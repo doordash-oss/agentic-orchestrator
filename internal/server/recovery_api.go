@@ -183,7 +183,35 @@ func recoveryItemDTO(item ports.RecoveryItem) RecoveryItem {
 	}
 	dto.DefaultAction = actionResume
 	dto.AllowedActions = []string{actionResume, recoveryActionKill}
+	dto.Error = wireOrphanSessionError(item)
 	return dto
+}
+
+// wireOrphanSessionError classifies one orphan session by process liveness
+// into its canonical needs_action code, rendered through the catalog with
+// the phase block from the PID file's phase and iteration and the
+// repositories block when the item is repository-scoped. It carries no
+// diagnostics and no filesystem paths; the bounded recovery log endpoint
+// stays the only log channel.
+func wireOrphanSessionError(item ports.RecoveryItem) Error {
+	code := errcat.OrphanSessionStale
+	if item.ProcessAlive {
+		code = errcat.OrphanSessionLive
+	}
+	params := errcat.OrphanSessionParams{
+		Phase:     item.PIDFile.Phase,
+		Iteration: item.PIDFile.Iteration,
+	}
+	opts := []errcat.Option{errcat.WithPhase(errcat.CodePhase{
+		Name:      item.PIDFile.Phase,
+		Iteration: item.PIDFile.Iteration,
+	})}
+	if repo := strings.TrimSpace(item.RepoName); repo != "" {
+		params.Repositories = []string{repo}
+		opts = append(opts, errcat.WithRepositories(errcat.CodeRepository{Name: repo}))
+	}
+	opts = append(opts, errcat.WithParams(params))
+	return wireError(errcat.New(code, opts...))
 }
 
 // recoveryLogAvailable reports whether a bounded log read is available for the

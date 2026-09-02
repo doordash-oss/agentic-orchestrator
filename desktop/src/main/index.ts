@@ -95,6 +95,7 @@ import {
   type AppEvent,
   type AppRouteEvent,
   type FeatureSnapshot,
+  type FeaturesListResult,
   type RemoteServerAddRequest,
   type RemoteServerAddResult,
   type SettingsFocus,
@@ -928,10 +929,10 @@ if (!hasSingleInstanceLock) {
       const featureIds: string[] = [];
       let detectionFailed = false;
       try {
-        const summaries = await features.listFeatures();
-        featureLabels = new Map(summaries.map((feature) => [feature.id, feature.name]));
+        const list = await features.listFeatures();
+        featureLabels = new Map(list.features.map((feature) => [feature.id, feature.name]));
         const snapshots = await Promise.allSettled(
-          summaries.map((summary) => features.getFeature(summary.id)),
+          list.features.map((summary) => features.getFeature(summary.id)),
         );
         for (const result of snapshots) {
           if (result.status === 'rejected') {
@@ -1127,12 +1128,14 @@ if (!hasSingleInstanceLock) {
         return;
       }
       try {
-        const [snapshot, summaries, sessionList] = await Promise.all([
+        const [snapshot, list, sessionList] = await Promise.all([
           attention.getSnapshot(),
-          features.listFeatures().catch(() => []),
+          features
+            .listFeatures()
+            .catch(() => ({ features: [], warnings: [] }) as FeaturesListResult),
           sessions.list().catch(() => []),
         ]);
-        featureLabels = new Map(summaries.map((feature) => [feature.id, feature.name]));
+        featureLabels = new Map(list.features.map((feature) => [feature.id, feature.name]));
         notifications.update(snapshot, {
           previewEnabled: settings.get().notifications.previewEnabled,
           featureLabel: (featureId) => featureLabels.get(featureId) ?? 'Untitled feature',

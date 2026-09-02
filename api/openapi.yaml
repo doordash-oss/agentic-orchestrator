@@ -2099,8 +2099,11 @@ components:
                 $ref: "#/components/schemas/FeatureSummary"
             warnings:
               type: array
+              description: >-
+                Canonical warning errors for feature files that could not be
+                loaded at list level; absent when every feature loaded.
               items:
-                $ref: "#/components/schemas/Warning"
+                $ref: "#/components/schemas/Error"
     FeatureDetailResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -2738,8 +2741,6 @@ components:
               type: string
             roadmap_phase:
               type: integer
-            warning_count:
-              type: integer
             upgrade_pipeline:
               type: string
             source_run_number:
@@ -2751,8 +2752,10 @@ components:
             warnings:
               type: array
               items:
-                type: string
-              description: Redacted non-fatal warning details (PR close, backup branch, worktree reset failures).
+                $ref: "#/components/schemas/Error"
+              description: >-
+                Canonical warning-class errors for non-fatal rewind failures
+                (pull-request close, backup branch, worktree reset).
     RewindPreviewResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -3237,9 +3240,13 @@ components:
             file_unavailable:
               type: boolean
               description: Whether the single-file diff content is unavailable.
-            partial_failure:
-              type: string
-              description: Safe, server-authored reason one repository could not be fully inspected, when non-empty.
+            error:
+              $ref: "#/components/schemas/Error"
+              x-go-type-skip-optional-pointer: false
+              description: >-
+                Canonical warning-class error rendering the typed partial
+                failure of this repository's inspection; absent when the
+                repository was fully inspected.
     RepositoryPathDTO:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -3587,7 +3594,7 @@ components:
     RecoveryItem:
       type: object
       required:
-        [key, feature_id, process_alive, default_action, allowed_actions]
+        [key, feature_id, process_alive, default_action, allowed_actions, error]
       properties:
         key:
           type: string
@@ -3606,6 +3613,12 @@ components:
           x-go-name: PID
         process_alive:
           type: boolean
+        error:
+          $ref: "#/components/schemas/Error"
+          description: >-
+            Canonical needs_action error classifying this orphan session by
+            liveness, with the phase and repositories context blocks; carries
+            no diagnostics and no filesystem paths.
         log_available:
           type: boolean
           description: Whether a bounded log read is available for this item.
@@ -3770,16 +3783,6 @@ components:
     # --- Feature/session payload types backing FeatureListResponse,
     # FeatureDetailResponse, SessionListResponse, SessionDetailResponse.
     # Mirror internal/server/types.go field-for-field.
-    Warning:
-      type: object
-      required: [code, message]
-      properties:
-        code:
-          type: string
-        feature_id:
-          type: string
-        message:
-          type: string
     Checkpoints:
       type: object
       required:
@@ -3826,14 +3829,6 @@ components:
           type: string
         parent_branch:
           type: string
-    RelationshipCleanupWarning:
-      type: object
-      required: [message]
-      properties:
-        message:
-          type: string
-        repo:
-          type: string
     RelationshipChildOutcome:
       type: string
       description: Recorded relationship close outcome; absent while the child is open.
@@ -3856,7 +3851,7 @@ components:
         - started_at
         - cost
         - integration_state
-        - cleanup_warnings
+        - warnings
       properties:
         id:
           type: string
@@ -3903,10 +3898,14 @@ components:
           description: >-
             Canonical error rendering the child's stored integration
             attention record; absent when integration is not parked.
-        cleanup_warnings:
+        warnings:
           type: array
           items:
-            $ref: "#/components/schemas/RelationshipCleanupWarning"
+            $ref: "#/components/schemas/Error"
+          description: >-
+            Canonical warning-class errors for this child's stored cleanup
+            and review-feedback tail records; absent when both settled
+            cleanly.
         has_diff_summary:
           type: boolean
           description: >-
@@ -3969,7 +3968,11 @@ components:
         warnings:
           type: array
           items:
-            $ref: "#/components/schemas/Warning"
+            $ref: "#/components/schemas/Error"
+          description: >-
+            Canonical warning-class errors for this feature, such as
+            effort-capability drift; absent when there is nothing to warn
+            about.
         active_child:
           $ref: "#/components/schemas/RelationshipChildSummary"
           x-go-type-skip-optional-pointer: false
@@ -4577,8 +4580,6 @@ components:
           description: >-
             True when this applied entry's parent worktree sync failed after
             the ref update; closure retries the sync automatically.
-        cleanup_warning:
-          type: string
     Usage:
       type: object
       properties:

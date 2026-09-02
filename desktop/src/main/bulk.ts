@@ -28,11 +28,11 @@ export class BulkService {
   constructor(private readonly featureService: FeatureService) {}
 
   async preview(): Promise<BulkPreview> {
-    const features = await this.featureService.listFeatures();
+    const list = await this.featureService.listFeatures();
     const eligible: BulkPreviewRow[] = [];
     const excluded: BulkPreviewRow[] = [];
 
-    for (const summary of features) {
+    for (const summary of list.features) {
       let snapshot: FeatureSnapshot | null = null;
       try {
         snapshot = await this.featureService.getFeature(summary.id);

@@ -26,6 +26,10 @@ import {
   AbsolutePathSchema,
   ReadinessSnapshotSchema,
   RelationshipChildViewSchema,
+  RelationshipTransactionViewSchema,
+  FeatureActionResultSchema,
+  RepositoryDiffResultSchema,
+  RecoveryItemViewSchema,
   SettingsPatchSchema,
   SettingsSchema,
   FeatureActionRequestSchema,
@@ -156,12 +160,78 @@ describe('Setup task and setup view schemas', () => {
       startedAt: '2026-07-14T00:00:00Z',
       cost: { totalUsd: 0, byPhase: {} },
       integrationState: 'merged',
-      cleanupWarnings: [],
+      warnings: [],
     };
     expect(RelationshipChildViewSchema.safeParse(childView).success).toBe(true);
     expect(RelationshipChildViewSchema.safeParse({ ...childView, lastError: 'boom' }).success).toBe(
       false,
     );
+    expect(
+      RelationshipChildViewSchema.safeParse({ ...childView, cleanupWarnings: [] }).success,
+    ).toBe(false);
+  });
+
+  it('rejects removed warning shapes on renderer-facing result views', () => {
+    const transactionEntry = {
+      repo: 'repo-a',
+      prepState: 'applied',
+      pendingSync: true,
+    };
+    const transaction = RelationshipTransactionViewSchema.safeParse({
+      phase: 'applied',
+      entries: [transactionEntry],
+    });
+    expect(transaction.success).toBe(true);
+    const staleTransaction = RelationshipTransactionViewSchema.safeParse({
+      phase: 'applied',
+      entries: [{ ...transactionEntry, cleanupWarning: 'stale string' }],
+    });
+    expect(staleTransaction.success).toBe(false);
+
+    const actionResult = {
+      featureId: 'abcd1234ef567890',
+      action: 'rewind',
+      result: 'rewound',
+      sessionIds: [],
+    };
+    expect(FeatureActionResultSchema.safeParse(actionResult).success).toBe(true);
+    const staleWarnings = FeatureActionResultSchema.safeParse({
+      ...actionResult,
+      warnings: ['stale string warning'],
+    });
+    expect(staleWarnings.success).toBe(false);
+
+    const diffResult = {
+      featureId: 'abcd1234ef567890',
+      repo: 'repo-a',
+      files: [],
+    };
+    expect(RepositoryDiffResultSchema.safeParse(diffResult).success).toBe(true);
+    const staleDiff = RepositoryDiffResultSchema.safeParse({
+      ...diffResult,
+      partialFailure: 'stale string',
+    });
+    expect(staleDiff.success).toBe(false);
+  });
+
+  it('requires the canonical orphan error on every recovery item view', () => {
+    const recoveryItem = {
+      key: 'feature-alpha:repo-a',
+      featureId: 'alpha1234ef567890',
+      processAlive: true,
+      allowedActions: ['resume', 'kill'],
+      defaultAction: 'resume',
+      error: {
+        code: 'orphan_session_live',
+        class: 'needs_action',
+        title: 'Orphan session still running',
+        summary: 'The session process is still alive after its run was interrupted.',
+      },
+    };
+    expect(RecoveryItemViewSchema.safeParse(recoveryItem).success).toBe(true);
+    const { error: _removed, ...withoutError } = recoveryItem;
+    void _removed;
+    expect(RecoveryItemViewSchema.safeParse(withoutError).success).toBe(false);
   });
 });
 

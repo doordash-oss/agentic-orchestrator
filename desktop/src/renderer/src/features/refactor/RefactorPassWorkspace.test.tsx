@@ -53,7 +53,7 @@ function childView(overrides: Partial<RelationshipChildView> = {}): Relationship
     startedAt: '2026-07-30T10:00:00Z',
     cost: { totalUsd: 1.25, byPhase: {} },
     integrationState: 'pending',
-    cleanupWarnings: [],
+    warnings: [],
     ...overrides,
   };
 }
@@ -529,6 +529,43 @@ describe('RefactorPassWorkspace', () => {
       within(alert).queryByRole('button', { name: 'Retry integration' }),
     ).not.toBeInTheDocument();
     expect(within(alert).getByText('integration is already running')).toBeInTheDocument();
+  });
+
+  it('renders one status-role surface per relationship warning with the repository under the disclosure', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith({
+      warnings: [
+        {
+          code: 'child_cleanup_incomplete',
+          class: 'warning' as const,
+          title: 'Cleanup incomplete',
+          summary: 'The worktree for repository "repo-a" could not be removed.',
+          context: { repositories: [{ name: 'repo-a', branch: 'agentico/pass-3' }] },
+          diagnostics: 'remove worktree: directory busy',
+        },
+      ],
+    });
+    renderWorkspace(parent, controllerFor(parent, readyChild()));
+
+    const surfaces = document.querySelectorAll('.refactor-pass .error-surface');
+    expect(surfaces).toHaveLength(1);
+    surfaces.forEach((surface) => {
+      expect(surface).toHaveAttribute('role', 'status');
+      expect(surface.querySelector('.error-surface__label')).toHaveTextContent('Warning');
+      expect(surface.querySelector('.error-surface__code')).toHaveTextContent(
+        'child_cleanup_incomplete',
+      );
+      expect(surface.querySelector('.error-surface__action')).toBeNull();
+
+      // The repository sits under the surface's compact disclosure.
+      const disclosure = surface.querySelector('details.error-surface__details--compact');
+      expect(disclosure).not.toBeNull();
+      expect(disclosure?.textContent).toContain('repo-a');
+    });
+
+    // The bespoke cleanup-warning list is gone, and no alert renders.
+    expect(document.querySelector('.refactor-pass__cleanup')).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Cleanup warnings' })).toBeNull();
   });
 
   it('renders two surfaces with distinct captions when an action is rejected while parked', () => {

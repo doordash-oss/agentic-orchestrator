@@ -1508,6 +1508,28 @@ func completionCanMarkDone(f *feature.Feature) (bool, string) {
 	return false, "feature status does not allow mark-done"
 }
 
+// RepositoryDiffFailureKind identifies the partial-failure family of a
+// repository diff inspection.
+type RepositoryDiffFailureKind string
+
+const (
+	// RepositoryDiffWorktreeUnavailable marks a repository whose worktree is
+	// not available for inspection.
+	RepositoryDiffWorktreeUnavailable RepositoryDiffFailureKind = "worktree_unavailable"
+	// RepositoryDiffFailed marks a repository whose diff could not be
+	// computed; Err carries the git error.
+	RepositoryDiffFailed RepositoryDiffFailureKind = "diff_failed"
+)
+
+// RepositoryDiffFailure is the typed partial failure of one repository's diff
+// inspection. The mutation-target boundary classifies it into a canonical
+// warning code with the repositories block; no layer renders it as text
+// first.
+type RepositoryDiffFailure struct {
+	Kind RepositoryDiffFailureKind
+	Err  error
+}
+
 // RepositoryDiffResult is the bounded, lazy diff inspection for one repository.
 type RepositoryDiffResult struct {
 	FeatureID       string
@@ -1519,7 +1541,7 @@ type RepositoryDiffResult struct {
 	FileTruncated   bool
 	FileBinary      bool
 	FileUnavailable bool
-	PartialFailure  string
+	PartialFailure  *RepositoryDiffFailure
 }
 
 // RepositoryDiffFileResult is one changed file in a repository diff.
@@ -1550,11 +1572,17 @@ func (o *Orchestrator) RepositoryDiff(featureID, repoName, filePath string) (Rep
 	}
 	repo, ok := findRepo(f, repoName)
 	if !ok {
-		return RepositoryDiffResult{FeatureID: featureID, Repo: repoName, PartialFailure: "repository not found"}, nil
+		return RepositoryDiffResult{}, fmt.Errorf("repository %q: %w", repoName, feature.ErrRepositoryNotFound)
 	}
 	workDir := repoWorkDir(repo)
 	if workDir == "" {
-		return RepositoryDiffResult{FeatureID: featureID, Repo: repoName, PartialFailure: "worktree not available"}, nil
+		return RepositoryDiffResult{
+			FeatureID: featureID,
+			Repo:      repoName,
+			PartialFailure: &RepositoryDiffFailure{
+				Kind: RepositoryDiffWorktreeUnavailable,
+			},
+		}, nil
 	}
 	result := RepositoryDiffResult{
 		FeatureID:      featureID,
@@ -1600,7 +1628,10 @@ func (o *Orchestrator) RepositoryWorktreePath(featureID, repoName string) (strin
 func (o *Orchestrator) repositoryFileListDiff(result RepositoryDiffResult, workDir, baseBranch string) (RepositoryDiffResult, error) {
 	previews, err := git.BranchDiffPreviews(workDir, baseBranch)
 	if err != nil {
-		result.PartialFailure = safeCompletionTruncate(err.Error(), 200)
+		result.PartialFailure = &RepositoryDiffFailure{
+			Kind: RepositoryDiffFailed,
+			Err:  errors.New(safeCompletionTruncate(err.Error(), 200)),
+		}
 		return result, nil
 	}
 	for i, p := range previews {
@@ -1624,7 +1655,10 @@ func (o *Orchestrator) repositoryFileListDiff(result RepositoryDiffResult, workD
 func (o *Orchestrator) repositorySingleFileDiff(result RepositoryDiffResult, workDir, baseBranch, filePath string) (RepositoryDiffResult, error) {
 	preview, err := git.SingleFileDiffPreview(workDir, baseBranch, filePath)
 	if err != nil {
-		result.PartialFailure = safeCompletionTruncate(err.Error(), 200)
+		result.PartialFailure = &RepositoryDiffFailure{
+			Kind: RepositoryDiffFailed,
+			Err:  errors.New(safeCompletionTruncate(err.Error(), 200)),
+		}
 		return result, nil
 	}
 	if preview == nil {

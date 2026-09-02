@@ -1083,6 +1083,125 @@ var catalog = map[Code]Entry{
 		Remediation: "The exit status is unaffected; check the runtime directory before restarting.",
 	},
 
+	// --- Warning codes ------------------------------------------------------
+	// One code per distinct remediation, all warning class with no action
+	// references: a warning never blocks progress and never gates a lane.
+	EffortCapabilityDrift: {
+		Class:   ClassWarning,
+		Title:   "Effort not supported by model",
+		Summary: "A configured effort is not supported by its model; Auto is in use until the configuration is updated.",
+		summaryParams: func(p Params) string {
+			return effortCapabilityDriftSummary(p)
+		},
+		Remediation: "Update the effort setting or choose a model that supports it.",
+	},
+	FeatureLoadFailed: {
+		Class:   ClassWarning,
+		Title:   "Feature could not be loaded",
+		Summary: "A feature could not be loaded from the store.",
+		summaryParams: func(p Params) string {
+			return featureLoadFailedSummary(p)
+		},
+		Remediation: "Fix or remove the feature's files, then refresh the list.",
+	},
+	ChildCleanupIncomplete: {
+		Class:   ClassWarning,
+		Title:   "Cleanup incomplete",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Cleaning up after the pass did not finish.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "Cleanup for %s did not finish.")
+		},
+		Remediation: "Retry the pass's integration or discard it to finish cleanup.",
+	},
+	ReviewFeedbackTailIncomplete: {
+		Class:   ClassWarning,
+		Title:   "Review feedback tail incomplete",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Finishing the review feedback tail did not complete.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "The review-feedback tail for %s did not finish.")
+		},
+		Remediation: "Retry the tail steps; each failure is listed in the details.",
+	},
+	RewindPullRequestCloseFailed: {
+		Class:   ClassWarning,
+		Title:   "Pull request close failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Closing a pull request failed during the rewind.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "Closing the pull request for %s failed during the rewind.")
+		},
+		Remediation: "Close the pull request on the remote if it is still open.",
+	},
+	RewindBackupBranchFailed: {
+		Class:   ClassWarning,
+		Title:   "Backup branch failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Creating a backup branch failed during the rewind.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "Creating the backup branch for %s failed during the rewind.")
+		},
+		Remediation: "Create the backup branch yourself if you need the pre-rewind state.",
+	},
+	RewindWorktreeResetFailed: {
+		Class:   ClassWarning,
+		Title:   "Worktree reset failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Resetting a worktree failed during the rewind.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "Resetting the worktree for %s failed during the rewind.")
+		},
+		Remediation: "Check the worktree's state; the rewind may be partially applied.",
+	},
+	RepositoryWorktreeUnavailable: {
+		Class:   ClassWarning,
+		Title:   "Worktree unavailable",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A repository's worktree is not available for inspection.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "The worktree for %s is not available.")
+		},
+		Remediation: "Retry once the worktree is back in place.",
+	},
+	RepositoryDiffFailed: {
+		Class:   ClassWarning,
+		Title:   "Diff failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Computing a repository's diff failed.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "Computing the diff for %s failed.")
+		},
+		Remediation: "Retry the diff; the git error is in the details.",
+	},
+
+	// --- Orphan-session recovery codes ---------------------------------------
+	// An orphan session's recovery item carries one of these, picked by
+	// process liveness. Both reference the resume action and declare the
+	// phase and repositories blocks.
+	OrphanSessionLive: {
+		Class:   ClassNeedsAction,
+		Title:   "Orphaned session running",
+		Blocks:  []Block{BlockPhase, BlockRepositories},
+		Summary: "An agent session is still running outside Agentico's supervision.",
+		summaryParams: func(p Params) string {
+			return orphanSessionSummary(p, "is still running outside Agentico's supervision")
+		},
+		Remediation: "Resume the session to bring it back under supervision, or kill it.",
+		Actions:     []string{"resume"},
+	},
+	OrphanSessionStale: {
+		Class:   ClassNeedsAction,
+		Title:   "Orphaned session state",
+		Blocks:  []Block{BlockPhase, BlockRepositories},
+		Summary: "An agent session left recovery state behind with no process running.",
+		summaryParams: func(p Params) string {
+			return orphanSessionSummary(p, "left recovery state behind with no process running")
+		},
+		Remediation: "Resume to relaunch the phase where it stopped, or kill to discard the state.",
+		Actions:     []string{"resume"},
+	},
+
 	// --- Integration attention codes ---------------------------------------------
 	// Every condition that parks a child pass's integration transaction
 	// classifies into one of these at the transaction boundary. All are

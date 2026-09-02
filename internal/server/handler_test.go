@@ -1100,8 +1100,18 @@ func TestFeatureListEmptyRuntimeAndPartialWarnings(t *testing.T) {
 	if len(body.Features) != 1 || body.Features[0].ID != "good-001" {
 		t.Fatalf("partial features = %+v; want good feature", body.Features)
 	}
-	if len(body.Warnings) != 1 || body.Warnings[0].FeatureID != "bad-001" || body.Warnings[0].Code != "partial_load" {
-		t.Fatalf("partial warnings = %+v; want structured partial load warning", body.Warnings)
+	if len(body.Warnings) != 1 || body.Warnings[0].Code != string(errcat.FeatureLoadFailed) {
+		t.Fatalf("partial warnings = %+v; want one feature_load_failed warning", body.Warnings)
+	}
+	warning := body.Warnings[0]
+	if warning.Class != ErrorClass(errcat.ClassWarning) {
+		t.Fatalf("load warning class = %q; want warning", warning.Class)
+	}
+	if !strings.Contains(warning.Summary, "bad-001") {
+		t.Fatalf("load warning summary = %q; want it to name the feature", warning.Summary)
+	}
+	if !strings.Contains(warning.Diagnostics, "duplicate key") {
+		t.Fatalf("load warning diagnostics = %q; want the bounded load error", warning.Diagnostics)
 	}
 }
 

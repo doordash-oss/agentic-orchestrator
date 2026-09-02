@@ -26,7 +26,7 @@ import {
   type Settings,
   type UpdateState,
 } from '../../../shared/ipc';
-import { featureSnapshot, installAgenticoMock } from '../test/agenticoMock';
+import { canonicalWarning, featureSnapshot, installAgenticoMock } from '../test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from '../test/setup';
 import { WorkspaceShell } from './WorkspaceShell';
 
@@ -75,6 +75,38 @@ function summaryOf(feature: ReturnType<typeof featureSnapshot>) {
     warnings: [],
   };
 }
+
+describe('WorkspaceShell overview list warnings', () => {
+  it('renders one compact status surface per list-level load warning above the feature list', async () => {
+    const feature = featureSnapshot({ id: FEATURE_ID, name: 'Search revamp', status: 'Created' });
+    installAgenticoMock({
+      features: [summaryOf(feature)],
+      listWarnings: [
+        canonicalWarning({
+          code: 'feature_load_failed',
+          title: 'Feature could not be loaded',
+          summary: 'The feature file for "broken-feature" could not be read.',
+          diagnostics: 'yaml: unknown field " retired"',
+        }),
+      ],
+    });
+    render(<WorkspaceShell />);
+
+    const codeTag = await screen.findByText('feature_load_failed');
+    expect(codeTag).toHaveClass('error-surface__code');
+    const surface = codeTag.closest('.error-surface');
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveAttribute('role', 'status');
+    expect(surface?.querySelector('.error-surface__action')).toBeNull();
+    expect(screen.getByText('Feature could not be loaded')).toBeVisible();
+
+    // The surface sits above the overview lanes region, not inside it.
+    const listRegion = screen.getByRole('region', { name: 'Existing features' });
+    expect(listRegion.compareDocumentPosition(surface as Node)).toBe(
+      Node.DOCUMENT_POSITION_PRECEDING,
+    );
+  });
+});
 
 describe('WorkspaceShell sidebar', () => {
   it('keeps Overview selected on first render and enters creation deliberately', async () => {
@@ -449,7 +481,7 @@ describe('WorkspaceShell sidebar', () => {
     expect(
       await screen.findByRole('region', { name: 'Feature Search revamp' }),
     ).toBeInTheDocument();
-    mock.api.listFeatures.mockResolvedValueOnce([]);
+    mock.api.listFeatures.mockResolvedValueOnce({ features: [], warnings: [] });
     await user.click(await screen.findByLabelText('More actions'));
     await user.click(screen.getByRole('menuitem', { name: 'Delete feature' }));
     const dialog = await screen.findByRole('dialog', { name: /Delete Search revamp/ });

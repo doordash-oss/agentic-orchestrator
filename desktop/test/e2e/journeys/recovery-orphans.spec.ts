@@ -88,7 +88,7 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     });
     transcript.step(`created feature \`${featureName}\``);
 
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 
@@ -153,6 +153,25 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     const firstItem = items.first();
     await expect(firstItem).toHaveAttribute('data-alive', 'true');
     transcript.step('first item is the live orphan — priority ordering verified');
+
+    transcript.section('Canonical orphan cards');
+    const liveCard = firstItem.locator('.error-surface--needs-action');
+    await expect(liveCard).toBeVisible({ timeout: 15_000 });
+    await expect(liveCard).toHaveAttribute('role', 'alert');
+    await expect(liveCard.getByText('Needs your action')).toBeVisible();
+    await expect(liveCard.locator('.error-surface__code')).toHaveText('orphan_session_live');
+    await expect(liveCard.getByText('Orphaned session running')).toBeVisible();
+    await expect(firstItem.getByRole('button', { name: 'Resume' })).toBeVisible({
+      timeout: 5_000,
+    });
+    transcript.step('live orphan renders one needs-action ErrorSurface with an in-card Resume');
+
+    const deadCard = deadItems.first().locator('.error-surface--needs-action');
+    await expect(deadCard).toBeVisible({ timeout: 5_000 });
+    await expect(deadCard).toHaveAttribute('role', 'alert');
+    await expect(deadCard.locator('.error-surface__code')).toHaveText('orphan_session_stale');
+    await expect(deadCard.getByText('Orphaned session state')).toBeVisible();
+    transcript.step('dead orphan renders the orphan_session_stale card');
 
     transcript.section('Bounded logs');
     const logsToggle = firstItem.locator('.recovery-workspace__logs-toggle');

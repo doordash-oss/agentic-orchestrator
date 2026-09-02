@@ -497,7 +497,11 @@ export const ServerRelationshipChildSchema = z.object({
   // record; absent when integration is not parked. Strict canonical
   // contract, same as ErrorResponse.
   attention: CanonicalErrorSchema.optional(),
-  cleanup_warnings: z.array(z.object({ repo: z.string().optional(), message: z.string() })),
+  // Canonical warning-class errors for this child's stored cleanup and
+  // review-feedback tail records.
+  warnings: z.array(CanonicalErrorSchema).max(100),
+  // The removed cleanup-warning strings must never reappear on the wire.
+  cleanup_warnings: z.never().optional(),
   // The removed last-error string must never reappear on the wire.
   last_error: z.never().optional(),
   diff_summary: z.string().max(DIFF_SUMMARY_MAX_BYTES).optional(),
@@ -523,10 +527,9 @@ export const ServerFeatureSummarySchema = z.object({
     current_roadmap_phase: z.number().int().nonnegative().optional(),
     total_roadmap_phases: z.number().int().nonnegative().optional(),
   }),
-  warnings: z
-    .array(z.object({ code: z.string(), message: z.string() }))
-    .max(100)
-    .optional(),
+  // Canonical warning-class errors for this feature; absent when there is
+  // nothing to warn about.
+  warnings: z.array(CanonicalErrorSchema).max(100).optional(),
   active_child: ServerRelationshipChildSchema.optional(),
   child_history: z.array(ServerRelationshipChildSchema).optional(),
   child_history_total: z.number().int().nonnegative().optional(),
@@ -665,7 +668,6 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
             apply_state: z.string().optional(),
             observed_sha: z.string().optional(),
             pending_sync: z.boolean().optional(),
-            cleanup_warning: z.string().optional(),
           }),
         )
         .optional(),
@@ -680,6 +682,9 @@ export type ServerFeatureDetail = z.output<typeof ServerFeatureDetailSchema>;
 export const FeatureListResponseSchema = z.object({
   api_version: z.string(),
   features: z.array(ServerFeatureSummarySchema),
+  // Canonical warning errors for feature files that could not be loaded at
+  // list level; absent when every feature loaded.
+  warnings: z.array(CanonicalErrorSchema).max(100).optional(),
 });
 
 export type FeatureListResponse = z.output<typeof FeatureListResponseSchema>;
@@ -834,10 +839,13 @@ export const RewindActionResponseSchema = z.object({
   effective_phase: z.string().optional(),
   roadmap_phase: z.number().int().nonnegative().optional(),
   upgrade_pipeline: z.string().optional(),
-  warning_count: z.number().int().nonnegative().optional(),
+  // The removed warning count must never reappear on the wire.
+  warning_count: z.never().optional(),
   source_run_number: z.number().int().nonnegative().optional(),
   new_run_number: z.number().int().nonnegative().optional(),
-  warnings: z.array(z.string()).optional(),
+  // Canonical warning-class errors for non-fatal rewind failures
+  // (pull-request close, backup branch, worktree reset).
+  warnings: z.array(CanonicalErrorSchema).max(100).optional(),
 });
 export type RewindActionResponse = z.output<typeof RewindActionResponseSchema>;
 
@@ -1069,6 +1077,9 @@ export const ServerRecoveryItemSchema = z.object({
   iteration: z.number().int().nonnegative().optional(),
   pid: z.number().int().optional(),
   process_alive: z.boolean(),
+  // Canonical needs_action error classifying this orphan session by
+  // liveness; required on every item.
+  error: CanonicalErrorSchema,
   log_available: z.boolean().optional(),
   allowed_actions: z.array(z.string()),
   default_action: z.string(),
@@ -1203,7 +1214,11 @@ export const RepositoryDiffResponseSchema = z.object({
   file_truncated: z.boolean().optional(),
   file_binary: z.boolean().optional(),
   file_unavailable: z.boolean().optional(),
-  partial_failure: z.string().optional(),
+  // The removed partial-failure string must never reappear on the wire.
+  partial_failure: z.never().optional(),
+  // Canonical warning-class error rendering the typed partial failure of
+  // this repository's inspection; absent when it was fully inspected.
+  error: CanonicalErrorSchema.optional(),
 });
 export type RepositoryDiffResponse = z.output<typeof RepositoryDiffResponseSchema>;
 

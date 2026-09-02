@@ -26,6 +26,7 @@ import {
   TextContentResponseSchema,
   validateWithSchema,
 } from '../shared/api/parse';
+import { redactedCanonicalError } from '../shared/errors';
 import {
   FeatureIdSchema,
   RecoveryExecuteRequestSchema,
@@ -61,6 +62,10 @@ export class RecoveryService {
       ...(item.iteration === undefined ? {} : { iteration: item.iteration }),
       ...(item.pid === undefined ? {} : { pid: item.pid }),
       processAlive: item.process_alive,
+      // Canonical error object crosses IPC intact except diagnostics, which
+      // pass through the same redaction defensively even though the server
+      // promises none.
+      error: redactedCanonicalError(item.error),
       ...(item.log_available === undefined ? {} : { logAvailable: item.log_available }),
       allowedActions: item.allowed_actions ?? [],
       defaultAction: item.default_action,

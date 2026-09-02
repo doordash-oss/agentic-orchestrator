@@ -77,7 +77,8 @@ const (
 // target ref, initial anchor, expected ref, child head, candidate commit,
 // preparation state, and apply/rollback state. Parking conditions live on the
 // journal's single attention record, not on entries; entries carry progress
-// state, cleanup and tail warnings, and the typed pending-sync flag only.
+// state, the two optional stored warning records, and the typed pending-sync
+// flag only.
 type RepoTransactionEntry struct {
 	// Repo is the repository name, matching the inherited parent repo.
 	Repo string `yaml:"repo"`
@@ -111,14 +112,18 @@ type RepoTransactionEntry struct {
 	// after the ref update; closure retries the sync automatically and clears
 	// the flag on success. It carries no attention record.
 	PendingSync bool `yaml:"pending_sync,omitempty"`
-	// CleanupWarning records a non-fatal worktree/branch cleanup failure
-	// for this repository.
-	CleanupWarning string `yaml:"cleanup_warning,omitempty"`
-	// TailWarning records a non-fatal review-feedback integration tail
-	// failure for this repository (push, reply, or thread-resolution
-	// failure). It is projected into the existing warnings list with a
-	// distinguishing prefix; no API schema change.
-	TailWarning string `yaml:"tail_warning,omitempty"`
+	// Cleanup is the optional stored canonical warning record for this
+	// repository's cleanup after a child pass: the
+	// child_cleanup_incomplete catalog code, the repositories context
+	// block, and the raw cause as diagnostics. Nil means cleanup finished
+	// cleanly; a successful retry clears it back to nil.
+	Cleanup *errcat.FailureRecord `yaml:"cleanup,omitempty"`
+	// Tail is the optional stored canonical warning record for this
+	// repository's review-feedback integration tail failures: the
+	// review_feedback_tail_incomplete catalog code, the repositories
+	// context block, and one raw diagnostics line per failure. Nil means
+	// no tail failure was recorded.
+	Tail *errcat.FailureRecord `yaml:"tail,omitempty"`
 }
 
 // TransactionJournal is the ordered per-repository transaction record for
@@ -147,8 +152,10 @@ type TransactionJournal struct {
 
 // UnmarshalYAML tolerates legacy journals: a free-form attention string (the
 // pre-catalog shape) and deleted entry keys (diagnostics, gate codes,
-// conflict files, dirty diagnostics) are ignored on load. The non-strict
-// decoder drops unknown entry keys; only the attention shape needs a guard.
+// conflict files, dirty diagnostics, and the pre-record cleanup_warning and
+// tail_warning strings) are ignored on load and never written back. The
+// non-strict decoder drops unknown entry keys; only the attention shape
+// needs a guard.
 func (t *TransactionJournal) UnmarshalYAML(value *yaml.Node) error {
 	var raw struct {
 		Phase       TransactionPhase       `yaml:"phase"`

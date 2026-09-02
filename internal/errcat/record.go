@@ -44,7 +44,9 @@ type RecordContext struct {
 // record names the repositories. Publish failure codes receive the
 // repository, branch, rebase target, and remote-only commit count of the
 // failing repository, so a stored record renders the same text the
-// mutation rejection renders.
+// mutation rejection renders. Relationship warning codes receive the full
+// repositories block, so a stored journal record renders the same text a
+// freshly built warning renders.
 func RenderRecord(record FailureRecord) Error {
 	opts := RecordOptions(record)
 	opts = append(opts, WithDiagnostics(record.Diagnostics))
@@ -91,6 +93,7 @@ func RecordOptions(record FailureRecord) []Option {
 		}
 	}
 	setupParams.Repositories = params.Repositories
+	relationshipWarning := IsRelationshipWarning(record.Code)
 	switch {
 	case setup:
 		opts = append(opts, WithParams(setupParams))
@@ -98,6 +101,8 @@ func RecordOptions(record FailureRecord) []Option {
 		opts = append(opts, WithParams(IntegrationRepoParams{Repositories: integrationRepos}))
 	case publish:
 		opts = append(opts, WithParams(publishParams))
+	case relationshipWarning:
+		opts = append(opts, WithParams(WarningRepoParams{Repositories: integrationRepos}))
 	default:
 		opts = append(opts, WithParams(params))
 	}

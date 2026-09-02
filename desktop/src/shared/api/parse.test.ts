@@ -21,11 +21,15 @@ import {
   CanonicalErrorSchema,
   CompletionPreflightRepoSchema,
   DIFF_SUMMARY_MAX_BYTES,
+  FeatureListResponseSchema,
   HealthResponseSchema,
   parseServerJson,
   PromptSnapshotResponseSchema,
+  RepositoryDiffResponseSchema,
+  RewindActionResponseSchema,
   ServerFeatureDetailSchema,
   ServerFeatureSummarySchema,
+  ServerRecoveryItemSchema,
   ServerRelationshipChildSchema,
   ServerRepoStatusSchema,
   ServerSetupSchema,
@@ -264,7 +268,7 @@ describe('ServerRelationshipChildSchema diff_summary bound', () => {
     started_at: '2026-07-14T00:00:00Z',
     cost: { total_usd: 0, by_phase: {} },
     integration_state: 'merged',
-    cleanup_warnings: [],
+    warnings: [],
     diff_summary: diffSummary,
   });
 
@@ -351,12 +355,13 @@ describe('integration attention single owner', () => {
     expect(legacyString.success).toBe(false);
   });
 
-  it('rejects the deleted entry diagnostics, conflict-file, and dirty shapes', () => {
+  it('rejects the deleted entry diagnostics, conflict-file, dirty, and cleanup-warning shapes', () => {
     const transactionField = ServerFeatureDetailSchema.pick({ transaction: true });
     for (const entry of [
       { repo: 'repo-a', diagnostics: 'merge conflict' },
       { repo: 'repo-a', conflict_files: ['query.ts'] },
       { repo: 'repo-a', dirty: [{ path: '/safe/repo-a', staged_total: 1 }] },
+      { repo: 'repo-a', cleanup_warning: 'worktree removal failed' },
     ]) {
       const parsed = transactionField.safeParse({
         transaction: { phase: 'attention', attention: canonicalAttention, entries: [entry] },
@@ -378,7 +383,7 @@ describe('integration attention single owner', () => {
       cost: { total_usd: 0, by_phase: {} },
       integration_state: 'attention',
       attention: canonicalAttention,
-      cleanup_warnings: [],
+      warnings: [],
     });
     expect(ok.success).toBe(true);
     expect(ok.data?.attention?.class).toBe('needs_action');
@@ -395,7 +400,7 @@ describe('integration attention single owner', () => {
       cost: { total_usd: 0, by_phase: {} },
       integration_state: 'attention',
       attention: [{ code: 'conflict', message: 'Resolve conflict', repo: 'repo-a' }],
-      cleanup_warnings: [],
+      warnings: [],
     });
     expect(legacyArray.success).toBe(false);
   });
@@ -412,7 +417,7 @@ describe('integration attention single owner', () => {
       started_at: '2026-07-14T00:00:00Z',
       cost: { total_usd: 0, by_phase: {} },
       integration_state: 'pending',
-      cleanup_warnings: [],
+      warnings: [],
     });
     expect(parsed.success).toBe(true);
     expect(parsed.data?.attention).toBeUndefined();
@@ -479,7 +484,7 @@ describe('ServerFeatureDetailSchema failure', () => {
       started_at: '2026-07-14T00:00:00Z',
       cost: { total_usd: 0, by_phase: {} },
       integration_state: 'merged',
-      cleanup_warnings: [],
+      warnings: [],
     };
     const canonicalError = {
       code: 'worktree_setup_failed',
@@ -658,5 +663,105 @@ describe('Repository publish-failure error contract', () => {
     expect(
       CompletionPreflightRepoSchema.safeParse({ ...preflightRepo, last_error: 'boom' }).success,
     ).toBe(false);
+  });
+});
+
+describe('canonical warning wire shapes', () => {
+  const canonicalWarning = {
+    code: 'rewind_worktree_reset',
+    class: 'warning',
+    title: 'Worktree reset to anchor',
+    summary: 'The worktree for repository "repo-a" was reset to its anchor commit.',
+  };
+
+  it('rejects a relationship child carrying the removed cleanup_warnings array', () => {
+    const base = {
+      id: 'abcd1234ef567890',
+      name: 'Refactor pass',
+      kind: 'refactor',
+      display_token: 'R1',
+      display_state: 'Completed',
+      pipeline: 'medium',
+      status: 'Done',
+      started_at: '2026-07-14T00:00:00Z',
+      cost: { total_usd: 0, by_phase: {} },
+      integration_state: 'merged',
+      warnings: [canonicalWarning],
+    };
+    expect(ServerRelationshipChildSchema.safeParse(base).success).toBe(true);
+    expect(
+      ServerRelationshipChildSchema.safeParse({
+        ...base,
+        cleanup_warnings: [{ repo: 'repo-a', message: 'worktree removal failed' }],
+      }).success,
+    ).toBe(false);
+    const { warnings: _omitted, ...missingWarnings } = base;
+    void _omitted;
+    expect(ServerRelationshipChildSchema.safeParse(missingWarnings).success).toBe(false);
+  });
+
+  it('rejects a rewind response with string warnings or the removed warning_count', () => {
+    const base = {
+      api_version: 'v1',
+      result: 'rewound',
+      feature_id: 'abcd1234ef567890',
+      warnings: [canonicalWarning],
+    };
+    expect(RewindActionResponseSchema.safeParse(base).success).toBe(true);
+    const stringWarnings = RewindActionResponseSchema.safeParse({
+      ...base,
+      warnings: ['plain string warning'],
+    });
+    expect(stringWarnings.success).toBe(false);
+    expect(RewindActionResponseSchema.safeParse({ ...base, warning_count: 1 }).success).toBe(false);
+  });
+
+  it('rejects a repository diff response carrying the removed partial_failure string', () => {
+    const base = {
+      api_version: 'v1',
+      feature_id: 'abcd1234ef567890',
+      repo: 'repo-a',
+      files: [],
+      error: canonicalWarning,
+    };
+    expect(RepositoryDiffResponseSchema.safeParse(base).success).toBe(true);
+    const stalePartialFailure = RepositoryDiffResponseSchema.safeParse({
+      ...base,
+      partial_failure: 'repo unreachable',
+    });
+    expect(stalePartialFailure.success).toBe(false);
+    const { error: _omitted, ...withoutError } = base;
+    void _omitted;
+    expect(RepositoryDiffResponseSchema.safeParse(withoutError).success).toBe(true);
+  });
+
+  it('rejects a recovery item without its required canonical orphan error', () => {
+    const base = {
+      key: 'feature-alpha:repo-a',
+      feature_id: 'alpha1234ef567890',
+      process_alive: true,
+      allowed_actions: ['resume', 'kill'],
+      default_action: 'resume',
+      error: {
+        code: 'orphan_session_live',
+        class: 'needs_action',
+        title: 'Orphan session still running',
+        summary: 'The session process is still alive after its run was interrupted.',
+      },
+    };
+    expect(ServerRecoveryItemSchema.safeParse(base).success).toBe(true);
+    const { error: _omitted, ...withoutError } = base;
+    void _omitted;
+    expect(ServerRecoveryItemSchema.safeParse(withoutError).success).toBe(false);
+  });
+
+  it('accepts canonical list-level and per-feature warnings on the feature list response', () => {
+    const parsed = FeatureListResponseSchema.safeParse({
+      api_version: 'v1',
+      features: [],
+      warnings: [canonicalWarning],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.warnings?.[0]?.code).toBe('rewind_worktree_reset');
   });
 });

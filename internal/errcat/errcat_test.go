@@ -41,6 +41,10 @@ var zeroParams = []Params{
 	RunFailureParams{},
 	IntegrationRepoParams{},
 	SetupFailureParams{},
+	EffortDriftParams{},
+	FeatureLoadFailedParams{},
+	WarningRepoParams{},
+	OrphanSessionParams{},
 }
 
 func TestCatalogEntriesAreValid(t *testing.T) {

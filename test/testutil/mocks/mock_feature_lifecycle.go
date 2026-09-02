@@ -90,8 +90,8 @@ type MockFeatureLifecycle struct {
 	RetryPhaseFn func(featureID string, repoNames []string) error
 
 	// Rewind hook.
-	RewindToPhaseFn     func(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error)
-	RewindWithRequestFn func(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error)
+	RewindToPhaseFn     func(featureID string, targetPhase feature.Phase) ([]feature.RewindWarning, feature.Phase, error)
+	RewindWithRequestFn func(featureID string, request feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error)
 
 	DefaultError error
 	Calls        []MockCall
@@ -422,7 +422,7 @@ func (m *MockFeatureLifecycle) MarkFailed(featureID string, failure errcat.Failu
 // Rewind / pipeline
 // ---------------------------------------------------------------------------
 
-func (m *MockFeatureLifecycle) RewindToPhase(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error) {
+func (m *MockFeatureLifecycle) RewindToPhase(featureID string, targetPhase feature.Phase) ([]feature.RewindWarning, feature.Phase, error) {
 	m.record("RewindToPhase", featureID, targetPhase)
 	if m.RewindToPhaseFn != nil {
 		return m.RewindToPhaseFn(featureID, targetPhase)
@@ -430,7 +430,7 @@ func (m *MockFeatureLifecycle) RewindToPhase(featureID string, targetPhase featu
 	return nil, 0, m.DefaultError
 }
 
-func (m *MockFeatureLifecycle) RewindWithRequest(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
+func (m *MockFeatureLifecycle) RewindWithRequest(featureID string, request feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error) {
 	m.record("RewindWithRequest", featureID, request)
 	if m.RewindWithRequestFn != nil {
 		return m.RewindWithRequestFn(featureID, request)

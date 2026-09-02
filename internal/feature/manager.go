@@ -978,11 +978,25 @@ func roadmapPhaseType(phase, total int) string {
 //	    external PR state on GitHub may have advanced for the closed
 //	    subset; the next rewind simply re-issues close calls and warns on
 //	    the already-closed entries.
-func (m *Manager) RewindToPhase(featureID string, targetPhase Phase) (warnings []string, effectiveTarget Phase, err error) {
+func (m *Manager) RewindToPhase(featureID string, targetPhase Phase) (warnings []RewindWarning, effectiveTarget Phase, err error) {
 	return m.RewindWithRequest(featureID, RewindRequest{TargetPhase: targetPhase})
 }
 
-func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (warnings []string, effectiveTarget Phase, err error) {
+// repoBranch returns the branch recorded for repoName on the feature's
+// repositories, or "" when the repository is not listed.
+func (f *Feature) repoBranch(repoName string) string {
+	if f == nil {
+		return ""
+	}
+	for i := range f.Repos {
+		if f.Repos[i].Name == repoName {
+			return f.Repos[i].Branch
+		}
+	}
+	return ""
+}
+
+func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (warnings []RewindWarning, effectiveTarget Phase, err error) {
 	targetPhase := request.TargetPhase
 	f, err := m.Store.Load(featureID)
 	if err != nil {
@@ -1004,7 +1018,7 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 		return nil, 0, err
 	}
 
-	var warns []string
+	var warns []RewindWarning
 
 	// Mark the feature as interrupted so any running phase goroutine
 	// (e.g. the implement loop) detects the rewind and stops writing
@@ -1029,7 +1043,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 				continue
 			}
 			if err := m.PRs.ClosePR(url); err != nil {
-				warns = append(warns, fmt.Sprintf("failed to close PR for %s: %v", repoName, err))
+				warns = append(warns, RewindWarning{
+					Kind:   RewindWarningPullRequestClose,
+					Repo:   repoName,
+					Branch: f.repoBranch(repoName),
+					Err:    err,
+				})
 			}
 		}
 	}
@@ -1046,7 +1065,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 			}
 			branchName, err := git.CreateBackupBranch(repo.WorktreePath, f.Slug)
 			if err != nil {
-				warns = append(warns, fmt.Sprintf("failed to create backup branch for %s: %v", repo.Name, err))
+				warns = append(warns, RewindWarning{
+					Kind:   RewindWarningBackupBranch,
+					Repo:   repo.Name,
+					Branch: repo.Branch,
+					Err:    err,
+				})
 				continue
 			}
 			if branchName != "" {
@@ -1072,7 +1096,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 					resetErr = m.Worktrees.ResetToBase(repo.WorktreePath, repo.BaseBranch)
 				}
 				if resetErr != nil {
-					warns = append(warns, fmt.Sprintf("failed to reset worktree: %v", resetErr))
+					warns = append(warns, RewindWarning{
+						Kind:   RewindWarningWorktreeReset,
+						Repo:   repo.Name,
+						Branch: repo.Branch,
+						Err:    resetErr,
+					})
 				}
 			}
 		}

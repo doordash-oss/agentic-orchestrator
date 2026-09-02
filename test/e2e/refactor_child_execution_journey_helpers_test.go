@@ -399,7 +399,7 @@ func waitForJourneyChildClosed(t *testing.T, baseURL string, store *feature.Stor
 			hasWarning := false
 			if current.Parent.Transaction != nil {
 				for _, e := range current.Parent.Transaction.Entries {
-					if e.CleanupWarning != "" {
+					if e.Cleanup != nil {
 						hasWarning = true
 						break
 					}

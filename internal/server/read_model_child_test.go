@@ -337,8 +337,12 @@ func TestParentProjectionsCarryCompleteRelationshipHistory(t *testing.T) {
 			Diagnostics: repoNameSelf + ": merge candidate conflict: [internal/server/read_model.go]",
 		},
 		Entries: []feature.RepoTransactionEntry{{
-			Repo:           repoNameSelf,
-			CleanupWarning: "branch cleanup pending",
+			Repo: repoNameSelf,
+			Cleanup: &errcat.FailureRecord{
+				Code:        errcat.ChildCleanupIncomplete,
+				Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: repoNameSelf}}},
+				Diagnostics: "branch cleanup pending",
+			},
 		}},
 	}
 	if err := store.Save(closed); err != nil {
@@ -724,7 +728,7 @@ func assertRelationshipProjection(t *testing.T, raw any, wantID, wantOutcome, wa
 	if !strings.HasPrefix(display, wantDisplayPrefix) {
 		t.Fatalf("relationship display_state = %q, want prefix %q", display, wantDisplayPrefix)
 	}
-	for _, field := range []string{"display_token", "pipeline", "started_at", "cost", "integration_state", "cleanup_warnings"} {
+	for _, field := range []string{"display_token", "pipeline", "started_at", "cost", "integration_state", "warnings"} {
 		if _, exists := projection[field]; !exists {
 			t.Fatalf("relationship projection missing %q: %#v", field, projection)
 		}

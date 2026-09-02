@@ -1734,7 +1734,7 @@ func TestRewindToPhase_PRURLCleared(t *testing.T) {
 	// Should have a warning about PR close failure
 	foundPRWarn := false
 	for _, w := range warns {
-		if strings.Contains(w, "failed to close PR") {
+		if w.Kind == feature.RewindWarningPullRequestClose && w.Err != nil {
 			foundPRWarn = true
 			break
 		}
@@ -1775,7 +1775,7 @@ func TestRewindToPhase_BackupBranchWarning(t *testing.T) {
 	// Should have a warning about backup branch failure
 	foundBackupWarn := false
 	for _, w := range warns {
-		if strings.Contains(w, "failed to create backup branch") {
+		if w.Kind == feature.RewindWarningBackupBranch && w.Err != nil {
 			foundBackupWarn = true
 			break
 		}
@@ -3064,10 +3064,10 @@ func TestRewindToPhase_ClosesPerRepoPRs(t *testing.T) {
 	repoAWarn := false
 	repoBWarn := false
 	for _, w := range warns {
-		if strings.Contains(w, "repo-a") && strings.Contains(w, "failed to close PR") {
+		if w.Kind == feature.RewindWarningPullRequestClose && w.Repo == "repo-a" {
 			repoAWarn = true
 		}
-		if strings.Contains(w, "repo-b") && strings.Contains(w, "failed to close PR") {
+		if w.Kind == feature.RewindWarningPullRequestClose && w.Repo == "repo-b" {
 			repoBWarn = true
 		}
 	}
@@ -3943,8 +3943,8 @@ func TestRewindToPhase_SkipsClosePRForUnpublished(t *testing.T) {
 		t.Fatalf("RewindToPhase: %v", err)
 	}
 	for _, w := range warns {
-		if strings.Contains(w, "failed to close PR") {
-			t.Errorf("ClosePR should be skipped for unpublishable feature, got warning: %s", w)
+		if w.Kind == feature.RewindWarningPullRequestClose {
+			t.Errorf("ClosePR should be skipped for unpublishable feature, got warning: %+v", w)
 		}
 	}
 }
@@ -3989,7 +3989,7 @@ func TestRewindToPhase_ClosePRStillCalledForPublished(t *testing.T) {
 	}
 	foundPRWarn := false
 	for _, w := range warns {
-		if strings.Contains(w, "failed to close PR") {
+		if w.Kind == feature.RewindWarningPullRequestClose && w.Err != nil {
 			foundPRWarn = true
 			break
 		}
@@ -4042,8 +4042,8 @@ func TestRewindToPhase_UnpublishedUsesLocalReset(t *testing.T) {
 		t.Fatalf("RewindToPhase: %v", err)
 	}
 	for _, w := range warns {
-		if strings.Contains(w, "failed to reset worktree") {
-			t.Errorf("ResetToBaseLocal should succeed for local-only repo, got warning: %s", w)
+		if w.Kind == feature.RewindWarningWorktreeReset {
+			t.Errorf("ResetToBaseLocal should succeed for local-only repo, got warning: %+v", w)
 		}
 	}
 
@@ -5296,11 +5296,11 @@ func TestRewindWithRequest_PartialBranchFailureStillSeals(t *testing.T) {
 	}
 	attrCount := 0
 	for _, w := range warns {
-		if strings.Contains(w, "failed to create backup branch for repo-a") {
+		if w.Kind == feature.RewindWarningBackupBranch && w.Repo == "repo-a" {
 			attrCount++
 		}
-		if strings.Contains(w, "repo-b") {
-			t.Errorf("warnings should not mention repo-b, got %q", w)
+		if w.Repo == "repo-b" {
+			t.Errorf("warnings should not mention repo-b, got %+v", w)
 		}
 	}
 	if attrCount != 1 {
@@ -5398,11 +5398,11 @@ func TestRewindToPhase_PartialBranchFailureStillSeals(t *testing.T) {
 	// One warning, per-repo attribution for repo-a, nothing about repo-b.
 	attrCount := 0
 	for _, w := range warns {
-		if strings.Contains(w, "failed to create backup branch for repo-a") {
+		if w.Kind == feature.RewindWarningBackupBranch && w.Repo == "repo-a" {
 			attrCount++
 		}
-		if strings.Contains(w, "repo-b") {
-			t.Errorf("warnings should not mention repo-b (it succeeded), got %q", w)
+		if w.Repo == "repo-b" {
+			t.Errorf("warnings should not mention repo-b (it succeeded), got %+v", w)
 		}
 	}
 	if attrCount != 1 {

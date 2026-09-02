@@ -15,11 +15,13 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 // handleCompletionPreflight serves GET
@@ -71,6 +73,13 @@ func (h *apiHandler) handleRepositoryDiff(w http.ResponseWriter, r *http.Request
 	}
 	resp, err := h.mutations.RepositoryDiff(featureID, repoName, filePath)
 	if err != nil {
+		// An unknown repository name is a client error: the not_found
+		// envelope names it instead of a success carrying a partial failure.
+		if errors.Is(err, feature.ErrRepositoryNotFound) {
+			writeAPIError(w, http.StatusNotFound, errcat.NotFound,
+				errcat.WithParams(errcat.SubjectParams{Subject: "Repository", Name: repoName}))
+			return
+		}
 		writeStoreError(w, err, featureID)
 		return
 	}

@@ -279,10 +279,14 @@ func TestRelationshipProjectionCarriesNoAttentionItemStrings(t *testing.T) {
 		seedIntegrationChild(t, store, parent.ID, &feature.TransactionJournal{
 			Phase: feature.TransactionPhaseMerged,
 			Entries: []feature.RepoTransactionEntry{{
-				Repo:           repoNameSelf,
-				ParentBranch:   "main",
-				MergeHEAD:      "cccc3333",
-				CleanupWarning: "worktree busy",
+				Repo:         repoNameSelf,
+				ParentBranch: "main",
+				MergeHEAD:    "cccc3333",
+				Cleanup: &errcat.FailureRecord{
+					Code:        errcat.ChildCleanupIncomplete,
+					Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: repoNameSelf}}},
+					Diagnostics: "worktree busy",
+				},
 			}},
 		})
 		handler := NewHandler(baseReadHandlerOptions(store))
@@ -292,9 +296,30 @@ func TestRelationshipProjectionCarriesNoAttentionItemStrings(t *testing.T) {
 		if _, has := activeChild["attention"]; has {
 			t.Fatalf("active_child attention = %#v, want absent for a warnings-only journal", activeChild["attention"])
 		}
-		warnings := activeChild["cleanup_warnings"].([]any)
-		if len(warnings) != 1 || warnings[0].(map[string]any)["message"] != "worktree busy" {
-			t.Fatalf("active_child cleanup_warnings = %#v, want the recorded warning", warnings)
+		if _, has := activeChild["cleanup_warnings"]; has {
+			t.Fatalf("active_child still carries the removed cleanup_warnings field: %#v", activeChild)
+		}
+		warnings := activeChild["warnings"].([]any)
+		if len(warnings) != 1 {
+			t.Fatalf("active_child warnings = %#v, want exactly one", warnings)
+		}
+		warning := warnings[0].(map[string]any)
+		if warning["code"] != string(errcat.ChildCleanupIncomplete) {
+			t.Fatalf("active_child warning code = %#v, want %s", warning["code"], errcat.ChildCleanupIncomplete)
+		}
+		if warning["class"] != string(errcat.ClassWarning) {
+			t.Fatalf("active_child warning class = %#v, want warning", warning["class"])
+		}
+		if !strings.Contains(warning["summary"].(string), repoNameSelf) {
+			t.Fatalf("active_child warning summary = %#v, want it to name the repository", warning["summary"])
+		}
+		if !strings.Contains(warning["diagnostics"].(string), "worktree busy") {
+			t.Fatalf("active_child warning diagnostics = %#v, want the recorded cause", warning["diagnostics"])
+		}
+		context := warning["context"].(map[string]any)
+		repos := context["repositories"].([]any)
+		if len(repos) != 1 || repos[0].(map[string]any)["name"] != repoNameSelf {
+			t.Fatalf("active_child warning repositories = %#v, want %s", repos, repoNameSelf)
 		}
 		assertNoItemCodes(t, activeChild)
 	})

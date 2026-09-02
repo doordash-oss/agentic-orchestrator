@@ -25,7 +25,7 @@ import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { clipboard, shell } from 'electron';
 import { z } from 'zod';
-import { redactText } from '../shared/errors';
+import { redactText, redactedCanonicalError } from '../shared/errors';
 import {
   validateWithSchema,
   CompletionPreflightResponseSchema,
@@ -153,7 +153,9 @@ export class CompletionService {
       ...(response.file_truncated ? { fileTruncated: response.file_truncated } : {}),
       ...(response.file_binary ? { fileBinary: response.file_binary } : {}),
       ...(response.file_unavailable ? { fileUnavailable: response.file_unavailable } : {}),
-      ...(response.partial_failure ? { partialFailure: response.partial_failure } : {}),
+      // Canonical warning objects cross IPC intact except diagnostics,
+      // which pass through the same redaction as every other raw text.
+      ...(response.error === undefined ? {} : { error: redactedCanonicalError(response.error) }),
     };
   }
 

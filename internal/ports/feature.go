@@ -109,8 +109,8 @@ type FeatureLifecycle interface {
 	MarkFailed(featureID string, failure errcat.FailureRecord) error
 
 	// Rewind / pipeline
-	RewindToPhase(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error)
-	RewindWithRequest(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error)
+	RewindToPhase(featureID string, targetPhase feature.Phase) ([]feature.RewindWarning, feature.Phase, error)
+	RewindWithRequest(featureID string, request feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error)
 	UpgradePipeline(featureID string, newProfile feature.PipelineProfile) error
 
 	// Per-repo implementation state. The unified flow tracks per-repo

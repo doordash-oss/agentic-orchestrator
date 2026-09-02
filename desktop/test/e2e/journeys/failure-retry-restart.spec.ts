@@ -119,7 +119,7 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     await expect(retryButton).toBeEnabled();
     await evidenceShotBothThemes(handle, 'setup-failure-retry');
 
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     expect(features).toHaveLength(1);
     const featureId = features[0]!.id;
     const failed = await handle.page.evaluate((id) => window.agentico.getFeature(id), featureId);
@@ -155,7 +155,7 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     expect(afterRetry.id).toBe(featureId); // same feature — never a duplicate create
     expect(afterRetry.setup?.status).toBe('done');
     expect(afterRetry.setup?.attempt).toBe(2);
-    const list = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const list = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     expect(list).toHaveLength(1);
     transcript.json('authoritative snapshot after retry (same id, attempt 2)', afterRetry);
 
@@ -253,7 +253,7 @@ test('iteration-budget failure restart extends the budget and clears the card', 
       name: featureName,
       repoPatterns: [/alpha/],
     });
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     expect(features).toHaveLength(1);
     const featureId = features[0]!.id;
     await expect(handle.page.getByLabel(`Feature ${featureName}`)).toBeVisible();

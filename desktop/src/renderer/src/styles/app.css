@@ -1593,13 +1593,6 @@ body {
   font: 13px var(--bench-font-text);
 }
 
-.refactor-pass__cleanup {
-  margin: 0;
-  padding: 0 0 0 var(--space-4);
-  color: var(--attention);
-  font: 13px var(--bench-font-text);
-}
-
 .refactor-pass__parent-card {
   margin-top: var(--space-5);
   padding-top: var(--space-4);
@@ -1874,14 +1867,6 @@ body {
 .refactor-history__facts dd {
   margin: 0;
   font-size: 13px;
-}
-
-.refactor-history__warnings {
-  margin: var(--space-2) 0 0;
-  padding-left: 24px;
-  color: var(--attention);
-  font: 13px var(--bench-font-text);
-  list-style: none;
 }
 
 .refactor-history__diff {
@@ -7215,10 +7200,6 @@ body {
   font-size: 14px;
 }
 
-.cockpit__rewind-landing .cockpit__rewind-warnings {
-  flex-basis: 100%;
-}
-
 .cockpit__carried-material {
   justify-content: flex-start;
 }
@@ -7255,8 +7236,7 @@ body {
   font-size: 11px;
 }
 
-.cockpit__rewind-source,
-.cockpit__rewind-warnings p {
+.cockpit__rewind-source {
   margin: 0;
   font-size: 13px;
 }
@@ -7268,31 +7248,6 @@ body {
   color: var(--text);
   font-family: var(--bench-font-text);
   font-size: 11px;
-}
-
-.cockpit__rewind-warnings {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  border-top: 1px solid var(--bad);
-  margin-top: var(--space-1);
-  padding-top: var(--space-2);
-}
-
-.cockpit__rewind-warnings h4,
-.cockpit__rewind-warnings ul {
-  margin: 0;
-}
-
-.cockpit__rewind-warnings h4 {
-  color: var(--bad);
-  font: 600 13px var(--bench-font-text);
-}
-
-.cockpit__rewind-warnings ul {
-  padding-left: var(--space-4);
-  color: var(--text);
-  font-size: 12px;
 }
 
 /* Primary intervention: the one filled signal control in the cockpit. */
@@ -7841,7 +7796,6 @@ body {
 }
 
 .completion-workspace__repo-status,
-.completion-workspace__partial-failure,
 .completion-workspace__truncated,
 .completion-workspace__file-op,
 .completion-workspace__file-lines,
@@ -10379,33 +10333,6 @@ body {
   padding: var(--space-3) var(--space-4);
 }
 
-/* Persistent warning panel: amber edge, because a rewind can succeed while
- * leaving unsent questions or stranded runs behind. */
-.rewind-journey__warnings {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  border: 1px solid var(--attention);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
-  background: color-mix(in srgb, var(--attention) 10%, transparent);
-}
-
-.rewind-journey__warnings-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.rewind-journey__warning-item {
-  color: var(--attention);
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-
 .rewind-journey__done {
   align-self: flex-start;
   font-family: var(--bench-font-text);
@@ -12226,34 +12153,11 @@ body {
 }
 
 .recovery-workspace__item-repo,
-.recovery-workspace__item-phase {
+.recovery-workspace__item-phase,
+.recovery-workspace__item-pid {
   font-family: var(--bench-font-mono);
   font-size: 12px;
   color: var(--muted);
-}
-
-.recovery-workspace__item-facts {
-  margin: 0;
-  display: flex;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
-
-.recovery-workspace__item-fact {
-  display: flex;
-  gap: var(--space-1);
-  font-size: 12px;
-}
-
-.recovery-workspace__item-fact dt {
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.recovery-workspace__item-fact dd {
-  margin: 0;
-  font-family: var(--bench-font-mono);
-  color: var(--text);
 }
 
 .recovery-workspace__item-actions {

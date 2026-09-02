@@ -108,6 +108,37 @@ describe('ChangesSurface', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(onRetry).toHaveBeenCalled();
   });
+
+  it('renders the diff warning as a status surface the no-changes message yields to', async () => {
+    const warningDiff: RepositoryDiffResult = {
+      featureId: 'f',
+      repo: 'repo-a',
+      files: [],
+      error: {
+        code: 'repository_worktree_unavailable',
+        class: 'warning',
+        title: 'Worktree unavailable',
+        summary: 'The worktree for repository "repo-a" is not available.',
+        context: { repositories: [{ name: 'repo-a' }] },
+      },
+    };
+    const getRepositoryDiff = vi.fn(() => Promise.resolve(warningDiff));
+    render(<ChangesSurface {...props({ getRepositoryDiff })} />);
+
+    const codeTag = await screen.findByText('repository_worktree_unavailable');
+    expect(codeTag).toHaveClass('error-surface__code');
+    const surface = codeTag.closest('.error-surface');
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveAttribute('role', 'status');
+    expect(surface?.querySelector('.error-surface__label')).toHaveTextContent('Warning');
+    expect(surface?.querySelector('.error-surface__action')).toBeNull();
+    expect(screen.getByText('Worktree unavailable')).toBeVisible();
+
+    // The no-changes message yields to the warning, and the old
+    // partial-failure span is gone.
+    expect(screen.queryByText('No local changes in this repository.')).not.toBeInTheDocument();
+    expect(document.querySelector('.completion-workspace__partial-failure')).toBeNull();
+  });
 });
 
 describe('ChangesSurface worktree affordance by locality', () => {

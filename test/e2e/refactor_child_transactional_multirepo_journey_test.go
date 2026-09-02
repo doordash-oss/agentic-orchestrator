@@ -1416,7 +1416,7 @@ func TestRefactorChildTransactionalMultiRepoClosureCleanupAndPublicationHandoff(
 	tx := child.Parent.Transaction
 	if tx != nil {
 		for i := range tx.Entries {
-			if tx.Entries[i].CleanupWarning != "" {
+			if tx.Entries[i].Cleanup != nil {
 				warningCount++
 			}
 		}
@@ -1448,7 +1448,7 @@ func TestRefactorChildTransactionalMultiRepoClosureCleanupAndPublicationHandoff(
 	tx = child.Parent.Transaction
 	if tx != nil {
 		for i := range tx.Entries {
-			if tx.Entries[i].CleanupWarning != "" {
+			if tx.Entries[i].Cleanup != nil {
 				warningCount++
 			}
 		}

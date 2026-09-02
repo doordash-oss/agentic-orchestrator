@@ -1594,7 +1594,11 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 					ParentAnchorSHA: "aaaa1111",
 					ChildHeadSHA:    "bbbb2222",
 					MergeHEAD:       "cccc3333",
-					CleanupWarning:  "worktree busy",
+					Cleanup: &errcat.FailureRecord{
+						Code:        errcat.ChildCleanupIncomplete,
+						Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: "repo-a"}}},
+						Diagnostics: "worktree busy",
+					},
 				}},
 			},
 		}

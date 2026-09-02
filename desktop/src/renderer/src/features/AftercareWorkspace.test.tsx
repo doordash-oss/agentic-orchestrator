@@ -49,7 +49,7 @@ const closedPass: RelationshipChildView = {
   outcome: 'completed',
   cost: { totalUsd: 1.25, byPhase: {} },
   integrationState: 'merged',
-  cleanupWarnings: [],
+  warnings: [],
 };
 
 const diffEvidence: AftercareEvidence = {
@@ -353,10 +353,12 @@ describe('AftercareWorkspace pass history', () => {
           {
             ...closedPass,
             kind: 'review-feedback',
-            cleanupWarnings: [
+            warnings: [
               {
-                message: 'review-feedback tail: no PR URL for review-feedback tail',
-                repo: 'org/repo-a',
+                code: 'review_feedback_tail_missing_pr',
+                class: 'warning',
+                title: 'Review-feedback tail not delivered',
+                summary: 'review-feedback tail: no PR URL for review-feedback tail',
               },
             ],
           },
@@ -366,6 +368,14 @@ describe('AftercareWorkspace pass history', () => {
 
     await user.click(screen.getByText('Pass history'));
     expect(screen.getByText(/review-feedback tail: no PR URL/)).toBeVisible();
+    const surface = screen.getByText(/review-feedback tail: no PR URL/).closest('.error-surface');
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveAttribute('role', 'status');
+    expect(within(surface as HTMLElement).getByText('Warning')).toBeVisible();
+    expect(screen.getByText('review_feedback_tail_missing_pr')).toHaveClass('error-surface__code');
+    expect(surface?.querySelector('.error-surface__action')).toBeNull();
+    // The bespoke per-entry warning list is gone.
+    expect(document.querySelector('.refactor-history__warnings')).toBeNull();
   });
 
   it('loads a list-projected diff body on demand', async () => {

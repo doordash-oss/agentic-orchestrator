@@ -144,7 +144,7 @@ function makeServices(): IpcServices {
     reorderWorkspaceRoots: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     initRepository: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     listRepositories: vi.fn(() => Promise.resolve([])),
-    listFeatures: vi.fn(() => Promise.resolve([])),
+    listFeatures: vi.fn(() => Promise.resolve({ features: [], warnings: [] })),
     getFeature: vi.fn(() =>
       Promise.resolve({
         id: 'abcd1234ef567890',
@@ -155,6 +155,7 @@ function makeServices(): IpcServices {
         repos: [],
         createdAt: '2026-07-14T10:00:00Z',
         activeRun: 1,
+        warnings: [],
         automaticReview: {
           mode: 'default' as const,
           enabled: true,

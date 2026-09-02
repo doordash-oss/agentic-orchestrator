@@ -40,6 +40,32 @@ type RewindRequest struct {
 	RoadmapPhase int
 }
 
+// RewindWarningKind identifies the non-fatal rewind failure family.
+type RewindWarningKind string
+
+const (
+	// RewindWarningPullRequestClose marks a pull request that could not be
+	// closed during the rewind.
+	RewindWarningPullRequestClose RewindWarningKind = "pull_request_close"
+	// RewindWarningBackupBranch marks a backup branch that could not be
+	// created during the rewind.
+	RewindWarningBackupBranch RewindWarningKind = "backup_branch"
+	// RewindWarningWorktreeReset marks a worktree that could not be reset
+	// during the rewind.
+	RewindWarningWorktreeReset RewindWarningKind = "worktree_reset"
+)
+
+// RewindWarning is one typed non-fatal rewind failure: the cause family, the
+// repository it happened in, its branch when known, and the raw error. The
+// mutation-target boundary classifies it into a canonical rewind warning
+// code with the repositories block; no layer renders it as text first.
+type RewindWarning struct {
+	Kind   RewindWarningKind
+	Repo   string
+	Branch string
+	Err    error
+}
+
 // VerificationItemStatus is one harness-executed testing-contract command's
 // live progress state ("pending", "running", or a terminal classification)
 // during the deterministic verification substep.

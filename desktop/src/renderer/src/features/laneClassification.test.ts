@@ -15,9 +15,11 @@ limitations under the License.
 */
 
 import { describe, expect, it } from 'vitest';
-import { featureSnapshot } from '../test/agenticoMock';
+import { canonicalWarning, featureSnapshot } from '../test/agenticoMock';
+import type { CanonicalError } from '../../../shared/api/parse';
 import type { FeatureSnapshot, RelationshipChildView } from '../../../shared/ipc';
 import {
+  LANES,
   classifyFeaturesByLane,
   classifyFeaturesByLaneWithAttention,
   classifyLane,
@@ -62,7 +64,7 @@ function child(overrides: Partial<RelationshipChildView> = {}): RelationshipChil
     startedAt: '2026-07-30T10:00:00Z',
     cost: { totalUsd: 0, byPhase: {} },
     integrationState: 'pending',
-    cleanupWarnings: [],
+    warnings: [],
     ...overrides,
   };
 }
@@ -164,6 +166,60 @@ describe('classifyLane — pending attention', () => {
       }),
     });
     expect(classifyLane(feature)).toBe('waiting');
+  });
+});
+
+describe('classifyLane — warnings never change the lane', () => {
+  const snapshotWarning = canonicalWarning();
+  const childWarning: CanonicalError = canonicalWarning({
+    code: 'child_cleanup_incomplete',
+    title: 'Cleanup incomplete',
+    summary: 'The worktree for repository "repo-a" could not be removed.',
+    context: { repositories: [{ name: 'repo-a', branch: 'agentico/pass-3' }] },
+  });
+
+  it('classifies a snapshot carrying feature warnings to exactly the lane the same snapshot takes without them, across every status', () => {
+    for (const [status] of STATUS_LANE_MATRIX) {
+      const bare = snapshot(status);
+      const laden = snapshot(status, { warnings: [snapshotWarning] });
+      expect(classifyLane(laden)).toBe(classifyLane(bare));
+    }
+  });
+
+  it('classifies an active child carrying relationship warnings to exactly the lane the same child takes without them', () => {
+    for (const [status] of STATUS_LANE_MATRIX) {
+      const bare = snapshot(status, {
+        activeChild: child({ status: 'Implementing', warnings: [] }),
+      });
+      const laden = snapshot(status, {
+        activeChild: child({ status: 'Implementing', warnings: [childWarning] }),
+      });
+      expect(classifyLane(laden)).toBe(classifyLane(bare));
+    }
+  });
+
+  // Rewind action-result warnings and repository-diff errors travel on their
+  // response objects, which classifyLane never receives; the two fields above
+  // are the only warning carriers a snapshot can represent.
+  it('keeps lane groups and counts identical for a batch carrying warnings', () => {
+    const bare = [
+      snapshot('Published', { activeChild: child({ status: 'Implementing', warnings: [] }) }),
+      snapshot('Failed'),
+      snapshot('Implementing'),
+    ];
+    const laden = bare.map((feature) => ({
+      ...feature,
+      warnings: [snapshotWarning],
+      ...(feature.activeChild === undefined
+        ? {}
+        : { activeChild: { ...feature.activeChild, warnings: [childWarning] } }),
+    }));
+    const laneIds = (groups: ReturnType<typeof classifyFeaturesByLane>) =>
+      LANES.map((lane) => groups[lane].map((feature) => feature.id));
+    expect(laneIds(classifyFeaturesByLane(laden))).toStrictEqual(
+      laneIds(classifyFeaturesByLane(bare)),
+    );
+    expect(laneCounts(laden)).toStrictEqual(laneCounts(bare));
   });
 });
 

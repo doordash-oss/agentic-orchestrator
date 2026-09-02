@@ -427,7 +427,7 @@ async function openCompletion(handle: AppHandle, featureName: string): Promise<L
 function seedPublishFixture(
   world: JourneyWorld,
   featureId: string,
-  apiBase: string,
+  _apiBase: string,
 ): PublishFixture {
   const featurePath = featureYamlPath(world, featureId);
   let featureYaml = fs.readFileSync(featurePath, 'utf8');

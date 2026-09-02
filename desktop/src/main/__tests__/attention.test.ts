@@ -535,7 +535,7 @@ describe('AttentionService review items', () => {
                         started_at: '2026-07-16T11:00:00Z',
                         cost: { total_usd: 1.2, by_phase: {} },
                         integration_state: 'pending',
-                        cleanup_warnings: [],
+                        warnings: [],
                       },
                     },
                   ],

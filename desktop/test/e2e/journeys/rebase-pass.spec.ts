@@ -140,7 +140,7 @@ test('rebase pass: behind feature → card click → pass workspace → completi
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
     transcript.step(`created feature \`${featureName}\` through the form; cockpit visible`);
 
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 
@@ -268,7 +268,7 @@ test('rebase pass dirty parent: one attention card, chip focuses it, retry compl
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
     transcript.step(`created feature \`${featureName}\` through the form; cockpit visible`);
 
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 
@@ -421,7 +421,7 @@ test('rebase pass up-to-date: card click renders inline notice, stays in afterca
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
     transcript.step(`created feature \`${featureName}\` through the form; cockpit visible`);
 
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 

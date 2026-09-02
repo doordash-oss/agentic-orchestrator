@@ -77,14 +77,14 @@ func (f *Feature) DiscardClosureTailPending() bool {
 	return f.AnyChildWorktreePending() || f.hasUnsettledDiscardCleanupWarning()
 }
 
-// hasUnsettledDiscardCleanupWarning checks for cleanup warnings on a
-// discarded child's transaction journal entries.
+// hasUnsettledDiscardCleanupWarning checks for stored cleanup warning
+// records on a discarded child's transaction journal entries.
 func (f *Feature) hasUnsettledDiscardCleanupWarning() bool {
 	if f.Parent == nil || f.Parent.Transaction == nil {
 		return false
 	}
 	for i := range f.Parent.Transaction.Entries {
-		if f.Parent.Transaction.Entries[i].CleanupWarning != "" {
+		if f.Parent.Transaction.Entries[i].Cleanup != nil {
 			return true
 		}
 	}

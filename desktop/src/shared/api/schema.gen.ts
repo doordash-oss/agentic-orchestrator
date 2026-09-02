@@ -1172,7 +1172,8 @@ export interface components {
         };
         FeatureListResponse: components["schemas"]["JSONResponse"] & {
             features: components["schemas"]["FeatureSummary"][];
-            warnings?: components["schemas"]["Warning"][];
+            /** @description Canonical warning errors for feature files that could not be loaded at list level; absent when every feature loaded. */
+            warnings?: components["schemas"]["Error"][];
         };
         FeatureDetailResponse: components["schemas"]["JSONResponse"] & {
             feature: components["schemas"]["FeatureDetail"];
@@ -1420,14 +1421,13 @@ export interface components {
             target_phase?: string;
             effective_phase?: string;
             roadmap_phase?: number;
-            warning_count?: number;
             upgrade_pipeline?: string;
             /** @description The run that was sealed (rewind source). */
             source_run_number?: number;
             /** @description The new active run forked by the rewind. */
             new_run_number?: number;
-            /** @description Redacted non-fatal warning details (PR close, backup branch, worktree reset failures). */
-            warnings?: string[];
+            /** @description Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset). */
+            warnings?: components["schemas"]["Error"][];
         };
         RewindPreviewResponse: components["schemas"]["JSONResponse"] & components["schemas"]["RewindPreview"];
         RewindPreview: {
@@ -1627,8 +1627,8 @@ export interface components {
             file_binary?: boolean;
             /** @description Whether the single-file diff content is unavailable. */
             file_unavailable?: boolean;
-            /** @description Safe, server-authored reason one repository could not be fully inspected, when non-empty. */
-            partial_failure?: string;
+            /** @description Canonical warning-class error rendering the typed partial failure of this repository's inspection; absent when the repository was fully inspected. */
+            error?: components["schemas"]["Error"];
         };
         RepositoryPathDTO: components["schemas"]["JSONResponse"] & {
             feature_id: string;
@@ -1796,6 +1796,8 @@ export interface components {
             iteration?: number;
             pid?: number;
             process_alive: boolean;
+            /** @description Canonical needs_action error classifying this orphan session by liveness, with the phase and repositories context blocks; carries no diagnostics and no filesystem paths. */
+            error: components["schemas"]["Error"];
             /** @description Whether a bounded log read is available for this item. */
             log_available?: boolean;
             default_action: string;
@@ -1875,11 +1877,6 @@ export interface components {
             tool_call?: components["schemas"]["ToolCall"];
             task?: components["schemas"]["Task"];
         };
-        Warning: {
-            code: string;
-            feature_id?: string;
-            message: string;
-        };
         Checkpoints: {
             inquiry_review: boolean;
             research_review: boolean;
@@ -1899,10 +1896,6 @@ export interface components {
             repo: string;
             sha: string;
             parent_branch?: string;
-        };
-        RelationshipCleanupWarning: {
-            message: string;
-            repo?: string;
         };
         /**
          * @description Recorded relationship close outcome; absent while the child is open.
@@ -1934,7 +1927,8 @@ export interface components {
             integration_state: string;
             /** @description Canonical error rendering the child's stored integration attention record; absent when integration is not parked. */
             attention?: components["schemas"]["Error"];
-            cleanup_warnings: components["schemas"]["RelationshipCleanupWarning"][];
+            /** @description Canonical warning-class errors for this child's stored cleanup and review-feedback tail records; absent when both settled cleanly. */
+            warnings: components["schemas"]["Error"][];
             /** @description True when a preserved diff summary exists for this closed child. The body itself is only carried by RelationshipChild on a detail route. */
             has_diff_summary?: boolean;
         };
@@ -1955,7 +1949,8 @@ export interface components {
             created_at: string;
             checkpoints: components["schemas"]["Checkpoints"];
             progress: components["schemas"]["FeatureProgress"];
-            warnings?: components["schemas"]["Warning"][];
+            /** @description Canonical warning-class errors for this feature, such as effort-capability drift; absent when there is nothing to warn about. */
+            warnings?: components["schemas"]["Error"][];
             active_child?: components["schemas"]["RelationshipChildSummary"];
             /** @description Newest closed children in authoritative store order, capped at a fixed server-side limit. Consult child_history_total and child_history_truncated for the full extent, and the feature detail route for the complete history. */
             child_history?: components["schemas"]["RelationshipChildSummary"][];
@@ -2205,7 +2200,6 @@ export interface components {
             observed_sha?: string;
             /** @description True when this applied entry's parent worktree sync failed after the ref update; closure retries the sync automatically. */
             pending_sync?: boolean;
-            cleanup_warning?: string;
         };
         Usage: {
             input_tokens?: number;

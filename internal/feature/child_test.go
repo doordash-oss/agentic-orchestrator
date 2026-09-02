@@ -1125,8 +1125,12 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 					ParentAnchorSHA: "aaaa1111",
 					ChildHeadSHA:    "bbbb2222",
 					MergeHEAD:       "cccc3333",
-					CleanupWarning:  "worktree busy",
-					PendingSync:     true,
+					Cleanup: &errcat.FailureRecord{
+						Code:        errcat.ChildCleanupIncomplete,
+						Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: "repoA"}}},
+						Diagnostics: "worktree busy",
+					},
+					PendingSync: true,
 				}},
 				Attention: &errcat.FailureRecord{
 					Code: errcat.IntegrationMergeConflict,
@@ -1165,7 +1169,8 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 	entry := tx.Entries[0]
 	if entry.ParentBranch != "feature/parent" || entry.ParentAnchorSHA != "aaaa1111" ||
 		entry.ChildHeadSHA != "bbbb2222" || entry.MergeHEAD != "cccc3333" ||
-		entry.CleanupWarning != "worktree busy" || !entry.PendingSync {
+		entry.Cleanup == nil || entry.Cleanup.Code != errcat.ChildCleanupIncomplete ||
+		entry.Cleanup.Diagnostics != "worktree busy" || !entry.PendingSync {
 		t.Fatalf("transaction entry = %+v, want full round-trip", entry)
 	}
 	rec := tx.Attention
@@ -1212,7 +1217,7 @@ func TestIntegrationResumable(t *testing.T) {
 		{"active phase attention", mk("", &feature.TransactionJournal{Phase: feature.TransactionPhaseAttention}, "/tmp/wt"), true},
 		{"active phase merged", mk("", merged, "/tmp/wt"), true},
 		{"closed completed settled", mk(feature.ChildCloseOutcomeCompleted, merged, ""), false},
-		{"closed completed with cleanup warning", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{MergeHEAD: "cccc3333", CleanupWarning: "worktree busy"}}}, ""), false},
+		{"closed completed with cleanup warning", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{MergeHEAD: "cccc3333", Cleanup: &errcat.FailureRecord{Code: errcat.ChildCleanupIncomplete, Diagnostics: "worktree busy"}}}}, ""), false},
 		{"closed completed with pending worktree", mk(feature.ChildCloseOutcomeCompleted, merged, "/tmp/wt"), false},
 		{"closed completed without merge head", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhasePreparing}, ""), false},
 	} {

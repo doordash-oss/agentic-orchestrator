@@ -817,7 +817,7 @@ async function waitForFeatureNamed(
   let found: { id: string; name: string; status: string } | undefined;
   await waitFor(
     async () => {
-      const features = await page.evaluate(() => window.agentico.listFeatures());
+      const features = (await page.evaluate(() => window.agentico.listFeatures())).features;
       found = features.find((feature) => feature.name === name);
       return found !== undefined;
     },

@@ -120,7 +120,7 @@ describe('overviewSubline', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 3.08, byPhase: {} },
         integrationState: 'pending',
-        cleanupWarnings: [],
+        warnings: [],
       },
     });
     const lanes = classifyFeaturesByLane([running]);

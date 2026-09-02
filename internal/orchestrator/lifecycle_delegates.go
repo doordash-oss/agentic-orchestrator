@@ -270,8 +270,8 @@ func (o *Orchestrator) SetDesignReady(featureID string) error {
 }
 
 // RewindToPhase delegates to Lifecycle.RewindToPhase. Returns the effective
-// target phase and warnings computed during the rewind.
-func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error) {
+// target phase and typed warnings computed during the rewind.
+func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase) ([]feature.RewindWarning, feature.Phase, error) {
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
 	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
@@ -289,7 +289,7 @@ func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase
 
 // RewindWithRequest delegates to Lifecycle.RewindWithRequest for rewind
 // flows that carry additional request fields such as a roadmap phase.
-func (o *Orchestrator) RewindWithRequest(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
+func (o *Orchestrator) RewindWithRequest(featureID string, request feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error) {
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
 	return o.rewindWithRequestLocked(featureID, request)
@@ -298,7 +298,7 @@ func (o *Orchestrator) RewindWithRequest(featureID string, request feature.Rewin
 // rewindWithRequestLocked is the lock-held rewind entry point. Callers must
 // hold the relationship read lock so the guard check and the rewind execute
 // atomically with any preceding mutations (e.g. pipeline upgrade).
-func (o *Orchestrator) rewindWithRequestLocked(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
+func (o *Orchestrator) rewindWithRequestLocked(featureID string, request feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error) {
 	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
 		return nil, 0, err
 	}
@@ -318,7 +318,7 @@ func (o *Orchestrator) rewindWithRequestLocked(featureID string, request feature
 // same read lock so a concurrent refactor launch cannot interleave a child
 // creation between the guard check and the mutations. Callers that need a
 // plain rewind (no pipeline upgrade) should use RewindWithRequest.
-func (o *Orchestrator) RewindWithUpgrade(featureID string, request feature.RewindRequest, upgradePipeline feature.PipelineProfile) ([]string, feature.Phase, error) {
+func (o *Orchestrator) RewindWithUpgrade(featureID string, request feature.RewindRequest, upgradePipeline feature.PipelineProfile) ([]feature.RewindWarning, feature.Phase, error) {
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
 	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {

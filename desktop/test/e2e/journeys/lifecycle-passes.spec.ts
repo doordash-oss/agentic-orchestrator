@@ -67,7 +67,7 @@ test('lifecycle passes: resume, retry, restart, rebase, refactor child', async (
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
     transcript.step(`created feature \`${featureName}\` through the form; cockpit visible`);
 
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 

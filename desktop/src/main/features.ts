@@ -27,6 +27,7 @@ limitations under the License.
 import {
   isRequestTimeout,
   redactText,
+  redactedCanonicalError,
   requiresLocalServerError,
   SafeErrorException,
 } from '../shared/errors';
@@ -69,10 +70,10 @@ import {
   type EffortLevel,
   type FeatureSetupView,
   type FeatureSnapshot,
+  type FeaturesListResult,
   type FeatureActionRequest,
   type FeatureActionResult,
   type PublishDescriptionResult,
-  type FeatureSummaryView,
   type ReadinessSnapshot,
   type RepositoryFileRef,
   type LaunchRebaseChildRequest,
@@ -297,38 +298,40 @@ export class FeatureService {
     };
   }
 
-  async listFeatures(): Promise<FeatureSummaryView[]> {
+  async listFeatures(): Promise<FeaturesListResult> {
     const body = await this.api('/api/v1/features');
     const response = validateWithSchema(body, FeatureListResponseSchema);
-    return response.features.map((feature) => ({
-      id: validateWithSchema(feature.id, FeatureIdSchema),
-      name: feature.name,
-      status: feature.status,
-      currentPhase: feature.current_phase,
-      repos: feature.repos,
-      createdAt: feature.created_at,
-      activeRun: feature.active_run,
-      runCount: feature.run_count,
-      ...(feature.progress.current_phase_status === undefined
-        ? {}
-        : { phaseStatus: feature.progress.current_phase_status }),
-      warnings: (feature.warnings ?? []).map((warning) => ({
-        code: warning.code,
-        message: redactText(warning.message),
+    return {
+      features: response.features.map((feature) => ({
+        id: validateWithSchema(feature.id, FeatureIdSchema),
+        name: feature.name,
+        status: feature.status,
+        currentPhase: feature.current_phase,
+        repos: feature.repos,
+        createdAt: feature.created_at,
+        activeRun: feature.active_run,
+        runCount: feature.run_count,
+        ...(feature.progress.current_phase_status === undefined
+          ? {}
+          : { phaseStatus: feature.progress.current_phase_status }),
+        // Canonical warning objects cross IPC intact except diagnostics,
+        // which pass through the same redaction as every other raw text.
+        warnings: (feature.warnings ?? []).map(redactedCanonicalError),
+        ...(feature.active_child === undefined
+          ? {}
+          : { activeChild: toRelationshipChildView(feature.active_child) }),
+        ...(feature.child_history === undefined
+          ? {}
+          : { childHistory: feature.child_history.map(toRelationshipChildView) }),
+        ...(feature.child_history_total === undefined
+          ? {}
+          : { childHistoryTotal: feature.child_history_total }),
+        ...(feature.child_history_truncated === undefined
+          ? {}
+          : { childHistoryTruncated: feature.child_history_truncated }),
       })),
-      ...(feature.active_child === undefined
-        ? {}
-        : { activeChild: toRelationshipChildView(feature.active_child) }),
-      ...(feature.child_history === undefined
-        ? {}
-        : { childHistory: feature.child_history.map(toRelationshipChildView) }),
-      ...(feature.child_history_total === undefined
-        ? {}
-        : { childHistoryTotal: feature.child_history_total }),
-      ...(feature.child_history_truncated === undefined
-        ? {}
-        : { childHistoryTruncated: feature.child_history_truncated }),
-    }));
+      warnings: (response.warnings ?? []).map(redactedCanonicalError),
+    };
   }
 
   /** Dispatches only allowlisted server-catalogue actions, single-flight per input. */
@@ -687,6 +690,9 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
       feature.active_run_detail?.phase_status ?? feature.progress.current_phase_status,
     ),
     ...(setup === null ? {} : { setup }),
+    // Canonical warning objects cross IPC intact except diagnostics, which
+    // pass through the same redaction as every other raw text.
+    warnings: (feature.warnings ?? []).map(redactedCanonicalError),
     automaticReview: {
       mode: feature.automatic_review.mode,
       enabled: feature.automatic_review.enabled,
@@ -780,9 +786,6 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
                     ...(entry.pending_sync === undefined
                       ? {}
                       : { pendingSync: entry.pending_sync }),
-                    ...(entry.cleanup_warning === undefined || entry.cleanup_warning === ''
-                      ? {}
-                      : { cleanupWarning: redactText(entry.cleanup_warning) }),
                   })),
                 }),
           },
@@ -888,10 +891,9 @@ function toRelationshipChildView(child: ServerRelationshipChild) {
                 : redactText(child.attention.diagnostics),
           },
         }),
-    cleanupWarnings: child.cleanup_warnings.map((warning) => ({
-      message: redactText(warning.message),
-      ...spreadDefined('repo', warning.repo),
-    })),
+    // Canonical warning objects cross IPC intact except diagnostics, which
+    // pass through the same redaction as every other raw text.
+    warnings: child.warnings.map(redactedCanonicalError),
     ...spreadDefined('diffSummary', child.diff_summary),
     ...(hasDiffSummary === undefined ? {} : { hasDiffSummary }),
   };

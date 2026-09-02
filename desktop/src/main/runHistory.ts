@@ -20,7 +20,7 @@ limitations under the License.
  * returns strict renderer-facing views; nothing here caches server-domain
  * data, reads runtime files, or lets the renderer compose REST paths.
  */
-import { redactText } from '../shared/errors';
+import { redactText, redactedCanonicalError } from '../shared/errors';
 import {
   ArtifactListResponseSchema,
   RunLogListResponseSchema,
@@ -273,7 +273,11 @@ export class RunHistoryService {
         ? { sourceRunNumber: result.source_run_number }
         : {}),
       ...(result.new_run_number !== undefined ? { newRunNumber: result.new_run_number } : {}),
-      ...(result.warnings !== undefined ? { warnings: result.warnings } : {}),
+      // Canonical warning objects cross IPC intact except diagnostics,
+      // which pass through the same redaction as every other raw text.
+      ...(result.warnings === undefined
+        ? {}
+        : { warnings: result.warnings.map(redactedCanonicalError) }),
     };
   }
 

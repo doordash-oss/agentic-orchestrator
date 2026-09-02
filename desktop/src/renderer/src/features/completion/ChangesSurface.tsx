@@ -17,6 +17,7 @@ limitations under the License.
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useConnectionState, useMediaQuery } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
+import { ErrorSurface } from '../../components/ErrorSurface';
 import {
   DiffViewer,
   PrLinkButton,
@@ -297,6 +298,10 @@ export function ChangesSurface({
 
       {selectedRepo !== null && diffLoading ? <DiffSkeleton /> : null}
 
+      {selectedRepo !== null && diff !== null && diff.error !== undefined ? (
+        <ErrorSurface error={diff.error} variant="compact" />
+      ) : null}
+
       {selectedRepo !== null && diff !== null ? (
         <div className="changes-manifest__workspace">
           <aside className="changes-manifest__files" aria-label="Changed files">
@@ -326,7 +331,7 @@ export function ChangesSurface({
                   ) : null}
                 </button>
               ))}
-              {diff.files.length === 0 && !diff.partialFailure ? (
+              {diff.files.length === 0 && !diff.error ? (
                 <p className="completion-workspace__no-changes">
                   No local changes in this repository.
                 </p>
@@ -341,11 +346,6 @@ export function ChangesSurface({
                 <strong>{selectedFile ?? 'Choose a file'}</strong>
               </div>
               <div className="changes-manifest__preview-controls">
-                {diff.partialFailure ? (
-                  <span className="completion-workspace__partial-failure">
-                    {diff.partialFailure}
-                  </span>
-                ) : null}
                 {diff.truncated ? (
                   <span className="completion-workspace__truncated">Truncated</span>
                 ) : null}

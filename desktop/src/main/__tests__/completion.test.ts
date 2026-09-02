@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 import { describe, expect, it } from 'vitest';
+import { RepositoryDiffResultSchema } from '../../shared/ipc';
 import { CompletionService } from '../completion';
 import type { ServerTransport } from '../serverClient';
 
@@ -188,5 +189,47 @@ describe('CompletionService.preflightCompletion', () => {
     expect(repo.error?.diagnostics).not.toContain('/Users/dev/worktrees/repo-a');
     expect(repo.error?.diagnostics).toContain('[path]');
     expect(Reflect.get(repo, 'lastError')).toBeUndefined();
+  });
+});
+
+describe('CompletionService.getRepositoryDiff', () => {
+  it('maps the canonical partial-inspection error with redacted diagnostics', async () => {
+    const service = new CompletionService({
+      transport: pathTransport({
+        status: 200,
+        body: {
+          api_version: 'v1',
+          feature_id: 'abcd1234ef567890',
+          repo: 'repo-a',
+          source_revision: 'rev-1',
+          files: [],
+          error: {
+            code: 'repository_inspection_partial',
+            class: 'warning',
+            title: 'Repository inspection incomplete',
+            summary: 'One repository could not be fully inspected for changes.',
+            diagnostics: 'git status failed under /Users/dev/repo-a: bearer tok-live-secret',
+          },
+        },
+      }),
+    });
+
+    const result = await service.getRepositoryDiff({
+      featureId: 'abcd1234ef567890',
+      repo: 'repo-a',
+    });
+
+    expect(result.files).toEqual([]);
+    expect(result.error).toMatchObject({
+      code: 'repository_inspection_partial',
+      class: 'warning',
+      title: 'Repository inspection incomplete',
+    });
+    expect(result.error?.diagnostics).not.toContain('/Users/dev/repo-a');
+    expect(result.error?.diagnostics).not.toContain('tok-live-secret');
+    expect(result.error?.diagnostics).toContain('[path]');
+    expect(result.error?.diagnostics).toContain('[redacted]');
+    expect(Reflect.get(result, 'partialFailure')).toBeUndefined();
+    expect(() => RepositoryDiffResultSchema.parse(result)).not.toThrow();
   });
 });

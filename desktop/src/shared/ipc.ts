@@ -1050,7 +1050,8 @@ export const RelationshipChildViewSchema = z.strictObject({
   integrationState: z.string(),
   /** Canonical integration-attention error; absent when integration is not parked. */
   attention: CanonicalErrorSchema.optional(),
-  cleanupWarnings: z.array(z.strictObject({ message: z.string(), repo: z.string().optional() })),
+  /** Canonical warning-class errors for this child's cleanup and review-feedback tails. */
+  warnings: z.array(CanonicalErrorSchema).max(100),
   diffSummary: z.string().optional(),
   /** A preserved diff exists even when `diffSummary` is absent from a list projection. */
   hasDiffSummary: z.boolean().optional(),
@@ -1068,7 +1069,6 @@ export const RelationshipTransactionViewSchema = z.strictObject({
         prepState: z.string().optional(),
         applyState: z.string().optional(),
         pendingSync: z.boolean().optional(),
-        cleanupWarning: z.string().optional(),
       }),
     )
     .max(100)
@@ -1086,7 +1086,8 @@ export const FeatureSummaryViewSchema = z.strictObject({
   activeRun: z.number().int().nonnegative(),
   runCount: z.number().int().nonnegative(),
   phaseStatus: z.string().optional(),
-  warnings: z.array(z.strictObject({ code: z.string(), message: z.string() })).max(100),
+  /** Canonical warning-class errors for this feature, diagnostics redacted. */
+  warnings: z.array(CanonicalErrorSchema).max(100),
   activeChild: RelationshipChildViewSchema.optional(),
   childHistory: z.array(RelationshipChildViewSchema).max(1000).optional(),
   /** Closed-child count before the list projection's cap. */
@@ -1095,6 +1096,16 @@ export const FeatureSummaryViewSchema = z.strictObject({
 });
 
 export type FeatureSummaryView = z.output<typeof FeatureSummaryViewSchema>;
+
+/**
+ * The featuresList channel result: per-feature summaries plus list-level
+ * canonical warnings for feature files the server could not load.
+ */
+export const FeaturesListResultSchema = z.strictObject({
+  features: z.array(FeatureSummaryViewSchema).max(500),
+  warnings: z.array(CanonicalErrorSchema).max(100),
+});
+export type FeaturesListResult = z.output<typeof FeaturesListResultSchema>;
 
 /** Per-repository operational status from the server feature detail. */
 export const RepoStatusViewSchema = z.strictObject({
@@ -1181,6 +1192,8 @@ export const FeatureSnapshotSchema = z.strictObject({
   /** Mid-flight phase status from the server ("implementing" | "reviewing"). */
   phaseStatus: z.string().optional(),
   setup: FeatureSetupViewSchema.optional(),
+  /** Canonical warning-class errors for this feature, diagnostics redacted. */
+  warnings: z.array(CanonicalErrorSchema).max(100),
   /** The authoritative server action catalogue (setup/start/…). */
   actions: z.array(FeatureActionViewSchema),
   activeChild: RelationshipChildViewSchema.optional(),
@@ -1317,7 +1330,8 @@ export const FeatureActionResultSchema = z.strictObject({
   sessionIds: z.array(z.string().min(1).max(200)).max(100),
   sourceRunNumber: z.number().int().nonnegative().optional(),
   newRunNumber: z.number().int().nonnegative().optional(),
-  warnings: z.array(z.string().max(500)).max(100).optional(),
+  /** Canonical warning-class errors from the action, diagnostics redacted. */
+  warnings: z.array(CanonicalErrorSchema).max(100).optional(),
 });
 export type FeatureActionResult = z.output<typeof FeatureActionResultSchema>;
 
@@ -1398,7 +1412,8 @@ export const RepositoryDiffResultSchema = z.strictObject({
   fileTruncated: z.boolean().optional(),
   fileBinary: z.boolean().optional(),
   fileUnavailable: z.boolean().optional(),
-  partialFailure: z.string().max(500).optional(),
+  /** Canonical warning-class error for the typed partial inspection failure; absent when fully inspected. */
+  error: CanonicalErrorSchema.optional(),
 });
 export type RepositoryDiffResult = z.output<typeof RepositoryDiffResultSchema>;
 
@@ -1580,6 +1595,8 @@ export const RecoveryItemViewSchema = z.strictObject({
   iteration: z.number().int().nonnegative().optional(),
   pid: z.number().int().optional(),
   processAlive: z.boolean(),
+  /** Canonical needs_action error classifying this orphan session by liveness. */
+  error: CanonicalErrorSchema,
   logAvailable: z.boolean().optional(),
   allowedActions: z.array(z.string().max(50)).max(20),
   defaultAction: z.string().max(50),
@@ -3408,7 +3425,7 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   },
   [IPC_CHANNELS.featuresList]: {
     request: z.tuple([]),
-    response: z.array(FeatureSummaryViewSchema),
+    response: FeaturesListResultSchema,
   },
   [IPC_CHANNELS.featuresGet]: {
     request: z.tuple([FeatureIdSchema]),
@@ -3771,7 +3788,7 @@ export interface AgenticoApi {
   reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot>;
   initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
   listRepositories(): Promise<RepositoryState[]>;
-  listFeatures(): Promise<FeatureSummaryView[]>;
+  listFeatures(): Promise<FeaturesListResult>;
   getFeature(featureId: string): Promise<FeatureSnapshot>;
   createFeature(input: CreateFeatureInput): Promise<CreateFeatureResult>;
   dispatchFeatureSetup(featureId: string): Promise<SetupDispatchResult>;

@@ -306,7 +306,7 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 	}
 	revision := revisionForAny(struct {
 		Features []FeatureSummary
-		Warnings []Warning
+		Warnings []Error
 	}{Features: summaries, Warnings: warnings})
 	h.writeRevisionedJSON(w, r, revision, FeatureListResponse{
 		APIVersion: APIVersion,
@@ -508,7 +508,7 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 	return false
 }
 
-func listFeatures(lister FeatureLister) ([]*feature.Feature, []Warning, error) {
+func listFeatures(lister FeatureLister) ([]*feature.Feature, []Error, error) {
 	if lister == nil {
 		return nil, nil, nil
 	}
@@ -520,13 +520,17 @@ func listFeatures(lister FeatureLister) ([]*feature.Feature, []Warning, error) {
 	if !errors.As(err, &partial) {
 		return nil, nil, err
 	}
-	warnings := make([]Warning, 0, len(partial.Warnings))
+	warnings := make([]Error, 0, len(partial.Warnings))
 	for _, w := range partial.Warnings {
-		warnings = append(warnings, Warning{
-			Code:      "partial_load",
-			FeatureID: w.ID,
-			Message:   "feature could not be loaded",
-		})
+		var diagnostics string
+		if w.Err != nil {
+			diagnostics = SafeDisplayText(w.Err.Error(), 240)
+		}
+		warnings = append(warnings, wireError(errcat.New(
+			errcat.FeatureLoadFailed,
+			errcat.WithParams(errcat.FeatureLoadFailedParams{FeatureID: w.ID}),
+			errcat.WithDiagnostics(diagnostics),
+		)))
 	}
 	return features, warnings, nil
 }
@@ -742,6 +746,13 @@ func writeAPIError(w http.ResponseWriter, status int, code errcat.Code, opts ...
 		APIVersion: APIVersion,
 		Error:      wireError(errcat.New(code, opts...)),
 	})
+}
+
+// WireCanonicalError projects a rendered canonical error onto the generated
+// wire model for adapters outside this package (the mutation target), so
+// every boundary renders canonical objects through one projection.
+func WireCanonicalError(rendered errcat.Error) Error {
+	return wireError(rendered)
 }
 
 // wireError projects a rendered canonical error onto the generated model.

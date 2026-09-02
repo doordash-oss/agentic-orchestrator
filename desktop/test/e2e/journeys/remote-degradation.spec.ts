@@ -408,9 +408,9 @@ test('remote degradation: gated affordances, copy-path completion, server-valida
     const cockpit = handle.page.getByLabel(`Feature ${FEATURE_NAME}`);
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
     await expect(cockpit.getByText('Ready to start')).toBeVisible({ timeout: 90_000 });
-    const feature = (await handle.page.evaluate(() => window.agentico.listFeatures())).find(
-      (candidate) => candidate.name === FEATURE_NAME,
-    );
+    const feature = (
+      await handle.page.evaluate(() => window.agentico.listFeatures())
+    ).features.find((candidate) => candidate.name === FEATURE_NAME);
     expect(feature).toBeDefined();
     transcript.step('feature created and set up entirely on the remote server');
 

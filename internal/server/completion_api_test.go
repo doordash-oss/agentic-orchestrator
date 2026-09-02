@@ -16,8 +16,11 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
@@ -505,11 +508,18 @@ func TestRepositoryDiffRejectsWrongMethod(t *testing.T) {
 
 func TestRepositoryDiffReportsPartialFailure(t *testing.T) {
 	t.Parallel()
+	rendered := wireError(errcat.New(
+		errcat.RepositoryWorktreeUnavailable,
+		errcat.WithRepositories(errcat.CodeRepository{Name: "repo-x"}),
+		errcat.WithParams(errcat.WarningRepoParams{
+			Repositories: []errcat.CodeRepository{{Name: "repo-x"}},
+		}),
+	))
 	target := &preflightMutationTarget{
 		repoDiff: RepositoryDiffResponse{
-			FeatureID:      fixtureFeatureID,
-			Repo:           "repo-x",
-			PartialFailure: "worktree not available",
+			FeatureID: fixtureFeatureID,
+			Repo:      "repo-x",
+			Error:     &rendered,
 		},
 	}
 	handler := NewHandler(HandlerOptions{
@@ -522,11 +532,52 @@ func TestRepositoryDiffReportsPartialFailure(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d; want 200 for partial failure", w.Code)
 	}
+	body, err := io.ReadAll(w.Result().Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if strings.Contains(string(body), "partial_failure") {
+		t.Fatalf("body still carries a partial_failure field: %s", body)
+	}
 	var resp RepositoryDiffResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != string(errcat.RepositoryWorktreeUnavailable) {
+		t.Fatalf("error = %+v; want repository_worktree_unavailable", resp.Error)
+	}
+	if resp.Error.Class != ErrorClass(errcat.ClassWarning) {
+		t.Fatalf("error class = %q; want warning", resp.Error.Class)
+	}
+	if resp.Error.Context == nil || len(resp.Error.Context.Repositories) != 1 ||
+		resp.Error.Context.Repositories[0].Name != "repo-x" {
+		t.Fatalf("error repositories block = %+v; want repo-x", resp.Error.Context)
+	}
+}
+
+func TestRepositoryDiffUnknownRepoReturnsNotFoundEnvelope(t *testing.T) {
+	t.Parallel()
+	target := &preflightMutationTarget{
+		repoDiffErr: fmt.Errorf("repository %q: %w", "repo-x", feature.ErrRepositoryNotFound),
+	}
+	handler := NewHandler(HandlerOptions{
+		Mutations:             target,
+		AuthToken:             testAuthToken,
+		DisableHostValidation: true,
+	})
+
+	w := authedGet(handler, "/api/v1/features/"+fixtureFeatureID+"/repositories/repo-x/diff")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d; want 404 for unknown repository", w.Code)
+	}
+	var resp ErrorResponse
 	if err := json.NewDecoder(w.Result().Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.PartialFailure != "worktree not available" {
-		t.Fatalf("partial_failure = %q; want 'worktree not available'", resp.PartialFailure)
+	if resp.Error.Code != string(errcat.NotFound) {
+		t.Fatalf("error code = %q; want not_found", resp.Error.Code)
+	}
+	if !strings.Contains(resp.Error.Summary, "repo-x") {
+		t.Fatalf("summary = %q; want it to name the repository", resp.Error.Summary)
 	}
 }

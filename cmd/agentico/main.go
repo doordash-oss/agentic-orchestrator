@@ -1827,9 +1827,8 @@ func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime
 	if effectiveTarget != 0 || strings.EqualFold(req.TargetPhase, phaseNameResearch) {
 		resp.EffectivePhase = effectiveTarget.DirName()
 	}
-	resp.WarningCount = len(warnings)
 	resp.SourceRunNumber = sourceRunNumber
-	resp.Warnings = redactRewindWarnings(warnings)
+	resp.Warnings = wireRewindWarnings(warnings)
 	if err != nil {
 		resp.Result = resultFailed
 		return resp, err
@@ -1879,18 +1878,65 @@ func (t *serverMutationTarget) validateRewindGuard(featureID string, req serverr
 	return current, nil
 }
 
-// redactRewindWarnings sanitizes rewind warning strings for API exposure,
-// stripping private tokens and bounding length, mirroring the server's
-// safeDisplayText redaction.
-func redactRewindWarnings(warnings []string) []string {
+// wireRewindWarnings classifies the feature manager's typed rewind warnings
+// once at this boundary into the canonical rewind warning codes, with the
+// repositories block and the raw cause as bounded, redacted diagnostics.
+func wireRewindWarnings(warnings []feature.RewindWarning) []serverruntime.Error {
 	if len(warnings) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(warnings))
-	for _, w := range warnings {
-		out = append(out, serverruntime.SafeDisplayText(w, 300))
+	out := make([]serverruntime.Error, 0, len(warnings))
+	for _, warning := range warnings {
+		var code errcat.Code
+		switch warning.Kind {
+		case feature.RewindWarningPullRequestClose:
+			code = errcat.RewindPullRequestCloseFailed
+		case feature.RewindWarningBackupBranch:
+			code = errcat.RewindBackupBranchFailed
+		default:
+			code = errcat.RewindWorktreeResetFailed
+		}
+		diagnostics := ""
+		if warning.Err != nil {
+			diagnostics = serverruntime.SafeDisplayText(warning.Err.Error(), 300)
+		}
+		rendered := errcat.New(
+			code,
+			errcat.WithRepositories(errcat.CodeRepository{Name: warning.Repo, Branch: warning.Branch}),
+			errcat.WithParams(errcat.WarningRepoParams{
+				Repositories: []errcat.CodeRepository{{Name: warning.Repo, Branch: warning.Branch}},
+			}),
+			errcat.WithDiagnostics(diagnostics),
+		)
+		out = append(out, serverruntime.WireCanonicalError(rendered))
 	}
 	return out
+}
+
+// wireRepositoryDiffFailure classifies one typed repository-diff partial
+// failure into its canonical warning code with the repositories block and
+// the raw cause as bounded, redacted diagnostics.
+func wireRepositoryDiffFailure(repoName string, failure *orchestrator.RepositoryDiffFailure) *serverruntime.Error {
+	if failure == nil {
+		return nil
+	}
+	code := errcat.RepositoryDiffFailed
+	if failure.Kind == orchestrator.RepositoryDiffWorktreeUnavailable {
+		code = errcat.RepositoryWorktreeUnavailable
+	}
+	diagnostics := ""
+	if failure.Err != nil {
+		diagnostics = serverruntime.SafeDisplayText(failure.Err.Error(), 200)
+	}
+	repos := []errcat.CodeRepository{{Name: repoName}}
+	rendered := errcat.New(
+		code,
+		errcat.WithRepositories(repos...),
+		errcat.WithParams(errcat.WarningRepoParams{Repositories: repos}),
+		errcat.WithDiagnostics(diagnostics),
+	)
+	wire := serverruntime.WireCanonicalError(rendered)
+	return &wire
 }
 
 func (t *serverMutationTarget) RetryFeature(featureID string) (serverruntime.RetryFeatureResponse, error) {
@@ -1995,7 +2041,7 @@ func (t *serverMutationTarget) RepositoryDiff(featureID, repoName, filePath stri
 		FileTruncated:   result.FileTruncated,
 		FileBinary:      result.FileBinary,
 		FileUnavailable: result.FileUnavailable,
-		PartialFailure:  result.PartialFailure,
+		Error:           wireRepositoryDiffFailure(result.Repo, result.PartialFailure),
 	}
 	for _, f := range result.Files {
 		resp.Files = append(resp.Files, serverruntime.RepositoryDiffFile{

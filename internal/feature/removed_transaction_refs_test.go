@@ -21,6 +21,7 @@ import (
 	"go/token"
 	"go/types"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -48,15 +49,20 @@ var removedTransactionConstants = map[string]bool{
 }
 
 // removedTransactionEntryFields are the RepoTransactionEntry field names
-// deleted with the single-record refactor. They are banned receiver-aware
-// (x.Field where x is feature.RepoTransactionEntry) because identically
-// named fields remain legitimate on other types: errcat.FailureRecord
-// carries Diagnostics and errcat.CodeRepository carries ConflictFiles.
+// deleted with the single-record refactor, plus the pre-catalog
+// cleanup_warning and tail_warning string fields deleted when the journal
+// began storing the two optional canonical warning records. They are banned
+// receiver-aware (x.Field where x is feature.RepoTransactionEntry) because
+// identically named fields remain legitimate on other types:
+// errcat.FailureRecord carries Diagnostics and errcat.CodeRepository
+// carries ConflictFiles.
 var removedTransactionEntryFields = map[string]bool{
-	"Diagnostics":   true,
-	"GateCode":      true,
-	"ConflictFiles": true,
-	"Dirty":         true,
+	"Diagnostics":    true,
+	"GateCode":       true,
+	"ConflictFiles":  true,
+	"Dirty":          true,
+	"CleanupWarning": true,
+	"TailWarning":    true,
 }
 
 // TestNoNonTestSourceReferencesRemovedTransactionAPIs parses every non-test
@@ -116,12 +122,12 @@ func TestNoNonTestSourceReferencesRemovedTransactionAPIs(t *testing.T) {
 
 // TestTypecheckBansRemovedTransactionEntryFields loads every repository
 // package with full type information (non-test sources only) and fails when
-// a selector x.Diagnostics, x.GateCode, x.ConflictFiles, or x.Dirty resolves
-// to a field of feature.RepoTransactionEntry, or when any identifier
-// resolves to one of the removed transaction constants declared in this
-// package. This is the precise, receiver-aware guard: the identically named
-// fields on errcat.FailureRecord, errcat.CodeRepository, and the generated
-// server models remain legal.
+// a selector resolves to a field of feature.RepoTransactionEntry that the
+// single-record refactor or the warning-record refactor deleted, or when any
+// identifier resolves to one of the removed transaction constants declared
+// in this package. This is the precise, receiver-aware guard: the identically
+// named fields on errcat.FailureRecord, errcat.CodeRepository, and the
+// generated server models remain legal.
 func TestTypecheckBansRemovedTransactionEntryFields(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	featurePkgPath := reflect.TypeOf(Feature{}).PkgPath()
@@ -203,4 +209,92 @@ func transactionEntryRecv(recv types.Type, featurePkgPath string) bool {
 	}
 	obj := named.Obj()
 	return obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == featurePkgPath && obj.Name() == "RepoTransactionEntry"
+}
+
+// TestTypecheckGuardFlagsRemovedWarningFieldsFixture pins the receiver-aware
+// guard itself: with the removed string fields synthetically reintroduced
+// (via source overlays that never touch disk), a non-test source selecting
+// .CleanupWarning or .TailWarning on a transaction entry must be flagged, so
+// the guard cannot silently stop covering the removed warning fields.
+func TestTypecheckGuardFlagsRemovedWarningFieldsFixture(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transactionPath := filepath.Join(repoRoot, "internal", "feature", "transaction.go")
+	transactionSrcBytes, err := os.ReadFile(transactionPath)
+	if err != nil {
+		t.Fatalf("read transaction.go: %v", err)
+	}
+	pkgIdx := strings.Index(string(transactionSrcBytes), "package feature\n")
+	if pkgIdx < 0 {
+		t.Fatal("transaction.go does not carry the expected package clause")
+	}
+	transactionSrc := string(transactionSrcBytes[pkgIdx:])
+	tailAnchor := "Tail *errcat.FailureRecord `yaml:\"tail,omitempty\"`\n}"
+	if !strings.Contains(transactionSrc, tailAnchor) {
+		t.Fatal("transaction.go no longer carries the Tail record field anchor")
+	}
+	// Reintroduce the removed string fields so the fixture compiles; the
+	// guard must still flag every selector that resolves to them.
+	transactionSrc = strings.Replace(transactionSrc, tailAnchor,
+		"Tail *errcat.FailureRecord `yaml:\"tail,omitempty\"`\n\tCleanupWarning string `yaml:\"cleanup_warning,omitempty\"`\n\tTailWarning string `yaml:\"tail_warning,omitempty\"`\n}", 1)
+
+	fixture := `package feature
+
+func removedWarningFieldsFixtureProbe(e *RepoTransactionEntry) (string, string) {
+	return e.CleanupWarning, e.TailWarning
+}
+`
+	overlayPath := filepath.Join(repoRoot, "internal", "feature", "zzz_removed_warning_fields_fixture_probe.go")
+	pkgs := loadRepoPackages(t, repoRoot, "./internal/feature", map[string][]byte{
+		transactionPath: []byte(transactionSrc),
+		overlayPath:     []byte(fixture),
+	})
+	featurePkgPath := reflect.TypeOf(Feature{}).PkgPath()
+	violationSet := make(map[string]bool)
+	typechecked := 0
+	for _, pkg := range pkgs {
+		info := pkg.TypesInfo
+		if info == nil {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			typechecked++
+			ast.Inspect(file, func(n ast.Node) bool {
+				selector, ok := n.(*ast.SelectorExpr)
+				if !ok || !removedTransactionEntryFields[selector.Sel.Name] {
+					return true
+				}
+				selection, ok := info.Selections[selector]
+				if !ok || selection.Kind() != types.FieldVal {
+					return true
+				}
+				if transactionEntryRecv(selection.Recv(), featurePkgPath) {
+					violationSet[fmt.Sprintf("%s: selector %s resolves to the removed feature.RepoTransactionEntry field",
+						pkg.Fset.Position(selector.Sel.Pos()), selector.Sel.Name)] = true
+				}
+				return true
+			})
+		}
+	}
+	if typechecked == 0 {
+		t.Fatal("fixture package carried no syntax and type info; guard could not run")
+	}
+	cleanupFlagged, tailFlagged := false, false
+	for v := range violationSet {
+		if !strings.Contains(v, "zzz_removed_warning_fields_fixture_probe.go") {
+			t.Errorf("unexpected violation outside the fixture: %s", v)
+			continue
+		}
+		if strings.Contains(v, "CleanupWarning") {
+			cleanupFlagged = true
+		}
+		if strings.Contains(v, "TailWarning") {
+			tailFlagged = true
+		}
+	}
+	if !cleanupFlagged || !tailFlagged {
+		t.Fatalf("fixture violations = %v; want both .CleanupWarning and .TailWarning flagged", violationSet)
+	}
 }

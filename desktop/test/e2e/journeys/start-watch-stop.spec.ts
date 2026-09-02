@@ -215,7 +215,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     await expect(dialog).toHaveCount(0);
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
 
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     await waitFor(
       async () => {
         const snapshot = await handle!.page.evaluate(

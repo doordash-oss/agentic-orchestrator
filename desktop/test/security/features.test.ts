@@ -55,6 +55,7 @@ function snapshot() {
     repos: ['repo-a'],
     createdAt: '2026-07-14T10:00:00Z',
     activeRun: 1,
+    warnings: [],
     automaticReview: {
       mode: 'default' as const,
       enabled: true,
@@ -150,7 +151,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     reorderWorkspaceRoots: vi.fn(() => Promise.reject(new Error('unused'))),
     initRepository: vi.fn(() => Promise.reject(new Error('unused'))),
     listRepositories: vi.fn(() => Promise.resolve([])),
-    listFeatures: vi.fn(() => Promise.resolve([])),
+    listFeatures: vi.fn(() => Promise.resolve({ features: [], warnings: [] })),
     getFeature: vi.fn(() => Promise.resolve(snapshot())),
     createFeature: vi.fn(() => Promise.resolve({ featureId: 'abcd1234ef567890' })),
     dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),

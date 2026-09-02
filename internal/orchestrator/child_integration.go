@@ -566,9 +566,9 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 // type-appropriate routing, resolves inline review threads whose reply
 // succeeded, and records the addressed comment IDs. Repos without selected
 // comments are not pushed. Failures are terminal warnings: the tail
-// attempts every step once, records per-repo failures in the new
-// TailWarning journal field, and marks itself settled regardless. The
-// parent ends Published whether or not any step failed.
+// attempts every step once, records per-repo failures in the entry's stored
+// tail warning record, and marks itself settled regardless. The parent ends
+// Published whether or not any step failed.
 func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feature) error {
 	// Group selected comments by repo, preserving the parent repo order.
 	commentsByRepo := make(map[string][]feature.ReviewFeedbackComment)
@@ -717,20 +717,46 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 }
 
 // recordTransactionCleanupWarning durably records the outcome of a per-repo
-// cleanup pass on the transaction journal (empty clears a previous warning
-// for that repo).
-func (o *Orchestrator) recordTransactionCleanupWarning(childID, repoName, warning string) error {
+// cleanup pass on the transaction journal: an empty cause clears the stored
+// record for that repo (cleanup finished cleanly), a non-empty cause stores
+// the canonical child_cleanup_incomplete record with the repositories block
+// and the raw cause as diagnostics.
+func (o *Orchestrator) recordTransactionCleanupWarning(childID, repoName, cause string) error {
 	return o.deps.Store.Modify(childID, func(f *feature.Feature) error {
 		if f.Parent.Transaction != nil {
 			for i := range f.Parent.Transaction.Entries {
 				if f.Parent.Transaction.Entries[i].Repo == repoName {
-					f.Parent.Transaction.Entries[i].CleanupWarning = warning
+					if cause == "" {
+						f.Parent.Transaction.Entries[i].Cleanup = nil
+					} else {
+						f.Parent.Transaction.Entries[i].Cleanup = &errcat.FailureRecord{
+							Code: errcat.ChildCleanupIncomplete,
+							Context: &errcat.RecordContext{
+								Repositories: []errcat.CodeRepository{{
+									Name:   repoName,
+									Branch: childRepoBranch(f, repoName),
+								}},
+							},
+							Diagnostics: cause,
+						}
+					}
 					return nil
 				}
 			}
 		}
 		return nil
 	})
+}
+
+// childRepoBranch returns the branch recorded for repoName on the feature's
+// repositories, or "" when the repository is not listed.
+func childRepoBranch(f *feature.Feature, repoName string) string {
+	for i := range f.Repos {
+		if f.Repos[i].Name == repoName {
+			return f.Repos[i].Branch
+		}
+	}
+	return ""
 }
 
 // reviewFeedbackLedger is the store capability for reading and writing the
@@ -741,21 +767,37 @@ type reviewFeedbackLedger interface {
 }
 
 // recordTransactionTailWarning durably records a review-feedback integration
-// tail failure for a repo on the transaction journal's TailWarning field.
-// The warning is terminal — it never blocks the remaining comments or repos
-// and the tail still settles.
-func (o *Orchestrator) recordTransactionTailWarning(childID, repoName, warning string) {
+// tail failure for a repo on the transaction journal entry's stored tail
+// record. The first failure for a repository creates the
+// review_feedback_tail_incomplete record with the repositories block; every
+// further failure appends one raw diagnostics line. The warning is terminal —
+// it never blocks the remaining comments or repos and the tail still settles.
+func (o *Orchestrator) recordTransactionTailWarning(childID, repoName, cause string) {
 	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
 		if f.Parent.Transaction != nil {
 			for i := range f.Parent.Transaction.Entries {
-				if f.Parent.Transaction.Entries[i].Repo == repoName {
-					existing := f.Parent.Transaction.Entries[i].TailWarning
-					if existing != "" {
-						existing += "; "
-					}
-					f.Parent.Transaction.Entries[i].TailWarning = existing + warning
-					return nil
+				entry := &f.Parent.Transaction.Entries[i]
+				if entry.Repo != repoName {
+					continue
 				}
+				if entry.Tail == nil {
+					entry.Tail = &errcat.FailureRecord{
+						Code: errcat.ReviewFeedbackTailIncomplete,
+						Context: &errcat.RecordContext{
+							Repositories: []errcat.CodeRepository{{
+								Name:   repoName,
+								Branch: entry.ParentBranch,
+							}},
+						},
+						Diagnostics: cause,
+					}
+				} else if cause != "" {
+					if entry.Tail.Diagnostics != "" {
+						entry.Tail.Diagnostics += "\n"
+					}
+					entry.Tail.Diagnostics += cause
+				}
+				return nil
 			}
 		}
 		return nil

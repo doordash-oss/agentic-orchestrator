@@ -26,6 +26,7 @@ limitations under the License.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type RewindPreviewView, type FeatureActionResult } from '../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { ErrorSurface } from '../components/ErrorSurface';
 import { displayPhaseLabel } from './featureView';
 
 export interface RewindJourneyProps {
@@ -460,18 +461,9 @@ export function RewindJourney(props: RewindJourneyProps) {
                 {result.newRunNumber !== undefined &&
                   `New run ${result.newRunNumber} is now active.`}
               </p>
-              {result.warnings && result.warnings.length > 0 && (
-                <div className="rewind-journey__warnings">
-                  <h4 className="rewind-journey__warnings-title">Warnings</h4>
-                  <ul className="rewind-journey__warnings-list">
-                    {result.warnings.map((w: string, i: number) => (
-                      <li key={i} className="rewind-journey__warning-item">
-                        {w}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              {result.warnings?.map((warning, index) => (
+                <ErrorSurface key={`${warning.code}:${index}`} error={warning} variant="compact" />
+              ))}
               <button
                 className="rewind-journey__done"
                 onClick={() => onRewindComplete(result)}

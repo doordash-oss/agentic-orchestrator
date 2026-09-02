@@ -56,9 +56,11 @@ import {
   sameMainWindowUiState,
   type ShellPatch,
 } from '../../../shared/ipc';
+import type { CanonicalError } from '../../../shared/api/parse';
 import { featureCommandEnablement, isFeatureCommandId } from '../../../shared/commands';
 import { runFeatureCommand, toggleActiveInspector } from './featureCommands';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { ErrorSurface } from '../components/ErrorSurface';
 import { isEditingShortcutTarget } from '../components/CommandPalette';
 import { CreateFeatureForm } from './CreateFeatureForm';
 import { FeatureCockpit } from './FeatureCockpit';
@@ -98,6 +100,8 @@ type ListState =
       features: FeatureSnapshot[];
       /** Per-feature detail failures; the row still renders from its summary. */
       detailFailures: ReadonlySet<string>;
+      /** List-level canonical warnings, e.g. feature files that failed to load. */
+      warnings: readonly CanonicalError[];
     };
 
 type Selection = { kind: 'overview' } | { kind: 'feature'; featureId: string };
@@ -137,6 +141,7 @@ function snapshotFromSummary(summary: FeatureSummaryView): FeatureSnapshot {
       validatorStatuses: {},
     },
     automaticReview: { mode: 'default', enabled: false, source: 'global' },
+    warnings: summary.warnings,
     ...(summary.phaseStatus === undefined ? {} : { phaseStatus: summary.phaseStatus }),
     ...(summary.activeChild === undefined ? {} : { activeChild: summary.activeChild }),
     ...(summary.childHistory === undefined ? {} : { childHistory: summary.childHistory }),
@@ -404,6 +409,7 @@ export function WorkspaceShell({
                 current.features.map((feature) => details.get(feature.id) ?? feature),
               ),
               detailFailures,
+              warnings: current.warnings,
             }
           : current,
       );
@@ -419,10 +425,15 @@ export function WorkspaceShell({
     const request = ++listRequestRef.current;
     const isCurrent = () => request === listRequestRef.current;
     window.agentico.listFeatures().then(
-      (summaries) => {
+      (list) => {
         if (!isCurrent()) return;
-        const rows = orderDashboardFeatures(summaries.map(snapshotFromSummary));
-        setList({ phase: 'loaded', features: rows, detailFailures: NO_DETAIL_FAILURES });
+        const rows = orderDashboardFeatures(list.features.map(snapshotFromSummary));
+        setList({
+          phase: 'loaded',
+          features: rows,
+          detailFailures: NO_DETAIL_FAILURES,
+          warnings: list.warnings,
+        });
         void refineDetails(rows, isCurrent).catch(() => {
           // Refinement is additive; the summary-derived rows already render.
         });
@@ -976,6 +987,15 @@ export function WorkspaceShell({
                   </button>
                 ) : null}
               </header>
+              {list.phase === 'loaded'
+                ? list.warnings.map((warning, index) => (
+                    <ErrorSurface
+                      key={`${warning.code}:${index}`}
+                      error={warning}
+                      variant="compact"
+                    />
+                  ))
+                : null}
               <OverviewLanes
                 state={list}
                 detailFailures={detailFailures}

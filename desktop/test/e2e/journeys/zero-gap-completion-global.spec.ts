@@ -65,9 +65,9 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
       repoPatterns: [/completion-lab/, /completion-ready/],
       waitForReady: true,
     });
-    const feature = (await handle.page.evaluate(() => window.agentico.listFeatures())).find(
-      (candidate) => candidate.name === featureName,
-    );
+    const feature = (
+      await handle.page.evaluate(() => window.agentico.listFeatures())
+    ).features.find((candidate) => candidate.name === featureName);
     expect(feature).toBeDefined();
 
     const discovery = readDiscovery(world);

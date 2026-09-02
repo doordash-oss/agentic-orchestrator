@@ -847,8 +847,12 @@ func TestStoreCloseChildIsIdempotentAndPreservesInspectionState(t *testing.T) {
 			Transaction: &TransactionJournal{
 				Phase: TransactionPhaseAttention,
 				Entries: []RepoTransactionEntry{{
-					Repo:           "repo",
-					CleanupWarning: "worktree busy",
+					Repo: "repo",
+					Cleanup: &errcat.FailureRecord{
+						Code:        errcat.ChildCleanupIncomplete,
+						Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: "repo"}}},
+						Diagnostics: "worktree busy",
+					},
 				}},
 			},
 		},
@@ -887,8 +891,9 @@ func TestStoreCloseChildIsIdempotentAndPreservesInspectionState(t *testing.T) {
 	if got.Artifacts["plan"] != child.Artifacts["plan"] || got.TotalCost() != child.TotalCost() {
 		t.Fatalf("inspection state artifacts/cost = (%v, %v), want (%v, %v)", got.Artifacts, got.TotalCost(), child.Artifacts, child.TotalCost())
 	}
-	if got.Parent.Transaction == nil || got.Parent.Transaction.Entries[0].CleanupWarning != "worktree busy" {
-		t.Fatalf("integration diagnostics = %#v, want cleanup warning retained", got.Parent.Transaction)
+	if got.Parent.Transaction == nil || got.Parent.Transaction.Entries[0].Cleanup == nil ||
+		got.Parent.Transaction.Entries[0].Cleanup.Diagnostics != "worktree busy" {
+		t.Fatalf("integration journal = %#v, want cleanup warning record retained", got.Parent.Transaction)
 	}
 }
 
@@ -1267,6 +1272,99 @@ func TestStoreSaveRunOmitsLegacyFailureKeys(t *testing.T) {
 	}
 	if !bytes.Contains(raw, []byte("failure:")) {
 		t.Errorf("run.yaml missing failure record block:\n%s", raw)
+	}
+}
+
+// TestStoreLoadIgnoresLegacyJournalWarningKeys pins the no-backward-
+// compatibility contract for the removed journal warning strings: stale
+// cleanup_warning and tail_warning keys in a hand-written feature.yaml are
+// silently ignored and load as no warning records, and a round-trip save
+// never re-emits them.
+func TestStoreLoadIgnoresLegacyJournalWarningKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const featureID = "legacy-journal-warnings-001"
+	featureDir := filepath.Join(dir, featureID)
+	runDir := filepath.Join(featureDir, "runs", "run-001")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	featureYAML := fmt.Sprintf(`id: %s
+name: Legacy Journal Warnings
+slug: legacy-journal-warnings
+description: pre-record journal with string warning keys
+created: 2026-01-01T00:00:00Z
+status: Published
+current_phase: 6
+repos:
+  - name: repo-a
+    path: /tmp/a
+    worktree_path: ""
+    branch: ""
+models: {}
+exit_criteria: ""
+active_run: 1
+run_count: 1
+schema_version: %d
+parent:
+  parent_id: parent-1
+  kind: refactor
+  close_outcome: completed
+  transaction:
+    phase: merged
+    entries:
+      - repo: repo-a
+        parent_branch: feature/parent
+        cleanup_warning: worktree busy
+        tail_warning: push failed
+`, featureID, SchemaVersionCurrent)
+	featurePath := filepath.Join(featureDir, "feature.yaml")
+	if err := os.WriteFile(featurePath, []byte(featureYAML), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runYAML := `run_number: 1
+started_at: 2026-01-01T00:00:00Z
+artifacts: {}
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("Load() error = %v; want nil (legacy warning keys must be ignored)", err)
+	}
+	tx := loaded.Parent.Transaction
+	if tx == nil || len(tx.Entries) != 1 {
+		t.Fatalf("transaction = %+v, want one entry", tx)
+	}
+	entry := tx.Entries[0]
+	if entry.Cleanup != nil || entry.Tail != nil {
+		t.Fatalf("warning records = %+v, want none from legacy cleanup_warning/tail_warning keys", entry)
+	}
+
+	// Saving the loaded feature back must never re-emit the stale keys.
+	tx.Entries[0].Cleanup = &errcat.FailureRecord{
+		Code:        errcat.ChildCleanupIncomplete,
+		Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: "repo-a"}}},
+		Diagnostics: "worktree busy",
+	}
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("save reloaded feature: %v", err)
+	}
+	rewritten, err := os.ReadFile(featurePath)
+	if err != nil {
+		t.Fatalf("reread feature.yaml: %v", err)
+	}
+	if bytes.Contains(rewritten, []byte("cleanup_warning")) || bytes.Contains(rewritten, []byte("tail_warning")) {
+		t.Errorf("feature.yaml contains a legacy warning key:\n%s", rewritten)
+	}
+	if !bytes.Contains(rewritten, []byte("cleanup:")) {
+		t.Errorf("feature.yaml missing the cleanup record block:\n%s", rewritten)
 	}
 }
 

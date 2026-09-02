@@ -28,6 +28,7 @@ import type {
   FeatureSummaryView,
   PickedDirectory,
   ReadinessSnapshot,
+  RecoveryItemView,
   RewindPreviewView,
   RunArtifactView,
   RunArtifactsListResult,
@@ -339,6 +340,7 @@ const FEATURE_SNAPSHOT: FeatureSnapshot = {
   createdAt: '2026-07-14T10:00:00Z',
   activeRun: 8,
   automaticReview: AUTOMATIC_REVIEW,
+  warnings: [],
   reviewGate: {
     reviewingGate: true,
     reviewFixing: false,
@@ -384,6 +386,7 @@ function overviewLaneSnapshot(
     createdAt,
     activeRun: 1,
     automaticReview: AUTOMATIC_REVIEW,
+    warnings: [],
     reviewGate: {
       reviewingGate: false,
       reviewFixing: false,
@@ -428,7 +431,7 @@ const OVERVIEW_LANE_FEATURES: FeatureSnapshot[] = [
       startedAt: '2026-07-23T08:10:00Z',
       cost: { totalUsd: 4.2, byPhase: {} },
       integrationState: 'pending',
-      cleanupWarnings: [],
+      warnings: [],
     },
   },
   {
@@ -603,6 +606,7 @@ const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
   createdAt: '2026-07-14T10:00:00Z',
   activeRun: 8,
   automaticReview: AUTOMATIC_REVIEW,
+  warnings: [],
   reviewGate: {
     reviewingGate: false,
     reviewFixing: false,
@@ -861,7 +865,7 @@ const REFACTOR_PASS_PARENT_SNAPSHOT: FeatureSnapshot = {
     startedAt: '2026-07-31T22:41:00Z',
     cost: { totalUsd: 0, byPhase: {} },
     integrationState: 'pending',
-    cleanupWarnings: [],
+    warnings: [],
   },
   childHistory: [
     {
@@ -878,7 +882,7 @@ const REFACTOR_PASS_PARENT_SNAPSHOT: FeatureSnapshot = {
       closedAt: '2026-07-27T14:03:00Z',
       cost: { totalUsd: 12.4, byPhase: {} },
       integrationState: 'merged',
-      cleanupWarnings: [],
+      warnings: [],
       diffSummary:
         'Repository: agentic-orchestrator\n 14 files changed, 220 insertions(+), 412 deletions(-)',
     },
@@ -944,7 +948,7 @@ const REVIEW_FEEDBACK_PASS_PARENT_SNAPSHOT: FeatureSnapshot = {
   },
 };
 
-const RECOVERY_ITEMS = [
+const RECOVERY_ITEMS: RecoveryItemView[] = [
   {
     key: 'feature-alpha:signal-lab',
     featureId: 'alpha1234ef567890',
@@ -954,6 +958,18 @@ const RECOVERY_ITEMS = [
     iteration: 3,
     pid: 12345,
     processAlive: true,
+    error: {
+      code: 'orphan_session_live',
+      class: 'needs_action',
+      title: 'Orphaned session running',
+      summary:
+        'The Implement phase at iteration 3 is still running outside Agentico\'s supervision in repository "signal-lab".',
+      remediation: {
+        hint: 'Resume the session to bring it back under supervision, or kill it.',
+        actions: ['resume'],
+      },
+      context: { phase: { name: 'implement', iteration: 3 } },
+    },
     logAvailable: true,
     allowedActions: ['resume', 'kill'],
     defaultAction: 'resume',
@@ -967,6 +983,18 @@ const RECOVERY_ITEMS = [
     iteration: 1,
     pid: 0,
     processAlive: false,
+    error: {
+      code: 'orphan_session_stale',
+      class: 'needs_action',
+      title: 'Orphaned session state',
+      summary:
+        'The Implement phase at iteration 1 left recovery state behind with no process running in repository "orchestrator-core".',
+      remediation: {
+        hint: 'Resume to relaunch the phase where it stopped, or kill to discard the state.',
+        actions: ['resume'],
+      },
+      context: { phase: { name: 'implement', iteration: 1 } },
+    },
     logAvailable: true,
     allowedActions: ['resume', 'kill'],
     defaultAction: 'resume',
@@ -1055,8 +1083,19 @@ const REWIND_RESULT: FeatureActionResult = {
   sourceRunNumber: 8,
   newRunNumber: 9,
   warnings: [
-    'Branch feature/history-and-rewind on signal-lab was force-reset to anchor abc123; the previous tip is preserved as backup branch feature/history-and-rewind-v8.',
-    'PR #42 on signal-lab will be closed automatically by the rewind.',
+    {
+      code: 'rewind_worktree_reset',
+      class: 'warning',
+      title: 'Worktree reset to anchor',
+      summary:
+        'Branch feature/history-and-rewind on signal-lab was force-reset to anchor abc123; the previous tip is preserved as backup branch feature/history-and-rewind-v8.',
+    },
+    {
+      code: 'rewind_pr_close',
+      class: 'warning',
+      title: 'Pull request will close',
+      summary: 'PR #42 on signal-lab will be closed automatically by the rewind.',
+    },
   ],
 };
 
@@ -1508,16 +1547,18 @@ function makeMockApi(
     initRepository: () => Promise.resolve(READY_SNAPSHOT),
     listRepositories: () => Promise.resolve(READY_SNAPSHOT.repositories),
     listFeatures: () =>
-      Promise.resolve(
-        scene === 'overview-lanes' ||
+      Promise.resolve({
+        features:
+          scene === 'overview-lanes' ||
           scene === 'update-popover' ||
           scene === 'command-palette-overview' ||
           scene.startsWith('creation-sheet')
-          ? OVERVIEW_LANE_SUMMARY
-          : scene === 'overview-empty'
-            ? []
-            : FEATURE_SUMMARY,
-      ),
+            ? OVERVIEW_LANE_SUMMARY
+            : scene === 'overview-empty'
+              ? []
+              : FEATURE_SUMMARY,
+        warnings: [],
+      }),
     getFeature: (_featureId: string) => {
       if (scene === 'command-palette-feature') {
         return Promise.resolve(COMMAND_PALETTE_FEATURE_SNAPSHOT);

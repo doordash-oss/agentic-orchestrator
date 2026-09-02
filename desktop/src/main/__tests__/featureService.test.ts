@@ -20,7 +20,11 @@ import {
   SafeErrorException,
   requestTimeoutError,
 } from '../../shared/errors';
-import { FeatureSnapshotSchema, type ReadinessSnapshot } from '../../shared/ipc';
+import {
+  FeatureSnapshotSchema,
+  FeaturesListResultSchema,
+  type ReadinessSnapshot,
+} from '../../shared/ipc';
 import { FeatureService, type FeatureServiceDeps } from '../features';
 import type { ApiRequestInit, HttpResult } from '../gateway/runtimeGateway';
 
@@ -1100,8 +1104,9 @@ describe('FeatureService.listFeatures', () => {
         ],
       },
     }));
-    const features = await service.listFeatures();
-    expect(features).toEqual([
+    const list = await service.listFeatures();
+    expect(list.warnings).toEqual([]);
+    expect(list.features).toEqual([
       {
         id: 'abcd1234ef567890',
         name: 'Search revamp',
@@ -1114,6 +1119,51 @@ describe('FeatureService.listFeatures', () => {
         warnings: [],
       },
     ]);
+  });
+
+  it('maps canonical list-level and per-feature warnings with redaction', async () => {
+    const canonicalWarning = (diagnostics: string) => ({
+      code: 'effort_capability_drift',
+      class: 'warning',
+      title: 'Effort exceeds model capability',
+      summary: 'The configured effort level exceeds what the selected model supports.',
+      diagnostics,
+    });
+    const { service } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        features: [
+          {
+            id: 'abcd1234ef567890',
+            name: 'Search revamp',
+            slug: 'search-revamp',
+            status: 'Created',
+            current_phase: 'Plan',
+            active_run: 1,
+            run_count: 1,
+            repos: ['repo-a'],
+            created_at: '2026-07-14T10:00:00Z',
+            checkpoints: {},
+            progress: {},
+            warnings: [canonicalWarning('drift detected in /Users/alice/secret/worktree')],
+          },
+        ],
+        warnings: [canonicalWarning('feature file unreadable: bearer tok-live-secret123 rejected')],
+      },
+    }));
+    const list = await service.listFeatures();
+    expect(list.features[0]?.warnings).toHaveLength(1);
+    expect(list.features[0]?.warnings[0]).toMatchObject({
+      code: 'effort_capability_drift',
+      class: 'warning',
+      title: 'Effort exceeds model capability',
+      diagnostics: 'drift detected in [path]',
+    });
+    expect(list.warnings).toHaveLength(1);
+    expect(list.warnings[0]?.diagnostics).not.toContain('tok-live-secret123');
+    expect(list.warnings[0]?.diagnostics).toContain('[redacted]');
+    expect(() => FeaturesListResultSchema.parse(list)).not.toThrow();
   });
 
   it('carries the bounded history counters and the body-less diff flag', async () => {
@@ -1148,7 +1198,7 @@ describe('FeatureService.listFeatures', () => {
                 closed_at: '2026-07-31T10:00:00Z',
                 cost: { total_usd: 1, by_phase: {} },
                 integration_state: 'merged',
-                cleanup_warnings: [],
+                warnings: [],
                 has_diff_summary: true,
               },
             ],
@@ -1158,7 +1208,7 @@ describe('FeatureService.listFeatures', () => {
         ],
       },
     }));
-    const [summary] = await service.listFeatures();
+    const [summary] = (await service.listFeatures()).features;
     expect(summary?.childHistoryTotal).toBe(12);
     expect(summary?.childHistoryTruncated).toBe(true);
     expect(summary?.childHistory?.[0]).toMatchObject({ hasDiffSummary: true });
@@ -1325,11 +1375,28 @@ describe('FeatureService relationship operations', () => {
         },
         diagnostics: 'repo-a: merge candidate conflict: [query.ts]',
       },
-      cleanup_warnings: [],
+      warnings: [
+        {
+          code: 'cleanup_worktree_reset_failed',
+          class: 'warning',
+          title: 'Worktree reset failed',
+          summary: 'Resetting the disposable worktree for repository "repo-a" failed.',
+          diagnostics: 'reset failed under /Users/dev/repo-a/worktree',
+        },
+      ],
     };
     const { service } = makeService(() => ({
       status: 200,
       body: detailBody({
+        warnings: [
+          {
+            code: 'effort_capability_drift',
+            class: 'warning',
+            title: 'Effort exceeds model capability',
+            summary: 'The configured effort level exceeds what the selected model supports.',
+            diagnostics: 'drift detected in /Users/alice/secret/worktree',
+          },
+        ],
         active_child: relationship,
         child_history: [
           {
@@ -1413,6 +1480,19 @@ describe('FeatureService relationship operations', () => {
       code: 'integration_merge_conflict',
       title: 'Integration merge conflict',
       diagnostics: 'repo-a: merge candidate conflict: [query.ts]',
+    });
+    // The child's canonical warnings cross IPC with redacted diagnostics.
+    expect(snapshot.activeChild?.warnings[0]).toMatchObject({
+      code: 'cleanup_worktree_reset_failed',
+      class: 'warning',
+      diagnostics: 'reset failed under [path]',
+    });
+    expect(snapshot.childHistory?.[0]?.warnings[0]?.diagnostics).toBe('reset failed under [path]');
+    // The detail's canonical warnings cross IPC with redacted diagnostics.
+    expect(snapshot.warnings[0]).toMatchObject({
+      code: 'effort_capability_drift',
+      class: 'warning',
+      diagnostics: 'drift detected in [path]',
     });
     expect(() => FeatureSnapshotSchema.parse(snapshot)).not.toThrow();
   });

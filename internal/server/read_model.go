@@ -145,7 +145,8 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		}
 		// Project the transaction journal for child integration. The
 		// journal's stored attention record renders through the catalog at
-		// projection time; entries carry progress state and warnings only.
+		// projection time; entries carry progress state only — the two
+		// stored warning records render on the relationship's warnings.
 		if tx := f.Parent.Transaction; tx != nil {
 			detail.Transaction = TransactionJournal{
 				Phase:     string(tx.Phase),
@@ -164,7 +165,6 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 					ApplyState:      string(e.ApplyState),
 					ObservedSha:     e.ObservedSHA,
 					PendingSync:     e.PendingSync,
-					CleanupWarning:  e.CleanupWarning,
 				}
 				detail.Transaction.Entries = append(detail.Transaction.Entries, entry)
 			}
@@ -547,7 +547,7 @@ func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSumma
 		StartedAt:         startedAt,
 		Cost:              costDTO(child),
 		IntegrationState:  "pending",
-		CleanupWarnings:   []RelationshipCleanupWarning{},
+		Warnings:          []Error{},
 	}
 	if setup := child.Run().Setup; setup != nil {
 		dto.SetupStatus = string(setup.Status)
@@ -573,20 +573,15 @@ func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSumma
 		}
 		// The stored attention record renders through the catalog at
 		// projection time; per-repository attention items are never
-		// synthesized.
+		// synthesized. The two stored warning records render through the
+		// catalog onto the child's canonical warnings array.
 		dto.Attention = wireIntegrationAttention(tx.Attention)
 		for _, entry := range tx.Entries {
-			if entry.CleanupWarning != "" {
-				dto.CleanupWarnings = append(dto.CleanupWarnings, RelationshipCleanupWarning{
-					Message: SafeDisplayText(entry.CleanupWarning, 240),
-					Repo:    entry.Repo,
-				})
+			if warning := wireIntegrationAttention(entry.Cleanup); warning != nil {
+				dto.Warnings = append(dto.Warnings, *warning)
 			}
-			if entry.TailWarning != "" {
-				dto.CleanupWarnings = append(dto.CleanupWarnings, RelationshipCleanupWarning{
-					Message: SafeDisplayText("review-feedback tail: "+entry.TailWarning, 240),
-					Repo:    entry.Repo,
-				})
+			if warning := wireIntegrationAttention(entry.Tail); warning != nil {
+				dto.Warnings = append(dto.Warnings, *warning)
 			}
 		}
 	}
@@ -637,7 +632,7 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 		Cost:              summary.Cost,
 		IntegrationState:  summary.IntegrationState,
 		Attention:         summary.Attention,
-		CleanupWarnings:   summary.CleanupWarnings,
+		Warnings:          summary.Warnings,
 		HasDiffSummary:    summary.HasDiffSummary,
 	}
 	// Re-bound at read time: records persisted before the write-time bound

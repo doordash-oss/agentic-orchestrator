@@ -18,6 +18,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RelationshipChildView } from '../../../../shared/ipc';
+import { canonicalWarning } from '../../test/agenticoMock';
 import { RefactorHistory } from './RefactorHistory';
 
 afterEach(cleanup);
@@ -36,7 +37,7 @@ function historyEntry(overrides: Partial<RelationshipChildView> = {}): Relations
     closedAt: '2026-08-01T10:00:00Z',
     cost: { totalUsd: 0, byPhase: {} },
     integrationState: 'pending',
-    cleanupWarnings: [],
+    warnings: [],
     ...overrides,
   };
 }
@@ -107,6 +108,57 @@ describe('RefactorHistory preserved diff', () => {
   it('offers no diff affordance when no body was preserved', () => {
     render(<RefactorHistory entries={[historyEntry()]} onLoadFullHistory={vi.fn()} />);
     expect(screen.queryByText('Preserved diff (read-only)')).toBeNull();
+  });
+});
+
+describe('RefactorHistory relationship warnings', () => {
+  it('renders one status-role surface per warning with the repository under the disclosure', async () => {
+    const user = userEvent.setup();
+    render(
+      <RefactorHistory
+        entries={[
+          historyEntry({
+            warnings: [
+              canonicalWarning({
+                code: 'child_cleanup_incomplete',
+                title: 'Cleanup incomplete',
+                summary: 'The worktree for repository "repo-a" could not be removed.',
+                context: { repositories: [{ name: 'repo-a', branch: 'agentico/pass-3' }] },
+                diagnostics: 'remove worktree: directory busy',
+              }),
+              canonicalWarning({
+                code: 'review_feedback_tail_incomplete',
+                title: 'Review-feedback tail not delivered',
+                summary: 'The review-feedback tail for repository "repo-b" was not delivered.',
+                context: { repositories: [{ name: 'repo-b', branch: 'agentico/pass-3' }] },
+              }),
+            ],
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByText('Pass history'));
+    const surfaces = document.querySelectorAll('.refactor-history .error-surface');
+    expect(surfaces).toHaveLength(2);
+    surfaces.forEach((surface) => {
+      expect(surface).toHaveAttribute('role', 'status');
+      expect(surface.querySelector('.error-surface__label')).toHaveTextContent('Warning');
+      expect(surface.querySelector('.error-surface__action')).toBeNull();
+    });
+    expect(screen.getByText('child_cleanup_incomplete')).toHaveClass('error-surface__code');
+    expect(screen.getByText('review_feedback_tail_incomplete')).toHaveClass('error-surface__code');
+
+    // Each repository sits under the surface's compact disclosure.
+    surfaces.forEach((surface) => {
+      const disclosure = surface.querySelector('details.error-surface__details--compact');
+      expect(disclosure).not.toBeNull();
+      expect(disclosure?.textContent).toMatch(/repo-[ab]/);
+    });
+
+    // The bespoke cleanup-warning list is gone.
+    expect(document.querySelector('.refactor-history__warnings')).toBeNull();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
 

@@ -237,17 +237,9 @@ function RewindLanding({ outcome, run, onOpenSource, onDismiss }: RewindLandingP
           ))}
         </div>
       ) : null}
-      {warnings.length > 0 ? (
-        <div className="cockpit__rewind-warnings" role="alert">
-          <h4>Rewind warnings</h4>
-          <p>Review these non-fatal recovery details before continuing work.</p>
-          <ul>
-            {warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      {warnings.map((warning, index) => (
+        <ErrorSurface key={`${warning.code}:${index}`} error={warning} variant="compact" />
+      ))}
     </section>
   );
 }
@@ -2765,6 +2757,14 @@ export function FeatureCockpit({
                       caption={`${actionError.action} was rejected`}
                     />
                   ) : null}
+
+                  {snapshot.warnings.map((warning, index) => (
+                    <ErrorSurface
+                      key={`${warning.code}:${index}`}
+                      error={warning}
+                      variant="compact"
+                    />
+                  ))}
 
                   <p className="cockpit__announcement" role="status" aria-live="polite">
                     {announcement}

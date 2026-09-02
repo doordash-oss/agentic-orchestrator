@@ -422,9 +422,9 @@ test('remote upload: picker/paste staging, server materialization, cleanup, reje
     const cockpit = handle.page.getByLabel(`Feature ${FEATURE_NAME}`);
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
     await expect(cockpit.getByText('Ready to start')).toBeVisible({ timeout: 90_000 });
-    const feature = (await handle.page.evaluate(() => window.agentico.listFeatures())).find(
-      (candidate) => candidate.name === FEATURE_NAME,
-    );
+    const feature = (
+      await handle.page.evaluate(() => window.agentico.listFeatures())
+    ).features.find((candidate) => candidate.name === FEATURE_NAME);
     expect(feature).toBeDefined();
 
     transcript.section('Server-side: feature dirs materialize the uploaded bytes');

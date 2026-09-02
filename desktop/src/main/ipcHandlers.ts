@@ -49,7 +49,7 @@ import {
   type PickedCreationFiles,
   type UploadCreationFilesResult,
   type FeatureSnapshot,
-  type FeatureSummaryView,
+  type FeaturesListResult,
   type FeatureActionRequest,
   type FeatureActionResult,
   type InitRepositoryRequest,
@@ -175,7 +175,7 @@ export interface IpcServices {
   reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot>;
   initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
   listRepositories(): Promise<RepositoryState[]>;
-  listFeatures(): Promise<FeatureSummaryView[]>;
+  listFeatures(): Promise<FeaturesListResult>;
   getFeature(featureId: string): Promise<FeatureSnapshot>;
   createFeature(input: CreateFeatureInput): Promise<CreateFeatureResult>;
   dispatchFeatureSetup(featureId: string): Promise<SetupDispatchResult>;

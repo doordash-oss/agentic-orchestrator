@@ -2280,7 +2280,7 @@ func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testi
 	if updated.Status != feature.StatusPlanNeedsReview || !updated.IsRewind {
 		t.Fatalf("rewound feature status/is_rewind = %s/%v, want PlanNeedsReview/true", updated.Status, updated.IsRewind)
 	}
-	if result.FeatureID != f.ID || result.TargetPhase != phaseNameImplement || result.EffectivePhase != phaseNameImplement || result.WarningCount != 0 {
+	if result.FeatureID != f.ID || result.TargetPhase != phaseNameImplement || result.EffectivePhase != phaseNameImplement || len(result.Warnings) != 0 {
 		t.Fatalf("RewindFeature() result = %+v; want effective implement rewind", result)
 	}
 }

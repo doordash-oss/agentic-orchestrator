@@ -142,7 +142,7 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
     transcript.step(`created feature \`${featureName}\` through the form; cockpit visible`);
 
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 
@@ -568,7 +568,7 @@ test('review-feedback recovery: failed-save Retry/Reload → conflict convergenc
       repoPatterns: [/alpha/],
     });
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 
@@ -781,7 +781,7 @@ test('review-feedback recovery: failed-save Retry/Reload → conflict convergenc
     transcript.step('replay transitioned to the child with the original reconciliation banner');
 
     // Exactly one child exists, carried on the parent's activeChild slot.
-    const afterReplay = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const afterReplay = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     expect(afterReplay).toHaveLength(1);
     expect(afterReplay[0]!.activeChild?.id).toBe(originalChildId);
     // Single auto-started child: the pass leaves "ready" without a manual click.

@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 import { vi } from 'vitest';
+import type { CanonicalError } from '../../../shared/api/parse';
 import type {
   AgenticoApi,
   AppEvent,
@@ -164,6 +165,36 @@ export function featureConfigSnapshot(
   };
 }
 
+/** A canonical warning-class error as the renderer receives it over IPC. */
+export function canonicalWarning(overrides: Partial<CanonicalError> = {}): CanonicalError {
+  return {
+    code: 'effort_capability_drift',
+    class: 'warning',
+    title: 'Effort exceeds the selected model',
+    summary: 'The Implement effort "high" is beyond what claude-sonnet-4-5 supports.',
+    ...overrides,
+  };
+}
+
+/**
+ * A canonical needs_action orphan-session error as the renderer receives it
+ * over IPC, mirroring the catalog's live-orphan rendering.
+ */
+export function orphanSessionError(overrides: Partial<CanonicalError> = {}): CanonicalError {
+  return {
+    code: 'orphan_session_live',
+    class: 'needs_action',
+    title: 'Orphaned session running',
+    summary: "The Implement phase at iteration 2 is still running outside Agentico's supervision.",
+    remediation: {
+      hint: 'Resume the session to bring it back under supervision, or kill it.',
+      actions: ['resume'],
+    },
+    context: { phase: { name: 'Implement', iteration: 2 } },
+    ...overrides,
+  };
+}
+
 /** A created feature mid-setup, as the cockpit first sees it. */
 export function featureSnapshot(overrides: Partial<FeatureSnapshot> = {}): FeatureSnapshot {
   return {
@@ -182,6 +213,7 @@ export function featureSnapshot(overrides: Partial<FeatureSnapshot> = {}): Featu
       enabled: true,
       source: 'global',
     },
+    warnings: [],
     reviewGate: {
       reviewingGate: false,
       reviewFixing: false,
@@ -340,6 +372,7 @@ export function installAgenticoMock(
     theme?: ThemeInfo;
     readiness?: ReadinessSnapshot;
     features?: FeatureSummaryView[];
+    listWarnings?: CanonicalError[];
     feature?: FeatureSnapshot;
     defaults?: CreationDefaults;
     sessions?: SessionSummary[];
@@ -414,7 +447,12 @@ export function installAgenticoMock(
     reorderWorkspaceRoots: vi.fn(() => Promise.resolve(readiness)),
     initRepository: vi.fn(() => Promise.resolve(readiness)),
     listRepositories: vi.fn(() => Promise.resolve(readiness.repositories)),
-    listFeatures: vi.fn(() => Promise.resolve(overrides.features ?? [])),
+    listFeatures: vi.fn(() =>
+      Promise.resolve({
+        features: overrides.features ?? [],
+        warnings: overrides.listWarnings ?? [],
+      }),
+    ),
     getFeature: vi.fn(() => Promise.resolve(feature)),
     createFeature: vi.fn(() => Promise.resolve({ featureId: feature.id })),
     dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),

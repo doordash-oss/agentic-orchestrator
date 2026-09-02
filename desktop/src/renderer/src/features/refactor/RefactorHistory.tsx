@@ -16,6 +16,7 @@ limitations under the License.
 
 import { useCallback, useState } from 'react';
 import type { RelationshipChildView } from '../../../../shared/ipc';
+import { ErrorSurface } from '../../components/ErrorSurface';
 import { CHILD_KIND_LABEL } from './refactorPassModel';
 
 /**
@@ -121,17 +122,9 @@ export function RefactorHistory({
                 </div>
               </dl>
             </div>
-            {entry.cleanupWarnings.length > 0 ? (
-              <ul className="refactor-history__warnings">
-                {entry.cleanupWarnings.map((warning) => (
-                  <li key={`${warning.repo ?? ''}:${warning.message}`}>
-                    {warning.repo === undefined
-                      ? warning.message
-                      : `${warning.repo}: ${warning.message}`}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
+            {entry.warnings.map((warning, index) => (
+              <ErrorSurface key={`${warning.code}:${index}`} error={warning} variant="compact" />
+            ))}
             {entry.diffSummary !== undefined && entry.diffSummary !== '' ? (
               <details className="refactor-history__diff">
                 <summary>Preserved diff (read-only)</summary>

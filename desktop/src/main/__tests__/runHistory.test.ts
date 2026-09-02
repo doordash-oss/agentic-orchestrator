@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 import { describe, expect, it } from 'vitest';
+import { FeatureActionResultSchema } from '../../shared/ipc';
 import { RunHistoryService } from '../runHistory';
 
 describe('RunHistoryService', () => {
@@ -152,5 +153,54 @@ describe('RunHistoryService', () => {
       { index: 0, blockIndex: 1, role: 'assistant', type: 'tool_use', tool: 'Read' },
       { index: 1, role: 'assistant', type: 'text', text: 'Applied the change.' },
     ]);
+  });
+
+  it('maps rewind warnings to canonical views with redacted diagnostics', async () => {
+    const service = new RunHistoryService({
+      apiRequest: () =>
+        Promise.resolve({
+          status: 200,
+          body: {
+            api_version: 'v1',
+            result: 'rewound',
+            feature_id: 'abcd1234ef567890',
+            effective_phase: 'Implement',
+            source_run_number: 8,
+            new_run_number: 9,
+            warnings: [
+              {
+                code: 'rewind_worktree_reset',
+                class: 'warning',
+                title: 'Worktree reset to anchor',
+                summary: 'The worktree for repository "repo-a" was reset to its anchor commit.',
+                diagnostics: 'reset failed under /Users/dev/repo-a/worktree',
+              },
+              {
+                code: 'rewind_pr_close',
+                class: 'warning',
+                title: 'Pull request will close',
+                summary: 'PR #42 on repo-a will be closed automatically by the rewind.',
+              },
+            ],
+          },
+        }),
+    });
+
+    const result = await service.executeRewind({
+      featureId: 'abcd1234ef567890',
+      targetPhase: 'Implement',
+    });
+    expect(result.action).toBe('rewind');
+    expect(result.sourceRunNumber).toBe(8);
+    expect(result.newRunNumber).toBe(9);
+    expect(result.warnings).toHaveLength(2);
+    expect(result.warnings?.[0]).toMatchObject({
+      code: 'rewind_worktree_reset',
+      class: 'warning',
+      title: 'Worktree reset to anchor',
+      diagnostics: 'reset failed under [path]',
+    });
+    expect(result.warnings?.[1]?.diagnostics).toBeUndefined();
+    expect(() => FeatureActionResultSchema.parse(result)).not.toThrow();
   });
 });

@@ -83,9 +83,13 @@ func TestOrchestrator_EnterReviewGate_SetsStatusAndPendingPhase(t *testing.T) {
 func TestOrchestrator_RewindWithRequest_FiresAuditHookAfterSuccess(t *testing.T) {
 	f := &feature.Feature{ID: "feat-rewind", ActiveRun: 1}
 	lc := lifecycleForFeature(f)
-	lc.RewindWithRequestFn = func(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
+	lc.RewindWithRequestFn = func(featureID string, request feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error) {
 		f.ActiveRun = 2
-		return []string{"backup warning"}, feature.PhaseImplement, nil
+		return []feature.RewindWarning{{
+			Kind: feature.RewindWarningBackupBranch,
+			Repo: "repo-a",
+			Err:  errors.New("backup warning"),
+		}}, feature.PhaseImplement, nil
 	}
 	fs := newFeatureStore(f)
 
@@ -113,8 +117,8 @@ func TestOrchestrator_RewindWithRequest_FiresAuditHookAfterSuccess(t *testing.T)
 	if err != nil {
 		t.Fatalf("RewindWithRequest: %v", err)
 	}
-	if len(warnings) != 1 || warnings[0] != "backup warning" {
-		t.Fatalf("warnings = %v, want backup warning", warnings)
+	if len(warnings) != 1 || warnings[0].Kind != feature.RewindWarningBackupBranch || warnings[0].Repo != "repo-a" {
+		t.Fatalf("warnings = %+v, want one repo-a backup-branch warning", warnings)
 	}
 	if effective != feature.PhaseImplement {
 		t.Fatalf("effective = %v, want PhaseImplement", effective)

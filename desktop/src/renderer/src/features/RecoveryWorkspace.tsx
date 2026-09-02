@@ -21,6 +21,7 @@ limitations under the License.
  * a dedicated workspace, while unrelated features remain usable.
  */
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { ErrorSurface, type ErrorSurfaceAction } from '../components/ErrorSurface';
 import { parseIpcError } from '../wizard/ipcError';
 import type { RecoverySnapshot, RecoveryItemView } from '../../../shared/ipc';
 
@@ -272,7 +273,28 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
         <ul className="recovery-workspace__queue" aria-label="Recovery items">
           {items.map((item) => {
             const outcome = outcomes.get(item.key);
-            const isExecuting = executingKey === item.key;
+            // The orphan condition renders once, as one compact ErrorSurface
+            // fed by the item's canonical needs_action error; the surface's
+            // primary action is the existing single-item resume dispatch.
+            const resolveResumeAction = (actionId: string): ErrorSurfaceAction | undefined => {
+              if (actionId !== 'resume') return undefined;
+              if (!item.allowedActions.includes('resume')) {
+                return {
+                  enabled: false,
+                  label: 'Resume',
+                  disabledReason: 'Resume is not available for this session.',
+                };
+              }
+              if (executingKey === item.key) return { enabled: true, label: 'Resuming…' };
+              if (executingKey !== null) {
+                return {
+                  enabled: false,
+                  label: 'Resume',
+                  disabledReason: 'Another recovery action is running.',
+                };
+              }
+              return { enabled: true, label: 'Resume' };
+            };
             return (
               <li
                 key={item.key}
@@ -307,21 +329,20 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
                   {item.phase !== undefined ? (
                     <code className="recovery-workspace__item-phase">{item.phase}</code>
                   ) : null}
-                </header>
-                <dl className="recovery-workspace__item-facts">
                   {item.pid !== undefined && item.processAlive ? (
-                    <div className="recovery-workspace__item-fact">
-                      <dt>PID</dt>
-                      <dd>{item.pid}</dd>
-                    </div>
+                    <code className="recovery-workspace__item-pid">PID {item.pid}</code>
                   ) : null}
-                  {item.iteration !== undefined ? (
-                    <div className="recovery-workspace__item-fact">
-                      <dt>Iteration</dt>
-                      <dd>{item.iteration}</dd>
-                    </div>
-                  ) : null}
-                </dl>
+                </header>
+                <ErrorSurface
+                  error={item.error}
+                  variant="compact"
+                  resolveAction={resolveResumeAction}
+                  onAction={(actionId) => {
+                    if (actionId === 'resume' && executingKey === null) {
+                      void executeSingle(item, 'resume');
+                    }
+                  }}
+                />
                 {item.logAvailable === true ? (
                   <div className="recovery-workspace__logs">
                     <button
@@ -365,16 +386,6 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
                   </p>
                 ) : (
                   <div className="recovery-workspace__item-actions">
-                    {item.allowedActions.includes('resume') ? (
-                      <button
-                        type="button"
-                        className="recovery-workspace__action recovery-workspace__action--resume"
-                        disabled={executingKey !== null}
-                        onClick={() => void executeSingle(item, 'resume')}
-                      >
-                        {isExecuting ? 'Resuming…' : 'Resume'}
-                      </button>
-                    ) : null}
                     {item.allowedActions.includes('kill') ? (
                       <button
                         type="button"

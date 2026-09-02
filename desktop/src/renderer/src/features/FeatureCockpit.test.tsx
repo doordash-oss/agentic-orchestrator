@@ -19,7 +19,12 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttentionItem, FeatureSnapshot } from '../../../shared/ipc';
-import { featureSnapshot, featureConfigSnapshot, installAgenticoMock } from '../test/agenticoMock';
+import {
+  canonicalWarning,
+  featureSnapshot,
+  featureConfigSnapshot,
+  installAgenticoMock,
+} from '../test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from '../test/setup';
 import { emptyAttentionDrafts } from './AttentionInbox';
 import { FeatureCockpit } from './FeatureCockpit';
@@ -464,7 +469,7 @@ describe('FeatureCockpit snapshot rendering', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 0, byPhase: {} },
         integrationState: 'pending',
-        cleanupWarnings: [],
+        warnings: [],
       },
     });
     const child = featureSnapshot({
@@ -664,7 +669,7 @@ describe('FeatureCockpit snapshot rendering', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 0, byPhase: {} },
         integrationState: 'pending',
-        cleanupWarnings: [],
+        warnings: [],
       },
     });
     const child = featureSnapshot({
@@ -766,7 +771,7 @@ describe('FeatureCockpit snapshot rendering', () => {
         cost: { totalUsd: 0, byPhase: {} },
         integrationState: 'attention',
         attention: parkedAttention,
-        cleanupWarnings: [],
+        warnings: [],
       },
     });
     const child = featureSnapshot({
@@ -1302,6 +1307,128 @@ describe('FeatureCockpit failure and retry', () => {
     expect(screen.getByRole('menuitem', { name: 'Start' })).toBeDisabled();
     expect(screen.getByText('setup must succeed first')).toBeInTheDocument();
     expect(screen.getByText('refresh the current run')).toBeInTheDocument();
+  });
+});
+
+describe('FeatureCockpit warnings', () => {
+  const driftWarning = (model: string) =>
+    canonicalWarning({
+      summary: `The Implement effort "high" is beyond what ${model} supports.`,
+    });
+
+  it('renders one compact status surface per effort-drift warning with no action', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Implementing',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [],
+        warnings: [driftWarning('claude-sonnet-4-5'), driftWarning('claude-opus-4-1')],
+      }),
+    });
+    renderCockpit(mock);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const stage = document.querySelector('.cockpit__stage-status');
+    expect(stage).not.toBeNull();
+    const surfaces = stage?.querySelectorAll('.error-surface') ?? [];
+    expect(surfaces).toHaveLength(2);
+    surfaces.forEach((surface) => {
+      expect(surface).toHaveAttribute('role', 'status');
+      expect(surface.querySelector('.error-surface__label')).toHaveTextContent('Warning');
+      expect(surface.querySelector('.error-surface__code')).toHaveTextContent(
+        'effort_capability_drift',
+      );
+      expect(surface.querySelector('.error-surface__action')).toBeNull();
+    });
+    // No alert-role element renders from the warnings themselves.
+    expect(stage?.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('renders rewind warnings as compact status surfaces in the journey and on the landing', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        actions: [
+          {
+            id: 'rewind',
+            enabled: true,
+            disabledReasons: [],
+            inputs: [{ name: 'target_phase', options: ['implement'] }],
+          },
+        ],
+      }),
+    });
+    mock.api.getRewindPreview.mockResolvedValue({
+      eligible: true,
+      sourceRunNumber: 3,
+      sourceRevision: 'rev-3',
+      targetPhase: 'implement',
+      effectivePhase: 'implement',
+    });
+    mock.api.executeRewind.mockResolvedValue({
+      featureId: FEATURE_ID,
+      action: 'rewind',
+      result: 'rewound',
+      sessionIds: [],
+      sourceRunNumber: 3,
+      newRunNumber: 4,
+      warnings: [
+        canonicalWarning({
+          code: 'rewind_backup_branch_failed',
+          title: 'Backup branch could not be created',
+          summary: 'The backup branch for repository "repo-a" could not be created.',
+          context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+        }),
+        canonicalWarning({
+          code: 'rewind_worktree_reset_failed',
+          title: 'Worktree could not be reset',
+          summary: 'The worktree for repository "repo-b" could not be reset.',
+          context: { repositories: [{ name: 'repo-b' }] },
+        }),
+      ],
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const actions = await screen.findByRole('group', { name: 'Feature actions' });
+    await user.click(within(actions).getByLabelText('More actions'));
+    await user.click(within(actions).getByRole('menuitem', { name: 'Rewind feature' }));
+    const dialog = await screen.findByRole('dialog', { name: /Rewind/ });
+    await user.click(within(dialog).getByRole('radio', { name: 'Implement' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Continue' })).toBeEnabled(),
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    await user.type(within(dialog).getByLabelText(/Type REWIND to confirm/), 'REWIND');
+    await user.click(within(dialog).getByRole('button', { name: 'Rewind' }));
+
+    // Journey success step: one status-role surface per canonical warning, no
+    // action button, and none of the old rewind-warnings classes.
+    await screen.findByText('Rewind complete');
+    const journeySurfaces = document.querySelectorAll('.rewind-journey .error-surface');
+    expect(journeySurfaces).toHaveLength(2);
+    journeySurfaces.forEach((surface) => {
+      expect(surface).toHaveAttribute('role', 'status');
+      expect(surface.querySelector('.error-surface__action')).toBeNull();
+    });
+    expect(
+      screen.getAllByText(/rewind_backup_branch_failed|rewind_worktree_reset_failed/),
+    ).toHaveLength(2);
+    expect(document.querySelector('.rewind-journey__warnings')).toBeNull();
+    expect(document.querySelector('.rewind-journey__warnings-list')).toBeNull();
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Open new run' }));
+
+    // The durable landing mirrors the same treatment and renders no alert.
+    const landing = await screen.findByRole('status', { name: 'Rewind outcome' });
+    const landingSurfaces = landing.querySelectorAll('.error-surface');
+    expect(landingSurfaces).toHaveLength(2);
+    landingSurfaces.forEach((surface) => {
+      expect(surface).toHaveAttribute('role', 'status');
+      expect(surface.querySelector('.error-surface__action')).toBeNull();
+    });
+    expect(within(landing).queryByRole('alert')).not.toBeInTheDocument();
+    expect(document.querySelector('.cockpit__rewind-warnings')).toBeNull();
   });
 });
 
@@ -2777,7 +2904,7 @@ describe('FeatureCockpit review-feedback aftercare', () => {
       closedAt: '2026-07-29T10:00:00Z',
       cost: { totalUsd: 1, byPhase: {} },
       integrationState: 'merged',
-      cleanupWarnings: [],
+      warnings: [],
       hasDiffSummary: true,
     };
     const withoutBody = featureSnapshot({
@@ -2816,7 +2943,7 @@ describe('FeatureCockpit review-feedback aftercare', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 0, byPhase: {} },
         integrationState: 'pending',
-        cleanupWarnings: [],
+        warnings: [],
       },
     });
     const child = featureSnapshot({
@@ -2859,7 +2986,7 @@ describe('FeatureCockpit review-feedback aftercare', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 0, byPhase: {} },
         integrationState: 'pending',
-        cleanupWarnings: [],
+        warnings: [],
       },
     };
     const child = featureSnapshot({

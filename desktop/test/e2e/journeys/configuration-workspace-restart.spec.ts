@@ -143,7 +143,7 @@ test('configuration, workspace, and restart journey against the packaged app', a
     transcript.step('feature config saved through the server');
 
     const persisted = await handle.page.evaluate(async () => {
-      const list = await window.agentico.listFeatures();
+      const list = (await window.agentico.listFeatures()).features;
       const feature = list.find((f) => f.name === 'Config Journey');
       if (!feature) throw new Error('feature not found');
       const snapshot = await window.agentico.getFeatureConfig(feature.id);

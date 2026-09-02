@@ -1557,7 +1557,9 @@ type FeatureDetail struct {
 	Transaction       TransactionJournal `json:"transaction,omitempty"`
 	VerificationItems []VerificationItem `json:"verification_items,omitempty"`
 	WaitReason        string             `json:"wait_reason,omitempty"`
-	Warnings          []Warning          `json:"warnings,omitempty"`
+
+	// Warnings Canonical warning-class errors for this feature, such as effort-capability drift; absent when there is nothing to warn about.
+	Warnings []Error `json:"warnings,omitempty"`
 }
 
 // FeatureDetailResponse defines model for FeatureDetailResponse.
@@ -1572,7 +1574,9 @@ type FeatureListResponse struct {
 	APIVersion string           `json:"api_version"`
 	Features   []FeatureSummary `json:"features"`
 	Meta       ResponseMeta     `json:"meta,omitempty"`
-	Warnings   []Warning        `json:"warnings,omitempty"`
+
+	// Warnings Canonical warning errors for feature files that could not be loaded at list level; absent when every feature loaded.
+	Warnings []Error `json:"warnings,omitempty"`
 }
 
 // FeatureProgress defines model for FeatureProgress.
@@ -1644,7 +1648,9 @@ type FeatureSummary struct {
 	RunCount              int             `json:"run_count"`
 	Slug                  string          `json:"slug"`
 	Status                string          `json:"status"`
-	Warnings              []Warning       `json:"warnings,omitempty"`
+
+	// Warnings Canonical warning-class errors for this feature, such as effort-capability drift; absent when there is nothing to warn about.
+	Warnings []Error `json:"warnings,omitempty"`
 }
 
 // FileChange defines model for FileChange.
@@ -2007,10 +2013,13 @@ type RecoveryActionResponse struct {
 type RecoveryItem struct {
 	AllowedActions []string `json:"allowed_actions"`
 	DefaultAction  string   `json:"default_action"`
-	FeatureID      string   `json:"feature_id"`
-	FeatureName    string   `json:"feature_name,omitempty"`
-	Iteration      int      `json:"iteration,omitempty"`
-	Key            string   `json:"key"`
+
+	// Error Canonical needs_action error classifying this orphan session by liveness, with the phase and repositories context blocks; carries no diagnostics and no filesystem paths.
+	Error       Error  `json:"error"`
+	FeatureID   string `json:"feature_id"`
+	FeatureName string `json:"feature_name,omitempty"`
+	Iteration   int    `json:"iteration,omitempty"`
+	Key         string `json:"key"`
 
 	// LogAvailable Whether a bounded log read is available for this item.
 	LogAvailable bool   `json:"log_available,omitempty"`
@@ -2057,10 +2066,9 @@ type RefactorFeatureResponse struct {
 // RelationshipChild defines model for RelationshipChild.
 type RelationshipChild struct {
 	// Attention Canonical error rendering the child's stored integration attention record; absent when integration is not parked.
-	Attention       *Error                       `json:"attention,omitempty"`
-	CleanupWarnings []RelationshipCleanupWarning `json:"cleanup_warnings"`
-	ClosedAt        *time.Time                   `json:"closed_at,omitempty"`
-	Cost            Cost                         `json:"cost"`
+	Attention *Error     `json:"attention,omitempty"`
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+	Cost      Cost       `json:"cost"`
 
 	// DiffSummary Preserved read-only diff summary captured at close time, before the child's disposable worktrees and ephemeral branches were removed. Bounded to 256 KiB: a per-file stat header followed by the diff body, truncated on a line boundary with a marker stating how many bytes were omitted. Empty when no diff was preserved.
 	DiffSummary string `json:"diff_summary,omitempty"`
@@ -2091,6 +2099,9 @@ type RelationshipChild struct {
 
 	// Status Stored child lifecycle status; closure never rewrites it.
 	Status string `json:"status"`
+
+	// Warnings Canonical warning-class errors for this child's stored cleanup and review-feedback tail records; absent when both settled cleanly.
+	Warnings []Error `json:"warnings"`
 }
 
 // RelationshipChildOutcome Recorded relationship close outcome; absent while the child is open.
@@ -2099,10 +2110,9 @@ type RelationshipChildOutcome string
 // RelationshipChildSummary List-safe projection of a relationship child. Carries every relationship field except the preserved diff body, so a parent with many closed children cannot inflate a list response without bound. Fetch RelationshipChild on a detail route for the body itself.
 type RelationshipChildSummary struct {
 	// Attention Canonical error rendering the child's stored integration attention record; absent when integration is not parked.
-	Attention       *Error                       `json:"attention,omitempty"`
-	CleanupWarnings []RelationshipCleanupWarning `json:"cleanup_warnings"`
-	ClosedAt        *time.Time                   `json:"closed_at,omitempty"`
-	Cost            Cost                         `json:"cost"`
+	Attention *Error     `json:"attention,omitempty"`
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+	Cost      Cost       `json:"cost"`
 
 	// DisplayState Human-readable relationship state. Closed children use exactly "Closed — Completed" or "Closed — Discarded".
 	DisplayState string `json:"display_state"`
@@ -2130,12 +2140,9 @@ type RelationshipChildSummary struct {
 
 	// Status Stored child lifecycle status; closure never rewrites it.
 	Status string `json:"status"`
-}
 
-// RelationshipCleanupWarning defines model for RelationshipCleanupWarning.
-type RelationshipCleanupWarning struct {
-	Message string `json:"message"`
-	Repo    string `json:"repo,omitempty"`
+	// Warnings Canonical warning-class errors for this child's stored cleanup and review-feedback tail records; absent when both settled cleanly.
+	Warnings []Error `json:"warnings"`
 }
 
 // RepoStatus defines model for RepoStatus.
@@ -2158,7 +2165,6 @@ type RepoTransactionEntry struct {
 	ApplyState      string `json:"apply_state,omitempty"`
 	CandidateSha    string `json:"candidate_sha,omitempty"`
 	ChildHeadSha    string `json:"child_head_sha,omitempty"`
-	CleanupWarning  string `json:"cleanup_warning,omitempty"`
 	ExpectedRefSha  string `json:"expected_ref_sha,omitempty"`
 	MergeHead       string `json:"merge_head,omitempty"`
 	ObservedSha     string `json:"observed_sha,omitempty"`
@@ -2195,7 +2201,10 @@ type RepositoryDiffFile struct {
 // RepositoryDiffResponse defines model for RepositoryDiffResponse.
 type RepositoryDiffResponse struct {
 	APIVersion string `json:"api_version"`
-	FeatureID  string `json:"feature_id"`
+
+	// Error Canonical warning-class error rendering the typed partial failure of this repository's inspection; absent when the repository was fully inspected.
+	Error     *Error `json:"error,omitempty"`
+	FeatureID string `json:"feature_id"`
 
 	// FileBinary Whether the single-file content is binary and cannot be displayed.
 	FileBinary bool `json:"file_binary,omitempty"`
@@ -2210,10 +2219,7 @@ type RepositoryDiffResponse struct {
 	FileUnavailable bool                 `json:"file_unavailable,omitempty"`
 	Files           []RepositoryDiffFile `json:"files"`
 	Meta            ResponseMeta         `json:"meta,omitempty"`
-
-	// PartialFailure Safe, server-authored reason one repository could not be fully inspected, when non-empty.
-	PartialFailure string `json:"partial_failure,omitempty"`
-	Repo           string `json:"repo"`
+	Repo            string               `json:"repo"`
 
 	// SourceRevision Authoritative revision of the repository state this diff observed.
 	SourceRevision string `json:"source_revision,omitempty"`
@@ -2477,10 +2483,9 @@ type RewindFeatureResponse struct {
 	SourceRunNumber int    `json:"source_run_number,omitempty"`
 	TargetPhase     string `json:"target_phase,omitempty"`
 	UpgradePipeline string `json:"upgrade_pipeline,omitempty"`
-	WarningCount    int    `json:"warning_count,omitempty"`
 
-	// Warnings Redacted non-fatal warning details (PR close, backup branch, worktree reset failures).
-	Warnings []string `json:"warnings,omitempty"`
+	// Warnings Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset).
+	Warnings []Error `json:"warnings,omitempty"`
 }
 
 // RewindPRConsequence defines model for RewindPRConsequence.
@@ -2928,13 +2933,6 @@ type Usage struct {
 type VerificationItem struct {
 	Name  string `json:"name"`
 	State string `json:"state"`
-}
-
-// Warning defines model for Warning.
-type Warning struct {
-	Code      string `json:"code"`
-	FeatureID string `json:"feature_id,omitempty"`
-	Message   string `json:"message"`
 }
 
 // WorkspaceReadiness defines model for WorkspaceReadiness.

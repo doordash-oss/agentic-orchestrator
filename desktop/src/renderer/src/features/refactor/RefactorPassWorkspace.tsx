@@ -727,13 +727,9 @@ export function RefactorPassWorkspace({
             </div>
           ) : null}
 
-          {view.cleanupWarnings.length > 0 ? (
-            <ul className="refactor-pass__cleanup" aria-label="Cleanup warnings">
-              {view.cleanupWarnings.map((item) => (
-                <li key={`${item.repo ?? ''}:${item.message}`}>{item.message}</li>
-              ))}
-            </ul>
-          ) : null}
+          {view.warnings.map((warning, index) => (
+            <ErrorSurface key={`${warning.code}:${index}`} error={warning} variant="compact" />
+          ))}
         </main>
 
         {!isNarrow && inspectorOpen ? (

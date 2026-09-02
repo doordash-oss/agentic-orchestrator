@@ -141,6 +141,17 @@ export function redactText(text: string): string {
 }
 
 /**
+ * The canonical object crosses IPC intact except diagnostics, which pass
+ * through the same redaction as every other raw text the renderer receives.
+ */
+export function redactedCanonicalError(error: CanonicalError): CanonicalError {
+  return {
+    ...error,
+    diagnostics: error.diagnostics === undefined ? undefined : redactText(error.diagnostics),
+  };
+}
+
+/**
  * Removes exact secret occurrences from free-form text (split/join, never
  * regex). Used at the server-boundary: an untrusted server can echo a
  * presented bearer back in free-text fields like its display name, so every

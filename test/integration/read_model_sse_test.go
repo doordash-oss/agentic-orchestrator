@@ -232,16 +232,28 @@ func TestAPIChildFeatureNeverLeaksIntoTopLevelList(t *testing.T) {
 				ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent,
 				Parent: &feature.ChildRelationship{ParentID: parent.ID, Kind: feature.ChildKindRefactor},
 			}
-			child.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: tc.setup, LastError: tc.setupErr}})
+			child.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: tc.setup}})
 			if tc.setup == feature.SetupStatusFailed {
-				// Mirror the setup runner's canonical worktree_setup_failed
-				// record: repository (with branch) block, raw error diagnostics.
+				// Mirror the setup runner's durable shape: the owning task
+				// carries the full record and the run carries the thin record.
+				key := "worktree:agentic-orchestrator"
+				child.Run().Setup.Tasks = map[string]feature.SetupTask{key: {
+					Key: key, Kind: feature.SetupTaskWorktree, Label: "Worktree: agentic-orchestrator",
+					Repo: "agentic-orchestrator", Status: feature.SetupStatusFailed,
+					Error: &errcat.FailureRecord{
+						Code: errcat.WorktreeSetupFailed,
+						Context: &errcat.RecordContext{
+							Repositories: []errcat.CodeRepository{{Name: "agentic-orchestrator", Branch: "feature/rework-auth"}},
+						},
+						Diagnostics: tc.setupErr,
+					},
+				}}
+				child.Run().Setup.TaskOrder = []string{key}
 				child.Run().Failure = &errcat.FailureRecord{
 					Code: errcat.WorktreeSetupFailed,
-					Context: &errcat.RecordContext{
-						Repositories: []errcat.CodeRepository{{Name: "agentic-orchestrator", Branch: "feature/rework-auth"}},
-					},
-					Diagnostics: tc.setupErr,
+					Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{
+						Key: key, Kind: "worktree", Label: "Worktree: agentic-orchestrator",
+					}},
 				}
 			}
 			if err := store.Save(child); err != nil {
@@ -265,8 +277,15 @@ func TestAPIChildFeatureNeverLeaksIntoTopLevelList(t *testing.T) {
 			if activeChild["relationship_state"] != tc.wantState {
 				t.Fatalf("active_child.relationship_state = %v, want %s", activeChild["relationship_state"], tc.wantState)
 			}
-			if tc.wantErrMsg && activeChild["last_error"] != tc.setupErr {
-				t.Fatalf("active_child.last_error = %v, want %q", activeChild["last_error"], tc.setupErr)
+			if tc.wantErrMsg {
+				// A failed child setup surfaces through setup_status alone; no
+				// last_error key exists anywhere on the summary.
+				if activeChild["setup_status"] != string(feature.SetupStatusFailed) {
+					t.Fatalf("active_child.setup_status = %v, want failed", activeChild["setup_status"])
+				}
+				if _, ok := activeChild["last_error"]; ok {
+					t.Fatalf("active_child = %+v, want no last_error for a failed child setup", activeChild)
+				}
 			}
 		})
 	}

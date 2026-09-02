@@ -32,7 +32,7 @@ func (f *Feature) ChildSetupComplete() bool {
 	if f.Status == StatusSettingUpWorktrees {
 		return false
 	}
-	if f.Status == StatusFailed && f.FailureCode() == errcat.WorktreeSetupFailed {
+	if f.Status == StatusFailed && errcat.IsSetupFailure(f.FailureCode()) {
 		return false
 	}
 	return true

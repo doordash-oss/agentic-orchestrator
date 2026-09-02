@@ -95,7 +95,8 @@ export interface RefactorPassController {
   attentionCardRef: RefObject<HTMLDivElement | null>;
   /** Scrolls to and focuses the integration-attention card, if present. */
   focusAttentionCard(): void;
-  dispatch(action: PassAction['id']): Promise<void>;
+  /** Dispatches a catalogue verb (or setup) through the shared action route. */
+  dispatch(action: PassAction['id'] | 'setup'): Promise<void>;
   /** Launch-time auto-start: dispatch start once this child becomes startable. */
   armAutoStart(childId: string): void;
   openDiscard(): void;
@@ -180,7 +181,7 @@ export function useRefactorPass(
   const discardAction = child?.actions.find((action) => action.id === 'discard');
 
   const dispatch = useCallback(
-    async (action: PassAction['id']) => {
+    async (action: PassAction['id'] | 'setup') => {
       if (child === null || busy) return;
       setBusy(true);
       setNotice(null);
@@ -428,6 +429,34 @@ export function RefactorPassWorkspace({
     };
   };
 
+  // A failed child setup renders exactly once, as one full ErrorSurface fed
+  // by the owning setup task's canonical error: the run's thin record names
+  // the task, and the task carries the full canonical object. The card's
+  // setup action resolves against the child's action catalog and dispatches
+  // through the pass dispatch.
+  const failedSetupTaskError = (() => {
+    if (child?.setup?.status !== 'failed') return null;
+    const tasks = child.setup?.tasks ?? [];
+    const owningKey = child.failure?.context?.setup_task?.key;
+    const task =
+      owningKey === undefined
+        ? tasks.find((candidate) => candidate.error !== undefined)
+        : tasks.find((candidate) => candidate.key === owningKey && candidate.error !== undefined);
+    return task?.error ?? null;
+  })();
+  const resolveSetupAction = (actionId: string): ErrorSurfaceAction | undefined => {
+    if (child === null) return undefined;
+    const action = actionById(child, actionId);
+    if (action === undefined) return undefined;
+    return {
+      enabled: action.enabled,
+      label: 'Retry setup',
+      disabledReason: action.enabled
+        ? undefined
+        : action.disabledReasons.map((reason) => reason.message).join(' '),
+    };
+  };
+
   const submitQuestionAnswers = () => {
     if (questionsAttention === undefined) return;
     void submitAttention(questionsAttention, () =>
@@ -555,6 +584,17 @@ export function RefactorPassWorkspace({
                 </>
               ) : null}
             </p>
+          ) : null}
+
+          {failedSetupTaskError !== null ? (
+            <ErrorSurface
+              error={failedSetupTaskError}
+              variant="full"
+              resolveAction={resolveSetupAction}
+              onAction={(actionId) => {
+                if (actionId === 'setup') void pass.dispatch('setup');
+              }}
+            />
           ) : null}
 
           {integrationAttention !== null ? (

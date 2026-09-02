@@ -91,6 +91,7 @@ function contextHasContent(context: CanonicalError['context']): boolean {
   if (context == null) return false;
   if (context.repositories != null && context.repositories.length > 0) return true;
   if (context.phase != null) return true;
+  if (context.setup_task != null) return true;
   const command = context.command;
   return command != null && (command.exit_code != null || (command.log_paths?.length ?? 0) > 0);
 }
@@ -140,6 +141,12 @@ function StructuredDetails({ context }: { context: ErrorContext }) {
             </li>
           ))}
         </ul>
+      )}
+      {context.setup_task != null && (
+        <div className="error-surface__setup-task">
+          <p className="error-surface__setup-task-label">Task: {context.setup_task.label}</p>
+          <p className="error-surface__setup-task-kind">{context.setup_task.kind}</p>
+        </div>
       )}
       {context.phase != null && (
         <div className="error-surface__phase">

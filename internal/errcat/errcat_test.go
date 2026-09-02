@@ -40,6 +40,7 @@ var zeroParams = []Params{
 	ProviderIssueParams{},
 	RunFailureParams{},
 	IntegrationRepoParams{},
+	SetupFailureParams{},
 }
 
 func TestCatalogEntriesAreValid(t *testing.T) {
@@ -68,7 +69,7 @@ func TestCatalogEntriesAreValid(t *testing.T) {
 		}
 		for _, block := range entry.Blocks {
 			switch block {
-			case BlockRepositories, BlockPhase, BlockCommand:
+			case BlockRepositories, BlockPhase, BlockCommand, BlockSetupTask:
 			default:
 				t.Errorf("%s: undeclared context block %q", code, block)
 			}
@@ -140,9 +141,9 @@ func TestNewUnknownCodeFallsBackToInternalError(t *testing.T) {
 	}
 }
 
-// terminalRunFailureCodes are the seven catalog codes a terminal run failure
-// can carry. All are blocking and reference a remediation action: setup for
-// worktree-setup failures, restart for every other terminal outcome.
+// terminalRunFailureCodes are the catalog codes a terminal run failure can
+// carry. All are blocking and reference a remediation action: setup for the
+// setup-failure codes, restart for every other terminal outcome.
 var terminalRunFailureCodes = []Code{
 	IterationBudgetExhausted,
 	SafetyRailTripped,
@@ -150,6 +151,8 @@ var terminalRunFailureCodes = []Code{
 	ArtifactMissing,
 	InfrastructureFailure,
 	WorktreeSetupFailed,
+	SetupAssetCopyFailed,
+	SetupInterrupted,
 	ProtocolViolation,
 }
 
@@ -172,7 +175,7 @@ func TestTerminalRunFailureActionReferences(t *testing.T) {
 			t.Fatalf("%s: missing from catalog", code)
 		}
 		want := []string{"restart"}
-		if code == WorktreeSetupFailed {
+		if IsSetupFailure(code) {
 			want = []string{"setup"}
 		}
 		if len(entry.Actions) != len(want) {

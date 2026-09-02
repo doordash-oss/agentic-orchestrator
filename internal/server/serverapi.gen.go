@@ -1370,6 +1370,9 @@ type ErrorContext struct {
 	// Phase Phase a code references.
 	Phase        *ErrorPhaseContext       `json:"phase,omitempty"`
 	Repositories []ErrorRepositoryContext `json:"repositories,omitempty"`
+
+	// SetupTask Setup task that owns a setup failure.
+	SetupTask *ErrorSetupTaskContext `json:"setup_task,omitempty"`
 }
 
 // ErrorPhaseContext Phase a code references.
@@ -1405,6 +1408,13 @@ type ErrorResponse struct {
 
 	// Error Canonical catalog-rendered error.
 	Error Error `json:"error"`
+}
+
+// ErrorSetupTaskContext Setup task that owns a setup failure.
+type ErrorSetupTaskContext struct {
+	Key   string `json:"key"`
+	Kind  string `json:"kind"`
+	Label string `json:"label"`
 }
 
 // FeatureAction Feature lifecycle action identifier.
@@ -2060,10 +2070,7 @@ type RelationshipChild struct {
 	ID               string `json:"id"`
 	IntegrationState string `json:"integration_state"`
 	Kind             string `json:"kind"`
-
-	// LastError Setup failure message when the child's setup failed.
-	LastError string `json:"last_error,omitempty"`
-	Name      string `json:"name"`
+	Name             string `json:"name"`
 
 	// Outcome Recorded relationship close outcome; absent while the child is open.
 	Outcome  RelationshipChildOutcome `json:"outcome,omitempty"`
@@ -2102,10 +2109,7 @@ type RelationshipChildSummary struct {
 	ID               string `json:"id"`
 	IntegrationState string `json:"integration_state"`
 	Kind             string `json:"kind"`
-
-	// LastError Setup failure message when the child's setup failed.
-	LastError string `json:"last_error,omitempty"`
-	Name      string `json:"name"`
+	Name             string `json:"name"`
 
 	// Outcome Recorded relationship close outcome; absent while the child is open.
 	Outcome  RelationshipChildOutcome `json:"outcome,omitempty"`
@@ -2767,7 +2771,6 @@ type SessionSummary struct {
 type Setup struct {
 	Attempt       int                  `json:"attempt,omitempty"`
 	CompletedAt   *time.Time           `json:"completed_at,omitempty"`
-	LastError     string               `json:"last_error,omitempty"`
 	LatestLogPath string               `json:"latest_log_path,omitempty"`
 	StartedAt     *time.Time           `json:"started_at,omitempty"`
 	Status        string               `json:"status"`
@@ -2777,13 +2780,15 @@ type Setup struct {
 
 // SetupTask defines model for SetupTask.
 type SetupTask struct {
-	Attempt          int        `json:"attempt,omitempty"`
-	Branch           string     `json:"branch,omitempty"`
-	EndedAt          *time.Time `json:"ended_at,omitempty"`
+	Attempt int        `json:"attempt,omitempty"`
+	Branch  string     `json:"branch,omitempty"`
+	EndedAt *time.Time `json:"ended_at,omitempty"`
+
+	// Error Canonical error rendering the task's stored failure record; absent when the task has not failed.
+	Error            *Error     `json:"error,omitempty"`
 	Key              string     `json:"key"`
 	Kind             string     `json:"kind"`
 	Label            string     `json:"label,omitempty"`
-	LastError        string     `json:"last_error,omitempty"`
 	Path             string     `json:"path,omitempty"`
 	Repo             string     `json:"repo,omitempty"`
 	SourcePath       string     `json:"source_path,omitempty"`

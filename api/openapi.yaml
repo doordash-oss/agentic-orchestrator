@@ -1620,6 +1620,20 @@ components:
         command:
           x-go-type-skip-optional-pointer: false
           $ref: "#/components/schemas/ErrorCommandContext"
+        setup_task:
+          x-go-type-skip-optional-pointer: false
+          $ref: "#/components/schemas/ErrorSetupTaskContext"
+    ErrorSetupTaskContext:
+      type: object
+      description: Setup task that owns a setup failure.
+      required: [key, kind, label]
+      properties:
+        key:
+          type: string
+        kind:
+          type: string
+        label:
+          type: string
     ErrorRepositoryContext:
       type: object
       description: Repository a code references.
@@ -3619,8 +3633,6 @@ components:
           type: array
           items:
             type: string
-        last_error:
-          type: string
     SetupTask:
       type: object
       required: [key, kind, status]
@@ -3655,8 +3667,12 @@ components:
           type: string
           format: date-time
           x-go-type-skip-optional-pointer: false
-        last_error:
-          type: string
+        error:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            Canonical error rendering the task's stored failure record;
+            absent when the task has not failed.
     ToolCall:
       type: object
       properties:
@@ -3883,9 +3899,6 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RelationshipCleanupWarning"
-        last_error:
-          type: string
-          description: Setup failure message when the child's setup failed.
         has_diff_summary:
           type: boolean
           description: >-

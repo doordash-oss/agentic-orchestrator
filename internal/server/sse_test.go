@@ -647,6 +647,54 @@ func TestFeatureFailedDomainEventCarriesCanonicalError(t *testing.T) {
 	}
 }
 
+// TestSetupFailedDomainEventCarriesCanonicalError pins the SSE mapping for
+// failed setup events: a setup-failed domain event carrying a canonical error
+// becomes a lifecycle.updated whose summary is the catalog title for its code
+// and whose error object carries the canonical code and class, exactly as a
+// feature-failed event does; other setup events carry no error object.
+func TestSetupFailedDomainEventCarriesCanonicalError(t *testing.T) {
+	t.Parallel()
+
+	rendered := errcat.RenderRecord(errcat.FailureRecord{
+		Code: errcat.WorktreeSetupFailed,
+		Context: &errcat.RecordContext{
+			Repositories: []errcat.CodeRepository{{Name: "repo-a", Branch: "feature/repo-a"}},
+		},
+		Diagnostics: "git worktree add failed: no commits yet",
+	})
+	failed := eventDTOFromDomain(ports.Event{
+		Type:           ports.SetupFailed,
+		FeatureID:      testFeatureID,
+		CanonicalError: &rendered,
+	})
+	if failed.Kind != sseEventLifecycleUpdated {
+		t.Fatalf("setup-failed event kind = %q, want %q", failed.Kind, sseEventLifecycleUpdated)
+	}
+	if failed.Summary != "Worktree setup failed" {
+		t.Fatalf("setup-failed event summary = %q, want the catalog title %q", failed.Summary, "Worktree setup failed")
+	}
+	if failed.Error == nil {
+		t.Fatal("setup-failed event error = nil, want canonical error object")
+	}
+	if failed.Error.Code != string(errcat.WorktreeSetupFailed) {
+		t.Fatalf("setup-failed event error.code = %q, want %q", failed.Error.Code, errcat.WorktreeSetupFailed)
+	}
+	if failed.Error.Class != SSEEventErrorClassBlocking {
+		t.Fatalf("setup-failed event error.class = %q, want %q", failed.Error.Class, SSEEventErrorClassBlocking)
+	}
+	if !failed.SnapshotRequired {
+		t.Fatal("setup-failed lifecycle event must require a snapshot")
+	}
+
+	started := eventDTOFromDomain(ports.Event{Type: ports.SetupStarted, FeatureID: testFeatureID})
+	if started.Error != nil {
+		t.Fatalf("setup-started event error = %+v, want none", *started.Error)
+	}
+	if !started.SnapshotRequired {
+		t.Fatal("setup-started lifecycle event must require a snapshot")
+	}
+}
+
 // TestRelationshipIntegrationChangedCarriesCanonicalError pins the SSE
 // mapping for relationship integration events: an integration-changed domain
 // event carrying a canonical error (a parked transaction) becomes a

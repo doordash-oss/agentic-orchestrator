@@ -93,20 +93,27 @@ test('partial setup failure, retry on the same feature, restart persistence', as
       },
     });
     // The durable failure renders once through the full error surface: the
-    // alert role, the "Failed" class label, the canonical code tag, and the
-    // catalog title.
+    // alert role, the "Failed" class label, the caption naming the owning
+    // task, the canonical code tag, and the catalog title — exactly once on
+    // the page.
     const failureCard = cockpit.getByRole('alert');
     await expect(failureCard).toBeVisible({ timeout: 60_000 });
     await expect(failureCard.locator('.error-surface__label')).toHaveText('Failed');
+    await expect(failureCard.locator('.error-surface__caption')).toHaveText('Worktree: beta');
     await expect(failureCard.locator('.error-surface__code')).toHaveText('worktree_setup_failed');
     await expect(failureCard.locator('.error-surface__title')).toHaveText('Worktree setup failed');
+    await expect(handle.page.getByText('Worktree setup failed')).toHaveCount(1);
+    // The owning repository sits under the Details disclosure.
+    const details = failureCard.locator('details.error-surface__details');
+    await details.locator('summary').click();
+    await expect(details.getByText('beta')).toBeVisible();
     // Raw diagnostics sit behind the Diagnostics disclosure.
     const diagnostics = failureCard.locator('details.error-surface__diagnostics');
     await expect(diagnostics).toBeVisible();
     await diagnostics.locator('summary').click();
     await expect(diagnostics.getByText('no commits yet')).toBeVisible();
     transcript.step(
-      'the failed card renders the canonical worktree_setup_failed surface with raw diagnostics behind the Diagnostics disclosure',
+      'the failed card renders the owning task once — caption, code tag, catalog title, repository under Details, raw diagnostics behind the Diagnostics disclosure',
     );
     const retryButton = failureCard.getByRole('button', { name: 'Retry setup' });
     await expect(retryButton).toBeEnabled();
@@ -120,7 +127,15 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     expect(failed.setup?.status).toBe('failed');
     const failedTask = failed.setup?.tasks.find((task) => task.repo === 'beta');
     expect(failedTask?.status).toBe('failed');
-    expect(failedTask?.error).toBeTruthy();
+    // The owning task carries the full canonical record: code and the raw
+    // diagnostics.
+    expect(failedTask?.error?.code).toBe('worktree_setup_failed');
+    expect(failedTask?.error?.diagnostics).toContain('no commits yet');
+    // The run's thin record carries the same code, a setup_task block naming
+    // the owning task, and no diagnostics.
+    expect(failed.failure?.code).toBe('worktree_setup_failed');
+    expect(failed.failure?.context?.setup_task?.key).toBe('worktree:beta');
+    expect(failed.failure?.diagnostics).toBeUndefined();
     const doneTask = failed.setup?.tasks.find((task) => task.repo === 'alpha');
     expect(doneTask?.status).toBe('done');
 

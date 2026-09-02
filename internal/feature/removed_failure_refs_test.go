@@ -21,6 +21,7 @@ import (
 	"go/token"
 	"go/types"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -101,25 +102,115 @@ func TestNoNonTestSourceReferencesRemovedFailureAPIs(t *testing.T) {
 
 // TestTypecheckBansRemovedRunFailureFields loads every repository package
 // with full type information (non-test sources only) and fails when a
-// selector x.LastError or x.FailureType resolves to a field of feature.Feature
-// or feature.Run, or when any identifier resolves to one of the removed
-// failure constants declared in this package. This is the precise,
-// receiver-aware guard for .LastError: the per-repo RepoState, setup
-// aggregate, setup task, and result-holder LastError fields remain legal.
+// selector x.LastError or x.FailureType resolves to a field of feature.Feature,
+// feature.Run, feature.SetupState, or feature.SetupTask, or when any
+// identifier resolves to one of the removed failure constants declared in
+// this package. This is the precise, receiver-aware guard for .LastError:
+// the per-repo RepoState and result-holder LastError fields remain legal.
 func TestTypecheckBansRemovedRunFailureFields(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
-	featurePkgPath := reflect.TypeOf(Feature{}).PkgPath()
+	pkgs := loadRepoPackages(t, repoRoot, "./...", nil)
+	violations, typechecked := scanPackagesForRemovedFailureRefs(pkgs, reflect.TypeOf(Feature{}).PkgPath())
+	if typechecked == 0 {
+		t.Fatal("no repository package carried syntax and type info; typecheck guard could not run")
+	}
+	for _, v := range violations {
+		t.Errorf("removed run failure field still referenced: %s", v)
+	}
+}
+
+// TestTypecheckGuardFlagsSetupLastErrorFixture pins the receiver-aware guard
+// itself: with the removed fields synthetically reintroduced (via source
+// overlays that never touch disk), a non-test source selecting .LastError on
+// the setup aggregate or a setup task must be flagged, so the guard cannot
+// silently stop covering the removed setup fields.
+func TestTypecheckGuardFlagsSetupLastErrorFixture(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	setupPath := filepath.Join(repoRoot, "internal", "feature", "setup.go")
+	setupSrcBytes, err := os.ReadFile(setupPath)
+	if err != nil {
+		t.Fatalf("read setup.go: %v", err)
+	}
+	// Reintroduce the removed fields so the fixture compiles; the guard must
+	// still flag every selector that resolves to them.
+	pkgIdx := strings.Index(string(setupSrcBytes), "package feature\n")
+	if pkgIdx < 0 {
+		t.Fatal("setup.go does not carry the expected package clause")
+	}
+	setupSrc := string(setupSrcBytes[pkgIdx:])
+	taskAnchor := "Error *errcat.FailureRecord `yaml:\"error,omitempty\"`\n}"
+	if !strings.Contains(setupSrc, taskAnchor) {
+		t.Fatal("setup.go no longer carries the SetupTask Error field anchor")
+	}
+	setupSrc = strings.Replace(setupSrc, taskAnchor,
+		"Error *errcat.FailureRecord `yaml:\"error,omitempty\"`\n\tLastError string `yaml:\"last_error,omitempty\"`\n}", 1)
+	stateAnchor := "TaskOrder     []string             `yaml:\"task_order,omitempty\"`\n}"
+	if !strings.Contains(setupSrc, stateAnchor) {
+		t.Fatal("setup.go no longer carries the SetupState TaskOrder anchor")
+	}
+	setupSrc = strings.Replace(setupSrc, stateAnchor,
+		"TaskOrder     []string             `yaml:\"task_order,omitempty\"`\n\tLastError     string               `yaml:\"last_error,omitempty\"`\n}", 1)
+
+	fixture := `package feature
+
+func lastErrorFixtureProbe(s *SetupState, task *SetupTask) (string, string) {
+	return s.LastError, task.LastError
+}
+`
+	overlayPath := filepath.Join(repoRoot, "internal", "feature", "zzz_lasterror_fixture_probe.go")
+	pkgs := loadRepoPackages(t, repoRoot, "./internal/feature", map[string][]byte{
+		setupPath:   []byte(setupSrc),
+		overlayPath: []byte(fixture),
+	})
+	violations, typechecked := scanPackagesForRemovedFailureRefs(pkgs, reflect.TypeOf(Feature{}).PkgPath())
+	if typechecked == 0 {
+		t.Fatal("fixture package carried no syntax and type info; guard could not run")
+	}
+	setupStateFlagged, setupTaskFlagged := false, false
+	for _, v := range violations {
+		if !strings.Contains(v, "zzz_lasterror_fixture_probe.go") {
+			t.Errorf("unexpected violation outside the fixture: %s", v)
+			continue
+		}
+		if strings.Contains(v, "feature.SetupState") {
+			setupStateFlagged = true
+		}
+		if strings.Contains(v, "feature.SetupTask") {
+			setupTaskFlagged = true
+		}
+	}
+	if !setupStateFlagged || !setupTaskFlagged {
+		t.Fatalf("fixture violations = %v; want .LastError flagged on both SetupState and SetupTask", violations)
+	}
+}
+
+// loadRepoPackages loads packages with full type information under root,
+// optionally with source overlays (synthetic files that never touch disk).
+func loadRepoPackages(t *testing.T, root, pattern string, overlay map[string][]byte) []*packages.Package {
+	t.Helper()
 	cfg := &packages.Config{
 		// LoadSyntax = NeedTypes | NeedSyntax | NeedTypesInfo (plus the
 		// bits they imply): typed syntax trees for the root packages, which
 		// is exactly what the selector-resolution guard needs.
-		Mode: packages.LoadSyntax,
-		Dir:  repoRoot,
+		Mode:    packages.LoadSyntax,
+		Dir:     root,
+		Overlay: overlay,
 	}
-	pkgs, err := packages.Load(cfg, "./...")
+	pkgs, err := packages.Load(cfg, pattern)
 	if err != nil {
 		t.Fatalf("loading repository packages: %v", err)
 	}
+	return pkgs
+}
+
+// scanPackagesForRemovedFailureRefs inspects loaded packages for selectors
+// resolving to the removed LastError/FailureType fields or identifiers
+// resolving to the removed failure constants. It returns the sorted
+// violations and the number of type-checked files.
+func scanPackagesForRemovedFailureRefs(pkgs []*packages.Package, featurePkgPath string) ([]string, int) {
 	violationSet := make(map[string]bool)
 	record := func(format string, args ...any) {
 		violationSet[fmt.Sprintf(format, args...)] = true
@@ -157,16 +248,14 @@ func TestTypecheckBansRemovedRunFailureFields(t *testing.T) {
 		}
 	}
 	if typechecked == 0 {
-		t.Fatal("no repository package carried syntax and type info; typecheck guard could not run")
+		return nil, 0
 	}
 	violations := make([]string, 0, len(violationSet))
 	for v := range violationSet {
 		violations = append(violations, v)
 	}
 	sort.Strings(violations)
-	for _, v := range violations {
-		t.Errorf("removed run failure field still referenced: %s", v)
-	}
+	return violations, typechecked
 }
 
 // removedFailureConstantObject reports whether obj is one of the removed
@@ -179,7 +268,8 @@ func removedFailureConstantObject(obj types.Object, featurePkgPath string) bool 
 }
 
 // featureRunRecvName reports whether recv (after pointer dereference) is
-// feature.Feature or feature.Run, returning the type name when it is.
+// one of the feature types whose LastError field was removed — Feature, Run,
+// SetupState, or SetupTask — returning the type name when it is.
 func featureRunRecvName(recv types.Type, featurePkgPath string) (string, bool) {
 	if ptr, ok := recv.(*types.Pointer); ok {
 		recv = ptr.Elem()
@@ -193,7 +283,7 @@ func featureRunRecvName(recv types.Type, featurePkgPath string) (string, bool) {
 		return "", false
 	}
 	switch obj.Name() {
-	case "Feature", "Run":
+	case "Feature", "Run", "SetupState", "SetupTask":
 		return obj.Name(), true
 	default:
 		return "", false

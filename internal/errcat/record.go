@@ -30,6 +30,7 @@ type RecordContext struct {
 	Repositories []CodeRepository `yaml:"repositories,omitempty" json:"repositories,omitempty"`
 	Phase        *CodePhase       `yaml:"phase,omitempty" json:"phase,omitempty"`
 	Command      *CodeCommand     `yaml:"command,omitempty" json:"command,omitempty"`
+	SetupTask    *CodeSetupTask   `yaml:"setup_task,omitempty" json:"setup_task,omitempty"`
 }
 
 // RenderRecord renders a stored failure record into the canonical error
@@ -38,12 +39,16 @@ type RecordContext struct {
 // template receives the phase and repository names from the record's blocks.
 // Integration attention codes receive the full repositories block instead,
 // so their summaries can name conflict-file and dirty-file counts and moved
-// refs.
+// refs. Setup failure codes receive the setup-task label and repository
+// names, so a run-level record names the owning task and a task-level
+// record names the repositories.
 func RenderRecord(record FailureRecord) Error {
 	opts := []Option{WithDiagnostics(record.Diagnostics)}
 	params := RunFailureParams{}
 	integration := IsIntegrationAttention(record.Code)
 	integrationRepos := []CodeRepository{}
+	setup := IsSetupFailure(record.Code)
+	setupParams := SetupFailureParams{}
 	if record.Context != nil {
 		if record.Context.Phase != nil {
 			opts = append(opts, WithPhase(*record.Context.Phase))
@@ -64,10 +69,18 @@ func RenderRecord(record FailureRecord) Error {
 		if record.Context.Command != nil {
 			opts = append(opts, WithCommand(*record.Context.Command))
 		}
+		if record.Context.SetupTask != nil {
+			opts = append(opts, WithSetupTask(*record.Context.SetupTask))
+			setupParams.TaskLabel = record.Context.SetupTask.Label
+		}
 	}
-	if integration {
+	setupParams.Repositories = params.Repositories
+	switch {
+	case setup:
+		opts = append(opts, WithParams(setupParams))
+	case integration:
 		opts = append(opts, WithParams(IntegrationRepoParams{Repositories: integrationRepos}))
-	} else {
+	default:
 		opts = append(opts, WithParams(params))
 	}
 	return New(record.Code, opts...)

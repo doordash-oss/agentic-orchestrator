@@ -17,12 +17,14 @@ limitations under the License.
 import { describe, expect, it } from 'vitest';
 import {
   ConnectionStateSchema,
+  FeatureSetupViewSchema,
   IPC_CHANNELS,
   IPC_EVENTS,
   InitRepositoryRequestSchema,
   IpcEnvelopeSchema,
   AbsolutePathSchema,
   ReadinessSnapshotSchema,
+  RelationshipChildViewSchema,
   SettingsPatchSchema,
   SettingsSchema,
   FeatureActionRequestSchema,
@@ -32,6 +34,7 @@ import {
   SessionIdSchema,
   SessionTranscriptRequestSchema,
   SessionOutputEventSchema,
+  SetupTaskViewSchema,
   isActiveChatSession,
   isTerminalChatStatus,
   defaultAmaGeometry,
@@ -86,6 +89,77 @@ describe('FeatureSnapshot failure schema', () => {
       delete incomplete[field];
       expect(failureSchema?.safeParse(incomplete).success).toBe(false);
     }
+  });
+});
+
+describe('Setup task and setup view schemas', () => {
+  const canonicalError = {
+    code: 'worktree_setup_failed',
+    class: 'blocking' as const,
+    title: 'Worktree setup failed',
+    summary: 'Setting up the worktree for repository "repo-a" failed.',
+    remediation: {
+      hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+      actions: ['setup'],
+    },
+    context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+    diagnostics: 'git worktree add failed: no commits yet',
+  };
+  const setupTask = {
+    key: 'worktree:repo-a',
+    kind: 'worktree',
+    label: 'Worktree: repo-a',
+    repo: 'repo-a',
+    status: 'failed',
+    branch: 'feature/search-revamp',
+    attempt: 1,
+    error: canonicalError,
+  };
+
+  it('accepts a setup task carrying its canonical error record', () => {
+    expect(SetupTaskViewSchema.safeParse(setupTask).success).toBe(true);
+  });
+
+  it('rejects a task error missing any required canonical field', () => {
+    for (const field of ['code', 'class', 'title', 'summary'] as const) {
+      const incomplete = {
+        ...setupTask,
+        error: { ...canonicalError } as Record<string, unknown>,
+      } as Record<string, unknown>;
+      delete (incomplete.error as Record<string, unknown>)[field];
+      expect(SetupTaskViewSchema.safeParse(incomplete).success).toBe(false);
+    }
+  });
+
+  it('rejects the removed lastError keys on setup and relationship child views', () => {
+    const setupView = {
+      status: 'failed',
+      attempt: 1,
+      tasks: [setupTask],
+    };
+    expect(FeatureSetupViewSchema.safeParse(setupView).success).toBe(true);
+    expect(FeatureSetupViewSchema.safeParse({ ...setupView, lastError: 'boom' }).success).toBe(
+      false,
+    );
+    expect(SetupTaskViewSchema.safeParse({ ...setupTask, lastError: 'boom' }).success).toBe(false);
+
+    const childView = {
+      id: 'abcd1234ef567890',
+      name: 'Refactor pass',
+      kind: 'refactor',
+      displayToken: 'R1',
+      displayState: 'Completed',
+      pipeline: 'medium',
+      status: 'Done',
+      startedAt: '2026-07-14T00:00:00Z',
+      cost: { totalUsd: 0, byPhase: {} },
+      integrationState: 'merged',
+      cleanupWarnings: [],
+    };
+    expect(RelationshipChildViewSchema.safeParse(childView).success).toBe(true);
+    expect(RelationshipChildViewSchema.safeParse({ ...childView, lastError: 'boom' }).success).toBe(
+      false,
+    );
   });
 });
 

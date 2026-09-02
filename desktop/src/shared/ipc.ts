@@ -991,8 +991,8 @@ export const SetupTaskViewSchema = z.strictObject({
   status: FeatureSetupStatusSchema,
   branch: z.string().optional(),
   attempt: z.number().int().nonnegative(),
-  /** Server-redacted safe failure summary. */
-  error: z.string().optional(),
+  /** Canonical error rendering the task's stored failure record, diagnostics redacted. */
+  error: CanonicalErrorSchema.optional(),
 });
 
 export type SetupTaskView = z.output<typeof SetupTaskViewSchema>;
@@ -1002,7 +1002,6 @@ export const FeatureSetupViewSchema = z.strictObject({
   attempt: z.number().int().nonnegative(),
   /** Tasks in the server-owned execution order. */
   tasks: z.array(SetupTaskViewSchema),
-  lastError: z.string().optional(),
 });
 
 export type FeatureSetupView = z.output<typeof FeatureSetupViewSchema>;
@@ -1052,7 +1051,6 @@ export const RelationshipChildViewSchema = z.strictObject({
   /** Canonical integration-attention error; absent when integration is not parked. */
   attention: CanonicalErrorSchema.optional(),
   cleanupWarnings: z.array(z.strictObject({ message: z.string(), repo: z.string().optional() })),
-  lastError: z.string().optional(),
   diffSummary: z.string().optional(),
   /** A preserved diff exists even when `diffSummary` is absent from a list projection. */
   hasDiffSummary: z.boolean().optional(),
@@ -1223,6 +1221,7 @@ export const FeatureOperationalActionSchema = z.enum([
   'resume',
   'retry',
   'restart',
+  'setup',
   'publish',
   'merge',
   'mark-done',
@@ -1237,7 +1236,7 @@ const CompletionRepoNameSchema = z.string().min(1).max(128);
 export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
   z.strictObject({
     featureId: FeatureIdSchema,
-    action: z.enum(['start', 'pause-stop', 'rewind', 'resume', 'retry']),
+    action: z.enum(['start', 'pause-stop', 'rewind', 'resume', 'retry', 'setup']),
   }),
   z.strictObject({
     featureId: FeatureIdSchema,
@@ -1300,6 +1299,7 @@ const _featureActionCatalogueSubset: {
   resume: z.never(),
   retry: z.never(),
   restart: z.never(),
+  setup: z.never(),
   publish: z.never(),
   merge: z.never(),
   'mark-done': z.never(),

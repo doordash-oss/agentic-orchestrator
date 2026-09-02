@@ -568,6 +568,15 @@ func (o *Observer) SetupLifecycle(sc SpanContext, ev feature.SetupEvent) {
 	if ev.Error != "" {
 		data["error"] = ev.Error
 	}
+	// A failed setup event carries the owning task's stored record; its
+	// catalog code and class travel as plain strings in the data map,
+	// alongside the raw error text, exactly as feature.failed does.
+	if ev.Failure != nil {
+		data["error_code"] = string(ev.Failure.Code)
+		if class := ev.FailureClass(); class != "" {
+			data["error_class"] = class
+		}
+	}
 	o.emit(sc, Event{
 		Timestamp:    time.Now(),
 		TraceID:      sc.TraceID,

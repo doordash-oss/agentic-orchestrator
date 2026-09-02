@@ -932,18 +932,42 @@ var catalog = map[Code]Entry{
 		Class:   ClassBlocking,
 		Title:   "Worktree setup failed",
 		Summary: "Setting up the feature's worktrees failed.",
-		Blocks:  []Block{BlockRepositories, BlockCommand},
+		Blocks:  []Block{BlockRepositories, BlockCommand, BlockSetupTask},
 		summaryParams: func(p Params) string {
-			params, ok := p.(RunFailureParams)
-			if !ok || len(params.Repositories) == 0 {
-				return ""
+			if summary := setupTaskLabelSummary(p); summary != "" {
+				return summary
 			}
-			if len(params.Repositories) == 1 {
-				return fmt.Sprintf("Setting up the worktree for repository %q failed.", params.Repositories[0])
+			switch params := p.(type) {
+			case SetupFailureParams:
+				return worktreeSetupRepoSummary(params.Repositories)
+			case RunFailureParams:
+				return worktreeSetupRepoSummary(params.Repositories)
 			}
-			return fmt.Sprintf("Setting up worktrees for repositories %s failed.", joinQuoted(params.Repositories))
+			return ""
 		},
-		Remediation: "Resolve the reported problem in the repository, then retry setup.",
+		Remediation: "Resolve the reported problem in the repository or branch, then retry setup.",
+		Actions:     []string{"setup"},
+	},
+	SetupAssetCopyFailed: {
+		Class:   ClassBlocking,
+		Title:   "Asset copy failed",
+		Summary: "Copying an image or attachment for the feature's setup failed.",
+		Blocks:  []Block{BlockRepositories, BlockCommand, BlockSetupTask},
+		summaryParams: func(p Params) string {
+			return setupTaskLabelSummary(p)
+		},
+		Remediation: "Fix the source file, then retry setup.",
+		Actions:     []string{"setup"},
+	},
+	SetupInterrupted: {
+		Class:   ClassBlocking,
+		Title:   "Setup interrupted",
+		Summary: "The feature's setup was interrupted before it finished.",
+		Blocks:  []Block{BlockRepositories, BlockCommand, BlockSetupTask},
+		summaryParams: func(p Params) string {
+			return setupTaskLabelSummary(p)
+		},
+		Remediation: "Retry setup to continue.",
 		Actions:     []string{"setup"},
 	},
 

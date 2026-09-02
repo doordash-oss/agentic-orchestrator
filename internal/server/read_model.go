@@ -551,13 +551,9 @@ func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSumma
 	}
 	if setup := child.Run().Setup; setup != nil {
 		dto.SetupStatus = string(setup.Status)
-		if setup.Status == feature.SetupStatusFailed {
-			dto.LastError = SafeDisplayText(setup.LastError, 240)
-		}
 	}
 	if childSetupComplete(child) {
 		dto.RelationshipState = "active"
-		dto.LastError = ""
 	}
 	if child.Parent.CloseOutcome != "" {
 		dto.Outcome = RelationshipChildOutcome(child.Parent.CloseOutcome)
@@ -634,7 +630,6 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 		IntegrationState:  summary.IntegrationState,
 		Attention:         summary.Attention,
 		CleanupWarnings:   summary.CleanupWarnings,
-		LastError:         summary.LastError,
 		HasDiffSummary:    summary.HasDiffSummary,
 	}
 	// Re-bound at read time: records persisted before the write-time bound
@@ -788,15 +783,15 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 }
 
 // childSetupFailed reports whether the child feature carries a failed
-// worktree setup that the setup retry action can rerun. Mirrors the
-// isFailedSetupFeature predicate used by the retry mutation.
+// setup that the setup action can rerun. Mirrors the isFailedSetupFeature
+// predicate used by the retry mutation.
 func childSetupFailed(f *feature.Feature) bool {
 	if f == nil {
 		return false
 	}
 	setup := f.Run().Setup
 	return f.Status == feature.StatusFailed &&
-		f.FailureCode() == errcat.WorktreeSetupFailed &&
+		errcat.IsSetupFailure(f.FailureCode()) &&
 		setup != nil &&
 		setup.Status == feature.SetupStatusFailed
 }
@@ -842,12 +837,12 @@ func childCapabilityDisabledReason(err error) ActionDisabledReason {
 
 // childActionCatalogDTOs builds the restricted child catalog: ordinary
 // start/resume/restart execution entries gated by the same capability check
-// the mutations enforce, plus setup-retry and discard. Child delivery actions
-// (publish, merge, rewind, refactor, mark-done, post-publish passes) are never
-// offered: a child's work reaches the parent only through integration. Child
-// cleanup and single-record delete are also unavailable while the relationship
-// is active; the authoritative RelationshipGuard enforces the same policy at
-// the mutation layer.
+// the mutations enforce, plus setup, setup-retry, and discard. Child delivery
+// actions (publish, merge, rewind, refactor, mark-done, post-publish passes)
+// are never offered: a child's work reaches the parent only through
+// integration. Child cleanup and single-record delete are also unavailable
+// while the relationship is active; the authoritative RelationshipGuard
+// enforces the same policy at the mutation layer.
 func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running bool,
 	action func(string, bool, ActionScope, []ActionInput, ...ActionDisabledReason) Action,
 	disabledStatusReason func(feature.Status) ActionDisabledReason) []Action {
@@ -863,6 +858,7 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running b
 			action(actionPauseStop, false, featureScope, nil, closed),
 			action(actionResume, false, featureScope, nil, closed),
 			action(actionRestart, false, featureScope, nil, closed),
+			action(actionSetup, false, featureScope, nil, closed),
 			action(actionRetry, false, featureScope, nil, closed),
 			action(actionDiscard, false, featureScope, nil, closed),
 		}
@@ -891,8 +887,12 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running b
 	return []Action{
 		action(actionStart, canStart, featureScope, nil, blockedReason(disabledStatusReason(status))),
 		action(actionPauseStop, canStop, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_running", Message: "child has no active work to pause or stop"})),
-		action(actionResume, canResume, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_paused", Message: "feature has no paused session or input gate"})),
+		action(actionResume, canResume, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_paused", Message: "child has no paused session or input gate"})),
 		action(actionRestart, canRestart, featureScope, nil, restartReason),
+		// Setup reruns only the unfinished tasks of a failed child setup and
+		// leaves the child parked at Created; the card resolves the action
+		// from this catalog with no client-side alias.
+		action(actionSetup, childSetupFailed(f), featureScope, nil, ActionDisabledReason{Code: "no_pending_setup", Message: "feature has no pending or failed setup work"}),
 		// Retry serves two child conditions: a failed setup the setup retry
 		// reruns, and a parked integration transaction (attention record,
 		// attention phase, or apply attention) whose retry re-enters
@@ -924,7 +924,7 @@ func setupActionEligible(f *feature.Feature) bool {
 		return setup.Status == feature.SetupStatusQueued || setup.Status == feature.SetupStatusRunning
 	}
 	return f.Status == feature.StatusFailed &&
-		f.FailureCode() == errcat.WorktreeSetupFailed &&
+		errcat.IsSetupFailure(f.FailureCode()) &&
 		setup.Status == feature.SetupStatusFailed
 }
 
@@ -1091,7 +1091,6 @@ func setupDTO(setup *feature.SetupState) *Setup {
 		LatestLogPath: SafeDisplayText(setup.LatestLogPath, 1000),
 		Tasks:         tasks,
 		TaskOrder:     append([]string(nil), setup.TaskOrder...),
-		LastError:     SafeDisplayText(setup.LastError, 500),
 	}
 }
 
@@ -1110,8 +1109,21 @@ func setupTaskDTO(task feature.SetupTask) SetupTask {
 		Attempt:          task.Attempt,
 		StartedAt:        task.StartedAt,
 		EndedAt:          task.EndedAt,
-		LastError:        SafeDisplayText(task.LastError, 500),
+		Error:            wireSetupTaskError(task.Error),
 	}
+}
+
+// wireSetupTaskError renders a setup task's stored failure record through
+// the catalog onto the canonical wire error, bounding raw diagnostics with
+// the safe-display helper.
+func wireSetupTaskError(record *errcat.FailureRecord) *Error {
+	if record == nil {
+		return nil
+	}
+	rendered := errcat.RenderRecord(*record)
+	wire := wireError(rendered)
+	wire.Diagnostics = SafeDisplayText(rendered.Diagnostics, 240)
+	return &wire
 }
 
 // probeRepoFreshness collects freshness for every repo concurrently. Each

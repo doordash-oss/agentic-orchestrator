@@ -55,14 +55,28 @@ func seedReadChildFeature(t *testing.T, store *feature.Store, parentID string, s
 			Bases:    []feature.ChildRepoBase{{Repo: repoNameSelf, SHA: "deadbeefcafe", ParentBranch: "main"}},
 		},
 	}
-	child.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: setupStatus, LastError: setupErr}})
+	child.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: setupStatus}})
 	if setupStatus == feature.SetupStatusFailed {
+		// Mirror the setup runner's durable shape: the owning task carries
+		// the full record, the run carries the thin setup_task record.
+		key := "worktree:" + repoNameSelf
+		child.Run().Setup.Tasks = map[string]feature.SetupTask{key: {
+			Key: key, Kind: feature.SetupTaskWorktree, Label: "Worktree: " + repoNameSelf,
+			Repo: repoNameSelf, Status: feature.SetupStatusFailed,
+			Error: &errcat.FailureRecord{
+				Code: errcat.WorktreeSetupFailed,
+				Context: &errcat.RecordContext{
+					Repositories: []errcat.CodeRepository{{Name: repoNameSelf, Branch: "feature/rework-auth"}},
+				},
+				Diagnostics: setupErr,
+			},
+		}}
+		child.Run().Setup.TaskOrder = []string{key}
 		child.Run().Failure = &errcat.FailureRecord{
 			Code: errcat.WorktreeSetupFailed,
-			Context: &errcat.RecordContext{
-				Repositories: []errcat.CodeRepository{{Name: repoNameSelf, Branch: "feature/rework-auth"}},
-			},
-			Diagnostics: setupErr,
+			Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{
+				Key: key, Kind: "worktree", Label: "Worktree: " + repoNameSelf,
+			}},
 		}
 	}
 	if err := store.Save(child); err != nil {
@@ -133,7 +147,7 @@ func TestChildFeatureExcludedFromTopLevelListButDetailWorks(t *testing.T) {
 	for _, raw := range actions {
 		ids[raw.(map[string]any)["id"].(string)] = true
 	}
-	want := map[string]bool{actionStart: true, actionPauseStop: true, actionResume: true, actionRestart: true, actionRetry: true, actionDiscard: true}
+	want := map[string]bool{actionStart: true, actionPauseStop: true, actionResume: true, actionRestart: true, actionSetup: true, actionRetry: true, actionDiscard: true}
 	if len(actions) != len(want) {
 		t.Fatalf("child detail actions = %v, want %v", ids, want)
 	}
@@ -166,8 +180,9 @@ func TestParentDetailIgnoresLegacyProviderStateInFeatureStore(t *testing.T) {
 }
 
 // TestParentProjectionsCarryActiveChildDerivedState covers the derived-state
-// matrix on both parent summary and parent detail: failed setup surfaces
-// last_error and stays setting_up; done setup flips to setup_complete.
+// matrix on both parent summary and parent detail: a failed setup surfaces
+// setup_status and stays setting_up with no last_error key; done setup flips
+// to setup_complete.
 func TestParentProjectionsCarryActiveChildDerivedState(t *testing.T) {
 	t.Parallel()
 
@@ -182,8 +197,8 @@ func TestParentProjectionsCarryActiveChildDerivedState(t *testing.T) {
 		if activeChild["relationship_state"] != "setting_up" || activeChild["setup_status"] != string(feature.SetupStatusFailed) {
 			t.Fatalf("active_child = %+v, want setting_up with failed setup", activeChild)
 		}
-		if activeChild["last_error"] != gitWorktreeAddFailedMsg {
-			t.Fatalf("active_child last_error = %v, want setup failure", activeChild["last_error"])
+		if _, ok := activeChild["last_error"]; ok {
+			t.Fatalf("active_child = %+v, want no last_error for a failed child setup", activeChild)
 		}
 	})
 
@@ -225,13 +240,13 @@ func TestParentProjectionsCarryActiveChildDerivedState(t *testing.T) {
 	})
 }
 
-// TestRelationshipChildSummaryProjectsOnlySetupText pins that the parent's
-// active_child summary projects the setup aggregate's failure text and never
-// falls back to the child run's stored failure record.
-func TestRelationshipChildSummaryProjectsOnlySetupText(t *testing.T) {
+// TestRelationshipChildSummaryProjectsOnlySetupStatus pins that the parent's
+// active_child summary indicates a failed child setup through setup_status
+// alone and never projects setup text of any kind.
+func TestRelationshipChildSummaryProjectsOnlySetupStatus(t *testing.T) {
 	t.Parallel()
 
-	t.Run("failed setup projects the setup aggregate text", func(t *testing.T) {
+	t.Run("failed setup projects setup_status only", func(t *testing.T) {
 		t.Parallel()
 		store, parent := seedReadFeature(t)
 		seedReadChildFeature(t, store, parent.ID, feature.StatusFailed, feature.SetupStatusFailed, gitWorktreeAddFailedMsg)
@@ -239,8 +254,11 @@ func TestRelationshipChildSummaryProjectsOnlySetupText(t *testing.T) {
 
 		detail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)
 		activeChild := detail[entityFeature].(map[string]any)["active_child"].(map[string]any)
-		if activeChild["last_error"] != gitWorktreeAddFailedMsg {
-			t.Fatalf("active_child last_error = %v, want the setup aggregate text", activeChild["last_error"])
+		if activeChild["setup_status"] != string(feature.SetupStatusFailed) {
+			t.Fatalf("active_child setup_status = %v, want failed", activeChild["setup_status"])
+		}
+		if _, ok := activeChild["last_error"]; ok {
+			t.Fatalf("active_child = %+v, want no last_error for a failed child setup", activeChild)
 		}
 	})
 

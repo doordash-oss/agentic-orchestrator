@@ -145,7 +145,7 @@ func TestFprintIndentsEveryMultiLineDiagnosticsLine(t *testing.T) {
 
 func TestFprintRendersContextBlocksAsKeyValuesBetweenHintAndDetail(t *testing.T) {
 	// The renderer test populates every context block directly: no single
-	// catalog code declares all three today, and the renderer must render
+	// catalog code declares all four today, and the renderer must render
 	// whatever blocks a rendered error carries.
 	e := New(ParentWorktreesDirty, WithDiagnostics("raw failure text"))
 	e.Context = &Context{
@@ -153,8 +153,9 @@ func TestFprintRendersContextBlocksAsKeyValuesBetweenHintAndDetail(t *testing.T)
 			{Name: "web", Branch: "main", DirtyFiles: []string{"a.go", "b.go"}},
 			{Name: "api", ConflictFiles: []string{"go.mod"}, MergeHEAD: "abc123"},
 		},
-		Phase:   &CodePhase{Name: "implement", Iteration: 2},
-		Command: &CodeCommand{ExitCode: 1, LogPaths: []string{"/tmp/a.log", "/tmp/b.log"}},
+		SetupTask: &CodeSetupTask{Key: "worktree:beta", Kind: "worktree", Label: "Worktree: beta"},
+		Phase:     &CodePhase{Name: "implement", Iteration: 2},
+		Command:   &CodeCommand{ExitCode: 1, LogPaths: []string{"/tmp/a.log", "/tmp/b.log"}},
 	}
 
 	lines := renderLines(t, e)
@@ -167,6 +168,7 @@ func TestFprintRendersContextBlocksAsKeyValuesBetweenHintAndDetail(t *testing.T)
 		"  repository: api",
 		"    conflict_files: go.mod",
 		"    merge_head: abc123",
+		"  setup_task: Worktree: beta, kind worktree",
 		"  phase: implement (iteration 2)",
 		"  exit_code: 1",
 		"  log_paths: /tmp/a.log, /tmp/b.log",

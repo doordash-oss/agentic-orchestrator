@@ -127,6 +127,84 @@ func TestRenderRecordSummaryReadsContextBlocks(t *testing.T) {
 	}
 }
 
+// TestSetupTaskRecordRoundTripsYAMLAndJSON pins the stored shape of the
+// run-level setup-failure record: a setup_task block survives both marshal
+// cycles unchanged.
+func TestSetupTaskRecordRoundTripsYAMLAndJSON(t *testing.T) {
+	record := FailureRecord{
+		Code: WorktreeSetupFailed,
+		Context: &RecordContext{
+			SetupTask: &CodeSetupTask{Key: "worktree:beta", Kind: "worktree", Label: "Worktree: beta"},
+		},
+	}
+
+	yamlBytes, err := yaml.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fromYAML FailureRecord
+	if err := yaml.Unmarshal(yamlBytes, &fromYAML); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(fromYAML, record) {
+		t.Fatalf("YAML round-trip mismatch:\n got %#v\nwant %#v\nyaml:\n%s", fromYAML, record, yamlBytes)
+	}
+	if !strings.Contains(string(yamlBytes), "setup_task:") {
+		t.Fatalf("YAML does not carry the setup_task key:\n%s", yamlBytes)
+	}
+
+	jsonBytes, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fromJSON FailureRecord
+	if err := json.Unmarshal(jsonBytes, &fromJSON); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(fromJSON, record) {
+		t.Fatalf("JSON round-trip mismatch:\n got %#v\nwant %#v", fromJSON, record)
+	}
+}
+
+// TestRenderRecordSetupTaskNamesTheOwningTask pins the run-level projection:
+// a record whose only context is the setup_task block renders a summary that
+// names the task and exposes the block, without leaking diagnostics.
+func TestRenderRecordSetupTaskNamesTheOwningTask(t *testing.T) {
+	rendered := RenderRecord(FailureRecord{
+		Code: WorktreeSetupFailed,
+		Context: &RecordContext{
+			SetupTask: &CodeSetupTask{Key: "worktree:beta", Kind: "worktree", Label: "Worktree: beta"},
+		},
+		Diagnostics: "git worktree add failed: no commits yet",
+	})
+	if rendered.Summary != `Setup task "Worktree: beta" failed.` {
+		t.Fatalf("summary = %q; want the owning-task sentence", rendered.Summary)
+	}
+	if strings.Contains(rendered.Summary, "no commits yet") {
+		t.Fatalf("summary leaks raw diagnostics: %q", rendered.Summary)
+	}
+	if rendered.Context == nil || rendered.Context.SetupTask == nil || rendered.Context.SetupTask.Key != "worktree:beta" {
+		t.Fatalf("setup_task context block not carried: %#v", rendered.Context)
+	}
+	if rendered.Context.Repositories != nil || rendered.Context.Command != nil {
+		t.Fatalf("run-level record must carry only the setup_task block: %#v", rendered.Context)
+	}
+}
+
+// TestRenderRecordDropsSetupTaskForNonSetupCode pins that a record whose
+// setup_task block the code did not declare renders without the block.
+func TestRenderRecordDropsSetupTaskForNonSetupCode(t *testing.T) {
+	rendered := RenderRecord(FailureRecord{
+		Code: IterationBudgetExhausted,
+		Context: &RecordContext{
+			SetupTask: &CodeSetupTask{Key: "worktree:beta", Kind: "worktree", Label: "Worktree: beta"},
+		},
+	})
+	if rendered.Context != nil && rendered.Context.SetupTask != nil {
+		t.Fatalf("iteration_budget_exhausted does not declare the setup_task block; got %#v", rendered.Context)
+	}
+}
+
 // TestRenderRecordDropsUndeclaredBlocks pins that a record whose context the
 // code did not declare renders without those blocks.
 func TestRenderRecordDropsUndeclaredBlocks(t *testing.T) {

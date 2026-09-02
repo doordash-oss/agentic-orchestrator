@@ -866,7 +866,7 @@ func TestScanRecovery_ReconcilesAbandonedSetupBeforeScan(t *testing.T) {
 				t.Fatalf("load during scan: %v", err)
 			}
 			scanSawFailed = got.Status == feature.StatusFailed &&
-				got.FailureCode() == errcat.WorktreeSetupFailed &&
+				errcat.IsSetupFailure(got.FailureCode()) &&
 				got.Run().Setup != nil &&
 				got.Run().Setup.Status == feature.SetupStatusFailed
 			return nil, nil

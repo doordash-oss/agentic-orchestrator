@@ -391,6 +391,13 @@ export const CanonicalErrorSchema = z.strictObject({
           log_paths: z.array(z.string()).max(50).optional(),
         })
         .optional(),
+      setup_task: z
+        .strictObject({
+          key: z.string().min(1),
+          kind: z.string().min(1),
+          label: z.string().min(1),
+        })
+        .optional(),
     })
     .optional(),
   diagnostics: z.string().optional(),
@@ -418,7 +425,11 @@ export const ServerSetupTaskSchema = z.object({
   status: z.string(),
   branch: z.string().optional(),
   attempt: z.number().int().optional(),
-  last_error: z.string().optional(),
+  // Canonical error rendering the task's stored failure record; absent when
+  // the task has not failed.
+  error: CanonicalErrorSchema.optional(),
+  // The removed last-error string must never reappear on the wire.
+  last_error: z.never().optional(),
 });
 
 export type ServerSetupTask = z.output<typeof ServerSetupTaskSchema>;
@@ -428,7 +439,8 @@ export const ServerSetupSchema = z.object({
   attempt: z.number().int().optional(),
   tasks: z.record(z.string(), ServerSetupTaskSchema).optional(),
   task_order: z.array(z.string()).optional(),
-  last_error: z.string().optional(),
+  // The removed last-error string must never reappear on the wire.
+  last_error: z.never().optional(),
 });
 
 export type ServerSetup = z.output<typeof ServerSetupSchema>;
@@ -484,7 +496,8 @@ export const ServerRelationshipChildSchema = z.object({
   // contract, same as ErrorResponse.
   attention: CanonicalErrorSchema.optional(),
   cleanup_warnings: z.array(z.object({ repo: z.string().optional(), message: z.string() })),
-  last_error: z.string().optional(),
+  // The removed last-error string must never reappear on the wire.
+  last_error: z.never().optional(),
   diff_summary: z.string().max(DIFF_SUMMARY_MAX_BYTES).optional(),
   // Set on list projections, which omit the body itself; the detail route
   // carries diff_summary instead.

@@ -142,6 +142,25 @@ func TestActionCatalogSetupAndStartLifecycle(t *testing.T) {
 		t.Fatalf("setup action = %+v; want enabled for failed setup (retry)", got)
 	}
 
+	// Every setup failure code — worktree, asset copy, and interrupted —
+	// enables the setup action for a failed feature with failed setup state.
+	for _, tc := range []struct {
+		name string
+		code errcat.Code
+	}{
+		{"worktree", errcat.WorktreeSetupFailed},
+		{"asset copy", errcat.SetupAssetCopyFailed},
+		{"interrupted", errcat.SetupInterrupted},
+	} {
+		setup := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable)
+		setup.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
+		setup.Run().Failure = &errcat.FailureRecord{Code: tc.code, Diagnostics: "raw setup failure"}
+		actions := actionCatalogDTOs(setup)
+		if got := actionDTOByID(t, actions, actionSetup); !got.Enabled {
+			t.Fatalf("%s: setup action = %+v; want enabled for a failed setup with code %s", tc.name, got, tc.code)
+		}
+	}
+
 	// After successful setup the feature is Created: Start is enabled and
 	// setup no longer applies.
 	created := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable)

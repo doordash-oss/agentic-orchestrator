@@ -1935,7 +1935,7 @@ func isFailedSetupFeature(f *feature.Feature) bool {
 	}
 	setup := f.Run().Setup
 	return f.Status == feature.StatusFailed &&
-		f.FailureCode() == errcat.WorktreeSetupFailed &&
+		errcat.IsSetupFailure(f.FailureCode()) &&
 		setup != nil &&
 		setup.Status == feature.SetupStatusFailed
 }

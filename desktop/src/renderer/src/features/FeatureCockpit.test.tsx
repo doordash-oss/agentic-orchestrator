@@ -1075,7 +1075,7 @@ describe('FeatureCockpit failure and retry', () => {
       title: 'Worktree setup failed',
       summary: 'Setting up the worktree for repository "repo-a" failed.',
       remediation: {
-        hint: 'Resolve the reported problem in the repository, then retry setup.',
+        hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
         actions: ['setup'],
       },
       context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
@@ -1086,28 +1086,33 @@ describe('FeatureCockpit failure and retry', () => {
   function failedSnapshot() {
     return featureSnapshot({
       status: 'Failed',
-      failure: worktreeSetupFailure(),
+      // The run carries the thin record: same code, a setup_task block
+      // naming the owning task, and no diagnostics.
+      failure: {
+        code: 'worktree_setup_failed',
+        class: 'blocking' as const,
+        title: 'Worktree setup failed',
+        summary: 'Setup task "Worktree: repo-a" failed.',
+        remediation: {
+          hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+          actions: ['setup'],
+        },
+        context: {
+          setup_task: { key: 'worktree:repo-a', kind: 'worktree', label: 'Worktree: repo-a' },
+        },
+      },
       setup: {
         status: 'failed',
         attempt: 1,
-        lastError: 'clone failed',
         tasks: [
           {
             key: 'worktree:repo-a',
             kind: 'worktree',
-            label: 'Create worktree',
-            repo: 'repo-a',
-            status: 'done',
-            attempt: 1,
-          },
-          {
-            key: 'kb:repo-a',
-            kind: 'kb',
-            label: 'Build knowledge base',
+            label: 'Worktree: repo-a',
             repo: 'repo-a',
             status: 'failed',
-            attempt: 2,
-            error: 'kb build exited with status 1',
+            attempt: 1,
+            error: worktreeSetupFailure(),
           },
         ],
       },
@@ -1125,7 +1130,7 @@ describe('FeatureCockpit failure and retry', () => {
     });
   }
 
-  it('renders the durable failure once through the full ErrorSurface', async () => {
+  it('renders the owning task once through the full ErrorSurface', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeature.mockResolvedValue(failedSnapshot());
     renderCockpit(mock);
@@ -1133,15 +1138,20 @@ describe('FeatureCockpit failure and retry', () => {
     await screen.findByRole('region', { name: 'Feature Search revamp' });
 
     // Exactly one durable failure surface, keyed by the alert role the
-    // blocking class assigns.
+    // blocking class assigns: the owning task's canonical object, captioned
+    // with the task label.
     const alert = screen.getByRole('alert');
     expect(within(alert).getByText('Failed')).toBeInTheDocument();
     expect(within(alert).getByText('worktree_setup_failed')).toBeInTheDocument();
     expect(within(alert).getByText('Worktree setup failed')).toBeInTheDocument();
+    expect(within(alert).getByText('Worktree: repo-a')).toBeInTheDocument();
     expect(
       within(alert).getByText('Setting up the worktree for repository "repo-a" failed.'),
     ).toBeInTheDocument();
     expect(within(alert).getByText('repo-a')).toBeInTheDocument();
+
+    // The run failure's own summary text appears nowhere.
+    expect(screen.queryByText('Setup task "Worktree: repo-a" failed.')).not.toBeInTheDocument();
 
     // Diagnostics sit behind the second disclosure and stay raw.
     const diagnostics = alert.querySelector('details.error-surface__diagnostics');
@@ -1150,6 +1160,39 @@ describe('FeatureCockpit failure and retry', () => {
 
     // No element with the old form-error classes remains in the stage status.
     expect(document.querySelector('.cockpit__stage-status .create-form__error')).toBeNull();
+  });
+
+  it('renders a non-setup terminal failure from the run record with Restart', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(
+      featureSnapshot({
+        status: 'Failed',
+        failure: {
+          code: 'iteration_budget_exhausted',
+          class: 'blocking' as const,
+          title: 'Iteration budget exhausted',
+          summary: 'The Implement phase exhausted its iteration budget at iteration 3.',
+          remediation: {
+            hint: 'Restart the phase with an extended iteration budget, or revise the plan so the work converges.',
+            actions: ['restart'],
+          },
+          context: { phase: { name: 'implement', iteration: 3 } },
+          diagnostics: 'no convergence',
+        },
+        actions: [
+          { id: 'restart', enabled: true, disabledReasons: [] },
+          { id: 'setup', enabled: false, disabledReasons: [] },
+        ],
+      }),
+    );
+    renderCockpit(mock);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByText('iteration_budget_exhausted')).toBeInTheDocument();
+    expect(within(alert).getByText('Iteration budget exhausted')).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: 'Restart' })).toBeEnabled();
+    expect(within(alert).queryByRole('button', { name: 'Retry setup' })).not.toBeInTheDocument();
   });
 
   it('retries via the card action on the SAME feature', async () => {

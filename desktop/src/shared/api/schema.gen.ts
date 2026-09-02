@@ -961,6 +961,13 @@ export interface components {
             repositories?: components["schemas"]["ErrorRepositoryContext"][];
             phase?: components["schemas"]["ErrorPhaseContext"];
             command?: components["schemas"]["ErrorCommandContext"];
+            setup_task?: components["schemas"]["ErrorSetupTaskContext"];
+        };
+        /** @description Setup task that owns a setup failure. */
+        ErrorSetupTaskContext: {
+            key: string;
+            kind: string;
+            label: string;
         };
         /** @description Repository a code references. */
         ErrorRepositoryContext: {
@@ -1802,7 +1809,6 @@ export interface components {
                 [key: string]: components["schemas"]["SetupTask"];
             };
             task_order?: string[];
-            last_error?: string;
         };
         SetupTask: {
             key: string;
@@ -1820,7 +1826,8 @@ export interface components {
             started_at?: string;
             /** Format: date-time */
             ended_at?: string;
-            last_error?: string;
+            /** @description Canonical error rendering the task's stored failure record; absent when the task has not failed. */
+            error?: components["schemas"]["Error"];
         };
         ToolCall: {
             summary?: string;
@@ -1924,8 +1931,6 @@ export interface components {
             /** @description Canonical error rendering the child's stored integration attention record; absent when integration is not parked. */
             attention?: components["schemas"]["Error"];
             cleanup_warnings: components["schemas"]["RelationshipCleanupWarning"][];
-            /** @description Setup failure message when the child's setup failed. */
-            last_error?: string;
             /** @description True when a preserved diff summary exists for this closed child. The body itself is only carried by RelationshipChild on a detail route. */
             has_diff_summary?: boolean;
         };

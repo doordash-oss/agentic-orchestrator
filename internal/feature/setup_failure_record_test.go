@@ -16,7 +16,9 @@ package feature_test
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
@@ -25,10 +27,12 @@ import (
 )
 
 // TestManagerSetupFailureStoresCanonicalRecord pins the durable shape of a
-// failing setup task: the run carries exactly one worktree_setup_failed
-// record whose repositories block names the failing repo, whose diagnostics
-// hold the raw error text, and whose command block points at the setup log;
-// the same raw text stays on the setup aggregate and task LastError strings.
+// failing setup task: the task carries exactly one worktree_setup_failed
+// record whose repositories block names the failing repo with its branch,
+// whose command block points at the setup log, and whose diagnostics hold
+// the raw error text; the run carries a thin record with the same code whose
+// only context is the setup_task block naming the task and which carries no
+// diagnostics; the setup aggregate carries no error text at all.
 func TestManagerSetupFailureStoresCanonicalRecord(t *testing.T) {
 	mgr := newTestManager(t)
 	mgr.Worktrees = &mocks.MockWorktreeOps{
@@ -54,28 +58,45 @@ func TestManagerSetupFailureStoresCanonicalRecord(t *testing.T) {
 	}
 	record := loaded.FailureRecord()
 	if record == nil {
-		t.Fatal("FailureRecord = nil, want one worktree_setup_failed record")
+		t.Fatal("FailureRecord = nil, want one thin worktree_setup_failed record")
 	}
 	if record.Code != errcat.WorktreeSetupFailed {
 		t.Fatalf("record code = %q, want %q", record.Code, errcat.WorktreeSetupFailed)
 	}
-	if record.Context == nil || len(record.Context.Repositories) != 1 || record.Context.Repositories[0].Name != "test-repo" {
-		t.Fatalf("record repositories = %+v, want exactly [test-repo]", record.Context)
+	if record.Context == nil || record.Context.SetupTask == nil || record.Context.SetupTask.Key != "worktree:test-repo" {
+		t.Fatalf("record context = %+v, want only the setup_task block naming the task", record.Context)
+	}
+	if record.Context.Repositories != nil || record.Context.Command != nil {
+		t.Fatalf("run record context = %+v, want no repository or command blocks", record.Context)
+	}
+	if record.Diagnostics != "" {
+		t.Fatalf("run record diagnostics = %q, want none on the thin record", record.Diagnostics)
 	}
 
 	setup := loaded.Run().Setup
 	if setup == nil || setup.Status != feature.SetupStatusFailed {
 		t.Fatalf("setup = %+v, want failed aggregate", setup)
 	}
-	if record.Diagnostics != setup.LastError {
-		t.Fatalf("record diagnostics = %q, want the setup aggregate's raw error %q", record.Diagnostics, setup.LastError)
-	}
 	task := setup.Tasks["worktree:test-repo"]
-	if task.Status != feature.SetupStatusFailed || task.LastError != record.Diagnostics {
-		t.Fatalf("task = %+v, want failed task carrying the same raw error %q", task, record.Diagnostics)
+	if task.Status != feature.SetupStatusFailed {
+		t.Fatalf("task = %+v, want failed task", task)
 	}
-	if record.Context.Command == nil || len(record.Context.Command.LogPaths) != 1 || record.Context.Command.LogPaths[0] != setup.LatestLogPath {
-		t.Fatalf("record command block = %+v, want the setup log path %q", record.Context.Command, setup.LatestLogPath)
+	if task.Error == nil || task.Error.Code != errcat.WorktreeSetupFailed {
+		t.Fatalf("task record = %+v, want worktree_setup_failed", task.Error)
+	}
+	if !strings.Contains(task.Error.Diagnostics, "git worktree add failed: branch exists") {
+		t.Fatalf("task record diagnostics = %q, want the raw error text", task.Error.Diagnostics)
+	}
+	if task.Error.Context == nil || len(task.Error.Context.Repositories) != 1 ||
+		task.Error.Context.Repositories[0].Name != "test-repo" || task.Error.Context.Repositories[0].Branch == "" {
+		t.Fatalf("task record repositories = %+v, want [test-repo] with its branch", task.Error.Context)
+	}
+	if task.Error.Context.Command == nil || len(task.Error.Context.Command.LogPaths) != 1 || task.Error.Context.Command.LogPaths[0] != setup.LatestLogPath {
+		t.Fatalf("task record command block = %+v, want the setup log path %q", task.Error.Context.Command, setup.LatestLogPath)
+	}
+
+	if owner := loaded.FailedSetupTask(); owner == nil || owner.Key != "worktree:test-repo" {
+		t.Fatalf("FailedSetupTask = %+v, want the owning worktree task", owner)
 	}
 }
 
@@ -124,6 +145,89 @@ func TestManagerRetrySetupClearsFailureRecord(t *testing.T) {
 	}
 	if reloaded.FailureRecord() != nil {
 		t.Fatalf("failure record = %+v, want cleared by setup retry and completion", reloaded.FailureRecord())
+	}
+	if task := reloaded.Run().Setup.Tasks["worktree:test-repo"]; task.Error != nil {
+		t.Fatalf("task record = %+v, want cleared by setup retry and completion", task.Error)
+	}
+}
+
+// TestManagerFailActiveSetupAbandonedBetweenTasks pins the ownerless-failure
+// contract: a setup abandoned between tasks (nothing running) parks the first
+// unfinished task in task order as the failed owner of a setup_interrupted
+// record, with the run's thin record pointing at it.
+func TestManagerFailActiveSetupAbandonedBetweenTasks(t *testing.T) {
+	mgr := newTestManager(t)
+	f, err := mgr.Create("Abandoned Between Tasks", "crash window", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", []string{filepath.Join(t.TempDir(), "missing.png")}, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		setup := ff.Run().Setup
+		worktree := setup.Tasks["worktree:test-repo"]
+		worktree.Status = feature.SetupStatusDone
+		setup.Tasks[worktree.Key] = worktree
+		return nil
+	}); err != nil {
+		t.Fatalf("seed done worktree: %v", err)
+	}
+
+	outcome, err := mgr.FailActiveSetup(f.ID, "setup was interrupted by shutdown or crash; retry setup to continue")
+	if err != nil {
+		t.Fatalf("FailActiveSetup: %v", err)
+	}
+	if !outcome.Marked {
+		t.Fatal("FailActiveSetup marked = false, want true for a running setup")
+	}
+	loaded, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if loaded.Status != feature.StatusFailed || loaded.FailureCode() != errcat.SetupInterrupted {
+		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureCode(), errcat.SetupInterrupted)
+	}
+	owner := loaded.FailedSetupTask()
+	if owner == nil || owner.Key != "image:1" {
+		t.Fatalf("owning task = %+v, want the first unfinished task image:1", owner)
+	}
+	if owner.Status != feature.SetupStatusFailed || owner.Error == nil || owner.Error.Code != errcat.SetupInterrupted {
+		t.Fatalf("owning task = %+v, want failed with a setup_interrupted record", owner)
+	}
+	if worktree := loaded.Run().Setup.Tasks["worktree:test-repo"]; worktree.Status != feature.SetupStatusDone || worktree.Error != nil {
+		t.Fatalf("done worktree task = %+v, want untouched by the failure", worktree)
+	}
+}
+
+// TestManagerRunSetupLogDirectoryFailureOwnsFirstUnfinishedTask pins the
+// pre-task failure contract: a setup-log creation failure before any task
+// started marks the first unfinished task failed with a setup_interrupted
+// record and points the run at it.
+func TestManagerRunSetupLogDirectoryFailureOwnsFirstUnfinishedTask(t *testing.T) {
+	mgr := newTestManager(t)
+	f, err := mgr.Create("Log Dir Failure", "blocked setup dir", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	setupDir := filepath.Join(mgr.Store.RunDir(f.ID, 1), "setup")
+	if err := os.WriteFile(setupDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("block setup dir: %v", err)
+	}
+
+	if err := mgr.RunSetup(f.ID); err == nil {
+		t.Fatal("RunSetup succeeded, want log directory failure")
+	}
+	loaded, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if loaded.Status != feature.StatusFailed || loaded.FailureCode() != errcat.SetupInterrupted {
+		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureCode(), errcat.SetupInterrupted)
+	}
+	owner := loaded.FailedSetupTask()
+	if owner == nil || owner.Key != "worktree:test-repo" {
+		t.Fatalf("owning task = %+v, want the first unfinished task worktree:test-repo", owner)
+	}
+	if owner.Status != feature.SetupStatusFailed || owner.Error == nil || owner.Error.Code != errcat.SetupInterrupted {
+		t.Fatalf("owning task = %+v, want failed with a setup_interrupted record", owner)
 	}
 }
 

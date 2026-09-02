@@ -205,18 +205,23 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 	setup.Status = feature.SetupStatusFailed
 	setup.CompletedAt = &now
 	setup.LatestLogPath = "/tmp/agentico/setup.log"
-	setup.LastError = gitWorktreeAddFailedMsg
 	task := setup.Tasks["worktree:repo-a"]
 	task.Status = feature.SetupStatusFailed
 	task.Path = "/tmp/worktrees/setup-failed/repo-a"
-	task.LastError = gitWorktreeAddFailedMsg
-	setup.Tasks[task.Key] = task
-	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup, Failure: &errcat.FailureRecord{
+	task.Error = &errcat.FailureRecord{
 		Code: errcat.WorktreeSetupFailed,
 		Context: &errcat.RecordContext{
 			Repositories: []errcat.CodeRepository{{Name: "repo-a", Branch: "feature/setup-failed"}},
+			Command:      &errcat.CodeCommand{LogPaths: []string{"/tmp/agentico/setup.log"}},
 		},
 		Diagnostics: gitWorktreeAddFailedMsg,
+	}
+	setup.Tasks[task.Key] = task
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup, Failure: &errcat.FailureRecord{
+		Code: errcat.WorktreeSetupFailed,
+		Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{
+			Key: "worktree:repo-a", Kind: "worktree", Label: "Worktree: repo-a",
+		}},
 	}})
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save feature: %v", err)
@@ -225,24 +230,69 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
 	featureBody := detail[entityFeature].(map[string]any)
+	if path := findJSONKey(detail, "last_error"); path != "" {
+		t.Fatalf("feature detail carries a last_error key at %s; setup text is gone", path)
+	}
 	active := featureBody["active_run_detail"].(map[string]any)
 	setupBody, ok := active["setup"].(map[string]any)
 	if !ok {
 		t.Fatalf("active_run_detail = %+v, want setup object for durable setup failure", active)
 	}
-	if setupBody["status"] != string(feature.SetupStatusFailed) || setupBody["last_error"] != gitWorktreeAddFailedMsg || setupBody["latest_log_path"] == "" {
-		t.Fatalf("setup = %+v, want failed setup diagnostic", setupBody)
+	if setupBody["status"] != string(feature.SetupStatusFailed) || setupBody["latest_log_path"] == "" {
+		t.Fatalf("setup = %+v, want failed setup with latest log", setupBody)
 	}
 	tasks := setupBody["tasks"].(map[string]any)
 	worktreeTask := tasks["worktree:repo-a"].(map[string]any)
-	if worktreeTask["status"] != string(feature.SetupStatusFailed) || worktreeTask["last_error"] != gitWorktreeAddFailedMsg || worktreeTask["path"] == "" {
-		t.Fatalf("worktree task = %+v, want failed task diagnostic", worktreeTask)
+	if worktreeTask["status"] != string(feature.SetupStatusFailed) || worktreeTask["path"] == "" {
+		t.Fatalf("worktree task = %+v, want failed task with persisted path", worktreeTask)
 	}
 
-	// The run's stored worktree_setup_failed record renders through the
-	// catalog as the canonical failure object: code, blocking class, catalog
-	// title and summary, the repositories block, a setup action reference,
-	// and the raw diagnostics.
+	// The failing task's stored record renders through the catalog as the
+	// canonical error object on the task: code, blocking class, catalog
+	// title and summary, the repositories block, the setup log path in the
+	// command block, a setup action reference, and the raw diagnostics.
+	taskError, ok := worktreeTask["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("worktree task error = %#v, want canonical error object", worktreeTask["error"])
+	}
+	if taskError["code"] != string(errcat.WorktreeSetupFailed) {
+		t.Fatalf("task error code = %v, want %q", taskError["code"], errcat.WorktreeSetupFailed)
+	}
+	if taskError["class"] != "blocking" {
+		t.Fatalf("task error class = %v, want blocking", taskError["class"])
+	}
+	if taskError["title"] != "Worktree setup failed" {
+		t.Fatalf("task error title = %v, want catalog title", taskError["title"])
+	}
+	if taskError["summary"] != `Setting up the worktree for repository "repo-a" failed.` {
+		t.Fatalf("task error summary = %v, want catalog summary naming the repository", taskError["summary"])
+	}
+	taskErrorContext, ok := taskError["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("task error context = %#v, want context blocks", taskError["context"])
+	}
+	repos, ok := taskErrorContext["repositories"].([]any)
+	if !ok || len(repos) != 1 || repos[0].(map[string]any)["name"] != "repo-a" {
+		t.Fatalf("task error repositories = %#v, want [repo-a]", taskErrorContext["repositories"])
+	}
+	command, ok := taskErrorContext["command"].(map[string]any)
+	if !ok || command["log_paths"].([]any)[0] != "/tmp/agentico/setup.log" {
+		t.Fatalf("task error command = %#v, want the setup log path", taskErrorContext["command"])
+	}
+	taskRemediation, ok := taskError["remediation"].(map[string]any)
+	if !ok {
+		t.Fatalf("task error remediation = %#v, want remediation block", taskError["remediation"])
+	}
+	taskActions, ok := taskRemediation["actions"].([]any)
+	if !ok || len(taskActions) != 1 || taskActions[0] != "setup" {
+		t.Fatalf("task error remediation actions = %#v, want [setup]", taskRemediation["actions"])
+	}
+	if taskError["diagnostics"] != gitWorktreeAddFailedMsg {
+		t.Fatalf("task error diagnostics = %v, want %q", taskError["diagnostics"], gitWorktreeAddFailedMsg)
+	}
+
+	// The run's thin record carries the same code, a setup_task block naming
+	// the owning task, and no diagnostics.
 	failure, ok := featureBody["failure"].(map[string]any)
 	if !ok {
 		t.Fatalf("feature detail failure = %#v, want canonical failure object", featureBody["failure"])
@@ -253,31 +303,44 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 	if failure["class"] != "blocking" {
 		t.Fatalf("failure.class = %v, want blocking", failure["class"])
 	}
-	if failure["title"] != "Worktree setup failed" {
-		t.Fatalf("failure.title = %v, want catalog title", failure["title"])
-	}
-	if failure["summary"] != `Setting up the worktree for repository "repo-a" failed.` {
-		t.Fatalf("failure.summary = %v, want catalog summary naming the repository", failure["summary"])
-	}
 	failureContext, ok := failure["context"].(map[string]any)
 	if !ok {
 		t.Fatalf("failure.context = %#v, want context block", failure["context"])
 	}
-	repos, ok := failureContext["repositories"].([]any)
-	if !ok || len(repos) != 1 || repos[0].(map[string]any)["name"] != "repo-a" {
-		t.Fatalf("failure.context.repositories = %#v, want [repo-a]", failureContext["repositories"])
+	setupTaskBlock, ok := failureContext["setup_task"].(map[string]any)
+	if !ok || setupTaskBlock["key"] != "worktree:repo-a" || setupTaskBlock["label"] != "Worktree: repo-a" {
+		t.Fatalf("failure.context.setup_task = %#v, want the owning task block", failureContext["setup_task"])
 	}
-	remediation, ok := failure["remediation"].(map[string]any)
-	if !ok {
-		t.Fatalf("failure.remediation = %#v, want remediation block", failure["remediation"])
+	if _, ok := failure["diagnostics"]; ok {
+		t.Fatalf("failure.diagnostics = %v, want none on the thin run record", failure["diagnostics"])
 	}
-	actions, ok := remediation["actions"].([]any)
-	if !ok || len(actions) != 1 || actions[0] != "setup" {
-		t.Fatalf("failure.remediation.actions = %#v, want [setup]", remediation["actions"])
+}
+
+// findJSONKey reports the dotted path of the first "last_error"-style key
+// match in a decoded JSON body, or "" when none exists.
+func findJSONKey(body map[string]any, key string) string {
+	var walk func(node any, path string) string
+	walk = func(node any, path string) string {
+		switch value := node.(type) {
+		case map[string]any:
+			if _, ok := value[key]; ok {
+				return path + "." + key
+			}
+			for name, child := range value {
+				if found := walk(child, path+"."+name); found != "" {
+					return found
+				}
+			}
+		case []any:
+			for i, child := range value {
+				if found := walk(child, fmt.Sprintf("%s[%d]", path, i)); found != "" {
+					return found
+				}
+			}
+		}
+		return ""
 	}
-	if failure["diagnostics"] != gitWorktreeAddFailedMsg {
-		t.Fatalf("failure.diagnostics = %v, want %q", failure["diagnostics"], gitWorktreeAddFailedMsg)
-	}
+	return walk(body, "$")
 }
 
 // TestFeatureDetailOmitsFailureWithoutRecord asserts a feature whose active
@@ -1400,6 +1463,43 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 		if retry.Enabled {
 			t.Fatalf("retry enabled = true; want false until setup fails")
 		}
+	})
+
+	t.Run("failed setup child offers setup and retry", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable)
+		f.Pipeline = feature.PipelineMedium
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+		f.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
+		f.Run().Failure = &errcat.FailureRecord{
+			Code: errcat.WorktreeSetupFailed,
+			Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{
+				Key: "worktree:" + repoNameSelf, Kind: "worktree", Label: "Worktree: " + repoNameSelf,
+			}},
+		}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		if setup := actionDTOByID(t, actions, actionSetup); !setup.Enabled {
+			t.Fatalf("child setup action = %+v; want enabled for a failed child setup", setup)
+		}
+		if retry := actionDTOByID(t, actions, actionRetry); !retry.Enabled {
+			t.Fatalf("child retry action = %+v; want unchanged and enabled for a failed child setup", retry)
+		}
+		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), disabledChildSetupIncomplete)
+	})
+
+	t.Run("queued child disables setup", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusSettingUpWorktrees, feature.Checkpoints{}, &publishable)
+		f.Pipeline = feature.PipelineMedium
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+		f.Run().Setup = &feature.SetupState{Status: feature.SetupStatusRunning}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionSetup), "no_pending_setup")
+		assertDisabledCode(t, actionDTOByID(t, actions, actionRetry), "not_failed")
 	})
 
 	t.Run("queued child reports setup_incomplete", func(t *testing.T) {

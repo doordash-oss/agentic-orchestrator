@@ -31,7 +31,7 @@ type setupRunner interface {
 // handler uses to park a still-running setup durably (see
 // feature.Manager.FailActiveSetup).
 type activeSetupFailer interface {
-	FailActiveSetup(featureID, message string) (marked bool, err error)
+	FailActiveSetup(featureID, message string) (feature.SetupFailureOutcome, error)
 }
 
 // RunSetupAsync runs RunSetup in an orchestrator-owned goroutine tracked by
@@ -55,22 +55,26 @@ func (o *Orchestrator) RunSetupAsync(featureID string) {
 // recordAsyncSetupFailure owns every terminal setup error the runner did not
 // already record: it durably marks any still-running setup failed (making the
 // feature retryable) and emits a blocking SetupFailed signal with the same
-// parent correlation as runner-emitted setup events. When the runner already
+// parent correlation as runner-emitted setup events, carrying the owning
+// task's stored record as the canonical error. When the runner already
 // failed the setup durably, its task-level SetupFailed event is the record
 // and nothing more is emitted.
 func (o *Orchestrator) recordAsyncSetupFailure(featureID string, setupErr error) {
 	msg := setupErr.Error()
+	var taskRecord *errcat.FailureRecord
 	if failer, ok := o.deps.Lifecycle.(activeSetupFailer); ok {
-		marked, err := failer.FailActiveSetup(featureID, msg)
+		outcome, err := failer.FailActiveSetup(featureID, msg)
 		if err != nil {
 			msg = fmt.Sprintf("%s (recording the setup failure durably also failed: %v)", msg, err)
-		} else if !marked && o.setupFailureAlreadyRecorded(featureID) {
+		} else if outcome.Marked {
+			taskRecord = outcome.TaskRecord
+		} else if o.setupFailureAlreadyRecorded(featureID) {
 			// The runner durably failed the setup and already emitted a
 			// task-level SetupFailed; emitting again would double the signal.
 			return
 		}
 	}
-	ev := feature.SetupEvent{Kind: feature.SetupEventFailed, FeatureID: featureID, Error: msg}
+	ev := feature.SetupEvent{Kind: feature.SetupEventFailed, FeatureID: featureID, Error: msg, Failure: taskRecord}
 	if f, err := o.deps.Lifecycle.Get(featureID); err == nil && f.Run() != nil {
 		ev.RunNumber = f.ActiveRun
 		if setup := f.Run().Setup; setup != nil {
@@ -152,7 +156,7 @@ func (o *Orchestrator) setupFailureAlreadyRecorded(featureID string) bool {
 		return false
 	}
 	setup := f.Run().Setup
-	return f.FailureCode() == errcat.WorktreeSetupFailed && setup != nil && setup.Status == feature.SetupStatusFailed
+	return errcat.IsSetupFailure(f.FailureCode()) && setup != nil && setup.Status == feature.SetupStatusFailed
 }
 
 func (o *Orchestrator) emitSetupEvent(ev feature.SetupEvent) {
@@ -184,7 +188,7 @@ func setupPortsEvent(ev feature.SetupEvent) ports.Event {
 	case feature.SetupEventFailed:
 		eventType = ports.SetupFailed
 	}
-	return ports.Event{
+	pe := ports.Event{
 		Type:        eventType,
 		FeatureID:   ev.FeatureID,
 		RunNumber:   ev.RunNumber,
@@ -199,6 +203,14 @@ func setupPortsEvent(ev feature.SetupEvent) ports.Event {
 		Message:     string(ev.Kind),
 		Error:       setupEventError(ev),
 	}
+	// A failed setup event carries the owning task's stored record rendered
+	// through the catalog as the canonical error, so the domain event and its
+	// SSE projection match the feature-failure shape.
+	if ev.Kind == feature.SetupEventFailed && ev.Failure != nil {
+		rendered := errcat.RenderRecord(*ev.Failure)
+		pe.CanonicalError = &rendered
+	}
+	return pe
 }
 
 func setupEventError(ev feature.SetupEvent) error {

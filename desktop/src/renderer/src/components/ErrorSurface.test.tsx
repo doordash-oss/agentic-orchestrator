@@ -158,6 +158,24 @@ describe('ErrorSurface structured details', () => {
     expect(screen.getByText('/logs/rebase.log').closest('li')).not.toBeNull();
     expect(container.querySelector('pre')).toHaveTextContent('exit status 128');
   });
+
+  it('renders the setup_task block as a task line under Details', () => {
+    // A run-level setup-failure record carries only the setup_task block;
+    // the full variant must still show visible details for it.
+    const error: CanonicalError = {
+      code: 'worktree_setup_failed',
+      class: 'blocking',
+      title: 'Worktree setup failed',
+      summary: 'Setup task "Worktree: repo-a" failed.',
+      remediation: { hint: 'Resolve the reported problem, then retry setup.', actions: ['setup'] },
+      context: { setup_task: { key: 'worktree:repo-a', kind: 'worktree', label: 'Worktree: repo-a' } },
+    };
+    const { container } = render(<ErrorSurface error={error} variant="full" />);
+    const details = container.querySelector('details.error-surface__details');
+    expect(details).not.toBeNull();
+    expect(screen.getByText('Task: Worktree: repo-a')).toBeInTheDocument();
+    expect(screen.getByText('worktree')).toBeInTheDocument();
+  });
 });
 
 describe('ErrorSurface primary-action slot', () => {

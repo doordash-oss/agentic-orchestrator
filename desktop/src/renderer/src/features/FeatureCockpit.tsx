@@ -1810,6 +1810,18 @@ export function FeatureCockpit({
       restart();
     }
   };
+
+  // A setup failure has one owner: the failing setup task. When the run's
+  // thin failure record names a setup task that carries its own canonical
+  // error, the card renders the task's object captioned with the task label;
+  // every other terminal failure renders the run failure as before.
+  const owningSetupTask = (() => {
+    const key = snapshot.failure?.context?.setup_task?.key;
+    if (key === undefined) return undefined;
+    return snapshot.setup?.tasks.find((task) => task.key === key && task.error !== undefined);
+  })();
+  const durableError = owningSetupTask?.error ?? snapshot.failure;
+  const durableErrorCaption = owningSetupTask !== undefined ? owningSetupTask.label : undefined;
   const primaryActions: CockpitPrimaryAction[] = [];
   if (setupAction?.enabled === true) {
     primaryActions.push({
@@ -2719,10 +2731,11 @@ export function FeatureCockpit({
                 ) : null}
 
                 <div className="cockpit__stage-status">
-                  {snapshot.failure !== undefined ? (
+                  {durableError !== undefined ? (
                     <ErrorSurface
-                      error={snapshot.failure}
+                      error={durableError}
                       variant="full"
+                      caption={durableErrorCaption}
                       resolveAction={resolveFailureAction}
                       onAction={handleFailureAction}
                     />

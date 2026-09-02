@@ -854,6 +854,28 @@ func (f *Feature) FailureCode() errcat.Code {
 	return ""
 }
 
+// FailedSetupTask returns the setup task that owns the run's stored setup
+// failure — the task named by the run record's setup_task block — or nil
+// when the run carries no such record or names no known task.
+func (f *Feature) FailedSetupTask() *SetupTask {
+	if f == nil {
+		return nil
+	}
+	rec := f.FailureRecord()
+	if rec == nil || rec.Context == nil || rec.Context.SetupTask == nil {
+		return nil
+	}
+	setup := f.Run().Setup
+	if setup == nil {
+		return nil
+	}
+	task, ok := setup.Tasks[rec.Context.SetupTask.Key]
+	if !ok {
+		return nil
+	}
+	return &task
+}
+
 func (f *Feature) reconcileTerminalRunFailure() {
 	if !f.HasTerminalFailure() {
 		return

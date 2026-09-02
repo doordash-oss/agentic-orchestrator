@@ -1270,6 +1270,164 @@ func TestStoreSaveRunOmitsLegacyFailureKeys(t *testing.T) {
 	}
 }
 
+// TestStoreSetupTaskRecordRoundTrip pins the durable shape of a setup task's
+// stored failure record: code, context blocks, and diagnostics survive a
+// save/load cycle untouched.
+func TestStoreSetupTaskRecordRoundTrip(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	record := &errcat.FailureRecord{
+		Code: errcat.WorktreeSetupFailed,
+		Context: &errcat.RecordContext{
+			Repositories: []errcat.CodeRepository{{Name: "repo-a", Branch: "feature/repo-a"}},
+			Command:      &errcat.CodeCommand{LogPaths: []string{"/tmp/setup/attempt-01-output.txt"}},
+		},
+		Diagnostics: "creating worktree for repo-a: no commits yet",
+	}
+	f := &Feature{
+		ID:            "setup-record-001",
+		Name:          "Setup Record",
+		Slug:          "setup-record",
+		Status:        StatusFailed,
+		CurrentPhase:  PhasePlan,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Setup = &SetupState{
+		Status:    SetupStatusFailed,
+		Attempt:   1,
+		Tasks:     map[string]SetupTask{"worktree:repo-a": {Key: "worktree:repo-a", Kind: SetupTaskWorktree, Label: "Worktree: repo-a", Repo: "repo-a", Status: SetupStatusFailed, Error: record}},
+		TaskOrder: []string{"worktree:repo-a"},
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code:    errcat.WorktreeSetupFailed,
+		Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{Key: "worktree:repo-a", Kind: "worktree", Label: "Worktree: repo-a"}},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	setup := loaded.Run().Setup
+	if setup == nil {
+		t.Fatal("setup = nil, want persisted setup state")
+	}
+	task := setup.Tasks["worktree:repo-a"]
+	if task.Error == nil || !reflect.DeepEqual(*task.Error, *record) {
+		t.Fatalf("task record = %+v, want %+v", task.Error, *record)
+	}
+	if owner := loaded.FailedSetupTask(); owner == nil || owner.Key != "worktree:repo-a" {
+		t.Fatalf("FailedSetupTask = %+v, want the owning task", owner)
+	}
+}
+
+// TestStoreLoadIgnoresLegacySetupLastErrorKeys pins the no-backward-
+// compatibility contract for the removed setup last-error strings: stale
+// last_error keys on the setup aggregate or a task in a hand-written run.yaml
+// load as no text and no record.
+func TestStoreLoadIgnoresLegacySetupLastErrorKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "legacy-setup-001",
+		Name:          "Legacy Setup",
+		Slug:          "legacy-setup",
+		Status:        StatusSettingUpWorktrees,
+		CurrentPhase:  PhasePlan,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Setup = &SetupState{
+		Status:    SetupStatusFailed,
+		Attempt:   1,
+		Tasks:     map[string]SetupTask{"worktree:repo-a": {Key: "worktree:repo-a", Kind: SetupTaskWorktree, Label: "Worktree: repo-a", Status: SetupStatusFailed}},
+		TaskOrder: []string{"worktree:repo-a"},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	stale := strings.Replace(string(raw), "setup:\n",
+		"setup:\n    last_error: git worktree add failed\n", 1)
+	if stale == string(raw) {
+		t.Fatal("run.yaml does not carry the expected setup block header")
+	}
+	withTask := strings.Replace(stale, "worktree:repo-a:\n",
+		"worktree:repo-a:\n            last_error: git worktree add failed\n", 1)
+	if withTask == stale {
+		t.Fatal("run.yaml does not carry the expected setup task header")
+	}
+	if err := os.WriteFile(runPath, []byte(withTask), 0o644); err != nil {
+		t.Fatalf("rewrite run.yaml with stale setup keys: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load with stale setup keys: %v", err)
+	}
+	setup := loaded.Run().Setup
+	if setup == nil || setup.Status != SetupStatusFailed {
+		t.Fatalf("setup = %+v, want failed aggregate preserved", setup)
+	}
+	task := setup.Tasks["worktree:repo-a"]
+	if task.Error != nil {
+		t.Fatalf("task record = %+v, want none from a stale last_error key", task.Error)
+	}
+}
+
+// TestStoreSaveRunOmitsSetupLastError reads the written run.yaml bytes and
+// asserts the store never persists a last_error key under setup.
+func TestStoreSaveRunOmitsSetupLastError(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "setup-no-legacy-001",
+		Name:          "Setup No Legacy",
+		Slug:          "setup-no-legacy",
+		Status:        StatusFailed,
+		CurrentPhase:  PhasePlan,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Setup = &SetupState{
+		Status:    SetupStatusFailed,
+		Attempt:   1,
+		Tasks: map[string]SetupTask{"worktree:repo-a": {Key: "worktree:repo-a", Kind: SetupTaskWorktree, Label: "Worktree: repo-a", Repo: "repo-a", Status: SetupStatusFailed,
+			Error: &errcat.FailureRecord{Code: errcat.WorktreeSetupFailed, Diagnostics: "git worktree add failed"}}},
+		TaskOrder: []string{"worktree:repo-a"},
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code:    errcat.WorktreeSetupFailed,
+		Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{Key: "worktree:repo-a", Kind: "worktree", Label: "Worktree: repo-a"}},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	if bytes.Contains(raw, []byte("last_error")) {
+		t.Errorf("run.yaml contains a last_error key under setup:\n%s", raw)
+	}
+	if !bytes.Contains(raw, []byte("error:")) {
+		t.Errorf("run.yaml missing the task error record block:\n%s", raw)
+	}
+}
+
 func TestStoreLoadReconcilesSuccessfulStatusWithTerminalFinalReviewFailure(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.

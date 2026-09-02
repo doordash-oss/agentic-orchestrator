@@ -944,9 +944,9 @@ func TestReconcilePendingChildCreationsReportsUnreadableRecords(t *testing.T) {
 // TestFailActiveSetupParksRunningSetupRetryable pins the durable recovery
 // contract behind Orchestrator.RunSetupAsync: when a setup run fails before
 // the runner could persist its own failure, marking the still-running setup
-// failed must park the child in Failed/WorktreeSetup with the error recorded
-// so ordinary RetrySetup takes over — and must be an idempotent no-op once
-// setup reaches a terminal state.
+// failed must park the child in Failed with a setup_interrupted record whose
+// owner is the owning setup task, so ordinary RetrySetup takes over — and
+// must be an idempotent no-op once setup reaches a terminal state.
 func TestFailActiveSetupParksRunningSetupRetryable(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp store and fakes isolate state.
@@ -968,11 +968,11 @@ func TestFailActiveSetupParksRunningSetupRetryable(t *testing.T) {
 	}
 
 	const cause = "reloading child after launch failed"
-	marked, err := mgr.FailActiveSetup(child.ID, cause)
+	outcome, err := mgr.FailActiveSetup(child.ID, cause)
 	if err != nil {
 		t.Fatalf("FailActiveSetup() error = %v", err)
 	}
-	if !marked {
+	if !outcome.Marked {
 		t.Fatal("FailActiveSetup marked = false for a running setup, want true")
 	}
 
@@ -980,12 +980,15 @@ func TestFailActiveSetupParksRunningSetupRetryable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	setup := parked.Run().Setup
-	if parked.Status != feature.StatusFailed || parked.FailureCode() != errcat.WorktreeSetupFailed {
-		t.Fatalf("status=%v failureCode=%q, want Failed/%s", parked.Status, parked.FailureCode(), errcat.WorktreeSetupFailed)
+	if parked.Status != feature.StatusFailed || parked.FailureCode() != errcat.SetupInterrupted {
+		t.Fatalf("status=%v failureCode=%q, want Failed/%s", parked.Status, parked.FailureCode(), errcat.SetupInterrupted)
 	}
-	if setup == nil || setup.Status != feature.SetupStatusFailed || setup.LastError != cause {
-		t.Fatalf("setup = %+v, want failed state with the recorded cause", setup)
+	owner := parked.FailedSetupTask()
+	if owner == nil || owner.Key != outcome.Owner.Key || owner.Status != feature.SetupStatusFailed {
+		t.Fatalf("owning task = %+v, want the failed task named by the run record", owner)
+	}
+	if owner.Error == nil || owner.Error.Code != errcat.SetupInterrupted || owner.Error.Diagnostics != cause {
+		t.Fatalf("owner record = %+v, want setup_interrupted with the recorded cause", owner.Error)
 	}
 
 	// Durably retryable through the ordinary gate: the retried run skips
@@ -1013,11 +1016,11 @@ func TestFailActiveSetupParksRunningSetupRetryable(t *testing.T) {
 	}
 
 	// Terminal setup is untouched: no clobber, no state change.
-	marked, err = mgr.FailActiveSetup(child.ID, "late failure")
+	outcome, err = mgr.FailActiveSetup(child.ID, "late failure")
 	if err != nil {
 		t.Fatalf("FailActiveSetup() after completion error = %v", err)
 	}
-	if marked {
+	if outcome.Marked {
 		t.Fatal("FailActiveSetup marked = true after setup completed, want false")
 	}
 	final, err := mgr.Store.Load(child.ID)

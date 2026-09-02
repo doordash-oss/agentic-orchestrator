@@ -156,6 +156,64 @@ function parkedChild(overrides: Partial<FeatureSnapshot> = {}): FeatureSnapshot 
   });
 }
 
+/** Canonical setup-failure error as the renderer receives it on the owning task. */
+const setupTaskError = {
+  code: 'worktree_setup_failed',
+  class: 'blocking' as const,
+  title: 'Worktree setup failed',
+  summary: 'Setting up the worktree for repository "repo-a" failed.',
+  remediation: {
+    hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+    actions: ['setup'],
+  },
+  context: { repositories: [{ name: 'repo-a', branch: 'feature/pass' }] },
+  diagnostics: 'git worktree add failed: no commits yet',
+};
+
+/** A child whose worktree setup failed: the task owns the canonical record. */
+function setupFailedChild(overrides: Partial<FeatureSnapshot> = {}): FeatureSnapshot {
+  return featureSnapshot({
+    id: CHILD_ID,
+    name: 'Slop removal pass',
+    status: 'Failed',
+    setupComplete: false,
+    setup: {
+      status: 'failed',
+      attempt: 1,
+      tasks: [
+        {
+          key: 'worktree:repo-a',
+          kind: 'worktree',
+          label: 'Worktree: repo-a',
+          repo: 'repo-a',
+          status: 'failed',
+          attempt: 1,
+          error: setupTaskError,
+        },
+      ],
+    },
+    failure: {
+      code: 'worktree_setup_failed',
+      class: 'blocking' as const,
+      title: 'Worktree setup failed',
+      summary: 'Setup task "Worktree: repo-a" failed.',
+      remediation: {
+        hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+        actions: ['setup'],
+      },
+      context: {
+        setup_task: { key: 'worktree:repo-a', kind: 'worktree', label: 'Worktree: repo-a' },
+      },
+    },
+    actions: [
+      { id: 'setup', enabled: true, disabledReasons: [] },
+      { id: 'retry', enabled: true, disabledReasons: [] },
+      { id: 'discard', enabled: true, disabledReasons: [] },
+    ],
+    ...overrides,
+  });
+}
+
 function renderWorkspace(
   parent: FeatureSnapshot,
   pass: RefactorPassController,
@@ -209,6 +267,44 @@ function waitingChild(): FeatureSnapshot {
 }
 
 describe('RefactorPassWorkspace', () => {
+  it('renders the owning setup task once with Retry setup dispatching setup', async () => {
+    installAgenticoMock({ feature: setupFailedChild() });
+    const parent = parentWith();
+    const pass = controllerFor(parent, setupFailedChild());
+    const user = userEvent.setup();
+    renderWorkspace(parent, pass);
+
+    // Exactly one alert-role ErrorSurface: the owning task's canonical
+    // object, not the run's thin record.
+    const alert = screen.getByRole('alert');
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    expect(within(alert).getByText('Failed')).toBeInTheDocument();
+    expect(within(alert).getByText('worktree_setup_failed')).toBeInTheDocument();
+    expect(within(alert).getByText('Worktree setup failed')).toBeInTheDocument();
+    expect(
+      within(alert).getByText('Setting up the worktree for repository "repo-a" failed.'),
+    ).toBeInTheDocument();
+    expect(within(alert).getByText('repo-a')).toBeInTheDocument();
+
+    // The deleted state sentence appears nowhere.
+    expect(
+      screen.queryByText('Worktree setup failed. Retry setup to continue.'),
+    ).not.toBeInTheDocument();
+
+    // The card's own Retry setup button dispatches setup for the child.
+    await user.click(within(alert).getByRole('button', { name: 'Retry setup' }));
+    expect(pass.dispatch).toHaveBeenCalledWith('setup');
+  });
+
+  it('renders no setup-failure card for a child without a failed setup', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    renderWorkspace(parent, controllerFor(parent, readyChild()));
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(document.querySelector('.error-surface')).toBeNull();
+  });
+
   it('shows a state-true custody strip and the pass inspector like a feature tab', () => {
     installAgenticoMock({ feature: readyChild() });
     const parent = parentWith();

@@ -881,9 +881,6 @@ function toRelationshipChildView(child: ServerRelationshipChild) {
       message: redactText(warning.message),
       ...spreadDefined('repo', warning.repo),
     })),
-    ...(child.last_error === undefined || child.last_error === ''
-      ? {}
-      : { lastError: redactText(child.last_error) }),
     ...spreadDefined('diffSummary', child.diff_summary),
     ...(hasDiffSummary === undefined ? {} : { hasDiffSummary }),
   };
@@ -935,17 +932,25 @@ function toSetupView(setup: ServerSetup | undefined): FeatureSetupView | null {
       status: taskStatus.data,
       ...(task.branch === undefined || task.branch === '' ? {} : { branch: task.branch }),
       attempt: task.attempt ?? 0,
-      ...(task.last_error === undefined || task.last_error === ''
+      ...(task.error === undefined
         ? {}
-        : { error: redactText(task.last_error) }),
+        : {
+            // The task's canonical failure object crosses IPC intact except
+            // diagnostics, which pass through the same redaction as every
+            // other raw text the renderer receives.
+            error: {
+              ...task.error,
+              diagnostics:
+                task.error.diagnostics === undefined
+                  ? undefined
+                  : redactText(task.error.diagnostics),
+            },
+          }),
     });
   }
   return {
     status: status.data,
     attempt: setup.attempt ?? 0,
     tasks: taskViews,
-    ...(setup.last_error === undefined || setup.last_error === ''
-      ? {}
-      : { lastError: redactText(setup.last_error) }),
   };
 }

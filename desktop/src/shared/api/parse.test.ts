@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   CanonicalErrorResponseSchema,
+  CanonicalErrorSchema,
   DIFF_SUMMARY_MAX_BYTES,
   HealthResponseSchema,
   parseServerJson,
@@ -25,6 +26,8 @@ import {
   ServerFeatureDetailSchema,
   ServerFeatureSummarySchema,
   ServerRelationshipChildSchema,
+  ServerSetupSchema,
+  ServerSetupTaskSchema,
 } from './parse';
 import { SafeErrorException } from '../errors';
 import { MAX_PAYLOAD_BYTES } from '../sanitize';
@@ -442,6 +445,79 @@ describe('ServerFeatureDetailSchema failure', () => {
       failure: { type: 'worktree_setup', message: 'git worktree add failed: no commits yet' },
     });
     expect(parsed.success).toBe(false);
+  });
+
+  it('accepts a canonical error with a setup_task block', () => {
+    const parsed = CanonicalErrorSchema.safeParse({
+      code: 'worktree_setup_failed',
+      class: 'blocking',
+      title: 'Worktree setup failed',
+      summary: 'Setup task "Worktree: repo-a" failed.',
+      remediation: {
+        hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+        actions: ['setup'],
+      },
+      context: {
+        setup_task: { key: 'worktree:repo-a', kind: 'worktree', label: 'Worktree: repo-a' },
+      },
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.context?.setup_task?.key).toBe('worktree:repo-a');
+  });
+
+  it('accepts a setup task with a canonical error and rejects stale last_error keys', () => {
+    const relationshipChildFixture = {
+      id: 'abcd1234ef567890',
+      name: 'Refactor pass',
+      kind: 'refactor',
+      display_token: 'R1',
+      display_state: 'Completed',
+      pipeline: 'medium',
+      status: 'Done',
+      started_at: '2026-07-14T00:00:00Z',
+      cost: { total_usd: 0, by_phase: {} },
+      integration_state: 'merged',
+      cleanup_warnings: [],
+    };
+    const canonicalError = {
+      code: 'worktree_setup_failed',
+      class: 'blocking',
+      title: 'Worktree setup failed',
+      summary: 'Setting up the worktree for repository "repo-a" failed.',
+      remediation: { hint: 'Fix the repository, then retry setup.', actions: ['setup'] },
+      context: { repositories: [{ name: 'repo-a', branch: 'feature/repo-a' }] },
+      diagnostics: 'git worktree add failed: no commits yet',
+    };
+    const task = {
+      key: 'worktree:repo-a',
+      kind: 'worktree',
+      label: 'Worktree: repo-a',
+      repo: 'repo-a',
+      status: 'failed',
+      branch: 'feature/repo-a',
+      attempt: 1,
+      error: canonicalError,
+    };
+    expect(ServerSetupTaskSchema.safeParse(task).success).toBe(true);
+    expect(
+      ServerSetupSchema.safeParse({
+        status: 'failed',
+        attempt: 1,
+        tasks: { 'worktree:repo-a': task },
+        task_order: ['worktree:repo-a'],
+      }).success,
+    ).toBe(true);
+
+    // The removed last_error strings fail parsing everywhere they could
+    // reappear: on the task, on the aggregate, and on a relationship child.
+    expect(ServerSetupTaskSchema.safeParse({ ...task, last_error: 'boom' }).success).toBe(false);
+    expect(
+      ServerSetupSchema.safeParse({ status: 'failed', last_error: 'boom' }).success,
+    ).toBe(false);
+    expect(
+      ServerRelationshipChildSchema.safeParse({ ...relationshipChildFixture, last_error: 'boom' })
+        .success,
+    ).toBe(false);
   });
 });
 

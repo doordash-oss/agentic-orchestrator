@@ -99,11 +99,10 @@ export function passState(child: FeatureSnapshot): PassState {
     };
   }
   if (child.setup?.status === 'failed') {
-    return {
-      id: 'setup-failed',
-      sentence: 'Worktree setup failed. Retry setup to continue.',
-      tone: 'danger',
-    };
+    // No sentence: the owning setup task's canonical error renders as the
+    // workspace's single full error card, exactly as parked integration
+    // attention does.
+    return { id: 'setup-failed', sentence: '', tone: 'danger' };
   }
   if (child.setupComplete === false || child.status === 'SettingUpWorktrees') {
     return {

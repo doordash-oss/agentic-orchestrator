@@ -939,25 +939,36 @@ describe('FeatureService.getFeature', () => {
   });
 
   it('passes the canonical failure across IPC with only diagnostics redacted', async () => {
-    const body = detailBody({
-      failure: {
-        code: 'worktree_setup_failed',
-        class: 'blocking',
-        title: 'Worktree setup failed',
-        summary: 'Setting up the worktree for repository "repo-a" failed.',
-        remediation: {
-          hint: 'Resolve the reported problem in the repository, then retry setup.',
-          actions: ['setup'],
-        },
-        context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
-        diagnostics: 'Bearer tok-x failed',
+    const canonical = {
+      code: 'worktree_setup_failed',
+      class: 'blocking',
+      title: 'Worktree setup failed',
+      summary: 'Setting up the worktree for repository "repo-a" failed.',
+      remediation: {
+        hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+        actions: ['setup'],
       },
-    });
+      context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+      diagnostics: 'Bearer tok-x failed',
+    };
+    const body = detailBody({ failure: { ...canonical } });
     const feature = (body['feature'] ?? {}) as Record<string, unknown>;
     const run = (feature['active_run_detail'] ?? {}) as Record<string, unknown>;
     const setup = (run['setup'] ?? {}) as Record<string, unknown>;
     setup['status'] = 'failed';
-    setup['last_error'] = 'clone failed at /Users/someone/repo';
+    setup['tasks'] = {
+      'worktree:repo-a': {
+        key: 'worktree:repo-a',
+        kind: 'worktree',
+        label: 'Worktree: repo-a',
+        repo: 'repo-a',
+        status: 'failed',
+        branch: 'feature/search-revamp',
+        attempt: 1,
+        error: { ...canonical, diagnostics: 'clone failed at /Users/someone/repo' },
+      },
+    };
+    setup['task_order'] = ['worktree:repo-a'];
     const { service } = makeService(() => ({ status: 200, body }));
     const snapshot = await service.getFeature('abcd1234ef567890');
     expect(snapshot.failure).toMatchObject({
@@ -966,14 +977,26 @@ describe('FeatureService.getFeature', () => {
       title: 'Worktree setup failed',
       summary: 'Setting up the worktree for repository "repo-a" failed.',
       remediation: {
-        hint: 'Resolve the reported problem in the repository, then retry setup.',
+        hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
         actions: ['setup'],
       },
       context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
     });
     expect(snapshot.failure?.diagnostics).toBeDefined();
     expect(snapshot.failure?.diagnostics).not.toContain('tok-x');
-    expect(snapshot.setup?.lastError).not.toContain('/Users/someone');
+    // The owning task's canonical object crosses IPC intact except
+    // diagnostics, which are redacted like every other raw text.
+    const taskError = snapshot.setup?.tasks[0]?.error;
+    expect(taskError).toMatchObject({
+      code: 'worktree_setup_failed',
+      class: 'blocking',
+      title: 'Worktree setup failed',
+      summary: 'Setting up the worktree for repository "repo-a" failed.',
+      remediation: { actions: ['setup'] },
+      context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+    });
+    expect(taskError?.diagnostics).toBeDefined();
+    expect(taskError?.diagnostics).not.toContain('/Users/someone');
   });
 
   it('omits the setup section rather than mislabel an unknown lifecycle value', async () => {

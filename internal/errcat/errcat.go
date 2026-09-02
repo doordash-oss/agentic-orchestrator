@@ -76,6 +76,15 @@ type CodeCommand struct {
 	LogPaths []string `json:"log_paths,omitempty" yaml:"log_paths,omitempty"`
 }
 
+// CodeSetupTask is the typed context block naming the setup task that owns
+// a setup failure. A run-level setup-failure record carries it as its only
+// context; task-level records never do (the task is itself the owner).
+type CodeSetupTask struct {
+	Key   string `json:"key" yaml:"key"`
+	Kind  string `json:"kind" yaml:"kind"`
+	Label string `json:"label" yaml:"label"`
+}
+
 // Remediation is the catalog-authored next step for an error code.
 type Remediation struct {
 	Hint    string   `json:"hint,omitempty"`
@@ -88,6 +97,7 @@ type Context struct {
 	Repositories []CodeRepository `json:"repositories,omitempty"`
 	Phase        *CodePhase       `json:"phase,omitempty"`
 	Command      *CodeCommand     `json:"command,omitempty"`
+	SetupTask    *CodeSetupTask   `json:"setup_task,omitempty"`
 }
 
 // Error is the rendered canonical error value. Title and Summary are always
@@ -110,6 +120,7 @@ const (
 	BlockRepositories Block = "repositories"
 	BlockPhase        Block = "phase"
 	BlockCommand      Block = "command"
+	BlockSetupTask    Block = "setup_task"
 )
 
 // Params is a marker interface implemented by the small per-code parameter
@@ -169,6 +180,7 @@ type config struct {
 	repositories []CodeRepository
 	phase        *CodePhase
 	command      *CodeCommand
+	setupTask    *CodeSetupTask
 }
 
 // Option customizes a rendered error.
@@ -198,6 +210,12 @@ func WithPhase(phase CodePhase) Option {
 // WithCommand attaches command context.
 func WithCommand(command CodeCommand) Option {
 	return func(c *config) { c.command = &command }
+}
+
+// WithSetupTask attaches the setup-task context block naming the task that
+// owns a setup failure.
+func WithSetupTask(task CodeSetupTask) Option {
+	return func(c *config) { c.setupTask = &task }
 }
 
 // New renders the canonical error for code. An unknown code resolves to the
@@ -250,7 +268,10 @@ func New(code Code, opts ...Option) Error {
 	if declared[BlockCommand] && cfg.command != nil {
 		ctx.Command = cfg.command
 	}
-	if ctx.Repositories != nil || ctx.Phase != nil || ctx.Command != nil {
+	if declared[BlockSetupTask] && cfg.setupTask != nil {
+		ctx.SetupTask = cfg.setupTask
+	}
+	if ctx.Repositories != nil || ctx.Phase != nil || ctx.Command != nil || ctx.SetupTask != nil {
 		rendered.Context = &ctx
 	}
 	return rendered

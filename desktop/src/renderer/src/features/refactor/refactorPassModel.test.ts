@@ -70,7 +70,7 @@ describe('passState', () => {
     expect(state.sentence).toContain('Start unlocks when setup completes');
   });
 
-  it('reports a failed setup as retryable', () => {
+  it('reports a failed setup as retryable with no sentence', () => {
     const state = passState(
       featureSnapshot({
         status: 'Failed',
@@ -79,6 +79,9 @@ describe('passState', () => {
       }),
     );
     expect(state).toMatchObject({ id: 'setup-failed', tone: 'danger' });
+    // The owning task's canonical error renders as the workspace's single
+    // full error card; the state sentence stays empty.
+    expect(state.sentence).toBe('');
   });
 
   it('renders the canonical summary for a failed pass and the fallback without a failure record', () => {

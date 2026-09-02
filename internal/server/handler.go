@@ -782,6 +782,13 @@ func wireError(rendered errcat.Error) Error {
 		if rendered.Context.Command != nil {
 			context.Command = &ErrorCommandContext{ExitCode: rendered.Context.Command.ExitCode, LogPaths: rendered.Context.Command.LogPaths}
 		}
+		if rendered.Context.SetupTask != nil {
+			context.SetupTask = &ErrorSetupTaskContext{
+				Key:   rendered.Context.SetupTask.Key,
+				Kind:  rendered.Context.SetupTask.Kind,
+				Label: rendered.Context.SetupTask.Label,
+			}
+		}
 		body.Context = &context
 	}
 	return body

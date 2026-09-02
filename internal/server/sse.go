@@ -562,7 +562,7 @@ func eventDTOFromDomain(ev ports.Event) SSEEvent {
 		dto = snapshotRequiredEventDTO(kind, resource)
 	}
 	dto.Summary = safeEventSummary(ev)
-	if ev.Type == ports.FeatureFailed && ev.CanonicalError != nil {
+	if (ev.Type == ports.FeatureFailed || ev.Type == ports.SetupFailed) && ev.CanonicalError != nil {
 		// Failure-carrying lifecycle events carry the catalog title as the
 		// summary and the canonical code/class identity as the error object.
 		dto.Summary = ev.CanonicalError.Title

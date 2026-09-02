@@ -26,6 +26,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -1145,6 +1146,52 @@ func TestSetupLifecycleEmitsPrePhaseEventWithDocumentedFields(t *testing.T) {
 	}
 	if _, ok := evt.Data["log_path"]; ok {
 		t.Fatalf("Data contains legacy log_path key: %v", evt.Data)
+	}
+}
+
+// TestSetupFailedLifecycleCarriesCanonicalCodeAndClass pins the setup.failed
+// observer event: the data map carries the owning task record's catalog code
+// and class alongside the raw error text.
+func TestSetupFailedLifecycleCarriesCanonicalCodeAndClass(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "setup_failed_feat"
+	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	obs := New(true, stateDir, false, "", false, "agentic")
+	sc := SpanContextForFeature(featureID, "", "", "").WithRun(1)
+
+	obs.SetupLifecycle(sc, feature.SetupEvent{
+		Kind:       feature.SetupEventFailed,
+		FeatureID:  featureID,
+		RunNumber:  1,
+		Attempt:    1,
+		TaskKey:    "worktree:api",
+		TaskKind:   feature.SetupTaskWorktree,
+		TaskStatus: feature.SetupStatusFailed,
+		Error:      "creating worktree for api: no commits yet",
+		Failure: &errcat.FailureRecord{
+			Code:        errcat.WorktreeSetupFailed,
+			Diagnostics: "creating worktree for api: no commits yet",
+		},
+	})
+
+	events := readEvents(t, stateDir, featureID)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	evt := events[0]
+	if evt.EventType != "setup.failed" {
+		t.Fatalf("EventType = %q, want setup.failed", evt.EventType)
+	}
+	if evt.Data["error_code"] != string(errcat.WorktreeSetupFailed) {
+		t.Fatalf("Data[error_code] = %#v, want %q", evt.Data["error_code"], errcat.WorktreeSetupFailed)
+	}
+	if evt.Data["error_class"] != "blocking" {
+		t.Fatalf("Data[error_class] = %#v, want blocking", evt.Data["error_class"])
+	}
+	if evt.Data["error"] != "creating worktree for api: no commits yet" {
+		t.Fatalf("Data[error] = %#v, want the raw error text", evt.Data["error"])
 	}
 }
 

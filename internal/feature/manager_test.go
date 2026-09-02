@@ -491,16 +491,26 @@ func TestManagerRunSetupFailurePersistsDiagnosticsAndLog(t *testing.T) {
 	if loaded.Status != feature.StatusFailed || loaded.FailureCode() != errcat.WorktreeSetupFailed {
 		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureCode(), errcat.WorktreeSetupFailed)
 	}
-	if loaded.FailureRecord() == nil || !strings.Contains(loaded.FailureRecord().Diagnostics, "git worktree add failed") {
-		t.Fatalf("failure diagnostics = %v, want worktree diagnostic", loaded.FailureRecord())
+	runRecord := loaded.FailureRecord()
+	if runRecord == nil || runRecord.Context == nil || runRecord.Context.SetupTask == nil || runRecord.Context.SetupTask.Key != "worktree:test-repo" {
+		t.Fatalf("run record = %+v, want thin record pointing at worktree:test-repo", runRecord)
+	}
+	if runRecord.Diagnostics != "" {
+		t.Fatalf("run record diagnostics = %q, want none on the thin record", runRecord.Diagnostics)
 	}
 	setup := loaded.Run().Setup
 	if setup == nil || setup.Status != feature.SetupStatusFailed || setup.LatestLogPath == "" {
 		t.Fatalf("setup = %+v, want failed setup with latest log", setup)
 	}
 	task := setup.Tasks["worktree:test-repo"]
-	if task.Status != feature.SetupStatusFailed || !strings.Contains(task.LastError, "git worktree add failed") {
-		t.Fatalf("task = %+v, want failed task diagnostic", task)
+	if task.Status != feature.SetupStatusFailed || task.Error == nil || !strings.Contains(task.Error.Diagnostics, "git worktree add failed") {
+		t.Fatalf("task = %+v, want failed task carrying the raw diagnostic", task)
+	}
+	if task.Error.Context == nil || len(task.Error.Context.Repositories) != 1 || task.Error.Context.Repositories[0].Name != "test-repo" {
+		t.Fatalf("task record repositories = %+v, want [test-repo]", task.Error.Context)
+	}
+	if task.Error.Context.Command == nil || len(task.Error.Context.Command.LogPaths) != 1 || task.Error.Context.Command.LogPaths[0] != setup.LatestLogPath {
+		t.Fatalf("task record command block = %+v, want the setup log path", task.Error.Context.Command)
 	}
 	logBytes, err := os.ReadFile(setup.LatestLogPath)
 	if err != nil {
@@ -533,15 +543,22 @@ func TestManagerRunSetupImageFailurePreservesCompletedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if loaded.Status != feature.StatusFailed || loaded.FailureCode() != errcat.WorktreeSetupFailed {
-		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureCode(), errcat.WorktreeSetupFailed)
+	if loaded.Status != feature.StatusFailed || loaded.FailureCode() != errcat.SetupAssetCopyFailed {
+		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureCode(), errcat.SetupAssetCopyFailed)
 	}
 	setup := loaded.Run().Setup
 	if setup.Tasks["worktree:test-repo"].Status != feature.SetupStatusDone {
 		t.Fatalf("worktree task = %+v, want completed before image failure", setup.Tasks["worktree:test-repo"])
 	}
-	if setup.Tasks["image:1"].Status != feature.SetupStatusFailed {
-		t.Fatalf("image task = %+v, want failed", setup.Tasks["image:1"])
+	imageTask := setup.Tasks["image:1"]
+	if imageTask.Status != feature.SetupStatusFailed {
+		t.Fatalf("image task = %+v, want failed", imageTask)
+	}
+	if imageTask.Error == nil || imageTask.Error.Code != errcat.SetupAssetCopyFailed {
+		t.Fatalf("image task record = %+v, want setup_asset_copy_failed", imageTask.Error)
+	}
+	if imageTask.Error.Context != nil && imageTask.Error.Context.Repositories != nil {
+		t.Fatalf("image task record repositories = %+v, want none for an asset copy failure", imageTask.Error.Context.Repositories)
 	}
 	if loaded.Repos[0].WorktreePath == "" {
 		t.Fatal("canonical worktree path was not preserved after later setup failure")
@@ -738,10 +755,10 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 		task := setup.Tasks["worktree:test-repo"]
 		task.Status = feature.SetupStatusFailed
 		task.Path = ""
-		task.LastError = "process exited before setup state saved"
+		task.Error = &errcat.FailureRecord{Code: errcat.WorktreeSetupFailed, Diagnostics: "process exited before setup state saved"}
 		setup.Tasks[task.Key] = task
 		ff.Status = feature.StatusFailed
-		ff.Run().Failure = &errcat.FailureRecord{Code: errcat.WorktreeSetupFailed, Diagnostics: task.LastError}
+		ff.Run().Failure = &errcat.FailureRecord{Code: errcat.WorktreeSetupFailed}
 		return nil
 	}); err != nil {
 		t.Fatalf("seed failed setup: %v", err)
@@ -845,19 +862,25 @@ func TestManagerReconcileAbandonedSetupsMarksFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if loaded.Status != feature.StatusFailed || loaded.FailureCode() != errcat.WorktreeSetupFailed {
-		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureCode(), errcat.WorktreeSetupFailed)
+	if loaded.Status != feature.StatusFailed || loaded.FailureCode() != errcat.SetupInterrupted {
+		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureCode(), errcat.SetupInterrupted)
 	}
 	setup := loaded.Run().Setup
-	if setup.Status != feature.SetupStatusFailed || !strings.Contains(setup.LastError, "interrupted by shutdown or crash") {
-		t.Fatalf("setup = %+v, want failed crash diagnostic", setup)
-	}
-	if setup.LatestLogPath != logPath {
-		t.Fatalf("latest log = %q, want preserved %q", setup.LatestLogPath, logPath)
+	if setup.Status != feature.SetupStatusFailed {
+		t.Fatalf("setup = %+v, want failed setup state", setup)
 	}
 	task := setup.Tasks["worktree:test-repo"]
 	if task.Status != feature.SetupStatusFailed || task.Path == "" || task.Branch == "" {
 		t.Fatalf("task = %+v, want failed task preserving path and branch", task)
+	}
+	if task.Error == nil || task.Error.Code != errcat.SetupInterrupted || !strings.Contains(task.Error.Diagnostics, "interrupted by shutdown or crash") {
+		t.Fatalf("task record = %+v, want setup_interrupted crash diagnostic", task.Error)
+	}
+	if runRecord := loaded.FailureRecord(); runRecord == nil || runRecord.Context == nil || runRecord.Context.SetupTask == nil || runRecord.Context.SetupTask.Key != "worktree:test-repo" {
+		t.Fatalf("run record = %+v, want thin record pointing at the interrupted task", runRecord)
+	}
+	if setup.LatestLogPath != logPath {
+		t.Fatalf("latest log = %q, want preserved %q", setup.LatestLogPath, logPath)
 	}
 }
 

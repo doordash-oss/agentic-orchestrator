@@ -128,6 +128,15 @@ func writeContext(w io.Writer, e Error) error {
 			return err
 		}
 	}
+	if e.Context.SetupTask != nil {
+		line := "  setup_task: " + strings.TrimSpace(e.Context.SetupTask.Label)
+		if kind := strings.TrimSpace(e.Context.SetupTask.Kind); kind != "" {
+			line += ", kind " + kind
+		}
+		if err := writeLine(w, line); err != nil {
+			return err
+		}
+	}
 	if e.Context.Phase != nil {
 		line := "  phase: " + strings.TrimSpace(e.Context.Phase.Name)
 		if e.Context.Phase.Iteration != 0 {

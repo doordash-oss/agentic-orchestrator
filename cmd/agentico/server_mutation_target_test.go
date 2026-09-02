@@ -1465,8 +1465,10 @@ func TestServerMutationTargetSetupFeatureRetriesOnlyUnfinishedWorkWithoutStartin
 	if failed.Status != feature.StatusFailed || failed.FailureCode() != errcat.WorktreeSetupFailed {
 		t.Fatalf("failed feature = %s/%s; want Failed/worktree_setup_failed with preserved state", failed.Status, failed.FailureCode())
 	}
-	if failedSetup := failed.Run().Setup; failedSetup == nil || failedSetup.LastError == "" {
-		t.Fatalf("failed setup = %+v; want durable last_error", failedSetup)
+	failedTask := failed.FailedSetupTask()
+	if failedTask == nil || failedTask.Key != "worktree:"+testRepoBName || failedTask.Status != feature.SetupStatusFailed ||
+		failedTask.Error == nil || !strings.Contains(failedTask.Error.Diagnostics, "transient checkout failure") {
+		t.Fatalf("owning task = %+v, want failed worktree:repo-b carrying the raw diagnostic", failedTask)
 	}
 	createsAfterFailure := creates
 
@@ -1495,6 +1497,103 @@ func TestServerMutationTargetSetupFeatureRetriesOnlyUnfinishedWorkWithoutStartin
 	}
 	if started != 0 {
 		t.Fatalf("OnFeatureStarted fired %d times; want 0 for setup retry", started)
+	}
+}
+
+func TestServerMutationTargetSetupFeatureOnFailedSetupChildRerunsUnfinishedAndParksCreated(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	cfg.Repos[testRepoBName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoBName)}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	failRepoB := true
+	creates := 0
+	worktrees := mocks.NewMockWorktreeOps()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		creates++
+		if repoName == testRepoBName && failRepoB {
+			return "", errors.New("transient checkout failure")
+		}
+		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+	}
+	manager.Worktrees = worktrees
+
+	parent := &feature.Feature{
+		ID: "p-setup-child", Name: "Parent", Slug: "p-setup-child", Status: feature.StatusPublished,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(parent); err != nil {
+		t.Fatalf("Save parent: %v", err)
+	}
+	child := &feature.Feature{
+		ID: "c-setup-child", Name: "Child Setup", Slug: "c-setup-child",
+		Status: feature.StatusSettingUpWorktrees, CurrentPhase: feature.PhasePlan,
+		ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent,
+		Repos: []feature.FeatureRepo{
+			{Name: testRepoAName, Path: cfg.Repos[testRepoAName].Path, BaseBranch: "main", Branch: "feature/c-setup-child"},
+			{Name: testRepoBName, Path: cfg.Repos[testRepoBName].Path, BaseBranch: "main", Branch: "feature/c-setup-child"},
+		},
+		Parent: &feature.ChildRelationship{ParentID: parent.ID, Kind: feature.ChildKindRefactor},
+	}
+	child.SetRun(&feature.Run{RunNumber: 1, Setup: feature.NewActiveSetupState(child.Repos, nil, nil, time.Now())})
+	if err := store.Save(child); err != nil {
+		t.Fatalf("Save child: %v", err)
+	}
+
+	started := 0
+	target := serverMutationTarget{
+		orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{
+			OnFeatureStarted: func(string) { started++ },
+		}),
+		store:         store,
+		dispatchAsync: func(fn func()) { fn() },
+	}
+
+	if _, err := target.SetupFeature(child.ID); err != nil {
+		t.Fatalf("SetupFeature() dispatch error = %v; want dispatch success with durable failure", err)
+	}
+	failed, err := store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("Load failed child: %v", err)
+	}
+	if failed.Status != feature.StatusFailed || failed.FailureCode() != errcat.WorktreeSetupFailed {
+		t.Fatalf("failed child = %s/%s; want Failed/worktree_setup_failed", failed.Status, failed.FailureCode())
+	}
+	owner := failed.FailedSetupTask()
+	if owner == nil || owner.Key != "worktree:"+testRepoBName || owner.Status != feature.SetupStatusFailed {
+		t.Fatalf("owning task = %+v, want failed worktree:%s", owner, testRepoBName)
+	}
+	if done := failed.Run().Setup.Tasks["worktree:"+testRepoAName]; done.Status != feature.SetupStatusDone {
+		t.Fatalf("repo-a task = %+v, want done before the repo-b failure", done)
+	}
+	createsAfterFailure := creates
+
+	failRepoB = false
+	result, err := target.SetupFeature(child.ID)
+	if err != nil {
+		t.Fatalf("SetupFeature() retry error = %v", err)
+	}
+	if result.Result != resultSetupStarted {
+		t.Fatalf("retry result = %+v; want setup_started", result)
+	}
+
+	updated, err := store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("Load retried child: %v", err)
+	}
+	if updated.Status != feature.StatusCreated {
+		t.Fatalf("child status = %s; want Created (children park after setup; never start)", updated.Status)
+	}
+	setup := updated.Run().Setup
+	if setup == nil || setup.Status != feature.SetupStatusDone || setup.Attempt != 2 {
+		t.Fatalf("setup = %+v; want done on attempt 2", setup)
+	}
+	if creates-createsAfterFailure != 1 {
+		t.Fatalf("retry worktree creates = %d; want only the previously failed task", creates-createsAfterFailure)
+	}
+	if started != 0 {
+		t.Fatalf("OnFeatureStarted fired %d times; want 0 for a child setup retry", started)
 	}
 }
 

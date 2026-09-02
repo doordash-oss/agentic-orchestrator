@@ -20,6 +20,7 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type RefObject,
   type SetStateAction,
 } from 'react';
 import {
@@ -31,7 +32,7 @@ import {
   type RelationshipChildView,
   type ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
-import { ErrorSurface } from '../../components/ErrorSurface';
+import { ErrorSurface, type ErrorSurfaceAction } from '../../components/ErrorSurface';
 import { parseIpcError, canonicalFromWizardError, type WizardError } from '../../wizard/ipcError';
 import {
   AttentionDetail,
@@ -54,7 +55,7 @@ import { InspectorContent } from '../CockpitInspector';
 import { InspectorDrawer } from '../InspectorDrawer';
 import { classifyHold, railSegments, railTrio } from '../phaseRail';
 import { PhaseRail } from '../PhaseRailRow';
-import { featureBranch, showsRun } from '../featureView';
+import { actionById, featureBranch, showsRun } from '../featureView';
 import {
   custodyStations,
   passActions,
@@ -87,6 +88,13 @@ export interface RefactorPassController {
   busy: boolean;
   notice: PassNotice | null;
   discardOpen: boolean;
+  /**
+   * Hosts the integration-attention card's root so an external surface (the
+   * cockpit status chip) can scroll to and focus the card.
+   */
+  attentionCardRef: RefObject<HTMLDivElement | null>;
+  /** Scrolls to and focuses the integration-attention card, if present. */
+  focusAttentionCard(): void;
   dispatch(action: PassAction['id']): Promise<void>;
   /** Launch-time auto-start: dispatch start once this child becomes startable. */
   armAutoStart(childId: string): void;
@@ -193,6 +201,13 @@ export function useRefactorPass(
   // enables the verb (setup completion arrives through the event stream).
   const [autoStartChildId, setAutoStartChildId] = useState<string | null>(null);
   const armAutoStart = useCallback((id: string) => setAutoStartChildId(id), []);
+  // Hosts the integration-attention card's root; the cockpit status chip
+  // focuses it through focusAttentionCard.
+  const attentionCardRef = useRef<HTMLDivElement | null>(null);
+  const focusAttentionCard = useCallback(() => {
+    attentionCardRef.current?.scrollIntoView({ block: 'center' });
+    attentionCardRef.current?.focus();
+  }, []);
   useEffect(() => {
     if (
       !active ||
@@ -236,6 +251,8 @@ export function useRefactorPass(
     busy,
     notice,
     discardOpen,
+    attentionCardRef,
+    focusAttentionCard,
     dispatch,
     armAutoStart,
     openDiscard: useCallback(() => setDiscardOpen(true), []),
@@ -393,6 +410,24 @@ export function RefactorPassWorkspace({
     (pass.notice !== null && pass.notice.kind === 'info' ? pass.notice.text : null) ??
     attentionNotice;
 
+  // The parked integration condition renders exactly once, as one full
+  // ErrorSurface fed by the child snapshot's canonical transaction attention.
+  // The card's retry action resolves against the child's action catalog and
+  // dispatches through the pass dispatch.
+  const integrationAttention = child?.transaction?.attention ?? null;
+  const resolveIntegrationAction = (actionId: string): ErrorSurfaceAction | undefined => {
+    if (child === null) return undefined;
+    const action = actionById(child, actionId);
+    if (action === undefined) return undefined;
+    return {
+      enabled: action.enabled,
+      label: 'Retry integration',
+      disabledReason: action.enabled
+        ? undefined
+        : action.disabledReasons.map((reason) => reason.message).join(' '),
+    };
+  };
+
   const submitQuestionAnswers = () => {
     if (questionsAttention === undefined) return;
     void submitAttention(questionsAttention, () =>
@@ -504,31 +539,36 @@ export function RefactorPassWorkspace({
                 Try again
               </button>
             </p>
-          ) : state !== null && state.id !== 'working' ? (
-            <>
-              <p className="refactor-pass__state" role="status" data-tone={state.tone}>
-                {state.sentence}
-                {gate !== undefined && activeGate === undefined ? (
-                  <>
-                    {' '}
-                    <button
-                      type="button"
-                      className="refactor-pass__answer-now"
-                      onClick={() => setDismissedGateId(undefined)}
-                    >
-                      Answer now
-                    </button>
-                  </>
-                ) : null}
-              </p>
-              {state.problems !== undefined && state.problems.length > 0 ? (
-                <ul className="refactor-pass__warnings" aria-label="Integration diagnostics">
-                  {state.problems.map((problem) => (
-                    <li key={problem}>{problem}</li>
-                  ))}
-                </ul>
+          ) : state !== null && state.id !== 'working' && state.sentence !== '' ? (
+            <p className="refactor-pass__state" role="status" data-tone={state.tone}>
+              {state.sentence}
+              {gate !== undefined && activeGate === undefined ? (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    className="refactor-pass__answer-now"
+                    onClick={() => setDismissedGateId(undefined)}
+                  >
+                    Answer now
+                  </button>
+                </>
               ) : null}
-            </>
+            </p>
+          ) : null}
+
+          {integrationAttention !== null ? (
+            <ErrorSurface
+              error={integrationAttention}
+              variant="full"
+              caption="Integration is parked"
+              rootRef={pass.attentionCardRef}
+              rootTabIndex={-1}
+              resolveAction={resolveIntegrationAction}
+              onAction={(actionId) => {
+                if (actionId === 'retry') void pass.dispatch('retry');
+              }}
+            />
           ) : null}
 
           {actionErrorNotice !== null ? (
@@ -542,17 +582,6 @@ export function RefactorPassWorkspace({
               {infoNotice}
             </p>
           ) : null}
-
-          {view.attention.map((item) => (
-            <p
-              key={`${item.code}:${item.repo ?? ''}`}
-              className="refactor-pass__alert"
-              role="alert"
-            >
-              {item.repo === undefined ? '' : `${item.repo}: `}
-              {item.message}
-            </p>
-          ))}
 
           {/* The question joins the live conversation instead of stacking a
            * form above it; standalone only when there is no live surface. */}
@@ -659,7 +688,7 @@ export function RefactorPassWorkspace({
           ) : null}
 
           {view.cleanupWarnings.length > 0 ? (
-            <ul className="refactor-pass__warnings">
+            <ul className="refactor-pass__cleanup" aria-label="Cleanup warnings">
               {view.cleanupWarnings.map((item) => (
                 <li key={`${item.repo ?? ''}:${item.message}`}>{item.message}</li>
               ))}

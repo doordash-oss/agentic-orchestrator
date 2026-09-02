@@ -48,13 +48,13 @@ export function laneLabel(lane: Lane): string {
 
 /**
  * True when the feature's active child pass carries something for the
- * human to resolve: an explicit attention entry, or the integration
- * transaction itself parked in its "attention" phase.
+ * human to resolve: the canonical integration-attention error, or the
+ * integration transaction itself parked in its "attention" state.
  */
 function childNeedsAttention(snapshot: FeatureSnapshot): boolean {
   const child = snapshot.activeChild;
   if (child === undefined) return false;
-  return child.attention.length > 0 || child.integrationState === 'attention';
+  return child.attention != null || child.integrationState === 'attention';
 }
 
 /**

@@ -49,7 +49,6 @@ const closedPass: RelationshipChildView = {
   outcome: 'completed',
   cost: { totalUsd: 1.25, byPhase: {} },
   integrationState: 'merged',
-  attention: [],
   cleanupWarnings: [],
 };
 

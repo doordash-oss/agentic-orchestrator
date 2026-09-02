@@ -39,6 +39,7 @@ var zeroParams = []Params{
 	ProviderUnavailableParams{},
 	ProviderIssueParams{},
 	RunFailureParams{},
+	IntegrationRepoParams{},
 }
 
 func TestCatalogEntriesAreValid(t *testing.T) {

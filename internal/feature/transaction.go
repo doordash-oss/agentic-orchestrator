@@ -14,6 +14,12 @@
 
 package feature
 
+import (
+	"gopkg.in/yaml.v3"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
+)
+
 // TransactionPhase is the aggregate phase of the multi-repository
 // transaction journal. It records the durable lifecycle from candidate
 // preparation through application, rollback, and settlement.
@@ -69,7 +75,9 @@ const (
 // RepoTransactionEntry is the per-repository journal entry in a transaction.
 // It preserves inherited repository order and durably records the per-repo
 // target ref, initial anchor, expected ref, child head, candidate commit,
-// preparation state, apply/rollback state, and structured diagnostics.
+// preparation state, and apply/rollback state. Parking conditions live on the
+// journal's single attention record, not on entries; entries carry progress
+// state, cleanup and tail warnings, and the typed pending-sync flag only.
 type RepoTransactionEntry struct {
 	// Repo is the repository name, matching the inherited parent repo.
 	Repo string `yaml:"repo"`
@@ -99,12 +107,10 @@ type RepoTransactionEntry struct {
 	// ObservedSHA is the actual ref SHA observed at apply or rollback time;
 	// used to diagnose external races.
 	ObservedSHA string `yaml:"observed_sha,omitempty"`
-	// Dirty carries categorized parent-worktree diagnostics when a dirty
-	// preflight blocked preparation.
-	Dirty []RepoDirtyDiagnostics `yaml:"dirty,omitempty"`
-	// ConflictFiles lists the files that conflicted during merge candidate
-	// preparation.
-	ConflictFiles []string `yaml:"conflict_files,omitempty"`
+	// PendingSync marks an applied entry whose parent worktree sync failed
+	// after the ref update; closure retries the sync automatically and clears
+	// the flag on success. It carries no attention record.
+	PendingSync bool `yaml:"pending_sync,omitempty"`
 	// CleanupWarning records a non-fatal worktree/branch cleanup failure
 	// for this repository.
 	CleanupWarning string `yaml:"cleanup_warning,omitempty"`
@@ -113,62 +119,113 @@ type RepoTransactionEntry struct {
 	// failure). It is projected into the existing warnings list with a
 	// distinguishing prefix; no API schema change.
 	TailWarning string `yaml:"tail_warning,omitempty"`
-	// Diagnostics is a human-readable summary of the per-repo attention
-	// condition.
-	Diagnostics string `yaml:"diagnostics,omitempty"`
-	// GateCode is the stable, typed failure code recorded by the rebase
-	// mechanical integration gate when it parks a behind repo at attention
-	// before any candidate or ref is touched. Empty for non-gate attention.
-	// See the GateCode* constants.
-	GateCode string `yaml:"gate_code,omitempty"`
 }
-
-// Stable gate-failure codes recorded by integration gates before any
-// candidate or ref is touched. They are distinct, machine-stable reason
-// strings so review tooling can classify a parked child without parsing
-// free-form diagnostics.
-const (
-	// GateCodeParentDrift: a parent branch tip moved from its creation-time
-	// base — parent refs must not move while a pass runs, except through the
-	// transaction itself. Drift parks integration once; retrying at the
-	// unchanged tip is the operator's acknowledgment to absorb it.
-	GateCodeParentDrift = "parent_ref_drift"
-	// GateCodeNotAncestor: the persisted creation-time target commit is not
-	// an ancestor of the child branch head — the child did not merge the
-	// creation-time target.
-	GateCodeNotAncestor = "rebase_gate_not_ancestor"
-	// GateCodeMergeInProgress: a merge or rebase sequencer is underway in
-	// the child worktree at gate time (MERGE_HEAD, rebase-merge, or
-	// rebase-apply present).
-	GateCodeMergeInProgress = "rebase_gate_merge_in_progress"
-	// GateCodeConflictMarkers: literal conflict markers remain in one or more
-	// tracked files of the child worktree, or the marker scan itself failed
-	// (fail closed).
-	GateCodeConflictMarkers = "rebase_gate_conflict_markers"
-	// GateCodeMissingTargetSHA: a persisted behind-repo target lacks the
-	// creation-time target SHA (e.g. an in-flight child created before the
-	// gate landed). The child must be discarded and relaunched.
-	GateCodeMissingTargetSHA = "rebase_gate_missing_target_sha"
-)
 
 // TransactionJournal is the ordered per-repository transaction record for
 // all child integration. It preserves inherited repository order and durably
-// records transaction identity, aggregate phase, and per-repository state.
+// records transaction identity, aggregate phase, per-repository state, and —
+// when integration parks — the single canonical attention record.
 type TransactionJournal struct {
 	// Phase is the aggregate transaction phase.
 	Phase TransactionPhase `yaml:"phase"`
 	// Entries is the ordered per-repository journal, preserving the
 	// inherited parent repository order.
 	Entries []RepoTransactionEntry `yaml:"entries"`
-	// Attention is a human-readable summary of the blocking condition when
-	// the transaction is parked at attention.
-	Attention string `yaml:"attention,omitempty"`
+	// Attention is the single stored canonical record classifying the parked
+	// integration condition: a needs_action catalog code, the repositories
+	// context block listing every affected repository with its branch,
+	// conflict files, dirty files, and SHAs, and raw diagnostics. Rendered
+	// text is never persisted; the catalog stays authoritative.
+	Attention *errcat.FailureRecord `yaml:"attention,omitempty"`
 	// TailSettled is the durable marker that the review-feedback integration
 	// tail has finished attempting all steps. The startup reconciler skips
 	// settled tails entirely so historical children trigger no pushes, no
 	// gh invocations, and no journal churn on later startups. Refactor
 	// children never set this marker.
 	TailSettled bool `yaml:"tail_settled,omitempty"`
+}
+
+// UnmarshalYAML tolerates legacy journals: a free-form attention string (the
+// pre-catalog shape) and deleted entry keys (diagnostics, gate codes,
+// conflict files, dirty diagnostics) are ignored on load. The non-strict
+// decoder drops unknown entry keys; only the attention shape needs a guard.
+func (t *TransactionJournal) UnmarshalYAML(value *yaml.Node) error {
+	var raw struct {
+		Phase       TransactionPhase       `yaml:"phase"`
+		Entries     []RepoTransactionEntry `yaml:"entries"`
+		Attention   yaml.Node              `yaml:"attention"`
+		TailSettled bool                   `yaml:"tail_settled"`
+	}
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	t.Phase = raw.Phase
+	t.Entries = raw.Entries
+	t.TailSettled = raw.TailSettled
+	if raw.Attention.Kind == yaml.MappingNode {
+		var record errcat.FailureRecord
+		if err := raw.Attention.Decode(&record); err != nil {
+			return err
+		}
+		t.Attention = &record
+	}
+	return nil
+}
+
+// AttentionRecord returns the journal's stored canonical attention record,
+// or nil when integration is not parked.
+func (t *TransactionJournal) AttentionRecord() *errcat.FailureRecord {
+	if t == nil {
+		return nil
+	}
+	return t.Attention
+}
+
+// AttentionCode returns the record's catalog code, or "" when the journal
+// carries no attention record.
+func (t *TransactionJournal) AttentionCode() errcat.Code {
+	if rec := t.AttentionRecord(); rec != nil {
+		return rec.Code
+	}
+	return ""
+}
+
+// HasAttention reports whether the journal is parked at integration
+// attention: the phase is attention, the journal carries an attention record
+// (including a closure-time sync failure on an applied journal), or any
+// entry carries apply attention.
+func (t *TransactionJournal) HasAttention() bool {
+	if t == nil {
+		return false
+	}
+	return t.Phase == TransactionPhaseAttention || t.Attention != nil || t.AnyApplyAttention()
+}
+
+// IntegrationAttentionRecord returns the child's stored integration
+// attention record, or nil when integration is not parked.
+func (f *Feature) IntegrationAttentionRecord() *errcat.FailureRecord {
+	if f == nil || f.Parent == nil {
+		return nil
+	}
+	return f.Parent.Transaction.AttentionRecord()
+}
+
+// IntegrationAttentionCode returns the child's integration attention catalog
+// code, or "" when the child carries no attention record.
+func (f *Feature) IntegrationAttentionCode() errcat.Code {
+	if f == nil || f.Parent == nil {
+		return ""
+	}
+	return f.Parent.Transaction.AttentionCode()
+}
+
+// HasIntegrationAttention reports whether the child's integration
+// transaction is parked at attention and needs the operator's action.
+func (f *Feature) HasIntegrationAttention() bool {
+	if f == nil || f.Parent == nil {
+		return false
+	}
+	return f.Parent.Transaction.HasAttention()
 }
 
 // AllCandidatesPrepared reports whether every per-repo entry has a durable

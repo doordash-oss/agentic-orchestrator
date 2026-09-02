@@ -121,7 +121,6 @@ describe('intervention-first dashboard ordering', () => {
       startedAt: '2026-07-30T10:00:00Z',
       cost: { totalUsd: 0, byPhase: {} },
       integrationState: 'pending',
-      attention: [],
       cleanupWarnings: [],
     };
     const refactoring = featureSnapshot({ status: 'Published', activeChild: child });

@@ -3802,16 +3802,6 @@ components:
           type: string
         parent_branch:
           type: string
-    RelationshipAttention:
-      type: object
-      required: [code, message]
-      properties:
-        code:
-          type: string
-        message:
-          type: string
-        repo:
-          type: string
     RelationshipCleanupWarning:
       type: object
       required: [message]
@@ -3842,7 +3832,6 @@ components:
         - started_at
         - cost
         - integration_state
-        - attention
         - cleanup_warnings
       properties:
         id:
@@ -3885,9 +3874,11 @@ components:
         integration_state:
           type: string
         attention:
-          type: array
-          items:
-            $ref: "#/components/schemas/RelationshipAttention"
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            Canonical error rendering the child's stored integration
+            attention record; absent when integration is not parked.
         cleanup_warnings:
           type: array
           items:
@@ -4514,31 +4505,6 @@ components:
                 parents.
               items:
                 $ref: "#/components/schemas/ReviewFeedbackComment"
-    ChildDirtyDiagnostics:
-      type: object
-      properties:
-        repo:
-          type: string
-        path:
-          type: string
-        staged:
-          type: array
-          items:
-            type: string
-        unstaged:
-          type: array
-          items:
-            type: string
-        untracked:
-          type: array
-          items:
-            type: string
-        staged_total:
-          type: integer
-        unstaged_total:
-          type: integer
-        untracked_total:
-          type: integer
     TransactionJournal:
       type: object
       description: >-
@@ -4551,7 +4517,11 @@ components:
             Aggregate transaction phase: preparing, prepared, applying,
             applied, rolling_back, rolled_back, attention, or merged.
         attention:
-          type: string
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            Canonical error rendering the journal's single stored
+            attention record; absent when integration is not parked.
         entries:
           type: array
           items:
@@ -4579,20 +4549,12 @@ components:
           type: string
         observed_sha:
           type: string
-        conflict_files:
-          type: array
-          items:
-            type: string
-        dirty:
-          type: array
+        pending_sync:
+          type: boolean
           description: >-
-            Categorized parent-worktree diagnostics recorded when a dirty
-            preflight blocked preparation for this repository.
-          items:
-            $ref: "#/components/schemas/ChildDirtyDiagnostics"
+            True when this applied entry's parent worktree sync failed after
+            the ref update; closure retries the sync automatically.
         cleanup_warning:
-          type: string
-        diagnostics:
           type: string
     Usage:
       type: object

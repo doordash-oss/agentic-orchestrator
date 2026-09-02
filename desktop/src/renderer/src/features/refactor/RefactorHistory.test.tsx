@@ -36,7 +36,6 @@ function historyEntry(overrides: Partial<RelationshipChildView> = {}): Relations
     closedAt: '2026-08-01T10:00:00Z',
     cost: { totalUsd: 0, byPhase: {} },
     integrationState: 'pending',
-    attention: [],
     cleanupWarnings: [],
     ...overrides,
   };

@@ -756,9 +756,20 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
       : {
           transaction: {
             ...spreadDefined('phase', feature.transaction.phase),
-            ...(feature.transaction.attention === undefined || feature.transaction.attention === ''
+            ...(feature.transaction.attention === undefined
               ? {}
-              : { attention: redactText(feature.transaction.attention) }),
+              : {
+                  // The canonical object crosses IPC intact except
+                  // diagnostics, which pass through the same redaction as
+                  // every other raw text the renderer receives.
+                  attention: {
+                    ...feature.transaction.attention,
+                    diagnostics:
+                      feature.transaction.attention.diagnostics === undefined
+                        ? undefined
+                        : redactText(feature.transaction.attention.diagnostics),
+                  },
+                }),
             ...(feature.transaction.entries === undefined
               ? {}
               : {
@@ -766,37 +777,12 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
                     ...spreadDefined('repo', entry.repo),
                     ...spreadDefined('prepState', entry.prep_state),
                     ...spreadDefined('applyState', entry.apply_state),
-                    ...(entry.conflict_files === undefined
+                    ...(entry.pending_sync === undefined
                       ? {}
-                      : { conflictFiles: entry.conflict_files }),
-                    ...(entry.dirty === undefined
-                      ? {}
-                      : {
-                          dirty: entry.dirty.map((dirty) => ({
-                            ...spreadDefined('repo', dirty.repo),
-                            ...spreadDefined('path', dirty.path),
-                            ...(dirty.staged === undefined ? {} : { staged: dirty.staged }),
-                            ...(dirty.unstaged === undefined ? {} : { unstaged: dirty.unstaged }),
-                            ...(dirty.untracked === undefined
-                              ? {}
-                              : { untracked: dirty.untracked }),
-                            ...(dirty.staged_total === undefined
-                              ? {}
-                              : { stagedTotal: dirty.staged_total }),
-                            ...(dirty.unstaged_total === undefined
-                              ? {}
-                              : { unstagedTotal: dirty.unstaged_total }),
-                            ...(dirty.untracked_total === undefined
-                              ? {}
-                              : { untrackedTotal: dirty.untracked_total }),
-                          })),
-                        }),
+                      : { pendingSync: entry.pending_sync }),
                     ...(entry.cleanup_warning === undefined || entry.cleanup_warning === ''
                       ? {}
                       : { cleanupWarning: redactText(entry.cleanup_warning) }),
-                    ...(entry.diagnostics === undefined || entry.diagnostics === ''
-                      ? {}
-                      : { diagnostics: redactText(entry.diagnostics) }),
                   })),
                 }),
           },
@@ -877,11 +863,20 @@ function toRelationshipChildView(child: ServerRelationshipChild) {
     ...spreadDefined('closedAt', child.closed_at),
     cost: { totalUsd: child.cost.total_usd, byPhase: child.cost.by_phase },
     integrationState: child.integration_state,
-    attention: child.attention.map((attention) => ({
-      code: attention.code,
-      message: redactText(attention.message),
-      ...spreadDefined('repo', attention.repo),
-    })),
+    ...(child.attention === undefined
+      ? {}
+      : {
+          // The canonical object crosses IPC intact except diagnostics,
+          // which pass through the same redaction as every other raw text
+          // the renderer receives.
+          attention: {
+            ...child.attention,
+            diagnostics:
+              child.attention.diagnostics === undefined
+                ? undefined
+                : redactText(child.attention.diagnostics),
+          },
+        }),
     cleanupWarnings: child.cleanup_warnings.map((warning) => ({
       message: redactText(warning.message),
       ...spreadDefined('repo', warning.repo),

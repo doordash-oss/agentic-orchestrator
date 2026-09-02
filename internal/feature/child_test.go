@@ -1101,7 +1101,8 @@ func TestChildSetupCompleteMatrix(t *testing.T) {
 }
 
 // TestChildIntegrationRecordPersists proves the durable integration record
-// and closure fields survive a store round-trip.
+// and closure fields survive a store round-trip, including the journal's
+// stored canonical attention record and the typed pending-sync flag.
 func TestChildIntegrationRecordPersists(t *testing.T) {
 	store := feature.NewStore(filepath.Join(t.TempDir(), "features"))
 	closed := time.Now().UTC().Truncate(time.Second)
@@ -1122,10 +1123,21 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 					ChildHeadSHA:    "bbbb2222",
 					MergeHEAD:       "cccc3333",
 					CleanupWarning:  "worktree busy",
-					Dirty: []feature.RepoDirtyDiagnostics{{
-						Repo: "repoA", Path: "/tmp/a", Untracked: []string{"stray.txt"}, UntrackedTotal: 1,
-					}},
+					PendingSync:     true,
 				}},
+				Attention: &errcat.FailureRecord{
+					Code: errcat.IntegrationMergeConflict,
+					Context: &errcat.RecordContext{
+						Repositories: []errcat.CodeRepository{{
+							Name:          "repoA",
+							Branch:        "feature/parent",
+							ConflictFiles: []string{"internal/api.go"},
+							ParentAnchorSHA: "aaaa1111",
+							ChildHeadSHA:  "bbbb2222",
+						}},
+					},
+					Diagnostics: "repoA: merge conflict: [internal/api.go]",
+				},
 			},
 		},
 		SchemaVersion: feature.SchemaVersionCurrent,
@@ -1150,11 +1162,21 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 	entry := tx.Entries[0]
 	if entry.ParentBranch != "feature/parent" || entry.ParentAnchorSHA != "aaaa1111" ||
 		entry.ChildHeadSHA != "bbbb2222" || entry.MergeHEAD != "cccc3333" ||
-		entry.CleanupWarning != "worktree busy" {
+		entry.CleanupWarning != "worktree busy" || !entry.PendingSync {
 		t.Fatalf("transaction entry = %+v, want full round-trip", entry)
 	}
-	if len(entry.Dirty) != 1 || entry.Dirty[0].UntrackedTotal != 1 || entry.Dirty[0].Untracked[0] != "stray.txt" {
-		t.Fatalf("dirty diagnostics = %+v, want round-trip", entry.Dirty)
+	rec := tx.Attention
+	if rec == nil || rec.Code != errcat.IntegrationMergeConflict || rec.Diagnostics != "repoA: merge conflict: [internal/api.go]" {
+		t.Fatalf("attention record = %+v, want round-trip", rec)
+	}
+	if rec.Context == nil || len(rec.Context.Repositories) != 1 {
+		t.Fatalf("attention repositories block = %+v, want one repository", rec.Context)
+	}
+	repo := rec.Context.Repositories[0]
+	if repo.Name != "repoA" || repo.Branch != "feature/parent" ||
+		len(repo.ConflictFiles) != 1 || repo.ConflictFiles[0] != "internal/api.go" ||
+		repo.ParentAnchorSHA != "aaaa1111" || repo.ChildHeadSHA != "bbbb2222" {
+		t.Fatalf("attention repository = %+v, want round-trip", repo)
 	}
 }
 

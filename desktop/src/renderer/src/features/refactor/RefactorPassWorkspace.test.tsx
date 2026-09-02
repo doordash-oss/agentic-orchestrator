@@ -14,7 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { act, cleanup, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttentionItem, FeatureSnapshot, RelationshipChildView } from '../../../../shared/ipc';
@@ -44,7 +53,6 @@ function childView(overrides: Partial<RelationshipChildView> = {}): Relationship
     startedAt: '2026-07-30T10:00:00Z',
     cost: { totalUsd: 1.25, byPhase: {} },
     integrationState: 'pending',
-    attention: [],
     cleanupWarnings: [],
     ...overrides,
   };
@@ -108,6 +116,8 @@ function controllerFor(
     busy: false,
     notice: null,
     discardOpen: false,
+    attentionCardRef: { current: null },
+    focusAttentionCard: vi.fn(),
     dispatch: vi.fn(() => Promise.resolve()),
     armAutoStart: vi.fn(),
     openDiscard: vi.fn(),
@@ -116,6 +126,34 @@ function controllerFor(
     reload: vi.fn(),
     ...overrides,
   };
+}
+
+/** Canonical integration-attention error as the renderer receives it. */
+const parkedAttention = {
+  code: 'integration_merge_conflict',
+  class: 'needs_action' as const,
+  title: 'Integration merge conflict',
+  summary: 'The merge candidate for repository "repo-a" conflicted on 1 file.',
+  remediation: {
+    hint: 'Resolve the conflict in the pass worktree and retry; the pass re-enters final review if its code changed.',
+    actions: ['retry'],
+  },
+  context: {
+    repositories: [{ name: 'repo-a', branch: 'main', conflict_files: ['internal/api.go'] }],
+  },
+  diagnostics: 'repo-a: merge conflict: [internal/api.go]',
+};
+
+function parkedChild(overrides: Partial<FeatureSnapshot> = {}): FeatureSnapshot {
+  return readyChild({
+    status: 'ReviewPassed',
+    actions: [
+      { id: 'retry', enabled: true, disabledReasons: [] },
+      { id: 'discard', enabled: true, disabledReasons: [] },
+    ],
+    transaction: { phase: 'attention', attention: parkedAttention },
+    ...overrides,
+  });
 }
 
 function renderWorkspace(
@@ -322,23 +360,131 @@ describe('RefactorPassWorkspace', () => {
     expect(within(dialog).getByRole('button', { name: 'Discard pass' })).toBeDisabled();
   });
 
+  it('renders the parked condition exactly once through the full ErrorSurface with a working retry', () => {
+    installAgenticoMock({ feature: parkedChild() });
+    const dispatch = vi.fn(() => Promise.resolve());
+    const parent = featureSnapshot({
+      id: 'parent1234ef5678',
+      name: 'Electron app',
+      status: 'Published',
+      activeChild: childView({ integrationState: 'attention', attention: parkedAttention }),
+    });
+    renderWorkspace(parent, controllerFor(parent, parkedChild(), { dispatch }));
+
+    // Exactly one alert-role surface carries the parked condition.
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByText('Needs your action')).toBeInTheDocument();
+    expect(within(alert).getByText('integration_merge_conflict')).toBeInTheDocument();
+    expect(within(alert).getByText('Integration merge conflict')).toBeInTheDocument();
+    expect(
+      within(alert).getByText('The merge candidate for repository "repo-a" conflicted on 1 file.'),
+    ).toBeInTheDocument();
+    expect(
+      within(alert).getByText(/Resolve the conflict in the pass worktree and retry/),
+    ).toBeInTheDocument();
+
+    // The repository and its conflict file sit under the Details disclosure;
+    // raw diagnostics sit behind the second disclosure.
+    const details = alert.querySelector('details.error-surface__details');
+    expect(details?.textContent).toContain('repo-a');
+    expect(details?.textContent).toContain('internal/api.go');
+    const diagnostics = alert.querySelector('details.error-surface__diagnostics');
+    expect(diagnostics?.textContent).toContain('repo-a: merge conflict');
+
+    // The card's retry button dispatches through the pass dispatch.
+    const retry = within(alert).getByRole('button', { name: 'Retry integration' });
+    expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+    expect(dispatch).toHaveBeenCalledWith('retry');
+
+    // No element with the old warnings-list or alert-paragraph classes, and
+    // no attention sentence, remains.
+    expect(document.querySelector('.refactor-pass__warnings')).toBeNull();
+    expect(document.querySelector('.refactor-pass__alert')).toBeNull();
+    expect(screen.queryByText('Integration needs attention.')).not.toBeInTheDocument();
+
+    // The custody strip still marks the integration station.
+    const custody = screen.getByRole('list', { name: 'Custody of the work' });
+    expect(within(custody).getByText('Needs attention')).toBeVisible();
+  });
+
+  it('renders the disabled reason in the card action slot instead of a button', () => {
+    installAgenticoMock({ feature: parkedChild() });
+    const parent = featureSnapshot({
+      id: 'parent1234ef5678',
+      name: 'Electron app',
+      status: 'Published',
+      activeChild: childView({ integrationState: 'attention', attention: parkedAttention }),
+    });
+    const blocked = parkedChild({
+      actions: [
+        {
+          id: 'retry',
+          enabled: false,
+          disabledReasons: [{ code: 'running', message: 'integration is already running' }],
+        },
+        { id: 'discard', enabled: true, disabledReasons: [] },
+      ],
+    });
+    renderWorkspace(parent, controllerFor(parent, blocked));
+
+    const alert = screen.getByRole('alert');
+    expect(
+      within(alert).queryByRole('button', { name: 'Retry integration' }),
+    ).not.toBeInTheDocument();
+    expect(within(alert).getByText('integration is already running')).toBeInTheDocument();
+  });
+
+  it('renders two surfaces with distinct captions when an action is rejected while parked', () => {
+    installAgenticoMock({ feature: parkedChild() });
+    const parent = featureSnapshot({
+      id: 'parent1234ef5678',
+      name: 'Electron app',
+      status: 'Published',
+      activeChild: childView({ integrationState: 'attention', attention: parkedAttention }),
+    });
+    renderWorkspace(
+      parent,
+      controllerFor(parent, parkedChild(), {
+        notice: {
+          kind: 'error',
+          error: {
+            code: 'invalid_transition',
+            message: 'the retry was rejected',
+            canonical: {
+              code: 'invalid_transition',
+              class: 'blocking',
+              title: 'Invalid transition',
+              summary: 'The action is not valid in the feature current state.',
+            },
+          },
+        },
+      }),
+    );
+
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts).toHaveLength(2);
+    expect(alerts.some((node) => node.textContent?.includes('Integration is parked'))).toBe(true);
+    expect(alerts.some((node) => node.textContent?.includes('The pass action was rejected'))).toBe(
+      true,
+    );
+  });
+
+  it('renders no attention card when the transaction carries no attention record', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    renderWorkspace(parent, controllerFor(parent, readyChild()));
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('Needs your action')).not.toBeInTheDocument();
+  });
+
   it('keeps integration state on the custody strip without a panel or history block', () => {
     installAgenticoMock({ feature: readyChild() });
     const integratingChild = readyChild({
       status: 'ReviewPassed',
       actions: [{ id: 'discard', enabled: true, disabledReasons: [] }],
-      transaction: {
-        phase: 'attention',
-        attention: 'parent tips moved',
-        entries: [
-          {
-            repo: 'repo-a',
-            prepState: 'prepared',
-            applyState: 'failed',
-            conflictFiles: ['main.go'],
-          },
-        ],
-      },
+      transaction: { phase: 'attention', attention: parkedAttention },
     });
     const parent = featureSnapshot({
       id: 'parent1234ef5678',

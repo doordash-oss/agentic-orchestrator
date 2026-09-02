@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -199,7 +200,8 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 			t.Fatalf("repo 2: ref = %s, want externally moved %s (must not overwrite)", got, externalSHA)
 		}
 
-		// The journal must be in attention phase with diagnostics.
+		// The journal must be in attention phase with a stored ref-race
+		// record for the externally moved repository.
 		tx := child.Parent.Transaction
 		if tx == nil {
 			t.Fatal("transaction journal missing")
@@ -207,12 +209,15 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 		if tx.Phase != feature.TransactionPhaseAttention {
 			t.Fatalf("journal phase = %q, want attention", tx.Phase)
 		}
-		if tx.Attention == "" {
-			t.Fatal("journal attention summary is empty; want diagnostics")
+		raceRec := tx.AttentionRecord()
+		if raceRec == nil || raceRec.Code != errcat.IntegrationRefRace {
+			t.Fatalf("attention record = %+v, want code %s", raceRec, errcat.IntegrationRefRace)
 		}
 
-		// The externally moved entry must have diagnostics naming repo,
-		// ref, anchor, candidate, and observed SHA.
+		// The externally moved entry must stay applied, and the record's
+		// repositories block must carry its anchor, expected, candidate,
+		// and observed SHAs with raw diagnostics naming the repository,
+		// ref, and those SHAs.
 		movedEntry := tx.EntryByRepo(child.Repos[2].Name)
 		if movedEntry == nil {
 			t.Fatal("moved entry missing from journal")
@@ -223,11 +228,14 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 		if movedEntry.ObservedSHA != externalSHA {
 			t.Fatalf("moved entry observed_sha = %s, want external %s", movedEntry.ObservedSHA, externalSHA)
 		}
-		if movedEntry.Diagnostics == "" {
-			t.Fatal("moved entry diagnostics empty; want external race diagnostics")
+		if block := attentionRepoBlock(raceRec, movedEntry.Repo); block == nil ||
+			block.ParentAnchorSHA != movedEntry.ParentAnchorSHA ||
+			block.ExpectedRefSHA != movedEntry.ExpectedRefSHA ||
+			block.CandidateSHA != movedEntry.CandidateSHA ||
+			block.ObservedSHA != externalSHA {
+			t.Fatalf("moved repo repositories block = %+v, want anchor %s expected %s candidate %s observed %s",
+				block, movedEntry.ParentAnchorSHA, movedEntry.ExpectedRefSHA, movedEntry.CandidateSHA, externalSHA)
 		}
-		// Diagnostics must name the repository, ref, anchor, candidate,
-		// and observed SHA.
 		for _, needle := range []string{
 			movedEntry.Repo,
 			"refs/heads/" + movedEntry.ParentBranch,
@@ -235,8 +243,8 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 			movedEntry.CandidateSHA,
 			movedEntry.ObservedSHA,
 		} {
-			if !strings.Contains(movedEntry.Diagnostics, needle) {
-				t.Fatalf("diagnostics %q missing %q", movedEntry.Diagnostics, needle)
+			if !strings.Contains(raceRec.Diagnostics, needle) {
+				t.Fatalf("attention diagnostics %q missing %q", raceRec.Diagnostics, needle)
 			}
 		}
 

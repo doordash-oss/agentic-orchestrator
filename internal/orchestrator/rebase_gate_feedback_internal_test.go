@@ -30,7 +30,8 @@ import (
 
 // TestRebaseGateFeedback_ViolationNamesRepoAndFact verifies a child whose
 // branch does not contain the persisted target produces feedback naming the
-// repo and the violated mechanical fact.
+// repo, the catalog title, and the catalog remediation hint — with no
+// gate-code string leaking into the implementer-facing text.
 func TestRebaseGateFeedback_ViolationNamesRepoAndFact(t *testing.T) {
 	fx := newRebaseGateFixture(t, false) // target not merged -> ancestor violation
 	o := fx.orchestrator()
@@ -42,13 +43,20 @@ func TestRebaseGateFeedback_ViolationNamesRepoAndFact(t *testing.T) {
 	if !strings.Contains(fb, fx.repos[0].name) {
 		t.Errorf("feedback does not name the violated repo %q:\n%s", fx.repos[0].name, fb)
 	}
-	if !strings.Contains(fb, "not an ancestor") {
-		t.Errorf("feedback does not state the violated mechanical fact:\n%s", fb)
+	if !strings.Contains(fb, "Pass branch diverged from target") {
+		t.Errorf("feedback does not carry the catalog title:\n%s", fb)
+	}
+	if !strings.Contains(fb, "Rebase the pass branch onto its target and retry, or discard the pass.") {
+		t.Errorf("feedback does not carry the catalog remediation hint:\n%s", fb)
+	}
+	if strings.Contains(fb, "rebase_gate_") {
+		t.Errorf("feedback leaks a gate-code string:\n%s", fb)
 	}
 }
 
 // TestRebaseGateFeedback_ConflictMarkersListFiles verifies conflict-marker
-// violations carry the offending files in the feedback.
+// violations carry the catalog title, the offending files, and the catalog
+// remediation hint in the feedback.
 func TestRebaseGateFeedback_ConflictMarkersListFiles(t *testing.T) {
 	fx := newRebaseGateFixture(t, true)
 	marked := strings.Join([]string{
@@ -69,8 +77,14 @@ func TestRebaseGateFeedback_ConflictMarkersListFiles(t *testing.T) {
 	if fb == "" {
 		t.Fatalf("rebaseGateFeedback = empty, want a conflict-marker violation")
 	}
+	if !strings.Contains(fb, "Unresolved conflict markers") {
+		t.Errorf("feedback does not carry the catalog title:\n%s", fb)
+	}
 	if !strings.Contains(fb, "conflicted.txt") {
 		t.Errorf("feedback does not list the conflicted file:\n%s", fb)
+	}
+	if !strings.Contains(fb, "Resolve the conflict markers in the worktree and retry.") {
+		t.Errorf("feedback does not carry the catalog remediation hint:\n%s", fb)
 	}
 }
 

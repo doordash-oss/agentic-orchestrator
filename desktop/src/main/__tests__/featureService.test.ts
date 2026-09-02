@@ -1077,7 +1077,6 @@ describe('FeatureService.listFeatures', () => {
                 closed_at: '2026-07-31T10:00:00Z',
                 cost: { total_usd: 1, by_phase: {} },
                 integration_state: 'merged',
-                attention: [],
                 cleanup_warnings: [],
                 has_diff_summary: true,
               },
@@ -1241,7 +1240,20 @@ describe('FeatureService relationship operations', () => {
       started_at: '2026-07-30T10:00:00Z',
       cost: { total_usd: 2.5, by_phase: { review: 2.5 } },
       integration_state: 'attention',
-      attention: [{ code: 'conflict', message: 'Resolve conflict', repo: 'repo-a' }],
+      attention: {
+        code: 'integration_merge_conflict',
+        class: 'needs_action',
+        title: 'Integration merge conflict',
+        summary: 'The merge candidate for repository "repo-a" conflicted on 1 file.',
+        remediation: {
+          hint: 'Resolve the conflict in the pass worktree and retry.',
+          actions: ['retry'],
+        },
+        context: {
+          repositories: [{ name: 'repo-a', branch: 'main', conflict_files: ['query.ts'] }],
+        },
+        diagnostics: 'repo-a: merge candidate conflict: [query.ts]',
+      },
       cleanup_warnings: [],
     };
     const { service } = makeService(() => ({
@@ -1274,14 +1286,26 @@ describe('FeatureService relationship operations', () => {
         ],
         transaction: {
           phase: 'attention',
-          attention: 'Integration needs recovery',
+          attention: {
+            code: 'integration_merge_conflict',
+            class: 'needs_action',
+            title: 'Integration merge conflict',
+            summary: 'The merge candidate for repository "repo-a" conflicted on 1 file.',
+            remediation: {
+              hint: 'Resolve the conflict in the pass worktree and retry.',
+              actions: ['retry'],
+            },
+            context: {
+              repositories: [{ name: 'repo-a', branch: 'main', conflict_files: ['query.ts'] }],
+            },
+            diagnostics: 'conflict in /Users/dev/repo-a while merging',
+          },
           entries: [
             {
               repo: 'repo-a',
               prep_state: 'prepared',
-              apply_state: 'conflict',
-              conflict_files: ['query.ts'],
-              dirty: [{ path: '/safe/repo-a', staged_total: 1 }],
+              apply_state: 'attention',
+              pending_sync: true,
             },
           ],
         },
@@ -1302,9 +1326,22 @@ describe('FeatureService relationship operations', () => {
       'Extract search core',
     ]);
     expect(snapshot.transaction?.entries?.[0]).toMatchObject({
-      applyState: 'conflict',
-      conflictFiles: ['query.ts'],
-      dirty: [{ path: '/safe/repo-a', stagedTotal: 1 }],
+      applyState: 'attention',
+      pendingSync: true,
+    });
+    // The canonical attention object crosses IPC on both the child
+    // transaction and the parent's active child, with diagnostics redacted.
+    expect(snapshot.transaction?.attention).toMatchObject({
+      code: 'integration_merge_conflict',
+      class: 'needs_action',
+      title: 'Integration merge conflict',
+      remediation: { actions: ['retry'] },
+      diagnostics: 'conflict in [path] while merging',
+    });
+    expect(snapshot.activeChild?.attention).toMatchObject({
+      code: 'integration_merge_conflict',
+      title: 'Integration merge conflict',
+      diagnostics: 'repo-a: merge candidate conflict: [query.ts]',
     });
     expect(() => FeatureSnapshotSchema.parse(snapshot)).not.toThrow();
   });

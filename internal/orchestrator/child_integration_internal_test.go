@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -378,11 +379,13 @@ func TestChildIntegrationDirtyParentBlocksMerge(t *testing.T) {
 	if tx.Entries[0].MergeHEAD != "" {
 		t.Fatalf("merge head recorded (%s) although the merge was blocked", tx.Entries[0].MergeHEAD)
 	}
-	if len(tx.Entries[0].Dirty) != 1 || tx.Entries[0].Dirty[0].UntrackedTotal != 1 {
-		t.Fatalf("dirty diagnostics = %+v, want categorized untracked entry", tx.Entries[0].Dirty)
+	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationParentDirty {
+		t.Fatalf("attention record = %+v, want integration_parent_dirty", tx.Attention)
 	}
-	if !strings.Contains(tx.Attention, "uncommitted changes") {
-		t.Fatalf("attention = %q, want dirty summary", tx.Attention)
+	if tx.Attention.Context == nil || len(tx.Attention.Context.Repositories) != 1 ||
+		len(tx.Attention.Context.Repositories[0].DirtyFiles) != 1 ||
+		tx.Attention.Context.Repositories[0].DirtyFiles[0] != "stray.txt" {
+		t.Fatalf("attention repositories = %+v, want the untracked stray.txt in dirty_files", tx.Attention.Context)
 	}
 	if child.Parent.CloseOutcome != "" || !child.IsActiveChild() {
 		t.Fatalf("child closed (%q) on blocked integration", child.Parent.CloseOutcome)
@@ -451,8 +454,13 @@ func TestChildIntegrationConflictAttentionAndRetry(t *testing.T) {
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
-	if !strings.Contains(tx.Attention, "merge") {
-		t.Fatalf("attention = %q, want merge failure detail", tx.Attention)
+	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationMergeConflict {
+		t.Fatalf("attention record = %+v, want integration_merge_conflict", tx.Attention)
+	}
+	if tx.Attention.Context == nil || len(tx.Attention.Context.Repositories) != 1 ||
+		len(tx.Attention.Context.Repositories[0].ConflictFiles) == 0 ||
+		tx.Attention.Context.Repositories[0].ConflictFiles[0] != "child.txt" {
+		t.Fatalf("attention repositories = %+v, want the conflicted child.txt in conflict_files", tx.Attention.Context)
 	}
 	if child.Parent.CloseOutcome != "" {
 		t.Fatalf("child closed on conflicted integration")
@@ -932,8 +940,8 @@ func TestChildIntegrationParentBranchMismatch(t *testing.T) {
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention on branch mismatch", tx)
 	}
-	if !strings.Contains(tx.Attention, "recorded parent branch") {
-		t.Fatalf("attention = %q, want recorded-branch diagnostic", tx.Attention)
+	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationParentBranchMismatch {
+		t.Fatalf("attention record = %+v, want integration_parent_branch_mismatch", tx.Attention)
 	}
 	if got := childIntegrationGit(t, fx.repoDir, "rev-parse", "feature/parent"); got != preHEAD {
 		t.Fatalf("parent branch moved to %s while another branch was checked out", got)

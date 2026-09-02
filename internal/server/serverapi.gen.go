@@ -1122,18 +1122,6 @@ type Checkpoints struct {
 	RoadmapReview   bool `json:"roadmap_review"`
 }
 
-// ChildDirtyDiagnostics defines model for ChildDirtyDiagnostics.
-type ChildDirtyDiagnostics struct {
-	Path           string   `json:"path,omitempty"`
-	Repo           string   `json:"repo,omitempty"`
-	Staged         []string `json:"staged,omitempty"`
-	StagedTotal    int      `json:"staged_total,omitempty"`
-	Unstaged       []string `json:"unstaged,omitempty"`
-	UnstagedTotal  int      `json:"unstaged_total,omitempty"`
-	Untracked      []string `json:"untracked,omitempty"`
-	UntrackedTotal int      `json:"untracked_total,omitempty"`
-}
-
 // ChildFeatureResponse defines model for ChildFeatureResponse.
 type ChildFeatureResponse struct {
 	APIVersion string       `json:"api_version"`
@@ -2050,16 +2038,10 @@ type RefactorFeatureResponse struct {
 	Result     string       `json:"result"`
 }
 
-// RelationshipAttention defines model for RelationshipAttention.
-type RelationshipAttention struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Repo    string `json:"repo,omitempty"`
-}
-
 // RelationshipChild defines model for RelationshipChild.
 type RelationshipChild struct {
-	Attention       []RelationshipAttention      `json:"attention"`
+	// Attention Canonical error rendering the child's stored integration attention record; absent when integration is not parked.
+	Attention       *Error                       `json:"attention,omitempty"`
 	CleanupWarnings []RelationshipCleanupWarning `json:"cleanup_warnings"`
 	ClosedAt        *time.Time                   `json:"closed_at,omitempty"`
 	Cost            Cost                         `json:"cost"`
@@ -2103,7 +2085,8 @@ type RelationshipChildOutcome string
 
 // RelationshipChildSummary List-safe projection of a relationship child. Carries every relationship field except the preserved diff body, so a parent with many closed children cannot inflate a list response without bound. Fetch RelationshipChild on a detail route for the body itself.
 type RelationshipChildSummary struct {
-	Attention       []RelationshipAttention      `json:"attention"`
+	// Attention Canonical error rendering the child's stored integration attention record; absent when integration is not parked.
+	Attention       *Error                       `json:"attention,omitempty"`
 	CleanupWarnings []RelationshipCleanupWarning `json:"cleanup_warnings"`
 	ClosedAt        *time.Time                   `json:"closed_at,omitempty"`
 	Cost            Cost                         `json:"cost"`
@@ -2160,22 +2143,20 @@ type RepoStatus struct {
 
 // RepoTransactionEntry defines model for RepoTransactionEntry.
 type RepoTransactionEntry struct {
-	ApplyState     string   `json:"apply_state,omitempty"`
-	CandidateSha   string   `json:"candidate_sha,omitempty"`
-	ChildHeadSha   string   `json:"child_head_sha,omitempty"`
-	CleanupWarning string   `json:"cleanup_warning,omitempty"`
-	ConflictFiles  []string `json:"conflict_files,omitempty"`
-	Diagnostics    string   `json:"diagnostics,omitempty"`
+	ApplyState      string `json:"apply_state,omitempty"`
+	CandidateSha    string `json:"candidate_sha,omitempty"`
+	ChildHeadSha    string `json:"child_head_sha,omitempty"`
+	CleanupWarning  string `json:"cleanup_warning,omitempty"`
+	ExpectedRefSha  string `json:"expected_ref_sha,omitempty"`
+	MergeHead       string `json:"merge_head,omitempty"`
+	ObservedSha     string `json:"observed_sha,omitempty"`
+	ParentAnchorSha string `json:"parent_anchor_sha,omitempty"`
+	ParentBranch    string `json:"parent_branch,omitempty"`
 
-	// Dirty Categorized parent-worktree diagnostics recorded when a dirty preflight blocked preparation for this repository.
-	Dirty           []ChildDirtyDiagnostics `json:"dirty,omitempty"`
-	ExpectedRefSha  string                  `json:"expected_ref_sha,omitempty"`
-	MergeHead       string                  `json:"merge_head,omitempty"`
-	ObservedSha     string                  `json:"observed_sha,omitempty"`
-	ParentAnchorSha string                  `json:"parent_anchor_sha,omitempty"`
-	ParentBranch    string                  `json:"parent_branch,omitempty"`
-	PrepState       string                  `json:"prep_state,omitempty"`
-	Repo            string                  `json:"repo,omitempty"`
+	// PendingSync True when this applied entry's parent worktree sync failed after the ref update; closure retries the sync automatically.
+	PendingSync bool   `json:"pending_sync,omitempty"`
+	PrepState   string `json:"prep_state,omitempty"`
+	Repo        string `json:"repo,omitempty"`
 }
 
 // RepositoryDiffFile defines model for RepositoryDiffFile.
@@ -2888,7 +2869,8 @@ type ToolCall struct {
 
 // TransactionJournal Ordered per-repository transaction journal for multi-repository child-to-parent integration.
 type TransactionJournal struct {
-	Attention string                 `json:"attention,omitempty"`
+	// Attention Canonical error rendering the journal's single stored attention record; absent when integration is not parked.
+	Attention *Error                 `json:"attention,omitempty"`
 	Entries   []RepoTransactionEntry `json:"entries,omitempty"`
 
 	// Phase Aggregate transaction phase: preparing, prepared, applying, applied, rolling_back, rolled_back, attention, or merged.

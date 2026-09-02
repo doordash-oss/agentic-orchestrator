@@ -1017,6 +1017,166 @@ var catalog = map[Code]Entry{
 		Summary:     "The runtime shut down with pending close errors.",
 		Remediation: "The exit status is unaffected; check the runtime directory before restarting.",
 	},
+
+	// --- Integration attention codes ---------------------------------------------
+	// Every condition that parks a child pass's integration transaction
+	// classifies into one of these at the transaction boundary. All are
+	// fix-then-retry preconditions that declare only the repositories block
+	// and reference the retry action.
+	IntegrationMergeConflict: {
+		Class:   ClassNeedsAction,
+		Title:   "Integration merge conflict",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "The integration merge conflicted with the parent's current state.",
+		summaryParams: func(p Params) string {
+			return integrationMergeConflictSummary(p)
+		},
+		Remediation: "Resolve the conflict in the pass worktree and retry; the pass re-enters final review if its code changed.",
+		Actions:     []string{"retry"},
+	},
+	IntegrationParentDirty: {
+		Class:   ClassNeedsAction,
+		Title:   "Parent worktree is dirty",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A parent worktree has uncommitted changes.",
+		summaryParams: func(p Params) string {
+			return integrationParentDirtySummary(p)
+		},
+		Remediation: "Commit or stash the parent worktree changes and retry.",
+		Actions:     []string{"retry"},
+	},
+	IntegrationParentRefDrift: {
+		Class:   ClassNeedsAction,
+		Title:   "Parent branch moved",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A parent branch moved since the pass started.",
+		summaryParams: func(p Params) string {
+			return integrationParentRefDriftSummary(p)
+		},
+		Remediation: "Reset or accept the moved parent tip and retry.",
+		Actions:     []string{"retry"},
+	},
+	IntegrationRefRace: {
+		Class:   ClassNeedsAction,
+		Title:   "Parent ref moved during integration",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A parent ref moved while the pass was integrating.",
+		summaryParams: func(p Params) string {
+			return integrationRefRaceSummary(p)
+		},
+		Remediation: "Retry the integration; the parent ref moved while it was being applied.",
+		Actions:     []string{"retry"},
+	},
+	IntegrationParentBranchMismatch: {
+		Class:   ClassNeedsAction,
+		Title:   "Parent branch mismatch",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A repository is not on the parent branch this pass expects.",
+		summaryParams: func(p Params) string {
+			return integrationParentBranchMismatchSummary(p)
+		},
+		Remediation: "Check out the parent branch this pass expects and retry.",
+		Actions:     []string{"retry"},
+	},
+	IntegrationRepositoryMissing: {
+		Class:   ClassNeedsAction,
+		Title:   "Repository missing",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A repository is missing from the workspace.",
+		summaryParams: func(p Params) string {
+			return integrationRepositoryMissingSummary(p)
+		},
+		Remediation: "Restore the missing repository and retry.",
+		Actions:     []string{"retry"},
+	},
+	IntegrationWorktreeSyncFailed: {
+		Class:   ClassNeedsAction,
+		Title:   "Worktree sync failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A worktree could not be synced after the pass applied.",
+		summaryParams: func(p Params) string {
+			return integrationWorktreeSyncFailedSummary(p)
+		},
+		Remediation: "Check the worktree's state and retry; the pass stays applied and resumable.",
+		Actions:     []string{"retry"},
+	},
+	IntegrationRolledBack: {
+		Class:   ClassNeedsAction,
+		Title:   "Integration rolled back",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "The pass was rolled back after its apply failed.",
+		summaryParams: func(p Params) string {
+			return integrationRolledBackSummary(p)
+		},
+		Remediation: "Retry the integration; the failed apply was rolled back.",
+		Actions:     []string{"retry"},
+	},
+	IntegrationCandidateFailed: {
+		Class:   ClassNeedsAction,
+		Title:   "Integration preparation failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Preparing a merge candidate failed.",
+		summaryParams: func(p Params) string {
+			return integrationCandidateFailedSummary(p)
+		},
+		Remediation: "Check the repository's state and retry the integration.",
+		Actions:     []string{"retry"},
+	},
+	RebaseGateTargetMissing: {
+		Class:   ClassNeedsAction,
+		Title:   "Rebase target missing",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "The rebase pass's creation-time target is missing.",
+		summaryParams: func(p Params) string {
+			return rebaseGateTargetMissingSummary(p)
+		},
+		Remediation: "Discard the rebase pass and relaunch it with a fresh target.",
+		Actions:     []string{"retry"},
+	},
+	RebaseGateNotAncestor: {
+		Class:   ClassNeedsAction,
+		Title:   "Pass branch diverged from target",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A pass branch is no longer an ancestor of its rebase target.",
+		summaryParams: func(p Params) string {
+			return rebaseGateNotAncestorSummary(p)
+		},
+		Remediation: "Rebase the pass branch onto its target and retry, or discard the pass.",
+		Actions:     []string{"retry"},
+	},
+	RebaseGateMergeInProgress: {
+		Class:   ClassNeedsAction,
+		Title:   "Merge in progress",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A repository has a merge in progress.",
+		summaryParams: func(p Params) string {
+			return rebaseGateMergeInProgressSummary(p)
+		},
+		Remediation: "Complete or abort the in-progress merge in the worktree and retry.",
+		Actions:     []string{"retry"},
+	},
+	RebaseGateConflictMarkers: {
+		Class:   ClassNeedsAction,
+		Title:   "Unresolved conflict markers",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A repository carries unresolved conflict markers.",
+		summaryParams: func(p Params) string {
+			return rebaseGateConflictMarkersSummary(p)
+		},
+		Remediation: "Resolve the conflict markers in the worktree and retry.",
+		Actions:     []string{"retry"},
+	},
+	RebaseGatePassthroughModified: {
+		Class:   ClassNeedsAction,
+		Title:   "Pass-through worktree modified",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A pass-through worktree has local modifications.",
+		summaryParams: func(p Params) string {
+			return rebaseGatePassthroughModifiedSummary(p)
+		},
+		Remediation: "Commit or stash the pass-through worktree changes and retry.",
+		Actions:     []string{"retry"},
+	},
 }
 
 func violationWord(count int) string {

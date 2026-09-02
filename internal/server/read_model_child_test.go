@@ -304,8 +304,20 @@ func TestParentProjectionsCarryCompleteRelationshipHistory(t *testing.T) {
 	closed.StartedAt = &closedStartedAt
 	closed.PhaseCosts = map[string]float64{"implement": 2.5}
 	closed.Parent.Transaction = &feature.TransactionJournal{
-		Phase:     feature.TransactionPhaseMerged,
-		Attention: "manual inspection required",
+		Phase: feature.TransactionPhaseMerged,
+		// The journal's attention is one stored canonical record; rendered
+		// text is produced by the catalog at projection time.
+		Attention: &errcat.FailureRecord{
+			Code: errcat.IntegrationMergeConflict,
+			Context: &errcat.RecordContext{
+				Repositories: []errcat.CodeRepository{{
+					Name:          repoNameSelf,
+					Branch:        "main",
+					ConflictFiles: []string{"internal/server/read_model.go"},
+				}},
+			},
+			Diagnostics: repoNameSelf + ": merge candidate conflict: [internal/server/read_model.go]",
+		},
 		Entries: []feature.RepoTransactionEntry{{
 			Repo:           repoNameSelf,
 			CleanupWarning: "branch cleanup pending",
@@ -318,13 +330,13 @@ func TestParentProjectionsCarryCompleteRelationshipHistory(t *testing.T) {
 	handler := NewHandler(baseReadHandlerOptions(store))
 	list := getJSONMap(t, handler, apiPathFeatures)
 	parentSummary := list["features"].([]any)[0].(map[string]any)
-	assertRelationshipProjection(t, parentSummary["active_child"], active.ID, "", "Active")
+	assertRelationshipProjection(t, parentSummary["active_child"], active.ID, "", "Active", false)
 
 	history, ok := parentSummary["child_history"].([]any)
 	if !ok || len(history) != 1 {
 		t.Fatalf("parent list child_history = %#v, want one closed child", parentSummary["child_history"])
 	}
-	assertRelationshipProjection(t, history[0], closed.ID, feature.ChildCloseOutcomeCompleted, "Closed — Completed")
+	assertRelationshipProjection(t, history[0], closed.ID, feature.ChildCloseOutcomeCompleted, "Closed — Completed", true)
 
 	parentDetail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
 	if got := mustMarshalJSON(t, parentDetail["child_history"]); got != mustMarshalJSON(t, parentSummary["child_history"]) {
@@ -676,7 +688,11 @@ func TestParentReviewFeedbackDirtyReasonCarriesDiagnostics(t *testing.T) {
 	t.Fatal("review-feedback action missing")
 }
 
-func assertRelationshipProjection(t *testing.T, raw any, wantID, wantOutcome, wantDisplayPrefix string) {
+// assertRelationshipProjection pins the shared relationship projection
+// fields. Attention is one canonical error object when the child's journal
+// carries a stored record and is wholly absent for a clean child; the old
+// per-repository attention items no longer exist on this surface.
+func assertRelationshipProjection(t *testing.T, raw any, wantID, wantOutcome, wantDisplayPrefix string, wantAttention bool) {
 	t.Helper()
 	projection, ok := raw.(map[string]any)
 	if !ok {
@@ -690,9 +706,25 @@ func assertRelationshipProjection(t *testing.T, raw any, wantID, wantOutcome, wa
 	if !strings.HasPrefix(display, wantDisplayPrefix) {
 		t.Fatalf("relationship display_state = %q, want prefix %q", display, wantDisplayPrefix)
 	}
-	for _, field := range []string{"display_token", "pipeline", "started_at", "cost", "integration_state", "attention", "cleanup_warnings"} {
+	for _, field := range []string{"display_token", "pipeline", "started_at", "cost", "integration_state", "cleanup_warnings"} {
 		if _, exists := projection[field]; !exists {
 			t.Fatalf("relationship projection missing %q: %#v", field, projection)
+		}
+	}
+	attention, hasAttention := projection["attention"]
+	if hasAttention != wantAttention {
+		t.Fatalf("relationship attention presence = %v, want %v: %#v", hasAttention, wantAttention, projection)
+	}
+	if !wantAttention {
+		return
+	}
+	record, ok := attention.(map[string]any)
+	if !ok {
+		t.Fatalf("relationship attention = %#v, want canonical error object", attention)
+	}
+	for _, field := range []string{"code", "class", "title", "summary"} {
+		if _, exists := record[field]; !exists {
+			t.Fatalf("relationship attention missing %q: %#v", field, record)
 		}
 	}
 }

@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -246,11 +247,16 @@ func TestRebaseGate_AncestorFailure(t *testing.T) {
 		t.Fatalf("journal entries = %d, want 1", len(journal.Entries))
 	}
 	e := journal.Entries[0]
-	if e.GateCode != feature.GateCodeNotAncestor {
-		t.Errorf("gate code = %q, want %q", e.GateCode, feature.GateCodeNotAncestor)
-	}
-	if !strings.Contains(e.Diagnostics, "not an ancestor") {
-		t.Errorf("diagnostics = %q, want 'not an ancestor'", e.Diagnostics)
+	if journal.Attention == nil || journal.Attention.Code != errcat.RebaseGateNotAncestor {
+		t.Errorf("attention record = %+v, want rebase_gate_not_ancestor", journal.Attention)
+	} else {
+		if journal.Attention.Context == nil || len(journal.Attention.Context.Repositories) != 1 ||
+			journal.Attention.Context.Repositories[0].Name != e.Repo {
+			t.Errorf("attention repositories = %+v, want the violated repo", journal.Attention.Context)
+		}
+		if !strings.Contains(journal.Attention.Diagnostics, "not an ancestor") {
+			t.Errorf("diagnostics = %q, want 'not an ancestor'", journal.Attention.Diagnostics)
+		}
 	}
 	if e.PrepState != feature.RepoPrepFailed {
 		t.Errorf("prep state = %q, want %q", e.PrepState, feature.RepoPrepFailed)
@@ -303,11 +309,11 @@ func TestRebaseGate_ConflictMarkersFailure(t *testing.T) {
 	if journal == nil || journal.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction = %+v, want attention", journal)
 	}
-	if journal.Entries[0].GateCode != feature.GateCodeConflictMarkers {
-		t.Errorf("gate code = %q, want %q", journal.Entries[0].GateCode, feature.GateCodeConflictMarkers)
-	}
-	if len(journal.Entries[0].ConflictFiles) == 0 {
-		t.Errorf("conflict files = %v; want the marked file listed", journal.Entries[0].ConflictFiles)
+	if journal.Attention == nil || journal.Attention.Code != errcat.RebaseGateConflictMarkers {
+		t.Errorf("attention record = %+v, want rebase_gate_conflict_markers", journal.Attention)
+	} else if journal.Attention.Context == nil || len(journal.Attention.Context.Repositories) != 1 ||
+		len(journal.Attention.Context.Repositories[0].ConflictFiles) == 0 {
+		t.Errorf("attention repositories = %+v, want the marked file listed", journal.Attention.Context)
 	}
 	if after := fx.parentRefSHA(0); after != before {
 		t.Errorf("parent ref changed: before=%s after=%s", before, after)
@@ -356,8 +362,8 @@ func TestRebaseGate_MergeInProgressFailure(t *testing.T) {
 	if journal == nil || journal.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction = %+v, want attention", journal)
 	}
-	if journal.Entries[0].GateCode != feature.GateCodeMergeInProgress {
-		t.Errorf("gate code = %q, want %q", journal.Entries[0].GateCode, feature.GateCodeMergeInProgress)
+	if journal.Attention == nil || journal.Attention.Code != errcat.RebaseGateMergeInProgress {
+		t.Errorf("attention record = %+v, want rebase_gate_merge_in_progress", journal.Attention)
 	}
 	if after := fx.parentRefSHA(0); after != before {
 		t.Errorf("parent ref changed: before=%s after=%s", before, after)
@@ -406,11 +412,10 @@ func TestRebaseGate_RebaseInProgressFailure(t *testing.T) {
 	if journal == nil || journal.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction = %+v, want attention", journal)
 	}
-	if journal.Entries[0].GateCode != feature.GateCodeMergeInProgress {
-		t.Errorf("gate code = %q, want %q", journal.Entries[0].GateCode, feature.GateCodeMergeInProgress)
-	}
-	if !strings.Contains(journal.Entries[0].Diagnostics, "rebase") {
-		t.Errorf("diagnostics = %q, want rebase sequencer detail", journal.Entries[0].Diagnostics)
+	if journal.Attention == nil || journal.Attention.Code != errcat.RebaseGateMergeInProgress {
+		t.Errorf("attention record = %+v, want rebase_gate_merge_in_progress", journal.Attention)
+	} else if !strings.Contains(journal.Attention.Diagnostics, "rebase") {
+		t.Errorf("diagnostics = %q, want rebase sequencer detail", journal.Attention.Diagnostics)
 	}
 	if after := fx.parentRefSHA(0); after != before {
 		t.Errorf("parent ref changed: before=%s after=%s", before, after)
@@ -440,8 +445,8 @@ func TestRebaseGate_MissingTargetSHAFailsClosed(t *testing.T) {
 	if journal == nil || journal.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction = %+v, want attention", journal)
 	}
-	if journal.Entries[0].GateCode != feature.GateCodeMissingTargetSHA {
-		t.Errorf("gate code = %q, want %q", journal.Entries[0].GateCode, feature.GateCodeMissingTargetSHA)
+	if journal.Attention == nil || journal.Attention.Code != errcat.RebaseGateTargetMissing {
+		t.Errorf("attention record = %+v, want rebase_gate_target_missing", journal.Attention)
 	}
 	if after := fx.parentRefSHA(0); after != before {
 		t.Errorf("parent ref changed: before=%s after=%s", before, after)

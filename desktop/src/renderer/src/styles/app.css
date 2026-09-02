@@ -1593,14 +1593,7 @@ body {
   font: 13px var(--bench-font-text);
 }
 
-.refactor-pass__alert {
-  margin: 0;
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid color-mix(in srgb, var(--attention) 55%, var(--hairline));
-  color: var(--attention);
-}
-
-.refactor-pass__warnings {
+.refactor-pass__cleanup {
   margin: 0;
   padding: 0 0 0 var(--space-4);
   color: var(--attention);
@@ -7016,6 +7009,16 @@ body {
 .cockpit__phase-status code {
   font: inherit;
   color: inherit;
+}
+/* The attention chip is a button that focuses the pass attention card; it
+ * keeps the chip's exact visual treatment and adds only the pointer cursor
+ * and keyboard focus ring. */
+.cockpit__phase-status--button {
+  cursor: pointer;
+}
+.cockpit__phase-status--button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .cockpit__phase-status code::before {
   content: '●';

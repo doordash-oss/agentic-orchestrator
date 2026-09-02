@@ -511,6 +511,17 @@ func eventDTOFromDomain(ev ports.Event) SSEEvent {
 		}
 		dto := snapshotRequiredEventDTO(sseEventLifecycleUpdated, resource)
 		dto.Summary = safeEventSummary(ev)
+		if ev.CanonicalError != nil {
+			// A relationship integration event carrying a canonical error
+			// (a parked transaction) carries the catalog title as the
+			// summary and the canonical code/class identity as the error
+			// object, exactly as failure-carrying feature events do.
+			dto.Summary = ev.CanonicalError.Title
+			dto.Error = &SSEEventError{
+				Code:  string(ev.CanonicalError.Code),
+				Class: SSEEventErrorClass(ev.CanonicalError.Class),
+			}
+		}
 		return dto
 	}
 	switch ev.Type {

@@ -464,7 +464,6 @@ describe('FeatureCockpit snapshot rendering', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 0, byPhase: {} },
         integrationState: 'pending',
-        attention: [],
         cleanupWarnings: [],
       },
     });
@@ -665,7 +664,6 @@ describe('FeatureCockpit snapshot rendering', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 0, byPhase: {} },
         integrationState: 'pending',
-        attention: [],
         cleanupWarnings: [],
       },
     });
@@ -735,6 +733,90 @@ describe('FeatureCockpit snapshot rendering', () => {
     const config = await screen.findByRole('dialog', { name: 'Feature configuration' });
     expect(within(config).getByRole('heading', { name: 'Paired configuration' })).toBeVisible();
     expect(within(config).getByText(/Pipeline is preserved per record/)).toBeVisible();
+  });
+
+  it('makes the attention chip a button that focuses the pass attention card, which owns the condition', async () => {
+    const childId = 'child1234ef567890';
+    const parkedAttention = {
+      code: 'integration_merge_conflict',
+      class: 'needs_action' as const,
+      title: 'Integration merge conflict',
+      summary: 'The merge candidate for repository "repo-a" conflicted on 1 file.',
+      remediation: {
+        hint: 'Resolve the conflict in the pass worktree and retry.',
+        actions: ['retry'],
+      },
+      context: { repositories: [{ name: 'repo-a', branch: 'main', conflict_files: ['query.ts'] }] },
+      diagnostics: 'repo-a: merge candidate conflict: [query.ts]',
+    };
+    const parent = featureSnapshot({
+      id: FEATURE_ID,
+      status: 'Published',
+      actions: [],
+      activeChild: {
+        id: childId,
+        name: 'Slop removal pass',
+        kind: 'refactor',
+        displayToken: `refactor:${childId}`,
+        displayState: 'Active — ReviewPassed',
+        pipeline: 'large',
+        status: 'ReviewPassed',
+        relationshipState: 'active',
+        startedAt: '2026-07-30T10:00:00Z',
+        cost: { totalUsd: 0, byPhase: {} },
+        integrationState: 'attention',
+        attention: parkedAttention,
+        cleanupWarnings: [],
+      },
+    });
+    const child = featureSnapshot({
+      id: childId,
+      name: 'Slop removal pass',
+      status: 'ReviewPassed',
+      setupComplete: true,
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [
+        { id: 'retry', enabled: true, disabledReasons: [] },
+        { id: 'discard', enabled: true, disabledReasons: [] },
+      ],
+      transaction: { phase: 'attention', attention: parkedAttention },
+    });
+    const mock = installAgenticoMock({ feature: parent });
+    mock.api.getFeature.mockImplementation((id: string) =>
+      Promise.resolve(id === childId ? child : parent),
+    );
+    // jsdom has no scrollIntoView and no layout to scroll; the focus
+    // assertion is the observable behavior.
+    const scrollIntoView = vi.fn();
+    const original = (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = scrollIntoView;
+    try {
+      renderCockpit(mock);
+      const user = userEvent.setup();
+
+      expect(await screen.findByRole('region', { name: 'Refactor pass' })).toBeVisible();
+      // The chip is a button carrying only the status label — no error text.
+      const chip = screen.getByRole('button', { name: /needs attention/ });
+      expect(chip).toHaveTextContent('Refactoring — needs attention');
+      expect(chip.textContent).not.toContain('Integration merge conflict');
+
+      // The card owns the condition: exactly one element carries the catalog
+      // title, and the summary appears only inside the card.
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Needs your action');
+      expect(alert).toHaveTextContent('Integration merge conflict');
+      expect(screen.getAllByText('Integration merge conflict')).toHaveLength(1);
+      expect(
+        screen.getAllByText('The merge candidate for repository "repo-a" conflicted on 1 file.'),
+      ).toHaveLength(1);
+
+      // Activating the chip scrolls to and focuses the card.
+      await user.click(chip);
+      expect(scrollIntoView).toHaveBeenCalled();
+      expect(alert).toHaveFocus();
+    } finally {
+      (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = original;
+    }
   });
 
   it('opens the completed transcript from Run record', async () => {
@@ -2596,7 +2678,6 @@ describe('FeatureCockpit review-feedback aftercare', () => {
       closedAt: '2026-07-29T10:00:00Z',
       cost: { totalUsd: 1, byPhase: {} },
       integrationState: 'merged',
-      attention: [],
       cleanupWarnings: [],
       hasDiffSummary: true,
     };
@@ -2636,7 +2717,6 @@ describe('FeatureCockpit review-feedback aftercare', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 0, byPhase: {} },
         integrationState: 'pending',
-        attention: [],
         cleanupWarnings: [],
       },
     });
@@ -2680,7 +2760,6 @@ describe('FeatureCockpit review-feedback aftercare', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 0, byPhase: {} },
         integrationState: 'pending',
-        attention: [],
         cleanupWarnings: [],
       },
     };

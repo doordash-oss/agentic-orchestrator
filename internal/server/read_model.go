@@ -143,11 +143,13 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 				ParentBranch: base.ParentBranch,
 			})
 		}
-		// Project the transaction journal for child integration.
+		// Project the transaction journal for child integration. The
+		// journal's stored attention record renders through the catalog at
+		// projection time; entries carry progress state and warnings only.
 		if tx := f.Parent.Transaction; tx != nil {
 			detail.Transaction = TransactionJournal{
 				Phase:     string(tx.Phase),
-				Attention: tx.Attention,
+				Attention: wireIntegrationAttention(tx.Attention),
 			}
 			for _, e := range tx.Entries {
 				entry := RepoTransactionEntry{
@@ -161,21 +163,8 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 					PrepState:       string(e.PrepState),
 					ApplyState:      string(e.ApplyState),
 					ObservedSha:     e.ObservedSHA,
-					ConflictFiles:   e.ConflictFiles,
+					PendingSync:     e.PendingSync,
 					CleanupWarning:  e.CleanupWarning,
-					Diagnostics:     e.Diagnostics,
-				}
-				for _, d := range e.Dirty {
-					entry.Dirty = append(entry.Dirty, ChildDirtyDiagnostics{
-						Repo:           d.Repo,
-						Path:           d.Path,
-						Staged:         d.Staged,
-						Unstaged:       d.Unstaged,
-						Untracked:      d.Untracked,
-						StagedTotal:    d.StagedTotal,
-						UnstagedTotal:  d.UnstagedTotal,
-						UntrackedTotal: d.UntrackedTotal,
-					})
 				}
 				detail.Transaction.Entries = append(detail.Transaction.Entries, entry)
 			}
@@ -264,11 +253,10 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 }
 
 func childHasIntegrationAttention(child *feature.Feature) bool {
-	if child == nil || child.Parent == nil || child.Parent.Transaction == nil {
+	if child == nil {
 		return false
 	}
-	tx := child.Parent.Transaction
-	return tx.Phase == feature.TransactionPhaseAttention || tx.Attention != "" || tx.AnyApplyAttention()
+	return child.HasIntegrationAttention()
 }
 
 func appendDisabledReason(actions []Action, reason ActionDisabledReason, excludedActionID string) {
@@ -559,7 +547,6 @@ func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSumma
 		StartedAt:         startedAt,
 		Cost:              costDTO(child),
 		IntegrationState:  "pending",
-		Attention:         []RelationshipAttention{},
 		CleanupWarnings:   []RelationshipCleanupWarning{},
 	}
 	if setup := child.Run().Setup; setup != nil {
@@ -588,34 +575,11 @@ func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSumma
 		if tx.Phase != "" {
 			dto.IntegrationState = string(tx.Phase)
 		}
-		if tx.Attention != "" {
-			dto.Attention = append(dto.Attention, RelationshipAttention{
-				Code:    "integration_attention",
-				Message: SafeDisplayText(tx.Attention, 240),
-			})
-		}
+		// The stored attention record renders through the catalog at
+		// projection time; per-repository attention items are never
+		// synthesized.
+		dto.Attention = wireIntegrationAttention(tx.Attention)
 		for _, entry := range tx.Entries {
-			if len(entry.Dirty) > 0 {
-				dto.Attention = append(dto.Attention, RelationshipAttention{
-					Code:    "dirty_parent",
-					Message: "parent repository has uncommitted changes",
-					Repo:    entry.Repo,
-				})
-			}
-			if len(entry.ConflictFiles) > 0 {
-				dto.Attention = append(dto.Attention, RelationshipAttention{
-					Code:    "integration_conflict",
-					Message: "integration has unresolved conflicts",
-					Repo:    entry.Repo,
-				})
-			}
-			if entry.Diagnostics != "" {
-				dto.Attention = append(dto.Attention, RelationshipAttention{
-					Code:    "integration_attention",
-					Message: SafeDisplayText(entry.Diagnostics, 240),
-					Repo:    entry.Repo,
-				})
-			}
 			if entry.CleanupWarning != "" {
 				dto.CleanupWarnings = append(dto.CleanupWarnings, RelationshipCleanupWarning{
 					Message: SafeDisplayText(entry.CleanupWarning, 240),
@@ -631,6 +595,19 @@ func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSumma
 		}
 	}
 	return dto
+}
+
+// wireIntegrationAttention renders a stored integration attention record
+// through the catalog onto the canonical wire error, bounding raw
+// diagnostics with the safe-display helper.
+func wireIntegrationAttention(record *errcat.FailureRecord) *Error {
+	if record == nil {
+		return nil
+	}
+	rendered := errcat.RenderRecord(*record)
+	wire := wireError(rendered)
+	wire.Diagnostics = SafeDisplayText(rendered.Diagnostics, 240)
+	return &wire
 }
 
 // relationshipChildDTO builds the detail projection: the summary plus the
@@ -916,7 +893,11 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running b
 		action(actionPauseStop, canStop, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_running", Message: "child has no active work to pause or stop"})),
 		action(actionResume, canResume, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_paused", Message: "feature has no paused session or input gate"})),
 		action(actionRestart, canRestart, featureScope, nil, restartReason),
-		action(actionRetry, childSetupFailed(f), featureScope, nil, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features"}),
+		// Retry serves two child conditions: a failed setup the setup retry
+		// reruns, and a parked integration transaction (attention record,
+		// attention phase, or apply attention) whose retry re-enters
+		// integration through the restart path.
+		action(actionRetry, childSetupFailed(f) || childHasIntegrationAttention(f), featureScope, nil, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features or parked integration"}),
 		// Discard must be available for every active child — running,
 		// paused, failed, interrupted, review-gated, input-blocked, and
 		// already-discarding — because the durable discard state machine

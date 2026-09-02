@@ -428,7 +428,6 @@ const OVERVIEW_LANE_FEATURES: FeatureSnapshot[] = [
       startedAt: '2026-07-23T08:10:00Z',
       cost: { totalUsd: 4.2, byPhase: {} },
       integrationState: 'pending',
-      attention: [],
       cleanupWarnings: [],
     },
   },
@@ -862,7 +861,6 @@ const REFACTOR_PASS_PARENT_SNAPSHOT: FeatureSnapshot = {
     startedAt: '2026-07-31T22:41:00Z',
     cost: { totalUsd: 0, byPhase: {} },
     integrationState: 'pending',
-    attention: [],
     cleanupWarnings: [],
   },
   childHistory: [
@@ -880,7 +878,6 @@ const REFACTOR_PASS_PARENT_SNAPSHOT: FeatureSnapshot = {
       closedAt: '2026-07-27T14:03:00Z',
       cost: { totalUsd: 12.4, byPhase: {} },
       integrationState: 'merged',
-      attention: [],
       cleanupWarnings: [],
       diffSummary:
         'Repository: agentic-orchestrator\n 14 files changed, 220 insertions(+), 412 deletions(-)',

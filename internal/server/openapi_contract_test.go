@@ -187,6 +187,33 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 	}
 }
 
+// TestIntegrationAttentionSchemasCollapsedToCanonicalError pins the OpenAPI
+// shape of the integration-attention single owner: the transaction journal's
+// and the relationship child summaries' attention fields reference the
+// canonical Error component, the legacy relationship-attention and
+// dirty-diagnostics schemas and the per-entry attention duplicates are gone,
+// and the typed pending-sync flag is declared.
+func TestIntegrationAttentionSchemasCollapsedToCanonicalError(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	for _, schema := range []string{"RelationshipAttention", "ChildDirtyDiagnostics"} {
+		if _, ok := spec.Components.Schemas[schema]; ok {
+			t.Fatalf("components.schemas.%s must be deleted; attention is the canonical Error", schema)
+		}
+	}
+	assertSchemaProperties(t, spec, "TransactionJournal", "phase", "attention", "entries")
+	assertSchemaProperties(t, spec, "RelationshipChildSummary", "attention")
+	// The detail schema composes the summary through allOf, so its own
+	// property set carries only the diff body.
+	assertSchemaProperties(t, spec, "RelationshipChild", "diff_summary")
+	assertSchemaProperties(t, spec, "RepoTransactionEntry", "pending_sync")
+	entryProps := schemaProperties(spec.Components.Schemas["RepoTransactionEntry"])
+	for _, forbidden := range removedEntryWireKeys {
+		if entryProps[forbidden] {
+			t.Fatalf("RepoTransactionEntry must not carry removed property %q", forbidden)
+		}
+	}
+}
+
 // TestRefactorRequestSchemaOmitsRepoSelection pins the refactor contract:
 // repository and base-branch selection are inherited from the parent and must
 // never re-enter the refactor request schema.

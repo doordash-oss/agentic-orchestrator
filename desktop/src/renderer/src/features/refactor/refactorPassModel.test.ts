@@ -38,13 +38,28 @@ function childView(overrides: Partial<RelationshipChildView> = {}): Relationship
     startedAt: '2026-07-30T10:00:00Z',
     cost: { totalUsd: 0, byPhase: {} },
     integrationState: 'pending',
-    attention: [],
     cleanupWarnings: [],
     ...overrides,
   };
 }
 
 const doneSetup: FeatureSnapshot['setup'] = { status: 'done', attempt: 1, tasks: [] };
+
+/** Canonical integration-attention error as the renderer receives it. */
+const integrationAttention = {
+  code: 'integration_merge_conflict',
+  class: 'needs_action' as const,
+  title: 'Integration merge conflict',
+  summary: 'The merge candidate for repository "repo-a" conflicted on 2 files.',
+  remediation: {
+    hint: 'Resolve the conflict in the pass worktree and retry; the pass re-enters final review if its code changed.',
+    actions: ['retry'],
+  },
+  context: {
+    repositories: [{ name: 'repo-a', branch: 'main', conflict_files: ['internal/api.go'] }],
+  },
+  diagnostics: 'repo-a: merge conflict: [internal/api.go]',
+};
 
 describe('passState', () => {
   it('reports setup until the worktrees are ready', () => {
@@ -159,59 +174,43 @@ describe('passState post-review lifecycle', () => {
     expect(passActions(child)).toEqual([{ id: 'start', label: 'Start pass', kind: 'primary' }]);
   });
 
-  it('prefers repository diagnostics over redundant transaction details', () => {
+  it('renders no sentence for the attention state; the card owns the condition', () => {
     const state = passState(
       featureSnapshot({
         ...base,
         status: 'ReviewPassed',
-        transaction: {
-          phase: 'attention',
-          attention: 'merge conflict in repo-a',
-          entries: [
-            {
-              repo: 'repo-a',
-              conflictFiles: ['internal/api.go', 'cmd/main.go'],
-              diagnostics: 'rebase stopped on internal/api.go',
-            },
-          ],
-        },
+        transaction: { phase: 'attention', attention: integrationAttention },
       }),
     );
-    expect(state).toMatchObject({ id: 'integration-attention', tone: 'attention' });
-    expect(state.problems).toEqual(['repo-a: rebase stopped on internal/api.go']);
+    expect(state).toEqual({ id: 'integration-attention', sentence: '', tone: 'attention' });
   });
 
-  it('falls back to conflict files when a repository has no diagnostic', () => {
-    const state = passState(
+  it('keeps a neutral progress sentence for rollback states with no diagnostics', () => {
+    const rollingBack = passState(
       featureSnapshot({
         ...base,
         status: 'ReviewPassed',
         transaction: {
-          phase: 'attention',
-          entries: [
-            {
-              repo: 'repo-a',
-              conflictFiles: ['internal/api.go', 'cmd/main.go'],
-            },
-          ],
+          phase: 'rolling_back',
+          attention: integrationAttention,
+          entries: [{ repo: 'repo-a', applyState: 'attention', pendingSync: true }],
         },
       }),
     );
-    expect(state.problems).toEqual(['repo-a: conflicts in internal/api.go, cmd/main.go']);
-  });
+    expect(rollingBack.id).toBe('integration-attention');
+    expect(rollingBack.sentence).toBe('Integration is rolling back after a failed apply.');
 
-  it('falls back to transaction attention when repositories provide no details', () => {
-    const state = passState(
+    const rolledBack = passState(
       featureSnapshot({
         ...base,
         status: 'ReviewPassed',
-        transaction: {
-          phase: 'attention',
-          attention: 'merge conflict in repo-a',
-        },
+        transaction: { phase: 'rolled_back', attention: integrationAttention },
       }),
     );
-    expect(state.problems).toEqual(['merge conflict in repo-a']);
+    expect(rolledBack.id).toBe('integration-attention');
+    expect(rolledBack.sentence).toBe(
+      'Integration rolled back after a failed apply. Retry runs it again.',
+    );
   });
 
   it('walks applied, merged, and discarded closures without reverting to ready', () => {
@@ -278,7 +277,7 @@ describe('custodyStations', () => {
       status: 'ReviewPassed',
       setupComplete: true,
       setup: doneSetup,
-      transaction: { phase: 'attention', attention: 'merge conflict in repo-a' },
+      transaction: { phase: 'attention' },
     });
     const [, passStation, integration] = custodyStations(parent, child, childView());
     expect(passStation.state).toBe('attention');
@@ -342,9 +341,10 @@ describe('passActions', () => {
 describe('refactoringStatusChip', () => {
   it('returns the parent action bar labels', () => {
     expect(refactoringStatusChip(childView())).toEqual({ label: 'Refactoring', tone: 'info' });
-    expect(
-      refactoringStatusChip(childView({ attention: [{ code: 'x', message: 'conflict' }] })),
-    ).toEqual({ label: 'Refactoring — needs attention', tone: 'attention' });
+    expect(refactoringStatusChip(childView({ attention: integrationAttention }))).toEqual({
+      label: 'Refactoring — needs attention',
+      tone: 'attention',
+    });
     expect(refactoringStatusChip(childView({ integrationState: 'attention' }))).toEqual({
       label: 'Refactoring — needs attention',
       tone: 'attention',
@@ -359,7 +359,7 @@ describe('refactoringStatusChip', () => {
     });
     expect(
       refactoringStatusChip(
-        childView({ kind: 'review-feedback', attention: [{ code: 'x', message: 'conflict' }] }),
+        childView({ kind: 'review-feedback', attention: integrationAttention }),
       ),
     ).toEqual({
       label: 'Addressing review feedback — needs attention',
@@ -373,9 +373,7 @@ describe('refactoringStatusChip', () => {
       tone: 'info',
     });
     expect(
-      refactoringStatusChip(
-        childView({ kind: 'rebase', attention: [{ code: 'x', message: 'conflict' }] }),
-      ),
+      refactoringStatusChip(childView({ kind: 'rebase', attention: integrationAttention })),
     ).toEqual({ label: 'Rebasing — needs attention', tone: 'attention' });
   });
 

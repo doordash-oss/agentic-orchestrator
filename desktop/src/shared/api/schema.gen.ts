@@ -1889,11 +1889,6 @@ export interface components {
             sha: string;
             parent_branch?: string;
         };
-        RelationshipAttention: {
-            code: string;
-            message: string;
-            repo?: string;
-        };
         RelationshipCleanupWarning: {
             message: string;
             repo?: string;
@@ -1926,7 +1921,8 @@ export interface components {
             closed_at?: string;
             cost: components["schemas"]["Cost"];
             integration_state: string;
-            attention: components["schemas"]["RelationshipAttention"][];
+            /** @description Canonical error rendering the child's stored integration attention record; absent when integration is not parked. */
+            attention?: components["schemas"]["Error"];
             cleanup_warnings: components["schemas"]["RelationshipCleanupWarning"][];
             /** @description Setup failure message when the child's setup failed. */
             last_error?: string;
@@ -2178,21 +2174,12 @@ export interface components {
             /** @description Persisted selected comments captured at launch for a review-feedback child; absent for refactor children and parents. */
             review_feedback?: components["schemas"]["ReviewFeedbackComment"][];
         };
-        ChildDirtyDiagnostics: {
-            repo?: string;
-            path?: string;
-            staged?: string[];
-            unstaged?: string[];
-            untracked?: string[];
-            staged_total?: number;
-            unstaged_total?: number;
-            untracked_total?: number;
-        };
         /** @description Ordered per-repository transaction journal for multi-repository child-to-parent integration. */
         TransactionJournal: {
             /** @description Aggregate transaction phase: preparing, prepared, applying, applied, rolling_back, rolled_back, attention, or merged. */
             phase?: string;
-            attention?: string;
+            /** @description Canonical error rendering the journal's single stored attention record; absent when integration is not parked. */
+            attention?: components["schemas"]["Error"];
             entries?: components["schemas"]["RepoTransactionEntry"][];
         };
         RepoTransactionEntry: {
@@ -2206,11 +2193,9 @@ export interface components {
             prep_state?: string;
             apply_state?: string;
             observed_sha?: string;
-            conflict_files?: string[];
-            /** @description Categorized parent-worktree diagnostics recorded when a dirty preflight blocked preparation for this repository. */
-            dirty?: components["schemas"]["ChildDirtyDiagnostics"][];
+            /** @description True when this applied entry's parent worktree sync failed after the ref update; closure retries the sync automatically. */
+            pending_sync?: boolean;
             cleanup_warning?: string;
-            diagnostics?: string;
         };
         Usage: {
             input_tokens?: number;

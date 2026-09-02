@@ -36,9 +36,14 @@ type RecordContext struct {
 // object through New. An unknown code falls back to the internal-error code,
 // context blocks the code did not declare are dropped, and the summary
 // template receives the phase and repository names from the record's blocks.
+// Integration attention codes receive the full repositories block instead,
+// so their summaries can name conflict-file and dirty-file counts and moved
+// refs.
 func RenderRecord(record FailureRecord) Error {
 	opts := []Option{WithDiagnostics(record.Diagnostics)}
 	params := RunFailureParams{}
+	integration := IsIntegrationAttention(record.Code)
+	integrationRepos := []CodeRepository{}
 	if record.Context != nil {
 		if record.Context.Phase != nil {
 			opts = append(opts, WithPhase(*record.Context.Phase))
@@ -49,6 +54,7 @@ func RenderRecord(record FailureRecord) Error {
 			repos := make([]CodeRepository, len(record.Context.Repositories))
 			copy(repos, record.Context.Repositories)
 			opts = append(opts, WithRepositories(repos...))
+			integrationRepos = repos
 			for _, repo := range record.Context.Repositories {
 				if repo.Name != "" {
 					params.Repositories = append(params.Repositories, repo.Name)
@@ -59,6 +65,10 @@ func RenderRecord(record FailureRecord) Error {
 			opts = append(opts, WithCommand(*record.Context.Command))
 		}
 	}
-	opts = append(opts, WithParams(params))
+	if integration {
+		opts = append(opts, WithParams(IntegrationRepoParams{Repositories: integrationRepos}))
+	} else {
+		opts = append(opts, WithParams(params))
+	}
 	return New(record.Code, opts...)
 }

@@ -1049,9 +1049,8 @@ export const RelationshipChildViewSchema = z.strictObject({
   closedAt: z.string().optional(),
   cost: z.strictObject({ totalUsd: z.number(), byPhase: z.record(z.string(), z.number()) }),
   integrationState: z.string(),
-  attention: z.array(
-    z.strictObject({ code: z.string(), message: z.string(), repo: z.string().optional() }),
-  ),
+  /** Canonical integration-attention error; absent when integration is not parked. */
+  attention: CanonicalErrorSchema.optional(),
   cleanupWarnings: z.array(z.strictObject({ message: z.string(), repo: z.string().optional() })),
   lastError: z.string().optional(),
   diffSummary: z.string().optional(),
@@ -1060,30 +1059,18 @@ export const RelationshipChildViewSchema = z.strictObject({
 });
 export type RelationshipChildView = z.output<typeof RelationshipChildViewSchema>;
 
-export const DirtyWorktreeViewSchema = z.strictObject({
-  repo: z.string().optional(),
-  path: z.string().optional(),
-  staged: z.array(z.string()).max(200).optional(),
-  unstaged: z.array(z.string()).max(200).optional(),
-  untracked: z.array(z.string()).max(200).optional(),
-  stagedTotal: z.number().int().nonnegative().optional(),
-  unstagedTotal: z.number().int().nonnegative().optional(),
-  untrackedTotal: z.number().int().nonnegative().optional(),
-});
-
 export const RelationshipTransactionViewSchema = z.strictObject({
   phase: z.string().optional(),
-  attention: z.string().optional(),
+  /** Canonical error rendering the journal's single stored attention record. */
+  attention: CanonicalErrorSchema.optional(),
   entries: z
     .array(
       z.strictObject({
         repo: z.string().optional(),
         prepState: z.string().optional(),
         applyState: z.string().optional(),
-        conflictFiles: z.array(z.string()).max(200).optional(),
-        dirty: z.array(DirtyWorktreeViewSchema).max(100).optional(),
+        pendingSync: z.boolean().optional(),
         cleanupWarning: z.string().optional(),
-        diagnostics: z.string().optional(),
       }),
     )
     .max(100)

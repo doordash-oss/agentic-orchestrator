@@ -259,7 +259,6 @@ describe('ServerRelationshipChildSchema diff_summary bound', () => {
     started_at: '2026-07-14T00:00:00Z',
     cost: { total_usd: 0, by_phase: {} },
     integration_state: 'merged',
-    attention: [],
     cleanup_warnings: [],
     diff_summary: diffSummary,
   });
@@ -311,6 +310,107 @@ describe('ServerFeatureSummarySchema bounded child history', () => {
     expect(parsed.success).toBe(true);
     expect(parsed.data?.child_history_total).toBe(12);
     expect(parsed.data?.child_history_truncated).toBe(true);
+  });
+});
+
+describe('integration attention single owner', () => {
+  const canonicalAttention = {
+    code: 'integration_merge_conflict',
+    class: 'needs_action',
+    title: 'Integration merge conflict',
+    summary: 'The merge candidate for repository "repo-a" conflicted on 1 file.',
+    remediation: {
+      hint: 'Resolve the conflict in the pass worktree and retry.',
+      actions: ['retry'],
+    },
+    context: { repositories: [{ name: 'repo-a', branch: 'main', conflict_files: ['query.ts'] }] },
+    diagnostics: 'repo-a: merge candidate conflict: [query.ts]',
+  };
+
+  it('accepts a canonical transaction attention and rejects the old free-form string', () => {
+    const transactionField = ServerFeatureDetailSchema.pick({ transaction: true });
+    const ok = transactionField.safeParse({
+      transaction: {
+        phase: 'attention',
+        attention: canonicalAttention,
+        entries: [{ repo: 'repo-a', prep_state: 'failed', pending_sync: false }],
+      },
+    });
+    expect(ok.success).toBe(true);
+    expect(ok.data?.transaction?.attention?.code).toBe('integration_merge_conflict');
+    expect(ok.data?.transaction?.entries?.[0]?.pending_sync).toBe(false);
+
+    const legacyString = transactionField.safeParse({
+      transaction: { phase: 'attention', attention: 'Integration needs recovery' },
+    });
+    expect(legacyString.success).toBe(false);
+  });
+
+  it('rejects the deleted entry diagnostics, conflict-file, and dirty shapes', () => {
+    const transactionField = ServerFeatureDetailSchema.pick({ transaction: true });
+    for (const entry of [
+      { repo: 'repo-a', diagnostics: 'merge conflict' },
+      { repo: 'repo-a', conflict_files: ['query.ts'] },
+      { repo: 'repo-a', dirty: [{ path: '/safe/repo-a', staged_total: 1 }] },
+    ]) {
+      const parsed = transactionField.safeParse({
+        transaction: { phase: 'attention', attention: canonicalAttention, entries: [entry] },
+      });
+      expect(parsed.success).toBe(false);
+    }
+  });
+
+  it('accepts a canonical relationship attention and rejects the old array-of-items shape', () => {
+    const ok = ServerRelationshipChildSchema.safeParse({
+      id: 'abcd1234ef567890',
+      name: 'Refactor pass',
+      kind: 'refactor',
+      display_token: 'R1',
+      display_state: 'Active — ReviewPassed',
+      pipeline: 'medium',
+      status: 'ReviewPassed',
+      started_at: '2026-07-14T00:00:00Z',
+      cost: { total_usd: 0, by_phase: {} },
+      integration_state: 'attention',
+      attention: canonicalAttention,
+      cleanup_warnings: [],
+    });
+    expect(ok.success).toBe(true);
+    expect(ok.data?.attention?.class).toBe('needs_action');
+
+    const legacyArray = ServerRelationshipChildSchema.safeParse({
+      id: 'abcd1234ef567890',
+      name: 'Refactor pass',
+      kind: 'refactor',
+      display_token: 'R1',
+      display_state: 'Active — ReviewPassed',
+      pipeline: 'medium',
+      status: 'ReviewPassed',
+      started_at: '2026-07-14T00:00:00Z',
+      cost: { total_usd: 0, by_phase: {} },
+      integration_state: 'attention',
+      attention: [{ code: 'conflict', message: 'Resolve conflict', repo: 'repo-a' }],
+      cleanup_warnings: [],
+    });
+    expect(legacyArray.success).toBe(false);
+  });
+
+  it('accepts a relationship child with no attention at all', () => {
+    const parsed = ServerRelationshipChildSchema.safeParse({
+      id: 'abcd1234ef567890',
+      name: 'Refactor pass',
+      kind: 'refactor',
+      display_token: 'R1',
+      display_state: 'Active — ReviewPassed',
+      pipeline: 'medium',
+      status: 'ReviewPassed',
+      started_at: '2026-07-14T00:00:00Z',
+      cost: { total_usd: 0, by_phase: {} },
+      integration_state: 'pending',
+      cleanup_warnings: [],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.attention).toBeUndefined();
   });
 });
 

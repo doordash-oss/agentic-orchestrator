@@ -479,9 +479,10 @@ export const ServerRelationshipChildSchema = z.object({
   closed_at: z.string().optional(),
   cost: z.object({ total_usd: z.number(), by_phase: z.record(z.string(), z.number()) }),
   integration_state: z.string(),
-  attention: z.array(
-    z.object({ code: z.string(), message: z.string(), repo: z.string().optional() }),
-  ),
+  // Canonical error rendering the child's stored integration attention
+  // record; absent when integration is not parked. Strict canonical
+  // contract, same as ErrorResponse.
+  attention: CanonicalErrorSchema.optional(),
   cleanup_warnings: z.array(z.object({ repo: z.string().optional(), message: z.string() })),
   last_error: z.string().optional(),
   diff_summary: z.string().max(DIFF_SUMMARY_MAX_BYTES).optional(),
@@ -622,32 +623,30 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   close_outcome: z.string().optional(),
   closed_at: z.string().optional(),
   transaction: z
-    .object({
+    .strictObject({
       phase: z.string().optional(),
-      attention: z.string().optional(),
+      // Canonical error rendering the journal's single stored attention
+      // record; absent when integration is not parked.
+      attention: CanonicalErrorSchema.optional(),
       entries: z
         .array(
-          z.object({
+          // Strict: the entry block is a fully-specified trust-boundary
+          // contract mirroring the generated RepoTransactionEntry, so the
+          // deleted diagnostics, conflict-file, and dirty shapes fail
+          // parsing instead of slipping through as unknown keys.
+          z.strictObject({
             repo: z.string().optional(),
+            parent_branch: z.string().optional(),
+            parent_anchor_sha: z.string().optional(),
+            expected_ref_sha: z.string().optional(),
+            child_head_sha: z.string().optional(),
+            candidate_sha: z.string().optional(),
+            merge_head: z.string().optional(),
             prep_state: z.string().optional(),
             apply_state: z.string().optional(),
-            conflict_files: z.array(z.string()).optional(),
-            dirty: z
-              .array(
-                z.object({
-                  repo: z.string().optional(),
-                  path: z.string().optional(),
-                  staged: z.array(z.string()).optional(),
-                  unstaged: z.array(z.string()).optional(),
-                  untracked: z.array(z.string()).optional(),
-                  staged_total: z.number().int().nonnegative().optional(),
-                  unstaged_total: z.number().int().nonnegative().optional(),
-                  untracked_total: z.number().int().nonnegative().optional(),
-                }),
-              )
-              .optional(),
+            observed_sha: z.string().optional(),
+            pending_sync: z.boolean().optional(),
             cleanup_warning: z.string().optional(),
-            diagnostics: z.string().optional(),
           }),
         )
         .optional(),

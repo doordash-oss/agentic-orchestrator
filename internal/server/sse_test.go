@@ -646,3 +646,64 @@ func TestFeatureFailedDomainEventCarriesCanonicalError(t *testing.T) {
 		t.Fatal("feature-started lifecycle event must require a snapshot")
 	}
 }
+
+// TestRelationshipIntegrationChangedCarriesCanonicalError pins the SSE
+// mapping for relationship integration events: an integration-changed domain
+// event carrying a canonical error (a parked transaction) becomes a
+// lifecycle.updated event whose summary is the catalog title for its code,
+// whose error object carries the canonical code and class, and which requires
+// a snapshot; the same event without a canonical error carries no error
+// object.
+func TestRelationshipIntegrationChangedCarriesCanonicalError(t *testing.T) {
+	t.Parallel()
+
+	rendered := errcat.RenderRecord(errcat.FailureRecord{
+		Code: errcat.IntegrationMergeConflict,
+		Context: &errcat.RecordContext{
+			Repositories: []errcat.CodeRepository{{
+				Name:          "repo-a",
+				ConflictFiles: []string{"internal/api.go"},
+			}},
+		},
+		Diagnostics: "repo-a: merge candidate conflict",
+	})
+	parked := eventDTOFromDomain(ports.Event{
+		Type:           ports.RelationshipIntegrationChanged,
+		ParentID:       "parent-1",
+		ChildID:        "child-1",
+		CanonicalError: &rendered,
+	})
+	if parked.Kind != sseEventLifecycleUpdated {
+		t.Fatalf("relationship integration event kind = %q, want %q", parked.Kind, sseEventLifecycleUpdated)
+	}
+	if parked.Resource.Type != resourceTypeRelationship {
+		t.Fatalf("relationship integration event resource type = %q, want %q", parked.Resource.Type, resourceTypeRelationship)
+	}
+	if parked.Summary != "Integration merge conflict" {
+		t.Fatalf("relationship integration event summary = %q, want the catalog title %q", parked.Summary, "Integration merge conflict")
+	}
+	if parked.Error == nil {
+		t.Fatal("relationship integration event error = nil, want canonical error object")
+	}
+	if parked.Error.Code != string(errcat.IntegrationMergeConflict) {
+		t.Fatalf("relationship integration event error.code = %q, want %q", parked.Error.Code, errcat.IntegrationMergeConflict)
+	}
+	if parked.Error.Class != SSEEventErrorClassNeedsAction {
+		t.Fatalf("relationship integration event error.class = %q, want %q", parked.Error.Class, SSEEventErrorClassNeedsAction)
+	}
+	if !parked.SnapshotRequired {
+		t.Fatal("relationship integration event must require a snapshot")
+	}
+
+	plain := eventDTOFromDomain(ports.Event{
+		Type:     ports.RelationshipIntegrationChanged,
+		ParentID: "parent-1",
+		ChildID:  "child-1",
+	})
+	if plain.Error != nil {
+		t.Fatalf("error-free relationship integration event error = %+v, want none", *plain.Error)
+	}
+	if !plain.SnapshotRequired {
+		t.Fatal("error-free relationship integration event must require a snapshot")
+	}
+}

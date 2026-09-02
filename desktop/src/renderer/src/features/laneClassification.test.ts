@@ -35,6 +35,21 @@ function snapshot(status: string, overrides: Partial<FeatureSnapshot> = {}): Fea
   });
 }
 
+/** Canonical integration-attention error as the renderer receives it. */
+function parkedAttention(): RelationshipChildView['attention'] {
+  return {
+    code: 'integration_parent_dirty',
+    class: 'needs_action',
+    title: 'Parent worktree is dirty',
+    summary: 'The parent worktree for repository "repo-a" has 1 uncommitted change.',
+    remediation: {
+      hint: 'Commit or stash the parent worktree changes and retry.',
+      actions: ['retry'],
+    },
+    context: { repositories: [{ name: 'repo-a', dirty_files: ['stray.txt'] }] },
+  };
+}
+
 function child(overrides: Partial<RelationshipChildView> = {}): RelationshipChildView {
   return {
     id: 'child1234ef567890',
@@ -47,7 +62,6 @@ function child(overrides: Partial<RelationshipChildView> = {}): RelationshipChil
     startedAt: '2026-07-30T10:00:00Z',
     cost: { totalUsd: 0, byPhase: {} },
     integrationState: 'pending',
-    attention: [],
     cleanupWarnings: [],
     ...overrides,
   };
@@ -122,11 +136,11 @@ describe('classifyLane — active child pass', () => {
 });
 
 describe('classifyLane — pending attention', () => {
-  it('classifies any feature with a pending child attention entry as waiting, regardless of status', () => {
+  it('classifies any feature with a canonical child attention error as waiting, regardless of status', () => {
     const feature = snapshot('CodeReady', {
       activeChild: child({
         status: 'Implementing',
-        attention: [{ code: 'x', message: 'needs a look' }],
+        attention: parkedAttention(),
       }),
     });
     expect(classifyLane(feature)).toBe('waiting');
@@ -142,11 +156,11 @@ describe('classifyLane — pending attention', () => {
   // Most adversarial representable combination: the schema allows `status`
   // and `activeChild` to vary independently, so a parent already marked
   // Done can still carry an unresolved child pass. Attention wins.
-  it('classifies a Done parent with a pending child attention entry as waiting', () => {
+  it('classifies a Done parent with a canonical child attention error as waiting', () => {
     const feature = snapshot('Done', {
       activeChild: child({
         status: 'Implementing',
-        attention: [{ code: 'x', message: 'needs a look' }],
+        attention: parkedAttention(),
       }),
     });
     expect(classifyLane(feature)).toBe('waiting');

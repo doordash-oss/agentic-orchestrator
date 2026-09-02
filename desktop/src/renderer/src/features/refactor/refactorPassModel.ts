@@ -24,7 +24,6 @@ import {
   isPendingReviewStatus,
   type FeatureSnapshot,
   type RelationshipChildView,
-  type RelationshipTransactionView,
   type ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
 import { actionById, displayStatusLabel, isReadyToStart } from '../featureView';
@@ -51,35 +50,10 @@ export interface PassState {
   /** One sentence under the pass name: what is happening and what comes next. */
   sentence: string;
   tone: 'quiet' | 'live' | 'attention' | 'danger';
-  /** Repository-level diagnostics when integration parks (conflicts, dirt). */
-  problems?: string[];
 }
 
 const ACTIVE_TRANSACTION_PHASES = new Set(['preparing', 'prepared', 'applying']);
 const PARKED_TRANSACTION_PHASES = new Set(['attention', 'rolling_back', 'rolled_back']);
-
-function transactionProblems(transaction: RelationshipTransactionView): string[] {
-  const problems: string[] = [];
-  for (const entry of transaction.entries ?? []) {
-    const repo = entry.repo === undefined ? '' : `${entry.repo}: `;
-    if (entry.diagnostics !== undefined && entry.diagnostics !== '') {
-      problems.push(`${repo}${entry.diagnostics}`);
-    } else if (entry.conflictFiles !== undefined && entry.conflictFiles.length > 0) {
-      problems.push(`${repo}conflicts in ${entry.conflictFiles.join(', ')}`);
-    }
-    if (entry.cleanupWarning !== undefined && entry.cleanupWarning !== '') {
-      problems.push(`${repo}${entry.cleanupWarning}`);
-    }
-  }
-  if (
-    problems.length === 0 &&
-    transaction.attention !== undefined &&
-    transaction.attention !== ''
-  ) {
-    problems.push(transaction.attention);
-  }
-  return problems;
-}
 
 export function passState(child: FeatureSnapshot): PassState {
   const transaction = child.transaction;
@@ -95,14 +69,19 @@ export function passState(child: FeatureSnapshot): PassState {
     return { id: 'closed', sentence: 'The pass is closed without merging.', tone: 'quiet' };
   }
   if (transactionPhase !== undefined && PARKED_TRANSACTION_PHASES.has(transactionPhase)) {
+    // The attention card owns the parked condition: the attention phase
+    // renders no sentence at all, and rollback states keep a neutral
+    // progress sentence with no diagnostics.
+    if (transactionPhase === 'attention') {
+      return { id: 'integration-attention', sentence: '', tone: 'attention' };
+    }
     return {
       id: 'integration-attention',
       sentence:
-        transactionPhase === 'attention'
-          ? 'Integration needs attention. Review the repository details below.'
-          : 'Integration was rolled back. Review the repository details below.',
+        transactionPhase === 'rolling_back'
+          ? 'Integration is rolling back after a failed apply.'
+          : 'Integration rolled back after a failed apply. Retry runs it again.',
       tone: 'attention',
-      problems: transaction === undefined ? [] : transactionProblems(transaction),
     };
   }
   if (transactionPhase === 'applied') {
@@ -265,7 +244,7 @@ export function custodyStations(
 ): [CustodyStation, CustodyStation, CustodyStation] {
   const state = child === null ? null : passState(child);
   const attention =
-    view.attention.length > 0 || state?.tone === 'attention' || state?.tone === 'danger';
+    view.attention != null || state?.tone === 'attention' || state?.tone === 'danger';
   return [
     {
       id: 'parent',
@@ -329,7 +308,9 @@ function passActionLabel(id: PassAction['id'], child: FeatureSnapshot): string {
     case 'resume':
       return 'Resume';
     case 'retry':
-      return child.setup?.status === 'failed' ? 'Retry setup' : 'Retry';
+      if (child.setup?.status === 'failed') return 'Retry setup';
+      if (child.transaction?.attention != null) return 'Retry integration';
+      return 'Retry';
     case 'pause-stop':
       return 'Stop';
     case 'restart':
@@ -357,7 +338,7 @@ export function refactoringStatusChip(view: RelationshipChildView): {
   label: string;
   tone: 'info' | 'attention';
 } {
-  const attention = view.attention.length > 0 || view.integrationState === 'attention';
+  const attention = view.attention != null || view.integrationState === 'attention';
   const active = passActiveVerb(view.kind);
   return attention
     ? { label: `${active} — needs attention`, tone: 'attention' }

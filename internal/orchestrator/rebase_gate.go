@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
@@ -34,11 +35,22 @@ import (
 // change what the gate checks. Any violation aborts integration with a typed,
 // durable attention record and leaves every parent ref byte-identical.
 
+// rebaseGateFinding is one behind repo's gate violation: the progress-state
+// journal entry, the catalog code classifying the violation, the literal
+// marker files when known, and the raw one-line diagnostics.
+type rebaseGateFinding struct {
+	entry         feature.RepoTransactionEntry
+	code          errcat.Code
+	conflictFiles []string
+	diagnostics   string
+}
+
 // rebaseIntegrationGate verifies the persisted creation-time targets against
 // the child worktrees. It returns a non-nil TransactionJournal parked in the
-// attention phase when any behind repo violates the gate, carrying per-repo
-// diagnostics with stable GateCode values. It returns nil when every behind
-// repo satisfies the gate, allowing candidate preparation to proceed.
+// attention phase when any behind repo violates the gate, carrying the
+// per-repo entries plus one stored attention record built from every
+// violation. It returns nil when every behind repo satisfies the gate,
+// allowing candidate preparation to proceed.
 //
 // The gate checks, for each persisted behind repo:
 //   - the persisted creation-time target SHA is an ancestor of the child branch
@@ -47,55 +59,71 @@ import (
 //   - no tracked file carries literal conflict markers.
 //
 // A persisted behind-repo target missing its creation-time SHA fails closed
-// with a distinct diagnostic. Non-rebase child kinds are never gated.
+// with a distinct code. Non-rebase child kinds are never gated.
 func (o *Orchestrator) rebaseIntegrationGate(child *feature.Feature) *feature.TransactionJournal {
 	if child == nil || child.Parent == nil || child.Parent.Kind != feature.ChildKindRebase {
 		return nil
 	}
 
-	var entries []feature.RepoTransactionEntry
-	var summary []string
+	var findings []rebaseGateFinding
 	for _, repoName := range child.Parent.RebaseBehind {
-		entry, violation := o.evalRebaseGateRepo(child, repoName)
+		finding, violation := o.evalRebaseGateRepo(child, repoName)
 		if violation {
-			entries = append(entries, entry)
-			summary = append(summary, fmt.Sprintf("%s: %s", repoName, entry.Diagnostics))
+			findings = append(findings, finding)
 		}
 	}
 
-	if len(entries) == 0 {
+	if len(findings) == 0 {
 		return nil
 	}
 
-	attention := "rebase integration gate failed: " + strings.Join(summary, "; ")
-	return &feature.TransactionJournal{
-		Phase:     feature.TransactionPhaseAttention,
-		Entries:   entries,
-		Attention: attention,
+	journal := &feature.TransactionJournal{
+		Phase: feature.TransactionPhaseAttention,
 	}
+	integration := make([]integrationFinding, 0, len(findings))
+	for _, finding := range findings {
+		journal.Entries = append(journal.Entries, finding.entry)
+		integration = append(integration, integrationFinding{
+			ctx: integrationRepoContext{
+				Name:          finding.entry.Repo,
+				ConflictFiles: finding.conflictFiles,
+			},
+			code:       finding.code,
+			diagnostics: finding.diagnostics,
+		})
+	}
+	journal.Attention = findingsRecord(integration)
+	return journal
 }
 
 // rebaseGateFeedback runs the same per-repo mechanical checks as
 // rebaseIntegrationGate and formats any violations as fix-round feedback for
 // the implement loop, so a violation surfaces the moment the loop is about to
-// declare success instead of at integration. Empty string = every behind
-// repo satisfies the gate. Non-rebase features are never gated.
+// declare success instead of at integration. The feedback derives entirely
+// from the catalog — title, remediation hint, and conflict files. Empty
+// string = every behind repo satisfies the gate. Non-rebase features are
+// never gated.
 func (o *Orchestrator) rebaseGateFeedback(child *feature.Feature) string {
 	if child == nil || child.Parent == nil || child.Parent.Kind != feature.ChildKindRebase {
 		return ""
 	}
 	var b strings.Builder
 	for _, repoName := range child.Parent.RebaseBehind {
-		entry, violation := o.evalRebaseGateRepo(child, repoName)
+		finding, violation := o.evalRebaseGateRepo(child, repoName)
 		if !violation {
 			continue
 		}
-		fmt.Fprintf(&b, "- **Critical**: repo %s: %s\n", repoName, entry.Diagnostics)
-		if len(entry.ConflictFiles) > 0 {
-			fmt.Fprintf(&b, "  Conflicted files: %s\n", strings.Join(entry.ConflictFiles, ", "))
+		repos := []errcat.CodeRepository{{Name: repoName, ConflictFiles: finding.conflictFiles}}
+		rendered := errcat.New(
+			finding.code,
+			errcat.WithParams(errcat.IntegrationRepoParams{Repositories: repos}),
+		)
+		fmt.Fprintf(&b, "- **Critical**: repo %s: %s\n", repoName, rendered.Title)
+		if len(finding.conflictFiles) > 0 {
+			fmt.Fprintf(&b, "  Conflicted files: %s\n", strings.Join(finding.conflictFiles, ", "))
 		}
-		if fix := rebaseGateRemediation(entry.GateCode); fix != "" {
-			fmt.Fprintf(&b, "  Fix: %s\n", fix)
+		if rendered.Remediation != nil && rendered.Remediation.Hint != "" {
+			fmt.Fprintf(&b, "  Fix: %s\n", rendered.Remediation.Hint)
 		}
 	}
 	if b.Len() == 0 {
@@ -106,49 +134,34 @@ func (o *Orchestrator) rebaseGateFeedback(child *feature.Feature) string {
 		"repo's own worktree before declaring this phase complete.\n\n" + b.String()
 }
 
-// rebaseGateRemediation states what to do about a gate violation as a general
-// principle, keyed by the stable gate code.
-func rebaseGateRemediation(code string) string {
-	switch code {
-	case feature.GateCodeNotAncestor:
-		return "merge the persisted creation-time target commit into the child branch and commit the " +
-			"result; do not substitute a newer or re-resolved target."
-	case feature.GateCodeMergeInProgress:
-		return "finish or abort the in-progress merge/rebase sequencer so the worktree ends on a " +
-			"committed, conflict-free state."
-	case feature.GateCodeConflictMarkers:
-		return "resolve every conflict hunk, remove the literal markers, and commit the resolution."
-	default:
-		return ""
-	}
-}
-
 // evalRebaseGateRepo evaluates the gate for a single behind repo. It returns
-// the journal entry recording any violation and a bool reporting whether the
-// repo violated the gate. The entry's GateCode and Diagnostics classify the
-// failure; ConflictFiles is populated when literal markers are found.
-func (o *Orchestrator) evalRebaseGateRepo(child *feature.Feature, repoName string) (feature.RepoTransactionEntry, bool) {
+// the finding recording any violation (progress-state entry, catalog code,
+// conflict files, raw diagnostics) and a bool reporting whether the repo
+// violated the gate.
+func (o *Orchestrator) evalRebaseGateRepo(child *feature.Feature, repoName string) (rebaseGateFinding, bool) {
 	target, ok := child.RebaseTargetForRepo(repoName)
 	if !ok || target.TargetSHA == "" {
-		entry := feature.RepoTransactionEntry{
-			Repo:      repoName,
-			PrepState: feature.RepoPrepFailed,
-			GateCode:  feature.GateCodeMissingTargetSHA,
-			Diagnostics: "rebase gate: creation-time target SHA is missing for repo " +
+		return rebaseGateFinding{
+			entry: feature.RepoTransactionEntry{
+				Repo:      repoName,
+				PrepState: feature.RepoPrepFailed,
+			},
+			code: errcat.RebaseGateTargetMissing,
+			diagnostics: "rebase gate: creation-time target SHA is missing for repo " +
 				repoName + "; the child must be discarded and relaunched",
-		}
-		return entry, true
+		}, true
 	}
 
 	childRepo := featureRepoByName(child, repoName)
 	if childRepo == nil {
-		entry := feature.RepoTransactionEntry{
-			Repo:        repoName,
-			PrepState:   feature.RepoPrepFailed,
-			GateCode:    feature.GateCodeMissingTargetSHA,
-			Diagnostics: "rebase gate: child no longer has behind repo " + repoName,
-		}
-		return entry, true
+		return rebaseGateFinding{
+			entry: feature.RepoTransactionEntry{
+				Repo:      repoName,
+				PrepState: feature.RepoPrepFailed,
+			},
+			code:       errcat.RebaseGateTargetMissing,
+			diagnostics: "rebase gate: child no longer has behind repo " + repoName,
+		}, true
 	}
 
 	childWorktree := childRepo.WorktreePath
@@ -161,48 +174,54 @@ func (o *Orchestrator) evalRebaseGateRepo(child *feature.Feature, repoName strin
 	// child changes (committed later by candidate preparation) do not affect
 	// the check.
 	if !git.IsAncestor(childWorktree, target.TargetSHA, "HEAD") {
-		entry := feature.RepoTransactionEntry{
-			Repo:        repoName,
-			PrepState:   feature.RepoPrepFailed,
-			GateCode:    feature.GateCodeNotAncestor,
-			Diagnostics: fmt.Sprintf("rebase gate: creation-time target %s is not an ancestor of the child branch head (target SHA %s)", target.Target, target.TargetSHA),
-		}
-		return entry, true
+		return rebaseGateFinding{
+			entry: feature.RepoTransactionEntry{
+				Repo:      repoName,
+				PrepState: feature.RepoPrepFailed,
+			},
+			code: errcat.RebaseGateNotAncestor,
+			diagnostics: fmt.Sprintf("rebase gate: creation-time target %s is not an ancestor of the child branch head (target SHA %s)",
+				target.Target, target.TargetSHA),
+		}, true
 	}
 
 	// 2. No merge or rebase sequencer in progress in the child worktree.
 	if git.MergeInProgress(childWorktree) || git.RebaseInProgress(childWorktree) {
-		entry := feature.RepoTransactionEntry{
-			Repo:        repoName,
-			PrepState:   feature.RepoPrepFailed,
-			GateCode:    feature.GateCodeMergeInProgress,
-			Diagnostics: "rebase gate: a merge or rebase sequencer is in progress in the child worktree (MERGE_HEAD, rebase-merge, or rebase-apply present)",
-		}
-		return entry, true
+		return rebaseGateFinding{
+			entry: feature.RepoTransactionEntry{
+				Repo:      repoName,
+				PrepState: feature.RepoPrepFailed,
+			},
+			code: errcat.RebaseGateMergeInProgress,
+			diagnostics: "rebase gate: a merge or rebase sequencer is in progress in the child worktree " +
+				"(MERGE_HEAD, rebase-merge, or rebase-apply present)",
+		}, true
 	}
 
 	// 3. No literal conflict markers in tracked files. Fail closed on a scan
 	// error: the gate cannot prove the worktree is marker-free.
 	files, err := git.ConflictMarkerFiles(childWorktree)
 	if err != nil {
-		entry := feature.RepoTransactionEntry{
-			Repo:        repoName,
-			PrepState:   feature.RepoPrepFailed,
-			GateCode:    feature.GateCodeConflictMarkers,
-			Diagnostics: fmt.Sprintf("rebase gate: conflict marker scan failed (failing closed): %v", err),
-		}
-		return entry, true
+		return rebaseGateFinding{
+			entry: feature.RepoTransactionEntry{
+				Repo:      repoName,
+				PrepState: feature.RepoPrepFailed,
+			},
+			code: errcat.RebaseGateConflictMarkers,
+			diagnostics: fmt.Sprintf("rebase gate: conflict marker scan failed (failing closed): %v", err),
+		}, true
 	}
 	if len(files) > 0 {
-		entry := feature.RepoTransactionEntry{
-			Repo:          repoName,
-			PrepState:     feature.RepoPrepFailed,
-			GateCode:      feature.GateCodeConflictMarkers,
-			ConflictFiles: append([]string(nil), files...),
-			Diagnostics:   fmt.Sprintf("rebase gate: conflict markers remain in tracked files: %v", files),
-		}
-		return entry, true
+		return rebaseGateFinding{
+			entry: feature.RepoTransactionEntry{
+				Repo:      repoName,
+				PrepState: feature.RepoPrepFailed,
+			},
+			code:          errcat.RebaseGateConflictMarkers,
+			conflictFiles: append([]string(nil), files...),
+			diagnostics:   fmt.Sprintf("rebase gate: conflict markers remain in tracked files: %v", files),
+		}, true
 	}
 
-	return feature.RepoTransactionEntry{Repo: repoName}, false
+	return rebaseGateFinding{}, false
 }

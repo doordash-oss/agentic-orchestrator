@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
@@ -240,6 +242,20 @@ func multiRepoGit(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// attentionRepoBlock returns the attention record's repositories-block entry
+// for the named repository, or nil when the record or entry is absent.
+func attentionRepoBlock(rec *errcat.FailureRecord, repo string) *errcat.CodeRepository {
+	if rec == nil || rec.Context == nil {
+		return nil
+	}
+	for i := range rec.Context.Repositories {
+		if rec.Context.Repositories[i].Name == repo {
+			return &rec.Context.Repositories[i]
+		}
+	}
+	return nil
+}
+
 // --- Wrapping worktree managers for fault injection ---
 
 // raceInjectingWorktrees wraps *git.WorktreeManager and injects an external
@@ -427,8 +443,21 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 		t.Fatalf("RunChildIntegration() error = %v, want nil with drift attention", err)
 	}
 	_, child := fx.reload()
-	if entry := child.Parent.Transaction.EntryByRepo(child.Repos[1].Name); entry == nil || entry.GateCode != feature.GateCodeParentDrift {
-		t.Fatalf("repo 1: gate code = %+v, want %s", entry, feature.GateCodeParentDrift)
+	driftTx := child.Parent.Transaction
+	if driftTx == nil {
+		t.Fatal("transaction journal missing after drift park")
+	}
+	driftRec := driftTx.AttentionRecord()
+	if driftRec == nil || driftRec.Code != errcat.IntegrationParentRefDrift {
+		t.Fatalf("attention record = %+v, want code %s", driftRec, errcat.IntegrationParentRefDrift)
+	}
+	// The drift block carries the creation-time base as the anchor and the
+	// moved tip as the observed SHA.
+	if block := attentionRepoBlock(driftRec, child.Repos[1].Name); block == nil ||
+		block.ParentAnchorSHA != child.BaseSHA(child.Repos[1].Name) ||
+		block.ObservedSHA != preRefs[1] {
+		t.Fatalf("repo 1: drift repositories block = %+v, want anchor %s and observed %s",
+			block, child.BaseSHA(child.Repos[1].Name), preRefs[1])
 	}
 
 	// Acknowledged retry: hits the staged conflict on repo 1.
@@ -448,9 +477,13 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
-	entry := tx.EntryByRepo(child.Repos[1].Name)
-	if entry == nil || len(entry.ConflictFiles) == 0 {
-		t.Fatalf("repo 1: conflict files missing, entry = %+v", entry)
+	conflictRec := tx.AttentionRecord()
+	if conflictRec == nil || conflictRec.Code != errcat.IntegrationMergeConflict {
+		t.Fatalf("attention record = %+v, want code %s", conflictRec, errcat.IntegrationMergeConflict)
+	}
+	if block := attentionRepoBlock(conflictRec, child.Repos[1].Name); block == nil ||
+		!slices.Contains(block.ConflictFiles, "child.txt") {
+		t.Fatalf("repo 1: conflict files missing from repositories block, block = %+v", block)
 	}
 
 	// Resolve the conflict: change child.txt to match the parent's
@@ -527,8 +560,16 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	// Review invalidation wiped the journal, so the moved parent tips are
 	// re-observed as drift and park once more; the retry acknowledges them.
 	_, child = fx.reload()
-	if tx := child.Parent.Transaction; tx == nil || tx.Phase != feature.TransactionPhaseAttention {
+	tx = child.Parent.Transaction
+	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want drift attention after review renewal", tx)
+	}
+	if rec := tx.AttentionRecord(); rec == nil || rec.Code != errcat.IntegrationParentRefDrift {
+		t.Fatalf("attention record after review renewal = %+v, want code %s", rec, errcat.IntegrationParentRefDrift)
+	}
+	if block := attentionRepoBlock(tx.AttentionRecord(), child.Repos[0].Name); block == nil ||
+		block.ObservedSHA != newerRepo0Tip {
+		t.Fatalf("repo 0: drift repositories block = %+v, want observed SHA %s (newer parent tip)", block, newerRepo0Tip)
 	}
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("RunChildIntegration() acknowledging retry error = %v", err)
@@ -624,13 +665,14 @@ func TestRefactorChildTransactionalMultiRepoExternalRaceRollbackAndAttention(t *
 	if tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %q, want attention (externally moved unapplied target must be durable attention)", tx.Phase)
 	}
-	if tx.Attention == "" {
-		t.Fatal("transaction attention message is empty; want durable attention diagnostics")
+	raceRec := tx.AttentionRecord()
+	if raceRec == nil || raceRec.Code != errcat.IntegrationRefRace {
+		t.Fatalf("attention record = %+v, want code %s", raceRec, errcat.IntegrationRefRace)
 	}
 
-	// The raced entry must be in per-repo attention state with diagnostics
-	// naming the repository, target ref, expected old SHA, candidate SHA,
-	// and observed SHA.
+	// The raced entry must be in per-repo attention state, and the record's
+	// repositories block must carry its expected, candidate, and observed
+	// SHAs with raw diagnostics naming the repository, ref, and raced SHAs.
 	racedEntry := tx.EntryByRepo(child.Repos[2].Name)
 	if racedEntry == nil {
 		t.Fatal("raced repo entry missing from journal")
@@ -638,14 +680,28 @@ func TestRefactorChildTransactionalMultiRepoExternalRaceRollbackAndAttention(t *
 	if racedEntry.ApplyState != feature.RepoApplyAttention {
 		t.Fatalf("raced entry apply state = %q, want attention", racedEntry.ApplyState)
 	}
-	if racedEntry.Diagnostics == "" {
-		t.Fatal("raced entry diagnostics empty; want external race diagnostics naming repo, ref, expected, and observed SHA")
-	}
 	if racedEntry.ObservedSHA == "" {
 		t.Fatal("raced entry observed SHA empty; want the externally moved ref SHA")
 	}
 	if racedEntry.ObservedSHA == racedEntry.ExpectedRefSHA {
 		t.Fatal("raced entry observed SHA equals expected; want externally moved SHA")
+	}
+	if block := attentionRepoBlock(raceRec, racedEntry.Repo); block == nil ||
+		block.ExpectedRefSHA != racedEntry.ExpectedRefSHA ||
+		block.CandidateSHA != racedEntry.CandidateSHA ||
+		block.ObservedSHA != racedEntry.ObservedSHA {
+		t.Fatalf("raced repo repositories block = %+v, want entry SHAs (expected %s candidate %s observed %s)",
+			block, racedEntry.ExpectedRefSHA, racedEntry.CandidateSHA, racedEntry.ObservedSHA)
+	}
+	for _, needle := range []string{
+		racedEntry.Repo,
+		"refs/heads/" + racedEntry.ParentBranch,
+		racedEntry.ExpectedRefSHA,
+		racedEntry.ObservedSHA,
+	} {
+		if !strings.Contains(raceRec.Diagnostics, needle) {
+			t.Fatalf("attention diagnostics %q missing %q", raceRec.Diagnostics, needle)
+		}
 	}
 
 	// The rolled-back entries must be in rolled_back state, not attention.
@@ -929,6 +985,23 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 			t.Fatalf("phase = %+v, want attention", tx)
 		}
+		// Startup reconciliation classifies the externally moved ref as a
+		// ref race; the record's repositories block carries the entry's
+		// old, candidate, and observed SHAs.
+		if rec := tx.AttentionRecord(); rec == nil || rec.Code != errcat.IntegrationRefRace {
+			t.Fatalf("attention record = %+v, want code %s", rec, errcat.IntegrationRefRace)
+		}
+		movedEntry := tx.EntryByRepo(child.Repos[0].Name)
+		if movedEntry == nil {
+			t.Fatal("moved entry missing from journal")
+		}
+		if block := attentionRepoBlock(tx.AttentionRecord(), movedEntry.Repo); block == nil ||
+			block.ParentAnchorSHA != movedEntry.ParentAnchorSHA ||
+			block.CandidateSHA != movedEntry.CandidateSHA ||
+			block.ObservedSHA != externalSHA {
+			t.Fatalf("moved repo repositories block = %+v, want old %s candidate %s observed %s",
+				block, movedEntry.ParentAnchorSHA, movedEntry.CandidateSHA, externalSHA)
+		}
 	})
 
 	// Cut point: apply worktree-sync failure — the CAS succeeds for repo 1
@@ -1146,12 +1219,9 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 			}
 			if _, c := fx.reload(); c.Parent.Transaction != nil &&
 				c.Parent.Transaction.Phase == feature.TransactionPhaseAttention {
-				drifted := false
-				for _, entry := range c.Parent.Transaction.Entries {
-					drifted = drifted || entry.GateCode == feature.GateCodeParentDrift
-				}
-				if !drifted {
-					t.Fatalf("rollback fail at %d: attention without drift entries: %+v", tc.failAt, c.Parent.Transaction)
+				if code := c.Parent.Transaction.AttentionCode(); code != errcat.IntegrationParentRefDrift {
+					t.Fatalf("rollback fail at %d: attention code = %q, want %s (externally raced ref re-observed as drift): %+v",
+						tc.failAt, code, errcat.IntegrationParentRefDrift, c.Parent.Transaction)
 				}
 				if err := freshO.RunChildIntegration(fx.child.ID); err != nil {
 					t.Fatalf("RunChildIntegration acknowledging drift (fail at %d): %v", tc.failAt, err)

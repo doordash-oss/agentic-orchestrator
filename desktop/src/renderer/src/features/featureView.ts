@@ -82,7 +82,7 @@ export function dashboardState(snapshot: FeatureSnapshot): DashboardState {
   if (child !== undefined) {
     // A parent with an active refactor pass is in progress even though its
     // stored status stays Published/CodeReady while the pass is labeled "Refactoring".
-    if (child.attention.length > 0 || child.integrationState === 'attention') {
+    if (child.attention != null || child.integrationState === 'attention') {
       return { bucket: 'intervention', label: 'Refactoring — needs attention', tone: 'attention' };
     }
     if (child.status === 'Failed') {

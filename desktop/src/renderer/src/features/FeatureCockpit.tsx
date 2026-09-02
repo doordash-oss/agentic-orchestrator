@@ -297,6 +297,7 @@ interface CockpitMenuAction {
 function CockpitActionBar({
   status,
   statusOverride,
+  onStatusClick,
   primaryActions,
   menuActions,
   extraControls,
@@ -312,6 +313,12 @@ function CockpitActionBar({
   status: FeatureSnapshot['status'];
   /** Replaces the raw status label (e.g. "Refactoring" while a pass runs). */
   statusOverride?: { label: string; tone: 'info' | 'attention' };
+  /**
+   * When the override shows attention, the chip becomes a button that fires
+   * this handler — the pass workspace owns what it focuses (the
+   * integration-attention card). The chip itself renders no error text.
+   */
+  onStatusClick?: () => void;
   primaryActions: CockpitPrimaryAction[];
   menuActions: CockpitMenuAction[];
   extraControls?: ReactNode;
@@ -321,7 +328,7 @@ function CockpitActionBar({
   onOpenInspector(): void;
   /** Whether the wide-layout trailing split-view pane is currently open. */
   inspectorOpen: boolean;
-  /** Wide-only: flips the trailing split-view pane open/closed. */
+  /** Wide-only: flips the trailing split-view pane open/close. */
   onToggleInspector(): void;
   actionsHost?: HTMLElement | null;
   inspectorToggleHost?: HTMLElement | null;
@@ -334,16 +341,35 @@ function CockpitActionBar({
 
   useDetailsDismiss(menuRef, '.cockpit__overflow-summary');
 
+  const statusIsAttention = statusOverride?.tone === 'attention' && onStatusClick !== undefined;
+  const statusChip = statusIsAttention ? (
+    <button
+      type="button"
+      className="cockpit__phase-status cockpit__phase-status--button"
+      aria-label={`${statusOverride?.label}. Focus the pass attention card.`}
+      onClick={onStatusClick}
+    >
+      <code
+        data-status={status}
+        {...(statusOverride === undefined ? {} : { 'data-tone': statusOverride.tone })}
+      >
+        {statusOverride?.label ?? displayStatusLabel(status)}
+      </code>
+    </button>
+  ) : (
+    <p className="cockpit__phase-status" role="status" aria-label="Current feature status">
+      <code
+        data-status={status}
+        {...(statusOverride === undefined ? {} : { 'data-tone': statusOverride.tone })}
+      >
+        {statusOverride?.label ?? displayStatusLabel(status)}
+      </code>
+    </p>
+  );
+
   const actionsInner = (
     <>
-      <p className="cockpit__phase-status" role="status" aria-label="Current feature status">
-        <code
-          data-status={status}
-          {...(statusOverride === undefined ? {} : { 'data-tone': statusOverride.tone })}
-        >
-          {statusOverride?.label ?? displayStatusLabel(status)}
-        </code>
-      </p>
+      {statusChip}
       {primaryActions.map((action) => (
         <button
           key={action.key}
@@ -2098,6 +2124,7 @@ export function FeatureCockpit({
               <CockpitActionBar
                 status={snapshot.status}
                 statusOverride={refactoringStatusChip(snapshot.activeChild)}
+                onStatusClick={refactorPass.focusAttentionCard}
                 primaryActions={refactorPass.actions.map((action) => ({
                   key: `pass-${action.id}`,
                   label: action.label,

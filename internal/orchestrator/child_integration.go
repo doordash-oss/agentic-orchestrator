@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -227,7 +228,7 @@ func (o *Orchestrator) runTransactionIntegration(childID string, child, parent *
 	// remaining applied entries. On completion the journal transitions
 	// to rolled_back or attention.
 	if journal != nil && journal.Phase == feature.TransactionPhaseRollingBack {
-		if err := o.rollbackTransaction(child, parent, journal, -1); err != nil {
+		if err := o.rollbackTransaction(child, parent, journal, -1, nil); err != nil {
 			return err
 		}
 		var err error
@@ -380,20 +381,23 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 		}
 		if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.CandidateSHA); err != nil {
 			syncErr := fmt.Errorf("syncing parent worktree for repo %s: %w", entry.Repo, err)
-			// The transaction journal's pending-sync diagnostic and the
-			// relationship event own this failure; the child's run carries
-			// no failure record until a later phase classifies it.
-			o.emitEvent(ports.Event{
-				Type:      ports.RelationshipIntegrationChanged,
-				FeatureID: childID,
-				ParentID:  parentID,
-				ChildID:   childID,
-				Message:   "child integration needs attention: " + syncErr.Error(),
-			})
+			// The journal's attention record and the relationship event own
+			// this failure; the phase stays applied so recovery semantics
+			// are unchanged and the pass remains resumable, and the child's
+			// run carries no failure record until a later phase classifies
+			// it.
+			finding := integrationFinding{
+				ctx:         repoContextFromEntry(entry),
+				code:        errcat.IntegrationWorktreeSyncFailed,
+				diagnostics: syncErr.Error(),
+			}
+			if err := o.parkIntegrationAttention(child, journal, []integrationFinding{finding}); err != nil {
+				return fmt.Errorf("recording closure sync attention: %w", err)
+			}
 			return syncErr
 		}
-		if strings.HasPrefix(entry.Diagnostics, "worktree sync pending after apply for repo ") {
-			entry.Diagnostics = ""
+		if entry.PendingSync {
+			entry.PendingSync = false
 			if err := o.persistTransaction(childID, journal); err != nil {
 				return fmt.Errorf("clearing pending worktree sync for repo %s: %w", entry.Repo, err)
 			}
@@ -413,8 +417,11 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 		return fmt.Errorf("close child relationship: %w", err)
 	}
 
-	// Persist the merged phase AFTER both transitions are durable.
+	// Persist the merged phase AFTER both transitions are durable. Closure
+	// succeeded, so the journal carries no attention record and no pending
+	// sync flag.
 	journal.Phase = feature.TransactionPhaseMerged
+	journal.Attention = nil
 	if err := o.persistTransaction(childID, journal); err != nil {
 		return fmt.Errorf("recording merged transaction: %w", err)
 	}

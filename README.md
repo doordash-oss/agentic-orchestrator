@@ -197,8 +197,8 @@ defaults:
     review: "gpt-5.4[272K]"      # Model for review phase (Codex)
     utilities: "sonnet[200K]"    # Model for chat and utility tasks
     kb_build: "sonnet[200K]"     # Model for knowledge base builds
-    automatic_review: ""         # Empty selects Automatic
-  automatic_review_enabled: false
+    automatic_review: ""         # Reviewer that screens shell commands; empty selects Automatic
+  automatic_review_enabled: true # Auto-approve safe shell commands (default on)
   exit_criteria: |
     - Feature fully implemented per plan
     - Unit tests added/updated as needed

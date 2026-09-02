@@ -303,7 +303,7 @@ export class ConfigService {
       checkpoints: toCheckpoints(defaults.checkpoints ?? {}),
       pipeline: defaults.pipeline ?? '',
       muteFeatureInput: parsed.data.notifications?.mute_feature_input ?? false,
-      automaticReviewEnabled: defaults.automatic_review_enabled ?? false,
+      automaticReviewEnabled: defaults.automatic_review_enabled ?? true,
     };
   }
 

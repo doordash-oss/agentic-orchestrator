@@ -21,17 +21,17 @@ import (
 	"testing"
 )
 
-func TestAutomaticReviewDefaultsDisabledAndEmpty(t *testing.T) {
+func TestAutomaticReviewDefaultsEnabledAndEmpty(t *testing.T) {
 	cfg := NewDefault()
-	if cfg.Defaults.AutomaticReviewEnabled {
-		t.Errorf("NewDefault AutomaticReviewEnabled = true, want false")
+	if !cfg.Defaults.AutomaticReviewEnabled {
+		t.Errorf("NewDefault AutomaticReviewEnabled = false, want true")
 	}
 	if cfg.Defaults.Models.AutomaticReview != "" {
 		t.Errorf("NewDefault AutomaticReview = %q, want empty (Automatic)", cfg.Defaults.Models.AutomaticReview)
 	}
 }
 
-func TestAutomaticReviewAbsentLegacyLoadsDisabled(t *testing.T) {
+func TestAutomaticReviewAbsentLegacyLoadsEnabled(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	legacy := `
@@ -47,8 +47,8 @@ defaults:
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Defaults.AutomaticReviewEnabled {
-		t.Errorf("absent legacy AutomaticReviewEnabled = true, want false")
+	if !cfg.Defaults.AutomaticReviewEnabled {
+		t.Errorf("absent legacy AutomaticReviewEnabled = false, want true")
 	}
 	if cfg.Defaults.Models.AutomaticReview != "" {
 		t.Errorf("absent legacy AutomaticReview = %q, want empty", cfg.Defaults.Models.AutomaticReview)

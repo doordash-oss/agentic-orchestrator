@@ -101,11 +101,31 @@ type DefaultsConfig struct {
 	MaxConsecutiveNoProgress int                           `yaml:"max_consecutive_no_progress" json:"max_consecutive_no_progress,omitempty"`
 	MaxPhasePlanIterations   int                           `yaml:"max_phase_plan_iterations,omitempty" json:"max_phase_plan_iterations,omitempty"`
 	Checkpoints              Checkpoints                   `yaml:"checkpoints" json:"checkpoints"`
-	// AutomaticReviewEnabled controls the default-off workspace behavior that
-	// lets an isolated reviewer classify a narrow set of Bash commands. An
-	// absent or false flag means disabled; it is never seeded by applyDefaults so
-	// legacy configs load as disabled without altering established defaults.
-	AutomaticReviewEnabled bool `yaml:"automatic_review_enabled,omitempty" json:"automatic_review_enabled,omitempty"`
+	// AutomaticReviewEnabled lets an isolated reviewer model screen Bash
+	// commands the session would otherwise pause on, auto-approving safe ones.
+	// Default-on: an absent key loads as enabled (see UnmarshalYAML), so the
+	// key is always written explicitly to keep a saved false stable.
+	AutomaticReviewEnabled bool `yaml:"automatic_review_enabled" json:"automatic_review_enabled"`
+}
+
+// UnmarshalYAML defaults an omitted automatic_review_enabled to true.
+func (d *DefaultsConfig) UnmarshalYAML(value *yaml.Node) error {
+	type plain DefaultsConfig
+	var p plain
+	if err := value.Decode(&p); err != nil {
+		return err
+	}
+	var probe struct {
+		AutomaticReviewEnabled *bool `yaml:"automatic_review_enabled"`
+	}
+	if err := value.Decode(&probe); err != nil {
+		return err
+	}
+	*d = DefaultsConfig(p)
+	if probe.AutomaticReviewEnabled == nil {
+		d.AutomaticReviewEnabled = true
+	}
+	return nil
 }
 
 // PipelinePreference stores the last-used feature-creation settings for a

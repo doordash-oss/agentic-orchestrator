@@ -36,22 +36,24 @@ defaults:
 
 ## Automatic Bash Review
 
-Automatic Bash review uses two workspace keys:
+The desktop app labels this **Auto-approve safe commands** and its reviewer
+model **Command reviewer**. It uses two workspace keys:
 
 ```yaml
 defaults:
-  automatic_review_enabled: false
+  automatic_review_enabled: true
   models:
     automatic_review: ""
 ```
 
 The full names are `defaults.automatic_review_enabled` and
-`defaults.models.automatic_review`. The feature is disabled by default. When
-the enabled key is absent, as in a legacy config, it remains disabled; a
-missing reviewer-model key has the same empty **Automatic** value as a fresh
-config. The workspace Models row remains editable while automatic review is
-disabled; saved changes apply only to new sessions because each session
-snapshots the enabled flag and resolved reviewer.
+`defaults.models.automatic_review`. The feature is enabled by default. When
+the enabled key is absent, as in a legacy config, it loads as enabled; set it
+to `false` explicitly to opt out. A missing reviewer-model key has the same
+empty **Automatic** value as a fresh config. The workspace Models row remains
+editable while automatic review is disabled; saved changes apply only to new
+sessions because each session snapshots the enabled flag and resolved
+reviewer.
 
 Automatic selection uses the fixed provider order Claude → OpenCode → Codex
 and chooses the first eligible provider's preferred cheap model. A
@@ -94,8 +96,8 @@ everything else, the reviewer model's judgment is the boundary before the
 human, and that reviewer is a fallible, promptable component. Repo-controlled
 build and test code is trusted-by-design: a fast-pathed command such as
 `make test` or `go generate` may execute Makefiles, `package.json` scripts,
-`//go:generate` directives, or `conftest.py`. Enable automatic review only
-when that tradeoff is acceptable.
+`//go:generate` directives, or `conftest.py`. Disable automatic review if
+that tradeoff is not acceptable.
 
 ### Reviewer and lifecycle contract
 

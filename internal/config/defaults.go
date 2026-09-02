@@ -41,6 +41,7 @@ func NewDefault() *Config {
 				PhasePlanReview: true,
 				ManualPublish:   true,
 			},
+			AutomaticReviewEnabled:   true,
 			ExitCriteria:             defaultExitCriteria,
 			Inquireness:              "high",
 			Pipeline:                 "large",

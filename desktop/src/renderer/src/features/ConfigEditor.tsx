@@ -63,9 +63,9 @@ export const PHASE_FIELDS: ReadonlyArray<PhaseField> = [
   { key: 'kbBuild', label: 'KB Build', role: 'kb_build', hint: 'Knowledge base construction' },
   {
     key: 'automaticReview',
-    label: 'Automatic review',
+    label: 'Command reviewer',
     role: 'automatic_review',
-    hint: 'Reviewer for unresolved Bash permission requests',
+    hint: 'Model that screens shell commands for auto-approval',
     workspaceOnly: true,
     supportsEffort: false,
   },
@@ -569,11 +569,11 @@ function ConfigForm({
           </select>
         </label>
         <label className="config-editor__row">
-          <span className="config-editor__row-label">Automatic review</span>
+          <span className="config-editor__row-label">Auto-approve safe commands</span>
           <span className="config-editor__row-hint">{automaticReview.hint}</span>
           <select
             className="config-editor__select"
-            aria-label="Automatic review"
+            aria-label="Auto-approve safe commands"
             value={automaticReview.value}
             onChange={(event) => onAutomaticReviewChange(event.target.value)}
           >
@@ -795,7 +795,7 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
         inputAlerts={{ value: draft.inputNotifications, options: FEATURE_ALERT_OPTIONS }}
         automaticReview={{
           value: draft.automaticReviewMode,
-          hint: 'Override the workspace default for new sessions in this feature',
+          hint: 'Override the workspace setting for new sessions in this feature',
           options: FEATURE_AUTOMATIC_REVIEW_OPTIONS,
         }}
         onChange={(next) => setDraft({ ...draft, ...next })}
@@ -921,7 +921,7 @@ export function WorkspaceDefaultsPanel({
         }}
         automaticReview={{
           value: draft.automaticReviewEnabled ? 'enabled' : 'disabled',
-          hint: 'Automatically review unresolved Bash requests for new sessions',
+          hint: 'A separate reviewer model screens shell commands that would pause for you. Safe ones run; risky ones still ask.',
           options: WORKSPACE_AUTOMATIC_REVIEW_OPTIONS,
         }}
         onChange={(next) => setDraft({ ...draft, ...next })}

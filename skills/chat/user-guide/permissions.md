@@ -19,7 +19,7 @@ Session policy can approve categories such as:
 - delegated agent work; and
 - read-only git commands such as `git status`, `git diff`, `git log`, and `git show`.
 
-When the optional Automatic Bash review feature is enabled, an unresolved
+With Automatic Bash review (on by default), an unresolved
 canonical Bash request first checks a deterministic fast path. Curated
 build/test commands auto-approve without a model. Every other reviewable
 command reaches one model review—including dangerous commands such as

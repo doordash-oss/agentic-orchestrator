@@ -286,7 +286,9 @@ export class AttentionService {
       ...(input.decision === 'allow_remember'
         ? { remember_pattern: input.rememberPattern, remember_scope: input.rememberScope }
         : {}),
-      ...(input.autoApproveScope === undefined ? {} : { auto_approve_scope: input.autoApproveScope }),
+      ...(input.autoApproveScope === undefined
+        ? {}
+        : { auto_approve_scope: input.autoApproveScope }),
     });
   }
   async answerQuestions(request: AskUserAnswerRequest): Promise<AttentionActionResult> {

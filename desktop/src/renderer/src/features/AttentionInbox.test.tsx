@@ -205,7 +205,9 @@ describe('permission auto-approve offer', () => {
     const mock = installAgenticoMock();
     const user = userEvent.setup();
     render(
-      <PermissionDetailHarness item={{ ...permissionItem, autoApprove: { wouldFastPath: true } }} />,
+      <PermissionDetailHarness
+        item={{ ...permissionItem, autoApprove: { wouldFastPath: true } }}
+      />,
     );
     const offer = screen.getByRole('group', { name: 'Auto-approve commands' });
     expect(within(offer).getByText(/would have run without asking/)).toBeVisible();

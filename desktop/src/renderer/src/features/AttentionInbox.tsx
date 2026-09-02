@@ -393,7 +393,9 @@ function AutoApproveOffer({
           <button
             className="attention-button"
             disabled={busy}
-            onClick={() => answer('feature', 'Allowed. Auto-approve commands is on for this feature.')}
+            onClick={() =>
+              answer('feature', 'Allowed. Auto-approve commands is on for this feature.')
+            }
           >
             Allow and auto-approve in this feature
           </button>
@@ -401,7 +403,9 @@ function AutoApproveOffer({
         <button
           className="attention-button"
           disabled={busy}
-          onClick={() => answer('workspace', 'Allowed. Auto-approve commands is on for the workspace.')}
+          onClick={() =>
+            answer('workspace', 'Allowed. Auto-approve commands is on for the workspace.')
+          }
         >
           Allow and auto-approve everywhere
         </button>

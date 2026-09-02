@@ -388,7 +388,7 @@ function AutoApproveOffer({
           : 'Auto-approve commands is off. With it on, a reviewer model would have decided this without asking.'}{' '}
         You can change it later in the feature configuration or in Settings › Workspace defaults.
       </p>
-      <div className="attention-detail__actions">
+      <div className="attention-detail__auto-approve-actions">
         {item.featureId !== undefined ? (
           <button
             className="attention-button"

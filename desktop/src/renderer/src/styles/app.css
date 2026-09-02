@@ -3680,6 +3680,12 @@ body {
   font-size: 13px;
 }
 
+.attention-detail__auto-approve-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
 .attention-detail__tasks {
   margin: 0;
   padding-left: var(--space-4);

@@ -147,6 +147,9 @@ export class AttentionService {
                   scopeDisplay: request.remember.scope_display,
                 },
               }),
+          ...(request.auto_approve === undefined
+            ? {}
+            : { autoApprove: { wouldFastPath: request.auto_approve.would_fast_path } }),
         })),
       ...promptsRaw.ask_user_questions
         .filter(
@@ -283,6 +286,9 @@ export class AttentionService {
       ...(input.decision === 'allow_remember'
         ? { remember_pattern: input.rememberPattern, remember_scope: input.rememberScope }
         : {}),
+      ...(input.autoApproveScope === undefined
+        ? {}
+        : { auto_approve_scope: input.autoApproveScope }),
     });
   }
   async answerQuestions(request: AskUserAnswerRequest): Promise<AttentionActionResult> {

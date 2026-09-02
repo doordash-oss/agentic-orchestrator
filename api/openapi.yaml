@@ -1592,6 +1592,12 @@ components:
           enum: [allow_once, allow_remember, deny]
         remember_pattern:
           type: string
+        auto_approve_scope:
+          type: string
+          enum: [feature, workspace]
+          description: >-
+            Turn automatic Bash review on for the request's feature or for the
+            whole workspace before answering. Not allowed with deny.
         remember_scope:
           type: string
           description: Existing permission cache scope. Empty string means global.
@@ -4686,6 +4692,19 @@ components:
         remember:
           $ref: "#/components/schemas/PermissionRememberPreview"
           x-go-type-skip-optional-pointer: false
+        auto_approve:
+          $ref: "#/components/schemas/PermissionAutoApproveOffer"
+          x-go-type-skip-optional-pointer: false
+    PermissionAutoApproveOffer:
+      type: object
+      description: >-
+        Present when automatic Bash review is off for the session but would
+        have handled this request had it been on.
+      required: [would_fast_path]
+      properties:
+        would_fast_path:
+          type: boolean
+          description: The deterministic guardrail alone would have approved the command.
     SessionDetail:
       allOf:
         - $ref: "#/components/schemas/SessionSummary"

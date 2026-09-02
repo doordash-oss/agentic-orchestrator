@@ -132,7 +132,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(header).not.toBeNull();
     expect(within(header!).getByLabelText('SettingUpWorktrees')).toBeInTheDocument();
     expect(within(header!).getByText('feature/search-revamp')).toBeInTheDocument();
-    expect(within(header!).queryByText('Automatic review')).not.toBeInTheDocument();
+    expect(within(header!).queryByText('Auto mode')).not.toBeInTheDocument();
     expect(within(header!).queryByText('Repository')).not.toBeInTheDocument();
   });
 

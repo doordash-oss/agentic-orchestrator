@@ -70,16 +70,16 @@ func (e AutomaticReviewStateMode) Valid() bool {
 
 // Defines values for AutomaticReviewStateSource.
 const (
-	Feature AutomaticReviewStateSource = "feature"
-	Global  AutomaticReviewStateSource = "global"
+	AutomaticReviewStateSourceFeature AutomaticReviewStateSource = "feature"
+	AutomaticReviewStateSourceGlobal  AutomaticReviewStateSource = "global"
 )
 
 // Valid indicates whether the value is a known member of the AutomaticReviewStateSource enum.
 func (e AutomaticReviewStateSource) Valid() bool {
 	switch e {
-	case Feature:
+	case AutomaticReviewStateSourceFeature:
 		return true
-	case Global:
+	case AutomaticReviewStateSourceGlobal:
 		return true
 	default:
 		return false
@@ -224,6 +224,24 @@ func (e NeedUserInputVerificationAction) Valid() bool {
 	case RETRYAFTERAUTH:
 		return true
 	case WAIVE:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PermissionAnswerRequestAutoApproveScope.
+const (
+	PermissionAnswerRequestAutoApproveScopeFeature   PermissionAnswerRequestAutoApproveScope = "feature"
+	PermissionAnswerRequestAutoApproveScopeWorkspace PermissionAnswerRequestAutoApproveScope = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the PermissionAnswerRequestAutoApproveScope enum.
+func (e PermissionAnswerRequestAutoApproveScope) Valid() bool {
+	switch e {
+	case PermissionAnswerRequestAutoApproveScopeFeature:
+		return true
+	case PermissionAnswerRequestAutoApproveScopeWorkspace:
 		return true
 	default:
 		return false
@@ -1328,17 +1346,19 @@ type Context struct {
 
 // ControlRequest defines model for ControlRequest.
 type ControlRequest struct {
-	FeatureID    string                     `json:"feature_id,omitempty"`
-	Input        map[string]interface{}     `json:"input,omitempty"`
-	Phase        string                     `json:"phase,omitempty"`
-	Questions    []AskUserQuestion          `json:"questions,omitempty"`
-	Remember     *PermissionRememberPreview `json:"remember,omitempty"`
-	RequestID    string                     `json:"request_id"`
-	SessionID    string                     `json:"session_id,omitempty"`
-	Status       string                     `json:"status"`
-	Summary      string                     `json:"summary,omitempty"`
-	ToolName     string                     `json:"tool_name"`
-	WaitingSince time.Time                  `json:"waiting_since"`
+	// AutoApprove Present when automatic Bash review is off for the session but would have handled this request had it been on.
+	AutoApprove  *PermissionAutoApproveOffer `json:"auto_approve,omitempty"`
+	FeatureID    string                      `json:"feature_id,omitempty"`
+	Input        map[string]interface{}      `json:"input,omitempty"`
+	Phase        string                      `json:"phase,omitempty"`
+	Questions    []AskUserQuestion           `json:"questions,omitempty"`
+	Remember     *PermissionRememberPreview  `json:"remember,omitempty"`
+	RequestID    string                      `json:"request_id"`
+	SessionID    string                      `json:"session_id,omitempty"`
+	Status       string                      `json:"status"`
+	Summary      string                      `json:"summary,omitempty"`
+	ToolName     string                      `json:"tool_name"`
+	WaitingSince time.Time                   `json:"waiting_since"`
 }
 
 // Cost defines model for Cost.
@@ -1847,14 +1867,19 @@ type Owner struct {
 
 // PermissionAnswerSchema defines model for PermissionAnswerRequest.
 type PermissionAnswerSchema struct {
-	Decision        PermissionAnswerRequestDecision `json:"decision"`
-	RememberPattern string                          `json:"remember_pattern,omitempty"`
+	// AutoApproveScope Turn automatic Bash review on for the request's feature or for the whole workspace before answering. Not allowed with deny.
+	AutoApproveScope PermissionAnswerRequestAutoApproveScope `json:"auto_approve_scope,omitempty"`
+	Decision         PermissionAnswerRequestDecision         `json:"decision"`
+	RememberPattern  string                                  `json:"remember_pattern,omitempty"`
 
 	// RememberScope Existing permission cache scope. Empty string means global.
 	RememberScope *string `json:"remember_scope,omitempty"`
 	RequestID     string  `json:"request_id"`
 	SessionID     string  `json:"session_id,omitempty"`
 }
+
+// PermissionAnswerRequestAutoApproveScope Turn automatic Bash review on for the request's feature or for the whole workspace before answering. Not allowed with deny.
+type PermissionAnswerRequestAutoApproveScope string
 
 // PermissionAnswerRequestDecision defines model for PermissionAnswerRequest.Decision.
 type PermissionAnswerRequestDecision string
@@ -1869,6 +1894,12 @@ type PermissionAnswerResponse struct {
 	RequestID      string       `json:"request_id"`
 	Result         string       `json:"result"`
 	SessionID      string       `json:"session_id"`
+}
+
+// PermissionAutoApproveOffer Present when automatic Bash review is off for the session but would have handled this request had it been on.
+type PermissionAutoApproveOffer struct {
+	// WouldFastPath The deterministic guardrail alone would have approved the command.
+	WouldFastPath bool `json:"would_fast_path"`
 }
 
 // PermissionRememberPreview defines model for PermissionRememberPreview.

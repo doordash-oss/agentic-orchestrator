@@ -260,7 +260,15 @@ type PermissionAnswerRequest struct {
 	Decision        string  `json:"decision"`
 	RememberPattern string  `json:"remember_pattern,omitempty"`
 	RememberScope   *string `json:"remember_scope,omitempty"`
+	// AutoApproveScope turns automatic Bash review on for the request's
+	// feature ("feature") or the workspace ("workspace") before answering.
+	AutoApproveScope string `json:"auto_approve_scope,omitempty"`
 }
+
+const (
+	AutoApproveScopeFeature   = "feature"
+	AutoApproveScopeWorkspace = "workspace"
+)
 
 type AskUserAnswerRequest struct {
 	RequestID string            `json:"request_id"`
@@ -1286,6 +1294,16 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 	}
 	if req.Decision == decisionAllowRemember && req.RememberScope == nil {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "remember_scope is required for allow_remember", nil)
+		return
+	}
+	switch req.AutoApproveScope {
+	case "", AutoApproveScopeFeature, AutoApproveScopeWorkspace:
+	default:
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "auto_approve_scope must be feature or workspace", nil)
+		return
+	}
+	if req.AutoApproveScope != "" && req.Decision == decisionDeny {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "auto_approve_scope cannot be combined with deny", nil)
 		return
 	}
 	resp, err := h.mutations.AnswerPermission(req)

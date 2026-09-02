@@ -1446,6 +1446,7 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 		s.respondToControlViaProtocol(req.RequestID, false, nil, decision.Reason)
 		return true
 	case "":
+		req.AutoApproveOffer = decision.AutoApproveOffer
 		return false
 	default:
 		s.respondToControlViaProtocol(req.RequestID, true, req.Request.Input, "")

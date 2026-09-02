@@ -17,10 +17,12 @@ import {
   isSyntheticHelpItem,
   type AttentionActionResult,
   type AttentionItem,
+  type AutoApproveScope,
   type VerificationGateAction,
 } from '../../../shared/ipc';
-import { BellIcon } from '../components/icons';
+import { BellIcon, ChevronDownIcon } from '../components/icons';
 import { ToolbarPopover, ToolbarPopoverAnchor } from '../components/ToolbarPopover';
+import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import {
   hasStructuredVerificationDecision,
   NeedUserInputVerificationDecision,
@@ -351,6 +353,85 @@ export function AttentionInbox({
   );
 }
 
+/**
+ * Split button offered on a Bash prompt when auto mode is off but would have
+ * handled the request. The main action allows the command and turns auto mode
+ * on for this feature; the chevron menu offers the workspace-wide choice.
+ * Running sessions pick the change up on their next command.
+ */
+function AutoModeSplitButton({
+  item,
+  busy,
+  submit,
+}: {
+  item: Extract<AttentionItem, { kind: 'permission' }>;
+  busy: boolean;
+  submit(action: AttentionAction, options?: AttentionSubmitOptions): void;
+}) {
+  const menuRef = useRef<HTMLDetailsElement>(null);
+  useDetailsDismiss(menuRef, '.attention-split__toggle');
+  const offer = item.autoApprove;
+  if (offer === undefined) return null;
+  const answer = (scope: AutoApproveScope) => {
+    if (menuRef.current !== null) menuRef.current.open = false;
+    submit(
+      () =>
+        window.agentico.answerPermission({
+          requestId: item.id,
+          ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
+          decision: 'allow_once',
+          autoApproveScope: scope,
+        }),
+      {
+        successNotice:
+          scope === 'feature'
+            ? 'Allowed. Auto mode is on for this feature.'
+            : 'Allowed. Auto mode is on for all features.',
+      },
+    );
+  };
+  const why = offer.wouldFastPath
+    ? 'Auto mode would have approved this command on its own: it matches the safe build and test fast path.'
+    : 'Auto mode would have sent this command to a reviewer model, which approves it or hands it back to you.';
+  const featureScoped = item.featureId !== undefined;
+  return (
+    <div className="attention-split" role="group" aria-label="Enable auto mode">
+      <button
+        className="attention-button attention-split__main"
+        disabled={busy}
+        title={`${why} Allows this command now and turns auto mode on${featureScoped ? ' for this feature' : ' for all features'}.`}
+        onClick={() => answer(featureScoped ? 'feature' : 'workspace')}
+      >
+        {featureScoped ? 'Enable auto mode (this feature only)' : 'Enable auto mode (all features)'}
+      </button>
+      {featureScoped ? (
+        <details ref={menuRef} className="attention-split__more">
+          <summary
+            className="attention-button attention-split__toggle"
+            aria-label="More auto mode options"
+            aria-disabled={busy}
+          >
+            <ChevronDownIcon className="attention-split__chevron" aria-hidden="true" />
+          </summary>
+          <div className="attention-split__menu" role="menu" aria-label="Auto mode scope">
+            <button
+              type="button"
+              role="menuitem"
+              className="attention-split__item"
+              disabled={busy}
+              title={`${why} Allows this command now and turns auto mode on for all features.`}
+              onClick={() => answer('workspace')}
+            >
+              Enable auto mode (all features)
+              <small>Safe commands run; a reviewer model screens the rest</small>
+            </button>
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 export function AttentionDetail({
   item,
   busy,
@@ -418,6 +499,9 @@ export function AttentionDetail({
           >
             Deny
           </button>
+          {item.autoApprove !== undefined ? (
+            <AutoModeSplitButton item={item} busy={busy} submit={submit} />
+          ) : null}
           {item.remember !== undefined ? (
             <button
               className="attention-button"

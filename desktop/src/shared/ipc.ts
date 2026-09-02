@@ -1872,7 +1872,11 @@ export const AttentionPermissionSchema = z.strictObject({
       scopeDisplay: z.string().max(4096),
     })
     .optional(),
+  /** Present when auto-approve commands is off but would have handled this request. */
+  autoApprove: z.strictObject({ wouldFastPath: z.boolean() }).optional(),
 });
+export const AutoApproveScopeSchema = z.enum(['feature', 'workspace']);
+export type AutoApproveScope = z.output<typeof AutoApproveScopeSchema>;
 export const AttentionQuestionBundleSchema = z.strictObject({
   kind: z.literal('questions'),
   id: AttentionIDSchema,
@@ -2017,6 +2021,8 @@ export const PermissionDecisionRequestSchema = z.strictObject({
   decision: z.enum(['allow_once', 'allow_remember', 'deny']),
   rememberPattern: z.string().max(4096).optional(),
   rememberScope: z.string().max(4096).optional(),
+  /** Turn auto-approve commands on for the feature or workspace before allowing. */
+  autoApproveScope: AutoApproveScopeSchema.optional(),
 });
 export type PermissionDecisionRequest = z.output<typeof PermissionDecisionRequestSchema>;
 export const AskUserAnswerRequestSchema = z.strictObject({

@@ -149,7 +149,7 @@ describe('FeatureConfigPanel', () => {
     render(<FeatureConfigPanel featureId="feat-1" />);
     const user = userEvent.setup();
 
-    const picker = await screen.findByLabelText('Automatic review');
+    const picker = await screen.findByLabelText('Auto mode');
     expect(picker).toHaveValue('default');
     await user.selectOptions(picker, 'enabled');
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -333,10 +333,10 @@ describe('WorkspaceDefaultsPanel', () => {
     render(<WorkspaceDefaultsPanel />);
     const user = userEvent.setup();
 
-    const reviewer = await screen.findByLabelText('Automatic review model');
+    const reviewer = await screen.findByLabelText('Auto mode reviewer model');
     expect(within(reviewer).getByRole('option', { name: /Automatic/ })).toBeVisible();
     await user.selectOptions(reviewer, 'claude:sonnet');
-    await user.selectOptions(screen.getByLabelText('Automatic review'), 'enabled');
+    await user.selectOptions(screen.getByLabelText('Auto mode'), 'enabled');
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(mock.api.updateWorkspaceDefaults).toHaveBeenCalledTimes(1));

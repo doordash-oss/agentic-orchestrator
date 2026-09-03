@@ -3005,10 +3005,11 @@ func jsonEqual(a, b json.RawMessage) bool {
 }
 
 // TestServerMutationTargetResumeConflictSurfacesAs409 pins the CLI boundary
-// contract: an orchestrator ErrResumeConflict (a resume already dispatched)
-// must surface as a canonical ActionConflictError carrying the
-// resume_in_progress catalog code, the diagnostic detail, and the typed
-// phase rendering option the API maps to a 409.
+// contract for a genuine resume conflict: with an active session holding the
+// feature, an orchestrator ErrResumeConflict must surface as a canonical
+// ActionConflictError carrying the resume_in_progress catalog code, the
+// sentinel-derived diagnostic detail, and the typed phase rendering option
+// the API maps to a 409.
 func TestServerMutationTargetResumeConflictSurfacesAs409(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
@@ -3029,7 +3030,13 @@ func TestServerMutationTargetResumeConflictSurfacesAs409(t *testing.T) {
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
-	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
+	sm := mocks.NewMockSessionManager()
+	active := mocks.NewMockSessionView("sess-resume-conflict", f.ID)
+	active.IsActiveVal = true
+	sm.FeatureSessionsFn = func(string) []ports.SessionView {
+		return []ports.SessionView{active}
+	}
+	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store, Sessions: sm}, orchestrator.Hooks{})
 	target := serverMutationTarget{orch: orch, store: store}
 
 	_, err := target.ResumeFeature(f.ID)
@@ -3043,15 +3050,69 @@ func TestServerMutationTargetResumeConflictSurfacesAs409(t *testing.T) {
 	if conflict.Code != errcat.ResumeInProgress {
 		t.Fatalf("conflict code = %q, want %q", conflict.Code, errcat.ResumeInProgress)
 	}
-	if conflict.Detail != "resume already in progress" {
-		t.Fatalf("conflict detail = %q, want %q", conflict.Detail, "resume already in progress")
+	if conflict.Detail != orchestrator.ErrResumeConflict.Error() {
+		t.Fatalf("conflict detail = %q, want the sentinel message %q", conflict.Detail, orchestrator.ErrResumeConflict.Error())
 	}
 	rendered := errcat.New(conflict.Code, conflict.Options...)
 	if rendered.Title != "Resume already in progress" {
 		t.Fatalf("rendered title = %q, want the catalog title", rendered.Title)
 	}
-	if rendered.Context == nil || rendered.Context.Phase == nil || rendered.Context.Phase.Name != feature.PhaseImplement.DirName() {
-		t.Fatalf("rendered phase context = %+v, want the interrupted phase", rendered.Context)
+	if rendered.Context == nil || rendered.Context.Phase == nil || rendered.Context.Phase.Name != feature.PhaseImplement.FailureName() {
+		t.Fatalf("rendered phase context = %+v, want the current phase's failure name", rendered.Context)
+	}
+}
+
+// TestServerMutationTargetResumeNotAvailableSurfacesAs409 pins the CLI
+// boundary contract for a status that does not admit resume: an orchestrator
+// ErrResumeNotAvailable must surface as a canonical ActionConflictError
+// carrying the invalid_transition catalog code — not resume_in_progress,
+// whose remediation would misguide on an already-running feature — with the
+// sentinel-derived detail and the phase rendering option keyed by
+// FailureName, the stable name stored in failure records.
+func TestServerMutationTargetResumeNotAvailableSurfacesAs409(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f := &feature.Feature{
+		ID:            "feat-resume-not-available",
+		Slug:          "feat-resume-not-available",
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseFinalReview,
+		ActiveRun:     1,
+		RunCount:      1,
+		Pipeline:      feature.PipelineMedium,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: testRepoAName, Path: filepath.Join(runtimeDir, testRepoAName)}},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	// No session manager: the feature is simply in a non-resumable status.
+	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
+	target := serverMutationTarget{orch: orch, store: store}
+
+	_, err := target.ResumeFeature(f.ID)
+	var conflict *serverruntime.ActionConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("ResumeFeature() error = %v, want ActionConflictError", err)
+	}
+	if !errors.Is(err, orchestrator.ErrResumeNotAvailable) {
+		t.Fatalf("ResumeFeature() error = %v, want ErrResumeNotAvailable unwrapped", err)
+	}
+	if conflict.Code != errcat.InvalidTransition {
+		t.Fatalf("conflict code = %q, want %q", conflict.Code, errcat.InvalidTransition)
+	}
+	if conflict.Detail != orchestrator.ErrResumeNotAvailable.Error() {
+		t.Fatalf("conflict detail = %q, want the sentinel message %q", conflict.Detail, orchestrator.ErrResumeNotAvailable.Error())
+	}
+	rendered := errcat.New(conflict.Code, conflict.Options...)
+	if rendered.Title != "Invalid transition" {
+		t.Fatalf("rendered title = %q, want the catalog title", rendered.Title)
+	}
+	if rendered.Context == nil || rendered.Context.Phase == nil || rendered.Context.Phase.Name != feature.PhaseFinalReview.FailureName() {
+		t.Fatalf("rendered phase context = %+v, want the final_review failure name", rendered.Context)
 	}
 }
 

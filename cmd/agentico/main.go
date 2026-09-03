@@ -78,6 +78,7 @@ const (
 	resultRetried      = "retried"
 	resultSetupStarted = "setup_started"
 	resultCreated      = "created"
+	resultResumed      = "resumed"
 
 	dispatchNone = "none"
 
@@ -1157,36 +1158,43 @@ func (t *serverMutationTarget) ResumeFeature(featureID string) (serverruntime.Fe
 	if t.orch == nil {
 		return serverruntime.FeatureStartResponse{}, errors.New("orchestrator is not available")
 	}
-	// The orchestrator-level ResumeFeature entry is retained (main had delegated
-	// resume into StartFeature); a concurrent resume surfaces ErrResumeConflict,
-	// which this boundary maps to the canonical 409 conflict response: the
-	// resume_in_progress catalog code, the diagnostic detail, and the typed
-	// phase rendering option clients expect.
+	// A resume rejection maps to the canonical 409 conflict response: the
+	// catalog code, the diagnostic detail, and the typed phase rendering
+	// option clients expect.
 	if err := t.orch.ResumeFeature(featureID); err != nil {
-		if errors.Is(err, orchestrator.ErrResumeConflict) {
-			options := []errcat.Option{}
-			if f, loadErr := t.loadFeatureForResumeContext(featureID); loadErr == nil && f != nil {
-				options = append(options, errcat.WithPhase(errcat.CodePhase{Name: f.CurrentPhase.DirName()}))
-			}
-			return serverruntime.FeatureStartResponse{}, &serverruntime.ActionConflictError{
-				Err:     err,
-				Code:    errcat.ResumeInProgress,
-				Detail:  "resume already in progress",
-				Options: options,
+		code, ok := resumeConflictCode(err)
+		if !ok {
+			return serverruntime.FeatureStartResponse{}, err
+		}
+		options := []errcat.Option{}
+		if t.store != nil {
+			if f, loadErr := t.store.Load(featureID); loadErr == nil && f != nil {
+				options = append(options, errcat.WithPhase(errcat.CodePhase{Name: f.CurrentPhase.FailureName()}))
 			}
 		}
-		return serverruntime.FeatureStartResponse{}, err
+		return serverruntime.FeatureStartResponse{}, &serverruntime.ActionConflictError{
+			Err:     err,
+			Code:    code,
+			Detail:  err.Error(),
+			Options: options,
+		}
 	}
-	return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: "resumed"}, nil
+	return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: resultResumed}, nil
 }
 
-// loadFeatureForResumeContext loads a feature for the resume-conflict phase
-// context; any failure degrades to the conflict without the phase block.
-func (t *serverMutationTarget) loadFeatureForResumeContext(featureID string) (*feature.Feature, error) {
-	if t.store == nil {
-		return nil, errors.New("feature store is not available")
+// resumeConflictCode maps orchestrator resume rejections to their catalog
+// codes: a claimed or actively-running feature keeps resume_in_progress,
+// while a status that does not admit resume reports the generic
+// invalid_transition.
+func resumeConflictCode(err error) (errcat.Code, bool) {
+	switch {
+	case errors.Is(err, orchestrator.ErrResumeConflict):
+		return errcat.ResumeInProgress, true
+	case errors.Is(err, orchestrator.ErrResumeNotAvailable):
+		return errcat.InvalidTransition, true
+	default:
+		return "", false
 	}
-	return t.store.Load(featureID)
 }
 
 func (t *serverMutationTarget) StopFeature(featureID string) (serverruntime.FeatureStopResponse, error) {
@@ -1340,7 +1348,7 @@ func (t *serverMutationTarget) ResumeNeedUserInput(featureID string, req serverr
 	if err := t.orch.ResumeNeedUserInput(featureID, orchestrator.NeedUserInputResume{}); err != nil {
 		return serverruntime.NeedUserInputResumeResponse{}, err
 	}
-	return serverruntime.NeedUserInputResumeResponse{FeatureID: featureID, Result: "resumed"}, nil
+	return serverruntime.NeedUserInputResumeResponse{FeatureID: featureID, Result: resultResumed}, nil
 }
 
 func (t *serverMutationTarget) DraftNeedUserInputAnswers(featureID string, req serverruntime.NeedUserInputDraftRequest) (serverruntime.NeedUserInputDraftResponse, error) {

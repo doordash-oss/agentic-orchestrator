@@ -139,10 +139,6 @@ type MutationTarget interface {
 	ExecuteRecovery(ctx context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) (RecoveryActionResponse, error)
 }
 
-type resumeFeatureMutationTarget interface {
-	ResumeFeature(featureID string) (FeatureStartResponse, error)
-}
-
 // ActionConflictError reports a mutation rejected by conflicting feature
 // state. Code selects the catalog entry; Detail becomes the raw diagnostics
 // text; Options carry typed summary parameters and context blocks for the
@@ -963,18 +959,6 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 	case actionStart:
 		if subaction != "" {
 			return false
-		}
-		if action == actionResume {
-			if target, ok := h.mutations.(resumeFeatureMutationTarget); ok {
-				resp, err := target.ResumeFeature(featureID)
-				if err != nil {
-					writeMutationError(w, err)
-					return true
-				}
-				defaultActionFields(&resp, featureID, resultStarted)
-				writeActionJSON(w, http.StatusOK, &resp)
-				return true
-			}
 		}
 		h.handleStartFeatureMutationTrusted(w, r, featureID)
 	case actionResume:

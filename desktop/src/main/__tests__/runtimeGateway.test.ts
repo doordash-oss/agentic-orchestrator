@@ -615,9 +615,13 @@ describe('RuntimeGateway launch', () => {
   });
 
   it('maps a spawn failure (e.g. permissions) to launch-failed with remediation', async () => {
+    // A full 20-line log tail: the newest line (the last) usually carries the
+    // actual launch error, so the scrub must keep it alongside the leading
+    // cause and command-context lines.
+    const diagnosticLines = Array.from({ length: 20 }, (_, index) => `log line ${index}`);
     const env = makeEnv({
       spawnError: new Error('EACCES: permission denied'),
-      diagnosticLines: ['runtime log tail'],
+      diagnosticLines,
     });
     await env.gateway.start();
     const state = env.gateway.getState();
@@ -628,7 +632,9 @@ describe('RuntimeGateway launch', () => {
     expect(error.diagnostics).toContain(
       'bundled agentico server --config [path] --state-dir [path]',
     );
-    expect(error.diagnostics).toContain('runtime log tail');
+    const lines = (error.diagnostics ?? '').split('\n');
+    expect(lines).toHaveLength(22);
+    expect(lines.at(-1)).toBe('log line 19');
     expectNoTokenLeak(env);
   });
 

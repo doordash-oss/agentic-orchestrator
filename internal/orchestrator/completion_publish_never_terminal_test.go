@@ -15,6 +15,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -200,5 +201,142 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 	}
 	if f.Status != feature.StatusPublished {
 		t.Fatalf("feature status = %v, want Published after the repo-scoped retry", f.Status)
+	}
+}
+
+// TestOrchestrator_RoadmapFinalScrubFailureStillEmitsPublishCompleted pins
+// the emission contract on the pre-Publish failure site: when the roadmap
+// final auto-publish aborts because scrubbing a stranded final-review
+// artifact fails after MarkCodeReady, Publish never runs — so the scrub site
+// itself must emit PublishCompleted (carrying the stored record's canonical
+// error) and fire OnPublishCompleted, matching what surfaceDispatchCompletionError assumes the Publish pipeline already did.
+func TestOrchestrator_RoadmapFinalScrubFailureStillEmitsPublishCompleted(t *testing.T) {
+	repoPath, _ := testutil.InitPublishReadyGitRepo(t)
+	// A stranded untracked final-review artifact: its presence makes the
+	// scrub reach the ls-files check, which the runner fails.
+	if err := os.WriteFile(filepath.Join(repoPath, "progress.md"), []byte("stranded\n"), 0o644); err != nil {
+		t.Fatalf("write stranded artifact: %v", err)
+	}
+	f := &feature.Feature{
+		ID:                  "feat-rf-scrub",
+		Name:                "scrub-failure",
+		Slug:                "scrub-failure",
+		Status:              feature.StatusImplementing,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentRoadmapPhase: 2,
+		TotalRoadmapPhases:  2,
+		Repos: []feature.FeatureRepo{
+			{Name: "r1", Path: repoPath, WorktreePath: repoPath, Branch: "feature/cool-feature", BaseBranch: mainBranch},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"r1": {Touched: true},
+		},
+	}
+	lc := lifecycleForFeature(f)
+	lc.CompleteImplementationFn = func(id string) error { return nil }
+	lc.MarkCodeReadyFn = func(id string) error {
+		f.Status = feature.StatusCodeReady
+		return nil
+	}
+	lc.SetRepoPublishErrorFn = func(id, repo string, record errcat.FailureRecord) error {
+		if f.RepoStates == nil {
+			f.RepoStates = make(map[string]*feature.RepoState)
+		}
+		st := f.RepoStates[repo]
+		if st == nil {
+			st = &feature.RepoState{}
+			f.RepoStates[repo] = st
+		}
+		stored := record
+		st.Error = &stored
+		return nil
+	}
+	fs := newFeatureStore(f)
+
+	// The command runner fails every ls-files invocation, so the scrub of the
+	// stranded artifact fails closed.
+	cmd := mocks.NewMockCommandRunner()
+	cmd.RunFn = func(_ context.Context, name string, args []string, _ ports.CommandOpts) ([]byte, error) {
+		for _, arg := range args {
+			if arg == "ls-files" {
+				return nil, errors.New("git ls-files: exit status 128")
+			}
+		}
+		return nil, nil
+	}
+
+	pub := mocks.NewMockRemoteOps()
+	pub.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
+		t.Fatal("CreatePR called; the scrub failure must abort before the publish pipeline runs")
+		return "", nil
+	}
+
+	pr := newPublishDescriptionPhaseRunner(t, "TITLE: Session Title\nBODY:\n## Summary\n\nGenerated body", false)
+	publishCompletedHook := 0
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Remote:      pub,
+		PhaseRunner: pr,
+		CmdRunner:   cmd,
+	}, orchestrator.Hooks{
+		OnPublishCompleted: func(featureID string, prURLs map[string]string, err error) {
+			publishCompletedHook++
+			if err == nil {
+				t.Fatal("OnPublishCompleted err = nil, want the scrub failure")
+			}
+		},
+	})
+	o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		ch := make(chan *agent.OrchestratorResult, 1)
+		ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
+		return ch, nil
+	})
+
+	err := o.HandlePhaseCompletion("feat-rf-scrub", orchestrator.PhaseCompletionInput{
+		Phase:           feature.PhaseImplement,
+		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "all_passed"},
+	})
+	var dispatch *orchestrator.PublishDispatchError
+	if err == nil || !errors.As(err, &dispatch) {
+		t.Fatalf("HandlePhaseCompletion error = %v, want PublishDispatchError", err)
+	}
+
+	// The feature stays at CodeReady with the repository owning the record.
+	if f.Status != feature.StatusCodeReady {
+		t.Fatalf("feature status = %v, want CodeReady", f.Status)
+	}
+	if f.Run().Failure != nil {
+		t.Fatalf("run failure record = %+v, want none", f.Run().Failure)
+	}
+	refuteLifecycleCall(t, lc, "MarkFailed")
+	state := f.RepoStates["r1"]
+	if state.Error == nil || state.Error.Code != errcat.PublishPushFailed {
+		t.Fatalf("repo record = %+v, want publish_push_failed (artifact scrub class)", state.Error)
+	}
+
+	// Publish never ran: no PublishStarted, and the completion event carries
+	// the stored record's canonical error.
+	var completed *ports.Event
+	for _, ev := range drainEvents(o) {
+		if ev.Type == ports.PublishStarted {
+			t.Fatal("PublishStarted observed; the scrub failure must abort before the publish pipeline runs")
+		}
+		if ev.Type == ports.PublishCompleted {
+			event := ev
+			completed = &event
+		}
+	}
+	if completed == nil {
+		t.Fatal("no PublishCompleted event observed, want the scrub site to emit it")
+	}
+	if completed.Error == nil {
+		t.Fatal("PublishCompleted event carries no error, want the scrub failure")
+	}
+	if completed.CanonicalError == nil || completed.CanonicalError.Code != errcat.PublishPushFailed {
+		t.Fatalf("PublishCompleted canonical error = %+v, want publish_push_failed", completed.CanonicalError)
+	}
+	if publishCompletedHook != 1 {
+		t.Fatalf("OnPublishCompleted calls = %d, want exactly one", publishCompletedHook)
 	}
 }

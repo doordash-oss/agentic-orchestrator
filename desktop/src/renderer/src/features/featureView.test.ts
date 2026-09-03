@@ -479,4 +479,28 @@ describe('fieldForCreationError', () => {
       }),
     ).toBe('form');
   });
+
+  it('routes the fixed bad_request summary by its diagnostics', () => {
+    expect(
+      fieldForCreationError({
+        code: 'bad_request',
+        summary: 'The request was not valid.',
+        diagnostics: 'name is required',
+      }),
+    ).toBe('name');
+    expect(
+      fieldForCreationError({
+        code: 'bad_request',
+        summary: 'The request was not valid.',
+        diagnostics: 'unknown repo "x"',
+      }),
+    ).toBe('repos');
+    expect(
+      fieldForCreationError({
+        code: 'bad_request',
+        summary: 'The request was not valid.',
+        diagnostics: 'inquiries must be a list',
+      }),
+    ).toBe('form');
+  });
 });

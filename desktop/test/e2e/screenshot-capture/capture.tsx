@@ -26,6 +26,7 @@ import {
   FEATURE_QUESTION_ITEM,
   FEATURE_QUESTION_BENCH_ITEM,
 } from './mock-api';
+import { ErrorCardsScene } from './error-cards-scene';
 import { ArchiveMode } from '../../../src/renderer/src/features/ArchiveMode';
 import { RewindJourney } from '../../../src/renderer/src/features/RewindJourney';
 import { RepositoryInstrument } from '../../../src/renderer/src/features/RepositoryInstrument';
@@ -1704,11 +1705,24 @@ function CaptureApp() {
   if (scene === 'cockpit-redesign-verification') {
     return <CockpitRedesignScene variant="verification" />;
   }
+  if (scene.startsWith('error-cards')) {
+    return <ErrorCardsScene scene={scene} />;
+  }
   if (scene === 'connection-shell') {
     return <ConnectionShellScene />;
   }
   if (scene === 'setup-wizard') {
     return <SetupWizardScene />;
+  }
+  if (scene === 'error-overview-lanes') {
+    return <OverviewLanesScene />;
+  }
+  if (
+    scene === 'error-run-failed' ||
+    scene === 'error-setup-failed' ||
+    scene === 'error-action-rejected'
+  ) {
+    return <AftercareScene />;
   }
   if (scene.startsWith('aftercare') || scene.startsWith('refactor-pass')) {
     return <AftercareScene />;

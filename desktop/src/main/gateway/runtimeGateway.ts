@@ -1511,14 +1511,17 @@ export class RuntimeGateway {
 
   /**
    * Re-applies the owned-diagnostics bounding to an already-folded
-   * diagnostics string: at most 21 lines (one command context plus the last
-   * 20 log lines), 256 chars for the command line, 512 per log line.
+   * diagnostics string: an optional leading cause line plus the launch
+   * command context (≤256 chars each) and the last 20 log lines (≤512 chars
+   * each). The newest log line — usually the one carrying the actual launch
+   * error — is the tail, so over-length input is trimmed from the middle,
+   * never from the end.
    */
   private scrubOwnedDiagnostics(text: string): string {
-    return text
-      .split('\n')
-      .slice(0, 21)
-      .map((line, index) => this.scrubDiagnosticLine(line).slice(0, index === 0 ? 256 : 512))
+    const lines = text.split('\n');
+    const bounded = lines.length <= 22 ? lines : [...lines.slice(0, 2), ...lines.slice(-20)];
+    return bounded
+      .map((line, index) => this.scrubDiagnosticLine(line).slice(0, index < 2 ? 256 : 512))
       .join('\n');
   }
 

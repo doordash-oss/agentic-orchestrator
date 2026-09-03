@@ -281,6 +281,16 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
                   disabledReason: 'Resume is not available for this session.',
                 };
               }
+              // An outcome is already recorded for this item: the action was
+              // dispatched once, so a second dispatch of the same action is
+              // refused rather than repeated.
+              if (outcome !== undefined) {
+                return {
+                  enabled: false,
+                  label: 'Resume',
+                  disabledReason: 'This recovery action already finished.',
+                };
+              }
               if (executingKey === item.key) return { enabled: true, label: 'Resuming…' };
               if (executingKey !== null) {
                 return {
@@ -334,7 +344,11 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
                   variant="compact"
                   resolveAction={resolveResumeAction}
                   onAction={(actionId) => {
-                    if (actionId === 'resume' && executingKey === null) {
+                    if (
+                      actionId === 'resume' &&
+                      executingKey === null &&
+                      outcomes.get(item.key) === undefined
+                    ) {
                       void executeSingle(item, 'resume');
                     }
                   }}

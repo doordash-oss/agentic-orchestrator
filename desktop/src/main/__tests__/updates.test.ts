@@ -183,6 +183,42 @@ describe('UpdateCoordinator', () => {
     expect(fs.existsSync(path.join(dir, 'updates', 'v0.2.0'))).toBe(false);
   });
 
+  it('does not let a stale signature failure classify a later check failure', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes', {
+      servedEnvelopeBytes: Buffer.from('{"tampered":true}\n'),
+    });
+    let feedUnreachable = false;
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture: {
+        ...fixture,
+        fetch: (input, init) =>
+          feedUnreachable && fetchUrl(input) === RELEASES_API
+            ? Promise.reject(new TypeError('network down'))
+            : fixture.fetch(input, init),
+      },
+    });
+
+    // First check: the signed envelope is tampered — a genuine signature
+    // failure whose verdict persists on the failed state.
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      signatureStatus: 'failed',
+      message: 'Agentico could not verify the downloaded update.',
+    });
+
+    // Second check: the feed itself is unreachable before any signature
+    // is examined. The stale 'failed' verdict must not reclassify this
+    // pre-verification failure as a signature failure.
+    feedUnreachable = true;
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      message: 'Agentico could not complete the update check.',
+    });
+  });
+
   it('rejects replaying an older signed envelope under a higher release tag', async () => {
     const fixture = signedFixture('v0.3.0', 'Agentico-mac-universal.dmg', 'package bytes', {
       envelopeTag: 'v0.2.0',

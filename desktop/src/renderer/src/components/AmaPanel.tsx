@@ -66,7 +66,6 @@ import {
   type ComposerUploadItem,
 } from '../features/stagedItems';
 import { parseIpcError } from '../wizard/ipcError';
-import { toCanonicalError } from '../../../shared/errors';
 import { buildConversation, reconcileMessages } from '../features/transcript/conversation';
 import { ConversationTranscript } from '../features/transcript/ConversationTranscript';
 import { ErrorSurface } from './ErrorSurface';
@@ -676,7 +675,7 @@ export function AmaPanel({
       void window.agentico
         .readClipboardImage()
         .then((result) => stageImagesRemotely(result.paths))
-        .catch((error: unknown) => announceFailure(toCanonicalError(error, 'E_INTERNAL')));
+        .catch((error: unknown) => announceFailure(parseIpcError(error)));
       return;
     }
     if (imported.paths.length > 0) {
@@ -686,7 +685,7 @@ export function AmaPanel({
     void window.agentico
       .readClipboardImage()
       .then((result) => setImages((current) => uniquePaths(current, result.paths)))
-      .catch((error: unknown) => announceFailure(toCanonicalError(error, 'E_INTERNAL')));
+      .catch((error: unknown) => announceFailure(parseIpcError(error)));
   };
 
   const askToEndChat = (): void => {
@@ -706,7 +705,7 @@ export function AmaPanel({
       setConfirmingEnd(false);
       announce('AMA ended.');
     } catch (error) {
-      announceFailure(toCanonicalError(error, 'E_INTERNAL'));
+      announceFailure(parseIpcError(error));
     } finally {
       setBusy(false);
     }

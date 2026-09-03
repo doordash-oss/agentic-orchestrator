@@ -307,7 +307,10 @@ export const CanonicalErrorSchema = z.strictObject({
             branch: z.string().optional(),
             rebase_target: z.string().optional(),
             remote_only_commits: z.number().int().nonnegative().optional(),
-            conflict_files: z.array(z.string()).max(500).optional(),
+            // Uncapped on purpose: the Go producers store conflict lists
+            // unbounded, so any client-side cap would make one large
+            // conflict unparse the whole payload.
+            conflict_files: z.array(z.string()).optional(),
             dirty_files: z.array(z.string()).max(500).optional(),
             parent_anchor_sha: z.string().optional(),
             expected_ref_sha: z.string().optional(),

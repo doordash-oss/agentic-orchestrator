@@ -94,10 +94,12 @@ func (o *Orchestrator) rebaseIntegrationGate(child *feature.Feature) *feature.Tr
 // rebaseGateFeedback runs the same per-repo mechanical checks as
 // rebaseIntegrationGate and formats any violations as fix-round feedback for
 // the implement loop, so a violation surfaces the moment the loop is about to
-// declare success instead of at integration. The feedback derives entirely
-// from the catalog — title, remediation hint, and conflict files. Empty
-// string = every behind repo satisfies the gate. Non-rebase features are
-// never gated.
+// declare success instead of at integration. The user-facing text derives
+// from the catalog — title, remediation hint, and conflict files — and the
+// feedback additionally feeds the agent the raw per-repo diagnostics (which
+// carry the persisted target ref and creation-time SHA) plus the
+// agent-oriented mechanical remediation. Empty string = every behind repo
+// satisfies the gate. Non-rebase features are never gated.
 func (o *Orchestrator) rebaseGateFeedback(child *feature.Feature) string {
 	if child == nil || child.Parent == nil || child.Parent.Kind != feature.ChildKindRebase {
 		return ""
@@ -114,11 +116,17 @@ func (o *Orchestrator) rebaseGateFeedback(child *feature.Feature) string {
 			errcat.WithParams(errcat.IntegrationRepoParams{Repositories: repos}),
 		)
 		fmt.Fprintf(&b, "- **Critical**: repo %s: %s\n", repoName, rendered.Title)
+		if finding.diagnostics != "" {
+			fmt.Fprintf(&b, "  %s\n", finding.diagnostics)
+		}
 		if len(finding.conflictFiles) > 0 {
 			fmt.Fprintf(&b, "  Conflicted files: %s\n", strings.Join(finding.conflictFiles, ", "))
 		}
 		if rendered.Remediation != nil && rendered.Remediation.Hint != "" {
 			fmt.Fprintf(&b, "  Fix: %s\n", rendered.Remediation.Hint)
+		}
+		if fix := rebaseGateAgentRemediation(finding.code); fix != "" {
+			fmt.Fprintf(&b, "  Mechanical fix: %s\n", fix)
 		}
 	}
 	if b.Len() == 0 {
@@ -127,6 +135,26 @@ func (o *Orchestrator) rebaseGateFeedback(child *feature.Feature) string {
 	return "Mechanical rebase exit checks failed. Each finding below is a deterministic git-level fact " +
 		"verified against the targets persisted at creation time; resolve every violation in the named " +
 		"repo's own worktree before declaring this phase complete.\n\n" + b.String()
+}
+
+// rebaseGateAgentRemediation states the agent-oriented fix for a gate
+// violation, keyed by the stable catalog code. The catalog's remediation
+// hint is user-facing; the implement loop needs the mechanical instruction.
+func rebaseGateAgentRemediation(code errcat.Code) string {
+	switch code {
+	case errcat.RebaseGateTargetMissing:
+		return "discard the child and relaunch it; a missing creation-time target SHA cannot be re-derived."
+	case errcat.RebaseGateNotAncestor:
+		return "merge the persisted creation-time target commit into the child branch and commit the " +
+			"result; do not substitute a newer or re-resolved target."
+	case errcat.RebaseGateMergeInProgress:
+		return "finish or abort the in-progress merge/rebase sequencer so the worktree ends on a " +
+			"committed, conflict-free state."
+	case errcat.RebaseGateConflictMarkers:
+		return "resolve every conflict hunk, remove the literal markers, and commit the resolution."
+	default:
+		return ""
+	}
 }
 
 // evalRebaseGateRepo evaluates the gate for a single behind repo. It returns

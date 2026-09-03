@@ -122,6 +122,10 @@ describe('RecoveryWorkspace', () => {
       actions: { 'feature-a:repo-a': 'resume' },
     });
     expect(await within(queue).findByText('↳ Resume submitted')).toBeVisible();
+    // Once the outcome is recorded, the Resume control disarms instead of
+    // offering a second dispatch of the same action.
+    expect(within(card).queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument();
+    expect(within(card).getByText('This recovery action already finished.')).toBeVisible();
     // Only the supported outcomes are offered.
     expect(screen.queryByRole('button', { name: 'Skip' })).not.toBeInTheDocument();
   });

@@ -248,7 +248,10 @@ describe('ReviewSurface recovery and containment', () => {
       type: 'saved',
       session: { ...session, text: '# Recovered plan' },
     });
-    api.discardLocalReviewDraft.mockRejectedValue(new Error('disk full'));
+    // The preload rejections the surface decodes: the authored canonical
+    // rides the sentinel-prefixed message, exactly as the context bridge
+    // delivers it.
+    api.discardLocalReviewDraft.mockRejectedValue(ipcError('E_INTERNAL', 'The disk is full.'));
 
     render(<ReviewSurface featureId={FEATURE_ID} onResolved={() => Promise.resolve()} />);
     await screen.findByText('Recovered unsaved draft');

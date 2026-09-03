@@ -65,7 +65,9 @@ function canonicalRejection(error: {
   class: 'blocking' | 'needs_action' | 'warning';
   title: string;
   summary: string;
-  remediation?: { hint: string };
+  remediation?: { hint: string; actions?: string[] };
+  context?: Record<string, unknown>;
+  diagnostics?: string;
 }): Error {
   return new Error(CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(error));
 }
@@ -608,6 +610,166 @@ const OVERVIEW_LANE_SUMMARY: FeatureSummaryView[] = OVERVIEW_LANE_FEATURES.map((
 
 const OVERVIEW_LANE_SNAPSHOTS: Record<string, FeatureSnapshot> = Object.fromEntries(
   OVERVIEW_LANE_FEATURES.map((feature) => [feature.id, feature]),
+);
+
+// --- Error-scenario fixtures: real surfaces carrying canonical errors -------
+
+const RUN_FAILED_ERROR = {
+  code: 'max_iterations',
+  class: 'blocking' as const,
+  title: 'Iteration budget exhausted',
+  summary: 'The Implement phase used every allowed iteration without passing verification.',
+  remediation: {
+    hint: 'Restart the run to keep going, or rewind to an earlier phase.',
+    actions: ['restart'],
+  },
+  context: { phase: { name: 'implement', iteration: 12 } },
+};
+
+const SETUP_FAILED_ERROR = {
+  code: 'worktree_setup_failed',
+  class: 'blocking' as const,
+  title: 'Workspace setup failed',
+  summary: 'A setup task exited with an error before the first phase could start.',
+  remediation: { hint: 'Fix the task, then retry setup.', actions: ['setup'] },
+  context: {
+    setup_task: { key: 'npm-install', kind: 'shell', label: 'npm ci' },
+    command: {
+      exit_code: 1,
+      log_paths: ['/Users/me/.agentic-orchestrator/logs/abcd1234/setup-npm-install.log'],
+    },
+  },
+};
+
+const ERROR_RUN_FAILED_SNAPSHOT: FeatureSnapshot = {
+  ...FEATURE_SNAPSHOT,
+  status: 'Failed',
+  currentPhase: 'Implement',
+  currentRoadmapPhase: 3,
+  totalRoadmapPhases: 5,
+  currentIteration: 12,
+  failure: RUN_FAILED_ERROR,
+  errors: [
+    {
+      ref: { scope: 'run', code: 'max_iterations', featureId: 'abcd1234ef567890' },
+      error: RUN_FAILED_ERROR,
+    },
+  ],
+  actions: [
+    {
+      id: 'start',
+      enabled: false,
+      disabledReasons: [{ code: 'already_started', message: 'This feature already ran.' }],
+    },
+    {
+      id: 'pause-stop',
+      enabled: false,
+      disabledReasons: [{ code: 'not_running', message: 'Nothing is running.' }],
+    },
+    { id: 'retry', enabled: true, disabledReasons: [] },
+    { id: 'restart', enabled: true, disabledReasons: [] },
+    { id: 'rewind', enabled: true, disabledReasons: [] },
+    { id: 'delete', enabled: true, disabledReasons: [] },
+  ],
+};
+
+const ERROR_SETUP_FAILED_SNAPSHOT: FeatureSnapshot = {
+  ...FEATURE_SNAPSHOT,
+  status: 'Created',
+  currentPhase: 'Setup',
+  activeRun: 0,
+  setupComplete: false,
+  setup: {
+    status: 'failed',
+    attempt: 2,
+    tasks: [
+      {
+        key: 'worktree:signal-lab',
+        kind: 'worktree',
+        label: 'Create worktree',
+        repo: 'signal-lab',
+        branch: 'feature/history-and-rewind',
+        status: 'done',
+        attempt: 1,
+      },
+      {
+        key: 'npm-install',
+        kind: 'shell',
+        label: 'npm ci',
+        repo: 'signal-lab',
+        status: 'failed',
+        attempt: 2,
+        error: SETUP_FAILED_ERROR,
+      },
+      { key: 'go-mod', kind: 'shell', label: 'go mod download', status: 'queued', attempt: 0 },
+    ],
+  },
+  failure: SETUP_FAILED_ERROR,
+  errors: [
+    {
+      ref: {
+        scope: 'setup',
+        code: 'worktree_setup_failed',
+        featureId: 'abcd1234ef567890',
+        taskKey: 'npm-install',
+      },
+      error: SETUP_FAILED_ERROR,
+    },
+  ],
+  actions: [
+    { id: 'setup', enabled: true, disabledReasons: [] },
+    {
+      id: 'start',
+      enabled: false,
+      disabledReasons: [{ code: 'setup_incomplete', message: 'Finish setup first.' }],
+    },
+    { id: 'delete', enabled: true, disabledReasons: [] },
+  ],
+};
+
+const ERROR_LANE_FAILED_FEATURE: FeatureSnapshot = {
+  ...overviewLaneSnapshot(
+    'billing-export-1',
+    'Nightly billing export',
+    'Failed',
+    'Implement',
+    ['agentic-orchestrator', 'taulu'],
+    '2026-07-23T06:10:00Z',
+    5_400,
+    'large',
+  ),
+  currentRoadmapPhase: 2,
+  totalRoadmapPhases: 4,
+  currentIteration: 12,
+  failure: RUN_FAILED_ERROR,
+  errors: [
+    {
+      ref: { scope: 'run', code: 'max_iterations', featureId: 'billing-export-1' },
+      error: RUN_FAILED_ERROR,
+    },
+  ],
+};
+
+const ERROR_LANE_FEATURES: FeatureSnapshot[] = [
+  ERROR_LANE_FAILED_FEATURE,
+  ...OVERVIEW_LANE_FEATURES,
+];
+
+const ERROR_LANE_SUMMARY: FeatureSummaryView[] = ERROR_LANE_FEATURES.map((feature) => ({
+  id: feature.id,
+  name: feature.name,
+  status: feature.status,
+  currentPhase: feature.currentPhase,
+  repos: feature.repos,
+  createdAt: feature.createdAt,
+  activeRun: feature.activeRun,
+  runCount: 1,
+  warnings: [],
+  errors: feature.errors,
+}));
+
+const ERROR_LANE_SNAPSHOTS: Record<string, FeatureSnapshot> = Object.fromEntries(
+  ERROR_LANE_FEATURES.map((feature) => [feature.id, feature]),
 );
 
 const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
@@ -1491,6 +1653,7 @@ function makeMockApi(
     shell: {
       featureByServer:
         scene === 'overview-lanes' ||
+        scene === 'error-overview-lanes' ||
         scene === 'overview-empty' ||
         scene === 'command-palette-overview' ||
         // The update popover is evidenced over Overview; the attention popover
@@ -1567,10 +1730,13 @@ function makeMockApi(
       Promise.resolve({
         features:
           scene === 'overview-lanes' ||
+          scene === 'error-overview-lanes' ||
           scene === 'update-popover' ||
           scene === 'command-palette-overview' ||
           scene.startsWith('creation-sheet')
-            ? OVERVIEW_LANE_SUMMARY
+            ? scene === 'error-overview-lanes'
+              ? ERROR_LANE_SUMMARY
+              : OVERVIEW_LANE_SUMMARY
             : scene === 'overview-empty'
               ? []
               : FEATURE_SUMMARY,
@@ -1580,13 +1746,26 @@ function makeMockApi(
       if (scene === 'command-palette-feature') {
         return Promise.resolve(COMMAND_PALETTE_FEATURE_SNAPSHOT);
       }
+      if (scene === 'error-run-failed') {
+        return Promise.resolve(ERROR_RUN_FAILED_SNAPSHOT);
+      }
+      if (scene === 'error-setup-failed') {
+        return Promise.resolve(ERROR_SETUP_FAILED_SNAPSHOT);
+      }
+      if (scene === 'error-action-rejected') {
+        return Promise.resolve(CYCLES_FEATURE_SNAPSHOT);
+      }
       if (
         scene === 'overview-lanes' ||
+        scene === 'error-overview-lanes' ||
         scene === 'update-popover' ||
         scene === 'command-palette-overview' ||
         scene.startsWith('creation-sheet')
       ) {
-        const snapshot = OVERVIEW_LANE_SNAPSHOTS[_featureId];
+        const snapshot =
+          scene === 'error-overview-lanes'
+            ? ERROR_LANE_SNAPSHOTS[_featureId]
+            : OVERVIEW_LANE_SNAPSHOTS[_featureId];
         if (snapshot !== undefined) {
           return Promise.resolve(snapshot);
         }
@@ -1702,9 +1881,54 @@ function makeMockApi(
       }
       return Promise.resolve(FEATURE_SNAPSHOT);
     },
-    createFeature: () => Promise.resolve({ featureId: 'abcd1234ef567890' } as CreateFeatureResult),
+    createFeature: () =>
+      scene === 'creation-sheet-error-form'
+        ? Promise.reject(
+            canonicalRejection({
+              code: 'internal',
+              class: 'blocking',
+              title: 'Something went wrong',
+              summary: 'The server hit an unexpected error while creating the feature.',
+              remediation: { hint: 'Try again. If it keeps failing, check the server log.' },
+              diagnostics:
+                'feature create: write feature.yaml: open /work/space/.agentic-orchestrator/features/translate-readme/feature.yaml: permission denied',
+            }),
+          )
+        : scene === 'creation-sheet-error'
+          ? Promise.reject(
+              canonicalRejection({
+                code: 'bad_request',
+                class: 'blocking',
+                title: 'Request rejected',
+                summary: 'The request was not valid.',
+                diagnostics: 'unknown repository "orchestrator-core"',
+              }),
+            )
+          : Promise.resolve({ featureId: 'abcd1234ef567890' } as CreateFeatureResult),
     dispatchFeatureSetup: () => Promise.resolve({ result: 'setup_started' } as SetupDispatchResult),
     dispatchFeatureAction: ({ action, featureId }) => {
+      if (scene === 'error-action-rejected') {
+        return Promise.reject(
+          canonicalRejection({
+            code: 'parent_worktrees_dirty',
+            class: 'blocking',
+            title: 'Parent worktree has uncommitted changes',
+            summary: 'The action cannot proceed while the parent branch has uncommitted work.',
+            remediation: {
+              hint: 'Commit or stash the changes in the listed repositories, then try again.',
+            },
+            context: {
+              repositories: [
+                {
+                  name: 'signal-lab',
+                  branch: 'feature/history-and-rewind',
+                  dirty_files: ['internal/orchestrator/completion.go', 'docs/notes.md'],
+                },
+              ],
+            },
+          }),
+        );
+      }
       if (scene === 'bulk-queue' && featureId === 'alpha1234ef567890') {
         return new Promise((resolve) =>
           setTimeout(

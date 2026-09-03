@@ -30,7 +30,7 @@ import { useEffect, useRef, type MouseEvent, type Ref } from 'react';
 import type { CanonicalError } from '../../../shared/api/parse';
 import { ERROR_CLASS_LABELS, type ErrorReference } from '../../../shared/ipc';
 import { useExplainChat } from '../explainChat';
-import { registerErrorCard } from './errorCardRegistry';
+import { errorCardKey, registerErrorCard } from './errorCardRegistry';
 import { CircleAlertIcon, TriangleAlertIcon, WrenchIcon } from './icons';
 
 export interface ErrorSurfaceAction {
@@ -253,7 +253,11 @@ export function ErrorSurface({
   const rootElementRef = useRef<HTMLDivElement | null>(null);
   // A durable error registers its root under the reference so the chip and
   // the inbox can resolve it; registration is provider-independent (the
-  // explain button is what the provider gates).
+  // explain button is what the provider gates). The effect depends on the
+  // reference's stable registry key — its complete content identity — so a
+  // parent re-rendering with a fresh-but-equal reference object registers
+  // the card once, not on every render.
+  const cardKey = cardReference !== undefined ? errorCardKey(cardReference) : '';
   useEffect(() => {
     const element = rootElementRef.current;
     if (cardReference === undefined || element === null) return;
@@ -261,7 +265,7 @@ export function ErrorSurface({
     return () => {
       registerErrorCard(cardReference, null);
     };
-  }, [cardReference]);
+  }, [cardKey]);
   const mergedRootRef = (node: HTMLDivElement | null): void => {
     rootElementRef.current = node;
     if (typeof rootRef === 'function') {

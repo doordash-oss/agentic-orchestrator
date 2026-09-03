@@ -525,8 +525,12 @@ func writeChildLaunchError(w http.ResponseWriter, err error) bool {
 		writeAPIError(w, http.StatusConflict, errcat.ActiveChildExists,
 			errcat.WithParams(errcat.RelatedFeatureParams{ParentID: activeChild.ParentID, ChildID: activeChild.ChildID}))
 	case errors.As(err, &dirty):
-		writeAPIError(w, http.StatusConflict, errcat.ParentWorktreesDirty,
-			errcat.WithRepositories(dirtyRepoContext(dirty.Repos)...))
+		repos, truncation := dirtyRepoContext(dirty.Repos)
+		opts := []errcat.Option{errcat.WithRepositories(repos...)}
+		if truncation != "" {
+			opts = append(opts, errcat.WithDiagnostics(truncation))
+		}
+		writeAPIError(w, http.StatusConflict, errcat.ParentWorktreesDirty, opts...)
 	case errors.As(err, &revisionConflict):
 		writeAPIError(w, http.StatusConflict, errcat.ReviewFeedbackRevisionConflict,
 			errcat.WithDiagnostics(revisionConflict.Error()))
@@ -544,7 +548,9 @@ func writeChildLaunchError(w http.ResponseWriter, err error) bool {
 	case errors.As(err, &upToDate):
 		repos := make([]errcat.CodeRepository, 0, len(upToDate.Targets))
 		for _, target := range upToDate.Targets {
-			repo := errcat.CodeRepository{Name: target.Repo, Branch: target.Target}
+			// The target ref is where the rebase would land, not the
+			// repository's own branch: RebaseTarget is its carrier.
+			repo := errcat.CodeRepository{Name: target.Repo, RebaseTarget: target.Target}
 			if target.TargetSHA != "" {
 				repo.ExpectedRefSHA = target.TargetSHA
 			}
@@ -588,18 +594,32 @@ func writeChildLaunchError(w http.ResponseWriter, err error) bool {
 }
 
 // dirtyRepoContext projects the bounded dirty-worktree diagnostics captured
-// at launch onto the canonical repositories context block. Dirty file names
-// live only here; titles and summaries never carry them.
-func dirtyRepoContext(repos []feature.RepoDirtyDiagnostics) []errcat.CodeRepository {
+// at launch onto the canonical repositories context block, and reports a
+// per-repo truncation line for diagnostics. Dirty file names live only in
+// the context block and the truncation diagnostics; titles and summaries
+// never carry them. Each category list is capped at
+// DefaultDirtyPathLimit entries at capture time, so a category whose total
+// exceeds its list must be surfaced as partial — the canonical error
+// otherwise presents a truncated list as complete.
+func dirtyRepoContext(repos []feature.RepoDirtyDiagnostics) ([]errcat.CodeRepository, string) {
 	blocks := make([]errcat.CodeRepository, 0, len(repos))
+	var truncation []string
 	for _, repo := range repos {
 		dirty := make([]string, 0, len(repo.Staged)+len(repo.Unstaged)+len(repo.Untracked))
 		dirty = append(dirty, repo.Staged...)
 		dirty = append(dirty, repo.Unstaged...)
 		dirty = append(dirty, repo.Untracked...)
 		blocks = append(blocks, errcat.CodeRepository{Name: repo.Repo, DirtyFiles: dirty})
+		if repo.StagedTotal > len(repo.Staged) ||
+			repo.UnstagedTotal > len(repo.Unstaged) ||
+			repo.UntrackedTotal > len(repo.Untracked) {
+			truncation = append(truncation, fmt.Sprintf(
+				"repo %s: %d staged, %d unstaged, %d untracked changes; each category lists at most %d files",
+				repo.Repo, repo.StagedTotal, repo.UnstagedTotal, repo.UntrackedTotal,
+				feature.DefaultDirtyPathLimit))
+		}
 	}
-	return blocks
+	return blocks, strings.Join(truncation, "; ")
 }
 
 func (h *apiHandler) handleMutationPreflight(w http.ResponseWriter, r *http.Request) bool {

@@ -1087,6 +1087,26 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 		}
 		if err := o.scrubFinalReviewRootArtifacts(context.Background(), workDir); err != nil {
 			o.storePublishFailure(f, name, err)
+			// Publish never ran, so its own PublishCompleted emission
+			// would be skipped and surfaceDispatchCompletionError
+			// ignores the dispatch error on that assumption. Emit the
+			// completion here with the stored record's canonical error —
+			// mirroring the Publish pipeline's failure shape — so the
+			// event, hook, and SSE refresh still observe the failure.
+			publishCompleted := ports.Event{
+				Type:      ports.PublishCompleted,
+				FeatureID: featureID,
+				Error:     err,
+			}
+			if freshF, getErr := o.deps.Lifecycle.Get(featureID); getErr == nil {
+				if rendered, ok := firstFailedRepoError(freshF); ok {
+					publishCompleted.CanonicalError = &rendered
+				}
+			}
+			o.emitEventBlocking(publishCompleted)
+			if o.hooks.OnPublishCompleted != nil {
+				o.hooks.OnPublishCompleted(featureID, nil, err)
+			}
 			return &PublishDispatchError{Err: err}
 		}
 	}

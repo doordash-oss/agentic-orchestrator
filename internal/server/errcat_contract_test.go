@@ -199,8 +199,9 @@ func TestRepresentativeRejectionsCarryCanonicalBodies(t *testing.T) {
 
 // TestRebaseActionErrorFamilyCarriesRepositoryContext pins the rebase
 // rejection family: already-up-to-date is a warning whose repositories block
-// names each repo and target branch, and fetch/target-resolution failures
-// name the failing repository in the block with the raw text in diagnostics.
+// names each repo with the target ref in rebase_target (never misfiled as
+// the repository's own branch), and fetch/target-resolution failures name
+// the failing repository in the block with the raw text in diagnostics.
 func TestRebaseActionErrorFamilyCarriesRepositoryContext(t *testing.T) {
 	t.Parallel()
 
@@ -210,7 +211,7 @@ func TestRebaseActionErrorFamilyCarriesRepositoryContext(t *testing.T) {
 		wantCode   errcat.Code
 		wantClass  errcat.Class
 		wantRepo   string
-		wantBranch string
+		wantTarget string
 	}{
 		{
 			name:       "already up to date",
@@ -218,7 +219,7 @@ func TestRebaseActionErrorFamilyCarriesRepositoryContext(t *testing.T) {
 			wantCode:   errcat.RebaseAlreadyUpToDate,
 			wantClass:  errcat.ClassWarning,
 			wantRepo:   "web",
-			wantBranch: "main",
+			wantTarget: "main",
 		},
 		{
 			name:      "fetch failed",
@@ -268,8 +269,15 @@ func TestRebaseActionErrorFamilyCarriesRepositoryContext(t *testing.T) {
 				t.Fatalf("context = %+v; want one repository block", body.Error.Context)
 			}
 			repo := body.Error.Context.Repositories[0]
-			if repo.Name != tc.wantRepo || repo.Branch != tc.wantBranch {
-				t.Fatalf("repository block = %+v; want name %q branch %q", repo, tc.wantRepo, tc.wantBranch)
+			if repo.Name != tc.wantRepo {
+				t.Fatalf("repository block = %+v; want name %q", repo, tc.wantRepo)
+			}
+			if tc.wantTarget != "" {
+				// The up-to-date target is the rebase target, not the
+				// repository's own branch.
+				if repo.RebaseTarget != tc.wantTarget || repo.Branch != "" {
+					t.Fatalf("repository block = %+v; want rebase_target %q and no branch", repo, tc.wantTarget)
+				}
 			}
 			if tc.name != "already up to date" && body.Error.Diagnostics == "" {
 				t.Fatalf("raw failure text must stay in diagnostics: %+v", body.Error)

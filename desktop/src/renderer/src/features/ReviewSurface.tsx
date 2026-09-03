@@ -22,7 +22,6 @@ import type {
   ReviewSession,
   ReviewValidation,
 } from '../../../shared/ipc';
-import { toCanonicalError } from '../../../shared/errors';
 import { MonacoBuffer, MonacoDiff, useResolvedTheme } from '../components/monaco';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { FieldError } from '../components/FieldError';
@@ -199,10 +198,7 @@ export function ReviewSurface({
       void window.agentico.saveLocalReviewDraft({ ...key, text }).catch((error: unknown) =>
         // A local recovery-copy failure: a desktop-local canonical, with the
         // old lead as the caption naming what was lost.
-        setFailure(
-          toCanonicalError(error, 'E_INTERNAL'),
-          'Local recovery copy could not be saved.',
-        ),
+        setFailure(parseIpcError(error), 'Local recovery copy could not be saved.'),
       );
     }, 350);
     return () => window.clearTimeout(timer);
@@ -262,7 +258,7 @@ export function ReviewSurface({
         await discardLocal(reviewKey(runtimeId, session));
       } catch (error) {
         setFailure(
-          toCanonicalError(error, 'E_INTERNAL'),
+          parseIpcError(error),
           'Saved, but the local recovery copy could not be removed.',
         );
       }
@@ -390,7 +386,7 @@ export function ReviewSurface({
           await discardLocal(reconcile.localKey);
         } catch (error) {
           setFailure(
-            toCanonicalError(error, 'E_INTERNAL'),
+            parseIpcError(error),
             'Replaced the server draft, but the local recovery copy could not be removed.',
           );
         }
@@ -448,7 +444,7 @@ export function ReviewSurface({
                     .discardLocalReviewDraft(reconcile.localKey)
                     .catch((error: unknown) =>
                       setFailure(
-                        toCanonicalError(error, 'E_INTERNAL'),
+                        parseIpcError(error),
                         'Could not remove the orphaned local draft — it may reappear on reopen.',
                       ),
                     );

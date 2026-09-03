@@ -599,3 +599,72 @@ func TestChatContextResolverRejectsStaleReferences(t *testing.T) {
 		})
 	}
 }
+
+// TestChatContextUnloadableFeatureIsServerError pins the load-failure
+// distinction: an unknown feature id is the client's 400
+// chat_context_invalid, but a referenced feature whose record exists and
+// cannot be loaded (schema drift, I/O, permissions) is a server-side 500
+// internal_error, never a client rejection.
+func TestChatContextUnloadableFeatureIsServerError(t *testing.T) {
+	t.Parallel()
+	baseDir := t.TempDir()
+	store := feature.NewStore(baseDir)
+	// A record carrying a schema version from another release fails closed
+	// on load without being "not exist".
+	corruptDir := filepath.Join(baseDir, "feat-corrupt")
+	if err := os.MkdirAll(corruptDir, 0o755); err != nil {
+		t.Fatalf("mkdir corrupt feature dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(corruptDir, "feature.yaml"), []byte("schema_version: 99999\n"), 0o644); err != nil {
+		t.Fatalf("write corrupt feature file: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		featureID  string
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "unloadable feature record",
+			featureID:  "feat-corrupt",
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   string(errcat.InternalError),
+		},
+		{
+			name:       "unknown feature id",
+			featureID:  "feat-unknown",
+			wantStatus: http.StatusBadRequest,
+			wantCode:   string(errcat.ChatContextInvalid),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			target := &uploadMutationRecorder{}
+			testAPI := newChatContextTestAPI(t, target, store)
+
+			w := postTrustedJSON(testAPI.handler, "/api/v1/prompts/chat/start", map[string]any{
+				"message": "Explain this error",
+				"context": map[string]any{
+					"scope":      "run",
+					"code":       "iteration_budget_exhausted",
+					"feature_id": tc.featureID,
+				},
+			})
+			if w.Code != tc.wantStatus {
+				t.Fatalf("chat start status = %d body=%s; want %d", w.Code, w.Body.String(), tc.wantStatus)
+			}
+			var body ErrorResponse
+			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Code != tc.wantCode {
+				t.Fatalf("code = %q; want %q", body.Error.Code, tc.wantCode)
+			}
+			if target.chatReq != nil {
+				t.Fatal("StartChat was called for a rejected reference")
+			}
+		})
+	}
+}

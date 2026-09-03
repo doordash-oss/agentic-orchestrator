@@ -407,18 +407,25 @@ export function featureBranch(snapshot: FeatureSnapshot): string | null {
 
 export type CreationErrorField = 'name' | 'repos' | 'form';
 
-/** Routes a structured server rejection to the control that owns it. */
+/**
+ * Routes a structured server rejection to the control that owns it. The
+ * catalog's bad_request summary is fixed ("The request was not valid.");
+ * the specifics — "name is required", an unknown repo — ride in
+ * diagnostics, so both fields are searched.
+ */
 export function fieldForCreationError(error: {
   code: string;
   summary: string;
+  diagnostics?: string;
 }): CreationErrorField {
   if (error.code === 'not_ready') {
     return 'form';
   }
-  if (error.code === 'bad_request' && /\bname\b/i.test(error.summary)) {
+  const detail = `${error.summary}\n${error.diagnostics ?? ''}`;
+  if (error.code === 'bad_request' && /\bname\b/i.test(detail)) {
     return 'name';
   }
-  if (/\brepo(sitor(y|ies))?s?\b/i.test(error.summary)) {
+  if (/\brepo(sitor(y|ies))?s?\b/i.test(detail)) {
     return 'repos';
   }
   return 'form';

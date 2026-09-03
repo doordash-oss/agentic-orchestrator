@@ -428,6 +428,10 @@ export class UpdateCoordinator {
       checkedAt: this.now().toISOString(),
       message: 'Checking the stable GitHub Releases feed.',
       error: undefined,
+      // A stale verdict from an earlier check must not classify this check's
+      // failures: the signature status is re-earned by this check's own
+      // verification (and preserved by fail() from the throw site on).
+      signatureStatus: 'unknown',
     };
     this.options.diagnostics?.record('update', 'info', this.state.message);
 

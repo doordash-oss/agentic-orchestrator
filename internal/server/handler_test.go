@@ -948,6 +948,14 @@ func TestRefactorActionDirtyErrorCarriesRepositoryContext(t *testing.T) {
 	if !slices.Equal(repo.DirtyFiles, wantDirty) {
 		t.Fatalf("dirty files = %v; want %v", repo.DirtyFiles, wantDirty)
 	}
+	// Totals beyond the captured lists surface as a truncation signal in
+	// diagnostics, so the partial list is never presented as complete.
+	if !strings.Contains(body.Error.Diagnostics, "3 staged, 2 unstaged, 1 untracked changes") {
+		t.Fatalf("diagnostics = %q; want a per-category totals truncation line", body.Error.Diagnostics)
+	}
+	if !strings.Contains(body.Error.Diagnostics, "each category lists at most 50 files") {
+		t.Fatalf("diagnostics = %q; want the per-category capture cap named", body.Error.Diagnostics)
+	}
 }
 
 // TestStartResumeActionChildExecutionBlocked verifies the child

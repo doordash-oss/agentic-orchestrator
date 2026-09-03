@@ -243,10 +243,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		}
 	}
 	if rec := f.FailureRecord(); rec != nil {
-		rendered := errcat.RenderRecord(*rec)
-		wire := wireError(rendered)
-		wire.Diagnostics = SafeDisplayText(rendered.Diagnostics, 240)
-		detail.Failure = &wire
+		detail.Failure = wireStoredError(rec)
 	}
 	if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
 		gate := needUserInputGateDTO(f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
@@ -592,10 +589,12 @@ func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSumma
 	return dto
 }
 
-// wireIntegrationAttention renders a stored integration attention record
-// through the catalog onto the canonical wire error, bounding raw
-// diagnostics with the safe-display helper.
-func wireIntegrationAttention(record *errcat.FailureRecord) *Error {
+// wireStoredError renders a stored failure record through the catalog onto
+// the canonical wire error, bounding raw diagnostics with the safe-display
+// helper. A nil record yields nil; every adapter that projects a stored
+// record — run failures, integration attention, repository publish
+// failures, setup tasks — shares this single rendering.
+func wireStoredError(record *errcat.FailureRecord) *Error {
 	if record == nil {
 		return nil
 	}
@@ -605,12 +604,16 @@ func wireIntegrationAttention(record *errcat.FailureRecord) *Error {
 	return &wire
 }
 
+// wireIntegrationAttention renders a stored integration attention record
+// through the shared stored-record projection.
+func wireIntegrationAttention(record *errcat.FailureRecord) *Error {
+	return wireStoredError(record)
+}
+
 // WireRepoError renders a stored repository publish-failure record through
-// the catalog onto the canonical wire error, bounding raw diagnostics with
-// the safe-display helper. A nil record yields nil; adapters that project a
-// repository's stored record share this single rendering.
+// the shared stored-record projection.
 func WireRepoError(record *errcat.FailureRecord) *Error {
-	return wireIntegrationAttention(record)
+	return wireStoredError(record)
 }
 
 // relationshipChildDTO builds the detail projection: the summary plus the
@@ -1122,16 +1125,9 @@ func setupTaskDTO(task feature.SetupTask) SetupTask {
 }
 
 // wireSetupTaskError renders a setup task's stored failure record through
-// the catalog onto the canonical wire error, bounding raw diagnostics with
-// the safe-display helper.
+// the shared stored-record projection.
 func wireSetupTaskError(record *errcat.FailureRecord) *Error {
-	if record == nil {
-		return nil
-	}
-	rendered := errcat.RenderRecord(*record)
-	wire := wireError(rendered)
-	wire.Diagnostics = SafeDisplayText(rendered.Diagnostics, 240)
-	return &wire
+	return wireStoredError(record)
 }
 
 // probeRepoFreshness collects freshness for every repo concurrently. Each

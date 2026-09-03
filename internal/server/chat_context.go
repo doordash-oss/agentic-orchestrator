@@ -15,8 +15,10 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
@@ -163,6 +165,18 @@ func chatContextFeatureInvalid(featureID string) *chatContextRejection {
 	}
 }
 
+// chatContextFeatureUnavailable reports a referenced feature whose record
+// exists but could not be loaded — an I/O, permission, or schema failure on
+// the server side. Distinct from an unknown feature reference, which is the
+// client's 400 chat_context_invalid.
+func chatContextFeatureUnavailable(err error) *chatContextRejection {
+	return &chatContextRejection{
+		status:      http.StatusInternalServerError,
+		code:        errcat.InternalError,
+		diagnostics: fmt.Sprintf("chat context feature record could not be loaded: %v", err),
+	}
+}
+
 func chatContextHomeNotFound(home string) *chatContextRejection {
 	return &chatContextRejection{
 		status:      http.StatusNotFound,
@@ -299,14 +313,21 @@ func (h *apiHandler) resolveChatContextRecovery(ref ErrorReference) (string, *ch
 	return buildChatContextBundle(ref, featureID, featureName, rendered, logPaths), nil
 }
 
-// chatContextFeature loads the referenced feature, mapping an unknown or
-// unloadable feature to the invalid-reference rejection.
+// chatContextFeature loads the referenced feature. An unknown feature is
+// the client's invalid-reference rejection; a present-but-unloadable record
+// is a server-side failure and maps to the internal-error rejection instead.
 func (h *apiHandler) chatContextFeature(featureID string) (*feature.Feature, *chatContextRejection) {
 	if h.store == nil {
 		return nil, chatContextFeatureInvalid(featureID)
 	}
 	f, err := h.store.Load(featureID)
-	if err != nil || f == nil {
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, chatContextFeatureUnavailable(err)
+		}
+		return nil, chatContextFeatureInvalid(featureID)
+	}
+	if f == nil {
 		return nil, chatContextFeatureInvalid(featureID)
 	}
 	return f, nil

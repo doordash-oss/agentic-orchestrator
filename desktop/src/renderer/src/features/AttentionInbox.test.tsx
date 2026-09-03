@@ -176,6 +176,90 @@ function popover(): HTMLElement | null {
   return screen.queryByRole('complementary', { name: 'Attention inbox' });
 }
 
+function PermissionDetailHarness({
+  item,
+}: {
+  item: Extract<AttentionItem, { kind: 'permission' }>;
+}): React.ReactElement {
+  const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
+  return (
+    <AttentionDetail
+      item={item}
+      busy={false}
+      submit={(action) => void action()}
+      drafts={drafts}
+      setDrafts={setDrafts}
+    />
+  );
+}
+
+describe('permission auto mode split button', () => {
+  it('stays hidden when the server made no offer', () => {
+    installAgenticoMock();
+    render(<PermissionDetailHarness item={permissionItem} />);
+    expect(screen.queryByRole('group', { name: 'Enable auto mode' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Allow once' })).toBeVisible();
+  });
+
+  it('allows and turns auto mode on for this feature, with all features behind the chevron', async () => {
+    const mock = installAgenticoMock();
+    const user = userEvent.setup();
+    render(
+      <PermissionDetailHarness
+        item={{ ...permissionItem, autoApprove: { wouldFastPath: true } }}
+      />,
+    );
+    const split = screen.getByRole('group', { name: 'Enable auto mode' });
+    const main = within(split).getByRole('button', {
+      name: 'Enable auto mode (this feature only)',
+    });
+    expect(main).toHaveAttribute('title', expect.stringContaining('safe build and test fast path'));
+    // The split button sits in the same row as the other decisions.
+    expect(main.closest('.attention-detail__actions')).toBe(
+      screen.getByRole('button', { name: 'Deny' }).closest('.attention-detail__actions'),
+    );
+
+    await user.click(main);
+    expect(mock.api.answerPermission).toHaveBeenLastCalledWith({
+      requestId: 'perm-1',
+      sessionId: 'session-1',
+      decision: 'allow_once',
+      autoApproveScope: 'feature',
+    });
+
+    const menu = split.querySelector('details');
+    expect(menu?.open).toBe(false);
+    await user.click(within(split).getByLabelText('More auto mode options'));
+    expect(menu?.open).toBe(true);
+    const all = within(split).getByRole('menuitem', { name: /Enable auto mode \(all features\)/ });
+    await user.click(all);
+    expect(mock.api.answerPermission).toHaveBeenLastCalledWith({
+      requestId: 'perm-1',
+      sessionId: 'session-1',
+      decision: 'allow_once',
+      autoApproveScope: 'workspace',
+    });
+  });
+
+  it('offers only the all-features choice for a request without a feature', () => {
+    installAgenticoMock();
+    const { featureId: _omit, ...ownerless } = permissionItem as Extract<
+      AttentionItem,
+      { kind: 'permission' }
+    >;
+    render(
+      <PermissionDetailHarness item={{ ...ownerless, autoApprove: { wouldFastPath: false } }} />,
+    );
+    const split = screen.getByRole('group', { name: 'Enable auto mode' });
+    const main = within(split).getByRole('button', { name: 'Enable auto mode (all features)' });
+    expect(main).toHaveAttribute(
+      'title',
+      expect.stringContaining('sent this command to a reviewer model'),
+    );
+    expect(within(split).queryByLabelText('More auto mode options')).toBeNull();
+  });
+});
+
 describe('AttentionInbox popover presentation', () => {
   it('toggles from the bell, dismisses on Escape and outside pointer, and never offers a close control', async () => {
     render(<Harness items={[permissionItem]} onJump={vi.fn()} />);

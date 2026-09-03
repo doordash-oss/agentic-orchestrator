@@ -202,6 +202,9 @@ type ToolPermissionRequest struct {
 type PermissionDecision struct {
 	Behavior string // "allow" | "deny" | "" (defer)
 	Reason   string
+	// AutoApproveOffer accompanies a deferral ("" behavior) for a Bash
+	// request that automatic review would have handled if enabled.
+	AutoApproveOffer *llm.AutoApproveOffer
 }
 
 // PermissionHandler decides whether a session may invoke a tool. Defined in

@@ -2040,6 +2040,9 @@ func controlRequestDTO(sess ports.SessionView, req *llm.ControlRequestMessage) C
 			Scope:        scope,
 			ScopeDisplay: permissionScopeDisplay(scope),
 		}
+		if req.AutoApproveOffer != nil {
+			dto.AutoApprove = &PermissionAutoApproveOffer{WouldFastPath: req.AutoApproveOffer.WouldFastPath}
+		}
 	}
 	return dto
 }

@@ -60,6 +60,15 @@ export function MinimizeIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** Disclosure chevron for split buttons and menus, shaped after SF Symbols' `chevron.down`. */
+export function ChevronDownIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M6 9l6 6 6-6" />
+    </Icon>
+  );
+}
+
 /** The toolbar attention trigger, shaped after SF Symbols' `bell`. */
 export function BellIcon(props: SVGProps<SVGSVGElement>) {
   return (

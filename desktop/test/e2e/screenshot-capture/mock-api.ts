@@ -1365,6 +1365,7 @@ const ATTENTION_POPOVER_ITEMS: AttentionSnapshot['items'] = [
     summary: 'Run the bounded verification command for the rewind preview.',
     input: { command: 'npm run check -- --scope=rewind' },
     waitingSince: new Date(Date.now() - 4 * 60_000).toISOString(),
+    autoApprove: { wouldFastPath: true },
   },
   {
     kind: 'review',

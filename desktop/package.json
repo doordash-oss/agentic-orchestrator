@@ -14,7 +14,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "generate:api": "openapi-typescript ../api/openapi.yaml -o src/shared/api/schema.gen.ts",
+    "generate:api": "node scripts/check-api-drift.mjs --write",
     "check:api-drift": "node scripts/check-api-drift.mjs",
     "install:electron-runtime": "node scripts/install-electron-runtime.mjs",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run check:api-drift",

@@ -21,6 +21,7 @@ limitations under the License.
  */
 import type { FeatureSnapshot, FeatureSetupView, OwnedError } from '../../../shared/ipc';
 import { ERROR_CLASS_LABELS } from '../../../shared/ipc';
+import type { ErrorSurfaceAction } from '../components/ErrorSurface';
 
 export type DashboardBucket = 'intervention' | 'active' | 'startable' | 'inactive';
 export type DashboardTone = 'danger' | 'attention' | 'active' | 'ready' | 'quiet';
@@ -346,10 +347,39 @@ export function runningPhaseSubline(
 }
 
 export function actionById(
-  snapshot: FeatureSnapshot,
+  snapshot: { actions: readonly FeatureSnapshot['actions'][number][] },
   id: string,
 ): FeatureSnapshot['actions'][number] | undefined {
   return snapshot.actions.find((action) => action.id === id);
+}
+
+/** Friendly renderer copy for catalog reasons that otherwise expose machine phrasing. */
+const DISABLED_REASON_COPY: Readonly<Record<string, string>> = {
+  worktree_state_unknown:
+    'Could not read the repository worktrees — check that they still exist and are a valid checkout.',
+};
+
+export function disabledReasonCopy(reason: { code: string; message: string }): string {
+  return DISABLED_REASON_COPY[reason.code] ?? reason.message;
+}
+
+/** Adapts one server catalog action to the shared error-card action contract. */
+export function catalogErrorAction(
+  snapshot: { actions: readonly FeatureSnapshot['actions'][number][] },
+  actionId: string,
+  label: string,
+): ErrorSurfaceAction | undefined {
+  const action = actionById(snapshot, actionId);
+  if (action === undefined) return undefined;
+  return {
+    enabled: action.enabled,
+    label,
+    disabledReason: action.enabled
+      ? undefined
+      : action.disabledReasons
+          .map((reason) => displayFeatureMessage(disabledReasonCopy(reason)))
+          .join(' '),
+  };
 }
 
 /**

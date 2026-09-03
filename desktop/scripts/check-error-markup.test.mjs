@@ -15,6 +15,7 @@ function writeTree(files) {
     'renderer/components/Good.tsx': '<div className="error-surface" />\n',
     'renderer/styles/app.css': '.error-surface { color: var(--bad); }\n',
     'src/shared/ipc.ts': 'export const ok = true;\n',
+    'src/main/good.ts': 'export const ok = true;\n',
   };
   for (const [path, contents] of Object.entries({ ...defaults, ...files })) {
     const full = join(root, path);
@@ -116,6 +117,24 @@ describe('error-markup static check', () => {
         file: join(tree.sourceDir, 'main', 'legacy.ts'),
         line: 1,
         rule: 'deleted identifier "SafeErrorSchema"',
+      });
+    } finally {
+      rmSync(tree.root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails when main passes a literal reason instead of a catalog-owned code', () => {
+    const tree = writeTree({
+      'src/main/bad.ts':
+        "buildCanonicalError('E_INTERNAL', { params: { reason: 'hand-authored prose' } });\n",
+    });
+    try {
+      const violations = checkErrorMarkup(optionsFor(tree));
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toMatchObject({
+        file: join(tree.sourceDir, 'main', 'bad.ts'),
+        line: 1,
+        rule: 'literal user-facing reason authored outside the desktop error catalog',
       });
     } finally {
       rmSync(tree.root, { recursive: true, force: true });

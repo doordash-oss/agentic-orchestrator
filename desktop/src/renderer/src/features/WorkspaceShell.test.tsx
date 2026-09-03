@@ -336,11 +336,16 @@ describe('WorkspaceShell sidebar', () => {
     expect(sidebarRow.querySelector('.sidebar__row-subline')?.textContent).toBe(
       'Iteration budget exhausted',
     );
+    expect(sidebarRow.querySelector('.sidebar__row-glyph')).toHaveAttribute('data-tone', 'danger');
 
     const lanes = await screen.findByRole('region', { name: 'Existing features' });
     const overviewRow = within(lanes).getByText('Broken feature').closest('li')!;
     expect(overviewRow.querySelector('.overview-row__state')?.textContent).toBe(
       'Iteration budget exhausted',
+    );
+    expect(overviewRow.querySelector('.overview-row__state')).toHaveAttribute(
+      'data-tone',
+      'danger',
     );
     // No presence surface carries the legacy hand-written labels.
     for (const legacy of ['needs attention', 'pass failed']) {

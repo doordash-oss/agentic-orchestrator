@@ -49,7 +49,7 @@ import { ErrorSurface, type ErrorSurfaceAction } from '../components/ErrorSurfac
 import { buildCanonicalError } from '../../../shared/errors';
 import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import { useModalDismiss } from '../components/useModalDismiss';
-import { useMediaQuery } from '../hooks';
+import { retryAction as retryLoadAction, useMediaQuery, type LoadState } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import type { CanonicalError } from '../../../shared/ipc';
 import { CurrentRunInspection, type RunMetrics } from './CurrentRunInspection';
@@ -68,7 +68,6 @@ import { InspectorDrawer } from './InspectorDrawer';
 import { ImpactPreviewList } from './ImpactPreviewList';
 import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
 import {
-  disabledReasonCopy,
   resolvePostImplementationMode,
   type AftercareAction,
   type AftercareModalId,
@@ -104,6 +103,8 @@ import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 import type { AttentionItem } from '../../../shared/ipc';
 import {
   actionById,
+  catalogErrorAction,
+  disabledReasonCopy,
   displayFeatureMessage,
   displayPhaseLabel,
   displayStatusLabel,
@@ -119,11 +120,9 @@ import {
 import { registerFeatureCommandExecutor } from './featureCommands';
 import type { FeatureCommandId } from '../../../shared/commands';
 
-type CockpitState =
-  | { phase: 'loading' }
-  | { phase: 'missing'; error: CanonicalError }
-  | { phase: 'error'; error: CanonicalError }
-  | { phase: 'loaded'; snapshot: FeatureSnapshot };
+type CockpitState = LoadState<
+  { phase: 'missing'; error: CanonicalError } | { phase: 'loaded'; snapshot: FeatureSnapshot }
+>;
 
 const FOCUSED_COMPLETION_SETTLE_MS = 500;
 
@@ -617,7 +616,7 @@ function RunSwitcherPopup({
           <ErrorSurface
             error={loadError.error}
             variant="compact"
-            localAction={{ label: 'Retry', onAction: () => load(loadError.page) }}
+            localAction={retryLoadAction(() => load(loadError.page))}
           />
         ) : null}
       </div>
@@ -1591,7 +1590,7 @@ export function FeatureCockpit({
         <ErrorSurface
           error={state.error}
           variant="compact"
-          localAction={{ label: 'Retry', onAction: () => refreshFeature() }}
+          localAction={retryLoadAction(() => refreshFeature())}
         />
       </section>
     );
@@ -1838,14 +1837,8 @@ export function FeatureCockpit({
   // against the feature's action catalog: the card's own primary button and
   // its disabled-reason text come from the server's enabled state.
   const resolveFailureAction = (actionId: string): ErrorSurfaceAction | undefined => {
-    const action = actionById(snapshot, actionId);
-    if (action === undefined) return undefined;
     const label = actionId === 'setup' ? 'Retry setup' : 'Restart';
-    return {
-      enabled: action.enabled,
-      label,
-      disabledReason: action.enabled ? undefined : reasonsOf(action).join(' '),
-    };
+    return catalogErrorAction(snapshot, actionId, label);
   };
 
   const handleFailureAction = (actionId: string): void => {

@@ -228,7 +228,7 @@ func (o *Orchestrator) runTransactionIntegration(childID string, child, parent *
 	// remaining applied entries. On completion the journal transitions
 	// to rolled_back or attention.
 	if journal != nil && journal.Phase == feature.TransactionPhaseRollingBack {
-		if err := o.rollbackTransaction(child, parent, journal, -1, nil); err != nil {
+		if err := o.rollbackTransaction(child, parent, journal, -1, integrationFinding{}); err != nil {
 			return err
 		}
 		var err error
@@ -386,11 +386,7 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 			// are unchanged and the pass remains resumable, and the child's
 			// run carries no failure record until a later phase classifies
 			// it.
-			finding := integrationFinding{
-				ctx:         repoContextFromEntry(entry),
-				code:        errcat.IntegrationWorktreeSyncFailed,
-				diagnostics: syncErr.Error(),
-			}
+			finding := entryFinding(entry, errcat.IntegrationWorktreeSyncFailed, syncErr.Error())
 			if err := o.parkIntegrationAttention(child, journal, []integrationFinding{finding}); err != nil {
 				return fmt.Errorf("recording closure sync attention: %w", err)
 			}

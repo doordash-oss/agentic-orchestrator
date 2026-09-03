@@ -175,6 +175,12 @@ export const ERROR_CATALOG = {
     summary: ({ reason }: { reason: string }) => reason,
     remediationHint: () => 'Check that the server is running and reachable, then use Retry.',
   }),
+  E_EXTERNAL_RUNTIME_UNRESPONSIVE: entry({
+    class: 'blocking',
+    title: 'The server connection was lost',
+    summary: () => 'The externally managed Agentico runtime stopped responding.',
+    remediationHint: () => 'Restart it from where it was started, then use Retry.',
+  }),
   /** A lost remote while the bounded background re-probe keeps trying to re-attach. */
   E_REMOTE_SERVER_LOST_REPROBING: entry({
     class: 'warning',
@@ -365,10 +371,45 @@ export const ERROR_CATALOG = {
     remediationHint: () =>
       'Re-enter the remote server token in Settings (paste its connection string again), then use Retry.',
   }),
+  E_REMOTE_TOKEN_UNREADABLE: entry({
+    class: 'needs_action',
+    title: 'Re-enter the remote server token',
+    summary: () => 'The stored token for this remote server could not be decrypted.',
+    remediationHint: () =>
+      'Re-enter the remote server token in Settings (paste its connection string again), then use Retry.',
+  }),
+  E_REMOTE_TOKEN_MISSING: entry({
+    class: 'needs_action',
+    title: 'Re-enter the remote server token',
+    summary: () => 'There is no stored token for this remote server.',
+    remediationHint: () =>
+      'Re-enter the remote server token in Settings (paste its connection string again), then use Retry.',
+  }),
+  E_REMOTE_HEALTH_UNANSWERED: entry({
+    class: 'blocking',
+    title: 'The server connection was lost',
+    summary: () => 'The remote Agentico server did not answer its health probe.',
+    remediationHint: () => 'Check that the server is running and reachable, then use Retry.',
+  }),
+  E_REMOTE_HEALTH_UNHEALTHY: entry({
+    class: 'blocking',
+    title: 'The server connection was lost',
+    summary: () => 'The remote Agentico server answered with an unhealthy status.',
+    remediationHint: () => 'Check the server health and logs, then use Retry.',
+  }),
+  E_REMOTE_STORED_TOKEN_REJECTED: entry({
+    class: 'needs_action',
+    title: 'Re-enter the remote server token',
+    summary: () => 'The remote Agentico server rejected the stored token.',
+    remediationHint: () =>
+      'Re-enter the remote server token in Settings (paste its connection string again), then use Retry.',
+  }),
   E_SERVER_UNKNOWN: entry({
     class: 'blocking',
     title: 'Unknown server',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: () => 'The server is not in the servers list.',
+    remediationHint: () =>
+      'Refresh Settings and try again; the server may already have been removed.',
   }),
   E_LINK_ADD_FAILED: entry({
     class: 'blocking',
@@ -407,6 +448,21 @@ export const ERROR_CATALOG = {
     class: 'blocking',
     title: 'Session stream protocol error',
     summary: ({ detail }: { detail: string }) => detail,
+  }),
+  E_STREAM_PROTOCOL_UNKNOWN_EVENT: entry({
+    class: 'blocking',
+    title: 'Session stream protocol error',
+    summary: () => 'The session output stream contained an unknown event.',
+  }),
+  E_STREAM_PROTOCOL_MISSING_SESSION_ID: entry({
+    class: 'blocking',
+    title: 'Session stream protocol error',
+    summary: () => 'The session output stream omitted its session ID.',
+  }),
+  E_STREAM_PROTOCOL_CURSOR_MISMATCH: entry({
+    class: 'blocking',
+    title: 'Session stream protocol error',
+    summary: () => 'The session output row cursor did not match its message.',
   }),
   E_SESSION_ERROR: entry({
     class: 'blocking',
@@ -548,25 +604,50 @@ export const ERROR_CATALOG = {
   }),
 
   // --- Update flow --------------------------------------------------------------
+  E_UPDATE_NOT_READY: entry({
+    class: 'blocking',
+    title: 'Update is not ready',
+    summary: () => 'No verified update is ready to install.',
+  }),
+  E_UPDATE_CONSENT_REQUIRED: entry({
+    class: 'needs_action',
+    title: 'Update consent required',
+    summary: () => 'Installing an update requires explicit consent.',
+  }),
+  E_UPDATE_RELEASE_VERSION_INVALID: entry({
+    class: 'blocking',
+    title: 'Update version is invalid',
+    summary: () => 'The release feed did not contain a compatible SemVer identity.',
+  }),
+  E_UPDATE_DOWNGRADE_REJECTED: entry({
+    class: 'blocking',
+    title: 'Update downgrade rejected',
+    summary: () => 'The release feed offered an older version.',
+  }),
+  E_UPDATE_ASSET_UNAVAILABLE: entry({
+    class: 'blocking',
+    title: 'Update package unavailable',
+    summary: () => 'No compatible update package is available for this platform.',
+  }),
   E_UPDATE_CHECK_FAILED: entry({
     class: 'blocking',
     title: 'Update check failed',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: () => 'Agentico could not complete the update check.',
   }),
   E_UPDATE_DOWNLOAD_FAILED: entry({
     class: 'blocking',
     title: 'Update download failed',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: () => 'Agentico could not download the selected update.',
   }),
   E_UPDATE_SIGNATURE_FAILED: entry({
     class: 'blocking',
     title: 'Update signature verification failed',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: () => 'Agentico could not verify the downloaded update.',
   }),
   E_UPDATE_INSTALL_FAILED: entry({
     class: 'blocking',
     title: 'Update install failed',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: () => 'Agentico could not install the verified update.',
   }),
 } as const;
 

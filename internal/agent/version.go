@@ -103,6 +103,19 @@ func BelowMinVersion(p llm.LLMProvider) (below bool, version string, minVer [3]i
 	return !meetsMinVersion(major, minor, patch, minVer), version, minVer
 }
 
+// BelowMinVersionGuidance returns the single detail/remedy pair used by both
+// startup and readiness when a provider fails its minimum-version gate.
+func BelowMinVersionGuidance(p llm.LLMProvider) (below bool, detail, remedy string) {
+	below, version, minVer := BelowMinVersion(p)
+	if !below {
+		return false, "", ""
+	}
+	return true,
+		fmt.Sprintf("%s CLI version %s is below the required minimum %d.%d.%d",
+			p.Name(), version, minVer[0], minVer[1], minVer[2]),
+		"Upgrade with: " + p.InstallHint()
+}
+
 // versionRe matches version strings like "1.2.3" or "claude 1.2.3".
 var versionRe = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
 

@@ -83,14 +83,9 @@ func (o *Orchestrator) rebaseIntegrationGate(child *feature.Feature) *feature.Tr
 	integration := make([]integrationFinding, 0, len(findings))
 	for _, finding := range findings {
 		journal.Entries = append(journal.Entries, finding.entry)
-		integration = append(integration, integrationFinding{
-			ctx: integrationRepoContext{
-				Name:          finding.entry.Repo,
-				ConflictFiles: finding.conflictFiles,
-			},
-			code:        finding.code,
-			diagnostics: finding.diagnostics,
-		})
+		item := entryFinding(&finding.entry, finding.code, finding.diagnostics)
+		item.ctx.ConflictFiles = finding.conflictFiles
+		integration = append(integration, item)
 	}
 	journal.Attention = findingsRecord(integration)
 	return journal

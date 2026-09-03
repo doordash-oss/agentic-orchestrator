@@ -5227,6 +5227,10 @@ body {
   background: var(--attention);
 }
 
+.sidebar__row-glyph[data-tone='danger'] {
+  background: var(--bad);
+}
+
 .sidebar__row-glyph[data-tone='progress'] {
   background: var(--accent);
 }
@@ -5969,6 +5973,10 @@ body {
   color: var(--attention);
 }
 
+.overview-row__state[data-tone='danger'] {
+  color: var(--bad);
+}
+
 .overview-row__state-text {
   min-width: 0;
   overflow: hidden;
@@ -5986,6 +5994,10 @@ body {
 
 .overview-row__state-dot[data-tone='attention'] {
   background: var(--attention);
+}
+
+.overview-row__state-dot[data-tone='danger'] {
+  background: var(--bad);
 }
 
 .overview-row__state-dot[data-tone='progress'] {
@@ -13380,7 +13392,7 @@ body {
   border: var(--bench-hairline-width) solid var(--hairline);
   border-radius: var(--bench-radius-control);
   background: var(--raised);
-  color: var(--faint);
+  color: var(--muted);
   font: 11px var(--bench-font-mono);
 }
 
@@ -13439,6 +13451,7 @@ body {
  * action but ghosted — transparent ground, hairline frame, muted word — so
  * the remediation verb stays the card's loudest affordance. */
 .error-surface__explain {
+  align-self: flex-start;
   border: var(--bench-hairline-width) solid var(--hairline);
   border-radius: var(--bench-radius-control);
   padding: 4px var(--space-3);
@@ -13549,7 +13562,7 @@ body {
 }
 
 .error-surface__file-list-label {
-  color: var(--faint);
+  color: var(--muted);
   font: 600 11px var(--bench-font-text);
 }
 
@@ -13568,7 +13581,7 @@ body {
 }
 
 .error-surface__sha-label {
-  color: var(--faint);
+  color: var(--muted);
 }
 
 .error-surface__sha-value {

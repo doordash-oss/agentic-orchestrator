@@ -651,15 +651,14 @@ func checkProviderVersionGate(p llm.LLMProvider) (llm.ProviderReadiness, bool) {
 	if !ok || !enforcer.EnforcesMinVersion() {
 		return llm.ProviderReadiness{}, true
 	}
-	below, version, minVer := agent.BelowMinVersion(p)
+	below, detail, remedy := agent.BelowMinVersionGuidance(p)
 	if !below {
 		return llm.ProviderReadiness{}, true
 	}
 	return llm.ProviderReadiness{
-		Ready: false,
-		Detail: fmt.Sprintf("%s CLI version %s is below the required minimum %d.%d.%d",
-			p.Name(), version, minVer[0], minVer[1], minVer[2]),
-		Remedy: "Upgrade with: " + p.InstallHint(),
+		Ready:  false,
+		Detail: detail,
+		Remedy: remedy,
 	}, false
 }
 

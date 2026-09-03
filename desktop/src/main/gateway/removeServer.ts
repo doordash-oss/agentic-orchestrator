@@ -64,13 +64,7 @@ export async function removeKnownServer(
 ): Promise<ConnectionState> {
   const entry = deps.knownServers().known.find((item) => item.serverKey === request.serverKey);
   if (entry === undefined) {
-    throw new CanonicalErrorException(
-      buildCanonicalError(E_SERVER_UNKNOWN, {
-        params: { reason: 'The server is not in the servers list.' },
-        remediationHint:
-          'Refresh Settings and try again; the server may already have been removed.',
-      }),
-    );
+    throw new CanonicalErrorException(buildCanonicalError(E_SERVER_UNKNOWN));
   }
   if (entry.kind === 'remote') {
     deps.removeRemoteToken(entry.serverKey);
@@ -99,11 +93,7 @@ export function serverTokenStatus(
 ): ServerTokenStatusResult {
   const entry = deps.knownServers().known.find((item) => item.serverKey === request.serverKey);
   if (entry === undefined) {
-    throw new CanonicalErrorException(
-      buildCanonicalError(E_SERVER_UNKNOWN, {
-        params: { reason: 'The server is not in the servers list.' },
-      }),
-    );
+    throw new CanonicalErrorException(buildCanonicalError(E_SERVER_UNKNOWN));
   }
   if (entry.kind === 'local') {
     return { status: 'local' };

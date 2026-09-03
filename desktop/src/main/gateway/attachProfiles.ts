@@ -411,14 +411,11 @@ export async function runRemoteAttach(
       stage: 'authenticate',
       detail: 'The stored credentials for the remote server must be re-entered.',
       ownership: 'none',
-      error: buildCanonicalError('E_REMOTE_TOKEN_REPASTE', {
-        params: {
-          reason:
-            loaded.status === 're-paste-required'
-              ? 'The stored token for this remote server could not be decrypted.'
-              : 'There is no stored token for this remote server.',
-        },
-      }),
+      error: buildCanonicalError(
+        loaded.status === 're-paste-required'
+          ? 'E_REMOTE_TOKEN_UNREADABLE'
+          : 'E_REMOTE_TOKEN_MISSING',
+      ),
       ...(switchContext !== undefined ? { switchContext } : {}),
     });
     return 'blocked';
@@ -441,9 +438,7 @@ export async function runRemoteAttach(
             stage: 'connect',
             detail: 'The remote Agentico server is not reachable.',
             ownership: 'none',
-            error: buildCanonicalError('E_EXTERNAL_SERVER_LOST', {
-              params: { reason: 'The remote Agentico server did not answer its health probe.' },
-            }),
+            error: buildCanonicalError('E_REMOTE_HEALTH_UNANSWERED'),
             ...(switchContext !== undefined ? { switchContext } : {}),
           }
         : {
@@ -451,11 +446,7 @@ export async function runRemoteAttach(
             stage: 'connect',
             detail: 'The remote Agentico server is not healthy.',
             ownership: 'none',
-            error: buildCanonicalError('E_EXTERNAL_SERVER_LOST', {
-              params: {
-                reason: 'The remote Agentico server answered with an unhealthy status.',
-              },
-            }),
+            error: buildCanonicalError('E_REMOTE_HEALTH_UNHEALTHY'),
             ...(switchContext !== undefined ? { switchContext } : {}),
           },
     );
@@ -498,9 +489,7 @@ export async function runRemoteAttach(
     },
     {
       detail: 'The remote Agentico server rejected the stored credentials.',
-      error: buildCanonicalError('E_REMOTE_TOKEN_REPASTE', {
-        params: { reason: 'The remote Agentico server rejected the stored token.' },
-      }),
+      error: buildCanonicalError('E_REMOTE_STORED_TOKEN_REJECTED'),
     },
     switchContext,
   );

@@ -419,32 +419,23 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 		entry := &journal.Entries[i]
 		parentRepo := featureRepoByName(parent, entry.Repo)
 		if parentRepo == nil {
-			findings = append(findings, integrationFinding{
-				ctx:         repoContextFromEntry(entry),
-				code:        errcat.IntegrationRepositoryMissing,
-				diagnostics: fmt.Sprintf("parent no longer has repository %s", entry.Repo),
-			})
+			findings = append(findings, entryFinding(entry, errcat.IntegrationRepositoryMissing,
+				fmt.Sprintf("parent no longer has repository %s", entry.Repo)))
 			continue
 		}
 		ref := "refs/heads/" + entry.ParentBranch
 		current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 		if err != nil {
-			findings = append(findings, integrationFinding{
-				ctx:         repoContextFromEntry(entry),
-				code:        errcat.IntegrationCandidateFailed,
-				diagnostics: fmt.Sprintf("reading ref %s: %v", ref, err),
-			})
+			findings = append(findings, entryFinding(entry, errcat.IntegrationCandidateFailed,
+				fmt.Sprintf("reading ref %s: %v", ref, err)))
 			continue
 		}
 		entry.ObservedSHA = current
 		if passThroughCandidate(entry) {
 			if current != entry.ParentAnchorSHA {
-				findings = append(findings, integrationFinding{
-					ctx:  repoContextFromEntry(entry),
-					code: errcat.IntegrationRefRace,
-					diagnostics: fmt.Sprintf("ref %s externally moved: pass-through anchor %s observed %s",
-						ref, entry.ParentAnchorSHA, current),
-				})
+				findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
+					fmt.Sprintf("ref %s externally moved: pass-through anchor %s observed %s",
+						ref, entry.ParentAnchorSHA, current)))
 			}
 			if entry.ApplyState != feature.RepoApplyApplied {
 				allAtCandidate = false
@@ -473,19 +464,13 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 				anyRolledBack = true
 			case entry.ApplyState == feature.RepoApplyApplied:
 				// Was applied but ref moved back — external reset.
-				findings = append(findings, integrationFinding{
-					ctx:         repoContextFromEntry(entry),
-					code:        errcat.IntegrationRefRace,
-					diagnostics: fmt.Sprintf("ref %s was applied but regressed to old SHA", ref),
-				})
+				findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
+					fmt.Sprintf("ref %s was applied but regressed to old SHA", ref)))
 			}
 		default:
-			findings = append(findings, integrationFinding{
-				ctx:  repoContextFromEntry(entry),
-				code: errcat.IntegrationRefRace,
-				diagnostics: fmt.Sprintf("ref %s externally moved: old %s candidate %s observed %s",
-					ref, entry.ParentAnchorSHA, entry.CandidateSHA, current),
-			})
+			findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
+				fmt.Sprintf("ref %s externally moved: old %s candidate %s observed %s",
+					ref, entry.ParentAnchorSHA, entry.CandidateSHA, current)))
 		}
 		if entry.ApplyState != feature.RepoApplyApplied {
 			allAtCandidate = false
@@ -506,13 +491,13 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 	}
 
 	if anyApplied && !allAtCandidate {
-		return o.rollbackTransaction(f, parent, journal, -1, nil)
+		return o.rollbackTransaction(f, parent, journal, -1, integrationFinding{})
 	}
 
 	// If some entries were rolled back during a partially completed
 	// rollback, continue the rollback for remaining applied entries.
 	if anyRolledBack && journal.Phase == feature.TransactionPhaseRollingBack {
-		return o.rollbackTransaction(f, parent, journal, -1, nil)
+		return o.rollbackTransaction(f, parent, journal, -1, integrationFinding{})
 	}
 
 	return nil

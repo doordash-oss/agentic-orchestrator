@@ -34,6 +34,7 @@ import {
 import { parseIpcError } from '../wizard/ipcError';
 import type { CanonicalError } from '../../../shared/ipc';
 import { ErrorSurface } from '../components/ErrorSurface';
+import { retryAction, type LoadState } from '../hooks';
 import { PhaseRail } from './PhaseRailRow';
 import { archiveRailSegments, railTrio } from './phaseRail';
 import {
@@ -56,13 +57,10 @@ export interface ArchiveModeProps {
   onReturnToCurrent(): void;
 }
 
-type ArchiveState =
-  | { phase: 'loading' }
-  | { phase: 'error'; error: CanonicalError }
-  | {
-      phase: 'loaded';
-      detail: RunDetailView | null;
-    };
+type ArchiveState = LoadState<{
+  phase: 'loaded';
+  detail: RunDetailView | null;
+}>;
 
 export function ArchiveMode(props: ArchiveModeProps) {
   const {
@@ -248,7 +246,7 @@ export function ArchiveMode(props: ArchiveModeProps) {
         <ErrorSurface
           error={state.error}
           variant="compact"
-          localAction={{ label: 'Retry', onAction: () => void load(selectedRunNumber) }}
+          localAction={retryAction(() => void load(selectedRunNumber))}
         />
       </ArchiveShell>
     );
@@ -364,7 +362,7 @@ export function ArchiveMode(props: ArchiveModeProps) {
               <ErrorSurface
                 error={inspectionError}
                 variant="compact"
-                localAction={{ label: 'Retry', onAction: () => void loadResources() }}
+                localAction={retryAction(() => void loadResources())}
               />
             ) : null}
             <h3 className="archive-mode__section-title">Artifacts</h3>
@@ -372,7 +370,7 @@ export function ArchiveMode(props: ArchiveModeProps) {
               <ErrorSurface
                 error={artifactLoadError}
                 variant="compact"
-                localAction={{ label: 'Retry', onAction: () => void loadResources() }}
+                localAction={retryAction(() => void loadResources())}
               />
             ) : artifacts.length === 0 ? (
               <p className="archive-mode__empty">No artifacts for this run.</p>
@@ -445,7 +443,7 @@ export function ArchiveMode(props: ArchiveModeProps) {
                 <ErrorSurface
                   error={sessionLoadError}
                   variant="compact"
-                  localAction={{ label: 'Retry', onAction: () => void loadResources() }}
+                  localAction={retryAction(() => void loadResources())}
                 />
               ) : sessions.sessions.length === 0 ? (
                 <p className="archive-mode__empty">

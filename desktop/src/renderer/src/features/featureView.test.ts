@@ -19,6 +19,7 @@ import { featureSnapshot } from '../test/agenticoMock';
 import type { OwnedError } from '../../../shared/ipc';
 import {
   actionById,
+  catalogErrorAction,
   childStatusSpineIndex,
   dashboardState,
   displayFeatureMessage,
@@ -80,6 +81,26 @@ describe('displayFeatureMessage', () => {
     expect(displayFeatureMessage('action unavailable while feature status is BuildingKB')).toBe(
       'action unavailable while feature status is Building knowledge base',
     );
+  });
+});
+
+describe('catalogErrorAction', () => {
+  it('uses the shared friendly reason copy for every error surface', () => {
+    const snapshot = featureSnapshot({
+      actions: [
+        {
+          id: 'publish',
+          enabled: false,
+          disabledReasons: [{ code: 'worktree_state_unknown', message: 'raw server wording' }],
+        },
+      ],
+    });
+    expect(catalogErrorAction(snapshot, 'publish', 'Retry publish')).toEqual({
+      enabled: false,
+      label: 'Retry publish',
+      disabledReason:
+        'Could not read the repository worktrees — check that they still exist and are a valid checkout.',
+    });
   });
 });
 

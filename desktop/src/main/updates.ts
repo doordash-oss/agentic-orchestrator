@@ -134,6 +134,11 @@ type FetchHeaders = Record<string, string>;
 
 /** The catalog codes a failed update state can carry, one per failure stage. */
 type UpdateFailureCode =
+  | 'E_UPDATE_NOT_READY'
+  | 'E_UPDATE_CONSENT_REQUIRED'
+  | 'E_UPDATE_RELEASE_VERSION_INVALID'
+  | 'E_UPDATE_DOWNGRADE_REJECTED'
+  | 'E_UPDATE_ASSET_UNAVAILABLE'
   | 'E_UPDATE_CHECK_FAILED'
   | 'E_UPDATE_DOWNLOAD_FAILED'
   | 'E_UPDATE_SIGNATURE_FAILED'
@@ -263,7 +268,7 @@ export class UpdateCoordinator {
 
   async installWhenIdle(): Promise<UpdateState> {
     if (!isInstallable(this.state)) {
-      return this.fail('No verified update is ready to install.');
+      return this.fail('E_UPDATE_NOT_READY');
     }
     const active = await this.options.detectActiveWork();
     if (!active.detectionFailed && active.featureCount === 0 && !active.amaActive) {
@@ -295,10 +300,10 @@ export class UpdateCoordinator {
 
   async installNow(request: UpdateInstallNowRequest): Promise<UpdateState> {
     if (!request.consent) {
-      return this.fail('Installing an update requires explicit consent.');
+      return this.fail('E_UPDATE_CONSENT_REQUIRED');
     }
     if (!isInstallable(this.state)) {
-      return this.fail('No verified update is ready to install.');
+      return this.fail('E_UPDATE_NOT_READY');
     }
     const active = await this.options.detectActiveWork();
     if (
@@ -336,7 +341,7 @@ export class UpdateCoordinator {
       return this.state;
     }
     if (!isInstallable(this.state)) {
-      return this.fail('No verified update is ready to install.');
+      return this.fail('E_UPDATE_NOT_READY');
     }
     let active: UpdateActiveWork;
     try {
@@ -360,7 +365,7 @@ export class UpdateCoordinator {
 
   private async applyStagedUpdate(): Promise<UpdateState> {
     if (!isInstallable(this.state) || this.stagedPackage === null) {
-      return this.fail('No verified update is ready to install.');
+      return this.fail('E_UPDATE_NOT_READY');
     }
     const readyState = this.state;
     this.state = {
@@ -388,12 +393,11 @@ export class UpdateCoordinator {
       }
       this.state = readyState;
       this.fail(
-        'The verified update could not be installed.',
+        'E_UPDATE_INSTALL_FAILED',
         {
           guidance: ['Retry the install from the Updates pane, or open the release notes.'],
         },
         {
-          code: 'E_UPDATE_INSTALL_FAILED',
           underlying: error,
         },
       );
@@ -432,21 +436,11 @@ export class UpdateCoordinator {
       const current = parseSemver(this.state.currentVersion);
       const target = parseSemver(latest.tag_name);
       if (target === null || current === null) {
-        return this.fail(
-          'The release feed did not contain a compatible SemVer identity.',
-          {},
-          {
-            code: 'E_UPDATE_CHECK_FAILED',
-          },
-        );
+        return this.fail('E_UPDATE_RELEASE_VERSION_INVALID');
       }
       const versionComparison = compareSemver(target, current);
       if (versionComparison < 0) {
-        return this.fail(
-          'The release feed offered an older version; downgrade rejected.',
-          { releaseNotesUrl: latest.html_url },
-          { code: 'E_UPDATE_CHECK_FAILED' },
-        );
+        return this.fail('E_UPDATE_DOWNGRADE_REJECTED', { releaseNotesUrl: latest.html_url });
       }
       if (versionComparison === 0) {
         this.stagedPackage = null;
@@ -469,15 +463,11 @@ export class UpdateCoordinator {
         stripLeadingV(latest.tag_name),
       );
       if (selected === null) {
-        return this.fail(
-          `No ${this.packageFormat} update package is available for ${this.platform}/${this.arch}.`,
-          {
-            targetVersion: stripLeadingV(latest.tag_name),
-            releaseNotesUrl: latest.html_url,
-            guidance: ['Open the release notes to choose a signed artifact manually.'],
-          },
-          { code: 'E_UPDATE_CHECK_FAILED' },
-        );
+        return this.fail('E_UPDATE_ASSET_UNAVAILABLE', {
+          targetVersion: stripLeadingV(latest.tag_name),
+          releaseNotesUrl: latest.html_url,
+          guidance: ['Open the release notes to choose a signed artifact manually.'],
+        });
       }
       const metadata = await this.verifyReleaseMetadata(latest, selected);
       if (metadata === null) {
@@ -566,7 +556,7 @@ export class UpdateCoordinator {
           : this.state.status === 'downloading'
             ? 'E_UPDATE_DOWNLOAD_FAILED'
             : 'E_UPDATE_CHECK_FAILED';
-      return this.fail(safeMessage(error), {}, { code, underlying: error });
+      return this.fail(code, {}, { underlying: error });
     } finally {
       this.scheduleNext();
     }
@@ -765,38 +755,34 @@ export class UpdateCoordinator {
   }
 
   private fail(
-    message: string,
+    code: UpdateFailureCode,
     patch: Partial<Pick<UpdateState, 'targetVersion' | 'releaseNotesUrl' | 'guidance'>> = {},
-    options: { code?: UpdateFailureCode; underlying?: unknown } = {},
+    options: { underlying?: unknown } = {},
   ): UpdateState {
     // The failed status carries the canonical error authored from the desktop
     // catalog: the message is the summary, the guidance lines fold into the
     // remediation hint, and any underlying error text rides redacted
     // diagnostics.
-    const code = options.code ?? 'E_UPDATE_INSTALL_FAILED';
     const guidanceHint = patch.guidance?.join(' ');
     const underlyingText =
       options.underlying !== undefined
         ? redactUpdateDiagnostics(safeMessage(options.underlying))
         : undefined;
     const error = buildCanonicalError(code, {
-      params: { reason: message },
       ...(guidanceHint !== undefined && guidanceHint !== ''
         ? { remediationHint: guidanceHint }
         : {}),
-      ...(underlyingText !== undefined && underlyingText !== message
-        ? { diagnostics: underlyingText }
-        : {}),
+      ...(underlyingText !== undefined ? { diagnostics: underlyingText } : {}),
     });
     this.state = {
       ...this.state,
       ...patch,
       status: 'failed',
       signatureStatus: this.state.signatureStatus,
-      message,
+      message: error.summary,
       error,
     };
-    this.options.diagnostics?.record('update', 'warn', message);
+    this.options.diagnostics?.record('update', 'warn', error.summary);
     this.notify();
     return this.state;
   }

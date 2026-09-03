@@ -429,8 +429,8 @@ func TestReadinessInvalidConfigurationReported(t *testing.T) {
 		t.Fatalf("configuration issue title = %q; want catalog title", snapshot.Configuration.Issue.Title)
 	}
 	if snapshot.Configuration.Issue.Remediation == nil ||
-		snapshot.Configuration.Issue.Remediation.Hint != "Fix defaults.pipeline in the runtime configuration" {
-		t.Fatalf("configuration remediation = %+v; want defaults.pipeline hint",
+		snapshot.Configuration.Issue.Remediation.Hint != "Fix the configuration and restart the runtime." {
+		t.Fatalf("configuration remediation = %+v; want catalog hint",
 			snapshot.Configuration.Issue.Remediation)
 	}
 }

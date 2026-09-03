@@ -441,7 +441,7 @@ var catalog = map[Code]Entry{
 			}
 			return "Some workspace roots do not resolve to existing directories: " + strings.Join(paths, "; ") + "."
 		},
-		Remediation: "Check the workspace roots in settings and try again.",
+		Remediation: "Create the directory or update workspace_roots in the runtime configuration.",
 	},
 
 	// --- Publish failure codes -------------------------------------------------
@@ -778,7 +778,7 @@ var catalog = map[Code]Entry{
 		Class:       ClassBlocking,
 		Title:       "Invalid repository",
 		Summary:     "A configured repository path is not a git repository.",
-		Remediation: "Check the repository paths in settings.",
+		Remediation: "Point the repository at a git checkout or initialize the directory as a repository.",
 	},
 	MissingExecutable: {
 		Class:       ClassBlocking,

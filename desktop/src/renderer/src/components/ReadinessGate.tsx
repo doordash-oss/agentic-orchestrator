@@ -21,7 +21,7 @@ limitations under the License.
  * gate is unsatisfied, and the main view once everything passes. Mounted
  * fresh on every reconnect, so resume always starts from the server truth.
  */
-import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useState, type Dispatch, type SetStateAction } from 'react';
 import type {
   AttentionItem,
   ReadinessSnapshot,
@@ -31,15 +31,9 @@ import type {
 import { WorkspaceShell } from '../features/WorkspaceShell';
 import type { AttentionDrafts } from '../features/AttentionInbox';
 import { deriveWizardState } from '../wizard/deriveWizardState';
-import { parseIpcError } from '../wizard/ipcError';
-import type { CanonicalError } from '../../../shared/ipc';
+import { retryAction, useIpcLoad } from '../hooks';
 import { SetupWizard } from './wizard/SetupWizard';
 import { ErrorSurface } from './ErrorSurface';
-
-type GateState =
-  | { phase: 'loading' }
-  | { phase: 'error'; error: CanonicalError }
-  | { phase: 'loaded'; snapshot: ReadinessSnapshot };
 
 export function ReadinessGate({
   attentionDrafts,
@@ -84,19 +78,9 @@ export function ReadinessGate({
   onOpenPalette?(): void;
   amaUnread?: boolean;
 }) {
-  const [state, setState] = useState<GateState>({ phase: 'loading' });
-
-  const load = useCallback(() => {
-    setState({ phase: 'loading' });
-    window.agentico
-      .getReadiness()
-      .then((snapshot) => setState({ phase: 'loaded', snapshot }))
-      .catch((err: unknown) => setState({ phase: 'error', error: parseIpcError(err) }));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const load = useCallback(() => window.agentico.getReadiness(), []);
+  const { state, reload } = useIpcLoad(load, []);
+  const [adoptedSnapshot, setAdoptedSnapshot] = useState<ReadinessSnapshot | null>(null);
 
   if (state.phase === 'loading') {
     return (
@@ -114,16 +98,13 @@ export function ReadinessGate({
         {/* The parsed canonical error owns the presentation — code, title,
          * summary, remediation — so no hand-written remediation sentence
          * rides along; Retry simply re-runs the fetch. */}
-        <ErrorSurface
-          error={state.error}
-          variant="compact"
-          localAction={{ label: 'Retry', onAction: load }}
-        />
+        <ErrorSurface error={state.error} variant="compact" localAction={retryAction(reload)} />
       </section>
     );
   }
 
-  const derived = deriveWizardState(state.snapshot);
+  const snapshot = adoptedSnapshot ?? state.data;
+  const derived = deriveWizardState(snapshot);
   if (derived.complete) {
     return (
       <WorkspaceShell
@@ -148,10 +129,5 @@ export function ReadinessGate({
     );
   }
 
-  return (
-    <SetupWizard
-      snapshot={state.snapshot}
-      onSnapshot={(snapshot) => setState({ phase: 'loaded', snapshot })}
-    />
-  );
+  return <SetupWizard snapshot={snapshot} onSnapshot={setAdoptedSnapshot} />;
 }

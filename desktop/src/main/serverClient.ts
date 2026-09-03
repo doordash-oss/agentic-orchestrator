@@ -334,29 +334,17 @@ export type ParsedSessionOutput =
 /** Parses one bounded, versioned session-output SSE block. */
 export function parseSessionOutputBlock(block: SseBlock): ParsedSessionOutput {
   if (!['session.output', 'session.output.done'].includes(block.event)) {
-    throw new CanonicalErrorException(
-      buildCanonicalError('E_STREAM_PROTOCOL', {
-        params: { detail: 'Unknown session output event.' },
-      }),
-    );
+    throw new CanonicalErrorException(buildCanonicalError('E_STREAM_PROTOCOL_UNKNOWN_EVENT'));
   }
   const chunk = parseServerJson(block.data, SessionOutputChunkSchema, 2 * 1024 * 1024);
   if (chunk.session_id === undefined || chunk.session_id === '') {
-    throw new CanonicalErrorException(
-      buildCanonicalError('E_STREAM_PROTOCOL', {
-        params: { detail: 'Session output omitted its session ID.' },
-      }),
-    );
+    throw new CanonicalErrorException(buildCanonicalError('E_STREAM_PROTOCOL_MISSING_SESSION_ID'));
   }
   if (block.event === 'session.output.done' || chunk.done === true) {
     return { type: 'done', sessionId: chunk.session_id, nextIndex: chunk.index };
   }
   if (chunk.message === undefined || chunk.message.index !== chunk.index) {
-    throw new CanonicalErrorException(
-      buildCanonicalError('E_STREAM_PROTOCOL', {
-        params: { detail: 'Session output row cursor did not match its message.' },
-      }),
-    );
+    throw new CanonicalErrorException(buildCanonicalError('E_STREAM_PROTOCOL_CURSOR_MISMATCH'));
   }
   return {
     type: 'record',

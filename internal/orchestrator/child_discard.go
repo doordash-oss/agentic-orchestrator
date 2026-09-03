@@ -22,7 +22,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -355,22 +354,16 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 		parentRepo := featureRepoByName(parent, entry.Repo)
 		if parentRepo == nil {
 			allSafe = false
-			findings = append(findings, integrationFinding{
-				ctx:         repoContextFromEntry(entry),
-				code:        errcat.IntegrationRepositoryMissing,
-				diagnostics: fmt.Sprintf("parent no longer has repository %s", entry.Repo),
-			})
+			findings = append(findings, entryFinding(entry, errcat.IntegrationRepositoryMissing,
+				fmt.Sprintf("parent no longer has repository %s", entry.Repo)))
 			continue
 		}
 		ref := "refs/heads/" + entry.ParentBranch
 		current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 		if err != nil {
 			allSafe = false
-			findings = append(findings, integrationFinding{
-				ctx:         repoContextFromEntry(entry),
-				code:        errcat.IntegrationCandidateFailed,
-				diagnostics: fmt.Sprintf("reading ref %s: %v", ref, err),
-			})
+			findings = append(findings, entryFinding(entry, errcat.IntegrationCandidateFailed,
+				fmt.Sprintf("reading ref %s: %v", ref, err)))
 			continue
 		}
 		entry.ObservedSHA = current
@@ -378,19 +371,8 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 		if current == entry.CandidateSHA {
 			// Ref still at candidate — CAS rollback to anchor.
 			if err := o.deps.Worktrees.UpdateRef(parentRepo.Path, ref, entry.CandidateSHA, entry.ParentAnchorSHA); err != nil {
-				var casErr *git.RefCASMismatchError
-				code := errcat.IntegrationCandidateFailed
-				diag := fmt.Sprintf("repo %s rollback CAS failed for %s: %v", entry.Repo, ref, err)
-				if errors.As(err, &casErr) {
-					code = errcat.IntegrationRefRace
-					diag = fmt.Sprintf("repo %s rollback CAS mismatch for %s: expected %s observed %s", entry.Repo, ref, casErr.Expected, casErr.Observed)
-				}
 				allSafe = false
-				findings = append(findings, integrationFinding{
-					ctx:         repoContextFromEntry(entry),
-					code:        code,
-					diagnostics: diag,
-				})
+				findings = append(findings, refUpdateFinding(entry, ref, err))
 				continue
 			}
 			entry.ApplyState = feature.RepoApplyRolledBack
@@ -401,11 +383,8 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 			}
 			if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.ParentAnchorSHA); err != nil {
 				allSafe = false
-				findings = append(findings, integrationFinding{
-					ctx:         repoContextFromEntry(entry),
-					code:        errcat.IntegrationWorktreeSyncFailed,
-					diagnostics: fmt.Sprintf("repo %s syncing parent worktree after rollback: %v", entry.Repo, err),
-				})
+				findings = append(findings, entryFinding(entry, errcat.IntegrationWorktreeSyncFailed,
+					fmt.Sprintf("repo %s syncing parent worktree after rollback: %v", entry.Repo, err)))
 				continue
 			}
 		} else if current == entry.ParentAnchorSHA {
@@ -414,12 +393,9 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 		} else {
 			// Externally moved — cannot overwrite.
 			allSafe = false
-			findings = append(findings, integrationFinding{
-				ctx:  repoContextFromEntry(entry),
-				code: errcat.IntegrationRefRace,
-				diagnostics: fmt.Sprintf("repo %s ref %s externally moved: anchor %s candidate %s observed %s",
-					entry.Repo, ref, entry.ParentAnchorSHA, entry.CandidateSHA, current),
-			})
+			findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
+				fmt.Sprintf("repo %s ref %s externally moved: anchor %s candidate %s observed %s",
+					entry.Repo, ref, entry.ParentAnchorSHA, entry.CandidateSHA, current)))
 		}
 	}
 

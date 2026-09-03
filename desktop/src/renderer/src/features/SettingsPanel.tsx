@@ -29,7 +29,7 @@ limitations under the License.
  * them.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { useConnectionState, useTheme } from '../hooks';
+import { retryAction, useConnectionState, useTheme } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import { WorkspaceDefaultsPanel } from './ConfigEditor';
 import { ErrorSurface } from '../components/ErrorSurface';
@@ -454,11 +454,7 @@ export function SettingsPanel({
       {error !== null ? (
         // The panel-level failure is the canonical error; Retry re-runs the
         // readiness/repository load exactly as the legacy button did.
-        <ErrorSurface
-          error={error}
-          variant="compact"
-          localAction={{ label: 'Retry', onAction: refresh }}
-        />
+        <ErrorSurface error={error} variant="compact" localAction={retryAction(refresh)} />
       ) : null}
 
       {pane === 'workspace-roots' && (

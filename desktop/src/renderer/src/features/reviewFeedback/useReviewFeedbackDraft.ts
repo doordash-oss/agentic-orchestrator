@@ -42,6 +42,7 @@ limitations under the License.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { parseIpcError } from '../../wizard/ipcError';
 import type { CanonicalError } from '../../../../shared/ipc';
+import type { LoadState } from '../../hooks';
 import { chunkSelectionUpdates } from './feedbackFilters';
 import {
   fetchReviewFeedbackDraft,
@@ -52,8 +53,7 @@ import {
   type ReviewFeedbackSelectionUpdate,
 } from './reviewFeedbackDraftApi';
 
-export type DraftLifecycle =
-  { phase: 'loading' } | { phase: 'ready' } | { phase: 'error'; error: CanonicalError };
+export type DraftLifecycle = LoadState<{ phase: 'ready' }>;
 
 /** One unacknowledged edit; the sequence number orders stacked edits per ref. */
 export interface PendingSelection {

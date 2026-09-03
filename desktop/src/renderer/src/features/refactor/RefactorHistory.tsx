@@ -17,6 +17,7 @@ limitations under the License.
 import { useCallback, useState } from 'react';
 import type { CanonicalError, RelationshipChildView } from '../../../../shared/ipc';
 import { ErrorSurface } from '../../components/ErrorSurface';
+import { retryAction } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
 import { CHILD_KIND_LABEL, relationshipWarningExplain } from './refactorPassModel';
 
@@ -86,11 +87,7 @@ export function RefactorHistory({
         </p>
       ) : null}
       {failed !== null ? (
-        <ErrorSurface
-          error={failed}
-          variant="compact"
-          localAction={{ label: 'Retry', onAction: load }}
-        />
+        <ErrorSurface error={failed} variant="compact" localAction={retryAction(load)} />
       ) : null}
       <ol className="refactor-history__entries">
         {shown.map((entry) => (

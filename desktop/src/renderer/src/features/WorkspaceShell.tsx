@@ -91,19 +91,16 @@ import {
 import { overviewHeadline, overviewSubline } from './overviewSummary';
 import { BulkPreviewPanel } from './BulkPreviewPanel';
 import { RecoveryWorkspace } from './RecoveryWorkspace';
-import { useConnectionState, useMediaQuery } from '../hooks';
+import { retryAction, useConnectionState, useMediaQuery, type LoadState } from '../hooks';
 
-type ListState =
-  | { phase: 'loading' }
-  | { phase: 'error'; error: CanonicalError }
-  | {
-      phase: 'loaded';
-      features: FeatureSnapshot[];
-      /** Per-feature detail failures, captured as canonical errors; the row still renders from its summary. */
-      detailFailures: ReadonlyMap<string, CanonicalError>;
-      /** List-level canonical warnings, e.g. feature files that failed to load. */
-      warnings: readonly CanonicalError[];
-    };
+type ListState = LoadState<{
+  phase: 'loaded';
+  features: FeatureSnapshot[];
+  /** Per-feature detail failures, captured as canonical errors; the row still renders from its summary. */
+  detailFailures: ReadonlyMap<string, CanonicalError>;
+  /** List-level canonical warnings, e.g. feature files that failed to load. */
+  warnings: readonly CanonicalError[];
+}>;
 
 type Selection = { kind: 'overview' } | { kind: 'feature'; featureId: string };
 
@@ -1102,7 +1099,7 @@ function SidebarRow({
   id: string;
   label: string;
   subline?: string;
-  glyphTone?: 'attention' | 'progress' | 'ok' | 'quiet';
+  glyphTone?: 'danger' | 'attention' | 'progress' | 'ok' | 'quiet';
   /**
    * Feature rows show a status dot; the pinned Overview row shows the house
    * glyph instead, since it has no status to report. Decorative either way —
@@ -1152,8 +1149,10 @@ function SidebarRow({
   );
 }
 
-const LANE_GLYPH_TONE: Readonly<Record<Lane, 'attention' | 'progress' | 'ok' | 'quiet'>> = {
-  failed: 'attention',
+const LANE_GLYPH_TONE: Readonly<
+  Record<Lane, 'danger' | 'attention' | 'progress' | 'ok' | 'quiet'>
+> = {
+  failed: 'danger',
   waiting: 'attention',
   running: 'progress',
   published: 'ok',
@@ -1386,11 +1385,7 @@ function OverviewLanes({
           Loading features…
         </p>
       ) : state.phase === 'error' ? (
-        <ErrorSurface
-          error={state.error}
-          variant="compact"
-          localAction={{ label: 'Retry', onAction: onRetry }}
-        />
+        <ErrorSurface error={state.error} variant="compact" localAction={retryAction(onRetry)} />
       ) : totalFeatures === 0 ? null : (
         <div className="overview-lanes__groups">
           {failureCount > 0 && firstFailure !== undefined ? (

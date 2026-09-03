@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useConnectionState, useMediaQuery } from '../../hooks';
+import { retryAction, useConnectionState, useMediaQuery } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
 import { ErrorSurface } from '../../components/ErrorSurface';
 import { buildCanonicalError } from '../../../../shared/errors';
@@ -245,7 +245,7 @@ export function ChangesSurface({
           error={error}
           variant="compact"
           caption="Completion preflight failed"
-          localAction={{ label: 'Retry', onAction: onRetry }}
+          localAction={retryAction(onRetry)}
         />
       ) : null}
       {loading ? <ChangesManifestSkeleton /> : null}

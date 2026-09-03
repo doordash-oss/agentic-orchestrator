@@ -31,7 +31,7 @@ import type {
 } from '../../../../shared/ipc';
 import { ErrorSurface } from '../../components/ErrorSurface';
 import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../../components/FieldError';
-import { useConnectionState } from '../../hooks';
+import { retryAction, useConnectionState, type LoadState } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
 import type { CanonicalError } from '../../../../shared/ipc';
 import {
@@ -57,10 +57,10 @@ import {
   type CheckpointState,
   type Pipeline,
 } from '../runContract';
-type SeedState =
-  | { phase: 'loading' }
-  | { phase: 'error'; error: CanonicalError }
-  | { phase: 'ready'; defaults: FeatureConfigSnapshot['defaults'] };
+type SeedState = LoadState<{
+  phase: 'ready';
+  defaults: FeatureConfigSnapshot['defaults'];
+}>;
 
 const STEPS = ['What', 'Pipeline', 'Review'] as const;
 
@@ -234,11 +234,7 @@ export function RefactorLauncher({
   if (seed.phase === 'error')
     return (
       <section className="refactor-wizard" aria-label="Start refactor">
-        <ErrorSurface
-          error={seed.error}
-          variant="compact"
-          localAction={{ label: 'Retry', onAction: loadSeed }}
-        />
+        <ErrorSurface error={seed.error} variant="compact" localAction={retryAction(loadSeed)} />
       </section>
     );
 

@@ -15,11 +15,13 @@
 package orchestrator
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -91,6 +93,28 @@ type integrationFinding struct {
 	diagnostics string
 }
 
+// entryFinding attaches a classification to the repository context recorded
+// in the transaction journal.
+func entryFinding(entry *feature.RepoTransactionEntry, code errcat.Code, diagnostics string) integrationFinding {
+	return integrationFinding{
+		ctx:         repoContextFromEntry(entry),
+		code:        code,
+		diagnostics: diagnostics,
+	}
+}
+
+// refUpdateFinding classifies every failed transactional ref update at the
+// workflow boundary, including the compare-and-swap race subtype.
+func refUpdateFinding(entry *feature.RepoTransactionEntry, ref string, err error) integrationFinding {
+	var casErr *git.RefCASMismatchError
+	if errors.As(err, &casErr) {
+		return entryFinding(entry, errcat.IntegrationRefRace,
+			fmt.Sprintf("ref %s expected %s observed %s", ref, casErr.Expected, casErr.Observed))
+	}
+	return entryFinding(entry, errcat.IntegrationCandidateFailed,
+		fmt.Sprintf("updating ref %s for repo %s: %v", ref, entry.Repo, err))
+}
+
 // line renders the finding's raw diagnostics as one per-repository line.
 func (f integrationFinding) line() string {
 	if f.ctx.Name == "" {
@@ -140,20 +164,6 @@ func (o *Orchestrator) parkIntegrationAttention(child *feature.Feature, journal 
 		return fmt.Errorf("recording integration attention: %w", err)
 	}
 	return o.emitTransactionAttention(child, record)
-}
-
-// parkIntegrationCode parks a single-code condition with the given
-// repository contexts and diagnostics lines.
-func (o *Orchestrator) parkIntegrationCode(child *feature.Feature, journal *feature.TransactionJournal, code errcat.Code, contexts []integrationRepoContext, diagnostics []string) error {
-	findings := make([]integrationFinding, 0, len(contexts))
-	for i, ctx := range contexts {
-		line := ""
-		if i < len(diagnostics) {
-			line = diagnostics[i]
-		}
-		findings = append(findings, integrationFinding{ctx: ctx, code: code, diagnostics: line})
-	}
-	return o.parkIntegrationAttention(child, journal, findings)
 }
 
 // dirtyFileList flattens a categorized cleanliness report into the record's

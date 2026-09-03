@@ -695,7 +695,7 @@ describe('RuntimeGateway supervision', () => {
 
     const state = env.gateway.getState();
     expect(state).toMatchObject({ status: 'error', ownership: 'external' });
-    expect(requireError(state).code).toBe('E_EXTERNAL_SERVER_LOST');
+    expect(requireError(state).code).toBe('E_EXTERNAL_RUNTIME_UNRESPONSIVE');
     expect(env.spawnCalls).toHaveLength(0);
     expect(env.gateway.hasOwnedChild()).toBe(false);
     await expect(env.gateway.apiRequest('/api/v1/readiness')).rejects.toMatchObject({

@@ -37,6 +37,8 @@ Common event fields and `data` keys:
 - `path`: worktree or repository path.
 - `branch`: branch used for the setup operation.
 - `error`: failure details when setup fails.
+- `error_code`: stable canonical catalog code when the event carries a failure.
+- `error_class`: canonical severity class (`blocking`, `needs_action`, or `warning`).
 
 ### `feature.rewound`
 

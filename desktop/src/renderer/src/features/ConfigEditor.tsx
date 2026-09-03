@@ -43,6 +43,7 @@ import type {
   WorkspaceDefaults,
 } from '../../../shared/ipc';
 import { ErrorSurface } from '../components/ErrorSurface';
+import { retryAction, type LoadState } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 
 export type PhaseKey = keyof PhaseModels;
@@ -627,9 +628,6 @@ function ConfigForm({
   );
 }
 
-type LoadState<T> =
-  { phase: 'loading' } | { phase: 'error'; error: CanonicalError } | { phase: 'ready'; data: T };
-
 interface SaveBarProps {
   dirty: boolean;
   saving: boolean;
@@ -716,10 +714,13 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
   const catalogue = useModelCatalogue();
   const [state, setState] = useState<
     LoadState<{
-      baseline: FeatureConfig;
-      draft: FeatureConfig;
-      manualPublishAvailable: boolean;
-      defaults: FeatureConfig;
+      phase: 'ready';
+      data: {
+        baseline: FeatureConfig;
+        draft: FeatureConfig;
+        manualPublishAvailable: boolean;
+        defaults: FeatureConfig;
+      };
     }>
   >({ phase: 'loading' });
   const [saving, setSaving] = useState(false);
@@ -784,7 +785,7 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
       <ErrorSurface
         error={state.error}
         variant="compact"
-        localAction={{ label: 'Retry', onAction: () => setRetryNonce((n) => n + 1) }}
+        localAction={retryAction(() => setRetryNonce((n) => n + 1))}
       />
     );
   }
@@ -855,7 +856,10 @@ export function WorkspaceDefaultsPanel({
   const loadedCatalogue = useModelCatalogue();
   const catalogue = catalogueOverride ?? loadedCatalogue;
   const [state, setState] = useState<
-    LoadState<{ baseline: WorkspaceDefaults; draft: WorkspaceDefaults }>
+    LoadState<{
+      phase: 'ready';
+      data: { baseline: WorkspaceDefaults; draft: WorkspaceDefaults };
+    }>
   >({ phase: 'loading' });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -902,7 +906,7 @@ export function WorkspaceDefaultsPanel({
       <ErrorSurface
         error={state.error}
         variant="compact"
-        localAction={{ label: 'Retry', onAction: () => setRetryNonce((n) => n + 1) }}
+        localAction={retryAction(() => setRetryNonce((n) => n + 1))}
       />
     );
   }

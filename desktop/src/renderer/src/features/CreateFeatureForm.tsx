@@ -33,7 +33,7 @@ import { ConsentDialog } from '../components/wizard/ConsentDialog';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../components/FieldError';
 import { useModalDismiss } from '../components/useModalDismiss';
-import { useConnectionState } from '../hooks';
+import { retryAction, useConnectionState, type LoadState } from '../hooks';
 import {
   isBlockingStagedItem,
   STAGED_ITEMS_BLOCK_SUBMIT,
@@ -63,10 +63,7 @@ import {
   type Pipeline,
 } from './runContract';
 
-type DefaultsState =
-  | { phase: 'loading' }
-  | { phase: 'error'; error: CanonicalError }
-  | { phase: 'loaded'; defaults: CreationDefaults };
+type DefaultsState = LoadState<{ phase: 'loaded'; defaults: CreationDefaults }>;
 
 const STEPS = ['Repositories', 'Describe', 'Depth', 'Contract'] as const;
 type Step = (typeof STEPS)[number];
@@ -613,7 +610,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
               <ErrorSurface
                 error={state.error}
                 variant="compact"
-                localAction={{ label: 'Retry', onAction: loadInitialDefaults }}
+                localAction={retryAction(loadInitialDefaults)}
               />
             ) : (
               <>

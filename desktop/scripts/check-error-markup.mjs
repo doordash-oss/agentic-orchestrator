@@ -55,7 +55,7 @@ export const BANNED_CLASS_FAMILIES = [
   // Recovery scan error
   'recovery-attention',
   'recovery-workspace__error-actions',
-  // Already-dead leftovers from earlier phases
+  // Error-specific families that have no remaining production owner
   'aftercare-workspace__action-error',
   'composer__notice',
   'refactor-pass__notice',
@@ -163,6 +163,23 @@ export function checkErrorMarkup(options) {
           fix: 'use CanonicalError/parseIpcError/buildCanonicalError; the safe-error and wizard-error shapes are gone',
         });
       }
+    }
+  }
+
+  for (const file of listFiles(join(options.sourceDir, 'main')).filter(
+    (path) => !isTestFile(path),
+  )) {
+    const source = readFileSync(file, 'utf8');
+    const match = /params\s*:\s*\{\s*reason\s*:\s*['"`]/m.exec(source);
+    if (match !== null) {
+      const line = source.slice(0, match.index).split('\n').length;
+      violations.push({
+        file,
+        line,
+        rule: 'literal user-facing reason authored outside the desktop error catalog',
+        snippet: source.split('\n')[line - 1].trim(),
+        fix: 'give the fixed condition its own E_ code and author its title, summary, and hint in shared/errors.ts',
+      });
     }
   }
 

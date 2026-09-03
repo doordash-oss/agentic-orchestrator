@@ -16,7 +16,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"os"
 	"reflect"
@@ -235,11 +234,9 @@ func probeProviderReadiness(ctx context.Context, p llm.LLMProvider) ProviderRead
 		out.Version = SafeDisplayText(strings.TrimSpace(version), maxReadinessTextLen)
 	}
 	if enforcer, ok := p.(llm.VersionEnforcer); ok && enforcer.EnforcesMinVersion() {
-		if below, version, minVer := agent.BelowMinVersion(p); below {
-			detail := fmt.Sprintf("%s CLI version %s is below the required minimum %d.%d.%d",
-				p.Name(), version, minVer[0], minVer[1], minVer[2])
+		if below, detail, remedy := agent.BelowMinVersionGuidance(p); below {
 			out.Issue = readinessIssue(errcat.UnsupportedVersion,
-				errcat.WithRemediationHint("Upgrade with: "+p.InstallHint()),
+				errcat.WithRemediationHint(remedy),
 				errcat.WithDiagnostics(SafeDisplayText(detail, maxReadinessTextLen)))
 			return out
 		}
@@ -292,18 +289,16 @@ func (h *apiHandler) modelReadiness() ModelReadiness {
 }
 
 // configurationReadiness validates the loaded runtime configuration shape.
-// The configuration detail rides the remediation hint and diagnostics; the
-// title and summary are the catalog's authored text.
+// The configuration detail rides diagnostics; all user-facing text comes
+// from the catalog.
 func configurationReadiness(cfg *config.Config) ConfigurationReadiness {
 	if cfg == nil {
 		return ConfigurationReadiness{Issue: readinessIssue(errcat.InvalidConfiguration,
-			errcat.WithRemediationHint("Restart the server with a readable configuration file"),
 			errcat.WithDiagnostics("runtime configuration is not loaded"),
 		)}
 	}
 	if cfg.Defaults.Pipeline != "" && !feature.PipelineProfile(cfg.Defaults.Pipeline).IsValid() {
 		return ConfigurationReadiness{Issue: readinessIssue(errcat.InvalidConfiguration,
-			errcat.WithRemediationHint("Fix defaults.pipeline in the runtime configuration"),
 			errcat.WithDiagnostics("defaults.pipeline must be medium, large, or moonshot"),
 		)}
 	}
@@ -328,7 +323,6 @@ func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 		} else {
 			entry.Issue = readinessIssue(errcat.InvalidWorkspaceRoot,
 				errcat.WithParams(errcat.WorkspaceRootParams{Paths: []errcat.InvalidPath{{Path: root}}}),
-				errcat.WithRemediationHint("Create the directory or update workspace_roots in the runtime configuration"),
 			)
 		}
 		out.Roots = append(out.Roots, entry)
@@ -346,9 +340,7 @@ func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 		if workspace.IsGitRepo(workspace.ExpandHome(repo.Path)) {
 			entry.Valid = true
 		} else {
-			entry.Issue = readinessIssue(errcat.InvalidRepository,
-				errcat.WithRemediationHint("Point the repository at a git checkout or initialize the directory as a repository"),
-			)
+			entry.Issue = readinessIssue(errcat.InvalidRepository)
 		}
 		out.Repositories = append(out.Repositories, entry)
 	}

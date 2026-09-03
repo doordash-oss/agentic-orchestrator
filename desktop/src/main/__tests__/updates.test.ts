@@ -177,7 +177,7 @@ describe('UpdateCoordinator', () => {
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
       signatureStatus: 'failed',
-      message: 'Signed update metadata could not be verified.',
+      message: 'Agentico could not verify the downloaded update.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(dir, 'updates', 'v0.2.0'))).toBe(false);
@@ -197,7 +197,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The signed release envelope did not match the selected release.',
+      message: 'Agentico could not complete the update check.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -215,7 +215,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The signed release envelope did not contain the exact desktop package inventory.',
+      message: 'Agentico could not complete the update check.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -233,7 +233,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The release contained ambiguous desktop update assets.',
+      message: 'Agentico could not complete the update check.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -251,7 +251,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The release contained ambiguous signed update metadata.',
+      message: 'Agentico could not complete the update check.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -288,7 +288,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The signed release envelope did not contain the exact desktop package inventory.',
+      message: 'Agentico could not complete the update check.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -342,7 +342,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The signed release envelope did not match the selected update package.',
+      message: 'Agentico could not complete the update check.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -361,7 +361,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'No macos update package is available for darwin/arm64.',
+      message: 'No compatible update package is available for this platform.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -403,7 +403,7 @@ describe('UpdateCoordinator', () => {
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
       signatureStatus: 'failed',
-      message: 'The update package checksum did not match signed metadata.',
+      message: 'Agentico could not verify the downloaded update.',
     });
     expect(fs.existsSync(path.join(dir, 'updates', 'v0.2.0'))).toBe(false);
   });
@@ -421,7 +421,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The release feed offered an older version; downgrade rejected.',
+      message: 'The release feed offered an older version.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -655,7 +655,7 @@ describe('UpdateCoordinator', () => {
     });
     const error = update.getState().error;
     expect(error?.summary).not.toContain('/Users/somebody');
-    expect(error?.summary).toContain('[path]');
+    expect(error?.diagnostics).toContain('[path]');
     expect(error?.diagnostics ?? '').not.toContain('/Users/somebody');
   });
 
@@ -677,7 +677,7 @@ describe('UpdateCoordinator', () => {
         code: 'E_UPDATE_SIGNATURE_FAILED',
         class: 'blocking',
         title: 'Update signature verification failed',
-        summary: 'Signed update metadata could not be verified.',
+        summary: 'Agentico could not verify the downloaded update.',
       },
     });
   });
@@ -708,7 +708,7 @@ describe('UpdateCoordinator', () => {
         code: 'E_UPDATE_DOWNLOAD_FAILED',
         class: 'blocking',
         title: 'Update download failed',
-        summary: 'The update package download was incomplete.',
+        summary: 'Agentico could not download the selected update.',
       },
     });
     expect(fs.existsSync(path.join(dir, 'updates', 'v0.2.0'))).toBe(false);
@@ -728,12 +728,12 @@ describe('UpdateCoordinator', () => {
     await expect(update.restartToUpdate()).resolves.toMatchObject({
       status: 'failed',
       signatureStatus: 'verified',
-      message: 'The verified update could not be installed.',
+      message: 'Agentico could not install the verified update.',
       error: {
         code: 'E_UPDATE_INSTALL_FAILED',
         class: 'blocking',
         title: 'Update install failed',
-        summary: 'The verified update could not be installed.',
+        summary: 'Agentico could not install the verified update.',
         remediation: {
           hint: 'Retry the install from the Updates pane, or open the release notes.',
         },

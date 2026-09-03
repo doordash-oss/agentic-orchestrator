@@ -802,10 +802,7 @@ export class RuntimeGateway {
       stage: 'connect',
       detail: 'The externally managed runtime is no longer reachable.',
       ownership: 'external',
-      error: buildCanonicalError('E_EXTERNAL_SERVER_LOST', {
-        params: { reason: 'The externally managed Agentico runtime stopped responding.' },
-        remediationHint: 'Restart it from where it was started, then use Retry.',
-      }),
+      error: buildCanonicalError('E_EXTERNAL_RUNTIME_UNRESPONSIVE'),
     });
   }
 

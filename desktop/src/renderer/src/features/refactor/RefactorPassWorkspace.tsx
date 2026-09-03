@@ -32,6 +32,7 @@ import {
   type ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
 import { ErrorSurface, type ErrorSurfaceAction } from '../../components/ErrorSurface';
+import { retryAction, type LoadState } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
 import { buildCanonicalError } from '../../../../shared/errors';
 import type { CanonicalError } from '../../../../shared/ipc';
@@ -56,7 +57,7 @@ import { InspectorContent } from '../CockpitInspector';
 import { InspectorDrawer } from '../InspectorDrawer';
 import { classifyHold, railSegments, railTrio } from '../phaseRail';
 import { PhaseRail } from '../PhaseRailRow';
-import { actionById, featureBranch, showsRun } from '../featureView';
+import { catalogErrorAction, featureBranch, showsRun } from '../featureView';
 import {
   custodyStations,
   passActions,
@@ -68,10 +69,7 @@ import {
   type PassAction,
 } from './refactorPassModel';
 
-type ChildState =
-  | { phase: 'loading' }
-  | { phase: 'error'; error: CanonicalError }
-  | { phase: 'loaded'; child: FeatureSnapshot };
+type ChildState = LoadState<{ phase: 'loaded'; child: FeatureSnapshot }>;
 
 /**
  * The pass's post-action notice: an informational receipt (discard outcome,
@@ -404,15 +402,7 @@ export function RefactorPassWorkspace({
   const integrationAttention = child?.transaction?.attention ?? null;
   const resolveIntegrationAction = (actionId: string): ErrorSurfaceAction | undefined => {
     if (child === null) return undefined;
-    const action = actionById(child, actionId);
-    if (action === undefined) return undefined;
-    return {
-      enabled: action.enabled,
-      label: 'Retry integration',
-      disabledReason: action.enabled
-        ? undefined
-        : action.disabledReasons.map((reason) => reason.message).join(' '),
-    };
+    return catalogErrorAction(child, actionId, 'Retry integration');
   };
 
   // A failed child setup renders exactly once, as one full ErrorSurface fed
@@ -433,15 +423,7 @@ export function RefactorPassWorkspace({
   const failedSetupTaskError = failedSetupTask?.error ?? null;
   const resolveSetupAction = (actionId: string): ErrorSurfaceAction | undefined => {
     if (child === null) return undefined;
-    const action = actionById(child, actionId);
-    if (action === undefined) return undefined;
-    return {
-      enabled: action.enabled,
-      label: 'Retry setup',
-      disabledReason: action.enabled
-        ? undefined
-        : action.disabledReasons.map((reason) => reason.message).join(' '),
-    };
+    return catalogErrorAction(child, actionId, 'Retry setup');
   };
 
   const submitQuestionAnswers = () => {
@@ -552,7 +534,7 @@ export function RefactorPassWorkspace({
             <ErrorSurface
               error={childState.error}
               variant="compact"
-              localAction={{ label: 'Retry', onAction: pass.reload }}
+              localAction={retryAction(pass.reload)}
             />
           ) : state !== null && state.id !== 'working' && state.sentence !== '' ? (
             <p className="refactor-pass__state" role="status" data-tone={state.tone}>

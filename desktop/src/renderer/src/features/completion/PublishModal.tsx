@@ -25,8 +25,7 @@ import { E_REQUEST_TIMEOUT, buildCanonicalError } from '../../../../shared/error
 import { ErrorSurface, type ErrorSurfaceAction } from '../../components/ErrorSurface';
 import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../../components/FieldError';
 import { useModalDismiss } from '../../components/useModalDismiss';
-import { disabledReasonCopy } from '../postImplementationModel';
-import { displayFeatureMessage } from '../featureView';
+import { catalogErrorAction } from '../featureView';
 import { parseIpcError } from '../../wizard/ipcError';
 import type { CanonicalError } from '../../../../shared/ipc';
 import { PrLinkButton, isEligibleForPublish } from './completionShared';
@@ -331,17 +330,12 @@ export function PublishModal({
               : undefined;
       return (actionId: string): ErrorSurfaceAction | undefined => {
         if (actionId !== PUBLISH_ACTION_ID) return undefined;
-        const action = actions.find((candidate) => candidate.id === PUBLISH_ACTION_ID);
-        if (action === undefined) return undefined;
-        const reason =
-          action.enabled || action.disabledReasons.length === 0
-            ? modalReason
-            : action.disabledReasons
-                .map((entry) => displayFeatureMessage(disabledReasonCopy(entry)))
-                .join(' ');
+        const base = catalogErrorAction({ actions }, actionId, 'Retry publish');
+        if (base === undefined) return undefined;
+        const reason = base.enabled ? modalReason : base.disabledReason;
         return {
-          enabled: action.enabled && modalReason === undefined,
-          label: 'Retry publish',
+          ...base,
+          enabled: base.enabled && modalReason === undefined,
           ...(reason === undefined ? {} : { disabledReason: reason }),
         };
       };

@@ -62,7 +62,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check (typecheck, lint, format, API drift)
+      - name: Check (typecheck, lint, format, API drift, error markup)
         if: matrix.os == 'ubuntu-latest'
         run: npm run check
 

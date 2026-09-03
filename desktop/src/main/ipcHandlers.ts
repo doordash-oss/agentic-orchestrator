@@ -28,8 +28,8 @@ import {
   buildCanonicalError,
   CanonicalErrorException,
   isAbortError,
-  redactText,
   requestTimeoutError,
+  toCanonicalError,
   type CanonicalError,
 } from '../shared/errors';
 import { validateWithSchema } from '../shared/api/parse';
@@ -295,13 +295,7 @@ function envelopeError(err: unknown): CanonicalError {
   if (isAbortError(err)) {
     return requestTimeoutError();
   }
-  if (err instanceof Error && err.message !== '') {
-    return buildCanonicalError('E_INTERNAL', {
-      params: { reason: 'The request failed unexpectedly.' },
-      diagnostics: redactText(err.message),
-    });
-  }
-  return buildCanonicalError('E_INTERNAL', { params: { reason: 'An unexpected error occurred.' } });
+  return toCanonicalError(err, 'E_INTERNAL');
 }
 
 function makeHandler(

@@ -14,8 +14,60 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type DependencyList } from 'react';
 import type { ConnectionState, ServerKind, ThemeInfo, ThemePreference } from '../../shared/ipc';
+import type { CanonicalError } from '../../shared/ipc';
+import type { ErrorSurfaceLocalAction } from './components/ErrorSurface';
+import { parseIpcError } from './wizard/ipcError';
+
+/** Shared asynchronous load phases; callers choose the successful payload shape. */
+export type LoadState<T> = { phase: 'loading' } | { phase: 'error'; error: CanonicalError } | T;
+
+/**
+ * Loads IPC-backed data with stale-result protection and a stable reload
+ * affordance. The dependency list deliberately defines the load identity;
+ * the latest callback is read from a ref so inline closures are safe.
+ */
+export function useIpcLoad<T>(
+  load: () => Promise<T>,
+  dependencies: DependencyList,
+): { state: LoadState<{ phase: 'loaded'; data: T }>; reload: () => void } {
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  const requestRef = useRef(0);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [state, setState] = useState<LoadState<{ phase: 'loaded'; data: T }>>({
+    phase: 'loading',
+  });
+
+  const reload = useCallback(() => setReloadToken((token) => token + 1), []);
+
+  useEffect(() => {
+    const request = ++requestRef.current;
+    setState({ phase: 'loading' });
+    void loadRef.current().then(
+      (data) => {
+        if (request === requestRef.current) setState({ phase: 'loaded', data });
+      },
+      (error: unknown) => {
+        if (request === requestRef.current) {
+          setState({ phase: 'error', error: parseIpcError(error) });
+        }
+      },
+    );
+    return () => {
+      requestRef.current += 1;
+    };
+    // The caller owns the semantic load dependencies; reloadToken is the local retry edge.
+  }, [...dependencies, reloadToken]);
+
+  return { state, reload };
+}
+
+/** The standard local Retry adapter for compact IPC load failures. */
+export function retryAction(reload: () => void): ErrorSurfaceLocalAction {
+  return { label: 'Retry', onAction: reload };
+}
 
 /** Subscribes to a media query reactively. */
 export function useMediaQuery(query: string): boolean {

@@ -155,17 +155,18 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     const mergeButton = mergeModal.getByRole('button', { name: 'Merge', exact: true });
     await expect(mergeButton).toBeEnabled();
     await mergeButton.click();
-    await expect(mergeModal.locator('.completion-workspace__result')).toBeVisible({
-      timeout: 30_000,
-    });
-    await expect(mergeModal.locator('.completion-workspace__result--failure')).toBeVisible();
-    transcript.step('merge failed with conflict as expected');
+    // A failed merge renders as one compact ErrorSurface fed by the canonical
+    // error the action result carries; the legacy failure-result markup is gone.
+    const mergeFailure = mergeModal.locator('.error-surface--compact');
+    await expect(mergeFailure).toBeVisible({ timeout: 30_000 });
+    await expect(mergeFailure.locator('.error-surface__code')).toBeVisible();
+    transcript.step('merge failed with conflict as expected — canonical failure card');
 
     transcript.section('Read rebase hint and launch rebase pass from aftercare');
     await expect(
       mergeModal.getByText(/Use Start rebase pass in the feature's aftercare workspace/),
     ).toBeVisible({ timeout: 10_000 });
-    transcript.step('aftercare rebase hint appears as plain text with no launch button');
+    transcript.step('aftercare rebase hint appears as the failure card remediation hint');
     await expect(mergeModal.getByRole('button', { name: /Hand off to rebase/i })).not.toBeVisible();
 
     await mergeModal.getByRole('button', { name: 'Close' }).click();

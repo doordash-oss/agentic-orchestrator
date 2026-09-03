@@ -18,6 +18,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { useConnectionState, useMediaQuery } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
 import { ErrorSurface } from '../../components/ErrorSurface';
+import { buildCanonicalError } from '../../../../shared/errors';
 import {
   DiffViewer,
   PrLinkButton,
@@ -26,6 +27,7 @@ import {
   type DiffLayout,
 } from './completionShared';
 import type {
+  CanonicalError,
   CompletionPreflightResult,
   RepositoryDiffResult,
   RevealPathResult,
@@ -35,7 +37,8 @@ export interface ChangesSurfaceProps {
   featureId: string;
   preflight: CompletionPreflightResult | null;
   loading: boolean;
-  error: string | null;
+  /** The preflight fetch's parsed canonical error. */
+  error: CanonicalError | null;
   onRetry: () => void;
   getRepositoryDiff: (
     featureId: string,
@@ -62,7 +65,7 @@ export function ChangesSurface({
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
   const [diff, setDiff] = useState<RepositoryDiffResult | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
-  const [diffError, setDiffError] = useState<string | null>(null);
+  const [diffError, setDiffError] = useState<CanonicalError | null>(null);
   const [diffLayoutOverride, setDiffLayoutOverride] = useState<DiffLayout | null>(null);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileDiff, setFileDiff] = useState<string | null>(null);
@@ -76,7 +79,7 @@ export function ChangesSurface({
   const remote = connection.status === 'ready' && connection.kind === 'remote';
   const [worktreeActionPending, setWorktreeActionPending] = useState(false);
   const [worktreeNotice, setWorktreeNotice] = useState<string | null>(null);
-  const [worktreeActionError, setWorktreeActionError] = useState<string | null>(null);
+  const [worktreeActionError, setWorktreeActionError] = useState<CanonicalError | null>(null);
   const diffLayout: DiffLayout =
     diffLayoutOverride ?? (constrainedLayout ? 'unified' : 'side-by-side');
 
@@ -95,7 +98,7 @@ export function ChangesSurface({
         setDiff(result);
       } catch (err) {
         if (request !== repoDiffRequestRef.current) return;
-        setDiffError(parseIpcError(err).message);
+        setDiffError(parseIpcError(err));
       } finally {
         if (request === repoDiffRequestRef.current) {
           setDiffLoading(false);
@@ -122,7 +125,7 @@ export function ChangesSurface({
         }
       } catch (err) {
         if (request !== fileDiffRequestRef.current) return;
-        setDiffError(parseIpcError(err).message);
+        setDiffError(parseIpcError(err));
       } finally {
         if (request === fileDiffRequestRef.current) {
           setFileLoading(false);
@@ -170,8 +173,8 @@ export function ChangesSurface({
    * One control, two verbs by locality. Local: reveal the worktree in the OS
    * file manager exactly as before. Remote: there is nothing to reveal, so
    * the same narrow server-path call returns the worktree path verbatim and
-   * it goes to this machine's clipboard. Either side surfaces failures
-   * inline rather than swallowing them.
+   * it goes to this machine's clipboard. Either side surfaces failures as a
+   * compact ErrorSurface rather than swallowing them.
    */
   const handleWorktreeAction = useCallback(
     async (repo: string) => {
@@ -189,13 +192,21 @@ export function ChangesSurface({
         const serverPath = result.path;
         if (!result.ok || serverPath === undefined) {
           setWorktreeActionError(
-            'The server did not report a worktree path for this repository. Refresh the completion preview and try again.',
+            buildCanonicalError('E_INTERNAL', {
+              params: { reason: 'The server did not report a worktree path for this repository.' },
+              remediationHint: 'Refresh the completion preview and try again.',
+            }),
           );
           return;
         }
         const copied = await copyText(serverPath);
         if (!copied.ok) {
-          setWorktreeActionError('The clipboard write failed; copy from the path shown instead.');
+          setWorktreeActionError(
+            buildCanonicalError('E_INTERNAL', {
+              params: { reason: 'The clipboard write failed.' },
+              remediationHint: 'Copy from the path shown instead.',
+            }),
+          );
           setWorktreeNotice(serverPath);
           return;
         }
@@ -203,7 +214,7 @@ export function ChangesSurface({
           `Copied — this path is on the server host, not this machine: ${serverPath}`,
         );
       } catch (err) {
-        setWorktreeActionError(`Could not copy the worktree path. ${parseIpcError(err).message}`);
+        setWorktreeActionError(parseIpcError(err));
       } finally {
         setWorktreeActionPending(false);
       }
@@ -230,19 +241,15 @@ export function ChangesSurface({
       </header>
 
       {error !== null ? (
-        <div className="completion-workspace__error" role="alert">
-          {error}
-          <button type="button" onClick={onRetry}>
-            Retry
-          </button>
-        </div>
+        <ErrorSurface
+          error={error}
+          variant="compact"
+          caption="Completion preflight failed"
+          localAction={{ label: 'Retry', onAction: onRetry }}
+        />
       ) : null}
       {loading ? <ChangesManifestSkeleton /> : null}
-      {diffError !== null ? (
-        <div className="completion-workspace__error" role="alert">
-          {diffError}
-        </div>
-      ) : null}
+      {diffError !== null ? <ErrorSurface error={diffError} variant="compact" /> : null}
       {preflight !== null ? (
         <div className="changes-manifest__repositories" role="tablist" aria-label="Repositories">
           {preflight.repos.map((repo) => (
@@ -289,9 +296,11 @@ export function ChangesSurface({
             </p>
           ) : null}
           {worktreeActionError !== null ? (
-            <p className="completion-workspace__error" role="alert">
-              {worktreeActionError}
-            </p>
+            <ErrorSurface
+              error={worktreeActionError}
+              variant="compact"
+              caption="Could not copy the worktree path"
+            />
           ) : null}
         </div>
       ) : null}

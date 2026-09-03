@@ -25,11 +25,11 @@ limitations under the License.
  * `dispatchAction`.
  */
 import {
+  CanonicalErrorException,
   isRequestTimeout,
   redactText,
   redactedCanonicalError,
   requiresLocalServerError,
-  SafeErrorException,
 } from '../shared/errors';
 import {
   FeatureActionResponseSchema,
@@ -141,7 +141,7 @@ function assertNoLocalPathsRemotely(remote: boolean, ...groups: readonly string[
   if (!remote) return;
   for (const group of groups) {
     if (group.length > 0) {
-      throw new SafeErrorException(requiresLocalServerError());
+      throw new CanonicalErrorException(requiresLocalServerError());
     }
   }
 }

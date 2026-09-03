@@ -28,6 +28,7 @@ import {
 import fs from 'node:fs';
 import path from 'node:path';
 import type { UpdateInstallNowRequest, UpdatePackageFormat, UpdateState } from '../shared/ipc';
+import { buildCanonicalError, redactText } from '../shared/errors';
 import type { DiagnosticsService } from './diagnostics';
 
 const REPO_API = 'https://api.github.com/repos/doordash-oss/agentic-orchestrator/releases';
@@ -130,6 +131,13 @@ interface SelectedAsset {
 }
 
 type FetchHeaders = Record<string, string>;
+
+/** The catalog codes a failed update state can carry, one per failure stage. */
+type UpdateFailureCode =
+  | 'E_UPDATE_CHECK_FAILED'
+  | 'E_UPDATE_DOWNLOAD_FAILED'
+  | 'E_UPDATE_SIGNATURE_FAILED'
+  | 'E_UPDATE_INSTALL_FAILED';
 
 interface VerifiedMetadata {
   packageSha256: string;
@@ -366,27 +374,38 @@ export class UpdateCoordinator {
     try {
       await this.options.restart(this.stagedPackage);
     } catch (error) {
-      const postponed = error instanceof UpdateRestartPostponedError;
-      this.state = {
-        ...readyState,
-        status: 'ready',
-        activeWorkSummary: undefined,
-        message: postponed
-          ? 'Restart was postponed. The verified update remains staged and ready to install.'
-          : 'The verified update could not be installed. Retry or use the release notes.',
-      };
-      this.options.diagnostics?.record(
-        'update',
-        postponed ? 'info' : 'warn',
-        this.state.message,
-        safeMessage(error),
+      if (error instanceof UpdateRestartPostponedError) {
+        this.state = {
+          ...readyState,
+          status: 'ready',
+          activeWorkSummary: undefined,
+          message:
+            'Restart was postponed. The verified update remains staged and ready to install.',
+        };
+        this.options.diagnostics?.record('update', 'info', this.state.message);
+        this.notify();
+        return this.state;
+      }
+      this.state = readyState;
+      this.fail(
+        'The verified update could not be installed.',
+        {
+          guidance: ['Retry the install from the Updates pane, or open the release notes.'],
+        },
+        {
+          code: 'E_UPDATE_INSTALL_FAILED',
+          underlying: error,
+        },
       );
-      this.notify();
+      this.options.diagnostics?.record('update', 'warn', this.state.message, safeMessage(error));
     }
     return this.state;
   }
 
   private async performCheck(): Promise<UpdateState> {
+    // A check is the only path out of a failed state, and the canonical error
+    // is present exactly while the status is failed, so it is dropped here
+    // and never rides a later non-failed state through a spread.
     if (!this.options.isPackaged) {
       this.state = {
         ...this.state,
@@ -394,6 +413,7 @@ export class UpdateCoordinator {
         checkedAt: this.now().toISOString(),
         message: 'Development builds are not updated in place.',
         guidance: ['Pull the source checkout and rebuild, or install a signed desktop package.'],
+        error: undefined,
       };
       return this.state;
     }
@@ -403,6 +423,7 @@ export class UpdateCoordinator {
       status: 'checking',
       checkedAt: this.now().toISOString(),
       message: 'Checking the stable GitHub Releases feed.',
+      error: undefined,
     };
     this.options.diagnostics?.record('update', 'info', this.state.message);
 
@@ -411,13 +432,21 @@ export class UpdateCoordinator {
       const current = parseSemver(this.state.currentVersion);
       const target = parseSemver(latest.tag_name);
       if (target === null || current === null) {
-        return this.fail('The release feed did not contain a compatible SemVer identity.');
+        return this.fail(
+          'The release feed did not contain a compatible SemVer identity.',
+          {},
+          {
+            code: 'E_UPDATE_CHECK_FAILED',
+          },
+        );
       }
       const versionComparison = compareSemver(target, current);
       if (versionComparison < 0) {
-        return this.fail('The release feed offered an older version; downgrade rejected.', {
-          releaseNotesUrl: latest.html_url,
-        });
+        return this.fail(
+          'The release feed offered an older version; downgrade rejected.',
+          { releaseNotesUrl: latest.html_url },
+          { code: 'E_UPDATE_CHECK_FAILED' },
+        );
       }
       if (versionComparison === 0) {
         this.stagedPackage = null;
@@ -447,6 +476,7 @@ export class UpdateCoordinator {
             releaseNotesUrl: latest.html_url,
             guidance: ['Open the release notes to choose a signed artifact manually.'],
           },
+          { code: 'E_UPDATE_CHECK_FAILED' },
         );
       }
       const metadata = await this.verifyReleaseMetadata(latest, selected);
@@ -528,7 +558,15 @@ export class UpdateCoordinator {
       };
       return this.state;
     } catch (error) {
-      return this.fail(safeMessage(error));
+      // The throw site left its stage on the state: a failed signature check,
+      // a download that died mid-transfer, or the check itself.
+      const code: UpdateFailureCode =
+        this.state.signatureStatus === 'failed'
+          ? 'E_UPDATE_SIGNATURE_FAILED'
+          : this.state.status === 'downloading'
+            ? 'E_UPDATE_DOWNLOAD_FAILED'
+            : 'E_UPDATE_CHECK_FAILED';
+      return this.fail(safeMessage(error), {}, { code, underlying: error });
     } finally {
       this.scheduleNext();
     }
@@ -613,7 +651,9 @@ export class UpdateCoordinator {
       60_000,
     );
     if (packageBytes.byteLength !== selected.packageAsset.size) {
-      this.state = { ...this.state, signatureStatus: 'failed' };
+      // An incomplete transfer is a download failure, not a verification
+      // failure: the checksum was never computed, so the signature status
+      // keeps its verified-from-metadata value.
       throw new Error('The update package download was incomplete.');
     }
     const packageSha256 = sha256Buffer(packageBytes);
@@ -727,13 +767,34 @@ export class UpdateCoordinator {
   private fail(
     message: string,
     patch: Partial<Pick<UpdateState, 'targetVersion' | 'releaseNotesUrl' | 'guidance'>> = {},
+    options: { code?: UpdateFailureCode; underlying?: unknown } = {},
   ): UpdateState {
+    // The failed status carries the canonical error authored from the desktop
+    // catalog: the message is the summary, the guidance lines fold into the
+    // remediation hint, and any underlying error text rides redacted
+    // diagnostics.
+    const code = options.code ?? 'E_UPDATE_INSTALL_FAILED';
+    const guidanceHint = patch.guidance?.join(' ');
+    const underlyingText =
+      options.underlying !== undefined
+        ? redactUpdateDiagnostics(safeMessage(options.underlying))
+        : undefined;
+    const error = buildCanonicalError(code, {
+      params: { reason: message },
+      ...(guidanceHint !== undefined && guidanceHint !== ''
+        ? { remediationHint: guidanceHint }
+        : {}),
+      ...(underlyingText !== undefined && underlyingText !== message
+        ? { diagnostics: underlyingText }
+        : {}),
+    });
     this.state = {
       ...this.state,
       ...patch,
       status: 'failed',
       signatureStatus: this.state.signatureStatus,
       message,
+      error,
     };
     this.options.diagnostics?.record('update', 'warn', message);
     this.notify();
@@ -1174,6 +1235,17 @@ function compareSemver(a: [number, number, number], b: [number, number, number])
 
 function stripLeadingV(value: string): string {
   return value.startsWith('v') ? value.slice(1) : value;
+}
+
+/**
+ * Free-form failure text that rides diagnostics: shared token/user-path
+ * redaction plus generic absolute-path scrubbing, so an installer error can
+ * never echo a private filesystem location.
+ */
+function redactUpdateDiagnostics(text: string): string {
+  return redactText(text)
+    .replace(/[A-Za-z]:\\[^\s"']+/g, '[path]')
+    .replace(/(^|[\s("'=])\/(?!\/)[^\s"']+/g, '$1[path]');
 }
 
 function safeMessage(error: unknown): string {

@@ -32,8 +32,10 @@ export type WizardGateId = Exclude<WizardStepId, 'ready'>;
 
 const GATE_ORDER: readonly WizardGateId[] = ['providers', 'models'];
 
-/** Which flattened issue codes belong to which step's blocker list. */
-const ISSUE_STEP: Record<ReadinessIssueCode, WizardStepId | null> = {
+/** Which flattened issue codes belong to which step's blocker list. Codes
+ * outside the readiness vocabulary (the canonical error code is a plain
+ * catalog code string) map to no step. */
+const ISSUE_STEP: Partial<Record<ReadinessIssueCode, WizardStepId | null>> = {
   missing_executable: 'providers',
   unsupported_version: 'providers',
   unauthenticated: 'providers',
@@ -45,6 +47,9 @@ const ISSUE_STEP: Record<ReadinessIssueCode, WizardStepId | null> = {
   invalid_repository: null,
   invalid_configuration: null,
 };
+
+const stepForIssueCode = (code: string): WizardStepId | null =>
+  ISSUE_STEP[code as ReadinessIssueCode] ?? null;
 
 export interface WizardState {
   steps: readonly WizardStepId[];
@@ -73,8 +78,11 @@ export function deriveWizardState(snapshot: ReadinessSnapshot): WizardState {
   const configurationIssue = snapshot.configuration.valid
     ? null
     : (snapshot.configuration.issue ?? {
+        // Mirrors the catalog's authored invalid_configuration entry.
         code: 'invalid_configuration' as const,
-        message: 'The runtime configuration is unusable.',
+        class: 'blocking' as const,
+        title: 'Invalid configuration',
+        summary: 'The runtime configuration is unusable.',
       });
 
   // Completion is server-authoritative: the snapshot's own ready flag decides,
@@ -82,7 +90,7 @@ export function deriveWizardState(snapshot: ReadinessSnapshot): WizardState {
   const complete =
     snapshot.ready && configurationIssue === null && GATE_ORDER.every((gate) => gates[gate]);
 
-  const blockers = snapshot.issues.filter((issue) => ISSUE_STEP[issue.code] === activeStep);
+  const blockers = snapshot.issues.filter((issue) => stepForIssueCode(issue.code) === activeStep);
 
   return {
     steps: WIZARD_STEPS,

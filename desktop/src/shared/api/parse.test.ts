@@ -35,7 +35,7 @@ import {
   ServerSetupSchema,
   ServerSetupTaskSchema,
 } from './parse';
-import { SafeErrorException } from '../errors';
+import { CanonicalErrorException, type CanonicalError } from '../errors';
 import { MAX_PAYLOAD_BYTES } from '../sanitize';
 
 const healthFixture = {
@@ -55,11 +55,11 @@ const healthFixture = {
   },
 };
 
-function failure(fn: () => unknown): { code: string; message: string; remediation?: string } {
+function failure(fn: () => unknown): CanonicalError {
   try {
     fn();
   } catch (err) {
-    if (err instanceof SafeErrorException) return err.safe;
+    if (err instanceof CanonicalErrorException) return err.canonical;
     throw err;
   }
   throw new Error('expected parse to fail closed');
@@ -130,7 +130,7 @@ describe('parseServerJson', () => {
     const bad = JSON.stringify({ ...healthFixture, owner: { pid: 'not-a-pid-hunter2' } });
     const safe = failure(() => parseServerJson(bad, HealthResponseSchema));
     expect(safe.code).toBe('E_SCHEMA_MISMATCH');
-    expect(safe.message).toContain('owner');
+    expect(safe.summary).toContain('owner');
     expect(JSON.stringify(safe)).not.toContain('hunter2');
   });
 
@@ -606,6 +606,25 @@ describe('CanonicalErrorResponseSchema', () => {
     });
     expect(parsed.success).toBe(false);
     expect(parsed.error?.issues[0]?.path).toEqual(['error', 'context', 'repositories', 0, 'name']);
+  });
+});
+
+describe('CanonicalErrorSchema code format', () => {
+  const base = { class: 'blocking' as const, title: 'Title', summary: 'Summary.' };
+
+  it('accepts both code families: server snake_case and desktop E_ codes', () => {
+    expect(
+      CanonicalErrorSchema.safeParse({ ...base, code: 'publish_pull_request_failed' }).success,
+    ).toBe(true);
+    expect(CanonicalErrorSchema.safeParse({ ...base, code: 'E_SERVER_CRASHED' }).success).toBe(
+      true,
+    );
+  });
+
+  it('rejects codes outside both families', () => {
+    for (const code of ['Server_Crashed', 'e_x', 'E_lower', 'HTTP-500', '', 'E_']) {
+      expect(CanonicalErrorSchema.safeParse({ ...base, code }).success, code).toBe(false);
+    }
   });
 });
 

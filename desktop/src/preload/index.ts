@@ -21,7 +21,11 @@ limitations under the License.
  * or process material in scope.
  */
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import { CANONICAL_ERROR_MESSAGE_PREFIX } from '../shared/errors';
+import {
+  buildCanonicalError,
+  CANONICAL_ERROR_MESSAGE_PREFIX,
+  type CanonicalError,
+} from '../shared/errors';
 import {
   AppEventSchema,
   AppRouteEventSchema,
@@ -92,29 +96,29 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
   const raw: unknown = await ipcRenderer.invoke(channel, ...args);
   const parsed = IpcEnvelopeSchema.safeParse(raw);
   if (!parsed.success) {
-    throw new Error('E_IPC_PROTOCOL: The main process returned an unrecognized response.');
+    // The malformed-envelope failure is also a catalog-authored canonical:
+    // it rides the same sentinel-prefixed message channel so the renderer's
+    // parser recovers it like any other envelope error.
+    throwCanonicalError(buildCanonicalError('E_IPC_PROTOCOL'));
   }
   if (!parsed.data.ok) {
-    const envelopeError = parsed.data.error;
-    if ('title' in envelopeError) {
-      // A server-emitted canonical error: the catalog owns the text, so the
-      // object crosses untouched. Custom Error properties do not survive the
-      // context bridge, so the canonical object also rides in the message
-      // behind a sentinel prefix; the renderer's parser recovers it there.
-      const error = new Error(CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(envelopeError));
-      Object.assign(error, {
-        code: envelopeError.code,
-        remediation: envelopeError.remediation?.hint,
-        canonical: envelopeError,
-      });
-      throw error;
-    }
-    const { code, message, remediation } = envelopeError;
-    const error = new Error(`${code}: ${message}${remediation ? ` ${remediation}` : ''}`);
-    Object.assign(error, { code, remediation });
-    throw error;
+    // The catalog owns the text, so the canonical object crosses untouched.
+    // Custom Error properties do not survive the context bridge, so the
+    // object also rides in the message behind a sentinel prefix; the
+    // renderer's parser recovers it there.
+    throwCanonicalError(parsed.data.error);
   }
   return parsed.data.value as T;
+}
+
+function throwCanonicalError(canonical: CanonicalError): never {
+  const error = new Error(CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(canonical));
+  Object.assign(error, {
+    code: canonical.code,
+    remediation: canonical.remediation?.hint,
+    canonical,
+  });
+  throw error;
 }
 
 const api: AgenticoApi = {

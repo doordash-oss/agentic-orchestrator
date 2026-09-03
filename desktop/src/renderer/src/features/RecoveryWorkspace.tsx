@@ -23,7 +23,7 @@ limitations under the License.
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { ErrorSurface, type ErrorSurfaceAction } from '../components/ErrorSurface';
 import { parseIpcError } from '../wizard/ipcError';
-import type { RecoverySnapshot, RecoveryItemView } from '../../../shared/ipc';
+import type { CanonicalError, RecoverySnapshot, RecoveryItemView } from '../../../shared/ipc';
 
 type RecoveryPhase = 'idle' | 'scanning' | 'ready' | 'executing' | 'complete' | 'error';
 
@@ -51,7 +51,7 @@ export interface RecoveryWorkspaceProps {
 export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProps = {}) {
   const [phase, setPhase] = useState<RecoveryPhase>('idle');
   const [snapshot, setSnapshot] = useState<RecoverySnapshot | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<CanonicalError | null>(null);
   const [outcomes, setOutcomes] = useState<Map<string, RecoveryOutcome>>(new Map());
   const [batchResult, setBatchResult] = useState<string | null>(null);
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
@@ -83,7 +83,7 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
       setSnapshot({ ...result, items: sortedItems });
       setPhase('ready');
     } catch (err) {
-      setError(parseIpcError(err).message);
+      setError(parseIpcError(err));
       setPhase('error');
     }
   }, []);
@@ -110,7 +110,7 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
       } catch (err) {
         setLogError((prev) => {
           const next = new Map(prev);
-          next.set(key, parseIpcError(err).message);
+          next.set(key, parseIpcError(err).summary);
           return next;
         });
       } finally {
@@ -141,7 +141,7 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
           setBatchResult(result.result);
         }
       } catch (err) {
-        setError(parseIpcError(err).message);
+        setError(parseIpcError(err));
       } finally {
         setExecutingKey(null);
       }
@@ -171,7 +171,7 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
           setBatchResult(result.result);
         }
       } catch (err) {
-        setError(parseIpcError(err).message);
+        setError(parseIpcError(err));
       } finally {
         setExecutingKey(null);
         setKillTarget(null);
@@ -252,21 +252,17 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
         </button>
       </header>
 
-      {items.length > 0 ? (
-        <div className="recovery-attention" aria-label="Recovery priority attention" role="alert">
-          <span className="recovery-attention__priority" role="status">
-            Recovery priority —{' '}
-            {liveCount > 0
-              ? `${liveCount} live orphan process${liveCount === 1 ? '' : 'es'}`
-              : `${deadCount} dead orphan session${deadCount === 1 ? '' : 's'}`}
-          </span>
-        </div>
-      ) : null}
-
       {error !== null ? (
-        <p className="form-field__error" role="alert">
-          {error}
-        </p>
+        // The scan or dispatch failure: one compact ErrorSurface whose action
+        // is the existing scan verb (labeled like the header's scan control).
+        <ErrorSurface
+          error={error}
+          variant="compact"
+          localAction={{
+            label: items.length > 0 ? 'Fresh scan' : 'Scan for orphans',
+            onAction: () => void scan(),
+          }}
+        />
       ) : null}
 
       {snapshot !== null && items.length > 0 ? (
@@ -419,14 +415,6 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
         </ul>
       ) : phase === 'ready' ? (
         <p className="recovery-workspace__empty">No orphan sessions found.</p>
-      ) : null}
-
-      {phase === 'error' ? (
-        <div className="recovery-workspace__error-actions">
-          <button type="button" className="recovery-workspace__rescan" onClick={() => void scan()}>
-            Scan for orphans
-          </button>
-        </div>
       ) : null}
 
       {hasOutcomes ? (

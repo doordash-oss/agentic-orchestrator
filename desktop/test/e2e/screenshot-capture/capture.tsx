@@ -165,12 +165,24 @@ const SETUP_WIZARD_MODELS_STEP: ReadinessSnapshot = {
   providers: [{ name: 'claude', installed: true, version: '2.1.0', ready: true }],
   models: {
     available: false,
-    issue: { code: 'models_unavailable', message: 'No models are configured yet.' },
+    issue: {
+      code: 'models_unavailable',
+      class: 'blocking',
+      title: 'Models unavailable',
+      summary: 'No models are configured yet.',
+    },
   },
   configuration: { valid: true },
   workspaceRoots: [{ path: '/work/space', valid: true }],
   repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true }],
-  issues: [{ code: 'models_unavailable', message: 'No models are configured yet.' }],
+  issues: [
+    {
+      code: 'models_unavailable',
+      class: 'blocking',
+      title: 'Models unavailable',
+      summary: 'No models are configured yet.',
+    },
+  ],
 };
 
 /** The setup wizard mounted the way it appears before the workspace exists:

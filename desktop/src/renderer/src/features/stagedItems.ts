@@ -25,7 +25,12 @@ limitations under the License.
  * staged elsewhere stay visible with a "staged on another server" badge, are
  * excluded from the submission, and block it until removed.
  */
-import type { CreationFileKind, StagedUpload } from '../../../shared/ipc';
+import type {
+  CanonicalError,
+  CreationFileKind,
+  CreationFileUploadResult,
+  StagedUpload,
+} from '../../../shared/ipc';
 
 export type UploadItemState = 'uploading' | 'ready' | 'failed';
 
@@ -77,10 +82,7 @@ export function pendingUploadItems(
 export function reconcileUploadResults(
   items: readonly ComposerUploadItem[],
   pending: readonly ComposerUploadItem[],
-  results: ReadonlyArray<
-    | { ok: true; name: string; upload: StagedUpload }
-    | { ok: false; name: string; error: { message: string; remediation?: string } }
-  >,
+  results: ReadonlyArray<CreationFileUploadResult>,
 ): ComposerUploadItem[] {
   const outcomeById = new Map<string, ComposerUploadItem>();
   pending.forEach((item, index) => {
@@ -93,14 +95,17 @@ export function reconcileUploadResults(
         : {
             ...item,
             state: 'failed',
-            message:
-              result.error.remediation === undefined || result.error.remediation === ''
-                ? result.error.message
-                : `${result.error.message} ${result.error.remediation}`,
+            message: uploadFailureText(result.error),
           },
     );
   });
   return items.map((item) => outcomeById.get(item.id) ?? item);
+}
+
+/** The failed chip's text: the canonical summary, with the remediation hint appended when authored. */
+function uploadFailureText(error: CanonicalError): string {
+  const hint = error.remediation?.hint;
+  return hint === undefined || hint === '' ? error.summary : `${error.summary} ${hint}`;
 }
 
 /** Marks every pending item failed after a wholesale transport failure. */

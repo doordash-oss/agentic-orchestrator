@@ -44,7 +44,7 @@ import {
   type PermissionDecisionRequest,
   type VerificationGateAction,
 } from '../shared/ipc';
-import { CanonicalErrorException, SafeErrorException } from '../shared/errors';
+import { CanonicalErrorException } from '../shared/errors';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
 
@@ -417,18 +417,15 @@ export class AttentionService {
           : {}),
       };
     } catch (error) {
-      // A submission racing the item's resolution reads as already resolved:
-      // the server answers conflict/not_found, or the canonical-era
-      // bad_request whose diagnostics name the missing pending request (the
-      // pre-canonical plain-text message lived in the body; the marker moved
-      // into diagnostics, so both spellings are honored).
+      // A submission racing the item's resolution reads as already resolved
+      // when the canonical bad_request's diagnostics name the missing pending
+      // request; every other canonical rejection (conflict, not_found, ...)
+      // propagates so the surface renders the server's authored card.
       const canonical = error instanceof CanonicalErrorException ? error.canonical : undefined;
-      const safe = error instanceof SafeErrorException ? error.safe : undefined;
       const stalePendingRequest =
-        (canonical?.code === 'bad_request' &&
-          /^pending request \S+ not found$/i.test(canonical.diagnostics ?? '')) ||
-        (safe?.code === 'bad_request' && /^pending request \S+ not found$/i.test(safe.message));
-      if (safe?.code === 'conflict' || safe?.code === 'not_found' || stalePendingRequest === true) {
+        canonical?.code === 'bad_request' &&
+        /^pending request \S+ not found$/i.test(canonical.diagnostics ?? '');
+      if (stalePendingRequest === true) {
         return {
           result: 'Already resolved.',
           alreadyResolved: true,

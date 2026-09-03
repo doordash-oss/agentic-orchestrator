@@ -21,18 +21,31 @@ import type {
   FeatureActionView,
   PublishFeatureActionRequest,
 } from '../../../../shared/ipc';
-import { E_REQUEST_TIMEOUT } from '../../../../shared/errors';
+import { E_REQUEST_TIMEOUT, buildCanonicalError } from '../../../../shared/errors';
 import { ErrorSurface, type ErrorSurfaceAction } from '../../components/ErrorSurface';
+import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../../components/FieldError';
 import { useModalDismiss } from '../../components/useModalDismiss';
 import { disabledReasonCopy } from '../postImplementationModel';
 import { displayFeatureMessage } from '../featureView';
-import { canonicalFromWizardError, parseIpcError, type WizardError } from '../../wizard/ipcError';
+import { parseIpcError } from '../../wizard/ipcError';
+import type { CanonicalError } from '../../../../shared/ipc';
 import { PrLinkButton, isEligibleForPublish } from './completionShared';
 import { UNPUBLISHED_CHANGES, pendingDeliveryDetail } from './pendingDelivery';
 
 const PUBLISH_TIMEOUT_LOCKED_MESSAGE =
   'Publish may still be running. Quit and reopen Agentico before publishing again.';
 const PUBLISH_ACTION_ID = 'publish';
+
+/**
+ * The publish timeout's canonical warning: the request outran its bound and
+ * the operation may still complete server-side, so the sheet stays disarmed
+ * and the quit-and-reopen guidance rides as the remediation hint.
+ */
+function publishTimeoutLockedError(): CanonicalError {
+  return buildCanonicalError(E_REQUEST_TIMEOUT, {
+    remediationHint: PUBLISH_TIMEOUT_LOCKED_MESSAGE,
+  });
+}
 
 /**
  * A publish outcome is either success, the reconciling timeout state (the
@@ -43,7 +56,8 @@ const PUBLISH_ACTION_ID = 'publish';
 type PublishOutcome =
   | { ok: true; result: string }
   | { ok: false; reconciling: true; message: string }
-  | { ok: false; reconciling?: undefined; error: WizardError };
+  | { ok: false; reconciling: true; timeoutLocked: true }
+  | { ok: false; reconciling?: undefined; error: CanonicalError };
 
 export interface PublishModalProps {
   featureId: string;
@@ -69,13 +83,12 @@ function PublishStatusNotice({
   result: PublishOutcome | null;
   publishTimeoutLocked: boolean;
 }) {
+  // Success and the in-flight reconciliation stay plain status lines; the
+  // timeout-locked state is a failure condition and renders as the
+  // E_REQUEST_TIMEOUT canonical warning through a compact ErrorSurface.
   if (result === null) {
     if (!publishTimeoutLocked) return null;
-    return (
-      <div className="completion-publish-sheet__status" role="status">
-        {PUBLISH_TIMEOUT_LOCKED_MESSAGE}
-      </div>
-    );
+    return <ErrorSurface error={publishTimeoutLockedError()} variant="compact" />;
   }
   if (result.ok) {
     return (
@@ -85,6 +98,9 @@ function PublishStatusNotice({
     );
   }
   if (result.reconciling === true) {
+    if ('timeoutLocked' in result) {
+      return <ErrorSurface error={publishTimeoutLockedError()} variant="compact" />;
+    }
     return (
       <div className="completion-publish-sheet__status" role="status">
         {result.message}
@@ -121,7 +137,7 @@ export function PublishModal({
   const [publishBody, setPublishBody] = useState('');
   const [titleVisited, setTitleVisited] = useState(false);
   const [generatingDescription, setGeneratingDescription] = useState(false);
-  const [publishGenResult, setPublishGenResult] = useState<WizardError | null>(null);
+  const [publishGenResult, setPublishGenResult] = useState<CanonicalError | null>(null);
   const [publishBusy, setPublishBusy] = useState(false);
   const [timedOutThisOpen, setTimedOutThisOpen] = useState(false);
   const [publishResult, setPublishResult] = useState<PublishOutcome | null>(null);
@@ -254,11 +270,7 @@ export function PublishModal({
           } catch {
             // Refresh hooks can deliberately absorb their own transport errors.
           }
-          setPublishResult({
-            ok: false,
-            reconciling: true,
-            message: PUBLISH_TIMEOUT_LOCKED_MESSAGE,
-          });
+          setPublishResult({ ok: false, reconciling: true, timeoutLocked: true });
         } else {
           try {
             await onDispatched();
@@ -437,8 +449,8 @@ export function PublishModal({
                   <input
                     ref={titleRef}
                     aria-label="PR title"
-                    aria-invalid={titleInvalid || undefined}
-                    aria-describedby={titleInvalid ? 'publish-title-error' : undefined}
+                    aria-invalid={fieldAriaInvalid(titleInvalid)}
+                    aria-describedby={fieldAriaDescribedBy('publish-title-error', titleInvalid)}
                     value={publishTitle}
                     onChange={(event) => {
                       setPublishTitle(event.target.value);
@@ -449,11 +461,10 @@ export function PublishModal({
                     placeholder="Enter PR title"
                   />
                 </label>
-                {titleInvalid ? (
-                  <p id="publish-title-error" className="completion-publish-sheet__field-error">
-                    Add a title to create the pull request.
-                  </p>
-                ) : null}
+                <FieldError
+                  id="publish-title-error"
+                  message={titleInvalid ? 'Add a title to create the pull request.' : undefined}
+                />
                 <label className="completion-workspace__field">
                   <span>
                     PR body <em>Optional</em>
@@ -492,7 +503,7 @@ export function PublishModal({
             />
             {rejection !== null && !selectedRepoCarriesError ? (
               <ErrorSurface
-                error={canonicalFromWizardError(rejection)}
+                error={rejection}
                 variant="compact"
                 caption="Publish was rejected"
                 rootRef={failureRef}
@@ -501,7 +512,7 @@ export function PublishModal({
             ) : null}
             {rejection === null && genRejection !== null ? (
               <ErrorSurface
-                error={canonicalFromWizardError(genRejection)}
+                error={genRejection}
                 variant="compact"
                 caption="Narrative generation was rejected"
                 rootRef={failureRef}

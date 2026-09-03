@@ -32,7 +32,9 @@ import {
   type ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
 import { ErrorSurface, type ErrorSurfaceAction } from '../../components/ErrorSurface';
-import { parseIpcError, canonicalFromWizardError, type WizardError } from '../../wizard/ipcError';
+import { parseIpcError } from '../../wizard/ipcError';
+import { buildCanonicalError } from '../../../../shared/errors';
+import type { CanonicalError } from '../../../../shared/ipc';
 import {
   AttentionDetail,
   attentionActionNotice,
@@ -68,7 +70,7 @@ import {
 
 type ChildState =
   | { phase: 'loading' }
-  | { phase: 'error'; message: string }
+  | { phase: 'error'; error: CanonicalError }
   | { phase: 'loaded'; child: FeatureSnapshot };
 
 /**
@@ -76,7 +78,7 @@ type ChildState =
  * attention result) or a rejected server action carried as the parsed error
  * for the canonical error surface.
  */
-export type PassNotice = { kind: 'info'; text: string } | { kind: 'error'; error: WizardError };
+export type PassNotice = { kind: 'info'; text: string } | { kind: 'error'; error: CanonicalError };
 
 export interface RefactorPassController {
   view: RelationshipChildView | undefined;
@@ -130,7 +132,7 @@ export function useRefactorPass(
       })
       .catch((err: unknown) => {
         if (request !== loadRequestRef.current) return;
-        setChildState({ phase: 'error', message: parseIpcError(err).message });
+        setChildState({ phase: 'error', error: parseIpcError(err) });
       });
   }, [childId]);
 
@@ -547,12 +549,11 @@ export function RefactorPassWorkspace({
               Loading the pass from the runtime…
             </p>
           ) : childState.phase === 'error' ? (
-            <p className="refactor-pass__state" role="alert">
-              The pass could not be loaded — {childState.message}{' '}
-              <button type="button" className="refactor-pass__retry-load" onClick={pass.reload}>
-                Try again
-              </button>
-            </p>
+            <ErrorSurface
+              error={childState.error}
+              variant="compact"
+              localAction={{ label: 'Retry', onAction: pass.reload }}
+            />
           ) : state !== null && state.id !== 'working' && state.sentence !== '' ? (
             <p className="refactor-pass__state" role="status" data-tone={state.tone}>
               {state.sentence}
@@ -613,7 +614,7 @@ export function RefactorPassWorkspace({
 
           {actionErrorNotice !== null ? (
             <ErrorSurface
-              error={canonicalFromWizardError(actionErrorNotice)}
+              error={actionErrorNotice}
               variant="compact"
               caption="The pass action was rejected"
             />
@@ -813,7 +814,13 @@ function DiscardPassDialog({
         <span className="impact-dialog__eyebrow">Operational impact</span>
         <h3 id="discard-pass-title">Discard {passName}?</h3>
         {preview === undefined ? (
-          <p role="alert">Impact projection is unavailable. Refresh before continuing.</p>
+          // Fail closed: the discard confirm stays disarmed until a fresh
+          // projection arrives; the missing projection is a warning, not a
+          // hard failure of the pass itself.
+          <ErrorSurface
+            error={buildCanonicalError('E_IMPACT_PROJECTION_STALE')}
+            variant="compact"
+          />
         ) : (
           <ImpactPreviewList preview={preview} />
         )}

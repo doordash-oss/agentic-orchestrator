@@ -18,6 +18,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { ConnectionStateSchema, type ConnectionState } from '../../../shared/ipc';
+import { buildCanonicalError, CANONICAL_ERROR_MESSAGE_PREFIX } from '../../../shared/errors';
 import { ConnectionShell } from './ConnectionShell';
 import { installAgenticoMock } from '../test/agenticoMock';
 
@@ -57,7 +58,9 @@ describe('ConnectionShell', () => {
     render(<ConnectionShell />);
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
 
-    const failure = { error: { code: 'E_X', message: 'failed', remediation: 'retry' } };
+    const failure = {
+      error: { code: 'E_X', class: 'blocking', title: 'Failed', summary: 'failed' },
+    };
     const cases = [
       { status: 'idle', stage: 'resolve-runtime', label: /idle/i },
       { status: 'resolving-runtime', stage: 'resolve-runtime', label: /resolving/i },
@@ -225,8 +228,10 @@ describe('ConnectionShell', () => {
           detail: 'A running Agentico runtime is not compatible with this app.',
           error: {
             code: 'E_INCOMPATIBLE_SERVER',
-            message: 'The server declares schema series 9.',
-            remediation: 'Update the Agentico desktop app and the agentico runtime.',
+            class: 'blocking',
+            title: 'The server is not compatible with this app',
+            summary: 'The server declares schema series 9.',
+            remediation: { hint: 'Update the Agentico desktop app and the agentico runtime.' },
           },
         }),
       );
@@ -250,11 +255,32 @@ describe('ConnectionShell', () => {
           status: 'crashed',
           stage: 'connect',
           detail: 'The app-managed runtime exited unexpectedly.',
-          error: { code: 'E_SERVER_CRASHED', message: 'exited', remediation: 'Retry.' },
+          error: {
+            code: 'E_SERVER_CRASHED',
+            class: 'blocking',
+            title: 'The app-managed runtime crashed',
+            summary: 'The app-managed Agentico runtime exited unexpectedly.',
+          },
         }),
       );
     });
     expect(screen.getByText('E_SERVER_CRASHED')).toBeInTheDocument();
+
+    // One compact ErrorSurface carries the whole failure: code tag, catalog
+    // title, and Retry as the surface's own local action.
+    const surface = screen.getByText('E_SERVER_CRASHED').closest('.error-surface');
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveClass('error-surface--compact', 'error-surface--blocking');
+    expect(screen.getByText('The app-managed runtime crashed')).toBeInTheDocument();
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    // The legacy hand-rolled failure markup is gone entirely.
+    expect(
+      document.querySelectorAll(
+        '.shell-card__error, .shell-card__error-head, .shell-card__error-code, ' +
+          '.shell-card__error-message, .shell-card__error-remediation, .shell-card__diagnostics, ' +
+          '.shell-card__retry',
+      ),
+    ).toHaveLength(0);
 
     await userEvent.click(screen.getByRole('button', { name: /retry/i }));
     expect(mock.api.retryConnection).toHaveBeenCalledTimes(1);
@@ -270,22 +296,31 @@ describe('ConnectionShell', () => {
           status: 'crashed',
           stage: 'connect',
           detail: 'The app-managed runtime exited unexpectedly.',
-          error: { code: 'E_SERVER_CRASHED', message: 'exited' },
-          diagnostics: {
-            commandContext: 'bundled agentico server --config [path] --state-dir [path]',
-            logTail: ['startup failed at [path]', 'credential=[redacted]'],
+          error: {
+            code: 'E_SERVER_CRASHED',
+            class: 'blocking',
+            title: 'The app-managed runtime crashed',
+            summary: 'The app-managed Agentico runtime exited unexpectedly.',
+            // The gateway folds the launch command context and bounded log
+            // tail into the canonical error's diagnostics string.
+            diagnostics:
+              'bundled agentico server --config [path] --state-dir [path]\n' +
+              'startup failed at [path]\n' +
+              'credential=[redacted]',
           },
         }),
       );
     });
 
-    const disclosure = screen.getByText('App runtime diagnostics');
+    // The gateway folds the launch command context and bounded log tail into
+    // the canonical error's diagnostics string; the surface's own disclosure
+    // is the only place it renders.
+    const disclosure = screen.getByText('More detail');
     expect(disclosure).toBeInTheDocument();
     await userEvent.click(disclosure);
-    expect(screen.getByText(/bundled agentico server/)).toBeInTheDocument();
-    expect(screen.getByLabelText('Redacted runtime log tail')).toHaveTextContent(
-      /startup failed at \[path\]/,
-    );
+    const diagnostics = screen.getByText(/bundled agentico server/);
+    expect(diagnostics).toHaveTextContent(/startup failed at \[path\]/);
+    expect(diagnostics).toHaveTextContent('credential=[redacted]');
   });
 
   it('keeps the retry button reachable and focusable by keyboard', async () => {
@@ -298,7 +333,7 @@ describe('ConnectionShell', () => {
           status: 'launch-failed',
           stage: 'connect',
           detail: 'x',
-          error: { code: 'E_X', message: 'm' },
+          error: { code: 'E_X', class: 'blocking', title: 'Failed', summary: 'm' },
         }),
       );
     });
@@ -316,8 +351,12 @@ describe('ConnectionShell', () => {
 
   it('fails to a safe error state when the preload API rejects', async () => {
     const mock = installAgenticoMock();
+    // The preload rethrows envelope errors as sentinel-prefixed canonical
+    // payloads; the shell recovers the canonical from the message.
     mock.api.getConnectionStatus.mockRejectedValueOnce(
-      new Error('E_IPC_PROTOCOL: The main process returned an unrecognized response.'),
+      new Error(
+        CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(buildCanonicalError('E_IPC_PROTOCOL')),
+      ),
     );
     render(<ConnectionShell />);
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/error/i));
@@ -457,7 +496,9 @@ describe('ConnectionShell failed switch', () => {
       stage: 'connect',
       error: {
         code: 'E_SWITCH_UNAVAILABLE',
-        message: 'The selected Agentico server is no longer running.',
+        class: 'blocking',
+        title: 'The selected server is unavailable',
+        summary: 'The selected Agentico server is no longer running.',
       },
       switchContext: {
         attempted: { serverKey: 'key-beta', kind: 'local', name: 'beta', runtimeDir: '/rt/beta' },
@@ -496,7 +537,7 @@ describe('ConnectionShell failed switch', () => {
       connection: state({
         status: 'error',
         stage: 'connect',
-        error: { code: 'E_X', message: 'failed' },
+        error: { code: 'E_X', class: 'blocking', title: 'Failed', summary: 'failed' },
       }),
     });
     render(<ConnectionShell />);

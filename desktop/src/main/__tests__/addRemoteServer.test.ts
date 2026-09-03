@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 import { describe, expect, it } from 'vitest';
-import { SafeErrorException } from '../../shared/errors';
+import { CanonicalErrorException } from '../../shared/errors';
 import { applyServersPatch, type ServersPrefs } from '../../shared/ipc';
 import { serverKeyForBaseUrl } from '../connectionString';
 import {
@@ -186,9 +186,11 @@ describe('addRemoteServer', () => {
     harness.answers.set(`${BASE_URL}/api/v1/readiness`, () => ({ status: 401, body: {} }));
 
     await expect(harness.run()).rejects.toMatchObject({
-      safe: {
+      canonical: {
         code: 'E_REMOTE_AUTH_REJECTED',
-        remediation: expect.stringContaining('FULL connection string'),
+        class: 'needs_action',
+        title: 'The token was rejected',
+        remediation: { hint: expect.stringContaining('FULL connection string') },
       },
     });
     expect(harness.prefs.known).toEqual([]);
@@ -201,9 +203,11 @@ describe('addRemoteServer', () => {
 
     await expect(harness.run()).rejects.toSatisfy(
       (err: unknown) =>
-        err instanceof SafeErrorException &&
-        err.safe.code === 'E_REMOTE_UNREACHABLE' &&
-        err.safe.remediation !== undefined,
+        err instanceof CanonicalErrorException &&
+        err.canonical.code === 'E_REMOTE_UNREACHABLE' &&
+        err.canonical.class === 'needs_action' &&
+        err.canonical.title === 'The server could not be reached' &&
+        err.canonical.remediation?.hint !== undefined,
     );
     expect(harness.prefs.known).toEqual([]);
     expect(harness.blobs.size).toBe(0);
@@ -220,7 +224,7 @@ describe('addRemoteServer', () => {
     harness.answers.set(`${BASE_URL}/api/v1/readiness`, () => ({ status: 200, body: {} }));
 
     await expect(harness.run()).rejects.toMatchObject({
-      safe: { code: 'E_REMOTE_INCOMPATIBLE' },
+      canonical: { code: 'E_REMOTE_INCOMPATIBLE', class: 'blocking' },
     });
     expect(harness.prefs.known).toEqual([]);
     expect(harness.blobs.size).toBe(0);
@@ -230,7 +234,7 @@ describe('addRemoteServer', () => {
     const harness = makeHarness();
 
     await expect(harness.run('https://no-scheme.example')).rejects.toMatchObject({
-      safe: { code: 'E_CONNECTION_STRING_SCHEME' },
+      canonical: { code: 'E_CONNECTION_STRING_SCHEME', class: 'needs_action' },
     });
     expect(harness.prefs.known).toEqual([]);
     expect(harness.blobs.size).toBe(0);

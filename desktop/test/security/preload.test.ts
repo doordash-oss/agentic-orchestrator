@@ -109,23 +109,33 @@ describe('preload surface', () => {
     expect(invoke).toHaveBeenCalledWith('agentico:connection:get-status');
   });
 
-  it('rejects with the safe error message on error envelopes', async () => {
+  it('rejects with the sentinel-prefixed canonical payload on error envelopes', async () => {
     const api = exposeInMainWorld.mock.calls[0]![1] as {
       getSettings(): Promise<unknown>;
     };
-    invoke.mockResolvedValueOnce({
-      ok: false,
-      error: { code: 'E_INTERNAL', message: 'nope', remediation: 'retry' },
-    });
-    await expect(api.getSettings()).rejects.toThrow(/E_INTERNAL/);
+    const canonical = {
+      code: 'E_INTERNAL',
+      class: 'blocking',
+      title: 'Request failed',
+      summary: 'The request failed unexpectedly.',
+    };
+    invoke.mockResolvedValueOnce({ ok: false, error: canonical });
+    const rejection = await api.getSettings().catch((err: unknown) => err);
+    expect(rejection).toBeInstanceOf(Error);
+    // Custom Error properties do not survive the context bridge, so the
+    // canonical object rides the message behind the sentinel prefix.
+    expect((rejection as Error).message).toBe('E_CANONICAL_ERROR ' + JSON.stringify(canonical));
   });
 
-  it('fails closed when main returns a malformed envelope', async () => {
+  it('fails closed with the IPC-protocol canonical when main returns a malformed envelope', async () => {
     const api = exposeInMainWorld.mock.calls[0]![1] as {
       getSettings(): Promise<unknown>;
     };
     invoke.mockResolvedValueOnce({ unexpected: true });
-    await expect(api.getSettings()).rejects.toThrow(/E_IPC_PROTOCOL/);
+    const rejection = await api.getSettings().catch((err: unknown) => err);
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toContain('E_CANONICAL_ERROR ');
+    expect((rejection as Error).message).toContain('E_IPC_PROTOCOL');
   });
 
   it('forwards provider-scoped model refreshes over the dedicated channel', async () => {

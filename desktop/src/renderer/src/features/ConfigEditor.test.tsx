@@ -17,7 +17,7 @@ limitations under the License.
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
-import { installAgenticoMock } from '../test/agenticoMock';
+import { installAgenticoMock, ipcError } from '../test/agenticoMock';
 import { FeatureConfigPanel, WorkspaceDefaultsPanel } from './ConfigEditor';
 import type { FeatureConfigSnapshot, ModelCatalogue, WorkspaceDefaults } from '../../../shared/ipc';
 
@@ -310,17 +310,59 @@ describe('FeatureConfigPanel', () => {
     ).toBeInTheDocument();
   });
 
-  it('surfaces load errors with a retry action', async () => {
+  it('surfaces a rejected load as a compact ErrorSurface whose Retry re-invokes it', async () => {
     const mock = installAgenticoMock();
-    mock.api.getFeatureConfig.mockRejectedValueOnce(new Error('boom'));
-    mock.api.getFeatureConfig.mockResolvedValueOnce(SNAPSHOT);
+    mock.api.getFeatureConfig
+      .mockRejectedValueOnce(
+        ipcError('E_IPC_UNREACHABLE', 'The application core did not respond.', {
+          title: 'Application core unreachable',
+        }),
+      )
+      .mockResolvedValueOnce(SNAPSHOT);
     render(<FeatureConfigPanel featureId="feat-1" />);
     const user = userEvent.setup();
 
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('Could not load configuration');
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_IPC_UNREACHABLE')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Application core unreachable')).toBeVisible();
+
     await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(mock.api.getFeatureConfig).toHaveBeenCalledTimes(2);
     await screen.findByRole('button', { name: 'Save changes' });
+  });
+
+  it('renders a failed save as a compact ErrorSurface while a successful save stays a status line', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeatureConfig.mockResolvedValue(SNAPSHOT);
+    mock.api.getModelCatalogue.mockResolvedValue(CATALOGUE);
+    mock.api.updateFeatureConfig
+      .mockRejectedValueOnce(
+        ipcError('invalid_configuration', 'The configuration did not match the schema.', {
+          title: 'Invalid configuration',
+        }),
+      )
+      .mockResolvedValueOnce(SNAPSHOT);
+    render(<FeatureConfigPanel featureId="feat-1" />);
+    const user = userEvent.setup();
+
+    await screen.findByLabelText('Implementation model');
+    await user.selectOptions(screen.getByLabelText('Implementation model'), 'claude:sonnet');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    // The failure branch is the canonical card; the bar's own Save button is
+    // the retry, so the card carries no action of its own.
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('invalid_configuration')).toHaveClass('error-surface__code');
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    // The success path returns to the plain status line (findByText, so the
+    // Saving… intermediate doesn't satisfy the assertion).
+    await screen.findByText(/Saved\./);
+    expect(screen.getByRole('status')).toHaveTextContent(/Saved\./);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 
@@ -335,6 +377,28 @@ const DEFAULTS: WorkspaceDefaults = {
 };
 
 describe('WorkspaceDefaultsPanel', () => {
+  it('surfaces a rejected defaults load as a compact ErrorSurface whose Retry reloads', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getWorkspaceDefaults
+      .mockRejectedValueOnce(
+        ipcError('E_NOT_CONNECTED', 'The app is not connected to an Agentico runtime.', {
+          title: 'Not connected',
+        }),
+      )
+      .mockResolvedValueOnce(DEFAULTS);
+    render(<WorkspaceDefaultsPanel />);
+    const user = userEvent.setup();
+
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_NOT_CONNECTED')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Not connected')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(mock.api.getWorkspaceDefaults).toHaveBeenCalledTimes(2);
+    await screen.findByLabelText('Utilities model');
+  });
+
   it('configures the automatic-review toggle and reviewer model independently', async () => {
     const mock = installAgenticoMock();
     mock.api.getWorkspaceDefaults.mockResolvedValue(DEFAULTS);

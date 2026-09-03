@@ -442,15 +442,20 @@ describe('runningPhaseSubline', () => {
 
 describe('fieldForCreationError', () => {
   it('routes structured rejections to the owning control', () => {
-    expect(fieldForCreationError({ code: 'not_ready', message: 'runtime is not ready' })).toBe(
+    expect(fieldForCreationError({ code: 'not_ready', summary: 'runtime is not ready' })).toBe(
       'form',
     );
-    expect(fieldForCreationError({ code: 'bad_request', message: 'name is required' })).toBe(
+    expect(fieldForCreationError({ code: 'bad_request', summary: 'name is required' })).toBe(
       'name',
     );
-    expect(fieldForCreationError({ code: 'bad_request', message: 'unknown repo "x"' })).toBe(
+    expect(fieldForCreationError({ code: 'bad_request', summary: 'unknown repo "x"' })).toBe(
       'repos',
     );
-    expect(fieldForCreationError({ code: 'E_HTTP_500', message: 'server exploded' })).toBe('form');
+    expect(
+      fieldForCreationError({
+        code: 'E_HTTP_REJECTED',
+        summary: 'The runtime rejected the request (HTTP 500).',
+      }),
+    ).toBe('form');
   });
 });

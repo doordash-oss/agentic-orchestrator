@@ -23,7 +23,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { redactText, requestTimeoutError, SafeErrorException } from '../../shared/errors';
+import { CanonicalErrorException, redactText, requestTimeoutError } from '../../shared/errors';
 import type { KnownServer, ServersPrefs } from '../../shared/ipc';
 import {
   assertNoPrototypePollution,
@@ -274,7 +274,7 @@ export async function fetchJson(
     return { status: response.status, body };
   } catch (err) {
     if (timedOut) {
-      throw new SafeErrorException(requestTimeoutError());
+      throw new CanonicalErrorException(requestTimeoutError());
     }
     throw err;
   } finally {
@@ -328,7 +328,7 @@ export async function fetchOctetPost(
     return { status: response.status, body };
   } catch (err) {
     if (timedOut) {
-      throw new SafeErrorException(requestTimeoutError());
+      throw new CanonicalErrorException(requestTimeoutError());
     }
     throw err;
   } finally {

@@ -17,13 +17,26 @@ limitations under the License.
 import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CanonicalErrorException, SafeErrorException } from '../../shared/errors';
+import { CanonicalErrorException } from '../../shared/errors';
 import { ReadinessSnapshotSchema } from '../../shared/ipc';
 import type { ApiRequestInit, HttpResult } from '../gateway/runtimeGateway';
 import { SetupService, type SetupServiceDeps } from '../setup';
 import { CreationFilesService } from '../creationFiles';
 
 function serverReadiness(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const claudeIssue = {
+    code: 'unauthenticated',
+    class: 'blocking',
+    title: 'Unauthenticated',
+    summary: 'A provider CLI is installed but its authentication flow has not been completed.',
+    remediation: { hint: 'claude login' },
+  };
+  const modelsIssue = {
+    code: 'models_unavailable',
+    class: 'blocking',
+    title: 'Models unavailable',
+    summary: 'No usable provider exposes any model.',
+  };
   return {
     api_version: 'v1',
     ready: false,
@@ -34,28 +47,17 @@ function serverReadiness(overrides: Record<string, unknown> = {}): Record<string
         installed: true,
         version: '2.1.0',
         ready: false,
-        issue: {
-          code: 'unauthenticated',
-          message: 'The claude CLI is not authenticated.',
-          remedy: 'claude login',
-        },
+        issue: claudeIssue,
       },
       { name: 'codex', installed: false, ready: false },
     ],
-    models: { available: false, issue: { code: 'models_unavailable', message: 'No models.' } },
+    models: { available: false, issue: modelsIssue },
     configuration: { valid: true },
     workspace: {
       roots: [{ path: '/work/space', valid: true }],
       repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true }],
     },
-    issues: [
-      {
-        code: 'unauthenticated',
-        message: 'The claude CLI is not authenticated.',
-        remedy: 'claude login',
-      },
-      { code: 'models_unavailable', message: 'No models.' },
-    ],
+    issues: [claudeIssue, modelsIssue],
     ...overrides,
   };
 }
@@ -91,7 +93,7 @@ describe('SetupService.getReadiness', () => {
     expect(snapshot.ready).toBe(false);
     expect(snapshot.probedAt).toBe('2026-07-14T10:00:00Z');
     expect(snapshot.providers).toHaveLength(2);
-    expect(snapshot.providers[0]?.issue?.remedy).toBe('claude login');
+    expect(snapshot.providers[0]?.issue?.remediation?.hint).toBe('claude login');
     expect(snapshot.workspaceRoots).toEqual([{ path: '/work/space', valid: true }]);
     expect(snapshot.repositories[0]?.name).toBe('repo-a');
     expect(snapshot.issues.map((issue) => issue.code)).toEqual([
@@ -106,7 +108,7 @@ describe('SetupService.getReadiness', () => {
       body: { api_version: 'v1', ready: 'yes' },
     }));
     await expect(service.getReadiness()).rejects.toMatchObject({
-      safe: { code: 'E_SCHEMA_MISMATCH' },
+      canonical: { code: 'E_SCHEMA_MISMATCH' },
     });
   });
 
@@ -164,7 +166,7 @@ describe('CreationFilesService', () => {
       ]);
       await expect(
         service.resolve([{ repoKey: 'repo-a', path: '../outside' }]),
-      ).rejects.toMatchObject({ safe: { code: 'E_INVALID_REPOSITORY_FILE' } });
+      ).rejects.toMatchObject({ canonical: { code: 'E_INVALID_REPOSITORY_FILE' } });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -215,7 +217,7 @@ describe('SetupService.addWorkspaceRoot', () => {
   it('rejects relative paths fail-closed without contacting the server', async () => {
     const { service, calls } = makeService(() => ({ status: 200, body: serverReadiness() }));
     await expect(service.addWorkspaceRoot('relative/path')).rejects.toBeInstanceOf(
-      SafeErrorException,
+      CanonicalErrorException,
     );
     expect(calls).toHaveLength(0);
   });
@@ -249,7 +251,11 @@ describe('SetupService.initRepository', () => {
     await expect(
       service.initRepository({ path: '/work/space/x', consent: false as never }),
     ).rejects.toMatchObject({
-      safe: { code: 'consent_required', remediation: expect.stringContaining('consent') },
+      canonical: {
+        code: 'E_CONSENT_REQUIRED',
+        class: 'needs_action',
+        remediation: { hint: expect.stringContaining('consent') },
+      },
     });
     expect(calls).toHaveLength(0);
   });
@@ -352,11 +358,13 @@ describe('SetupService.initRepository', () => {
     expect(diagnostics).not.toContain('tok-123');
   });
 
-  it('degrades to a generic safe error when the error body is unstructured', async () => {
+  it('degrades to the fixed HTTP rejection code with the status in the summary', async () => {
     const { service } = makeService(() => ({ status: 500, body: 'boom' }));
     await expect(
       service.initRepository({ path: '/work/space/x', consent: true }),
-    ).rejects.toMatchObject({ safe: { code: 'E_HTTP_500' } });
+    ).rejects.toMatchObject({
+      canonical: { code: 'E_HTTP_REJECTED', summary: expect.stringContaining('500') },
+    });
   });
 });
 
@@ -391,8 +399,8 @@ describe('SetupService.pickWorkspaceDirectory', () => {
       () => Promise.resolve('sneaky/relative'),
     );
     const failure = await service.pickWorkspaceDirectory().catch((err: unknown) => err);
-    expect(failure).toBeInstanceOf(SafeErrorException);
-    expect((failure as SafeErrorException).safe.code).toBe('E_INVALID_PATH');
-    expect(JSON.stringify((failure as SafeErrorException).safe)).not.toContain('sneaky');
+    expect(failure).toBeInstanceOf(CanonicalErrorException);
+    expect((failure as CanonicalErrorException).canonical.code).toBe('E_INVALID_PATH');
+    expect(JSON.stringify((failure as CanonicalErrorException).canonical)).not.toContain('sneaky');
   });
 });

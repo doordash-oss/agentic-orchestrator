@@ -14,14 +14,39 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { installAgenticoMock, orphanSessionError } from '../test/agenticoMock';
+import { installAgenticoMock, ipcError, orphanSessionError } from '../test/agenticoMock';
 import { ExplainChatProvider } from '../explainChat';
 import { RecoveryWorkspace } from './RecoveryWorkspace';
 
 afterEach(cleanup);
+
+describe('RecoveryWorkspace scan and dispatch errors', () => {
+  it('renders a rejected scan as a compact ErrorSurface whose scan action re-invokes it', async () => {
+    const mock = installAgenticoMock();
+    mock.api.scanRecovery.mockRejectedValue(ipcError('E_INTERNAL', 'The recovery scan failed.'));
+    render(<RecoveryWorkspace />);
+    const user = userEvent.setup();
+
+    // The auto-scan on mount rejected: one compact ErrorSurface, no queue.
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(alert).getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+    expect(within(alert).getByText('The recovery scan failed.')).toBeVisible();
+    expect(within(alert).getByRole('button', { name: 'Scan for orphans' })).toHaveClass(
+      'error-surface__action',
+    );
+    // The legacy hand-rolled error markup is gone.
+    expect(document.querySelector('.form-field__error')).toBeNull();
+    expect(document.querySelector('.recovery-workspace__error-actions')).toBeNull();
+    expect(document.querySelector('.recovery-attention')).toBeNull();
+
+    await user.click(within(alert).getByRole('button', { name: 'Scan for orphans' }));
+    await waitFor(() => expect(mock.api.scanRecovery).toHaveBeenCalledTimes(2));
+  });
+});
 
 describe('RecoveryWorkspace', () => {
   it('renders a live orphan as one needs-action card with an in-card Resume and the PID in the header', async () => {

@@ -15,8 +15,8 @@ limitations under the License.
 */
 
 import { describe, expect, it } from 'vitest';
-import { CANONICAL_ERROR_MESSAGE_PREFIX } from '../../../shared/errors';
-import { canonicalFromWizardError, parseIpcError } from './ipcError';
+import { CANONICAL_ERROR_MESSAGE_PREFIX, buildCanonicalError } from '../../../shared/errors';
+import { parseIpcError } from './ipcError';
 import type { CanonicalError } from '../../../shared/api/parse';
 
 const CANONICAL: CanonicalError = {
@@ -28,65 +28,49 @@ const CANONICAL: CanonicalError = {
   context: { repositories: [{ name: 'repo-a', dirty_files: ['src/one.ts'] }] },
 };
 
+const IPC_UNREACHABLE = buildCanonicalError('E_IPC_UNREACHABLE');
+
 describe('parseIpcError', () => {
-  it('preserves preload metadata apart from the display message', () => {
-    const remediation = 'Review and reconcile the branch on GitHub, then refresh and retry.';
-    const error = Object.assign(
-      new Error(`publish_remote_diverged: safe display message ${remediation}`),
-      { code: 'publish_remote_diverged', remediation },
-    );
-
-    expect(parseIpcError(error)).toEqual({
-      code: 'publish_remote_diverged',
-      message: 'safe display message',
-      remediation,
-    });
-  });
-
-  it('returns the canonical object when preload attached it', () => {
-    const error = Object.assign(new Error('unused'), { canonical: CANONICAL });
-    expect(parseIpcError(error)).toEqual({
-      code: 'parent_worktrees_dirty',
-      message: CANONICAL.summary,
-      remediation: CANONICAL.remediation?.hint,
-      canonical: CANONICAL,
-    });
-  });
-
   it('recovers the canonical object from the sentinel message the bridge keeps', () => {
     // Custom Error properties do not survive the context bridge, so preload
     // carries the canonical object inside the message.
     const error = new Error(CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(CANONICAL));
-    expect(parseIpcError(error)).toEqual({
-      code: 'parent_worktrees_dirty',
-      message: CANONICAL.summary,
-      remediation: CANONICAL.remediation?.hint,
-      canonical: CANONICAL,
-    });
+    expect(parseIpcError(error)).toEqual(CANONICAL);
   });
 
-  it('falls back to the legacy shape when a sentinel message is malformed', () => {
+  it('honors an attached canonical prop (same-world mocks and tests)', () => {
+    const error = Object.assign(new Error('unused'), { canonical: CANONICAL });
+    expect(parseIpcError(error)).toEqual(CANONICAL);
+  });
+
+  it('prefers the attached canonical over the sentinel message', () => {
+    const error = Object.assign(
+      new Error(CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(IPC_UNREACHABLE)),
+      { canonical: CANONICAL },
+    );
+    expect(parseIpcError(error)).toEqual(CANONICAL);
+  });
+
+  it('degrades an unparseable sentinel message to the catalog IPC-unreachable canonical', () => {
     const error = new Error(CANONICAL_ERROR_MESSAGE_PREFIX + 'not json');
-    const parsed = parseIpcError(error);
-    expect(parsed.canonical).toBeUndefined();
-    expect(parsed.code).toBe('E_IPC');
+    expect(parseIpcError(error)).toEqual(IPC_UNREACHABLE);
   });
 
-  it('adapts legacy transport errors to a blocking canonical for ErrorSurface', () => {
-    const adapted = canonicalFromWizardError({
-      code: 'E_REQUEST_TIMEOUT',
-      message: 'The runtime did not answer within the request bound.',
-      remediation: 'Wait for the feature to refresh.',
-    });
-    expect(adapted).toEqual({
-      code: 'E_REQUEST_TIMEOUT',
-      class: 'blocking',
-      title: 'Request failed',
-      summary: 'The runtime did not answer within the request bound.',
-      remediation: { hint: 'Wait for the feature to refresh.' },
-    });
-    expect(canonicalFromWizardError({ code: 'x', message: 'm', canonical: CANONICAL })).toBe(
-      CANONICAL,
+  it('degrades any other rejection to the catalog IPC-unreachable canonical', () => {
+    expect(parseIpcError(new Error('connect ECONNREFUSED'))).toEqual(IPC_UNREACHABLE);
+    expect(parseIpcError('not even an error')).toEqual(IPC_UNREACHABLE);
+    expect(parseIpcError(undefined)).toEqual(IPC_UNREACHABLE);
+  });
+
+  it('preserves the canonical code, class, title, and summary verbatim', () => {
+    const error = new Error(CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(CANONICAL));
+    const parsed = parseIpcError(error);
+    expect(parsed.code).toBe('parent_worktrees_dirty');
+    expect(parsed.class).toBe('needs_action');
+    expect(parsed.title).toBe('Parent worktrees are dirty');
+    expect(parsed.summary).toBe("The parent feature's worktrees have uncommitted changes.");
+    expect(parsed.remediation?.hint).toBe(
+      'Commit or stash the listed changes in each repository, then retry.',
     );
   });
 });

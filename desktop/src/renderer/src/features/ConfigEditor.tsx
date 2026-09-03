@@ -31,6 +31,7 @@ limitations under the License.
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import type {
   AutomaticReviewMode,
+  CanonicalError,
   Checkpoints,
   EffortLevel,
   FeatureConfig,
@@ -41,6 +42,7 @@ import type {
   PhaseModels,
   WorkspaceDefaults,
 } from '../../../shared/ipc';
+import { ErrorSurface } from '../components/ErrorSurface';
 import { parseIpcError } from '../wizard/ipcError';
 
 export type PhaseKey = keyof PhaseModels;
@@ -626,13 +628,13 @@ function ConfigForm({
 }
 
 type LoadState<T> =
-  { phase: 'loading' } | { phase: 'error'; message: string } | { phase: 'ready'; data: T };
+  { phase: 'loading' } | { phase: 'error'; error: CanonicalError } | { phase: 'ready'; data: T };
 
 interface SaveBarProps {
   dirty: boolean;
   saving: boolean;
   saved: boolean;
-  error: string | null;
+  error: CanonicalError | null;
   effectNote: string;
   onSave(): void;
   onReset(): void;
@@ -641,17 +643,22 @@ interface SaveBarProps {
 function SaveBar({ dirty, saving, saved, error, effectNote, onSave, onReset }: SaveBarProps) {
   return (
     <footer className="config-editor__footer">
-      <span className="config-editor__status" role="status">
-        {error !== null
-          ? `Save failed — ${error}`
-          : saving
+      {/* The failure branch is the canonical card; the bar's own Save button
+       * is the retry, so the card carries no action of its own. Success,
+       * progress, and the clean note stay a status line. */}
+      {error !== null ? (
+        <ErrorSurface error={error} variant="compact" />
+      ) : (
+        <span className="config-editor__status" role="status">
+          {saving
             ? 'Saving…'
             : dirty
               ? 'Unsaved changes'
               : saved
                 ? `Saved. ${effectNote}`
                 : effectNote}
-      </span>
+        </span>
+      )}
       <div className="config-editor__actions">
         <button
           type="button"
@@ -717,7 +724,7 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
   >({ phase: 'loading' });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<CanonicalError | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
@@ -740,7 +747,7 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
         });
       })
       .catch((e: unknown) => {
-        if (alive) setState({ phase: 'error', message: parseIpcError(e).message });
+        if (alive) setState({ phase: 'error', error: parseIpcError(e) });
       });
     return () => {
       alive = false;
@@ -765,7 +772,7 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
         });
         setSaved(true);
       })
-      .catch((e: unknown) => setSaveError(parseIpcError(e).message))
+      .catch((e: unknown) => setSaveError(parseIpcError(e)))
       .finally(() => setSaving(false));
   }, [featureId, state]);
 
@@ -774,16 +781,11 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
   }
   if (state.phase === 'error') {
     return (
-      <div className="config-editor__notice config-editor__notice--error" role="alert">
-        <p>Could not load configuration — {state.message}</p>
-        <button
-          type="button"
-          className="config-editor__btn"
-          onClick={() => setRetryNonce((n) => n + 1)}
-        >
-          Retry
-        </button>
-      </div>
+      <ErrorSurface
+        error={state.error}
+        variant="compact"
+        localAction={{ label: 'Retry', onAction: () => setRetryNonce((n) => n + 1) }}
+      />
     );
   }
 
@@ -857,7 +859,7 @@ export function WorkspaceDefaultsPanel({
   >({ phase: 'loading' });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<CanonicalError | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
@@ -871,7 +873,7 @@ export function WorkspaceDefaultsPanel({
         if (alive) setState({ phase: 'ready', data: { baseline: defaults, draft: defaults } });
       })
       .catch((e: unknown) => {
-        if (alive) setState({ phase: 'error', message: parseIpcError(e).message });
+        if (alive) setState({ phase: 'error', error: parseIpcError(e) });
       });
     return () => {
       alive = false;
@@ -888,7 +890,7 @@ export function WorkspaceDefaultsPanel({
         setState({ phase: 'ready', data: { baseline: defaults, draft: defaults } });
         setSaved(true);
       })
-      .catch((e: unknown) => setSaveError(parseIpcError(e).message))
+      .catch((e: unknown) => setSaveError(parseIpcError(e)))
       .finally(() => setSaving(false));
   }, [state]);
 
@@ -897,16 +899,11 @@ export function WorkspaceDefaultsPanel({
   }
   if (state.phase === 'error') {
     return (
-      <div className="config-editor__notice config-editor__notice--error" role="alert">
-        <p>Could not load workspace defaults — {state.message}</p>
-        <button
-          type="button"
-          className="config-editor__btn"
-          onClick={() => setRetryNonce((n) => n + 1)}
-        >
-          Retry
-        </button>
-      </div>
+      <ErrorSurface
+        error={state.error}
+        variant="compact"
+        localAction={{ label: 'Retry', onAction: () => setRetryNonce((n) => n + 1) }}
+      />
     );
   }
 

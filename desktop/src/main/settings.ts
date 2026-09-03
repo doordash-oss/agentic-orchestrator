@@ -31,7 +31,7 @@ limitations under the License.
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { redactText, SafeErrorException, safeError } from '../shared/errors';
+import { redactText, buildCanonicalError, CanonicalErrorException } from '../shared/errors';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sanitize';
 import {
   AmaPrefsSchema,
@@ -331,12 +331,7 @@ export class SettingsStore {
   update(patch: SettingsPatch): Settings {
     const parsed = SettingsPatchSchema.safeParse(patch);
     if (!parsed.success) {
-      throw new SafeErrorException(
-        safeError(
-          'E_INVALID_SETTINGS_PATCH',
-          'The settings update was rejected because it did not match the settings schema.',
-        ),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_INVALID_SETTINGS_PATCH'));
     }
     const next: Settings = {
       ...this.settings,

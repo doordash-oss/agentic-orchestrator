@@ -27,6 +27,7 @@ import {
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttentionItem, FeatureSnapshot, RelationshipChildView } from '../../../../shared/ipc';
+import { buildCanonicalError } from '../../../../shared/errors';
 import { featureSnapshot, installAgenticoMock } from '../../test/agenticoMock';
 import { ExplainChatProvider } from '../../explainChat';
 import { emptyAttentionDrafts } from '../AttentionInbox';
@@ -451,8 +452,36 @@ describe('RefactorPassWorkspace', () => {
     renderWorkspace(parent, controllerFor(parent, bareChild, { discardOpen: true }));
 
     const dialog = screen.getByRole('dialog', { name: /Discard Slop removal pass/ });
-    expect(within(dialog).getByRole('alert')).toHaveTextContent('Impact projection is unavailable');
+    // The missing projection is a warning-class card from the shared
+    // desktop-local code: the dialog failed closed, and the discard confirm
+    // stays disarmed until a refresh.
+    const notice = within(dialog).getByRole('status');
+    expect(notice).toHaveClass('error-surface', 'error-surface--compact', 'error-surface--warning');
+    expect(notice).toHaveTextContent('Impact projection is missing or stale');
+    expect(within(dialog).getByText('E_IMPACT_PROJECTION_STALE')).toHaveClass(
+      'error-surface__code',
+    );
     expect(within(dialog).getByRole('button', { name: 'Discard pass' })).toBeDisabled();
+  });
+
+  it('renders a rejected pass load as a compact ErrorSurface whose Retry reloads', async () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    const reload = vi.fn();
+    const pass = controllerFor(parent, null, {
+      childState: { phase: 'error', error: buildCanonicalError('E_NOT_CONNECTED') },
+      reload,
+    });
+    const user = userEvent.setup();
+    renderWorkspace(parent, pass);
+
+    const surface = screen.getByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_NOT_CONNECTED')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Not connected')).toBeVisible();
+
+    await user.click(within(surface).getByRole('button', { name: 'Retry' }));
+    expect(reload).toHaveBeenCalledOnce();
   });
 
   it('renders the parked condition exactly once through the full ErrorSurface with a working retry', () => {
@@ -582,13 +611,9 @@ describe('RefactorPassWorkspace', () => {
           kind: 'error',
           error: {
             code: 'invalid_transition',
-            message: 'the retry was rejected',
-            canonical: {
-              code: 'invalid_transition',
-              class: 'blocking',
-              title: 'Invalid transition',
-              summary: 'The action is not valid in the feature current state.',
-            },
+            class: 'blocking',
+            title: 'Invalid transition',
+            summary: 'The action is not valid in the feature current state.',
           },
         },
       }),

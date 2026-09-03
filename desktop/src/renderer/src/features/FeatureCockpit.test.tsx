@@ -24,6 +24,7 @@ import {
   featureSnapshot,
   featureConfigSnapshot,
   installAgenticoMock,
+  ipcError,
 } from '../test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from '../test/setup';
 import { ExplainChatProvider } from '../explainChat';
@@ -580,8 +581,13 @@ describe('FeatureCockpit snapshot rendering', () => {
     });
     mock.api.launchRebaseChild
       .mockRejectedValueOnce(
-        new Error(
-          'rebase_target_resolution_failed: Could not resolve a target branch for repo-a. Check the repository default branch.',
+        ipcError(
+          'rebase_target_resolution_failed',
+          'The rebase target branch could not be resolved.',
+          {
+            title: 'Rebase target unresolved',
+            remediation: 'Check that the target branch exists on the remote, then retry.',
+          },
         ),
       )
       .mockResolvedValueOnce({
@@ -597,11 +603,9 @@ describe('FeatureCockpit snapshot rendering', () => {
 
     const alert = await within(aftercare).findByRole('alert');
     expect(alert).toHaveTextContent('rebase_target_resolution_failed');
-    expect(alert).toHaveTextContent(/Could not resolve a target branch/);
-    // A legacy transport rejection (no attached canonical) still renders
-    // through the adapter: blocking, with the safe message as the summary.
+    expect(alert).toHaveTextContent('Rebase target unresolved');
+    expect(alert).toHaveTextContent('The rebase target branch could not be resolved.');
     expect(alert).toHaveClass('error-surface', 'error-surface--blocking');
-    expect(within(alert).getByText('Request failed')).toBeVisible();
     expect(within(alert).getByText('rebase_target_resolution_failed')).toHaveClass(
       'error-surface__code',
     );
@@ -2310,7 +2314,7 @@ describe('FeatureCockpit convergence', () => {
     renderCockpit(mock, true);
     expect(await screen.findByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
     await openInspector();
-    mock.api.getFeature.mockRejectedValueOnce(new Error('unavailable: runtime busy'));
+    mock.api.getFeature.mockRejectedValueOnce(ipcError('E_INTERNAL', 'runtime busy'));
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
     expect(await screen.findByText('Refreshing from the runtime…')).toBeVisible();
     expect(screen.getByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
@@ -2321,9 +2325,15 @@ describe('FeatureCockpit convergence', () => {
     const mock = installAgenticoMock();
     renderCockpit(mock, true);
     await screen.findByRole('region', { name: 'Feature Search revamp' });
-    mock.api.getFeature.mockRejectedValueOnce(new Error('not_found: feature not found'));
+    mock.api.getFeature.mockRejectedValueOnce(
+      ipcError('not_found', 'feature not found', { title: 'Feature not found' }),
+    );
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
-    expect(await screen.findByText('This feature no longer exists on the server.')).toBeVisible();
+    // The server's own not_found canonical renders through the compact surface.
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('not_found')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Feature not found')).toBeVisible();
   });
 
   it('does not compete with an unresolved initial load after an invalidation', async () => {
@@ -2333,7 +2343,7 @@ describe('FeatureCockpit convergence', () => {
       .mockImplementationOnce(
         () => new Promise((resolve) => (resolveInitial = resolve as typeof resolveInitial)),
       )
-      .mockRejectedValueOnce(new Error('unavailable: runtime busy'));
+      .mockRejectedValueOnce(ipcError('E_INTERNAL', 'runtime busy'));
     renderCockpit(mock);
     await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(1));
 
@@ -2481,15 +2491,61 @@ describe('FeatureCockpit convergence', () => {
 
   it('renders a close affordance instead of crashing when the feature vanished', async () => {
     const mock = installAgenticoMock();
-    mock.api.getFeature.mockRejectedValue(new Error('not_found: feature not found'));
+    mock.api.getFeature.mockRejectedValue(
+      ipcError('not_found', 'feature not found', { title: 'Feature not found' }),
+    );
     const { onClose } = renderCockpit(mock);
     const user = userEvent.setup();
 
-    expect(
-      await screen.findByText('This feature no longer exists on the server.'),
-    ).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Close tab' }));
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('not_found')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Feature not found')).toBeVisible();
+    await user.click(within(surface).getByRole('button', { name: 'Close tab' }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders one compact ErrorSurface with Retry when the initial feature load rejects', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeature
+      .mockRejectedValueOnce(ipcError('E_INTERNAL', 'runtime busy'))
+      .mockResolvedValue(featureSnapshot());
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    await user.click(within(surface).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
+  });
+
+  it('routes a failed setup retry through the action-rejection surface, never the announcement region', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        setup: { status: 'failed', attempt: 1, tasks: [] },
+        actions: [{ id: 'setup', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.dispatchFeatureSetup.mockRejectedValueOnce(ipcError('conflict', 'setup rejected'));
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    // Setup failed once, so the primary verb the state invites is Retry setup.
+    await user.click(screen.getByRole('button', { name: 'Retry setup' }));
+
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(screen.getByText('Retry was rejected')).toBeVisible();
+    expect(screen.getByText('conflict')).toHaveClass('error-surface__code');
+    expect(mock.api.dispatchFeatureSetup).toHaveBeenCalledWith(FEATURE_ID);
+    // Nothing is written to the announcement region for the failure.
+    document.querySelectorAll('.cockpit__announcement').forEach((region) => {
+      expect(region.textContent).toBe('');
+    });
+    expect(screen.queryByText(/Retry failed/)).not.toBeInTheDocument();
   });
 
   it('saves floating gate drafts while leaving the agent paused', async () => {
@@ -3099,7 +3155,15 @@ describe('FeatureCockpit delete', () => {
     await user.click(await screen.findByLabelText('More actions'));
     await user.click(screen.getByRole('menuitem', { name: 'Delete feature' }));
     const dialog = await screen.findByRole('dialog', { name: /Delete Search revamp/ });
-    expect(dialog).toHaveTextContent('Impact projection is missing or stale');
+    // The missing projection renders a warning-class surface from the
+    // desktop-local catalog code, not a hand-rolled alert line.
+    const warning = within(dialog).getByText('E_IMPACT_PROJECTION_STALE').closest('.error-surface');
+    expect(warning).not.toBeNull();
+    expect(warning).toHaveClass('error-surface--compact', 'error-surface--warning');
+    expect(warning).toHaveAttribute('role', 'status');
+    expect(
+      within(warning as HTMLElement).getByText('Impact projection is missing or stale'),
+    ).toBeVisible();
     expect(within(dialog).getByRole('button', { name: 'Delete feature' })).toBeDisabled();
   });
 
@@ -3510,16 +3574,24 @@ describe('FeatureCockpit run switcher popup', () => {
     expect(within(menu).getByRole('button', { name: 'Load older' })).toBeInTheDocument();
   });
 
-  it('reports a failed run-history read inside the menu without losing the current run', async () => {
+  it('renders a compact ErrorSurface with Retry inside the menu when the run-history read fails', async () => {
     const mock = installAgenticoMock();
-    mock.api.listRuns.mockRejectedValue(new Error('history unavailable'));
+    mock.api.listRuns.mockRejectedValue(ipcError('E_INTERNAL', 'history unavailable'));
     renderWithSwitcher();
 
-    const { menu } = await openSwitcher();
-    expect(
-      await within(menu).findByText(/Could not load run history — history unavailable/),
-    ).toBeVisible();
+    const { user, menu } = await openSwitcher();
+    const surface = await within(menu).findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+    // The current run stays reachable while the history read is unusable.
     expect(within(menu).getByRole('menuitem', { name: 'Plan · current' })).toBeVisible();
+    await user.click(within(surface).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mock.api.listRuns).toHaveBeenCalledTimes(2));
+    expect(mock.api.listRuns).toHaveBeenLastCalledWith({
+      featureId: FEATURE_ID,
+      page: 1,
+      pageSize: 8,
+    });
   });
 });
 
@@ -3622,7 +3694,9 @@ describe('FeatureCockpit feature-command funnel', () => {
       .mockResolvedValueOnce(snapshot)
       .mockRejectedValue(new Error('refresh unavailable'));
     mock.api.dispatchFeatureAction.mockRejectedValue(
-      new Error('E_REQUEST_TIMEOUT: publish did not answer before the bound'),
+      ipcError('E_REQUEST_TIMEOUT', 'publish did not answer before the bound', {
+        class: 'warning',
+      }),
     );
     await mounted(mock);
     const user = userEvent.setup();

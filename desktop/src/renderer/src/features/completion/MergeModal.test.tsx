@@ -18,6 +18,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MergeModalBody } from './MergeModal';
 import { STATUS_LABELS } from './completionShared';
+import { ipcError } from '../../test/agenticoMock';
 import type { CompletionPreflightResult } from '../../../../shared/ipc';
 
 const preflight: CompletionPreflightResult = {
@@ -55,12 +56,24 @@ describe('MergeModalBody', () => {
     );
   });
 
-  it('shows the aftercare rebase hint after a failed merge with no launch button', async () => {
-    const dispatchAction = vi.fn(() => Promise.reject(new Error('conflict')));
+  it('renders a failed merge as a compact ErrorSurface whose remediation hint is the rebase handoff', async () => {
+    const dispatchAction = vi.fn(() =>
+      Promise.reject(ipcError('merge_conflict', 'The merge conflicted with the base branch.')),
+    );
     render(<MergeModalBody {...props({ dispatchAction })} />);
     fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
-    await screen.findByText(/Use Start rebase pass in the feature's aftercare workspace/);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveClass('error-surface', 'error-surface--compact');
+    expect(screen.getByText('merge_conflict')).toHaveClass('error-surface__code');
+    expect(screen.getByText('The merge conflicted with the base branch.')).toBeVisible();
+    // The hand-written rebase handoff prose is now the failure card's remediation hint.
+    const hint = screen.getByText(/Use Start rebase pass in the feature's aftercare workspace/);
+    expect(hint).toHaveClass('error-surface__remediation-hint');
     expect(screen.queryByRole('button', { name: /Hand off to rebase/i })).not.toBeInTheDocument();
+    // The legacy failure-result markup is gone.
+    expect(document.querySelector('.completion-workspace__result--failure')).toBeNull();
+    expect(document.querySelector('.completion-workspace__merge-handoff-hint')).toBeNull();
   });
 
   it('shows the empty state when nothing is mergeable', () => {

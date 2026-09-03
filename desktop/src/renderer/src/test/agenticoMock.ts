@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 import { vi } from 'vitest';
+import { CANONICAL_ERROR_MESSAGE_PREFIX } from '../../../shared/errors';
 import type { CanonicalError } from '../../../shared/api/parse';
 import type {
   AgenticoApi,
@@ -42,8 +43,52 @@ import type {
 } from '../../../shared/ipc';
 import { defaultSettings } from '../../../shared/ipc';
 
+/**
+ * A rejection shaped the way the preload rethrows envelope errors: the
+ * canonical object rides the sentinel-prefixed message (and is attached for
+ * same-world recovery). Pass to `mockRejectedValue` on window.agentico calls.
+ */
+export function ipcError(
+  code: string,
+  summary: string,
+  options: { class?: CanonicalError['class']; title?: string; remediation?: string } = {},
+): Error {
+  const canonical: CanonicalError = {
+    code,
+    class: options.class ?? 'blocking',
+    title: options.title ?? 'Request failed',
+    summary,
+    ...(options.remediation === undefined ? {} : { remediation: { hint: options.remediation } }),
+  };
+  return Object.assign(new Error(CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(canonical)), {
+    code: canonical.code,
+    remediation: canonical.remediation?.hint,
+    canonical,
+  });
+}
+
 /** A snapshot with every mandatory gate unsatisfied (fresh install). */
 export function unreadySnapshot(overrides: Partial<ReadinessSnapshot> = {}): ReadinessSnapshot {
+  const claudeIssue = {
+    code: 'unauthenticated',
+    class: 'blocking',
+    title: 'Unauthenticated',
+    summary: 'A provider CLI is installed but its authentication flow has not been completed.',
+    remediation: { hint: 'claude login' },
+  } as const;
+  const codexIssue = {
+    code: 'missing_executable',
+    class: 'blocking',
+    title: 'Missing executable',
+    summary: 'A provider CLI is not installed.',
+    remediation: { hint: 'npm install -g @openai/codex' },
+  } as const;
+  const modelsIssue = {
+    code: 'models_unavailable',
+    class: 'blocking',
+    title: 'Models unavailable',
+    summary: 'No usable provider exposes any model.',
+  } as const;
   return {
     ready: false,
     providers: [
@@ -52,43 +97,23 @@ export function unreadySnapshot(overrides: Partial<ReadinessSnapshot> = {}): Rea
         installed: true,
         version: '2.1.0',
         ready: false,
-        issue: {
-          code: 'unauthenticated',
-          message: 'The claude CLI is installed but not authenticated.',
-          remedy: 'claude login',
-        },
+        issue: claudeIssue,
       },
       {
         name: 'codex',
         installed: false,
         ready: false,
-        issue: {
-          code: 'missing_executable',
-          message: 'The codex CLI is not installed.',
-          remedy: 'npm install -g @openai/codex',
-        },
+        issue: codexIssue,
       },
     ],
     models: {
       available: false,
-      issue: { code: 'models_unavailable', message: 'No usable provider exposes any model.' },
+      issue: modelsIssue,
     },
     configuration: { valid: true },
     workspaceRoots: [],
     repositories: [],
-    issues: [
-      {
-        code: 'unauthenticated',
-        message: 'The claude CLI is installed but not authenticated.',
-        remedy: 'claude login',
-      },
-      {
-        code: 'missing_executable',
-        message: 'The codex CLI is not installed.',
-        remedy: 'npm install -g @openai/codex',
-      },
-      { code: 'models_unavailable', message: 'No usable provider exposes any model.' },
-    ],
+    issues: [claudeIssue, codexIssue, modelsIssue],
     ...overrides,
   };
 }
@@ -117,7 +142,12 @@ export function creationDefaults(overrides: Partial<CreationDefaults> = {}): Cre
         name: 'repo-b',
         path: '/work/space/repo-b',
         valid: false,
-        issue: { code: 'invalid_repository', message: 'Not a git repository.' },
+        issue: {
+          code: 'invalid_repository',
+          class: 'blocking',
+          title: 'Invalid repository',
+          summary: 'A configured repository path is not a git repository.',
+        },
       },
     ],
     defaults: {

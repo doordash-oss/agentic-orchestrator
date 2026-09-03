@@ -19,12 +19,12 @@ limitations under the License.
  * responses (parsed in the main process before use) and IPC payloads.
  *
  * Order matters: byte-size gate, JSON parse, prototype-pollution scan,
- * API-version gate, then zod schema validation. Errors are typed SafeErrors
- * and never echo raw payload values.
+ * API-version gate, then zod schema validation. Errors are typed canonical
+ * errors and never echo raw payload values.
  */
 import { z } from 'zod';
 import { assertCompatibleApiVersion } from '../apiVersion';
-import { SafeErrorException, safeError } from '../errors';
+import { buildCanonicalError, CanonicalErrorException } from '../errors';
 import { MAX_PAYLOAD_BYTES, assertNoPrototypePollution, assertWithinByteSize } from '../sanitize';
 import type { components } from './schema.gen';
 
@@ -40,13 +40,7 @@ export function parseServerJson<Schema extends z.ZodType>(
   try {
     data = JSON.parse(raw);
   } catch {
-    throw new SafeErrorException(
-      safeError(
-        'E_MALFORMED_RESPONSE',
-        'The response was not valid JSON.',
-        'Retry; if this persists the server or transport is misbehaving.',
-      ),
-    );
+    throw new CanonicalErrorException(buildCanonicalError('E_MALFORMED_RESPONSE'));
   }
 
   assertNoPrototypePollution(data);
@@ -66,16 +60,13 @@ export function validateWithSchema<Schema extends z.ZodType>(
 ): z.output<Schema> {
   const result = schema.safeParse(data);
   if (!result.success) {
-    // Report only issue paths and codes — never received values.
+    // Report only issue paths and codes — never received values. The paths
+    // ride in the summary (redacted at build time), not free-form text.
     const paths = [...new Set(result.error.issues.map((i) => i.path.join('.') || '(root)'))]
       .slice(0, 5)
       .join(', ');
-    throw new SafeErrorException(
-      safeError(
-        'E_SCHEMA_MISMATCH',
-        `The payload did not match the expected schema at: ${paths}.`,
-        'Update the Agentico desktop app and the agentico server to matching releases.',
-      ),
+    throw new CanonicalErrorException(
+      buildCanonicalError('E_SCHEMA_MISMATCH', { params: { paths } }),
     );
   }
   return result.data;
@@ -139,66 +130,6 @@ export const HealthResponseSchema = z.object({
 });
 
 export type HealthResponse = z.output<typeof HealthResponseSchema>;
-
-// --- Readiness (GET /api/v1/readiness, POST /api/v1/readiness/refresh) -----
-
-export const ServerReadinessIssueSchema = z.object({
-  code: z.enum([
-    'missing_executable',
-    'unsupported_version',
-    'unauthenticated',
-    'models_unavailable',
-    'invalid_configuration',
-    'invalid_workspace_root',
-    'invalid_repository',
-  ]),
-  message: z.string(),
-  remedy: z.string().optional(),
-});
-
-export const ReadinessResponseSchema = z.object({
-  api_version: z.string(),
-  ready: z.boolean(),
-  probed_at: z.string().optional(),
-  providers: z.array(
-    z.object({
-      name: z.string(),
-      installed: z.boolean(),
-      version: z.string().optional(),
-      ready: z.boolean(),
-      issue: ServerReadinessIssueSchema.optional(),
-    }),
-  ),
-  models: z.object({
-    available: z.boolean(),
-    models: z.array(z.string()).optional(),
-    issue: ServerReadinessIssueSchema.optional(),
-  }),
-  configuration: z.object({
-    valid: z.boolean(),
-    issue: ServerReadinessIssueSchema.optional(),
-  }),
-  workspace: z.object({
-    roots: z.array(
-      z.object({
-        path: z.string(),
-        valid: z.boolean(),
-        issue: ServerReadinessIssueSchema.optional(),
-      }),
-    ),
-    repositories: z.array(
-      z.object({
-        name: z.string(),
-        path: z.string(),
-        valid: z.boolean(),
-        issue: ServerReadinessIssueSchema.optional(),
-      }),
-    ),
-  }),
-  issues: z.array(ServerReadinessIssueSchema).optional(),
-});
-
-export type ReadinessResponse = z.output<typeof ReadinessResponseSchema>;
 
 // --- Blocking attention (GET /api/v1/prompts, /api/v1/permissions) ---------
 // These responses are deliberately bounded before they are translated to the
@@ -348,9 +279,16 @@ export type RuntimeConfigWorkspace = z.output<typeof RuntimeConfigWorkspaceSchem
 // properties, an unknown class, or the pre-canonical `{code,message,status}`
 // body all fail parsing and degrade to the main-process transport error.
 
-/** Canonical catalog-rendered error, mirroring the generated Error component. */
+/**
+ * Canonical catalog-rendered error, mirroring the generated Error component.
+ * The code must be either a desktop-local `E_UPPER_SNAKE` code or a server
+ * lowercase snake_case code — the two families are disjoint by construction.
+ */
 export const CanonicalErrorSchema = z.strictObject({
-  code: z.string().min(1),
+  code: z
+    .string()
+    .min(1)
+    .regex(/^(?:E_[A-Z0-9_]+|[a-z][a-z0-9]+(?:_[a-z0-9]{2,})*)$/),
   class: z.enum(['blocking', 'needs_action', 'warning']),
   title: z.string().min(1),
   summary: z.string().min(1),
@@ -414,6 +352,55 @@ export const CanonicalErrorResponseSchema = z.strictObject({
 });
 
 export type CanonicalErrorResponse = z.output<typeof CanonicalErrorResponseSchema>;
+
+// --- Readiness (GET /api/v1/readiness, POST /api/v1/readiness/refresh) -----
+// Readiness issues are the canonical catalog-rendered error for their code:
+// the strict CanonicalErrorSchema accepts them and rejects the pre-canonical
+// `{code, message, remedy}` shape.
+
+export const ReadinessResponseSchema = z.object({
+  api_version: z.string(),
+  ready: z.boolean(),
+  probed_at: z.string().optional(),
+  providers: z.array(
+    z.object({
+      name: z.string(),
+      installed: z.boolean(),
+      version: z.string().optional(),
+      ready: z.boolean(),
+      issue: CanonicalErrorSchema.optional(),
+    }),
+  ),
+  models: z.object({
+    available: z.boolean(),
+    models: z.array(z.string()).optional(),
+    issue: CanonicalErrorSchema.optional(),
+  }),
+  configuration: z.object({
+    valid: z.boolean(),
+    issue: CanonicalErrorSchema.optional(),
+  }),
+  workspace: z.object({
+    roots: z.array(
+      z.object({
+        path: z.string(),
+        valid: z.boolean(),
+        issue: CanonicalErrorSchema.optional(),
+      }),
+    ),
+    repositories: z.array(
+      z.object({
+        name: z.string(),
+        path: z.string(),
+        valid: z.boolean(),
+        issue: CanonicalErrorSchema.optional(),
+      }),
+    ),
+  }),
+  issues: z.array(CanonicalErrorSchema).optional(),
+});
+
+export type ReadinessResponse = z.output<typeof ReadinessResponseSchema>;
 
 // --- Features (GET/POST /api/v1/features, GET /api/v1/features/{id}) --------
 // Lenient subsets: z.object tolerates and strips fields this view does not
@@ -1339,8 +1326,12 @@ type CompatibilityDTO = components['schemas']['CompatibilityDeclaration'];
 const _compatibilityAssignable = (value: CompatibilityDeclaration): CompatibilityDTO => value;
 void _compatibilityAssignable;
 type ReadinessDTO = components['schemas']['ReadinessResponse'];
-const _readinessAssignable = (value: ReadinessResponse): ReadinessDTO => value;
-void _readinessAssignable;
+// Reverse guard for the readiness subset: the generated component (whose
+// issue entries are canonical Errors with feature-action-enum remediation
+// actions) must remain assignable to the parsed output, exactly like the
+// canonical error guard above.
+const _readinessSubset = (value: ReadinessDTO): ReadinessResponse => value;
+void _readinessSubset;
 // Reverse guard for the subset schema: every field it parses must exist on
 // the generated RuntimeConfigResponse with a compatible type.
 type RuntimeConfigDTO = components['schemas']['RuntimeConfigResponse'];

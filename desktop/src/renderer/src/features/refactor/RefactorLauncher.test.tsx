@@ -266,9 +266,17 @@ describe('RefactorLauncher', () => {
     await user.clear(screen.getByLabelText('Child name'));
     await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
     expect(screen.getByText('Enter a child name.')).toBeVisible();
-    // Client-side validation keeps its own inline markup — no error surface.
-    expect(screen.getByText('Enter a child name.')).toHaveClass('form-field__error');
+    // Client-side validation is a per-field message exposed as the input's
+    // description — no form-level error surface.
+    expect(screen.getByText('Enter a child name.')).toHaveClass('field-error');
+    expect(screen.getByText('Enter a child name.')).toHaveAttribute(
+      'id',
+      'refactor-child-name-error',
+    );
+    const input = document.getElementById('refactor-child-name') as HTMLElement;
+    expect(input).toHaveAttribute('aria-describedby', 'refactor-child-name-error');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
     expect(document.querySelector('.error-surface')).toBeNull();
-    expect(document.getElementById('refactor-child-name')).toHaveFocus();
+    expect(input).toHaveFocus();
   });
 });

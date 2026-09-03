@@ -1098,44 +1098,32 @@ export interface components {
             runtime_policy: string;
             server_build: components["schemas"]["BuildIdentity"];
         };
-        /**
-         * @description Readiness problem taxonomy. missing_executable — a provider CLI binary is not installed; unsupported_version — an installed provider CLI is below the enforced minimum version; unauthenticated — a provider CLI is installed but its authentication flow has not been completed; models_unavailable — no usable provider exposes any model; invalid_configuration — the runtime configuration is unusable; invalid_workspace_root — a configured workspace root does not resolve to a directory; invalid_repository — a configured repository path is not a git repository.
-         * @enum {string}
-         */
-        ReadinessIssueCode: "missing_executable" | "unsupported_version" | "unauthenticated" | "models_unavailable" | "invalid_configuration" | "invalid_workspace_root" | "invalid_repository";
-        ReadinessIssue: {
-            code: components["schemas"]["ReadinessIssueCode"];
-            /** @description Human-readable problem summary. Never contains credentials. */
-            message: string;
-            /** @description Safe remediation metadata, such as the CLI command to run. Never contains credentials or non-configured filesystem paths. */
-            remedy?: string;
-        };
         ProviderReadiness: {
             name: string;
             installed: boolean;
             version?: string;
             ready: boolean;
-            issue?: components["schemas"]["ReadinessIssue"];
+            issue?: components["schemas"]["Error"];
         };
         ModelReadiness: {
             available: boolean;
             models?: string[];
-            issue?: components["schemas"]["ReadinessIssue"];
+            issue?: components["schemas"]["Error"];
         };
         ConfigurationReadiness: {
             valid: boolean;
-            issue?: components["schemas"]["ReadinessIssue"];
+            issue?: components["schemas"]["Error"];
         };
         WorkspaceRootReadiness: {
             path: string;
             valid: boolean;
-            issue?: components["schemas"]["ReadinessIssue"];
+            issue?: components["schemas"]["Error"];
         };
         RepositoryReadiness: {
             name: string;
             path: string;
             valid: boolean;
-            issue?: components["schemas"]["ReadinessIssue"];
+            issue?: components["schemas"]["Error"];
         };
         RepositoryInitRequest: {
             /** @description Absolute directory to initialize, confined to a configured workspace root. May not yet exist; an existing directory must be empty and not already a git repository. */
@@ -1170,8 +1158,8 @@ export interface components {
             models: components["schemas"]["ModelReadiness"];
             configuration: components["schemas"]["ConfigurationReadiness"];
             workspace: components["schemas"]["WorkspaceReadiness"];
-            /** @description Flattened outstanding issues across all sections. */
-            issues?: components["schemas"]["ReadinessIssue"][];
+            /** @description Flattened outstanding issues across all sections, each the canonical catalog-rendered error for its readiness code. */
+            issues?: components["schemas"]["Error"][];
         };
         FeatureListResponse: components["schemas"]["JSONResponse"] & {
             features: components["schemas"]["FeatureSummary"][];

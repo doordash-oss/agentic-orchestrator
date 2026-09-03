@@ -25,6 +25,21 @@ export interface ErrorSurfaceAction {
   disabledReason?: string;
 }
 
+/**
+ * A direct action for surfaces with no server action catalog (connection
+ * shell, fetch errors, forms): label and callback, rendered in the
+ * primary-action slot with the same classes as a catalog-resolved action.
+ * A disabled reason mirrors the resolved action's semantics — the reason
+ * renders as text and the local action has no enabled state.
+ */
+export interface ErrorSurfaceLocalAction {
+  label: string;
+  /** Invoked when the primary action button is clicked. */
+  onAction: () => void;
+  /** Shown as text instead of a button; a local action with a reason has no enabled state. */
+  disabledReason?: string;
+}
+
 export interface ErrorSurfaceProps {
   error: CanonicalError;
   variant?: 'full' | 'compact';
@@ -38,6 +53,12 @@ export interface ErrorSurfaceProps {
   resolveAction?: (actionId: string) => ErrorSurfaceAction | undefined;
   /** Invoked when the primary action button is clicked. */
   onAction?: (actionId: string) => void;
+  /**
+   * A direct action rendered in the primary-action slot for surfaces with no
+   * server action catalog. Mutually exclusive with `resolveAction` — passing
+   * both throws in development, and the local action wins in production.
+   */
+  localAction?: ErrorSurfaceLocalAction;
   /** Lands on the root div so a hosting surface can focus the banner. */
   rootRef?: Ref<HTMLDivElement>;
   /** Forwarded to the root div when a host focuses it programmatically. */
@@ -196,6 +217,7 @@ export function ErrorSurface({
   caption,
   resolveAction,
   onAction,
+  localAction,
   rootRef,
   rootTabIndex,
   explain,
@@ -225,21 +247,38 @@ export function ErrorSurface({
       (rootRef as { current: HTMLDivElement | null }).current = node;
     }
   };
+  // The two action paths own the same slot, so passing both is a wiring
+  // mistake. Fail fast where it was made; production still renders the
+  // local action rather than losing the card over it.
+  if (import.meta.env.DEV && localAction != null && resolveAction != null) {
+    throw new Error('ErrorSurface accepts either localAction or resolveAction, not both.');
+  }
   const ClassIcon = CLASS_ICON[error.class];
   const remediation = error.remediation;
   const remediationHint = remediation?.hint;
   // Only the first referenced action drives the slot; later IDs exist for the
-  // catalog's benefit, not the surface.
+  // catalog's benefit, not the surface. A local action, when passed, owns the
+  // slot outright — the catalog resolution never even runs.
   const actionId = remediation?.actions?.[0];
-  const action = actionId != null ? resolveAction?.(actionId) : undefined;
-  const actionSlot =
-    action != null && actionId != null && action.enabled ? (
-      <button type="button" className="error-surface__action" onClick={() => onAction?.(actionId)}>
-        {action.label}
+  const resolvedAction =
+    localAction == null && actionId != null ? resolveAction?.(actionId) : undefined;
+  const localActionSlot =
+    localAction == null ? null : localAction.disabledReason != null ? (
+      <span className="error-surface__action-reason">{localAction.disabledReason}</span>
+    ) : (
+      <button type="button" className="error-surface__action" onClick={localAction.onAction}>
+        {localAction.label}
       </button>
-    ) : action != null && action.disabledReason != null ? (
-      <span className="error-surface__action-reason">{action.disabledReason}</span>
+    );
+  const resolvedActionSlot =
+    resolvedAction != null && actionId != null && resolvedAction.enabled ? (
+      <button type="button" className="error-surface__action" onClick={() => onAction?.(actionId)}>
+        {resolvedAction.label}
+      </button>
+    ) : resolvedAction != null && resolvedAction.disabledReason != null ? (
+      <span className="error-surface__action-reason">{resolvedAction.disabledReason}</span>
     ) : null;
+  const actionSlot = localActionSlot ?? resolvedActionSlot;
   const remediationHasContent =
     (remediationHint != null && remediationHint !== '') || actionSlot != null;
   const diagnostics =

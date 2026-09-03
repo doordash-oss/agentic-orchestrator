@@ -40,7 +40,8 @@ limitations under the License.
  * stays frozen with an actionable retry.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { parseIpcError, type WizardError } from '../../wizard/ipcError';
+import { parseIpcError } from '../../wizard/ipcError';
+import type { CanonicalError } from '../../../../shared/ipc';
 import { chunkSelectionUpdates } from './feedbackFilters';
 import {
   fetchReviewFeedbackDraft,
@@ -52,7 +53,7 @@ import {
 } from './reviewFeedbackDraftApi';
 
 export type DraftLifecycle =
-  { phase: 'loading' } | { phase: 'ready' } | { phase: 'error'; error: WizardError };
+  { phase: 'loading' } | { phase: 'ready' } | { phase: 'error'; error: CanonicalError };
 
 /** One unacknowledged edit; the sequence number orders stacked edits per ref. */
 export interface PendingSelection {
@@ -70,9 +71,9 @@ export interface PendingSelection {
  * workspace is usable again.
  */
 export type DraftRecovery =
-  | { kind: 'saveFailed'; error: WizardError }
-  | { kind: 'conflictReloading'; conflict: WizardError }
-  | { kind: 'conflictReloadFailed'; conflict: WizardError; error: WizardError };
+  | { kind: 'saveFailed'; error: CanonicalError }
+  | { kind: 'conflictReloading'; conflict: CanonicalError }
+  | { kind: 'conflictReloadFailed'; conflict: CanonicalError; error: CanonicalError };
 
 /** `review_feedback` conflict codes that always resolve via a refetch, never a replay. */
 const CONFLICT_CODES = new Set([
@@ -101,7 +102,7 @@ export interface UseReviewFeedbackDraft {
   /** Active recovery overlay, or null when the draft is fully reconciled. */
   recovery: DraftRecovery | null;
   /** Explanatory notice published only after a conflict reload succeeded. */
-  conflictNotice: WizardError | null;
+  conflictNotice: CanonicalError | null;
   /** True while an explicit recovery action (retry/reload) is in flight. */
   retrying: boolean;
   /** Polite one-shot flag after a deliberate reload succeeded. */
@@ -121,7 +122,7 @@ export interface UseReviewFeedbackDraft {
   /** Deliberately abandon the overlay and adopt the authoritative draft. */
   reloadSavedSelections(): void;
   /** Begin conflict reconciliation (also used by a stale-revision launch). */
-  recoverFromConflict(conflict: WizardError): void;
+  recoverFromConflict(conflict: CanonicalError): void;
   /** Re-attempt a failed conflict reload; recovers the workspace. */
   retryConflictReload(): void;
   /** Clear the explanatory/polite notices without touching the draft. */
@@ -136,7 +137,7 @@ export function useReviewFeedbackDraft({
   const [repos, setRepos] = useState<ReviewFeedbackDraftRepoGroup[]>([]);
   const [pending, setPending] = useState<ReadonlyMap<string, PendingSelection>>(new Map());
   const [recovery, setRecovery] = useState<DraftRecovery | null>(null);
-  const [conflictNotice, setConflictNotice] = useState<WizardError | null>(null);
+  const [conflictNotice, setConflictNotice] = useState<CanonicalError | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [reloaded, setReloaded] = useState(false);
 
@@ -254,7 +255,7 @@ export function useReviewFeedbackDraft({
    * so the user is never left with a stale view under a "ready" claim.
    */
   const recoverFromConflict = useCallback(
-    (conflict: WizardError): void => {
+    (conflict: CanonicalError): void => {
       epochRef.current += 1;
       const epoch = epochRef.current;
       setRetrying(false);

@@ -16,7 +16,7 @@ limitations under the License.
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { SafeErrorException, safeError } from '../../shared/errors';
+import { buildCanonicalError, CanonicalErrorException } from '../../shared/errors';
 import type { AppRouteEvent, RemoteServerAddResult } from '../../shared/ipc';
 import {
   addServerFromLink,
@@ -184,9 +184,7 @@ describe('addServerFromLink', () => {
   it('surfaces a pipeline failure on the add form with the pane error copy', async () => {
     const { deps, routes, notifications, switched } = makeDeps({
       addServer: async () => {
-        throw new SafeErrorException(
-          safeError('E_REMOTE_AUTH_REJECTED', 'The server rejected the token.'),
-        );
+        throw new CanonicalErrorException(buildCanonicalError('E_REMOTE_AUTH_REJECTED'));
       },
     });
     await addServerFromLink(CONNECTION_STRING, deps);
@@ -194,15 +192,15 @@ describe('addServerFromLink', () => {
     expect(routes).toEqual([
       { target: 'settings', settingsSection: 'servers', settingsFocus: 'add-server' },
     ]);
-    expect(notifications).toEqual(['The token was rejected. The server rejected the token.']);
+    expect(notifications).toEqual([
+      'The token was rejected. The server rejected the token from the connection string.',
+    ]);
   });
 
   it('never leaks the link or token into logs, routes, or notifications', async () => {
     const failing = makeDeps({
       addServer: async () => {
-        throw new SafeErrorException(
-          safeError('E_REMOTE_UNREACHABLE', 'Could not reach the server.'),
-        );
+        throw new CanonicalErrorException(buildCanonicalError('E_REMOTE_UNREACHABLE'));
       },
     });
     await addServerFromLink(CONNECTION_STRING, failing.deps);

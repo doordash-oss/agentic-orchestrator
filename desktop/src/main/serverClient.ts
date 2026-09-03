@@ -20,16 +20,15 @@ limitations under the License.
  * success check, structured-error parsing, redaction, and fail-closed
  * fallback stay identical across services instead of drifting per call site.
  * A canonical server error crosses unchanged (the catalog owns its human
- * text); anything else degrades to the main-process transport safe error.
+ * text); anything else degrades to the desktop catalog's transport error.
  */
 import { randomUUID } from 'node:crypto';
 import {
+  buildCanonicalError,
   CanonicalErrorException,
   redactText,
   requiresLocalServerError,
-  SafeErrorException,
-  safeError,
-  toSafeError,
+  toCanonicalError,
 } from '../shared/errors';
 import {
   CanonicalErrorResponseSchema,
@@ -77,9 +76,9 @@ export interface ServerTransport {
 
 /**
  * Performs one authenticated request and returns the raw success body for
- * the caller to schema-validate. Non-2xx responses throw either a
- * CanonicalErrorException (the server's catalog-rendered error, passed
- * through unchanged) or the main-process transport SafeErrorException;
+ * the caller to schema-validate. Non-2xx responses throw a
+ * CanonicalErrorException — either the server's catalog-rendered error
+ * (passed through unchanged) or the desktop catalog's transport error;
  * nothing from the wire crosses unredacted.
  */
 export async function serverRequest(
@@ -165,7 +164,7 @@ export class SessionService {
     const remote = this.locality() === 'remote';
     if (remote && (input.images?.length ?? 0) > 0) {
       // A locally shaped path remotely is a stale draft: fail, never leak.
-      throw new SafeErrorException(requiresLocalServerError());
+      throw new CanonicalErrorException(requiresLocalServerError());
     }
     const { context } = input;
     const response = await serverRequest(this.transport, '/api/v1/prompts/chat/start', {
@@ -253,9 +252,7 @@ export class SessionService {
     try {
       const openStream = this.transport.openSessionOutputStream;
       if (openStream === undefined) {
-        throw new SafeErrorException(
-          safeError('E_SSE_UNAVAILABLE', 'This build has no session output transport wired.'),
-        );
+        throw new CanonicalErrorException(buildCanonicalError('E_SSE_UNAVAILABLE'));
       }
       const stream = await openStream.call(this.transport, input.sessionId, {
         ...(input.from === undefined ? {} : { from: input.from }),
@@ -263,8 +260,10 @@ export class SessionService {
       state.stream = stream;
       if (state.cancelled) return;
       if (stream.status !== 200) {
-        throw new SafeErrorException(
-          safeError(`E_HTTP_${stream.status}`, 'The runtime rejected the session output stream.'),
+        throw new CanonicalErrorException(
+          buildCanonicalError('E_SESSION_STREAM_REJECTED', {
+            params: { status: String(stream.status) },
+          }),
         );
       }
       const assembler = new SseBlockAssembler();
@@ -300,7 +299,7 @@ export class SessionService {
                 subscriptionId,
                 type: 'error',
                 sessionId: input.sessionId,
-                error: toSafeError(error, 'E_SESSION_STREAM'),
+                error: toCanonicalError(error, 'E_SESSION_STREAM'),
               },
               SessionOutputEventSchema,
             ),
@@ -335,20 +334,28 @@ export type ParsedSessionOutput =
 /** Parses one bounded, versioned session-output SSE block. */
 export function parseSessionOutputBlock(block: SseBlock): ParsedSessionOutput {
   if (!['session.output', 'session.output.done'].includes(block.event)) {
-    throw new SafeErrorException(safeError('E_STREAM_PROTOCOL', 'Unknown session output event.'));
+    throw new CanonicalErrorException(
+      buildCanonicalError('E_STREAM_PROTOCOL', {
+        params: { detail: 'Unknown session output event.' },
+      }),
+    );
   }
   const chunk = parseServerJson(block.data, SessionOutputChunkSchema, 2 * 1024 * 1024);
   if (chunk.session_id === undefined || chunk.session_id === '') {
-    throw new SafeErrorException(
-      safeError('E_STREAM_PROTOCOL', 'Session output omitted its session ID.'),
+    throw new CanonicalErrorException(
+      buildCanonicalError('E_STREAM_PROTOCOL', {
+        params: { detail: 'Session output omitted its session ID.' },
+      }),
     );
   }
   if (block.event === 'session.output.done' || chunk.done === true) {
     return { type: 'done', sessionId: chunk.session_id, nextIndex: chunk.index };
   }
   if (chunk.message === undefined || chunk.message.index !== chunk.index) {
-    throw new SafeErrorException(
-      safeError('E_STREAM_PROTOCOL', 'Session output row cursor did not match its message.'),
+    throw new CanonicalErrorException(
+      buildCanonicalError('E_STREAM_PROTOCOL', {
+        params: { detail: 'Session output row cursor did not match its message.' },
+      }),
     );
   }
   return {
@@ -420,7 +427,15 @@ function toSessionDetail(session: ServerSessionDetail): SessionDetail {
       ...(session.initial_prompt === undefined ? {} : { initialPrompt: session.initial_prompt }),
       canAttach: session.can_attach,
       logAvailable: session.log_available,
-      ...(session.safe_error === undefined ? {} : { safeError: redactText(session.safe_error) }),
+      // The server's free-text terminal error string is redacted and wrapped
+      // in a desktop catalog canonical; it never crosses raw.
+      ...(session.safe_error === undefined
+        ? {}
+        : {
+            safeError: buildCanonicalError('E_SESSION_ERROR', {
+              params: { reason: redactText(session.safe_error) },
+            }),
+          }),
     },
     SessionDetailSchema,
   );
@@ -511,10 +526,10 @@ export function toTranscriptMessage(message: ServerTranscriptMessage): Transcrip
  * Maps a non-2xx server response. A body that parses as the canonical error
  * envelope crosses unchanged as a CanonicalErrorException — the catalog owns
  * its title, summary, remediation, and typed context. Anything else (or a
- * body that fails canonical parsing) fails closed to the main-process
- * transport SafeError.
+ * body that fails canonical parsing) fails closed to the desktop catalog's
+ * fixed HTTP-rejection code with the status in the summary.
  */
-export function mapServerError(result: HttpResult): SafeErrorException | CanonicalErrorException {
+export function mapServerError(result: HttpResult): CanonicalErrorException {
   const parsed = CanonicalErrorResponseSchema.safeParse(result.body);
   if (parsed.success) {
     // The catalog owns every authored field, so the object crosses intact;
@@ -527,11 +542,7 @@ export function mapServerError(result: HttpResult): SafeErrorException | Canonic
         : { ...error, diagnostics: redactText(error.diagnostics) };
     return new CanonicalErrorException(canonical);
   }
-  return new SafeErrorException(
-    safeError(
-      `E_HTTP_${result.status}`,
-      'The runtime rejected the request.',
-      'Retry; if this persists, restart the runtime and check its log.',
-    ),
+  return new CanonicalErrorException(
+    buildCanonicalError('E_HTTP_REJECTED', { params: { status: String(result.status) } }),
   );
 }

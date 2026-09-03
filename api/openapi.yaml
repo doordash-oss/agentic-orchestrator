@@ -1923,40 +1923,6 @@ components:
             token auth and single-owner discovery).
         server_build:
           $ref: "#/components/schemas/BuildIdentity"
-    ReadinessIssueCode:
-      type: string
-      description: >-
-        Readiness problem taxonomy. missing_executable — a provider CLI binary
-        is not installed; unsupported_version — an installed provider CLI is
-        below the enforced minimum version; unauthenticated — a provider CLI
-        is installed but its authentication flow has not been completed;
-        models_unavailable — no usable provider exposes any model;
-        invalid_configuration — the runtime configuration is unusable;
-        invalid_workspace_root — a configured workspace root does not resolve
-        to a directory; invalid_repository — a configured repository path is
-        not a git repository.
-      enum:
-        - missing_executable
-        - unsupported_version
-        - unauthenticated
-        - models_unavailable
-        - invalid_configuration
-        - invalid_workspace_root
-        - invalid_repository
-    ReadinessIssue:
-      type: object
-      required: [code, message]
-      properties:
-        code:
-          $ref: "#/components/schemas/ReadinessIssueCode"
-        message:
-          type: string
-          description: Human-readable problem summary. Never contains credentials.
-        remedy:
-          type: string
-          description: >-
-            Safe remediation metadata, such as the CLI command to run. Never
-            contains credentials or non-configured filesystem paths.
     ProviderReadiness:
       type: object
       required: [name, installed, ready]
@@ -1970,7 +1936,7 @@ components:
         ready:
           type: boolean
         issue:
-          $ref: "#/components/schemas/ReadinessIssue"
+          $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
     ModelReadiness:
       type: object
@@ -1983,7 +1949,7 @@ components:
           items:
             type: string
         issue:
-          $ref: "#/components/schemas/ReadinessIssue"
+          $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
     ConfigurationReadiness:
       type: object
@@ -1992,7 +1958,7 @@ components:
         valid:
           type: boolean
         issue:
-          $ref: "#/components/schemas/ReadinessIssue"
+          $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
     WorkspaceRootReadiness:
       type: object
@@ -2003,7 +1969,7 @@ components:
         valid:
           type: boolean
         issue:
-          $ref: "#/components/schemas/ReadinessIssue"
+          $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
     RepositoryReadiness:
       type: object
@@ -2016,7 +1982,7 @@ components:
         valid:
           type: boolean
         issue:
-          $ref: "#/components/schemas/ReadinessIssue"
+          $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
     RepositoryInitRequest:
       x-go-name: RepositoryInitSchema
@@ -2097,9 +2063,11 @@ components:
               $ref: "#/components/schemas/WorkspaceReadiness"
             issues:
               type: array
-              description: Flattened outstanding issues across all sections.
+              description: >-
+                Flattened outstanding issues across all sections, each the
+                canonical catalog-rendered error for its readiness code.
               items:
-                $ref: "#/components/schemas/ReadinessIssue"
+                $ref: "#/components/schemas/Error"
     FeatureListResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

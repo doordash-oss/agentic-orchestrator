@@ -297,8 +297,9 @@ describe('hostile remote server echoing the token', () => {
       throw new Error('unreachable');
     }
     expect(state.error.code).toBe('E_REMOTE_TOKEN_REPASTE');
-    // Neither the fixed diagnostics nor the safe error echo server body text.
-    expect(state.error.message).not.toContain(REMOTE_TOKEN);
+    // Neither the fixed diagnostics nor the canonical error echo server body text.
+    expect(state.error.summary).not.toContain(REMOTE_TOKEN);
+    expect(state.error.diagnostics ?? '').not.toContain(REMOTE_TOKEN);
     expectTokenFree(env);
   });
 
@@ -423,7 +424,7 @@ describe('add-remote-server paste flow hygiene', () => {
     };
     await expect(
       addRemoteServer({ connectionString: `agentico://${REMOTE_TOKEN}@10.9.8.7:8080` }, deps),
-    ).rejects.toMatchObject({ safe: { code: 'E_REMOTE_UNREACHABLE' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REMOTE_UNREACHABLE' } });
 
     expect(JSON.stringify(record.logs)).not.toContain(REMOTE_TOKEN);
     expect(record.upserted).toHaveLength(0);

@@ -25,8 +25,11 @@ limitations under the License.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type RewindPreviewView, type FeatureActionResult } from '../../../shared/ipc';
-import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { buildCanonicalError } from '../../../shared/errors';
+import { parseIpcError } from '../wizard/ipcError';
+import type { CanonicalError } from '../../../shared/ipc';
 import { ErrorSurface } from '../components/ErrorSurface';
+import { FieldError } from '../components/FieldError';
 import { displayPhaseLabel } from './featureView';
 
 export interface RewindJourneyProps {
@@ -94,7 +97,7 @@ export function RewindJourney(props: RewindJourneyProps) {
   const [preview, setPreview] = useState<RewindPreviewView | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [confirmText, setConfirmText] = useState('');
-  const [error, setError] = useState<WizardError | null>(null);
+  const [error, setError] = useState<CanonicalError | null>(null);
   const [result, setResult] = useState<FeatureActionResult | null>(null);
   const submitRef = useRef(false);
 
@@ -102,6 +105,11 @@ export function RewindJourney(props: RewindJourneyProps) {
   const showRoadmapPicker =
     isImplement && totalRoadmapPhases !== undefined && totalRoadmapPhases > 1;
   const canConfirm = confirmText === 'REWIND' && preview?.eligible === true;
+  // Preview validation findings render as FieldError elements; the target
+  // radiogroup is the input they describe.
+  const findingIds = (preview?.validationFindings ?? []).map(
+    (_finding, index) => `rewind-finding-${index}`,
+  );
 
   // A successful rewind can change the cockpit surface before the mutation
   // response is rendered, remounting this dialog. Reconcile that remount from
@@ -234,7 +242,11 @@ export function RewindJourney(props: RewindJourneyProps) {
           <div className="rewind-journey__body">
             <fieldset className="rewind-journey__field">
               <legend className="rewind-journey__legend">Target phase</legend>
-              <div className="rewind-journey__options" role="radiogroup">
+              <div
+                className="rewind-journey__options"
+                role="radiogroup"
+                aria-describedby={findingIds.length > 0 ? findingIds.join(' ') : undefined}
+              >
                 {validPhaseOptions.map((phase) => (
                   <label key={phase} className="rewind-journey__option">
                     <input
@@ -257,9 +269,13 @@ export function RewindJourney(props: RewindJourneyProps) {
                 ))}
               </div>
               {validPhaseOptions.length === 0 && (
-                <p className="rewind-journey__loading" role="status">
-                  Rewind targets are no longer available. Refresh the feature and try again.
-                </p>
+                <ErrorSurface
+                  error={buildCanonicalError('E_INTERNAL', {
+                    params: { reason: 'Rewind targets are no longer available.' },
+                    remediationHint: 'Refresh the feature and try again.',
+                  })}
+                  variant="compact"
+                />
               )}
             </fieldset>
 
@@ -328,20 +344,18 @@ export function RewindJourney(props: RewindJourneyProps) {
                   )}
                 </dl>
                 {preview.validationFindings && preview.validationFindings.length > 0 && (
-                  <ul className="rewind-journey__findings" role="alert">
-                    {preview.validationFindings.map((f: string, i: number) => (
-                      <li key={i}>{f}</li>
+                  <ul aria-label="Validation findings">
+                    {preview.validationFindings.map((finding: string, index: number) => (
+                      <li key={index}>
+                        <FieldError id={`rewind-finding-${index}`} message={finding} />
+                      </li>
                     ))}
                   </ul>
                 )}
               </div>
             )}
 
-            {error && (
-              <div role="alert" className="rewind-journey__error">
-                {error.message}
-              </div>
-            )}
+            {error && <ErrorSurface error={error} variant="compact" />}
 
             <div className="rewind-journey__actions">
               <button className="rewind-journey__cancel" onClick={onClose}>
@@ -477,26 +491,22 @@ export function RewindJourney(props: RewindJourneyProps) {
 
         {step === 'error' && error && (
           <div className="rewind-journey__body">
-            <div className="rewind-journey__error-result" role="alert">
-              <h3 className="rewind-journey__section-title">Rewind could not be completed</h3>
-              <p>{error.message}</p>
-              <p className="rewind-journey__recovery">
-                The original run is preserved. You can safely retry the rewind.
-              </p>
-              <div className="rewind-journey__actions">
-                <button className="rewind-journey__cancel" onClick={onClose}>
-                  Close
-                </button>
-                <button
-                  className="rewind-journey__retry"
-                  onClick={() => {
-                    setStep('target');
-                    setError(null);
-                  }}
-                >
-                  Try again
-                </button>
-              </div>
+            <ErrorSurface
+              error={error}
+              variant="compact"
+              caption="Rewind could not be completed — the original run is preserved"
+              localAction={{
+                label: 'Retry',
+                onAction: () => {
+                  setStep('target');
+                  setError(null);
+                },
+              }}
+            />
+            <div className="rewind-journey__actions">
+              <button className="rewind-journey__cancel" onClick={onClose}>
+                Close
+              </button>
             </div>
           </div>
         )}

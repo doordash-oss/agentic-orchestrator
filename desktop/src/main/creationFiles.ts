@@ -20,7 +20,7 @@ limitations under the License.
  */
 import { lstat, opendir, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { SafeErrorException, safeError } from '../shared/errors';
+import { buildCanonicalError, CanonicalErrorException } from '../shared/errors';
 import {
   AbsolutePathSchema,
   CREATION_ATTACHMENT_LIMIT,
@@ -141,8 +141,10 @@ export class CreationFilesService {
   }
 }
 
-function invalidRepositoryFile(message: string): SafeErrorException {
-  return new SafeErrorException(safeError('E_INVALID_REPOSITORY_FILE', message));
+function invalidRepositoryFile(reason: string): CanonicalErrorException {
+  return new CanonicalErrorException(
+    buildCanonicalError('E_INVALID_REPOSITORY_FILE', { params: { reason } }),
+  );
 }
 
 function isWithinRoot(root: string, candidate: string): boolean {

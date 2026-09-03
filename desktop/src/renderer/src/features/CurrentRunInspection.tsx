@@ -27,6 +27,8 @@ import type {
   VerificationItemView,
 } from '../../../shared/ipc';
 import { parseIpcError } from '../wizard/ipcError';
+import type { CanonicalError } from '../../../shared/api/parse';
+import { ErrorSurface } from '../components/ErrorSurface';
 import {
   orderedReviewStatuses,
   reviewAxisShortName,
@@ -250,6 +252,15 @@ interface OpenedContent {
 }
 
 /**
+ * A failed file open, kept with the request that failed so the surface's
+ * Refresh can re-invoke exactly that open.
+ */
+interface FailedOpen {
+  error: CanonicalError;
+  request: { kind: 'artifact' | 'log'; id: string; size?: number; label: string };
+}
+
+/**
  * The "Files" preview view: the artifact spine and log channels side by side.
  * It shares the transcript's pane, so browsing files never pushes the live
  * activity down the page; an opened file floats in a modal (see FileOverlay).
@@ -261,21 +272,35 @@ function FilesSurface({
   loadingContent,
   contentError,
   onOpen,
+  onRefresh,
 }: {
   artifacts: RunArtifactsListResult['artifacts'];
   logs: RunLogView[];
-  logListError: string | null;
+  logListError: CanonicalError | null;
   loadingContent: boolean;
-  contentError: string | null;
+  contentError: FailedOpen | null;
   onOpen(kind: 'artifact' | 'log', id: string, size?: number, label?: string): void;
+  /** Re-invokes the run-resource refresh that carries the log listing. */
+  onRefresh(): void;
 }): React.ReactElement {
   const channels = logs.length === 0 ? [] : groupLogsByChannel(logs);
   return (
     <div className="current-inspection__files" aria-label="Run files">
       {contentError !== null ? (
-        <p role="alert" className="form-field__error">
-          Could not open this file: {contentError}
-        </p>
+        <ErrorSurface
+          error={contentError.error}
+          variant="compact"
+          localAction={{
+            label: 'Refresh',
+            onAction: () =>
+              onOpen(
+                contentError.request.kind,
+                contentError.request.id,
+                contentError.request.size,
+                contentError.request.label,
+              ),
+          }}
+        />
       ) : null}
       <div className="current-inspection__files-columns">
         <section className="current-inspection__files-column" aria-label="Run artifacts">
@@ -320,12 +345,14 @@ function FilesSurface({
             <span>Bounded logs</span>
             <span className="current-inspection__resource-count">{logs.length}</span>
           </h4>
-          {logs.length === 0 ? (
-            <p className="setup-step__empty">
-              {logListError === null
-                ? 'No run logs yet.'
-                : `Could not refresh run logs: ${logListError}`}
-            </p>
+          {logListError !== null ? (
+            <ErrorSurface
+              error={logListError}
+              variant="compact"
+              localAction={{ label: 'Refresh', onAction: onRefresh }}
+            />
+          ) : logs.length === 0 ? (
+            <p className="setup-step__empty">No run logs yet.</p>
           ) : (
             <ul className="current-inspection__channels" aria-label="Available run logs">
               {channels.map((group) => (
@@ -453,9 +480,9 @@ export function CurrentRunInspection({
     value: RunTextContent;
   } | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [logListError, setLogListError] = useState<string | null>(null);
-  const [contentError, setContentError] = useState<string | null>(null);
+  const [error, setError] = useState<CanonicalError | null>(null);
+  const [logListError, setLogListError] = useState<CanonicalError | null>(null);
+  const [contentError, setContentError] = useState<FailedOpen | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [view, setView] = useState<PreviewView>('conversation');
   const requestRef = useRef(0);
@@ -576,7 +603,7 @@ export function CurrentRunInspection({
           .then((value) => ({ value, error: null }))
           .catch((cause: unknown) => ({
             value: { logs: [] as RunLogView[] },
-            error: parseIpcError(cause).message,
+            error: parseIpcError(cause),
           })),
         // Per-phase timing/cost. Absent for runs without recorded detail; a
         // failure must not blank the whole inspection, so it degrades to null.
@@ -603,7 +630,7 @@ export function CurrentRunInspection({
             },
       );
     } catch (cause) {
-      if (request === requestRef.current) setError(parseIpcError(cause).message);
+      if (request === requestRef.current) setError(parseIpcError(cause));
     }
   }, [featureId, runNumber, onRunMetrics]);
 
@@ -678,7 +705,10 @@ export function CurrentRunInspection({
               });
         setContent({ kind, label, value });
       } catch (cause) {
-        setContentError(parseIpcError(cause).message);
+        setContentError({
+          error: parseIpcError(cause),
+          request: { kind, id, ...(size === undefined ? {} : { size }), label },
+        });
       } finally {
         setLoadingContent(false);
       }
@@ -694,6 +724,9 @@ export function CurrentRunInspection({
       loadingContent={loadingContent}
       contentError={contentError}
       onOpen={(kind, id, size, label) => void openContent(kind, id, size, label)}
+      onRefresh={() => {
+        void refresh();
+      }}
     />
   );
 
@@ -701,9 +734,16 @@ export function CurrentRunInspection({
     return (
       <section className="current-inspection current-inspection--files" aria-label="Run files">
         {error !== null ? (
-          <p role="alert" className="form-field__error">
-            {error}
-          </p>
+          <ErrorSurface
+            error={error}
+            variant="compact"
+            localAction={{
+              label: 'Refresh',
+              onAction: () => {
+                void refresh();
+              },
+            }}
+          />
         ) : null}
         {initialLoading ? <p className="setup-step__empty">Loading run files…</p> : filesSurface}
         {content !== null ? (
@@ -776,9 +816,16 @@ export function CurrentRunInspection({
       data-presentation={presentation}
     >
       {error !== null ? (
-        <p role="alert" className="form-field__error">
-          {error}
-        </p>
+        <ErrorSurface
+          error={error}
+          variant="compact"
+          localAction={{
+            label: 'Refresh',
+            onAction: () => {
+              void refresh();
+            },
+          }}
+        />
       ) : null}
 
       {initialLoading && presentation === 'record' ? (

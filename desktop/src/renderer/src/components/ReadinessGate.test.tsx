@@ -18,7 +18,12 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ReadinessSnapshot } from '../../../shared/ipc';
-import { installAgenticoMock, readySnapshot, unreadySnapshot } from '../test/agenticoMock';
+import {
+  installAgenticoMock,
+  ipcError,
+  readySnapshot,
+  unreadySnapshot,
+} from '../test/agenticoMock';
 import { matchMediaState } from '../test/setup';
 import { ReadinessGate } from './ReadinessGate';
 
@@ -65,12 +70,17 @@ describe('ReadinessGate first snapshot', () => {
   it('renders an actionable error with retry when the readiness fetch fails', async () => {
     const mock = installAgenticoMock();
     mock.api.getReadiness
-      .mockRejectedValueOnce(new Error('E_NOT_CONNECTED: The app is not connected.'))
+      .mockRejectedValueOnce(ipcError('E_NOT_CONNECTED', 'The app is not connected.'))
       .mockResolvedValueOnce(unreadySnapshot());
     render(<ReadinessGate />);
 
-    await waitFor(() => expect(screen.getByText('E_NOT_CONNECTED')).toBeInTheDocument());
-    await userEvent.click(screen.getByRole('button', { name: /try again/i }));
+    // The parsed canonical error renders as one compact ErrorSurface; the
+    // hand-written remediation sentence is gone.
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(screen.getByText('E_NOT_CONNECTED')).toHaveClass('error-surface__code');
+    expect(screen.queryByText(/readiness check could not be completed/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /retry/i }));
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /set up agentico/i })).toBeInTheDocument(),
     );

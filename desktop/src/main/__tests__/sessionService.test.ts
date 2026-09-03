@@ -123,7 +123,7 @@ describe('SessionService snapshots', () => {
       const service = new SessionService(
         transport({ apiRequest: () => Promise.resolve({ status: 200, body }) }),
       );
-      await expect(service.list()).rejects.toMatchObject({ safe: expect.any(Object) });
+      await expect(service.list()).rejects.toMatchObject({ canonical: expect.any(Object) });
     }
   });
 });
@@ -174,7 +174,7 @@ describe('SessionService singleton chat mutations', () => {
     );
 
     await expect(service.startChat({ message: 'hello' })).rejects.toMatchObject({
-      safe: { code: 'E_SCHEMA_MISMATCH' },
+      canonical: { code: 'E_SCHEMA_MISMATCH' },
     });
   });
 
@@ -189,7 +189,7 @@ describe('SessionService singleton chat mutations', () => {
 
     await expect(
       service.startChat({ message: 'What is running?', images: ['/tmp/clipboard.png'] }),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     expect(apiRequest).not.toHaveBeenCalled();
   });
 
@@ -410,7 +410,7 @@ describe('SessionService output subscriptions', () => {
     expect(emit).toHaveBeenCalledOnce();
   });
 
-  it('delivers a safe stream error when the sink remains available', async () => {
+  it('delivers a canonical stream error when the sink remains available', async () => {
     const service = new SessionService(
       transport({
         openSessionOutputStream: () => Promise.reject(new Error('stream setup failed')),
@@ -428,7 +428,9 @@ describe('SessionService output subscriptions', () => {
       sessionId: 'session-1',
       error: {
         code: 'E_SESSION_STREAM',
-        message: 'stream setup failed',
+        class: 'blocking',
+        title: 'The session stream failed',
+        summary: 'stream setup failed',
       },
     });
   });

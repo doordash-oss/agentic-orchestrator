@@ -167,21 +167,15 @@ export const IPC_EVENTS = {
 
 // --- Error shapes crossing the boundary -------------------------------------
 
-export const SafeErrorSchema = z.strictObject({
-  code: z.string(),
-  message: z.string(),
-  remediation: z.string().optional(),
-});
-
 /**
  * Every invoke resolves to this envelope so failures stay typed. The error
- * branch is a union: a server-emitted canonical error crosses unchanged (the
- * catalog owns its human text), and every main-process transport failure
- * degrades to the redacted safe-error shape.
+ * branch carries exactly one shape: the canonical error. Server-emitted
+ * canonical errors cross unchanged (the server catalog owns their text);
+ * main-process failures are built from the desktop-local E_ catalog.
  */
 export const IpcEnvelopeSchema = z.discriminatedUnion('ok', [
   z.strictObject({ ok: z.literal(true), value: z.unknown() }),
-  z.strictObject({ ok: z.literal(false), error: z.union([CanonicalErrorSchema, SafeErrorSchema]) }),
+  z.strictObject({ ok: z.literal(false), error: CanonicalErrorSchema }),
 ]);
 
 export type IpcEnvelope = z.output<typeof IpcEnvelopeSchema>;
@@ -279,18 +273,6 @@ const connectionStateBase = {
 } as const;
 
 const connectionStage = <T extends ConnectionStage>(stage: T) => z.literal(stage);
-
-/** Renderer-safe, bounded diagnostics for failures of the app-owned child only. */
-export const ConnectionDiagnosticsSchema = z.strictObject({
-  commandContext: z.string().max(256),
-  logTail: z.array(z.string().max(512)).max(20),
-});
-export type ConnectionDiagnostics = z.output<typeof ConnectionDiagnosticsSchema>;
-
-const connectionFailureContext = {
-  ...connectionStateBase,
-  diagnostics: ConnectionDiagnosticsSchema.optional(),
-} as const;
 
 /** Startup progress before any server exists to own or attach to. */
 const ConnectionIdleStateSchema = z.strictObject({
@@ -415,41 +397,46 @@ export const ConnectionAwaitingServerChoiceStateSchema = z.strictObject({
   candidates: z.array(ServerChoiceCandidateSchema).min(2).max(MAX_SERVER_CHOICE_CANDIDATES),
 });
 
-/** Terminal failures always carry redacted diagnostics for the shell. */
+/**
+ * Terminal failures always carry a canonical error. For failures of the
+ * app-owned child, the canonical error's `diagnostics` string folds the
+ * bounded, redacted launch command context and log tail (last 20 lines,
+ * 512 chars per line) — assembled by the gateway where it scrubs them today.
+ */
 const ConnectionIncompatibleStateSchema = z.strictObject({
   status: z.literal('incompatible'),
   stage: connectionStage('connect'),
   ...connectionStateBase,
   ownership: ServerOwnershipSchema,
-  error: SafeErrorSchema,
+  error: CanonicalErrorSchema,
 });
 const ConnectionResourcesMissingStateSchema = z.strictObject({
   status: z.literal('resources-missing'),
   stage: connectionStage('connect'),
   ...connectionStateBase,
   ownership: ServerOwnershipSchema,
-  error: SafeErrorSchema,
+  error: CanonicalErrorSchema,
 });
 const ConnectionLaunchFailedStateSchema = z.strictObject({
   status: z.literal('launch-failed'),
   stage: z.enum(['connect', 'wait-health', 'authenticate']),
-  ...connectionFailureContext,
+  ...connectionStateBase,
   ownership: ServerOwnershipSchema,
-  error: SafeErrorSchema,
+  error: CanonicalErrorSchema,
 });
 const ConnectionCrashedStateSchema = z.strictObject({
   status: z.literal('crashed'),
   stage: connectionStage('connect'),
-  ...connectionFailureContext,
+  ...connectionStateBase,
   ownership: ServerOwnershipSchema,
-  error: SafeErrorSchema,
+  error: CanonicalErrorSchema,
 });
 const ConnectionUnexpectedErrorStateSchema = z.strictObject({
   status: z.literal('error'),
   stage: z.enum(['resolve-runtime', 'discover', 'connect', 'wait-health', 'authenticate']),
   ...connectionStateBase,
   ownership: ServerOwnershipSchema,
-  error: SafeErrorSchema,
+  error: CanonicalErrorSchema,
   /** Present when this failure interrupted a server switch. */
   switchContext: SwitchContextSchema.optional(),
 });
@@ -559,9 +546,9 @@ const RemoteServerAddKeySchema = z.string().regex(/^[0-9a-f]{32}$/);
 
 /**
  * Success outcomes of the add-server flow. All failures travel the standard
- * { ok: false, error: SafeError } envelope instead, so no failure variant
- * exists here. `duplicate-local` means the probed server IS a known local
- * server (matched on runtime identity); the UI can offer to switch to
+ * { ok: false, error: CanonicalError } envelope instead, so no failure
+ * variant exists here. `duplicate-local` means the probed server IS a known
+ * local server (matched on runtime identity); the UI can offer to switch to
  * `serverKey`. `session-only` means the OS keystore was unavailable: the
  * server connected but nothing was persisted and it will require a re-paste
  * next launch.
@@ -572,18 +559,6 @@ export const RemoteServerAddResultSchema = z.discriminatedUnion('status', [
   z.strictObject({ status: z.literal('session-only'), serverKey: RemoteServerAddKeySchema }),
 ]);
 export type RemoteServerAddResult = z.output<typeof RemoteServerAddResultSchema>;
-
-/**
- * Distinct lead-ins per failure class of the add-server flow, shared by the
- * Servers pane's inline error and the deep-link add's notification.
- */
-export function addServerErrorTitle(code: string): string {
-  if (code.startsWith('E_CONNECTION_STRING_')) return 'The connection string could not be parsed.';
-  if (code === 'E_REMOTE_UNREACHABLE') return 'The server could not be reached.';
-  if (code === 'E_REMOTE_INCOMPATIBLE') return 'The server is not compatible with this app.';
-  if (code === 'E_REMOTE_AUTH_REJECTED') return 'The token was rejected.';
-  return 'The server could not be added.';
-}
 
 // --- Remove-server flow / stored-token status --------------------------------
 // Removal is main-side orchestrated: the dedicated channel deletes the token
@@ -625,8 +600,12 @@ export function isConnectionErrorState(state: ConnectionState): state is Connect
 // --- Readiness (renderer-facing view of the authoritative server snapshot) ---
 // Strict by design: any foreign field — in particular anything token-shaped —
 // fails validation at the IPC boundary. The renderer never receives raw
-// server payloads; the main process maps them into this shape.
+// server payloads; the main process maps them into this shape. Readiness
+// issues are the canonical catalog-rendered error for their code: the strict
+// canonical schema accepts them and rejects the pre-canonical
+// `{code, message, remedy}` shape.
 
+/** The readiness issue codes the server catalog defines, for step mapping. */
 export const READINESS_ISSUE_CODES = [
   'missing_executable',
   'unsupported_version',
@@ -637,18 +616,11 @@ export const READINESS_ISSUE_CODES = [
   'invalid_repository',
 ] as const;
 
-export const ReadinessIssueCodeSchema = z.enum(READINESS_ISSUE_CODES);
-export type ReadinessIssueCode = z.output<typeof ReadinessIssueCodeSchema>;
+export type ReadinessIssueCode = (typeof READINESS_ISSUE_CODES)[number];
 
-export const ReadinessIssueSchema = z.strictObject({
-  code: ReadinessIssueCodeSchema,
-  /** Server-provided safe summary; never carries credentials. */
-  message: z.string(),
-  /** Safe remediation metadata, e.g. the provider CLI auth command. */
-  remedy: z.string().optional(),
-});
-
-export type ReadinessIssue = z.output<typeof ReadinessIssueSchema>;
+/** Canonical catalog-rendered readiness issue — the one error shape. */
+export const ReadinessIssueSchema = CanonicalErrorSchema;
+export type ReadinessIssue = CanonicalError;
 
 export const ProviderReadinessSchema = z.strictObject({
   name: z.string(),
@@ -968,20 +940,42 @@ export const UpdateProgressSchema = z.strictObject({
 });
 export type UpdateProgress = z.output<typeof UpdateProgressSchema>;
 
-export const UpdateStateSchema = z.strictObject({
-  status: UpdateStatusSchema,
-  currentVersion: z.string().min(1).max(80),
-  targetVersion: z.string().min(1).max(80).optional(),
-  packageFormat: UpdatePackageFormatSchema,
-  signatureStatus: UpdateSignatureStatusSchema,
-  checkedAt: z.string().datetime().optional(),
-  nextCheckAt: z.string().datetime().optional(),
-  releaseNotesUrl: z.string().url().optional(),
-  message: z.string().max(500),
-  guidance: z.array(z.string().max(240)).max(6).optional(),
-  progress: UpdateProgressSchema.optional(),
-  activeWorkSummary: z.string().max(240).optional(),
-});
+export const UpdateStateSchema = z
+  .strictObject({
+    status: UpdateStatusSchema,
+    currentVersion: z.string().min(1).max(80),
+    targetVersion: z.string().min(1).max(80).optional(),
+    packageFormat: UpdatePackageFormatSchema,
+    signatureStatus: UpdateSignatureStatusSchema,
+    checkedAt: z.string().datetime().optional(),
+    nextCheckAt: z.string().datetime().optional(),
+    releaseNotesUrl: z.string().url().optional(),
+    message: z.string().max(500),
+    guidance: z.array(z.string().max(240)).max(6).optional(),
+    progress: UpdateProgressSchema.optional(),
+    activeWorkSummary: z.string().max(240).optional(),
+    // Present exactly when status is 'failed': the canonical error the
+    // coordinator authored from the desktop catalog for that failure.
+    error: CanonicalErrorSchema.optional(),
+  })
+  .superRefine((state, ctx) => {
+    const failed = state.status === 'failed';
+    const carriesError = state.error !== undefined;
+    if (failed && !carriesError) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['error'],
+        message: "a 'failed' update state must carry a canonical error",
+      });
+    }
+    if (!failed && carriesError) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['error'],
+        message: "only a 'failed' update state may carry a canonical error",
+      });
+    }
+  });
 export type UpdateState = z.output<typeof UpdateStateSchema>;
 
 export const UpdateInstallNowRequestSchema = z.strictObject({
@@ -2400,7 +2394,12 @@ export const SessionDetailSchema = SessionSummarySchema.extend({
   initialPrompt: OptionalBoundedTextSchema,
   canAttach: z.boolean(),
   logAvailable: z.boolean(),
-  safeError: OptionalBoundedTextSchema,
+  /**
+   * Canonical rendering of the session's terminal error text (the server's
+   * `safe_error` string, redacted and wrapped by the main process). The
+   * legacy name is kept; only the shape changed.
+   */
+  safeError: CanonicalErrorSchema.optional(),
 });
 export type SessionDetail = z.output<typeof SessionDetailSchema>;
 
@@ -2458,7 +2457,7 @@ export const SessionOutputEventSchema = z.discriminatedUnion('type', [
     subscriptionId: SubscriptionIdSchema,
     type: z.literal('error'),
     sessionId: SessionIdSchema,
-    error: SafeErrorSchema,
+    error: CanonicalErrorSchema,
   }),
 ]);
 export type SessionOutputEvent = z.output<typeof SessionOutputEventSchema>;
@@ -2655,7 +2654,7 @@ export const UploadedCreationFileSchema = z.strictObject({
 export const FailedCreationFileUploadSchema = z.strictObject({
   ok: z.literal(false),
   name: z.string().max(255),
-  error: SafeErrorSchema,
+  error: CanonicalErrorSchema,
 });
 export const CreationFileUploadResultSchema = z.union([
   UploadedCreationFileSchema,
@@ -3902,7 +3901,7 @@ export interface AgenticoApi {
   /**
    * Adds a remote server from a pasted connection string: parses, probes,
    * guards against local duplicates, verifies the token, and persists. All
-   * failures arrive as thrown SafeError envelopes; the pasted string is never
+   * failures arrive as thrown canonical errors; the pasted string is never
    * echoed back.
    */
   addRemoteServer(request: RemoteServerAddRequest): Promise<RemoteServerAddResult>;

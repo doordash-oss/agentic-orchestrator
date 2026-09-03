@@ -19,7 +19,12 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ReadinessSnapshot } from '../../../../shared/ipc';
-import { installAgenticoMock, readySnapshot, unreadySnapshot } from '../../test/agenticoMock';
+import {
+  installAgenticoMock,
+  ipcError,
+  readySnapshot,
+  unreadySnapshot,
+} from '../../test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from '../../test/setup';
 import { SetupWizard } from './SetupWizard';
 
@@ -85,16 +90,48 @@ describe('SetupWizard provider step', () => {
   it('moves focus to a safe error region when the recheck fails', async () => {
     const mock = installAgenticoMock();
     mock.api.refreshReadiness.mockRejectedValue(
-      new Error('E_NOT_CONNECTED: The app is not connected to an Agentico runtime.'),
+      ipcError('E_NOT_CONNECTED', 'The app is not connected to an Agentico runtime.'),
     );
     render(<Harness initial={unreadySnapshot()} />);
 
     await userEvent.click(screen.getByRole('button', { name: /check again/i }));
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('E_NOT_CONNECTED');
-    expect(alert).toHaveFocus();
+    // The step error renders as a compact ErrorSurface that takes focus;
+    // the provider rows' issue surfaces stay unfocused alerts.
+    await waitFor(() => expect(document.activeElement).toHaveAttribute('role', 'alert'));
+    expect(document.activeElement).toHaveTextContent('E_NOT_CONNECTED');
+    expect(document.activeElement).toHaveFocus();
     // The step and its retry action remain actionable.
     expect(screen.getByRole('button', { name: /check again/i })).toBeEnabled();
+  });
+
+  it('renders each provider issue through a compact ErrorSurface with the code tag', () => {
+    installAgenticoMock();
+    render(<Harness initial={unreadySnapshot()} />);
+
+    const claudeRow = screen.getByText('claude').closest('li')!;
+    const claudeCode = within(claudeRow).getByText('unauthenticated');
+    expect(claudeCode).toHaveClass('error-surface__code');
+    expect(claudeCode.closest('.error-surface')).toHaveClass('error-surface--compact');
+
+    const codexRow = screen.getByText('codex').closest('li')!;
+    expect(within(codexRow).getByText('missing_executable')).toHaveClass('error-surface__code');
+    // The legacy issue markup is gone.
+    expect(document.querySelector('.provider-row__issue')).toBeNull();
+    expect(document.querySelector('.setup-wizard__code')).toBeNull();
+  });
+
+  it('copies the missing-executable install command from the provider surface', async () => {
+    installAgenticoMock();
+    const user = userEvent.setup();
+    render(<Harness initial={unreadySnapshot()} />);
+
+    await user.click(screen.getByRole('button', { name: /copy the codex command/i }));
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent(/copied the codex command/i),
+    );
+    await expect(window.navigator.clipboard.readText()).resolves.toBe(
+      'npm install -g @openai/codex',
+    );
   });
 
   it('renders an actionable empty state when the server reports no providers', () => {
@@ -178,14 +215,14 @@ describe('SetupWizard cross-cutting a11y and presentation', () => {
 
   it('tolerates corrupt or unavailable local preferences with defaults', async () => {
     const mock = installAgenticoMock();
-    mock.api.getSettings.mockRejectedValue(new Error('E_INTERNAL: settings unavailable'));
+    mock.api.getSettings.mockRejectedValue(ipcError('E_INTERNAL', 'settings unavailable'));
     render(<Harness initial={unreadySnapshot()} />);
     // Wizard still renders from the authoritative snapshot with default help.
     expect(await screen.findByRole('heading', { name: /set up agentico/i })).toBeInTheDocument();
     expect(screen.getByText(/provider clis installed on this machine/i)).toBeInTheDocument();
   });
 
-  it('surfaces an invalid configuration as a blocking banner with remediation', () => {
+  it('surfaces an invalid configuration as a blocking ErrorSurface with remediation', () => {
     installAgenticoMock();
     render(
       <Harness
@@ -195,16 +232,27 @@ describe('SetupWizard cross-cutting a11y and presentation', () => {
             valid: false,
             issue: {
               code: 'invalid_configuration',
-              message: 'config.yaml is unreadable.',
-              remedy: 'Fix config.yaml in the runtime directory.',
+              class: 'blocking',
+              title: 'Invalid configuration',
+              summary: 'config.yaml is unreadable.',
+              remediation: { hint: 'Fix config.yaml in the runtime directory.' },
             },
           },
         })}
       />,
     );
     const banner = screen.getByRole('alert');
-    expect(banner).toHaveTextContent('invalid_configuration');
+    expect(banner).toHaveClass(
+      'error-surface',
+      'error-surface--compact',
+      'error-surface--blocking',
+    );
+    expect(within(banner).getByText('invalid_configuration')).toHaveClass('error-surface__code');
+    expect(banner).toHaveTextContent('Invalid configuration');
     expect(banner).toHaveTextContent(/config\.yaml is unreadable/i);
     expect(banner).toHaveTextContent(/fix config\.yaml/i);
+    // The legacy banner markup is gone.
+    expect(document.querySelector('.setup-wizard__banner')).toBeNull();
+    expect(document.querySelector('.setup-wizard__error')).toBeNull();
   });
 });

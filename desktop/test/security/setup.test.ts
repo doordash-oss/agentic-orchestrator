@@ -245,7 +245,7 @@ function register(services = makeServices()) {
 interface Envelope {
   ok: boolean;
   value?: unknown;
-  error?: { code: string; message: string };
+  error?: { code: string };
 }
 
 describe('setup IPC surface: sender validation', () => {

@@ -15,11 +15,7 @@ limitations under the License.
 */
 
 import { describe, expect, it, vi } from 'vitest';
-import {
-  CanonicalErrorException,
-  SafeErrorException,
-  requestTimeoutError,
-} from '../../shared/errors';
+import { CanonicalErrorException, requestTimeoutError } from '../../shared/errors';
 import {
   FeatureSnapshotSchema,
   FeaturesListResultSchema,
@@ -46,7 +42,12 @@ function readiness(): ReadinessSnapshot {
         name: 'repo-b',
         path: '/work/space/repo-b',
         valid: false,
-        issue: { code: 'invalid_repository', message: 'Not a git repository.' },
+        issue: {
+          code: 'invalid_repository',
+          class: 'blocking',
+          title: 'Invalid repository',
+          summary: 'A configured repository path is not a git repository.',
+        },
       },
     ],
     issues: [],
@@ -191,7 +192,7 @@ describe('FeatureService remote-connection submit boundary', () => {
         attachments: [],
         repositoryFiles: [],
       }),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     await expect(
       service.createFeature({
         name: 'Staged before the switch',
@@ -202,7 +203,7 @@ describe('FeatureService remote-connection submit boundary', () => {
         attachments: ['/staged/spec.pdf'],
         repositoryFiles: [],
       }),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     await expect(
       service.createFeature({
         name: 'Staged before the switch',
@@ -213,7 +214,7 @@ describe('FeatureService remote-connection submit boundary', () => {
         attachments: [],
         repositoryFiles: [{ repoKey: 'repo-a', path: 'src/query.ts' }],
       }),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     expect(resolveRepositoryFiles).not.toHaveBeenCalled();
     expect(calls).toHaveLength(0);
   });
@@ -290,14 +291,14 @@ describe('FeatureService remote-connection submit boundary', () => {
         name: 'Extract search core',
         images: ['/staged/shot.png'],
       }),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     await expect(
       service.launchRefactorChild({
         parentId: 'abcd1234ef567890',
         name: 'Extract search core',
         repositoryFiles: [{ repoKey: 'repo-a', path: 'src/query.ts' }],
       }),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     await service.launchRefactorChild({
       parentId: 'abcd1234ef567890',
       name: 'Extract search core',
@@ -329,7 +330,7 @@ describe('FeatureService remote-connection submit boundary', () => {
         images: ['/staged/shot.png'],
         kind: 'local',
       } as never),
-    ).rejects.toMatchObject({ safe: { code: 'E_SCHEMA_MISMATCH' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_SCHEMA_MISMATCH' } });
     expect(calls).toHaveLength(0);
   });
 });
@@ -458,8 +459,9 @@ describe('FeatureService.createFeature', () => {
   it('fails closed on an unstructured error body without echoing it', async () => {
     const { service } = makeService(() => ({ status: 500, body: 'Bearer tok-leak-1 exploded' }));
     const err = await service.createFeature(input).catch((e: unknown) => e);
-    expect(err).toMatchObject({ safe: { code: 'E_HTTP_500' } });
-    expect(JSON.stringify((err as { safe: unknown }).safe)).not.toContain('tok-leak-1');
+    expect(err).toMatchObject({ canonical: { code: 'E_HTTP_REJECTED' } });
+    expect((err as { canonical?: { summary?: string } }).canonical?.summary).toContain('500');
+    expect(JSON.stringify((err as { canonical: unknown }).canonical)).not.toContain('tok-leak-1');
   });
 
   it('rejects malformed input before any request reaches the transport', async () => {
@@ -471,10 +473,10 @@ describe('FeatureService.createFeature', () => {
         repoKeys: ['r'],
         useCurrentBranch: false,
       }),
-    ).rejects.toMatchObject({ safe: { code: 'E_SCHEMA_MISMATCH' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_SCHEMA_MISMATCH' } });
     await expect(
       service.createFeature({ name: 'ok', description: '', repoKeys: [], useCurrentBranch: false }),
-    ).rejects.toMatchObject({ safe: { code: 'E_SCHEMA_MISMATCH' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_SCHEMA_MISMATCH' } });
     expect(calls).toHaveLength(0);
   });
 });
@@ -495,7 +497,7 @@ describe('FeatureService.dispatchSetup', () => {
     const { service, calls } = makeService(() => ({ status: 200, body: {} }));
     for (const bad of ['../other', 'id/with/slash', 'id?x=1', '']) {
       await expect(service.dispatchSetup(bad)).rejects.toMatchObject({
-        safe: { code: 'E_SCHEMA_MISMATCH' },
+        canonical: { code: 'E_SCHEMA_MISMATCH' },
       });
     }
     expect(calls).toHaveLength(0);
@@ -676,7 +678,7 @@ describe('FeatureService.dispatchAction', () => {
   it('retains the single-flight entry after a request timeout so no duplicate publish is issued', async () => {
     const request = vi.fn((path: string) => {
       if (path.endsWith('/actions/publish')) {
-        return Promise.reject(new SafeErrorException(requestTimeoutError()));
+        return Promise.reject(new CanonicalErrorException(requestTimeoutError()));
       }
       return Promise.resolve({ status: 200, body: detailBody() });
     });
@@ -688,12 +690,12 @@ describe('FeatureService.dispatchAction', () => {
     };
 
     await expect(service.dispatchAction(input)).rejects.toMatchObject({
-      safe: { code: 'E_REQUEST_TIMEOUT' },
+      canonical: { code: 'E_REQUEST_TIMEOUT' },
     });
     // A second click must not reach the server: the first publish is still
     // running there.
     await expect(service.dispatchAction(input)).rejects.toMatchObject({
-      safe: { code: 'E_REQUEST_TIMEOUT' },
+      canonical: { code: 'E_REQUEST_TIMEOUT' },
     });
     expect(request.mock.calls.filter(([path]) => path.endsWith('/actions/publish'))).toHaveLength(
       1,
@@ -799,7 +801,7 @@ describe('FeatureService.dispatchAction', () => {
     const { service, calls } = makeService(() => ({ status: 200, body: {} }));
     await expect(
       service.dispatchAction({ featureId: 'abcd1234ef567890', action: '../start' as never }),
-    ).rejects.toMatchObject({ safe: { code: 'E_SCHEMA_MISMATCH' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_SCHEMA_MISMATCH' } });
     expect(calls).toHaveLength(0);
   });
 });

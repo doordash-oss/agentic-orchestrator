@@ -59,7 +59,7 @@ import {
 import type { CanonicalError } from '../../../shared/api/parse';
 import { featureCommandEnablement, isFeatureCommandId } from '../../../shared/commands';
 import { runFeatureCommand, toggleActiveInspector } from './featureCommands';
-import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { parseIpcError } from '../wizard/ipcError';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { isEditingShortcutTarget } from '../components/CommandPalette';
 import { CreateFeatureForm } from './CreateFeatureForm';
@@ -95,19 +95,19 @@ import { useConnectionState, useMediaQuery } from '../hooks';
 
 type ListState =
   | { phase: 'loading' }
-  | { phase: 'error'; error: WizardError }
+  | { phase: 'error'; error: CanonicalError }
   | {
       phase: 'loaded';
       features: FeatureSnapshot[];
-      /** Per-feature detail failures; the row still renders from its summary. */
-      detailFailures: ReadonlySet<string>;
+      /** Per-feature detail failures, captured as canonical errors; the row still renders from its summary. */
+      detailFailures: ReadonlyMap<string, CanonicalError>;
       /** List-level canonical warnings, e.g. feature files that failed to load. */
       warnings: readonly CanonicalError[];
     };
 
 type Selection = { kind: 'overview' } | { kind: 'feature'; featureId: string };
 
-const NO_DETAIL_FAILURES: ReadonlySet<string> = new Set();
+const NO_DETAIL_FAILURES: ReadonlyMap<string, CanonicalError> = new Map();
 
 /**
  * How many features one Home load may fetch detail for. Detail responses cost
@@ -382,44 +382,73 @@ export function WorkspaceShell({
   }, []);
 
   /**
-   * Refines a bounded few rows with their server detail. Settled per feature:
-   * one rejected detail — an oversized payload, a parse failure — flags that
-   * row and leaves every other row exactly as the list returned it.
+   * Refines the given features with their server detail, settling per
+   * feature: one rejected detail — an oversized payload, a parse failure —
+   * is captured as that feature's canonical error (so the row and the
+   * degradation card can render it) while every other row stays exactly as
+   * the list returned it. Requested ids that succeed drop out of the
+   * failure map, so a retry set narrows to what is still failing.
+   */
+  const fetchDetails = useCallback(async (ids: readonly string[], isCurrent: () => boolean) => {
+    if (ids.length === 0) return;
+    const settled = await Promise.allSettled(ids.map((id) => window.agentico.getFeature(id)));
+    if (!isCurrent()) return;
+    const details = new Map<string, FeatureSnapshot>();
+    const failures = new Map<string, CanonicalError>();
+    ids.forEach((id, index) => {
+      const result = settled[index];
+      if (result === undefined) return;
+      if (result.status === 'fulfilled') {
+        details.set(id, result.value);
+      } else {
+        failures.set(id, parseIpcError(result.reason));
+      }
+    });
+    setList((current) => {
+      if (current.phase !== 'loaded') return current;
+      const merged = new Map(current.detailFailures);
+      for (const id of ids) merged.delete(id);
+      for (const [id, error] of failures) merged.set(id, error);
+      return {
+        phase: 'loaded',
+        features: orderDashboardFeatures(
+          current.features.map((feature) => details.get(feature.id) ?? feature),
+        ),
+        detailFailures: merged,
+        warnings: current.warnings,
+      };
+    });
+  }, []);
+
+  /**
+   * Refines a bounded few rows with their server detail — the selection
+   * first, then the active rows whose sub-line and pip read detail-only
+   * fields. Overview renders from the list summaries alone, so the whole
+   * surface stays alive even when a single feature's detail is unusable.
    */
   const refineDetails = useCallback(
-    async (rows: readonly FeatureSnapshot[], isCurrent: () => boolean) => {
+    (rows: readonly FeatureSnapshot[], isCurrent: () => boolean) => {
       const ids = detailFetchIds(
         rows,
         shellStateRef.current?.featureByServer[scopeKeyRef.current] ?? null,
       );
-      if (ids.length === 0) return;
-      const settled = await Promise.allSettled(ids.map((id) => window.agentico.getFeature(id)));
-      if (!isCurrent()) return;
-      const details = new Map<string, FeatureSnapshot>();
-      const detailFailures = new Set<string>();
-      ids.forEach((id, index) => {
-        const result = settled[index];
-        if (result === undefined) return;
-        if (result.status === 'fulfilled') {
-          details.set(id, result.value);
-        } else {
-          detailFailures.add(id);
-        }
+      return fetchDetails(ids, isCurrent).catch(() => {
+        // Refinement is additive; the summary-derived rows already render.
       });
-      setList((current) =>
-        current.phase === 'loaded'
-          ? {
-              phase: 'loaded',
-              features: orderDashboardFeatures(
-                current.features.map((feature) => details.get(feature.id) ?? feature),
-              ),
-              detailFailures,
-              warnings: current.warnings,
-            }
-          : current,
-      );
     },
-    [],
+    [fetchDetails],
+  );
+
+  /** Refetches ONLY the features whose detail failed; the healthy rows are untouched. */
+  const retryFailedDetails = useCallback(
+    (ids: readonly string[]) => {
+      // Shares the latest list load's currency, so a reload raced mid-retry discards this write.
+      const request = listRequestRef.current;
+      void fetchDetails(ids, () => request === listRequestRef.current).catch(() => {
+        // A failed retry keeps the rows flagged; the card's Retry stays available.
+      });
+    },
+    [fetchDetails],
   );
 
   /**
@@ -439,9 +468,8 @@ export function WorkspaceShell({
           detailFailures: NO_DETAIL_FAILURES,
           warnings: list.warnings,
         });
-        void refineDetails(rows, isCurrent).catch(() => {
-          // Refinement is additive; the summary-derived rows already render.
-        });
+        // Refinement is additive; its own catch keeps the summary rows rendering.
+        void refineDetails(rows, isCurrent);
       },
       (err: unknown) => {
         // Only a failed LIST is fatal: there is nothing to render without it.
@@ -1021,6 +1049,7 @@ export function WorkspaceShell({
                   }
                 }}
                 onRetry={loadList}
+                onRetryDetails={retryFailedDetails}
               />
               <RecoveryWorkspace onNavigateToFeature={(featureId) => selectFeature(featureId)} />
               <BulkPreviewPanel autoPreviewKey={bulkPreviewRequest} />
@@ -1248,14 +1277,16 @@ function laneSubline(
 
 interface OverviewLanesProps {
   state: ListState;
-  /** Features whose detail fetch failed; their rows render summary-only. */
-  detailFailures: ReadonlySet<string>;
+  /** Features whose detail fetch failed, keyed by id with the captured canonical error. */
+  detailFailures: ReadonlyMap<string, CanonicalError>;
   laneGroups: Record<Lane, FeatureSnapshot[]>;
   attentionItems: readonly AttentionItem[];
   attentionKindsByFeature: ReadonlyMap<string, Record<AttentionItem['kind'], number>>;
   onOpen(featureId: string): void;
   onAnswer(featureId: string, attentionId?: string): void;
   onRetry(): void;
+  /** Refetches only the features whose detail fetch failed. */
+  onRetryDetails(ids: readonly string[]): void;
 }
 
 /** The first non-recovery attention item this feature owns, if any. */
@@ -1338,8 +1369,16 @@ function OverviewLanes({
   onOpen,
   onAnswer,
   onRetry,
+  onRetryDetails,
 }: OverviewLanesProps) {
   const totalFeatures = LANES.reduce((sum, lane) => sum + laneGroups[lane].length, 0);
+  // One degradation card for the whole list: the first failed feature's
+  // canonical error, captioned with how many features are affected.
+  const firstFailure =
+    state.phase === 'loaded'
+      ? state.features.find((feature) => state.detailFailures.has(feature.id))
+      : undefined;
+  const failureCount = detailFailures.size;
   return (
     <section className="overview-lanes" aria-label="Existing features">
       {state.phase === 'loading' ? (
@@ -1347,16 +1386,24 @@ function OverviewLanes({
           Loading features…
         </p>
       ) : state.phase === 'error' ? (
-        <div className="overview-lanes__error">
-          <p className="form-field__error">
-            {state.error.code}: {state.error.message}
-          </p>
-          <button type="button" className="setup-wizard__action" onClick={onRetry}>
-            Try again
-          </button>
-        </div>
+        <ErrorSurface
+          error={state.error}
+          variant="compact"
+          localAction={{ label: 'Retry', onAction: onRetry }}
+        />
       ) : totalFeatures === 0 ? null : (
         <div className="overview-lanes__groups">
+          {failureCount > 0 && firstFailure !== undefined ? (
+            <ErrorSurface
+              error={state.detailFailures.get(firstFailure.id)!}
+              variant="compact"
+              caption={`Details for ${failureCount} feature${failureCount === 1 ? '' : 's'} could not be loaded`}
+              localAction={{
+                label: 'Retry',
+                onAction: () => onRetryDetails([...detailFailures.keys()]),
+              }}
+            />
+          ) : null}
           {LANES.map((lane) =>
             laneGroups[lane].length === 0 ? null : (
               <OverviewLaneSection
@@ -1388,7 +1435,7 @@ function OverviewLaneSection({
 }: {
   lane: Lane;
   features: FeatureSnapshot[];
-  detailFailures: ReadonlySet<string>;
+  detailFailures: ReadonlyMap<string, CanonicalError>;
   attentionItems: readonly AttentionItem[];
   attentionKindsByFeature: ReadonlyMap<string, Record<AttentionItem['kind'], number>>;
   onOpen(featureId: string): void;
@@ -1411,7 +1458,7 @@ function OverviewLaneSection({
               key={feature.id}
               lane={lane}
               feature={feature}
-              detailUnavailable={detailFailures.has(feature.id)}
+              detailFailure={detailFailures.get(feature.id)}
               attentionKinds={attentionKindsByFeature.get(feature.id)}
               onOpen={() => onOpen(feature.id)}
               onAnswer={() =>
@@ -1428,15 +1475,15 @@ function OverviewLaneSection({
 function OverviewRow({
   lane,
   feature,
-  detailUnavailable,
+  detailFailure,
   attentionKinds,
   onOpen,
   onAnswer,
 }: {
   lane: Lane;
   feature: FeatureSnapshot;
-  /** This row's detail fetch failed; it is flagged rather than dropped. */
-  detailUnavailable: boolean;
+  /** This row's detail fetch failed; the captured canonical error stands in for the pip. */
+  detailFailure: CanonicalError | undefined;
   attentionKinds: Record<AttentionItem['kind'], number> | undefined;
   onOpen(): void;
   onAnswer(): void;
@@ -1457,9 +1504,9 @@ function OverviewRow({
               {overviewRowStateText(lane, feature, attentionKinds)}
             </span>
           </span>
-          {detailUnavailable ? (
+          {detailFailure !== undefined ? (
             <span className="overview-row__state" data-tone="attention">
-              <span className="overview-row__state-text">Details unavailable</span>
+              <span className="overview-row__state-text">{detailFailure.title}</span>
             </span>
           ) : pip === null ? null : (
             <PipRail

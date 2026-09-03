@@ -53,7 +53,17 @@ describe('stagedItems', () => {
     const pending = pendingUploadItems('image', ['/shots/a.png', '/shots/b.png']);
     const items = reconcileUploadResults(['other', ...pending] as ComposerUploadItem[], pending, [
       { ok: true, name: 'a.png', upload: upload('server-1', 'ref-a') },
-      { ok: false, name: 'b.png', error: { message: 'Too large.', remediation: 'Shrink it.' } },
+      {
+        ok: false,
+        name: 'b.png',
+        error: {
+          code: 'request_too_large',
+          class: 'needs_action',
+          title: 'Request too large',
+          summary: 'Too large.',
+          remediation: { hint: 'Shrink it.' },
+        },
+      },
     ]);
     expect(items[0]).toBe('other');
     expect(items[1]).toMatchObject({ state: 'ready', upload: { reference: 'ref-a' } });
@@ -63,6 +73,23 @@ describe('stagedItems', () => {
     });
     // Identities survive the flip so chips do not remount.
     expect(items[1]?.id).toBe(pending[0]?.id);
+  });
+
+  it('renders the failed chip text without the remediation hint when none is authored', () => {
+    const pending = pendingUploadItems('image', ['/shots/a.png']);
+    const items = reconcileUploadResults(pending, pending, [
+      {
+        ok: false,
+        name: 'a.png',
+        error: {
+          code: 'request_too_large',
+          class: 'needs_action',
+          title: 'Request too large',
+          summary: 'Too large.',
+        },
+      },
+    ]);
+    expect(items[0]).toMatchObject({ state: 'failed', message: 'Too large.' });
   });
 
   it('marks pending items failed on a wholesale transport failure', () => {

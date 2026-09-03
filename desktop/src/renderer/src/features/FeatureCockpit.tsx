@@ -46,10 +46,12 @@ import {
   type FeatureActionView,
 } from '../../../shared/ipc';
 import { ErrorSurface, type ErrorSurfaceAction } from '../components/ErrorSurface';
+import { buildCanonicalError } from '../../../shared/errors';
 import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import { useModalDismiss } from '../components/useModalDismiss';
 import { useMediaQuery } from '../hooks';
-import { canonicalFromWizardError, parseIpcError, type WizardError } from '../wizard/ipcError';
+import { parseIpcError } from '../wizard/ipcError';
+import type { CanonicalError } from '../../../shared/ipc';
 import { CurrentRunInspection, type RunMetrics } from './CurrentRunInspection';
 import { classifyHold, railSegments, railTrio } from './phaseRail';
 import { PhaseRail } from './PhaseRailRow';
@@ -119,8 +121,8 @@ import type { FeatureCommandId } from '../../../shared/commands';
 
 type CockpitState =
   | { phase: 'loading' }
-  | { phase: 'missing' }
-  | { phase: 'error'; error: WizardError }
+  | { phase: 'missing'; error: CanonicalError }
+  | { phase: 'error'; error: CanonicalError }
   | { phase: 'loaded'; snapshot: FeatureSnapshot };
 
 const FOCUSED_COMPLETION_SETTLE_MS = 500;
@@ -524,7 +526,9 @@ function RunSwitcherPopup({
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState<WizardError | null>(null);
+  // The failed page rides with the error so Retry re-invokes exactly the
+  // history load that failed — the first page or an older-pages append.
+  const [loadError, setLoadError] = useState<{ error: CanonicalError; page: number } | null>(null);
   const loadRequestRef = useRef(0);
 
   const load = useCallback(
@@ -542,7 +546,7 @@ function RunSwitcherPopup({
         })
         .catch((err: unknown) => {
           if (request !== loadRequestRef.current) return;
-          setLoadError(parseIpcError(err));
+          setLoadError({ error: parseIpcError(err), page: nextPage });
         })
         .finally(() => {
           if (request === loadRequestRef.current) setLoading(false);
@@ -610,9 +614,11 @@ function RunSwitcherPopup({
           </button>
         ) : null}
         {loadError !== null ? (
-          <p className="cockpit__run-switcher-error" role="status">
-            Could not load run history — {loadError.message}
-          </p>
+          <ErrorSurface
+            error={loadError.error}
+            variant="compact"
+            localAction={{ label: 'Retry', onAction: () => load(loadError.page) }}
+          />
         ) : null}
       </div>
     </details>
@@ -856,7 +862,12 @@ function DeleteConfirmDialog({
         <span className="impact-dialog__eyebrow">Operational impact</span>
         <h3 id="delete-dialog-title">Delete {snapshot.name}?</h3>
         {projectionMissing ? (
-          <p role="alert">Impact projection is missing or stale. Close this dialog and refresh.</p>
+          // Desktop-authored warning: the dialog fails closed (delete stays
+          // disabled) until a refresh brings the projection back.
+          <ErrorSurface
+            error={buildCanonicalError('E_IMPACT_PROJECTION_STALE')}
+            variant="compact"
+          />
         ) : preview === undefined ? (
           <p>This removes the feature record and any remaining worktrees.</p>
         ) : (
@@ -962,7 +973,7 @@ export function FeatureCockpit({
   const [announcement, setAnnouncement] = useState('');
   const [actionError, setActionError] = useState<{
     action: 'Start' | 'Stop' | 'Resume' | 'Retry' | 'Restart' | 'Delete' | 'Rebase';
-    error: WizardError;
+    error: CanonicalError;
   } | null>(null);
   const [rebaseLaunchBusy, setRebaseLaunchBusy] = useState(false);
   const [stopDialog, setStopDialog] = useState(false);
@@ -1084,7 +1095,7 @@ export function FeatureCockpit({
           const parsed = parseIpcError(err);
           if (parsed.code === 'not_found') {
             setRefreshFailed(false);
-            setState({ phase: 'missing' });
+            setState({ phase: 'missing', error: parsed });
           } else if (options.silent === true) {
             setRefreshFailed(true);
           } else {
@@ -1329,8 +1340,11 @@ export function FeatureCockpit({
         return refreshFeature({ silent: true });
       })
       .catch((err: unknown) => {
-        const parsed = parseIpcError(err);
-        setAnnouncement(`Retry failed — ${parsed.message}`);
+        // A failed retry is a rejected action like any lifecycle verb: the
+        // canonical card owns the failure, and nothing is written to the
+        // announcement region for it.
+        setActionError({ action: 'Retry', error: parseIpcError(err) });
+        setAnnouncement('');
         return refreshFeature({ silent: true });
       })
       .finally(() => {
@@ -1560,12 +1574,13 @@ export function FeatureCockpit({
   if (state.phase === 'missing') {
     return (
       <section className="cockpit" aria-label={`Feature ${titleHint}`}>
-        <div role="alert" className="cockpit__missing">
-          <p className="cockpit__missing-message">This feature no longer exists on the server.</p>
-          <button type="button" className="setup-wizard__action" onClick={onClose}>
-            Close tab
-          </button>
-        </div>
+        {/* The server's own not_found canonical, not a hand-rolled message:
+         * the card carries the catalog text and the tab's way out. */}
+        <ErrorSurface
+          error={state.error}
+          variant="compact"
+          localAction={{ label: 'Close tab', onAction: onClose }}
+        />
       </section>
     );
   }
@@ -1573,13 +1588,11 @@ export function FeatureCockpit({
   if (state.phase === 'error') {
     return (
       <section className="cockpit" aria-label={`Feature ${titleHint}`}>
-        <div role="alert" className="create-form__error">
-          <span className="create-form__error-code">{state.error.code}</span>
-          <p className="create-form__error-message">{state.error.message}</p>
-        </div>
-        <button type="button" className="setup-wizard__action" onClick={() => refreshFeature()}>
-          Try again
-        </button>
+        <ErrorSurface
+          error={state.error}
+          variant="compact"
+          localAction={{ label: 'Retry', onAction: () => refreshFeature() }}
+        />
       </section>
     );
   }
@@ -2329,7 +2342,7 @@ export function FeatureCockpit({
 
         {actionError === null || snapshot.activeChild === undefined ? null : (
           <ErrorSurface
-            error={canonicalFromWizardError(actionError.error)}
+            error={actionError.error}
             variant="compact"
             caption={`${actionError.action} was rejected`}
             explain={{ featureName: snapshot.name }}
@@ -2824,7 +2837,7 @@ export function FeatureCockpit({
 
                   {actionError !== null ? (
                     <ErrorSurface
-                      error={canonicalFromWizardError(actionError.error)}
+                      error={actionError.error}
                       variant="compact"
                       caption={`${actionError.action} was rejected`}
                       explain={{ featureName: snapshot.name }}

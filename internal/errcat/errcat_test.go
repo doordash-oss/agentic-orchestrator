@@ -269,6 +269,35 @@ func TestNewNeverReturnsEmptyTitleOrSummary(t *testing.T) {
 	}
 }
 
+// TestWithRemediationHintOverridesAuthoredHint pins the request-scoped hint
+// override: a caller-supplied remediation hint (e.g. a provider's own install
+// or login command) replaces the entry's authored hint, an empty hint keeps
+// the authored one, and an entry without any remediation gains one.
+func TestWithRemediationHintOverridesAuthoredHint(t *testing.T) {
+	rendered := New(MissingExecutable, WithRemediationHint("Install with: npm install -g missing-cli"))
+	if rendered.Remediation == nil || rendered.Remediation.Hint != "Install with: npm install -g missing-cli" {
+		t.Fatalf("remediation = %#v; want caller-supplied install hint", rendered.Remediation)
+	}
+
+	rendered = New(MissingExecutable, WithRemediationHint("   "))
+	if rendered.Remediation == nil || rendered.Remediation.Hint != "Install the missing provider CLI, then retry." {
+		t.Fatalf("remediation = %#v; want authored hint kept for blank override", rendered.Remediation)
+	}
+
+	rendered = New(MethodNotAllowed, WithRemediationHint("Use POST"))
+	if rendered.Remediation == nil || rendered.Remediation.Hint != "Use POST" {
+		t.Fatalf("remediation = %#v; want hint added to an entry without one", rendered.Remediation)
+	}
+
+	rendered = New(PublishRebaseConflict, WithRemediationHint("Resolve the conflict, then retry"))
+	if rendered.Remediation == nil || rendered.Remediation.Hint != "Resolve the conflict, then retry" {
+		t.Fatalf("remediation hint = %q; want override", rendered.Remediation.Hint)
+	}
+	if len(rendered.Remediation.Actions) != 1 || rendered.Remediation.Actions[0] != "publish" {
+		t.Fatalf("remediation actions = %#v; want the entry's actions preserved", rendered.Remediation.Actions)
+	}
+}
+
 // TestPackageImportsOnlyStdlib pins the leaf-package contract: errcat must
 // not depend on any internal or external package so every layer can use it.
 func TestPackageImportsOnlyStdlib(t *testing.T) {

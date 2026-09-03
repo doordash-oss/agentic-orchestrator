@@ -18,15 +18,15 @@ limitations under the License.
  * Generic, owner-only, recoverable storage for keyed unsaved text drafts.
  *
  * The review-editor draft store delegates to this implementation,
- * supplying its key shape, file name, draft cap, error-code prefix, and
- * Zod schemas.
+ * supplying its key shape, file name, draft cap, and Zod schemas. The
+ * error codes are the fixed desktop catalog codes for local review drafts.
  *
  * A corrupt or incompatible file is moved aside; recovery always starts
  * empty rather than implying that draft text survived.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { redactText, SafeErrorException, safeError } from '../shared/errors';
+import { buildCanonicalError, CanonicalErrorException, redactText } from '../shared/errors';
 import {
   assertNoPrototypePollution,
   assertWithinByteSize,
@@ -57,7 +57,6 @@ export interface KeyedDraftStoreConfig<
 > {
   fileName: string;
   maxDrafts: number;
-  errorCodePrefix: string;
   maxBytes: number;
   saveRequestSchema: DraftSchema<SaveRequest>;
   storeSchema: DraftSchema<{ schemaVersion: number; drafts: Draft[] }>;
@@ -107,12 +106,7 @@ export class KeyedDraftStore<
   save(request: SaveRequest): Draft {
     const parsed = this.config.saveRequestSchema.safeParse(request);
     if (!parsed.success) {
-      throw new SafeErrorException(
-        safeError(
-          `E_INVALID_${this.config.errorCodePrefix}`,
-          'The local draft did not match the supported schema.',
-        ),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_INVALID_LOCAL_DRAFT'));
     }
     assertWithinByteSize(parsed.data.text, this.config.maxBytes);
     const draft = { ...parsed.data, savedAt: this.now().toISOString() } as unknown as Draft;
@@ -121,12 +115,7 @@ export class KeyedDraftStore<
     );
     if (index === -1) {
       if (this.drafts.length >= this.config.maxDrafts) {
-        throw new SafeErrorException(
-          safeError(
-            `E_${this.config.errorCodePrefix}_LIMIT`,
-            'Too many recoverable drafts are stored locally. Discard an older draft before saving another.',
-          ),
-        );
+        throw new CanonicalErrorException(buildCanonicalError('E_LOCAL_DRAFT_LIMIT'));
       }
       this.drafts = [...this.drafts, draft];
     } else {

@@ -24,6 +24,7 @@ import type {
   FeatureActionView,
 } from '../../../../shared/ipc';
 import type { CanonicalError } from '../../../../shared/api/parse';
+import { ipcError } from '../../test/agenticoMock';
 import { ExplainChatProvider } from '../../explainChat';
 import { PublishModal } from './PublishModal';
 
@@ -364,9 +365,11 @@ describe('PublishModal', () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     const setPublishTimeoutLocked = vi.fn();
-    const dispatchAction = vi
-      .fn()
-      .mockRejectedValue(new Error('E_REQUEST_TIMEOUT: publish did not answer before the bound'));
+    const dispatchAction = vi.fn().mockRejectedValue(
+      ipcError('E_REQUEST_TIMEOUT', 'publish did not answer before the bound', {
+        class: 'warning',
+      }),
+    );
     render(
       <PublishModal
         {...props({
@@ -394,6 +397,46 @@ describe('PublishModal', () => {
     expect(dispatchAction).toHaveBeenCalledOnce();
   });
 
+  it('renders the timeout lock as a warning-class E_REQUEST_TIMEOUT ErrorSurface with the sheet disarmed', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockRejectedValue(
+      ipcError('E_REQUEST_TIMEOUT', 'publish did not answer before the bound', {
+        class: 'warning',
+      }),
+    );
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          onDispatched: vi.fn().mockRejectedValue(new Error('refresh unavailable')),
+          preflight: preflightWith({
+            repos: [
+              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+            ],
+          }),
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    // The locked state is the request-timeout canonical warning: the sheet's
+    // own status line never carries the failure text. Wait on the catalog
+    // title — the transient "Refreshing…" progress line is a plain status.
+    const title = await screen.findByText('Request timed out');
+    const surface = title.closest('.error-surface') as HTMLElement;
+    expect(surface).toHaveClass(
+      'error-surface',
+      'error-surface--compact',
+      'error-surface--warning',
+    );
+    expect(within(surface).getByText('E_REQUEST_TIMEOUT')).toHaveClass('error-surface__code');
+    expect(surface).toHaveTextContent(
+      'Publish may still be running. Quit and reopen Agentico before publishing again.',
+    );
+    // The publish control stays disarmed by the existing lock logic.
+    expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled();
+  });
+
   it('marks a blank required title invalid after local validation', async () => {
     const user = userEvent.setup();
     render(<PublishModal {...props()} />);
@@ -403,12 +446,19 @@ describe('PublishModal', () => {
 
     const title = screen.getByLabelText('PR title');
     expect(title).toHaveAttribute('aria-invalid', 'true');
-    expect(screen.getByText('Add a title to create the pull request.')).toBeVisible();
+    expect(title).toHaveAttribute('aria-describedby', 'publish-title-error');
+    const fieldError = screen.getByText('Add a title to create the pull request.');
+    expect(fieldError).toHaveClass('field-error');
+    expect(fieldError).toHaveAttribute('id', 'publish-title-error');
+    // The legacy hand-rolled field-error markup is gone.
+    expect(document.querySelector('.completion-publish-sheet__field-error')).toBeNull();
   });
 
   it('moves focus to a rejected publish surface', async () => {
     const user = userEvent.setup();
-    const dispatchAction = vi.fn().mockRejectedValue(new Error('publish failed safely'));
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValue(ipcError('E_INTERNAL', 'publish failed safely'));
     render(
       <PublishModal
         {...props({
@@ -580,7 +630,7 @@ describe('PublishModal', () => {
     const user = userEvent.setup();
     const dispatchAction = vi
       .fn()
-      .mockRejectedValue(new Error('publish_partial_failure: web pull request failed'));
+      .mockRejectedValue(ipcError('publish_partial_failure', 'web pull request failed'));
     const initial = preflightWith({
       repos: [{ repo: 'web', publishable: true, touched: true, status: 'eligible' }],
     });
@@ -706,7 +756,7 @@ describe('PublishModal', () => {
 
   it('renders structured remediation for an unknown publish failure', async () => {
     const user = userEvent.setup();
-    const failure = Object.assign(new Error('publish_partial_failure: one repository failed'), {
+    const failure = ipcError('publish_partial_failure', 'one repository failed', {
       remediation: 'Resolve the repository failure, then retry the remaining work.',
     });
     render(
@@ -740,7 +790,7 @@ describe('PublishModal', () => {
     const user = userEvent.setup();
     const dispatchAction = vi
       .fn()
-      .mockRejectedValueOnce(new Error('publish_partial_failure: web push failed'))
+      .mockRejectedValueOnce(ipcError('publish_partial_failure', 'web push failed'))
       .mockResolvedValueOnce(result);
     const initial: CompletionPreflightResult = {
       featureId,
@@ -795,7 +845,9 @@ describe('PublishModal', () => {
     render(
       <PublishModal
         {...props({
-          dispatchAction: vi.fn().mockRejectedValue(new Error('publish failed safely')),
+          dispatchAction: vi
+            .fn()
+            .mockRejectedValue(ipcError('E_INTERNAL', 'publish failed safely')),
           onDispatched,
           preflight: preflightWith({
             repos: [
@@ -868,9 +920,11 @@ describe('PublishModal', () => {
         }),
     );
     const onClose = vi.fn();
-    const dispatchAction = vi
-      .fn()
-      .mockRejectedValue(new Error('E_REQUEST_TIMEOUT: publish did not answer before the bound'));
+    const dispatchAction = vi.fn().mockRejectedValue(
+      ipcError('E_REQUEST_TIMEOUT', 'publish did not answer before the bound', {
+        class: 'warning',
+      }),
+    );
     render(
       <PublishModal
         {...props({
@@ -908,9 +962,11 @@ describe('PublishModal', () => {
 
   it('keeps a timeout locked when its refresh callback rejects', async () => {
     const user = userEvent.setup();
-    const dispatchAction = vi
-      .fn()
-      .mockRejectedValue(new Error('E_REQUEST_TIMEOUT: publish did not answer before the bound'));
+    const dispatchAction = vi.fn().mockRejectedValue(
+      ipcError('E_REQUEST_TIMEOUT', 'publish did not answer before the bound', {
+        class: 'warning',
+      }),
+    );
     render(
       <PublishModal
         {...props({

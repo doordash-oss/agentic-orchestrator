@@ -74,10 +74,10 @@ func (h *apiHandler) handleReadinessRefreshRoute(w http.ResponseWriter, r *http.
 
 // rejectNotReadyForCreation gates feature creation on mandatory readiness.
 // While no provider is usable (or the configuration is invalid) it writes a
-// structured 409 not_ready error whose summary lists the readiness issue
-// titles and whose diagnostics carry their raw messages, and reports true.
-// Handlers constructed without a provider registry (tests, embedded uses)
-// are not gated.
+// structured 409 not_ready error whose summary lists the rendered readiness
+// issue titles and whose diagnostics join the issues' raw provider detail,
+// and reports true. Handlers constructed without a provider registry (tests,
+// embedded uses) are not gated.
 func (h *apiHandler) rejectNotReadyForCreation(w http.ResponseWriter, r *http.Request) bool {
 	if h.registry == nil {
 		return false
@@ -87,20 +87,18 @@ func (h *apiHandler) rejectNotReadyForCreation(w http.ResponseWriter, r *http.Re
 		return false
 	}
 	titles := make([]string, 0, len(snapshot.Issues))
-	messages := make([]string, 0, len(snapshot.Issues))
+	diagnostics := make([]string, 0, len(snapshot.Issues))
 	for _, issue := range snapshot.Issues {
-		if entry, ok := errcat.Lookup(errcat.Code(issue.Code)); ok && entry.Title != "" {
-			titles = append(titles, entry.Title)
-		} else {
-			titles = append(titles, issue.Message)
+		if issue.Title != "" {
+			titles = append(titles, issue.Title)
 		}
-		if issue.Message != "" {
-			messages = append(messages, issue.Message)
+		if issue.Diagnostics != "" {
+			diagnostics = append(diagnostics, issue.Diagnostics)
 		}
 	}
 	writeAPIError(w, http.StatusConflict, errcat.NotReady,
 		errcat.WithParams(errcat.ReadinessParams{Titles: titles}),
-		errcat.WithDiagnostics(strings.Join(messages, "; ")))
+		errcat.WithDiagnostics(strings.Join(diagnostics, "; ")))
 	return true
 }
 
@@ -209,18 +207,27 @@ func (h *apiHandler) refreshProviderReadiness(ctx context.Context, providerName 
 	return refreshed, true
 }
 
+// readinessIssue renders one readiness issue as the canonical catalog error
+// for its code, projected onto the generated wire model. Title, summary, and
+// the fallback remediation hint come from the catalog entry; opts may
+// override the hint with the request-scoped command or detail and attach
+// bounded, credential-free diagnostics.
+func readinessIssue(code errcat.Code, opts ...errcat.Option) *Error {
+	rendered := wireError(errcat.New(code, opts...))
+	return &rendered
+}
+
 // probeProviderReadiness classifies one provider against the readiness
 // taxonomy: missing executable, unsupported version, unauthenticated, or
-// ready. Detail/remedy text is bounded and never includes credentials — the
-// remedy is the provider's own install hint or auth command.
+// ready. Each issue is the catalog-rendered canonical error for its code:
+// title and summary are authored text, the remediation hint is the
+// provider's own install hint or auth command, and provider-supplied detail
+// rides diagnostics — bounded and redacted, never credentials.
 func probeProviderReadiness(ctx context.Context, p llm.LLMProvider) ProviderReadiness {
 	out := ProviderReadiness{Name: p.Name()}
 	if !p.DetectCLI() {
-		out.Issue = &ReadinessIssue{
-			Code:    MissingExecutable,
-			Message: p.Name() + " CLI was not found",
-			Remedy:  "Install with: " + p.InstallHint(),
-		}
+		out.Issue = readinessIssue(errcat.MissingExecutable,
+			errcat.WithRemediationHint("Install with: "+p.InstallHint()))
 		return out
 	}
 	out.Installed = true
@@ -229,12 +236,11 @@ func probeProviderReadiness(ctx context.Context, p llm.LLMProvider) ProviderRead
 	}
 	if enforcer, ok := p.(llm.VersionEnforcer); ok && enforcer.EnforcesMinVersion() {
 		if below, version, minVer := agent.BelowMinVersion(p); below {
-			out.Issue = &ReadinessIssue{
-				Code: UnsupportedVersion,
-				Message: fmt.Sprintf("%s CLI version %s is below the required minimum %d.%d.%d",
-					p.Name(), version, minVer[0], minVer[1], minVer[2]),
-				Remedy: "Upgrade with: " + p.InstallHint(),
-			}
+			detail := fmt.Sprintf("%s CLI version %s is below the required minimum %d.%d.%d",
+				p.Name(), version, minVer[0], minVer[1], minVer[2])
+			out.Issue = readinessIssue(errcat.UnsupportedVersion,
+				errcat.WithRemediationHint("Upgrade with: "+p.InstallHint()),
+				errcat.WithDiagnostics(SafeDisplayText(detail, maxReadinessTextLen)))
 			return out
 		}
 	}
@@ -254,11 +260,9 @@ func probeProviderReadiness(ctx context.Context, p llm.LLMProvider) ProviderRead
 	if message == "" {
 		message = p.Name() + " provider is not authenticated"
 	}
-	out.Issue = &ReadinessIssue{
-		Code:    Unauthenticated,
-		Message: SafeDisplayText(message, maxReadinessTextLen),
-		Remedy:  SafeDisplayText(strings.TrimSpace(status.Remedy), maxReadinessTextLen),
-	}
+	out.Issue = readinessIssue(errcat.Unauthenticated,
+		errcat.WithRemediationHint(SafeDisplayText(strings.TrimSpace(status.Remedy), maxReadinessTextLen)),
+		errcat.WithDiagnostics(SafeDisplayText(message, maxReadinessTextLen)))
 	return out
 }
 
@@ -283,29 +287,25 @@ func (h *apiHandler) modelReadiness() ModelReadiness {
 		return ModelReadiness{Available: true, Models: models}
 	}
 	return ModelReadiness{
-		Issue: &ReadinessIssue{
-			Code:    ModelsUnavailable,
-			Message: "no models are available from a usable provider",
-			Remedy:  "Install or authenticate a provider CLI, then refresh readiness",
-		},
+		Issue: readinessIssue(errcat.ModelsUnavailable),
 	}
 }
 
 // configurationReadiness validates the loaded runtime configuration shape.
+// The configuration detail rides the remediation hint and diagnostics; the
+// title and summary are the catalog's authored text.
 func configurationReadiness(cfg *config.Config) ConfigurationReadiness {
 	if cfg == nil {
-		return ConfigurationReadiness{Issue: &ReadinessIssue{
-			Code:    InvalidConfiguration,
-			Message: "runtime configuration is not loaded",
-			Remedy:  "Restart the server with a readable configuration file",
-		}}
+		return ConfigurationReadiness{Issue: readinessIssue(errcat.InvalidConfiguration,
+			errcat.WithRemediationHint("Restart the server with a readable configuration file"),
+			errcat.WithDiagnostics("runtime configuration is not loaded"),
+		)}
 	}
 	if cfg.Defaults.Pipeline != "" && !feature.PipelineProfile(cfg.Defaults.Pipeline).IsValid() {
-		return ConfigurationReadiness{Issue: &ReadinessIssue{
-			Code:    InvalidConfiguration,
-			Message: "defaults.pipeline must be medium, large, or moonshot",
-			Remedy:  "Fix defaults.pipeline in the runtime configuration",
-		}}
+		return ConfigurationReadiness{Issue: readinessIssue(errcat.InvalidConfiguration,
+			errcat.WithRemediationHint("Fix defaults.pipeline in the runtime configuration"),
+			errcat.WithDiagnostics("defaults.pipeline must be medium, large, or moonshot"),
+		)}
 	}
 	return ConfigurationReadiness{Valid: true}
 }
@@ -326,11 +326,10 @@ func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 		if info, err := os.Stat(workspace.ExpandHome(root)); err == nil && info.IsDir() {
 			entry.Valid = true
 		} else {
-			entry.Issue = &ReadinessIssue{
-				Code:    InvalidWorkspaceRoot,
-				Message: "workspace root does not resolve to a directory",
-				Remedy:  "Create the directory or update workspace_roots in the runtime configuration",
-			}
+			entry.Issue = readinessIssue(errcat.InvalidWorkspaceRoot,
+				errcat.WithParams(errcat.WorkspaceRootParams{Paths: []errcat.InvalidPath{{Path: root}}}),
+				errcat.WithRemediationHint("Create the directory or update workspace_roots in the runtime configuration"),
+			)
 		}
 		out.Roots = append(out.Roots, entry)
 	}
@@ -347,11 +346,9 @@ func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 		if workspace.IsGitRepo(workspace.ExpandHome(repo.Path)) {
 			entry.Valid = true
 		} else {
-			entry.Issue = &ReadinessIssue{
-				Code:    InvalidRepository,
-				Message: "configured repository path is not a git repository",
-				Remedy:  "Point the repository at a git checkout or initialize the directory as a repository",
-			}
+			entry.Issue = readinessIssue(errcat.InvalidRepository,
+				errcat.WithRemediationHint("Point the repository at a git checkout or initialize the directory as a repository"),
+			)
 		}
 		out.Repositories = append(out.Repositories, entry)
 	}
@@ -360,8 +357,8 @@ func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 
 // flattenReadinessIssues collects every outstanding issue across all
 // readiness sections into one ordered list.
-func flattenReadinessIssues(resp ReadinessResponse) []ReadinessIssue {
-	var issues []ReadinessIssue
+func flattenReadinessIssues(resp ReadinessResponse) []Error {
+	var issues []Error
 	for _, p := range resp.Providers {
 		if p.Issue != nil {
 			issues = append(issues, *p.Issue)

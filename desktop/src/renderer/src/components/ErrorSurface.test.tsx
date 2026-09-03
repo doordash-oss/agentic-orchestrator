@@ -256,6 +256,75 @@ describe('ErrorSurface primary-action slot', () => {
   });
 });
 
+describe('ErrorSurface local action', () => {
+  it('renders the local action as the only button and invokes its callback', async () => {
+    const onAction = vi.fn();
+    render(<ErrorSurface error={BASE_ERROR} localAction={{ label: 'Retry', onAction }} />);
+    const button = screen.getByRole('button', { name: 'Retry' });
+    expect(button).toHaveClass('error-surface__action');
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    const user = userEvent.setup();
+    await user.click(button);
+    expect(onAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the local action disabled reason as text instead of a button', () => {
+    render(
+      <ErrorSurface
+        error={BASE_ERROR}
+        localAction={{ label: 'Retry', onAction: vi.fn(), disabledReason: 'A child is running.' }}
+      />,
+    );
+    expect(screen.getByText('A child is running.')).toHaveClass('error-surface__action-reason');
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('fails fast in development when both a local action and an action resolver are passed', () => {
+    // Vitest runs with import.meta.env.DEV true, so the invariant fires here.
+    expect(() =>
+      render(
+        <ErrorSurface
+          error={FULL_ERROR}
+          localAction={{ label: 'Retry', onAction: vi.fn() }}
+          resolveAction={vi.fn(() => ENABLED_ACTION)}
+        />,
+      ),
+    ).toThrow('ErrorSurface accepts either localAction or resolveAction, not both.');
+  });
+
+  it('renders the local action instead when both are passed in production', () => {
+    vi.stubEnv('DEV', false);
+    try {
+      const resolveAction = vi.fn(() => ENABLED_ACTION);
+      render(
+        <ErrorSurface
+          error={FULL_ERROR}
+          localAction={{ label: 'Retry', onAction: vi.fn() }}
+          resolveAction={resolveAction}
+        />,
+      );
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible();
+      expect(screen.getAllByRole('button')).toHaveLength(1);
+      expect(resolveAction).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('renders the local action in the compact variant remediation slot', () => {
+    render(
+      <ErrorSurface
+        error={BASE_ERROR}
+        variant="compact"
+        localAction={{ label: 'Recheck', onAction: vi.fn() }}
+      />,
+    );
+    const button = screen.getByRole('button', { name: 'Recheck' });
+    expect(button).toHaveClass('error-surface__action');
+    expect(button.closest('.error-surface__remediation')).not.toBeNull();
+  });
+});
+
 describe('ErrorSurface explain-in-chat slot', () => {
   const FEATURE_NAME = 'Search revamp';
   const RUN_REFERENCE = { scope: 'run' as const, code: BASE_ERROR.code, featureId: 'abcd1234' };

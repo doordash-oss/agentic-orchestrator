@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 import { describe, expect, it } from 'vitest';
-import { CanonicalErrorException, SafeErrorException } from '../../shared/errors';
+import { CanonicalErrorException } from '../../shared/errors';
 import { PromptSnapshotResponseSchema } from '../../shared/api/parse';
 import type { HttpResult } from '../gateway/runtimeGateway';
 import { mapServerError, serverRequest, type ServerTransport } from '../serverClient';
@@ -167,14 +167,16 @@ describe('mapServerError (fail-closed fallback)', () => {
     ['malformed error object', { error: { code: 42 } }],
     ['string body', 'Bearer tok-leak exploded'],
     ['null body', null],
-  ])('degrades to the generic E_HTTP error on %s', (_label, body) => {
+  ])('degrades to the fixed HTTP rejection code on %s', (_label, body) => {
     const err = mapServerError({ status: 502, body });
-    expect(err).toBeInstanceOf(SafeErrorException);
-    expect((err as SafeErrorException).safe).toEqual({
-      code: 'E_HTTP_502',
-      message: 'The runtime rejected the request.',
-      remediation: 'Retry; if this persists, restart the runtime and check its log.',
+    expect(err).toBeInstanceOf(CanonicalErrorException);
+    expect((err as CanonicalErrorException).canonical).toEqual({
+      code: 'E_HTTP_REJECTED',
+      class: 'blocking',
+      title: 'The request was rejected',
+      summary: 'The runtime rejected the request (HTTP 502).',
+      remediation: { hint: 'Retry; if this persists, restart the runtime and check its log.' },
     });
-    expect(JSON.stringify((err as SafeErrorException).safe)).not.toContain('tok-leak');
+    expect(JSON.stringify((err as CanonicalErrorException).canonical)).not.toContain('tok-leak');
   });
 });

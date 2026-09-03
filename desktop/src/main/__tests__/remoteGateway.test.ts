@@ -18,11 +18,11 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   ConnectionStateSchema,
   MAX_KNOWN_SERVERS,
+  type CanonicalError,
   type ConnectionState,
   type KnownServer,
   type ServersPrefs,
 } from '../../shared/ipc';
-import type { SafeError } from '../../shared/errors';
 import { serverKeyForBaseUrl } from '../connectionString';
 import type { RegistryScan } from '../gateway/registry';
 import type { LoadResult } from '../gateway/remoteTokenStore';
@@ -353,7 +353,7 @@ function makeEnv(options: EnvOptions = {}): Env {
   return env;
 }
 
-function requireError(state: ConnectionState): SafeError {
+function requireError(state: ConnectionState): CanonicalError {
   if (state.status !== 'error' && state.status !== 'incompatible') {
     throw new Error(`expected a failure state, got ${state.status}`);
   }
@@ -442,7 +442,9 @@ describe('RuntimeGateway remote attach profile', () => {
     expect(state.status).toBe('error');
     const error = requireError(state);
     expect(error.code).toBe('E_EXTERNAL_SERVER_LOST');
-    expect(error.remediation ?? '').toContain('Retry');
+    expect(error.class).toBe('blocking');
+    expect(error.title).toBe('The server connection was lost');
+    expect(error.remediation?.hint ?? '').toContain('Retry');
     expect(env.spawnCalls).toBe(0);
     expectNoTokenLeak(env);
   });
@@ -457,7 +459,9 @@ describe('RuntimeGateway remote attach profile', () => {
     expect(failed.status).toBe('error');
     const error = requireError(failed);
     expect(error.code).toBe('E_REMOTE_TOKEN_REPASTE');
-    expect(error.remediation ?? '').toContain('Re-enter the remote server token');
+    expect(error.class).toBe('needs_action');
+    expect(error.title).toBe('Re-enter the remote server token');
+    expect(error.remediation?.hint ?? '').toContain('Re-enter the remote server token');
     expect(env.spawnCalls).toBe(0);
 
     env.tokens.save(remoteKey(), REMOTE_TOKEN);
@@ -492,7 +496,7 @@ describe('RuntimeGateway remote attach profile', () => {
     expect(state.status).toBe('error');
     const error = requireError(state);
     expect(error.code).toBe('E_REMOTE_TOKEN_REPASTE');
-    expect(error.remediation ?? '').toContain('Re-enter the remote server token');
+    expect(error.remediation?.hint ?? '').toContain('Re-enter the remote server token');
     // The rejected token was still registered for redaction by the store.
     expect(env.secrets).toContain(REMOTE_TOKEN);
     expectNoTokenLeak(env);
@@ -542,7 +546,7 @@ describe('RuntimeGateway remote loss and re-probe', () => {
     }
   }
 
-  it('remote loss lands in E_EXTERNAL_SERVER_LOST with retry remediation; no spawn, no crash loop', async () => {
+  it('remote loss lands in the warning-class E_REMOTE_SERVER_LOST_REPROBING; no spawn, no crash loop', async () => {
     const env = makeEnv({});
     await startRemote(env);
     const realFetch = env.deps.fetchJson;
@@ -558,8 +562,9 @@ describe('RuntimeGateway remote loss and re-probe', () => {
     const state = env.gateway.getState();
     expect(state.status).toBe('error');
     const error = requireError(state);
-    expect(error.code).toBe('E_EXTERNAL_SERVER_LOST');
-    expect(error.remediation ?? '').toContain('Retry');
+    expect(error.code).toBe('E_REMOTE_SERVER_LOST_REPROBING');
+    expect(error.class).toBe('warning');
+    expect(error.remediation?.hint ?? '').toContain('Retry');
     expect(state.ownership).toBe('external');
     expect(env.spawnCalls).toBe(0);
     expect(env.states.some((s) => s.status === 'crashed')).toBe(false);
@@ -580,7 +585,7 @@ describe('RuntimeGateway remote loss and re-probe', () => {
 
     await env.gateway.handleGlobalStreamStale();
     expect(env.gateway.getState().status).toBe('error');
-    expect(requireError(env.gateway.getState()).code).toBe('E_EXTERNAL_SERVER_LOST');
+    expect(requireError(env.gateway.getState()).code).toBe('E_REMOTE_SERVER_LOST_REPROBING');
 
     // First re-probe: server still down, state unchanged.
     pumpSleep(env);

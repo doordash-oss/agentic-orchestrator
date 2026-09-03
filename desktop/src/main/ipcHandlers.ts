@@ -24,7 +24,14 @@ limitations under the License.
  * and always resolves to a typed { ok } envelope — exceptions never cross
  * the boundary unredacted.
  */
-import { toEnvelopeError } from '../shared/errors';
+import {
+  buildCanonicalError,
+  CanonicalErrorException,
+  isAbortError,
+  redactText,
+  requestTimeoutError,
+  type CanonicalError,
+} from '../shared/errors';
 import { validateWithSchema } from '../shared/api/parse';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sanitize';
 import {
@@ -271,11 +278,31 @@ export interface IpcMainLike {
 
 const UNTRUSTED: IpcEnvelope = {
   ok: false,
-  error: {
-    code: 'E_UNTRUSTED_SENDER',
-    message: 'The request did not originate from the application window.',
-  },
+  error: buildCanonicalError('E_UNTRUSTED_SENDER'),
 };
+
+/**
+ * The envelope's single error shape. A CanonicalErrorException crosses
+ * unchanged; a fetch/DOM abort becomes the typed timeout; anything else
+ * degrades to the catalog's E_INTERNAL canonical whose summary is authored
+ * text and whose diagnostics carry the redacted original message — no user
+ * path or token can cross.
+ */
+function envelopeError(err: unknown): CanonicalError {
+  if (err instanceof CanonicalErrorException) {
+    return err.canonical;
+  }
+  if (isAbortError(err)) {
+    return requestTimeoutError();
+  }
+  if (err instanceof Error && err.message !== '') {
+    return buildCanonicalError('E_INTERNAL', {
+      params: { reason: 'The request failed unexpectedly.' },
+      diagnostics: redactText(err.message),
+    });
+  }
+  return buildCanonicalError('E_INTERNAL', { params: { reason: 'An unexpected error occurred.' } });
+}
 
 function makeHandler(
   channel: IpcChannel,
@@ -297,7 +324,7 @@ function makeHandler(
       );
       return { ok: true, value: validateWithSchema(value, contract.response) };
     } catch (err) {
-      return { ok: false, error: toEnvelopeError(err, 'E_INTERNAL') };
+      return { ok: false, error: envelopeError(err) };
     }
   };
 }

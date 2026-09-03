@@ -898,7 +898,7 @@ describe('error items', () => {
     expect(onJump).toHaveBeenCalledWith('feature-1', needsActionErrorItem.id);
   });
 
-  it('names a rejected inbox action by the catalog title, not the sentinel wire text', async () => {
+  it('renders a rejected inbox action as a compact ErrorSurface with the catalog title', async () => {
     const mock = installAgenticoMock();
     // A canonical rejection as the preload rethrows it: the sentinel-prefixed
     // message carrying the serialized canonical object.
@@ -916,9 +916,13 @@ describe('error items', () => {
     await user.type(screen.getByLabelText('Help reply'), 'carry on');
     await user.click(screen.getByRole('button', { name: 'Send reply' }));
 
-    await waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent('Help could not be sent'),
-    );
-    expect(screen.getByRole('status')).not.toHaveTextContent('agentico-canonical');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(alert).getByText('Help could not be sent')).toBeVisible();
+    expect(within(alert).getByText('send_help_failed')).toHaveClass('error-surface__code');
+    expect(within(alert).getByText('The help message could not be delivered.')).toBeVisible();
+    // The sentinel wire text never renders.
+    expect(alert).not.toHaveTextContent('E_CANONICAL_ERROR');
+    expect(document.querySelector('.attention-status')).toBeNull();
   });
 });

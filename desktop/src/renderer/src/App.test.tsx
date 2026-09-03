@@ -24,7 +24,12 @@ import {
   type ConnectionState,
 } from '../../shared/ipc';
 import App from './App';
-import { defaultUpdateState, installAgenticoMock, readySnapshot } from './test/agenticoMock';
+import {
+  defaultUpdateState,
+  installAgenticoMock,
+  ipcError,
+  readySnapshot,
+} from './test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from './test/setup';
 
 /** Builds a state through the schema, so tests can only emit valid variants. */
@@ -304,7 +309,12 @@ describe('App readiness gating', () => {
           status: 'crashed',
           stage: 'connect',
           detail: 'The app-managed runtime exited unexpectedly.',
-          error: { code: 'E_SERVER_CRASHED', message: 'exited', remediation: 'Retry.' },
+          error: {
+            code: 'E_SERVER_CRASHED',
+            class: 'blocking',
+            title: 'The app-managed runtime crashed',
+            summary: 'The app-managed Agentico runtime exited unexpectedly.',
+          },
         }),
       );
     });
@@ -367,7 +377,7 @@ describe('App settings-window routing', () => {
 
   it('keeps the surface untouched when the window fails to open', async () => {
     const mock = readyMock();
-    mock.api.openSettingsWindow.mockRejectedValueOnce(new Error('E_WINDOW: refused'));
+    mock.api.openSettingsWindow.mockRejectedValueOnce(ipcError('E_INTERNAL', 'refused'));
     render(<App />);
     await screen.findByRole('option', { name: 'Overview' });
 

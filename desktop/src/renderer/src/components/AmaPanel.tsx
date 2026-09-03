@@ -35,6 +35,7 @@ import {
   isTerminalChatStatus,
   type AmaGeometry,
   type AttentionItem,
+  type CanonicalError,
   type ErrorReference,
   type RoutedRequest,
   type SessionDetail,
@@ -44,7 +45,7 @@ import {
 import {
   AttentionDetail,
   attentionActionNotice,
-  attentionErrorMessage,
+  attentionError,
   emptyAttentionDrafts,
   runAttentionSubmit,
   type AttentionAction,
@@ -65,8 +66,10 @@ import {
   type ComposerUploadItem,
 } from '../features/stagedItems';
 import { parseIpcError } from '../wizard/ipcError';
+import { toCanonicalError } from '../../../shared/errors';
 import { buildConversation, reconcileMessages } from '../features/transcript/conversation';
 import { ConversationTranscript } from '../features/transcript/ConversationTranscript';
+import { ErrorSurface } from './ErrorSurface';
 import {
   clampAmaGeometry,
   dragAmaGeometry,
@@ -81,7 +84,12 @@ type TranscriptState =
   | { phase: 'idle'; messages: TranscriptMessage[]; cursor: TranscriptCursor }
   | { phase: 'loading'; messages: TranscriptMessage[]; cursor: TranscriptCursor }
   | { phase: 'ready'; messages: TranscriptMessage[]; cursor: TranscriptCursor }
-  | { phase: 'error'; message: string; messages: TranscriptMessage[]; cursor: TranscriptCursor };
+  | {
+      phase: 'error';
+      error: CanonicalError;
+      messages: TranscriptMessage[];
+      cursor: TranscriptCursor;
+    };
 
 /** A live drag or resize: the pointer and geometry the gesture started from. */
 interface Gesture {
@@ -146,6 +154,9 @@ export function AmaPanel({
   const [optimisticMessage, setOptimisticMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  // The notice slot's failure branch: a canonical error rendered as a compact
+  // ErrorSurface. Success and reconnect text stay the plain status line.
+  const [noticeError, setNoticeError] = useState<CanonicalError | null>(null);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [localDrafts, setLocalDrafts] = useState(emptyAttentionDrafts);
@@ -179,6 +190,19 @@ export function AmaPanel({
   // In-progress, failed, or foreign-server uploads stay in the composer but
   // block sending until removed (or switched back to).
   const uploadsBlocking = imageUploads.some((item) => isBlockingStagedItem(item, serverKey));
+
+  const announce = useCallback((text: string): void => {
+    setNoticeError(null);
+    setNotice(text);
+  }, []);
+  const clearNotice = useCallback((): void => {
+    setNotice('');
+    setNoticeError(null);
+  }, []);
+  const announceFailure = useCallback((error: CanonicalError): void => {
+    setNotice('');
+    setNoticeError(error);
+  }, []);
 
   // Real asks only (questions, permissions): the chat's idle wait between
   // turns is its resting state, and the composer below is how it continues.
@@ -311,13 +335,14 @@ export function AmaPanel({
     } catch (error) {
       // Before the first question there is no chat session to read, which is
       // the empty state rather than a failure.
-      if (parseIpcError(error).code === 'not_found') {
+      const parsed = parseIpcError(error);
+      if (parsed.code === 'not_found') {
         setTranscript({ phase: 'ready', messages: [], cursor: EMPTY_CURSOR });
         return null;
       }
       setTranscript((current) => ({
         phase: 'error',
-        message: error instanceof Error ? error.message : 'Could not load AMA transcript.',
+        error: parsed,
         messages: current.messages,
         cursor: current.cursor,
       }));
@@ -337,7 +362,7 @@ export function AmaPanel({
       setOptimisticMessage(draft);
       setPinToBottom((value) => value + 1);
       setBusy(true);
-      setNotice('');
+      clearNotice();
       setOpenPersisted(true);
       try {
         await window.agentico.startChat({
@@ -351,22 +376,28 @@ export function AmaPanel({
             await replaceOutputSubscription(from);
             await loadTranscript();
           } catch {
-            setNotice('Message sent, but live updates could not reconnect. Reopen AMA to retry.');
+            announce('Message sent, but live updates could not reconnect. Reopen AMA to retry.');
           }
         }
         setOptimisticMessage(null);
       } catch (error) {
         setOptimisticMessage(null);
-        // The catalog owns the text: a canonical rejection is named by its
-        // title; anything else falls back to the recovered message. The
-        // composer is never touched — nothing was taken from it.
-        const parsed = parseIpcError(error);
-        setNotice(parsed.canonical?.title ?? parsed.message);
+        // The catalog owns the text: the canonical object names the failure.
+        // The composer is never touched — nothing was taken from it.
+        announceFailure(parseIpcError(error));
       } finally {
         setBusy(false);
       }
     },
-    [loadTranscript, refreshSession, replaceOutputSubscription, setOpenPersisted],
+    [
+      announce,
+      announceFailure,
+      clearNotice,
+      loadTranscript,
+      refreshSession,
+      replaceOutputSubscription,
+      setOpenPersisted,
+    ],
   );
 
   useEffect(() => {
@@ -509,7 +540,7 @@ export function AmaPanel({
         } else {
           setTranscript((current) => ({
             phase: 'error',
-            message: event.error.message,
+            error: event.error,
             messages: current.messages,
             cursor: current.cursor,
           }));
@@ -568,7 +599,7 @@ export function AmaPanel({
     setImageUploads([]);
     setPinToBottom((value) => value + 1);
     setBusy(true);
-    setNotice('');
+    clearNotice();
     setOpenPersisted(true);
     try {
       const uploadRefs = submittableReferences(submittedUploads, 'image', serverKey);
@@ -584,7 +615,7 @@ export function AmaPanel({
           await replaceOutputSubscription(from);
           await loadTranscript();
         } catch {
-          setNotice('Message sent, but live updates could not reconnect. Reopen AMA to retry.');
+          announce('Message sent, but live updates could not reconnect. Reopen AMA to retry.');
         }
       }
       setOptimisticMessage(null);
@@ -593,7 +624,7 @@ export function AmaPanel({
       setMessage(text);
       setImages(submittedImages);
       setImageUploads(submittedUploads);
-      setNotice(error instanceof Error ? error.message : 'Could not send AMA message.');
+      announceFailure(parseIpcError(error));
     } finally {
       setBusy(false);
     }
@@ -617,7 +648,7 @@ export function AmaPanel({
         setImageUploads((items) => reconcileUploadResults(items, pending, result.results)),
       )
       .catch((error: unknown) => {
-        const message = parseIpcError(error).message;
+        const message = parseIpcError(error).summary;
         setImageUploads((items) => failPendingUploads(items, pending, message));
       });
   };
@@ -645,9 +676,7 @@ export function AmaPanel({
       void window.agentico
         .readClipboardImage()
         .then((result) => stageImagesRemotely(result.paths))
-        .catch((error: unknown) =>
-          setNotice(error instanceof Error ? error.message : 'Could not paste image.'),
-        );
+        .catch((error: unknown) => announceFailure(toCanonicalError(error, 'E_INTERNAL')));
       return;
     }
     if (imported.paths.length > 0) {
@@ -657,9 +686,7 @@ export function AmaPanel({
     void window.agentico
       .readClipboardImage()
       .then((result) => setImages((current) => uniquePaths(current, result.paths)))
-      .catch((error: unknown) =>
-        setNotice(error instanceof Error ? error.message : 'Could not paste image.'),
-      );
+      .catch((error: unknown) => announceFailure(toCanonicalError(error, 'E_INTERNAL')));
   };
 
   const askToEndChat = (): void => {
@@ -671,15 +698,15 @@ export function AmaPanel({
   const endChat = async (): Promise<void> => {
     if (!sessionActive || busy) return;
     setBusy(true);
-    setNotice('');
+    clearNotice();
     try {
       await window.agentico.endChat();
       await refreshSession();
       await loadTranscript();
       setConfirmingEnd(false);
-      setNotice('AMA ended.');
+      announce('AMA ended.');
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Could not end AMA.');
+      announceFailure(toCanonicalError(error, 'E_INTERNAL'));
     } finally {
       setBusy(false);
     }
@@ -692,25 +719,25 @@ export function AmaPanel({
   ): Promise<void> => {
     if (attentionBusy !== null) return;
     setAttentionBusy(id);
-    setNotice('');
+    clearNotice();
     try {
       const { latest, notice: nextNotice } = await runAttentionSubmit(action, refreshAttention, {
         collapseOnSuccess: false,
         ...options,
       });
-      setNotice(
+      announce(
         latest.some((item) => item.id === id) ? nextNotice : ATTENTION_ALREADY_RESOLVED_NOTICE,
       );
     } catch (error) {
-      setNotice(attentionErrorMessage(error));
+      announceFailure(attentionError(error));
     } finally {
       setAttentionBusy(null);
     }
   };
 
   const saveDraft = useAttentionDraftSaves({
-    notify: (result, options) => setNotice(attentionActionNotice(result, options)),
-    notifyError: (error) => setNotice(attentionErrorMessage(error)),
+    notify: (result, options) => announce(attentionActionNotice(result, options)),
+    notifyError: (error) => announceFailure(attentionError(error)),
     onAlreadyResolved: async () => {
       await refreshAttention();
     },
@@ -808,7 +835,9 @@ export function AmaPanel({
             status={
               <>
                 {transcript.phase === 'loading' ? <p role="status">Loading transcript…</p> : null}
-                {transcript.phase === 'error' ? <p role="alert">{transcript.message}</p> : null}
+                {transcript.phase === 'error' ? (
+                  <ErrorSurface error={transcript.error} variant="compact" />
+                ) : null}
               </>
             }
             emptyState={
@@ -822,7 +851,9 @@ export function AmaPanel({
             }
           />
         </div>
-        {notice !== '' ? (
+        {noticeError !== null ? (
+          <ErrorSurface error={noticeError} variant="compact" />
+        ) : notice !== '' ? (
           <p className="ama-panel__notice" role="status" aria-live="polite">
             {notice}
           </p>

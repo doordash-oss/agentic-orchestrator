@@ -30,8 +30,10 @@ import type {
   RepositoryFileRef,
 } from '../../../../shared/ipc';
 import { ErrorSurface } from '../../components/ErrorSurface';
+import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../../components/FieldError';
 import { useConnectionState } from '../../hooks';
-import { canonicalFromWizardError, parseIpcError, type WizardError } from '../../wizard/ipcError';
+import { parseIpcError } from '../../wizard/ipcError';
+import type { CanonicalError } from '../../../../shared/ipc';
 import {
   isBlockingStagedItem,
   STAGED_ITEMS_BLOCK_SUBMIT,
@@ -57,7 +59,7 @@ import {
 } from '../runContract';
 type SeedState =
   | { phase: 'loading' }
-  | { phase: 'error'; error: WizardError }
+  | { phase: 'error'; error: CanonicalError }
   | { phase: 'ready'; defaults: FeatureConfigSnapshot['defaults'] };
 
 const STEPS = ['What', 'Pipeline', 'Review'] as const;
@@ -106,7 +108,7 @@ export function RefactorLauncher({
   const [pending, setPending] = useState(false);
   const [autoStart, setAutoStart] = useState(true);
   const [nameError, setNameError] = useState<string | null>(null);
-  const [formError, setFormError] = useState<WizardError | null>(null);
+  const [formError, setFormError] = useState<CanonicalError | null>(null);
   const catalogue = useModelCatalogue();
   const nameRef = useRef<HTMLInputElement | null>(null);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
@@ -232,10 +234,11 @@ export function RefactorLauncher({
   if (seed.phase === 'error')
     return (
       <section className="refactor-wizard" aria-label="Start refactor">
-        <ErrorSurface error={canonicalFromWizardError(seed.error)} variant="compact" />
-        <button type="button" onClick={loadSeed}>
-          Try again
-        </button>
+        <ErrorSurface
+          error={seed.error}
+          variant="compact"
+          localAction={{ label: 'Retry', onAction: loadSeed }}
+        />
       </section>
     );
 
@@ -284,7 +287,7 @@ export function RefactorLauncher({
       </nav>
       {formError !== null ? (
         <ErrorSurface
-          error={canonicalFromWizardError(formError)}
+          error={formError}
           variant="compact"
           rootRef={formErrorRef}
           rootTabIndex={-1}
@@ -304,18 +307,17 @@ export function RefactorLauncher({
               className="form-field__input"
               value={name}
               maxLength={200}
-              aria-invalid={nameError !== null}
-              aria-describedby={nameError ? 'refactor-child-name-error' : undefined}
+              aria-invalid={fieldAriaInvalid(nameError !== null)}
+              aria-describedby={fieldAriaDescribedBy(
+                'refactor-child-name-error',
+                nameError !== null,
+              )}
               onChange={(event) => {
                 setName(event.target.value);
                 setNameError(null);
               }}
             />
-            {nameError ? (
-              <span id="refactor-child-name-error" className="form-field__error">
-                {nameError}
-              </span>
-            ) : null}
+            <FieldError id="refactor-child-name-error" message={nameError} />
           </label>
           <DescriptionComposer
             id="refactor-brief"

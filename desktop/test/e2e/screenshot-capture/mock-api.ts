@@ -57,6 +57,18 @@ import {
   defaultSettingsWindowPrefs,
   type SettingsPaneId,
 } from '../../../src/shared/ipc';
+import { CANONICAL_ERROR_MESSAGE_PREFIX } from '../../../src/shared/errors';
+
+/** A preload-shaped rejection carrying a full canonical error. */
+function canonicalRejection(error: {
+  code: string;
+  class: 'blocking' | 'needs_action' | 'warning';
+  title: string;
+  summary: string;
+  remediation?: { hint: string };
+}): Error {
+  return new Error(CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(error));
+}
 
 const DEMO_FEATURE_CONFIG = {
   models: { planning: 'demo:planner' },
@@ -2064,9 +2076,12 @@ function makeMockApi(
     launchRebaseChild: () => {
       if (scene === 'aftercare-rebase-up-to-date') {
         return Promise.reject(
-          new Error(
-            'rebase_already_up_to_date: Every repository is already up to date with its target branch. Nothing to merge.',
-          ),
+          canonicalRejection({
+            code: 'rebase_already_up_to_date',
+            class: 'warning',
+            title: 'Already up to date',
+            summary: 'The feature is already up to date with its rebase targets.',
+          }),
         );
       }
       return Promise.resolve({

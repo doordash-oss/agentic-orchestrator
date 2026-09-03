@@ -108,7 +108,7 @@ import {
   routeSettingsPane,
   routeWindowPurpose,
 } from './windowRegistry';
-import { redactText, toSafeError } from '../shared/errors';
+import { redactText, toCanonicalError } from '../shared/errors';
 import {
   RENDERER_ENTRY_URL,
   RENDERER_ORIGIN,
@@ -1214,12 +1214,14 @@ if (!hasSingleInstanceLock) {
         publishNativeCommandTestState(nativeCommands);
       }
       if (state.status === 'launch-failed' || state.status === 'crashed') {
-        diagnostics.record('server', 'error', state.detail, state.diagnostics?.logTail?.join('\n'));
+        // The gateway folds the launch command context and bounded log tail
+        // into the canonical error's diagnostics string.
+        diagnostics.record('server', 'error', state.detail, state.error.diagnostics);
         if (state.status === 'crashed') {
           diagnostics.recordCrash({
             processRole: 'server',
             category: state.detail,
-            context: state.diagnostics?.commandContext,
+            context: state.error.diagnostics,
           });
         }
       }
@@ -1532,8 +1534,9 @@ function forcedActiveWorkForE2E(featureLabels: Map<string, string>): ActiveWorkC
 }
 
 function safeStopReason(error: unknown): string {
-  const safe = toSafeError(error, 'E_STOP_FAILED');
-  return safe.remediation === undefined ? safe.message : `${safe.message} ${safe.remediation}`;
+  const canonical = toCanonicalError(error, 'E_STOP_FAILED');
+  const hint = canonical.remediation?.hint;
+  return hint === undefined ? canonical.summary : `${canonical.summary} ${hint}`;
 }
 
 function activeWorkDecision(response: number): ActiveWorkDecision {

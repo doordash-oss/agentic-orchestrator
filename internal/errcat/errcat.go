@@ -177,12 +177,13 @@ const (
 )
 
 type config struct {
-	params       Params
-	diagnostics  string
-	repositories []CodeRepository
-	phase        *CodePhase
-	command      *CodeCommand
-	setupTask    *CodeSetupTask
+	params          Params
+	diagnostics     string
+	remediationHint string
+	repositories    []CodeRepository
+	phase           *CodePhase
+	command         *CodeCommand
+	setupTask       *CodeSetupTask
 }
 
 // Option customizes a rendered error.
@@ -196,6 +197,14 @@ func WithParams(params Params) Option {
 // WithDiagnostics attaches raw, deepest-disclosure detail text.
 func WithDiagnostics(text string) Option {
 	return func(c *config) { c.diagnostics = strings.TrimSpace(text) }
+}
+
+// WithRemediationHint overrides the entry's authored remediation hint with
+// request-scoped text, such as a provider's own install or login command. A
+// blank hint keeps the authored one; the entry's action references always
+// survive.
+func WithRemediationHint(hint string) Option {
+	return func(c *config) { c.remediationHint = strings.TrimSpace(hint) }
 }
 
 // WithRepositories attaches repositories context. Blocks the code did not
@@ -255,6 +264,13 @@ func New(code Code, opts ...Option) Error {
 	}
 	if entry.Remediation != "" || len(entry.Actions) > 0 {
 		rendered.Remediation = &Remediation{Hint: entry.Remediation, Actions: entry.Actions}
+	}
+	if cfg.remediationHint != "" {
+		if rendered.Remediation == nil {
+			rendered.Remediation = &Remediation{Hint: cfg.remediationHint}
+		} else {
+			rendered.Remediation.Hint = cfg.remediationHint
+		}
 	}
 	declared := make(map[Block]bool, len(entry.Blocks))
 	for _, block := range entry.Blocks {

@@ -569,7 +569,7 @@ describe('registerIpcHandlers', () => {
     expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
   });
 
-  it('converts service exceptions into redacted safe errors', async () => {
+  it('converts service exceptions into redacted canonical internal errors', async () => {
     const services = makeServices();
     services.getSettings = vi.fn(() => {
       throw new Error('exploded at /Users/somebody/secret with Bearer tok123');
@@ -577,12 +577,18 @@ describe('registerIpcHandlers', () => {
     const { handlers } = register(services);
     const result = (await handlers.get(IPC_CHANNELS.settingsGet)!(goodEvent)) as {
       ok: boolean;
-      error?: { code: string; message: string };
+      error?: { code: string; summary: string; diagnostics?: string };
     };
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe('E_INTERNAL');
-    expect(result.error?.message).not.toContain('/Users/somebody');
-    expect(result.error?.message).not.toContain('tok123');
+    // The catalog-authored summary never echoes the raw message; the
+    // diagnostics carry it only through the shared redaction.
+    expect(result.error?.summary).not.toContain('/Users/somebody');
+    expect(result.error?.summary).not.toContain('tok123');
+    expect(result.error?.diagnostics).not.toContain('/Users/somebody');
+    expect(result.error?.diagnostics).not.toContain('tok123');
+    expect(result.error?.diagnostics).toContain('[path]');
+    expect(result.error?.diagnostics).toContain('[redacted]');
   });
 
   it('does not send session output after the renderer is destroyed', async () => {

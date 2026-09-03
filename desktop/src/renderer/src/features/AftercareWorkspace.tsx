@@ -15,13 +15,13 @@ limitations under the License.
 */
 
 import type {
+  CanonicalError,
   CompletionPreflightResult,
   FeatureSnapshot,
   RelationshipChildView,
   RunDetailView,
 } from '../../../shared/ipc';
 import { ErrorSurface } from '../components/ErrorSurface';
-import { canonicalFromWizardError, type WizardError } from '../wizard/ipcError';
 import { formatDuration } from './featureView';
 import { AftercareShipped } from './AftercareShipped';
 import { AftercareSymbol } from './AftercareSymbol';
@@ -51,7 +51,7 @@ export interface AftercareWorkspaceProps {
 
 export interface AftercareActionError {
   action: string;
-  error: WizardError;
+  error: CanonicalError;
 }
 
 export function AftercareWorkspace({
@@ -84,7 +84,7 @@ export function AftercareWorkspace({
         <section className="aftercare-workspace__runway" aria-label="Follow-up actions">
           {actionError === null ? null : (
             <ErrorSurface
-              error={canonicalFromWizardError(actionError.error)}
+              error={actionError.error}
               variant="compact"
               caption={`${actionError.action} was rejected`}
             />

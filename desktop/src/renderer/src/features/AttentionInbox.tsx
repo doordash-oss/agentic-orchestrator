@@ -35,10 +35,12 @@ import {
   type AttentionActionResult,
   type AttentionItem,
   type AutoApproveScope,
+  type CanonicalError,
   type VerificationGateAction,
 } from '../../../shared/ipc';
 import { BellIcon, ChevronDownIcon } from '../components/icons';
 import { parseIpcError } from '../wizard/ipcError';
+import { ErrorSurface } from '../components/ErrorSurface';
 import { ToolbarPopover, ToolbarPopoverAnchor } from '../components/ToolbarPopover';
 import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import {
@@ -115,11 +117,16 @@ export function attentionActionNotice(
 }
 
 export function attentionErrorMessage(error: unknown): string {
-  // The catalog owns the text: a canonical rejection is named by its title,
-  // never the sentinel-prefixed wire message; anything else falls back to
-  // the recovered message.
-  const parsed = parseIpcError(error);
-  return parsed.canonical?.title ?? parsed.message;
+  return attentionError(error).title;
+}
+
+/**
+ * The canonical object behind a rejected inbox action: the catalog owns the
+ * text, and the notice slot renders the whole canonical through a compact
+ * ErrorSurface instead of a bare title line.
+ */
+export function attentionError(error: unknown): CanonicalError {
+  return parseIpcError(error);
 }
 
 /**
@@ -154,6 +161,9 @@ export function AttentionInbox({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
+  // The notice slot's failure branch: a canonical error rendered as a compact
+  // ErrorSurface. Success notices stay the plain status line.
+  const [noticeError, setNoticeError] = useState<CanonicalError | null>(null);
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
   const bell = useRef<HTMLButtonElement>(null);
   const itemButtons = useRef(new Map<string, HTMLButtonElement>());
@@ -194,6 +204,7 @@ export function AttentionInbox({
     if (expanded === null || busy !== null) return;
     if (items.some((item) => item.id === expanded)) return;
     const next = items[0];
+    setNoticeError(null);
     setNotice(ATTENTION_ALREADY_RESOLVED_NOTICE);
     setExpanded(next?.id ?? null);
     setPendingFocus(hasActiveModalDialog() ? null : (next?.id ?? null));
@@ -221,8 +232,10 @@ export function AttentionInbox({
     if (busy !== null) return;
     setBusy(id);
     setNotice('');
+    setNoticeError(null);
     try {
       const { latest, notice: nextNotice } = await runAttentionSubmit(action, refresh, options);
+      setNoticeError(null);
       setNotice(nextNotice);
       const stillPending = latest.some((item) => item.id === id);
       if (options.collapseOnSuccess !== false && !stillPending) {
@@ -233,15 +246,22 @@ export function AttentionInbox({
         setPendingFocus(next?.id ?? null);
       }
     } catch (error) {
-      setNotice(attentionErrorMessage(error));
+      setNotice('');
+      setNoticeError(attentionError(error));
     } finally {
       setBusy(null);
     }
   };
 
   const saveDraft = useAttentionDraftSaves({
-    notify: (result, options) => setNotice(attentionActionNotice(result, options)),
-    notifyError: (error) => setNotice(attentionErrorMessage(error)),
+    notify: (result, options) => {
+      setNoticeError(null);
+      setNotice(attentionActionNotice(result, options));
+    },
+    notifyError: (error) => {
+      setNotice('');
+      setNoticeError(attentionError(error));
+    },
     onAlreadyResolved: async () => {
       await refresh();
     },
@@ -280,9 +300,9 @@ export function AttentionInbox({
           </span>
         ) : null}
       </button>
-      {notice !== '' && !open ? (
+      {(notice !== '' || noticeError !== null) && !open ? (
         <p className="sr-only" role="status">
-          {notice}
+          {noticeError !== null ? noticeError.title : notice}
         </p>
       ) : null}
       <ToolbarPopover
@@ -298,7 +318,11 @@ export function AttentionInbox({
           <h2>Attention inbox</h2>
           <span className="attention-popover__count">{actionableCount} waiting</span>
         </header>
-        {notice !== '' ? (
+        {noticeError !== null ? (
+          // A rejected inbox action renders the whole canonical error; a
+          // success notice stays the plain polite status line.
+          <ErrorSurface error={noticeError} variant="compact" />
+        ) : notice !== '' ? (
           <p className="attention-status" role="status" aria-live="polite">
             {notice}
           </p>

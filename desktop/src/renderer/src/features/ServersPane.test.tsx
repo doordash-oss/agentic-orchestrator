@@ -25,7 +25,12 @@ import {
   type ServerListRow,
   type Settings,
 } from '../../../shared/ipc';
-import { installAgenticoMock, readySnapshot, type AgenticoMock } from '../test/agenticoMock';
+import {
+  installAgenticoMock,
+  ipcError,
+  readySnapshot,
+  type AgenticoMock,
+} from '../test/agenticoMock';
 import { SettingsPanel } from './SettingsPanel';
 
 afterEach(cleanup);
@@ -313,22 +318,22 @@ describe('SettingsPanel servers pane', () => {
     it.each([
       {
         code: 'E_CONNECTION_STRING_TOKEN',
-        lead: 'The connection string could not be parsed.',
+        lead: 'The connection string is missing its token',
         message: 'The connection string is missing its token. Copy the whole agentico:// string.',
       },
       {
         code: 'E_REMOTE_UNREACHABLE',
-        lead: 'The server could not be reached.',
+        lead: 'The server could not be reached',
         message: 'The server did not answer. Check the host and port, then paste it again.',
       },
       {
         code: 'E_REMOTE_INCOMPATIBLE',
-        lead: 'The server is not compatible with this app.',
+        lead: 'The server is not compatible with this app',
         message: 'The server runs an unsupported API version. Update the remote server.',
       },
       {
         code: 'E_REMOTE_AUTH_REJECTED',
-        lead: 'The token was rejected.',
+        lead: 'The token was rejected',
         message: 'The server rejected this token. Copy a fresh connection string.',
       },
     ])(
@@ -336,7 +341,7 @@ describe('SettingsPanel servers pane', () => {
       async ({ code, lead, message }) => {
         const user = userEvent.setup();
         const { mock } = installServersMock({});
-        mock.api.addRemoteServer.mockRejectedValue(new Error(`${code}: ${message}`));
+        mock.api.addRemoteServer.mockRejectedValue(ipcError(code, message, { title: lead }));
         render(<SettingsPanel pane="servers" />);
 
         const pane = await screen.findByRole('region', { name: 'Servers' });
@@ -345,7 +350,11 @@ describe('SettingsPanel servers pane', () => {
         await user.type(field, pasted);
         await user.click(within(pane).getByRole('button', { name: 'Probe and connect' }));
 
+        // The canonical rejection renders as one compact ErrorSurface with
+        // the code tag, catalog title, and summary.
         const alert = await within(pane).findByRole('alert');
+        expect(alert).toHaveClass('error-surface', 'error-surface--compact');
+        expect(within(alert).getByText(code)).toHaveClass('error-surface__code');
         expect(alert).toHaveTextContent(lead);
         expect(alert).toHaveTextContent(message);
         // The pasted string (which embeds the token) is out of the DOM.

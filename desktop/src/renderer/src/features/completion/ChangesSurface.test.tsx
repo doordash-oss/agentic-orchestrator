@@ -17,8 +17,9 @@ limitations under the License.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ChangesSurface } from './ChangesSurface';
-import { installAgenticoMock } from '../../test/agenticoMock';
+import { installAgenticoMock, ipcError } from '../../test/agenticoMock';
 import type {
+  CanonicalError,
   CompletionPreflightResult,
   ConnectionState,
   RepositoryDiffResult,
@@ -102,11 +103,23 @@ describe('ChangesSurface', () => {
     expect(screen.getByLabelText('Loading change manifest')).toBeVisible();
   });
 
-  it('shows an error with retry', () => {
+  it('renders a rejected preflight as a compact ErrorSurface whose Retry re-invokes it', () => {
     const onRetry = vi.fn();
-    render(<ChangesSurface {...props({ error: 'nope', preflight: null, onRetry })} />);
+    const error: CanonicalError = {
+      code: 'E_INTERNAL',
+      class: 'blocking',
+      title: 'Request failed',
+      summary: 'nope',
+    };
+    render(<ChangesSurface {...props({ error, preflight: null, onRetry })} />);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveClass('error-surface', 'error-surface--compact');
+    expect(alert).toHaveTextContent('nope');
+    expect(screen.getByText('E_INTERNAL')).toHaveClass('error-surface__code');
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(onRetry).toHaveBeenCalled();
+    // The legacy hand-rolled preflight error markup is gone.
+    expect(document.querySelector('.completion-workspace__error')).toBeNull();
   });
 
   it('renders the diff warning as a status surface the no-changes message yields to', async () => {
@@ -174,26 +187,30 @@ describe('ChangesSurface worktree affordance by locality', () => {
   it('surfaces an actionable inline error when the server path call fails', async () => {
     installAgenticoMock({ connection: READY_REMOTE });
     const revealPath = vi.fn(() =>
-      Promise.reject(new Error('not_found: The feature no longer exists on the server.')),
+      Promise.reject(ipcError('not_found', 'The feature no longer exists on the server.')),
     );
     render(<ChangesSurface {...props({ revealPath })} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Copy Path' }));
 
     const alert = await screen.findByRole('alert');
+    expect(alert).toHaveClass('error-surface', 'error-surface--compact');
     expect(alert).toHaveTextContent(/could not copy the worktree path/i);
     expect(alert).toHaveTextContent('The feature no longer exists on the server.');
   });
 
   it('surfaces an actionable inline error when the clipboard write fails', async () => {
     installAgenticoMock({ connection: READY_REMOTE });
-    const copyText = vi.fn(() => Promise.reject(new Error('denied')));
+    const copyText = vi.fn(() => Promise.resolve({ ok: false }));
     const revealPath = vi.fn(() => Promise.resolve({ ok: true, path: '/srv/wt' }));
     render(<ChangesSurface {...props({ revealPath, copyText })} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Copy Path' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/could not copy the worktree path/i);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveClass('error-surface', 'error-surface--compact');
+    expect(alert).toHaveTextContent(/could not copy the worktree path/i);
+    expect(alert).toHaveTextContent('The clipboard write failed.');
   });
 
   it('swaps the affordance with the connection kind without remounting', async () => {

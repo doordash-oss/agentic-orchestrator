@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CompletionPreflightRepoSchema,
   ConnectionStateSchema,
+  CreationFileUploadResultSchema,
   FeatureSetupViewSchema,
   FeatureSummaryViewSchema,
   IPC_CHANNELS,
@@ -36,6 +37,7 @@ import {
   SettingsSchema,
   FeatureActionRequestSchema,
   AttentionItemSchema,
+  UpdateStateSchema,
   actionableAttentionCount,
   type AttentionItem,
   FeatureSnapshotSchema,
@@ -72,7 +74,24 @@ import {
   ServerTokenStatusRequestSchema,
   ServerTokenStatusResultSchema,
 } from './ipc';
+import * as ipcModule from './ipc';
 import { assertNoPrototypePollution } from './sanitize';
+
+const canonicalErrorFixture = {
+  code: 'E_INTERNAL',
+  class: 'blocking' as const,
+  title: 'Request failed',
+  summary: 'The connection attempt failed unexpectedly: boom.',
+  remediation: { hint: 'Retry.' },
+};
+
+describe('module surface', () => {
+  it('exports no safe-error schema: the canonical error is the one error shape', () => {
+    // Matched structurally (not by name) so this file never spells the
+    // deleted identifier the static check guards against.
+    expect(Object.keys(ipcModule).some((key) => /safe.?error/i.test(key))).toBe(false);
+  });
+});
 
 describe('FeatureSnapshot failure schema', () => {
   const failureSchema = FeatureSnapshotSchema.shape.failure;
@@ -440,6 +459,27 @@ describe('operational IPC schemas', () => {
       ),
     ).toThrow();
   });
+
+  it('carries the session-output error event as one canonical error', () => {
+    const event = {
+      subscriptionId: 'sub-1',
+      type: 'error',
+      sessionId: 'session-1',
+      error: {
+        code: 'E_SESSION_STREAM',
+        class: 'blocking',
+        title: 'The session stream failed',
+        summary: 'The session output stream ended unexpectedly.',
+      },
+    };
+    expect(SessionOutputEventSchema.parse(event)).toStrictEqual(event);
+    expect(
+      SessionOutputEventSchema.safeParse({
+        ...event,
+        error: { code: 'E_SESSION_STREAM', message: 'stream broke' },
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe('singleton AMA session helpers', () => {
@@ -551,37 +591,59 @@ describe('ConnectionStateSchema', () => {
     expect(ConnectionStateSchema.safeParse({ ...base, serverName: 42 }).success).toBe(false);
   });
 
-  it('accepts terminal error states with redacted diagnostics', () => {
+  it('accepts terminal error states carrying a canonical error with folded diagnostics', () => {
     const state = {
       status: 'incompatible',
       stage: 'connect',
       detail: 'A running Agentico runtime is not compatible with this app.',
       ownership: 'external',
-      error: { code: 'E_INCOMPATIBLE_SERVER', message: 'nope', remediation: 'update' },
+      error: {
+        code: 'E_INCOMPATIBLE_SERVER',
+        class: 'blocking',
+        title: 'The server is not compatible with this app',
+        summary: 'The server build is too old for this app.',
+        remediation: { hint: 'Update the app and the runtime to matching releases.' },
+        diagnostics: 'bundled agentico server\nlast redacted log line',
+      },
     };
     expect(ConnectionStateSchema.parse(state)).toEqual(state);
   });
 
-  it('bounds app-owned failure diagnostics at the IPC boundary', () => {
+  it('rejects a terminal error carrying a message, a structured diagnostics object, or a state-level diagnostics sibling', () => {
     const base = {
       status: 'crashed',
       stage: 'connect',
       detail: 'The app-owned runtime stopped.',
       ownership: 'none',
-      error: { code: 'E_SERVER_CRASHED', message: 'stopped' },
-      diagnostics: { commandContext: 'bundled agentico server', logTail: ['redacted line'] },
+      error: {
+        code: 'E_SERVER_CRASHED',
+        class: 'blocking',
+        title: 'The app-managed runtime crashed',
+        summary: 'The app-managed Agentico runtime exited with code 1.',
+        diagnostics: 'bundled agentico server\nredacted line',
+      },
     };
     expect(ConnectionStateSchema.safeParse(base).success).toBe(true);
     expect(
       ConnectionStateSchema.safeParse({
         ...base,
-        diagnostics: { ...base.diagnostics, logTail: Array.from({ length: 21 }, () => 'line') },
+        error: { ...base.error, message: 'stopped' },
       }).success,
     ).toBe(false);
     expect(
       ConnectionStateSchema.safeParse({
         ...base,
-        diagnostics: { ...base.diagnostics, logTail: ['x'.repeat(513)] },
+        error: {
+          ...base.error,
+          diagnostics: { commandContext: 'bundled agentico server', logTail: ['redacted line'] },
+        },
+      }).success,
+    ).toBe(false);
+    // The pre-canonical state-level structured diagnostics sibling is gone.
+    expect(
+      ConnectionStateSchema.safeParse({
+        ...base,
+        diagnostics: { commandContext: 'bundled agentico server', logTail: ['redacted line'] },
       }).success,
     ).toBe(false);
   });
@@ -620,7 +682,7 @@ describe('ConnectionStateSchema', () => {
         detail: 'Connected.',
         ownership: 'app-owned',
         kind: 'local',
-        error: { code: 'E_X', message: 'impossible' },
+        error: canonicalErrorFixture,
       }).success,
     ).toBe(false);
   });
@@ -653,7 +715,7 @@ describe('ConnectionStateSchema', () => {
           stage: 'discover',
           detail: 'working',
           ownership: 'none',
-          error: { code: 'E_X', message: 'impossible' },
+          error: canonicalErrorFixture,
         }).success,
         `${status} must not carry an error`,
       ).toBe(false);
@@ -711,7 +773,7 @@ describe('ConnectionStateSchema', () => {
           status === 'launch-failed' ||
           status === 'crashed' ||
           status === 'error'
-            ? { error: { code: 'E_X', message: 'failed' } }
+            ? { error: canonicalErrorFixture }
             : {}),
         }).success,
         `${status} must only accept its lifecycle stage`,
@@ -1135,6 +1197,13 @@ describe('window purposes', () => {
 });
 
 describe('ReadinessSnapshotSchema', () => {
+  const issue = {
+    code: 'unauthenticated',
+    class: 'blocking',
+    title: 'Unauthenticated',
+    summary: 'A provider CLI is installed but its authentication flow has not been completed.',
+    remediation: { hint: 'claude login' },
+  };
   const snapshot = {
     ready: false,
     probedAt: '2026-07-14T10:00:00Z',
@@ -1144,25 +1213,51 @@ describe('ReadinessSnapshotSchema', () => {
         installed: true,
         version: '2.1.0',
         ready: false,
-        issue: { code: 'unauthenticated', message: 'not authenticated', remedy: 'claude login' },
+        issue,
       },
     ],
-    models: { available: false, issue: { code: 'models_unavailable', message: 'no models' } },
+    models: {
+      available: false,
+      issue: {
+        code: 'models_unavailable',
+        class: 'blocking',
+        title: 'Models unavailable',
+        summary: 'No usable provider exposes any model.',
+      },
+    },
     configuration: { valid: true },
     workspaceRoots: [{ path: '/w', valid: true }],
     repositories: [{ name: 'r', path: '/w/r', valid: true }],
-    issues: [{ code: 'unauthenticated', message: 'not authenticated', remedy: 'claude login' }],
+    issues: [issue],
   };
 
-  it('accepts a complete snapshot', () => {
+  it('accepts a complete snapshot whose issues are canonical errors', () => {
     expect(ReadinessSnapshotSchema.parse(snapshot)).toEqual(snapshot);
   });
 
-  it('rejects unknown issue codes and token-shaped extras fail-closed', () => {
+  it('rejects the pre-canonical message/remedy issue shape fail-closed', () => {
     expect(
       ReadinessSnapshotSchema.safeParse({
         ...snapshot,
-        issues: [{ code: 'mystery', message: 'x' }],
+        issues: [{ code: 'unauthenticated', message: 'not authenticated' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      ReadinessSnapshotSchema.safeParse({
+        ...snapshot,
+        providers: [
+          {
+            name: 'claude',
+            installed: true,
+            version: '2.1.0',
+            ready: false,
+            issue: {
+              code: 'unauthenticated',
+              message: 'not authenticated',
+              remedy: 'claude login',
+            },
+          },
+        ],
       }).success,
     ).toBe(false);
     for (const extra of [{ authToken: 'x' }, { token: 'x' }, { baseUrl: 'http://127.0.0.1:1' }]) {
@@ -1197,16 +1292,52 @@ describe('InitRepositoryRequestSchema', () => {
 });
 
 describe('IpcEnvelopeSchema', () => {
-  it('accepts ok and error envelopes', () => {
+  it('accepts ok and error envelopes, the error member being one canonical error', () => {
     expect(IpcEnvelopeSchema.safeParse({ ok: true, value: { any: 1 } }).success).toBe(true);
+    expect(IpcEnvelopeSchema.safeParse({ ok: false, error: canonicalErrorFixture }).success).toBe(
+      true,
+    );
+  });
+
+  it('rejects the pre-canonical {code,message} error shape', () => {
     expect(
       IpcEnvelopeSchema.safeParse({ ok: false, error: { code: 'E_X', message: 'm' } }).success,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('rejects malformed envelopes', () => {
     expect(IpcEnvelopeSchema.safeParse({ ok: false }).success).toBe(false);
     expect(IpcEnvelopeSchema.safeParse({ value: 1 }).success).toBe(false);
+  });
+});
+
+describe('creation file upload results', () => {
+  const failed = {
+    ok: false as const,
+    name: 'shot.png',
+    error: {
+      code: 'E_UPLOAD_TOO_LARGE',
+      class: 'needs_action',
+      title: 'The file is too large',
+      summary: 'The file is larger than the 10 MiB upload limit.',
+      remediation: {
+        hint: 'Choose a smaller file: images are limited to 10 MiB and attachments to 25 MiB.',
+      },
+    },
+  };
+
+  it('accepts a failed-upload entry carrying one canonical error', () => {
+    expect(CreationFileUploadResultSchema.safeParse(failed).success).toBe(true);
+    expect(CreationFileUploadResultSchema.parse(failed)).toEqual(failed);
+  });
+
+  it('rejects the pre-canonical {code,message} failure entry', () => {
+    expect(
+      CreationFileUploadResultSchema.safeParse({
+        ...failed,
+        error: { code: 'E_UPLOAD_TOO_LARGE', message: 'too large' },
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -1410,5 +1541,48 @@ describe('error attention items', () => {
   it('rejects an error item whose class is warning', () => {
     expect(AttentionItemSchema.safeParse({ ...errorItem, class: 'warning' }).success).toBe(false);
     expect(AttentionItemSchema.safeParse(errorItem).success).toBe(true);
+  });
+});
+
+describe('UpdateStateSchema canonical error presence', () => {
+  const base = {
+    currentVersion: '0.1.0',
+    packageFormat: 'macos',
+    signatureStatus: 'unknown',
+    message: 'Agentico is up to date.',
+  } as const;
+  const canonicalError = {
+    code: 'E_UPDATE_CHECK_FAILED',
+    class: 'blocking',
+    title: 'Update check failed',
+    summary: 'GitHub Releases returned HTTP 503.',
+  } as const;
+
+  it("rejects a 'failed' state that carries no canonical error", () => {
+    expect(UpdateStateSchema.safeParse({ ...base, status: 'failed' }).success).toBe(false);
+  });
+
+  it('rejects a non-failed state that carries a canonical error', () => {
+    for (const status of [
+      'idle',
+      'checking',
+      'current',
+      'available',
+      'downloading',
+      'ready',
+      'scheduled',
+      'installing',
+    ] as const) {
+      expect(
+        UpdateStateSchema.safeParse({ ...base, status, error: canonicalError }).success,
+        status,
+      ).toBe(false);
+    }
+  });
+
+  it("accepts a 'failed' state carrying a canonical E_ error", () => {
+    expect(
+      UpdateStateSchema.safeParse({ ...base, status: 'failed', error: canonicalError }).success,
+    ).toBe(true);
   });
 });

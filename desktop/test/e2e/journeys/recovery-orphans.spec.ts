@@ -133,9 +133,12 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     await expect(recoveryQueue).toBeVisible({ timeout: 30_000 });
     transcript.step('recovery workspace auto-scanned and rendered the queue');
 
-    const attentionBanner = recoveryPanel.locator('.recovery-attention');
-    await expect(attentionBanner).toBeVisible({ timeout: 5_000 });
-    transcript.step('recovery-priority attention banner visible');
+    // The priority banner was folded into the header summary: the per-item
+    // needs-action cards own the condition itself.
+    const scanSummary = recoveryPanel.locator('.recovery-workspace__summary');
+    await expect(scanSummary).toBeVisible({ timeout: 5_000 });
+    await expect(scanSummary).toContainText(/live/);
+    transcript.step('recovery workspace reports the risk-first scan summary');
 
     const items = recoveryQueue.locator('.recovery-workspace__item');
     const itemCount = await items.count();

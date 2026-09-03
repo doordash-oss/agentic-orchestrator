@@ -18,7 +18,7 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionSummary } from '../../../shared/ipc';
-import { installAgenticoMock } from '../test/agenticoMock';
+import { installAgenticoMock, ipcError } from '../test/agenticoMock';
 import { CurrentRunInspection } from './CurrentRunInspection';
 
 afterEach(() => {
@@ -1005,7 +1005,12 @@ describe('CurrentRunInspection', () => {
         subscriptionId: 'subscription-1',
         type: 'error',
         sessionId: 'craft',
-        error: { code: 'E_SESSION_STREAM', message: 'stream interrupted' },
+        error: {
+          code: 'E_SESSION_STREAM',
+          class: 'blocking',
+          title: 'The session stream failed',
+          summary: 'The session output stream ended unexpectedly.',
+        },
       });
       mock.emitSessionOutput({
         subscriptionId: 'subscription-1',
@@ -1230,5 +1235,114 @@ describe('CurrentRunInspection', () => {
 
     expect(await screen.findByLabelText('Review gate')).toBeVisible();
     expect(screen.getByLabelText('Review axes')).toHaveTextContent('Craft✓');
+  });
+});
+
+describe('CurrentRunInspection error surfaces', () => {
+  const FEATURE_ID = 'abcd1234ef567890';
+
+  /** The healthy base every rejection test overrides exactly one leg of. */
+  function resolveBase(mock: ReturnType<typeof installAgenticoMock>) {
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: FEATURE_ID,
+      activity: 'Running implementation',
+      contextPercentage: -1,
+      totalSeconds: 0,
+      totalUsd: 0,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+    mock.api.listRunLogs.mockResolvedValue({ logs: [] });
+  }
+
+  function renderInspection(mode: 'live' | 'files' = 'files', shouldStream = true) {
+    return render(
+      <CurrentRunInspection
+        featureId={FEATURE_ID}
+        runNumber={8}
+        currentPhase="Implement"
+        reviewGate={REVIEW_GATE}
+        mode={mode}
+        shouldStream={shouldStream}
+      />,
+    );
+  }
+
+  it('renders one compact ErrorSurface with Refresh when the files fetch rejects', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock();
+    resolveBase(mock);
+    mock.api.listRunArtifacts.mockRejectedValueOnce(
+      ipcError('E_INTERNAL', 'artifacts unavailable'),
+    );
+    renderInspection();
+
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+    await user.click(within(surface).getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(mock.api.listRunArtifacts).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+
+  it('renders one compact ErrorSurface with Refresh when the preview fetch rejects', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock();
+    resolveBase(mock);
+    mock.api.getLivePreview.mockRejectedValueOnce(ipcError('E_INTERNAL', 'preview unavailable'));
+    // shouldStream off so the metrics poll cannot add preview calls of its own.
+    renderInspection('live', false);
+
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+    await user.click(within(surface).getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(mock.api.getLivePreview).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+
+  it('renders one compact ErrorSurface with Refresh when a file open rejects', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock();
+    resolveBase(mock);
+    mock.api.listRunArtifacts.mockResolvedValue({
+      artifacts: [{ id: 'design', runNumber: 8, phase: 'Design', contentAvailable: true }],
+    });
+    mock.api.getRunArtifactContent
+      .mockRejectedValueOnce(ipcError('E_INTERNAL', 'artifact content unavailable'))
+      .mockResolvedValue({
+        id: 'design',
+        offset: 0,
+        limit: 64 * 1024,
+        size: 12,
+        text: 'recovered artifact',
+        truncated: false,
+      });
+    renderInspection();
+
+    await user.click(await screen.findByRole('button', { name: 'Open artifact design' }));
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+    await user.click(within(surface).getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(mock.api.getRunArtifactContent).toHaveBeenCalledTimes(2));
+    // The retried open succeeds and floats the recovered content.
+    expect(await screen.findByRole('dialog', { name: 'Run artifact design' })).toBeVisible();
+  });
+
+  it('renders one compact ErrorSurface with Refresh when the log-list refresh rejects', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock();
+    resolveBase(mock);
+    mock.api.listRunLogs.mockRejectedValueOnce(ipcError('E_INTERNAL', 'logs unavailable'));
+    renderInspection();
+
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+    await user.click(within(surface).getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(mock.api.listRunLogs).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
   });
 });

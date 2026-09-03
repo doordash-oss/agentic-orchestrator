@@ -15,36 +15,24 @@ limitations under the License.
 */
 
 /**
- * Parses errors thrown by the preload IPC bridge into the renderer's legacy
- * error shape, plus the canonical object when the main process carried one.
+ * Parses errors thrown by the preload IPC bridge into the one canonical
+ * error shape.
  *
- * Preload rethrows with a `CODE: text` message and attaches `code`,
- * `remediation`, and — for server-emitted canonical errors — the full
- * `canonical` object. Legacy consumers keep reading `code`/`message`/
- * `remediation`; migrated surfaces read `canonical` directly.
+ * Preload rethrows every envelope error as a sentinel-prefixed canonical
+ * message and attaches `code`, `remediation`, and the full `canonical`
+ * object (attachments survive in the same world — tests and mocks — but not
+ * across the context bridge, so the sentinel message is the authoritative
+ * channel). An unparseable rejection degrades to the catalog's
+ * E_IPC_UNREACHABLE canonical.
  */
-import { CANONICAL_ERROR_MESSAGE_PREFIX } from '../../../shared/errors';
+import { CANONICAL_ERROR_MESSAGE_PREFIX, buildCanonicalError } from '../../../shared/errors';
 import type { CanonicalError } from '../../../shared/api/parse';
 
-export interface WizardError {
-  code: string;
-  message: string;
-  remediation?: string;
-  /** The catalog-rendered server error, when the rejection was canonical. */
-  canonical?: CanonicalError;
-}
-
-export function parseIpcError(err: unknown): WizardError {
+export function parseIpcError(err: unknown): CanonicalError {
   const raw = err instanceof Error ? err.message : '';
   const attached =
     err instanceof Error
       ? (err as Error & { code?: unknown; remediation?: unknown; canonical?: unknown })
-      : undefined;
-  const attachedCode =
-    typeof attached?.code === 'string' && attached.code !== '' ? attached.code : undefined;
-  const remediation =
-    typeof attached?.remediation === 'string' && attached.remediation !== ''
-      ? attached.remediation
       : undefined;
   // Custom Error properties do not survive the context bridge, so preload
   // carries the canonical object in the message behind a sentinel prefix.
@@ -54,40 +42,9 @@ export function parseIpcError(err: unknown): WizardError {
     ? attached.canonical
     : (carried ?? undefined);
   if (canonical !== undefined) {
-    // The catalog owns the text: message is the summary and the remediation
-    // is the catalog hint.
-    return {
-      code: canonical.code,
-      message: canonical.summary,
-      ...(canonical.remediation?.hint === undefined
-        ? {}
-        : { remediation: canonical.remediation.hint }),
-      canonical,
-    };
+    return canonical;
   }
-  const attachedMessage =
-    attachedCode === undefined
-      ? undefined
-      : raw
-          .replace(new RegExp(`^${attachedCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:\\s*`), '')
-          .replace(
-            remediation === undefined
-              ? /$^/
-              : new RegExp(`\\s*${remediation.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`),
-            '',
-          );
-  const match = /^([A-Za-z0-9_]+):\s*([\s\S]*)$/.exec(raw);
-  if (attachedCode !== undefined || (match !== null && match[2] !== undefined && match[2] !== '')) {
-    return {
-      code: attachedCode ?? match?.[1] ?? 'E_IPC',
-      message: attachedMessage ?? match?.[2] ?? raw,
-      ...(remediation === undefined ? {} : { remediation }),
-    };
-  }
-  return {
-    code: 'E_IPC',
-    message: raw === '' ? 'The application core did not respond.' : raw,
-  };
+  return buildCanonicalError('E_IPC_UNREACHABLE');
 }
 
 function isCanonicalError(value: unknown): value is CanonicalError {
@@ -112,20 +69,4 @@ function parseCanonicalMessage(raw: string): CanonicalError | null {
   } catch {
     return null;
   }
-}
-
-/**
- * Adapts a parsed IPC error to the canonical shape for ErrorSurface. A
- * canonical server error passes through; a legacy transport error (E_*
- * codes) maps to a blocking error whose summary is the safe message.
- */
-export function canonicalFromWizardError(error: WizardError): CanonicalError {
-  if (error.canonical !== undefined) return error.canonical;
-  return {
-    code: error.code,
-    class: 'blocking',
-    title: 'Request failed',
-    summary: error.message,
-    ...(error.remediation === undefined ? {} : { remediation: { hint: error.remediation } }),
-  };
 }

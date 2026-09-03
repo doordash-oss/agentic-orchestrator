@@ -18,7 +18,7 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RelationshipChildView } from '../../../../shared/ipc';
-import { canonicalWarning } from '../../test/agenticoMock';
+import { canonicalWarning, ipcError } from '../../test/agenticoMock';
 import { ExplainChatProvider } from '../../explainChat';
 import { RefactorHistory } from './RefactorHistory';
 
@@ -91,19 +91,35 @@ describe('RefactorHistory preserved diff', () => {
     expect(await screen.findByText('3 files changed')).toBeInTheDocument();
   });
 
-  it('reports a failed load instead of showing an empty diff', async () => {
+  it('reports a failed load as a compact ErrorSurface whose Retry re-invokes it', async () => {
     const user = userEvent.setup();
-    const onLoadFullHistory = vi.fn().mockRejectedValue(new Error('offline'));
+    const onLoadFullHistory = vi
+      .fn()
+      .mockRejectedValueOnce(
+        ipcError('E_IPC_UNREACHABLE', 'The application core did not respond.', {
+          title: 'Application core unreachable',
+        }),
+      )
+      .mockResolvedValueOnce([
+        historyEntry({ diffSummary: '3 files changed', hasDiffSummary: true }),
+      ]);
     render(
       <RefactorHistory
         entries={[historyEntry({ hasDiffSummary: true })]}
         onLoadFullHistory={onLoadFullHistory}
       />,
     );
+    await user.click(screen.getByText('Pass history'));
     await user.click(screen.getByRole('button', { name: 'Load diff' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Could not load the preserved history.',
-    );
+
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_IPC_UNREACHABLE')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('The application core did not respond.')).toBeVisible();
+
+    await user.click(within(surface).getByRole('button', { name: 'Retry' }));
+    expect(onLoadFullHistory).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText('3 files changed')).toBeInTheDocument();
   });
 
   it('offers no diff affordance when no body was preserved', () => {
@@ -214,6 +230,10 @@ describe('RefactorHistory truncated history', () => {
     render(<RefactorHistory entries={entries} total={12} truncated />);
     expect(screen.getByText('2 of 12')).toBeInTheDocument();
     expect(screen.getByText(/Showing the 2 most recent of 12 settled passes/)).toBeInTheDocument();
+    // The shortfall notice is informational, not an error: no alert role and
+    // no error surface render for it.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(document.querySelector('.error-surface')).toBeNull();
   });
 
   it('replaces the bounded list with the full history on demand', async () => {

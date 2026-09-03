@@ -229,13 +229,9 @@ describe('AftercareWorkspace runway', () => {
         action: 'Rebase',
         error: {
           code: 'rebase_already_up_to_date',
-          message: 'Every repository is already up to date with its target branch.',
-          canonical: {
-            code: 'rebase_already_up_to_date',
-            class: 'warning',
-            title: 'Already up to date',
-            summary: 'Every repository is already up to date with its target branch.',
-          },
+          class: 'warning',
+          title: 'Already up to date',
+          summary: 'Every repository is already up to date with its target branch.',
         },
       },
     });

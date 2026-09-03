@@ -31,12 +31,14 @@ import type {
 import { WorkspaceShell } from '../features/WorkspaceShell';
 import type { AttentionDrafts } from '../features/AttentionInbox';
 import { deriveWizardState } from '../wizard/deriveWizardState';
-import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { parseIpcError } from '../wizard/ipcError';
+import type { CanonicalError } from '../../../shared/ipc';
 import { SetupWizard } from './wizard/SetupWizard';
+import { ErrorSurface } from './ErrorSurface';
 
 type GateState =
   | { phase: 'loading' }
-  | { phase: 'error'; error: WizardError }
+  | { phase: 'error'; error: CanonicalError }
   | { phase: 'loaded'; snapshot: ReadinessSnapshot };
 
 export function ReadinessGate({
@@ -109,18 +111,14 @@ export function ReadinessGate({
   if (state.phase === 'error') {
     return (
       <section className="shell-card setup-gate" aria-label="Runtime readiness">
-        <div className="shell-card__error">
-          <div className="shell-card__error-head">
-            <span className="shell-card__error-code">{state.error.code}</span>
-          </div>
-          <p className="shell-card__error-message">{state.error.message}</p>
-          <p className="shell-card__error-remediation">
-            The readiness check could not be completed. Retry once the runtime is reachable.
-          </p>
-          <button type="button" className="shell-card__retry" onClick={load}>
-            Try again
-          </button>
-        </div>
+        {/* The parsed canonical error owns the presentation — code, title,
+         * summary, remediation — so no hand-written remediation sentence
+         * rides along; Retry simply re-runs the fetch. */}
+        <ErrorSurface
+          error={state.error}
+          variant="compact"
+          localAction={{ label: 'Retry', onAction: load }}
+        />
       </section>
     );
   }

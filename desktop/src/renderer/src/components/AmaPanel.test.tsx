@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CANONICAL_ERROR_MESSAGE_PREFIX } from '../../../shared/errors';
@@ -25,7 +25,7 @@ import {
   type ConnectionState,
   type Settings,
 } from '../../../shared/ipc';
-import { installAgenticoMock } from '../test/agenticoMock';
+import { installAgenticoMock, ipcError } from '../test/agenticoMock';
 import { AmaPanel } from './AmaPanel';
 
 afterEach(cleanup);
@@ -144,9 +144,9 @@ describe('AmaPanel first open', () => {
   it('shows only the empty state when no chat session exists yet', async () => {
     const mock = installAgenticoMock();
     mock.api.getSessionTranscript.mockRejectedValue(
-      new Error('not_found: session not found The session no longer exists.'),
+      ipcError('not_found', 'session not found The session no longer exists.'),
     );
-    mock.api.getSession.mockRejectedValue(new Error('not_found: session not found'));
+    mock.api.getSession.mockRejectedValue(ipcError('not_found', 'session not found'));
     renderPanel();
     await waitFor(() => expect(mock.api.getSettings).toHaveBeenCalled());
 
@@ -567,7 +567,12 @@ describe('AmaPanel on a remote server', () => {
         {
           ok: false,
           name: 'clipboard-image.png',
-          error: { code: 'request_too_large', message: 'File exceeds limit.' },
+          error: {
+            code: 'request_too_large',
+            class: 'needs_action',
+            title: 'Request too large',
+            summary: 'File exceeds limit.',
+          },
         },
       ],
     });
@@ -845,12 +850,38 @@ describe('AmaPanel routed drafts', () => {
     );
 
     expect(await screen.findByText('Referenced error no longer present')).toBeVisible();
+    // The rejected send renders as a compact warning-class ErrorSurface with
+    // the catalog title; no plain notice line carries the failure.
+    const surface = screen
+      .getByText('Referenced error no longer present')
+      .closest('.error-surface') as HTMLElement;
+    expect(surface).toHaveClass(
+      'error-surface',
+      'error-surface--compact',
+      'error-surface--warning',
+    );
+    expect(document.querySelector('.ama-panel__notice')).toBeNull();
     await waitFor(() => expect(screen.queryByText('Explain the failure')).not.toBeInTheDocument());
     expect(input).toHaveValue('Keep mine');
     expect(mock.api.startChat).toHaveBeenCalledWith({
       message: 'Explain the failure',
       context: reference,
     });
+  });
+});
+
+describe('AmaPanel transcript errors', () => {
+  it('renders a rejected transcript load as a compact ErrorSurface', async () => {
+    const mock = installAgenticoMock({ settings: settingsWithAma({ drawer: 'expanded' }) });
+    mock.api.getSessionTranscript.mockRejectedValue(
+      ipcError('E_INTERNAL', 'The transcript could not be read.'),
+    );
+    renderPanel();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(alert).getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+    expect(within(alert).getByText('The transcript could not be read.')).toBeVisible();
   });
 });
 

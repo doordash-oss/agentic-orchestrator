@@ -51,23 +51,37 @@ func TestCatalogActionReferencesAreValidFeatureActions(t *testing.T) {
 	}
 }
 
-// TestCatalogCoversGeneratedReadinessIssueCodes pins every generated
-// readiness issue code to a catalog entry so not_ready summaries can render
-// issue titles from authored catalog text.
-func TestCatalogCoversGeneratedReadinessIssueCodes(t *testing.T) {
+// readinessIssueCodes are the codes the readiness projection renders as
+// canonical errors on the wire. The generated readiness-issue enum is gone
+// (the codes are catalog codes), so this set pins what the projection may
+// emit.
+var readinessIssueCodes = []errcat.Code{
+	errcat.InvalidConfiguration,
+	errcat.InvalidRepository,
+	errcat.InvalidWorkspaceRoot,
+	errcat.MissingExecutable,
+	errcat.ModelsUnavailable,
+	errcat.Unauthenticated,
+	errcat.UnsupportedVersion,
+}
+
+// TestCatalogCoversReadinessIssueCodes pins every readiness issue code to a
+// complete, blocking catalog entry so every projected issue renders authored
+// title, summary, and remediation text.
+func TestCatalogCoversReadinessIssueCodes(t *testing.T) {
 	t.Parallel()
 
-	for _, code := range []ReadinessIssueCode{
-		InvalidConfiguration,
-		InvalidRepository,
-		InvalidWorkspaceRoot,
-		MissingExecutable,
-		ModelsUnavailable,
-		Unauthenticated,
-		UnsupportedVersion,
-	} {
-		if _, ok := errcat.Lookup(errcat.Code(code)); !ok {
+	for _, code := range readinessIssueCodes {
+		entry, ok := errcat.Lookup(code)
+		if !ok {
 			t.Errorf("readiness issue code %q has no catalog entry", code)
+			continue
+		}
+		if entry.Class != errcat.ClassBlocking {
+			t.Errorf("readiness issue code %q class is %q; want blocking", code, entry.Class)
+		}
+		if entry.Title == "" || entry.Summary == "" {
+			t.Errorf("readiness issue code %q must carry authored title and summary", code)
 		}
 	}
 }

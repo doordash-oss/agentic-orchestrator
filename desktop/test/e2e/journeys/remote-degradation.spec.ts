@@ -422,7 +422,9 @@ test('remote degradation: gated affordances, copy-path completion, server-valida
     await expect(settings.getByRole('button', { name: 'Add workspace root' })).toHaveCount(0);
     await rootField.fill('/definitely/not/a/real/root');
     await settings.getByRole('button', { name: 'Add root' }).click();
-    await expect(settings.getByRole('alert')).toContainText('/definitely/not/a/real/root', {
+    // The add-root rejection is a FieldError beside the input (no live-region
+    // role), naming the rejected path.
+    await expect(settings.locator('.field-error')).toContainText('/definitely/not/a/real/root', {
       timeout: 30_000,
     });
     await evidenceShot(handle, 'remote-degradation-root-rejected', settings);

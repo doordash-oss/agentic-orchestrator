@@ -57,7 +57,6 @@ export class LocalDraftStore {
       {
         fileName: FILE_NAME,
         maxDrafts: 20,
-        errorCodePrefix: 'LOCAL_DRAFT',
         maxBytes: MAX_LOCAL_REVIEW_DRAFT_BYTES,
         saveRequestSchema: LocalReviewDraftSaveRequestSchema,
         storeSchema: LocalReviewDraftStoreSchema,

@@ -213,7 +213,7 @@ test('configuration, workspace, and restart journey against the packaged app', a
     const firstDegraded = degradedProviders.first();
     await expect(firstDegraded).toContainText('Not ready');
     const degradedCause = await settings
-      .locator('.settings-panel__provider.is-degraded .settings-panel__provider-cause')
+      .locator('.settings-panel__provider.is-degraded .error-surface')
       .first()
       .textContent();
     expect(degradedCause).toBeTruthy();

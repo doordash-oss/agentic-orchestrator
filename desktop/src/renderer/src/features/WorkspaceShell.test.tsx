@@ -27,7 +27,12 @@ import {
   type Settings,
   type UpdateState,
 } from '../../../shared/ipc';
-import { canonicalWarning, featureSnapshot, installAgenticoMock } from '../test/agenticoMock';
+import {
+  canonicalWarning,
+  featureSnapshot,
+  installAgenticoMock,
+  ipcError,
+} from '../test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from '../test/setup';
 import { WorkspaceShell } from './WorkspaceShell';
 
@@ -908,7 +913,7 @@ describe('WorkspaceShell sidebar', () => {
 });
 
 describe('WorkspaceShell Overview loading', () => {
-  it('renders every other row when one feature detail rejects', async () => {
+  it('flags both degraded rows with the canonical title and one captioned surface whose Retry refetches only the failed ids', async () => {
     const failing = featureSnapshot({
       id: FEATURE_ID,
       name: 'Oversized feature',
@@ -916,36 +921,80 @@ describe('WorkspaceShell Overview loading', () => {
       errors: [blockingRunError(FEATURE_ID)],
       actions: [],
     });
-    const healthy = featureSnapshot({
+    const second = featureSnapshot({
       id: SECOND_FEATURE_ID,
-      name: 'Healthy feature',
+      name: 'Second oversized feature',
       status: 'Implementing',
+      actions: [],
+    });
+    const healthy = featureSnapshot({
+      id: 'ffff000011112222',
+      name: 'Healthy feature',
+      status: 'Done',
       setup: { status: 'done', attempt: 1, tasks: [] },
       actions: [],
     });
-    const mock = installAgenticoMock({ features: [failing, healthy].map(summaryOf) });
-    mock.api.getFeature.mockImplementation((featureId: string) =>
-      featureId === FEATURE_ID
-        ? Promise.reject(new Error('E_PAYLOAD_TOO_LARGE: payload rejected'))
-        : Promise.resolve(healthy),
-    );
+    const snapshots = [failing, second, healthy];
+    // Only the first detail fetch per failed id rejects; the retry succeeds.
+    const rejected = new Set<string>();
+    const mock = installAgenticoMock({ features: snapshots.map(summaryOf) });
+    mock.api.getFeature.mockImplementation((featureId: string) => {
+      if (
+        (featureId === FEATURE_ID || featureId === SECOND_FEATURE_ID) &&
+        !rejected.has(featureId)
+      ) {
+        rejected.add(featureId);
+        return Promise.reject(
+          ipcError('E_PAYLOAD_TOO_LARGE', 'payload rejected', { title: 'Payload too large' }),
+        );
+      }
+      return Promise.resolve(snapshots.find((snapshot) => snapshot.id === featureId) ?? healthy);
+    });
     render(<WorkspaceShell />);
 
     const lanes = await screen.findByRole('region', { name: 'Existing features' });
-    // The rest of Overview is intact: both rows, both lanes, no fatal surface.
+    // The rest of Overview is intact: all three rows render, no fatal surface.
     expect(within(lanes).getByText('Healthy feature')).toBeInTheDocument();
     expect(within(lanes).getByText('Oversized feature')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
-    // Only the unusable row is flagged.
+    expect(within(lanes).getByText('Second oversized feature')).toBeInTheDocument();
+    // Both degraded rows carry the canonical title as their state text.
     const failingRow = within(lanes).getByText('Oversized feature').closest('li')!;
-    await waitFor(() =>
-      expect(within(failingRow).getByText('Details unavailable')).toBeInTheDocument(),
-    );
+    const secondRow = within(lanes).getByText('Second oversized feature').closest('li')!;
+    await waitFor(() => {
+      expect(within(failingRow).getByText('Payload too large')).toBeInTheDocument();
+      expect(within(secondRow).getByText('Payload too large')).toBeInTheDocument();
+    });
     const healthyRow = within(lanes).getByText('Healthy feature').closest('li')!;
-    expect(within(healthyRow).queryByText('Details unavailable')).not.toBeInTheDocument();
+    expect(within(healthyRow).queryByText('Payload too large')).not.toBeInTheDocument();
+
+    // Exactly one compact degradation surface, captioned for both features,
+    // rendering the first failure's canonical error.
+    const caption = await screen.findByText('Details for 2 features could not be loaded');
+    const surface = caption.closest('.error-surface') as HTMLElement;
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveClass('error-surface--compact');
+    expect(surface.querySelector('.error-surface__code')).toHaveTextContent('E_PAYLOAD_TOO_LARGE');
+    expect(lanes.querySelectorAll('.error-surface')).toHaveLength(1);
+
+    // Retry refetches ONLY the two failed features' details.
+    const callsBefore = mock.api.getFeature.mock.calls.length;
+    await userEvent.click(within(surface).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mock.api.getFeature.mock.calls.length).toBe(callsBefore + 2));
+    const retriedIds = mock.api.getFeature.mock.calls
+      .slice(callsBefore)
+      .map((call) => call[0])
+      .sort();
+    expect(retriedIds).toEqual([FEATURE_ID, SECOND_FEATURE_ID].sort());
+    // The succeeded retry clears the degradation card and both flags.
+    await waitFor(() => {
+      expect(
+        screen.queryByText('Details for 2 features could not be loaded'),
+      ).not.toBeInTheDocument();
+      expect(within(failingRow).queryByText('Payload too large')).not.toBeInTheDocument();
+    });
   });
 
-  it('keeps the fatal error surface and its retry when the list fetch fails', async () => {
+  it('renders a compact ErrorSurface with the parsed code and a Retry that reloads the list', async () => {
     const feature = featureSnapshot({
       id: FEATURE_ID,
       name: 'Search revamp',
@@ -955,18 +1004,21 @@ describe('WorkspaceShell Overview loading', () => {
     });
     const mock = installAgenticoMock({ features: [summaryOf(feature)] });
     mock.api.listFeatures.mockRejectedValueOnce(
-      new Error('E_PAYLOAD_TOO_LARGE: payload rejected as too large'),
+      ipcError('E_PAYLOAD_TOO_LARGE', 'payload rejected as too large', {
+        title: 'Payload too large',
+      }),
     );
     render(<WorkspaceShell />);
 
-    expect(
-      await screen.findByText('E_PAYLOAD_TOO_LARGE: payload rejected as too large'),
-    ).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_PAYLOAD_TOO_LARGE')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Payload too large')).toBeVisible();
+    await userEvent.click(within(surface).getByRole('button', { name: 'Retry' }));
 
     const lanes = await screen.findByRole('region', { name: 'Existing features' });
     expect(within(lanes).getByText('Search revamp')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
 
   it('fetches detail only for the rows that need it, never one per feature', async () => {
@@ -999,6 +1051,8 @@ describe('WorkspaceShell Overview loading', () => {
     expect(within(lanes).getByText('Finished feature 0')).toBeInTheDocument();
     await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID));
     expect(mock.api.getFeature).toHaveBeenCalledTimes(1);
+    // A lane with no failures renders no degradation card.
+    expect(lanes.querySelectorAll('.error-surface')).toHaveLength(0);
   });
 });
 
@@ -1097,7 +1151,12 @@ describe('WorkspaceShell toolbar', () => {
         stage: 'connect',
         detail: 'The runtime is unreachable.',
         ownership: 'none',
-        error: { code: 'E_CONNECT', message: 'The runtime is unreachable.' },
+        error: {
+          code: 'E_GATEWAY',
+          class: 'blocking',
+          title: 'Connection failed',
+          summary: 'The runtime is unreachable.',
+        },
       },
     });
     render(<WorkspaceShell />);

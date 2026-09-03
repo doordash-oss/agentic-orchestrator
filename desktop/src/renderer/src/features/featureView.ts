@@ -380,15 +380,15 @@ export type CreationErrorField = 'name' | 'repos' | 'form';
 /** Routes a structured server rejection to the control that owns it. */
 export function fieldForCreationError(error: {
   code: string;
-  message: string;
+  summary: string;
 }): CreationErrorField {
   if (error.code === 'not_ready') {
     return 'form';
   }
-  if (error.code === 'bad_request' && /\bname\b/i.test(error.message)) {
+  if (error.code === 'bad_request' && /\bname\b/i.test(error.summary)) {
     return 'name';
   }
-  if (/\brepo(sitor(y|ies))?s?\b/i.test(error.message)) {
+  if (/\brepo(sitor(y|ies))?s?\b/i.test(error.summary)) {
     return 'repos';
   }
   return 'form';

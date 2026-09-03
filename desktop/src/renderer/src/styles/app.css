@@ -1587,12 +1587,6 @@ body {
   cursor: default;
 }
 
-.refactor-pass__notice {
-  margin: 0;
-  color: var(--muted);
-  font: 13px var(--bench-font-text);
-}
-
 .refactor-pass__parent-card {
   margin-top: var(--space-5);
   padding-top: var(--space-4);
@@ -2017,15 +2011,6 @@ body {
   font-size: 12px;
 }
 
-.create-form__error-detail {
-  margin-top: var(--space-2);
-  font-size: 13px;
-}
-
-.create-form__error-detail p {
-  margin: 2px 0 0;
-}
-
 @media (max-width: 760px) {
   .refactor-pass__custody {
     grid-template-columns: 1fr;
@@ -2118,10 +2103,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-}
-
-.aftercare-workspace__action-error {
-  margin: 0;
 }
 
 /* The grouped inset list, shared shape with Overview's lanes and the
@@ -2727,12 +2708,6 @@ body {
   border-color: var(--bad);
 }
 
-.creation-sheet__field-error {
-  margin: 0;
-  color: var(--bad);
-  font: 12px var(--bench-font-text);
-}
-
 .creation-sheet__button {
   border: var(--bench-hairline-width) solid var(--hairline);
   border-radius: var(--bench-radius-control);
@@ -3040,40 +3015,6 @@ body {
   font: 13px var(--bench-font-text);
 }
 
-.creation-sheet__retry {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-3);
-}
-
-.creation-sheet__alert {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--space-3);
-  border: var(--bench-hairline-width) solid var(--bad);
-  border-radius: var(--bench-radius-card);
-  background: color-mix(in srgb, var(--bad) 10%, transparent);
-}
-
-.creation-sheet__alert b {
-  color: var(--bad);
-  font: 600 11px var(--bench-font-mono);
-  letter-spacing: 0.02em;
-}
-
-.creation-sheet__alert p {
-  margin: 0;
-  color: var(--text);
-  font: 13px var(--bench-font-text);
-}
-
-.creation-sheet__alert:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
 .creation-sheet__footer-trailing {
   margin-left: auto;
   display: flex;
@@ -3215,10 +3156,6 @@ body {
   margin: var(--space-4) 0 0;
   color: var(--attention);
   font: 12px var(--bench-font-text);
-}
-
-.need-input-sheet .form-field__error {
-  margin: var(--space-3) 0 0;
 }
 
 .need-input-verification {
@@ -4442,77 +4379,6 @@ body {
 
 /* --- Error panel -------------------------------------------------------------- */
 
-.shell-card__error {
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  padding: var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.shell-card__error-code {
-  font-family: var(--bench-font-mono);
-  font-size: 12px;
-  color: var(--bad);
-}
-
-.shell-card__error-message {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.shell-card__error-remediation {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.shell-card__diagnostics {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.shell-card__diagnostics summary {
-  cursor: pointer;
-  color: var(--text);
-  font-weight: 700;
-}
-
-.shell-card__diagnostics p {
-  margin: var(--space-2) 0 0;
-}
-
-.shell-card__diagnostics pre {
-  max-height: 180px;
-  margin: var(--space-2) 0 0;
-  padding: var(--space-2);
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--text);
-  background: var(--content);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-}
-
-.shell-card__retry {
-  align-self: flex-start;
-  font-family: var(--bench-font-text);
-  font-weight: 700;
-  font-size: 13px;
-  color: var(--text);
-  background: transparent;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-4);
-  cursor: pointer;
-}
-
-.shell-card__retry:hover {
-  border-color: var(--accent);
-}
-
 /* --- Server picker (awaiting-server-choice) ------------------------------------
    One quiet registry list: hairline rows, the selected row lifts with the
    accent edge — never color alone, the row carries the "Running" word too. */
@@ -4634,45 +4500,6 @@ body {
   min-height: 1.2em;
   color: var(--muted);
   font-size: 13px;
-}
-
-.setup-wizard__banner,
-.setup-wizard__error {
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.setup-wizard__error:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.setup-wizard__error-code {
-  font-family: var(--bench-font-mono);
-  font-size: 12px;
-  color: var(--bad);
-}
-
-.setup-wizard__banner-message,
-.setup-wizard__error-message {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.setup-wizard__code {
-  display: block;
-  font-family: var(--bench-font-mono);
-  font-size: 12px;
-  background: var(--content);
-  border: 1px solid var(--hairline);
-  border-radius: 3px;
-  padding: var(--space-2) var(--space-3);
-  overflow-wrap: anywhere;
-  user-select: all;
 }
 
 .setup-wizard__action {
@@ -4797,25 +4624,6 @@ body {
   margin: 0;
   font-family: var(--bench-font-mono);
   font-size: 12px;
-}
-
-.provider-row__issue {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.provider-row__issue-message {
-  margin: 0;
-  font-size: 13px;
-}
-
-.provider-row__remedy {
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  align-items: flex-start;
 }
 
 .provider-row__copy {
@@ -4947,32 +4755,6 @@ body {
   gap: var(--space-4);
 }
 
-.create-form__error {
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.create-form__error:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.create-form__error-code {
-  font-family: var(--bench-font-mono);
-  font-size: 11px;
-  letter-spacing: 0.02em;
-  color: var(--bad);
-}
-
-.create-form__error-message {
-  margin: 0;
-  font-size: 13px;
-}
-
 .form-field {
   display: flex;
   flex-direction: column;
@@ -5011,12 +4793,6 @@ body {
 .form-field__input--multiline {
   resize: vertical;
   min-height: 72px;
-}
-
-.form-field__error {
-  margin: 0;
-  color: var(--bad);
-  font-size: 12px;
 }
 
 /* Primary intervention: the one filled signal control in the form. */
@@ -5846,11 +5622,6 @@ body {
   color: var(--muted);
   font-size: 0.78rem;
 }
-.composer__notice {
-  margin: 0;
-  color: var(--attention);
-  font-size: 0.78rem;
-}
 .composer__chips {
   display: flex;
   flex-wrap: wrap;
@@ -6070,13 +5841,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
-}
-
-.overview-lanes__error {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  align-items: flex-start;
 }
 
 .overview-lane {
@@ -6680,12 +6444,6 @@ body {
 
 .cockpit__run-switcher-more {
   color: var(--muted);
-}
-
-.cockpit__run-switcher-error {
-  margin: var(--space-1) var(--space-3) 0;
-  color: var(--bad);
-  font: 500 12px var(--bench-font-text);
 }
 
 /* The stage bar's fixed four-segment control: a raised track holding a
@@ -7626,24 +7384,6 @@ body {
   text-decoration: none;
 }
 
-.recovery-workspace__error-actions {
-  margin-top: var(--space-3);
-}
-
-.cockpit__missing {
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  padding: var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.cockpit__missing-message {
-  margin: 0;
-  font-size: 13px;
-}
-
 /* --- Completion workspace -------------------------------------------------- */
 
 .completion-workspace {
@@ -7676,8 +7416,7 @@ body {
   filter: brightness(1.1);
 }
 .completion-workspace__no-changes,
-.completion-workspace__blocked,
-.completion-workspace__error {
+.completion-workspace__blocked {
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   padding: var(--space-2) var(--space-3);
@@ -7685,6 +7424,13 @@ body {
   font-size: 12px;
 }
 
+.completion-workspace__blocked {
+  border-color: var(--bad);
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+}
+.completion-workspace__no-changes,
+.completion-workspace__blocked,
 .completion-workspace__result {
   display: flex;
   align-items: center;
@@ -7700,12 +7446,6 @@ body {
   border-color: var(--ok);
   background: color-mix(in srgb, var(--ok) 10%, transparent);
   color: var(--ok);
-}
-
-.completion-workspace__result--failure {
-  border-color: var(--bad);
-  background: color-mix(in srgb, var(--bad) 10%, transparent);
-  color: var(--bad);
 }
 
 .completion-workspace__result--reconciling {
@@ -7725,29 +7465,6 @@ body {
   overflow-wrap: anywhere;
 }
 
-.completion-workspace__error,
-.completion-workspace__blocked {
-  border-color: var(--bad);
-  color: var(--bad);
-  background: color-mix(in srgb, var(--bad) 8%, transparent);
-}
-
-.completion-workspace__error {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.completion-workspace__error button {
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  padding: var(--space-1) var(--space-2);
-  background: transparent;
-  color: var(--bad);
-  font: 700 12px var(--bench-font-text);
-  cursor: pointer;
-}
 .completion-workspace__diff,
 .completion-workspace__publish,
 .completion-workspace__merge,
@@ -8092,13 +7809,12 @@ body {
 }
 
 /* Copy-path confirmation/error lines drop below the reveal/copy control. */
-.changes-manifest__repository-bar > .completion-workspace__notice,
-.changes-manifest__repository-bar > .completion-workspace__error {
+.changes-manifest__repository-bar > .completion-workspace__notice {
   flex-basis: 100%;
   margin: 0;
   overflow-wrap: anywhere;
 }
-
+.changes-manifest__repository-bar > .completion-workspace__notice,
 .completion-workspace__notice {
   color: var(--muted);
   font: 500 12px var(--bench-font-text);
@@ -8451,12 +8167,6 @@ body {
   font: 12px var(--bench-font-text);
 }
 
-.completion-publish-sheet__field-error {
-  margin: calc(-1 * var(--space-1)) 0 0;
-  color: var(--bad);
-  font: 12px var(--bench-font-text);
-}
-
 .completion-publish-sheet .completion-workspace__field textarea {
   min-height: 6rem;
 }
@@ -8558,35 +8268,6 @@ body {
   margin: 0;
   color: var(--muted);
   font-size: 13px;
-}
-
-.completion-workspace__repo-outcome {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-shrink: 0;
-}
-
-.completion-workspace__repo-outcome-label {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 1.35rem;
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
-  padding: 0 var(--space-2);
-  font: 11px var(--bench-font-text);
-  white-space: nowrap;
-}
-
-.completion-workspace__repo-outcome--success .completion-workspace__repo-outcome-label {
-  border-color: var(--ok);
-  color: var(--ok);
-}
-
-.completion-workspace__repo-outcome--failure .completion-workspace__repo-outcome-label {
-  border-color: var(--bad);
-  color: var(--bad);
 }
 
 .completion-workspace__publish-empty {
@@ -9120,13 +8801,6 @@ body {
   gap: var(--space-4);
 }
 
-.settings-panel__error {
-  padding: var(--space-3);
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--bad) 8%, transparent);
-}
-
 .settings-panel__section {
   display: flex;
   flex-direction: column;
@@ -9374,11 +9048,6 @@ body {
   white-space: nowrap;
 }
 
-.settings-panel__root-issue {
-  color: var(--bad);
-  font: 400 0.75rem/1.3 var(--bench-font-text);
-}
-
 .settings-panel__root-count {
   flex-shrink: 0;
   color: var(--muted);
@@ -9477,15 +9146,6 @@ body {
 .settings-panel__provider-status.is-degraded {
   color: var(--bad);
   background: color-mix(in srgb, var(--bad) 12%, transparent);
-}
-
-.settings-panel__provider-cause {
-  color: var(--muted);
-  font: 400 0.8125rem/1.4 var(--bench-font-text);
-}
-
-.settings-panel__provider-remedy {
-  color: var(--muted);
 }
 
 .settings-panel__provider-version {
@@ -9914,19 +9574,6 @@ body {
   font-size: 13px;
 }
 
-.archive-mode__error {
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.archive-mode__error:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
 /* Return to the live run: the one filled signal control in the archive. */
 .archive-mode__return {
   font-family: var(--bench-font-text);
@@ -10149,21 +9796,6 @@ body {
   word-break: break-all;
 }
 
-.rewind-journey__findings {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  color: var(--bad);
-  font-size: 13px;
-}
-
-.rewind-journey__findings li {
-  overflow-wrap: anywhere;
-}
-
 .rewind-journey__confirm-summary {
   display: flex;
   flex-direction: column;
@@ -10348,26 +9980,6 @@ body {
 
 .rewind-journey__done:hover {
   filter: brightness(1.1);
-}
-
-.rewind-journey__error {
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.rewind-journey__error:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.rewind-journey__error-result {
-  margin: 0;
-  font-size: 13px;
-  overflow-wrap: anywhere;
 }
 
 .rewind-journey__recovery {
@@ -11000,50 +10612,8 @@ body {
   font: 13px var(--bench-font-text);
 }
 
-.review-feedback-workspace__error {
-  width: min(1120px, 100%);
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
 /* Recovery alert: same error surface as elsewhere, with a plain-language
    headline/message row and the two named recovery actions. */
-.review-feedback-recovery__detail {
-  margin: 0;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.review-feedback-recovery__actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.review-feedback-recovery__actions button {
-  border: 1px solid var(--hairline);
-  border-radius: var(--bench-radius-control);
-  background: var(--raised);
-  color: var(--text);
-  font-size: 12px;
-  padding: var(--space-1) var(--space-2);
-  cursor: pointer;
-}
-
-.review-feedback-recovery__actions button:hover:not(:disabled) {
-  background: var(--hover);
-}
-
-.review-feedback-recovery__actions button:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.review-feedback-recovery__actions button:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
 
 /* ─── Review-feedback safe Markdown ─── */
 
@@ -11220,8 +10790,8 @@ body {
 }
 
 .review-feedback-diff__line[data-kind='remove'] {
-  color: var(--danger, #b03a2e);
-  background: color-mix(in srgb, var(--danger, #b03a2e) 8%, transparent);
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
 }
 
 .review-feedback-diff__line[data-kind='hunk'] {
@@ -12023,19 +11593,6 @@ body {
 
 /* ─── Recovery workspace ─── */
 
-.recovery-attention {
-  border: 1px solid var(--accent);
-  border-radius: var(--bench-radius-control);
-  margin-bottom: var(--space-3);
-  overflow: hidden;
-  padding: var(--space-2) var(--space-3);
-  background: color-mix(in srgb, var(--accent) 10%, var(--raised));
-}
-.recovery-attention__priority {
-  font-size: 12px;
-  color: var(--accent);
-  font-weight: 600;
-}
 .recovery-workspace {
   border: 1px solid var(--hairline);
   border-radius: var(--bench-radius-control);
@@ -13727,18 +13284,6 @@ body {
   color: var(--muted);
 }
 
-.config-editor__notice--error {
-  color: var(--bad);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  align-items: flex-start;
-}
-
-.config-editor__notice--error p {
-  margin: 0;
-}
-
 @media (max-width: 720px) {
   .config-editor__row {
     grid-template-columns: 1fr;
@@ -14065,4 +13610,14 @@ body {
 .error-surface--compact .error-surface__diagnostics {
   gap: var(--space-1);
   padding-top: var(--space-1);
+}
+
+/* The shared per-field validation message: the one error presentation that
+ * is not a card. One element, one class — small quiet text in the bad tone,
+ * tied to its input by aria-describedby rather than a live region (the host
+ * focuses the field when its message appears). */
+.field-error {
+  margin: 0;
+  color: var(--bad);
+  font-size: 12px;
 }

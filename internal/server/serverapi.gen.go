@@ -383,39 +383,6 @@ func (e PermissionAnswerRequestDecision) Valid() bool {
 	}
 }
 
-// Defines values for ReadinessIssueCode.
-const (
-	InvalidConfiguration ReadinessIssueCode = "invalid_configuration"
-	InvalidRepository    ReadinessIssueCode = "invalid_repository"
-	InvalidWorkspaceRoot ReadinessIssueCode = "invalid_workspace_root"
-	MissingExecutable    ReadinessIssueCode = "missing_executable"
-	ModelsUnavailable    ReadinessIssueCode = "models_unavailable"
-	Unauthenticated      ReadinessIssueCode = "unauthenticated"
-	UnsupportedVersion   ReadinessIssueCode = "unsupported_version"
-)
-
-// Valid indicates whether the value is a known member of the ReadinessIssueCode enum.
-func (e ReadinessIssueCode) Valid() bool {
-	switch e {
-	case InvalidConfiguration:
-		return true
-	case InvalidRepository:
-		return true
-	case InvalidWorkspaceRoot:
-		return true
-	case MissingExecutable:
-		return true
-	case ModelsUnavailable:
-		return true
-	case Unauthenticated:
-		return true
-	case UnsupportedVersion:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for RelationshipChildOutcome.
 const (
 	RelationshipChildOutcomeCompleted RelationshipChildOutcome = "completed"
@@ -1268,8 +1235,9 @@ type ConfigRepo struct {
 
 // ConfigurationReadiness defines model for ConfigurationReadiness.
 type ConfigurationReadiness struct {
-	Issue *ReadinessIssue `json:"issue,omitempty"`
-	Valid bool            `json:"valid"`
+	// Issue Canonical catalog-rendered error.
+	Issue *Error `json:"issue,omitempty"`
+	Valid bool   `json:"valid"`
 }
 
 // Context defines model for Context.
@@ -1821,9 +1789,11 @@ type ModelDefaults = config.ModelConfig
 
 // ModelReadiness defines model for ModelReadiness.
 type ModelReadiness struct {
-	Available bool            `json:"available"`
-	Issue     *ReadinessIssue `json:"issue,omitempty"`
-	Models    []string        `json:"models,omitempty"`
+	Available bool `json:"available"`
+
+	// Issue Canonical catalog-rendered error.
+	Issue  *Error   `json:"issue,omitempty"`
+	Models []string `json:"models,omitempty"`
 }
 
 // NeedUserInputDraftResponse defines model for NeedUserInputDraftResponse.
@@ -1987,11 +1957,13 @@ type ProviderModelRefreshResponse struct {
 
 // ProviderReadiness defines model for ProviderReadiness.
 type ProviderReadiness struct {
-	Installed bool            `json:"installed"`
-	Issue     *ReadinessIssue `json:"issue,omitempty"`
-	Name      string          `json:"name"`
-	Ready     bool            `json:"ready"`
-	Version   string          `json:"version,omitempty"`
+	Installed bool `json:"installed"`
+
+	// Issue Canonical catalog-rendered error.
+	Issue   *Error `json:"issue,omitempty"`
+	Name    string `json:"name"`
+	Ready   bool   `json:"ready"`
+	Version string `json:"version,omitempty"`
 }
 
 // PublishDescriptionResponse defines model for PublishDescriptionResponse.
@@ -2018,30 +1990,15 @@ type Publishability struct {
 	Repos         map[string]bool `json:"repos"`
 }
 
-// ReadinessIssue defines model for ReadinessIssue.
-type ReadinessIssue struct {
-	// Code Readiness problem taxonomy. missing_executable — a provider CLI binary is not installed; unsupported_version — an installed provider CLI is below the enforced minimum version; unauthenticated — a provider CLI is installed but its authentication flow has not been completed; models_unavailable — no usable provider exposes any model; invalid_configuration — the runtime configuration is unusable; invalid_workspace_root — a configured workspace root does not resolve to a directory; invalid_repository — a configured repository path is not a git repository.
-	Code ReadinessIssueCode `json:"code"`
-
-	// Message Human-readable problem summary. Never contains credentials.
-	Message string `json:"message"`
-
-	// Remedy Safe remediation metadata, such as the CLI command to run. Never contains credentials or non-configured filesystem paths.
-	Remedy string `json:"remedy,omitempty"`
-}
-
-// ReadinessIssueCode Readiness problem taxonomy. missing_executable — a provider CLI binary is not installed; unsupported_version — an installed provider CLI is below the enforced minimum version; unauthenticated — a provider CLI is installed but its authentication flow has not been completed; models_unavailable — no usable provider exposes any model; invalid_configuration — the runtime configuration is unusable; invalid_workspace_root — a configured workspace root does not resolve to a directory; invalid_repository — a configured repository path is not a git repository.
-type ReadinessIssueCode string
-
 // ReadinessResponse defines model for ReadinessResponse.
 type ReadinessResponse struct {
 	APIVersion    string                 `json:"api_version"`
 	Configuration ConfigurationReadiness `json:"configuration"`
 
-	// Issues Flattened outstanding issues across all sections.
-	Issues []ReadinessIssue `json:"issues,omitempty"`
-	Meta   ResponseMeta     `json:"meta,omitempty"`
-	Models ModelReadiness   `json:"models"`
+	// Issues Flattened outstanding issues across all sections, each the canonical catalog-rendered error for its readiness code.
+	Issues []Error        `json:"issues,omitempty"`
+	Meta   ResponseMeta   `json:"meta,omitempty"`
+	Models ModelReadiness `json:"models"`
 
 	// ProbedAt When provider probes last ran.
 	ProbedAt  *time.Time          `json:"probed_at,omitempty"`
@@ -2320,10 +2277,11 @@ type RepositoryPathDTO struct {
 
 // RepositoryReadiness defines model for RepositoryReadiness.
 type RepositoryReadiness struct {
-	Issue *ReadinessIssue `json:"issue,omitempty"`
-	Name  string          `json:"name"`
-	Path  string          `json:"path"`
-	Valid bool            `json:"valid"`
+	// Issue Canonical catalog-rendered error.
+	Issue *Error `json:"issue,omitempty"`
+	Name  string `json:"name"`
+	Path  string `json:"path"`
+	Valid bool   `json:"valid"`
 }
 
 // Resource defines model for Resource.
@@ -3015,9 +2973,10 @@ type WorkspaceRepository struct {
 
 // WorkspaceRootReadiness defines model for WorkspaceRootReadiness.
 type WorkspaceRootReadiness struct {
-	Issue *ReadinessIssue `json:"issue,omitempty"`
-	Path  string          `json:"path"`
-	Valid bool            `json:"valid"`
+	// Issue Canonical catalog-rendered error.
+	Issue *Error `json:"issue,omitempty"`
+	Path  string `json:"path"`
+	Valid bool   `json:"valid"`
 }
 
 // ArtifactID defines model for ArtifactID.

@@ -49,7 +49,7 @@ describe('evaluateCompatibility', () => {
       const verdict = evaluateCompatibility(missing);
       expect(verdict.compatible).toBe(false);
       if (!verdict.compatible) {
-        expect(verdict.reason).toMatch(/declare/i);
+        expect(verdict.code).toBe('missing_contract');
       }
     }
   });
@@ -63,7 +63,7 @@ describe('evaluateCompatibility', () => {
     const verdict = evaluateCompatibility(declaration({ schema_version: 999 }));
     expect(verdict.compatible).toBe(false);
     if (!verdict.compatible) {
-      expect(verdict.reason).toMatch(/schema/i);
+      expect(verdict).toMatchObject({ code: 'unsupported_schema', schemaVersion: '999' });
     }
   });
 
@@ -78,7 +78,11 @@ describe('evaluateCompatibility', () => {
     );
     expect(verdict.compatible).toBe(false);
     if (!verdict.compatible) {
-      expect(verdict.reason).toMatch(/desktop/i);
+      expect(verdict).toMatchObject({
+        code: 'newer_client_schema_required',
+        schemaVersion: String(DESKTOP_SCHEMA_VERSION + 1),
+        clientSchemaVersion: String(DESKTOP_SCHEMA_VERSION),
+      });
     }
   });
 
@@ -95,7 +99,7 @@ describe('evaluateCompatibility', () => {
       const verdict = evaluateCompatibility(declaration({ runtime_policy: policy }));
       expect(verdict.compatible).toBe(false);
       if (!verdict.compatible) {
-        expect(verdict.reason).toMatch(/polic/i);
+        expect(verdict.code).toBe('unsupported_runtime_policy');
       }
     }
   });

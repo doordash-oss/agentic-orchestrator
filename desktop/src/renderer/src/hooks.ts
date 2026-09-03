@@ -31,7 +31,11 @@ export type LoadState<T> = { phase: 'loading' } | { phase: 'error'; error: Canon
 export function useIpcLoad<T>(
   load: () => Promise<T>,
   dependencies: DependencyList,
-): { state: LoadState<{ phase: 'loaded'; data: T }>; reload: () => void } {
+): {
+  state: LoadState<{ phase: 'loaded'; data: T }>;
+  reload: () => void;
+  replace: (data: T) => void;
+} {
   const loadRef = useRef(load);
   loadRef.current = load;
   const requestRef = useRef(0);
@@ -41,6 +45,10 @@ export function useIpcLoad<T>(
   });
 
   const reload = useCallback(() => setReloadToken((token) => token + 1), []);
+  const replace = useCallback((data: T) => {
+    requestRef.current += 1;
+    setState({ phase: 'loaded', data });
+  }, []);
 
   useEffect(() => {
     const request = ++requestRef.current;
@@ -61,7 +69,7 @@ export function useIpcLoad<T>(
     // The caller owns the semantic load dependencies; reloadToken is the local retry edge.
   }, [...dependencies, reloadToken]);
 
-  return { state, reload };
+  return { state, reload, replace };
 }
 
 /** The standard local Retry adapter for compact IPC load failures. */

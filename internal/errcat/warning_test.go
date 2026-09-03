@@ -71,9 +71,6 @@ func TestOrphanSessionCodesAreNeedsActionResume(t *testing.T) {
 		t.Fatalf("orphan code list has %d entries; want 2", len(orphanSessionCodeList))
 	}
 	for _, code := range orphanSessionCodeList {
-		if !IsOrphanSession(code) {
-			t.Errorf("%s: not recognized as an orphan-session code", code)
-		}
 		entry, ok := Lookup(code)
 		if !ok {
 			t.Fatalf("%s: missing from catalog", code)

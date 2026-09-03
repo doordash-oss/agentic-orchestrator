@@ -337,6 +337,7 @@ describe('WorkspaceShell sidebar', () => {
       'Iteration budget exhausted',
     );
     expect(sidebarRow.querySelector('.sidebar__row-glyph')).toHaveAttribute('data-tone', 'danger');
+    expect(sidebarRow.querySelector('.pip-rail')).toHaveAttribute('data-tone', 'danger');
 
     const lanes = await screen.findByRole('region', { name: 'Existing features' });
     const overviewRow = within(lanes).getByText('Broken feature').closest('li')!;
@@ -347,6 +348,7 @@ describe('WorkspaceShell sidebar', () => {
       'data-tone',
       'danger',
     );
+    expect(overviewRow.querySelector('.pip-rail')).toHaveAttribute('data-tone', 'danger');
     // No presence surface carries the legacy hand-written labels.
     for (const legacy of ['needs attention', 'pass failed']) {
       expect(document.body.textContent?.toLowerCase()).not.toContain(legacy);

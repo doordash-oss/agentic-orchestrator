@@ -166,7 +166,7 @@ describe('CreationFilesService', () => {
       ]);
       await expect(
         service.resolve([{ repoKey: 'repo-a', path: '../outside' }]),
-      ).rejects.toMatchObject({ canonical: { code: 'E_INVALID_REPOSITORY_FILE' } });
+      ).rejects.toMatchObject({ canonical: { code: 'E_REPOSITORY_FILE_ESCAPED' } });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

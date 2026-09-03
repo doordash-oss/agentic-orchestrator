@@ -22,6 +22,7 @@ import {
   useState,
   type Dispatch,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
   type SetStateAction,
 } from 'react';
 import {
@@ -41,6 +42,7 @@ import {
 import { BellIcon, ChevronDownIcon } from '../components/icons';
 import { parseIpcError } from '../wizard/ipcError';
 import { ErrorSurface } from '../components/ErrorSurface';
+import { useRegisteredErrorCard } from '../components/errorCardRegistry';
 import { ToolbarPopover, ToolbarPopoverAnchor } from '../components/ToolbarPopover';
 import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import {
@@ -59,6 +61,18 @@ export interface AttentionDrafts {
   questions: Record<string, Record<string, QuestionAnswerDraft>>;
   help: Record<string, string>;
   gates: Record<string, Record<number, string>>;
+}
+
+/** Omits a projected error when its owning card is already mounted in this view. */
+export function OwnerAwareAttention({
+  item,
+  children,
+}: {
+  item: AttentionItem;
+  children: ReactNode;
+}) {
+  const ownerIsVisible = useRegisteredErrorCard(item.kind === 'error' ? item.ref : undefined);
+  return ownerIsVisible ? null : children;
 }
 
 export function emptyAttentionDrafts(): AttentionDrafts {
@@ -946,7 +960,7 @@ export function AttentionDetail({
 
   if (item.kind === 'error')
     return (
-      <div className="attention-detail">
+      <div className="attention-detail" data-class={item.class}>
         {/* The class label as eyebrow, the catalog title, and one way to the
          * owning card — never summary, remediation, diagnostics, or actions,
          * which belong to the card alone. */}

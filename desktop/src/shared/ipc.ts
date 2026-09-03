@@ -2394,12 +2394,6 @@ export const SessionDetailSchema = SessionSummarySchema.extend({
   initialPrompt: OptionalBoundedTextSchema,
   canAttach: z.boolean(),
   logAvailable: z.boolean(),
-  /**
-   * Canonical rendering of the session's terminal error text (the server's
-   * `safe_error` string, redacted and wrapped by the main process). The
-   * legacy name is kept; only the shape changed.
-   */
-  safeError: CanonicalErrorSchema.optional(),
 });
 export type SessionDetail = z.output<typeof SessionDetailSchema>;
 

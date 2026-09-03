@@ -22,11 +22,13 @@ import type { AttentionItem } from '../../../shared/ipc';
 import {
   AttentionDetail,
   AttentionInbox,
+  OwnerAwareAttention,
   emptyAttentionDrafts,
   type AttentionAction,
   type AttentionDrafts,
 } from './AttentionInbox';
 import { installAgenticoMock } from '../test/agenticoMock';
+import { ErrorSurface } from '../components/ErrorSurface';
 
 afterEach(cleanup);
 
@@ -101,6 +103,17 @@ const questionsItem: Extract<AttentionItem, { kind: 'questions' }> = {
       ],
     },
   ],
+};
+
+const errorItem: Extract<AttentionItem, { kind: 'error' }> = {
+  kind: 'error',
+  id: 'error:feature-1:run',
+  featureId: 'feature-1',
+  waitingSince: '2026-07-15T10:00:00.000Z',
+  ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'feature-1' },
+  class: 'blocking',
+  code: 'iteration_budget_exhausted',
+  title: 'Iteration budget exhausted',
 };
 
 const helpQuestionItem: Extract<AttentionItem, { kind: 'help' }> = {
@@ -822,6 +835,30 @@ describe('AttentionInbox question detail', () => {
 });
 
 describe('error items', () => {
+  it('omits an error projection when its owning card is mounted in the same view', async () => {
+    render(
+      <>
+        <ErrorSurface
+          error={{
+            code: errorItem.code,
+            class: errorItem.class,
+            title: errorItem.title,
+            summary: 'The Implement phase exhausted its iteration budget.',
+          }}
+          explain={{ reference: errorItem.ref }}
+        />
+        <OwnerAwareAttention item={errorItem}>
+          <section aria-label="Duplicate error projection">{errorItem.title}</section>
+        </OwnerAwareAttention>
+      </>,
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'Duplicate error projection' })).toBeNull(),
+    );
+    expect(screen.getAllByText('Iteration budget exhausted')).toHaveLength(1);
+  });
+
   const blockingErrorItem: Extract<AttentionItem, { kind: 'error' }> = {
     kind: 'error',
     id: 'error:feature-1:run::iteration_budget_exhausted',

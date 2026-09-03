@@ -220,10 +220,4 @@ func TestIntegrationAttentionAccessors(t *testing.T) {
 	if rec := withRecord.IntegrationAttentionRecord(); rec == nil || rec.Code != errcat.IntegrationMergeConflict {
 		t.Fatalf("IntegrationAttentionRecord() = %+v, want the stored record", rec)
 	}
-	if code := withRecord.IntegrationAttentionCode(); code != errcat.IntegrationMergeConflict {
-		t.Fatalf("IntegrationAttentionCode() = %q, want integration_merge_conflict", code)
-	}
-	if code := cleanPrepared.IntegrationAttentionCode(); code != "" {
-		t.Fatalf("IntegrationAttentionCode() = %q, want empty without a record", code)
-	}
 }

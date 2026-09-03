@@ -43,7 +43,7 @@ import type {
   WorkspaceDefaults,
 } from '../../../shared/ipc';
 import { ErrorSurface } from '../components/ErrorSurface';
-import { retryAction, type LoadState } from '../hooks';
+import { retryAction, useIpcLoad } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 
 export type PhaseKey = keyof PhaseModels;
@@ -712,89 +712,51 @@ const FEATURE_AUTOMATIC_REVIEW_OPTIONS = [
 
 export function FeatureConfigPanel({ featureId }: { featureId: string }) {
   const catalogue = useModelCatalogue();
-  const [state, setState] = useState<
-    LoadState<{
-      phase: 'ready';
-      data: {
-        baseline: FeatureConfig;
-        draft: FeatureConfig;
-        manualPublishAvailable: boolean;
-        defaults: FeatureConfig;
-      };
-    }>
-  >({ phase: 'loading' });
+  const loadConfig = useCallback(async () => {
+    const snapshot = await window.agentico.getFeatureConfig(featureId);
+    return {
+      baseline: snapshot.current,
+      draft: snapshot.current,
+      defaults: snapshot.defaults,
+      manualPublishAvailable: snapshot.manualPublishAvailable,
+    };
+  }, [featureId]);
+  const { state, reload, replace } = useIpcLoad(loadConfig, [featureId]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<CanonicalError | null>(null);
-  const [retryNonce, setRetryNonce] = useState(0);
-
-  useEffect(() => {
-    let alive = true;
-    setState({ phase: 'loading' });
-    setSaved(false);
-    setSaveError(null);
-    void window.agentico
-      .getFeatureConfig(featureId)
-      .then((snapshot) => {
-        if (!alive) return;
-        setState({
-          phase: 'ready',
-          data: {
-            baseline: snapshot.current,
-            draft: snapshot.current,
-            defaults: snapshot.defaults,
-            manualPublishAvailable: snapshot.manualPublishAvailable,
-          },
-        });
-      })
-      .catch((e: unknown) => {
-        if (alive) setState({ phase: 'error', error: parseIpcError(e) });
-      });
-    return () => {
-      alive = false;
-    };
-  }, [featureId, retryNonce]);
 
   const save = useCallback(() => {
-    if (state.phase !== 'ready') return;
+    if (state.phase !== 'loaded') return;
     setSaving(true);
     setSaveError(null);
     void window.agentico
       .updateFeatureConfig({ featureId, config: state.data.draft })
       .then((snapshot) => {
-        setState({
-          phase: 'ready',
-          data: {
-            baseline: snapshot.current,
-            draft: snapshot.current,
-            defaults: snapshot.defaults,
-            manualPublishAvailable: snapshot.manualPublishAvailable,
-          },
+        replace({
+          baseline: snapshot.current,
+          draft: snapshot.current,
+          defaults: snapshot.defaults,
+          manualPublishAvailable: snapshot.manualPublishAvailable,
         });
         setSaved(true);
       })
       .catch((e: unknown) => setSaveError(parseIpcError(e)))
       .finally(() => setSaving(false));
-  }, [featureId, state]);
+  }, [featureId, replace, state]);
 
   if (state.phase === 'loading') {
     return <p className="config-editor__notice">Loading configuration…</p>;
   }
   if (state.phase === 'error') {
-    return (
-      <ErrorSurface
-        error={state.error}
-        variant="compact"
-        localAction={retryAction(() => setRetryNonce((n) => n + 1))}
-      />
-    );
+    return <ErrorSurface error={state.error} variant="compact" localAction={retryAction(reload)} />;
   }
 
   const { baseline, draft, defaults, manualPublishAvailable } = state.data;
   const dirty = JSON.stringify(baseline) !== JSON.stringify(draft);
   const setDraft = (next: FeatureConfig) => {
     setSaved(false);
-    setState({ phase: 'ready', data: { ...state.data, draft: next } });
+    replace({ ...state.data, draft: next });
   };
 
   return (
@@ -855,67 +817,41 @@ export function WorkspaceDefaultsPanel({
 } = {}) {
   const loadedCatalogue = useModelCatalogue();
   const catalogue = catalogueOverride ?? loadedCatalogue;
-  const [state, setState] = useState<
-    LoadState<{
-      phase: 'ready';
-      data: { baseline: WorkspaceDefaults; draft: WorkspaceDefaults };
-    }>
-  >({ phase: 'loading' });
+  const loadDefaults = useCallback(async () => {
+    const defaults = await window.agentico.getWorkspaceDefaults();
+    return { baseline: defaults, draft: defaults };
+  }, []);
+  const { state, reload, replace } = useIpcLoad(loadDefaults, []);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<CanonicalError | null>(null);
-  const [retryNonce, setRetryNonce] = useState(0);
-
-  useEffect(() => {
-    let alive = true;
-    setState({ phase: 'loading' });
-    setSaved(false);
-    setSaveError(null);
-    void window.agentico
-      .getWorkspaceDefaults()
-      .then((defaults) => {
-        if (alive) setState({ phase: 'ready', data: { baseline: defaults, draft: defaults } });
-      })
-      .catch((e: unknown) => {
-        if (alive) setState({ phase: 'error', error: parseIpcError(e) });
-      });
-    return () => {
-      alive = false;
-    };
-  }, [retryNonce]);
 
   const save = useCallback(() => {
-    if (state.phase !== 'ready') return;
+    if (state.phase !== 'loaded') return;
     setSaving(true);
     setSaveError(null);
     void window.agentico
       .updateWorkspaceDefaults(state.data.draft)
       .then((defaults) => {
-        setState({ phase: 'ready', data: { baseline: defaults, draft: defaults } });
+        replace({ baseline: defaults, draft: defaults });
         setSaved(true);
       })
       .catch((e: unknown) => setSaveError(parseIpcError(e)))
       .finally(() => setSaving(false));
-  }, [state]);
+  }, [replace, state]);
 
   if (state.phase === 'loading') {
     return <p className="config-editor__notice">Loading workspace defaults…</p>;
   }
   if (state.phase === 'error') {
-    return (
-      <ErrorSurface
-        error={state.error}
-        variant="compact"
-        localAction={retryAction(() => setRetryNonce((n) => n + 1))}
-      />
-    );
+    return <ErrorSurface error={state.error} variant="compact" localAction={retryAction(reload)} />;
   }
 
   const { baseline, draft } = state.data;
   const dirty = JSON.stringify(baseline) !== JSON.stringify(draft);
   const setDraft = (next: WorkspaceDefaults) => {
     setSaved(false);
-    setState({ phase: 'ready', data: { ...state.data, draft: next } });
+    replace({ ...state.data, draft: next });
   };
 
   return (

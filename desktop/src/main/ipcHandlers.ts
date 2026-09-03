@@ -24,14 +24,7 @@ limitations under the License.
  * and always resolves to a typed { ok } envelope — exceptions never cross
  * the boundary unredacted.
  */
-import {
-  buildCanonicalError,
-  CanonicalErrorException,
-  isAbortError,
-  requestTimeoutError,
-  toCanonicalError,
-  type CanonicalError,
-} from '../shared/errors';
+import { buildCanonicalError, toCanonicalError, type CanonicalError } from '../shared/errors';
 import { validateWithSchema } from '../shared/api/parse';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sanitize';
 import {
@@ -282,19 +275,10 @@ const UNTRUSTED: IpcEnvelope = {
 };
 
 /**
- * The envelope's single error shape. A CanonicalErrorException crosses
- * unchanged; a fetch/DOM abort becomes the typed timeout; anything else
- * degrades to the catalog's E_INTERNAL canonical whose summary is authored
- * text and whose diagnostics carry the redacted original message — no user
- * path or token can cross.
+ * The envelope's single error shape delegates canonical pass-through,
+ * timeout classification, and fallback diagnostics to the shared boundary.
  */
 function envelopeError(err: unknown): CanonicalError {
-  if (err instanceof CanonicalErrorException) {
-    return err.canonical;
-  }
-  if (isAbortError(err)) {
-    return requestTimeoutError();
-  }
   return toCanonicalError(err, 'E_INTERNAL');
 }
 

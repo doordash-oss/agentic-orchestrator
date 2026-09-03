@@ -74,7 +74,7 @@ export const CANONICAL_ERROR_MESSAGE_PREFIX = 'E_CANONICAL_ERROR ';
 // --- Catalog -----------------------------------------------------------------
 
 /** One catalog entry: class plus authored title/summary/hint text. */
-export interface CatalogSpec<P extends Record<string, string>> {
+export interface CatalogSpec<P extends object> {
   class: CanonicalError['class'];
   title: string;
   /** Authored summary; parameter-derived text is redacted at build time. */
@@ -83,8 +83,41 @@ export interface CatalogSpec<P extends Record<string, string>> {
   remediationHint?: (params: P) => string;
 }
 
-function entry<P extends Record<string, string>>(spec: CatalogSpec<P>): CatalogSpec<P> {
+function entry<P extends object>(spec: CatalogSpec<P>): CatalogSpec<P> {
   return spec;
+}
+
+export type CompatibilityFailure =
+  | { compatible: false; code: 'missing_contract' }
+  | { compatible: false; code: 'unrecognized_contract' }
+  | { compatible: false; code: 'unsupported_api'; apiVersion: string }
+  | { compatible: false; code: 'unsupported_schema'; schemaVersion: string }
+  | {
+      compatible: false;
+      code: 'newer_client_schema_required';
+      schemaVersion: string;
+      clientSchemaVersion: string;
+    }
+  | { compatible: false; code: 'unsupported_runtime_policy' };
+
+function compatibilitySummary(failure: CompatibilityFailure): string {
+  switch (failure.code) {
+    case 'missing_contract':
+      return 'The server does not declare a compatibility contract.';
+    case 'unrecognized_contract':
+      return 'The server declares an unrecognized compatibility contract.';
+    case 'unsupported_api':
+      return `The server serves API ${failure.apiVersion}, which this app does not support.`;
+    case 'unsupported_schema':
+      return `The server declares schema series ${failure.schemaVersion}, which this app does not support.`;
+    case 'newer_client_schema_required':
+      return (
+        `The server requires client schema ${failure.schemaVersion}, ` +
+        `but this desktop build implements ${failure.clientSchemaVersion}.`
+      );
+    case 'unsupported_runtime_policy':
+      return 'The server enforces a runtime policy this app does not support.';
+  }
 }
 
 const CONNECTION_STRING_GRAMMAR = 'agentico://<token>@<host>:<port>[?name=<name>]';
@@ -98,7 +131,7 @@ export const ERROR_CATALOG = {
   E_INTERNAL: entry({
     class: 'blocking',
     title: 'Request failed',
-    summary: (_params: { reason: string }) => 'The request failed unexpectedly.',
+    summary: () => 'The request failed unexpectedly.',
   }),
   E_UNTRUSTED_SENDER: entry({
     class: 'blocking',
@@ -143,14 +176,12 @@ export const ERROR_CATALOG = {
   E_GATEWAY: entry({
     class: 'blocking',
     title: 'Connection failed',
-    summary: ({ reason }: { reason: string }) =>
-      `The connection attempt failed unexpectedly: ${reason}`,
+    summary: () => 'The connection attempt failed unexpectedly.',
   }),
   E_RECOVERY_DELAY: entry({
     class: 'blocking',
     title: 'Recovery delayed',
-    summary: ({ reason }: { reason: string }) =>
-      `An automatic recovery step could not proceed: ${reason}`,
+    summary: () => 'An automatic recovery step could not proceed.',
   }),
   E_BAD_API_PATH: entry({
     class: 'blocking',
@@ -168,12 +199,6 @@ export const ERROR_CATALOG = {
     title: 'The selected server is unavailable',
     summary: () => 'The selected Agentico server is no longer running.',
     remediationHint: () => 'Use Retry to try again, or go back to the previous server.',
-  }),
-  E_EXTERNAL_SERVER_LOST: entry({
-    class: 'blocking',
-    title: 'The server connection was lost',
-    summary: ({ reason }: { reason: string }) => reason,
-    remediationHint: () => 'Check that the server is running and reachable, then use Retry.',
   }),
   E_EXTERNAL_RUNTIME_UNRESPONSIVE: entry({
     class: 'blocking',
@@ -201,14 +226,14 @@ export const ERROR_CATALOG = {
   E_LAUNCH_FAILED: entry({
     class: 'blocking',
     title: 'The bundled runtime could not be started',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: () => 'The bundled runtime could not be started unexpectedly.',
     remediationHint: () =>
       'Check that the application files are intact and executable, then retry.',
   }),
   E_BUNDLED_INCOMPATIBLE: entry({
     class: 'blocking',
     title: 'The bundled runtime is incompatible',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: compatibilitySummary,
     remediationHint: () => 'Reinstall the application so the bundled runtime matches the app.',
   }),
   E_LAUNCH_NO_TOKEN: entry({
@@ -254,12 +279,12 @@ export const ERROR_CATALOG = {
   E_EVENT_STREAM: entry({
     class: 'blocking',
     title: 'Event stream failed',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: () => 'The runtime event stream stopped unexpectedly.',
   }),
   E_STOP_FAILED: entry({
     class: 'blocking',
     title: 'Stop failed',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: () => 'The runtime could not be stopped.',
   }),
 
   // --- Attach / remote-add ----------------------------------------------------
@@ -325,8 +350,7 @@ export const ERROR_CATALOG = {
   E_REMOTE_INCOMPATIBLE: entry({
     class: 'blocking',
     title: 'The server is not compatible with this app',
-    summary: ({ reason }: { reason: string }) =>
-      `The server is not compatible with this app: ${reason}`,
+    summary: compatibilitySummary,
     remediationHint: () =>
       'Update the Agentico desktop app and the agentico server to matching releases, then retry.',
   }),
@@ -340,7 +364,7 @@ export const ERROR_CATALOG = {
   E_INCOMPATIBLE_SERVER: entry({
     class: 'blocking',
     title: 'The server is not compatible with this app',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: compatibilitySummary,
     remediationHint: () =>
       'Update the Agentico desktop app and the agentico runtime to matching releases, then retry. ' +
       'This app never shuts down a runtime it does not own — close that runtime from wherever it ' +
@@ -363,13 +387,6 @@ export const ERROR_CATALOG = {
     title: 'Authentication with the running runtime failed',
     summary: () => 'The running runtime rejected the stored credentials.',
     remediationHint: () => 'Restart that runtime from where it was started, then retry.',
-  }),
-  E_REMOTE_TOKEN_REPASTE: entry({
-    class: 'needs_action',
-    title: 'Re-enter the remote server token',
-    summary: ({ reason }: { reason: string }) => reason,
-    remediationHint: () =>
-      'Re-enter the remote server token in Settings (paste its connection string again), then use Retry.',
   }),
   E_REMOTE_TOKEN_UNREADABLE: entry({
     class: 'needs_action',
@@ -414,7 +431,7 @@ export const ERROR_CATALOG = {
   E_LINK_ADD_FAILED: entry({
     class: 'blocking',
     title: 'The server could not be added',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: () => 'The server link could not be added unexpectedly.',
   }),
 
   // --- Sessions / streams ------------------------------------------------------
@@ -442,12 +459,7 @@ export const ERROR_CATALOG = {
   E_SESSION_STREAM: entry({
     class: 'blocking',
     title: 'The session stream failed',
-    summary: ({ reason }: { reason: string }) => reason,
-  }),
-  E_STREAM_PROTOCOL: entry({
-    class: 'blocking',
-    title: 'Session stream protocol error',
-    summary: ({ detail }: { detail: string }) => detail,
+    summary: () => 'The session output stream stopped unexpectedly.',
   }),
   E_STREAM_PROTOCOL_UNKNOWN_EVENT: entry({
     class: 'blocking',
@@ -464,11 +476,6 @@ export const ERROR_CATALOG = {
     title: 'Session stream protocol error',
     summary: () => 'The session output row cursor did not match its message.',
   }),
-  E_SESSION_ERROR: entry({
-    class: 'blocking',
-    title: 'The session ended with an error',
-    summary: ({ reason }: { reason: string }) => reason,
-  }),
   E_HTTP_REJECTED: entry({
     class: 'blocking',
     title: 'The request was rejected',
@@ -481,7 +488,7 @@ export const ERROR_CATALOG = {
   E_UPLOAD: entry({
     class: 'blocking',
     title: 'Upload failed',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: () => 'The file could not be uploaded.',
   }),
   E_UPLOAD_UNAVAILABLE: entry({
     class: 'blocking',
@@ -507,10 +514,28 @@ export const ERROR_CATALOG = {
     remediationHint: () =>
       'Choose a smaller file: images are limited to 10 MiB and attachments to 25 MiB.',
   }),
-  E_INVALID_REPOSITORY_FILE: entry({
+  E_REPOSITORY_FILE_INELIGIBLE: entry({
     class: 'needs_action',
     title: 'The selected repository file is not eligible',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: () => 'A selected repository file is no longer eligible.',
+    remediationHint: () => 'Re-pick the file from the repository file picker, then retry.',
+  }),
+  E_REPOSITORY_FILE_ESCAPED: entry({
+    class: 'needs_action',
+    title: 'The selected repository file escaped its repository',
+    summary: () => 'A selected repository file escaped its repository.',
+    remediationHint: () => 'Re-pick the file from the repository file picker, then retry.',
+  }),
+  E_REPOSITORY_FILE_OUTSIDE: entry({
+    class: 'needs_action',
+    title: 'The selected repository file is outside its repository',
+    summary: () => 'A selected repository file resolved outside its repository.',
+    remediationHint: () => 'Re-pick the file from the repository file picker, then retry.',
+  }),
+  E_REPOSITORY_FILE_NOT_REGULAR: entry({
+    class: 'needs_action',
+    title: 'The selected repository file is not a regular file',
+    summary: () => 'A selected repository file is not a regular file.',
     remediationHint: () => 'Re-pick the file from the repository file picker, then retry.',
   }),
 
@@ -695,8 +720,8 @@ export function buildCanonicalError<C extends CatalogCode>(
   code: C,
   options: BuildCanonicalErrorOptions<C> = {},
 ): CanonicalError {
-  const spec = ERROR_CATALOG[code] as CatalogSpec<Record<string, string>>;
-  const params = (options.params ?? {}) as Record<string, string>;
+  const spec = ERROR_CATALOG[code] as CatalogSpec<object>;
+  const params = (options.params ?? {}) as object;
   const summary = redactText(spec.summary(params));
   const hint =
     options.remediationHint !== undefined
@@ -736,18 +761,21 @@ export function requiresLocalServerError(): CanonicalError {
   return buildCanonicalError('E_REQUIRES_LOCAL_SERVER');
 }
 
-export function isRequiresLocalServerError(err: unknown): boolean {
-  return err instanceof CanonicalErrorException && err.canonical.code === 'E_REQUIRES_LOCAL_SERVER';
-}
-
 export function isRequestTimeout(err: unknown): boolean {
   return err instanceof CanonicalErrorException && err.canonical.code === 'E_REQUEST_TIMEOUT';
 }
 
-/** Catalog codes whose summary interpolates one redacted `reason` string. */
-type ReasonCode = {
-  [C in CatalogCode]: CatalogParams<C> extends { reason: string } ? C : never;
-}[CatalogCode];
+/** Catalog-authored fallbacks used to classify arbitrary caught exceptions. */
+export type FallbackCode =
+  | 'E_INTERNAL'
+  | 'E_GATEWAY'
+  | 'E_RECOVERY_DELAY'
+  | 'E_LAUNCH_FAILED'
+  | 'E_EVENT_STREAM'
+  | 'E_STOP_FAILED'
+  | 'E_LINK_ADD_FAILED'
+  | 'E_SESSION_STREAM'
+  | 'E_UPLOAD';
 
 /** True for a fetch/DOM abort, whose raw message reads as an opaque failure. */
 export function isAbortError(err: unknown): boolean {
@@ -757,27 +785,20 @@ export function isAbortError(err: unknown): boolean {
 /**
  * Converts an arbitrary thrown value into a canonical error.
  * CanonicalErrorExceptions pass through untouched; a fetch/DOM abort becomes
- * the typed timeout; Error messages are redacted into the fallback code's
- * `reason` parameter. E_INTERNAL keeps its catalog-authored summary and puts
- * the caught message in diagnostics instead. Anything else (which could hold
- * raw payload data) is replaced with a generic reason.
+ * the typed timeout. Every fallback keeps its catalog-authored summary and
+ * places a caught Error message in redacted diagnostics. Non-Error throws may
+ * hold arbitrary payload data, so they never cross the boundary.
  */
-export function toCanonicalError(err: unknown, fallbackCode: ReasonCode): CanonicalError {
+export function toCanonicalError(err: unknown, fallbackCode: FallbackCode): CanonicalError {
   if (err instanceof CanonicalErrorException) {
     return err.canonical;
   }
   if (isAbortError(err)) {
     return requestTimeoutError();
   }
-  const reason =
-    err instanceof Error && err.message !== '' ? err.message : 'An unexpected error occurred.';
-  if (fallbackCode === 'E_INTERNAL') {
-    return buildCanonicalError('E_INTERNAL', {
-      params: { reason: 'An unexpected error occurred.' },
-      ...(err instanceof Error && err.message !== '' ? { diagnostics: err.message } : {}),
-    });
-  }
-  return buildCanonicalError(fallbackCode, { params: { reason } });
+  return buildCanonicalError(fallbackCode, {
+    ...(err instanceof Error && err.message !== '' ? { diagnostics: err.message } : {}),
+  });
 }
 
 const BEARER_RE = /bearer\s+[a-z0-9._~+/=-]+/gi;

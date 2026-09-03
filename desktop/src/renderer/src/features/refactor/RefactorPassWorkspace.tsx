@@ -38,6 +38,7 @@ import { buildCanonicalError } from '../../../../shared/errors';
 import type { CanonicalError } from '../../../../shared/ipc';
 import {
   AttentionDetail,
+  OwnerAwareAttention,
   attentionActionNotice,
   attentionErrorMessage,
   runAttentionSubmit,
@@ -609,19 +610,23 @@ export function RefactorPassWorkspace({
           {/* The question joins the live conversation instead of stacking a
            * form above it; standalone only when there is no live surface. */}
           {inlineAttention !== undefined && !showsLiveSurface && childState.phase !== 'loading' ? (
-            <section className="live-preview__attention" aria-label="Agent request">
-              <AttentionDetail
-                key={`${inlineAttention.kind}:${inlineAttention.id}`}
-                item={inlineAttention}
-                busy={attentionBusy === inlineAttention.id}
-                drafts={attentionDrafts}
-                setDrafts={setAttentionDrafts}
-                saveDraft={(action, options) =>
-                  saveAttentionDraft(inlineAttention.id, action, options)
-                }
-                submit={(action, options) => void submitAttention(inlineAttention, action, options)}
-              />
-            </section>
+            <OwnerAwareAttention item={inlineAttention}>
+              <section className="live-preview__attention" aria-label="Agent request">
+                <AttentionDetail
+                  key={`${inlineAttention.kind}:${inlineAttention.id}`}
+                  item={inlineAttention}
+                  busy={attentionBusy === inlineAttention.id}
+                  drafts={attentionDrafts}
+                  setDrafts={setAttentionDrafts}
+                  saveDraft={(action, options) =>
+                    saveAttentionDraft(inlineAttention.id, action, options)
+                  }
+                  submit={(action, options) =>
+                    void submitAttention(inlineAttention, action, options)
+                  }
+                />
+              </section>
+            </OwnerAwareAttention>
           ) : null}
 
           {/* The live surface's Conversation/Signal-trace toggle, refresh, and
@@ -686,19 +691,21 @@ export function RefactorPassWorkspace({
                       onSubmit={submitQuestionAnswers}
                     />
                   ) : (
-                    <AttentionDetail
-                      key={`${inlineAttention.kind}:${inlineAttention.id}`}
-                      item={inlineAttention}
-                      busy={attentionBusy === inlineAttention.id}
-                      drafts={attentionDrafts}
-                      setDrafts={setAttentionDrafts}
-                      saveDraft={(action, options) =>
-                        saveAttentionDraft(inlineAttention.id, action, options)
-                      }
-                      submit={(action, options) =>
-                        void submitAttention(inlineAttention, action, options)
-                      }
-                    />
+                    <OwnerAwareAttention item={inlineAttention}>
+                      <AttentionDetail
+                        key={`${inlineAttention.kind}:${inlineAttention.id}`}
+                        item={inlineAttention}
+                        busy={attentionBusy === inlineAttention.id}
+                        drafts={attentionDrafts}
+                        setDrafts={setAttentionDrafts}
+                        saveDraft={(action, options) =>
+                          saveAttentionDraft(inlineAttention.id, action, options)
+                        }
+                        submit={(action, options) =>
+                          void submitAttention(inlineAttention, action, options)
+                        }
+                      />
+                    </OwnerAwareAttention>
                   )
                 }
               />

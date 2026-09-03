@@ -163,13 +163,14 @@ function evaluateAttachCompatibility(
   if (verdict.compatible) {
     return verdict;
   }
-  host.log(`${logPrefix}: ${verdict.reason}`);
+  const error = buildCanonicalError('E_INCOMPATIBLE_SERVER', { params: verdict });
+  host.log(`${logPrefix}: ${error.summary}`);
   host.setState({
     status: 'incompatible',
     stage: 'connect',
     detail,
     ownership: 'external',
-    error: buildCanonicalError('E_INCOMPATIBLE_SERVER', { params: { reason: verdict.reason } }),
+    error,
   });
   return null;
 }

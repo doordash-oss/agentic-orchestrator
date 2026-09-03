@@ -338,6 +338,26 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
                       void executeSingle(item, 'resume');
                     }
                   }}
+                  secondaryAction={
+                    outcome === undefined && item.allowedActions.includes('kill')
+                      ? executingKey === null
+                        ? {
+                            label: 'Kill',
+                            onAction: () => {
+                              killTriggerRef.current =
+                                document.activeElement instanceof HTMLButtonElement
+                                  ? document.activeElement
+                                  : null;
+                              setKillTarget(item);
+                            },
+                          }
+                        : {
+                            label: 'Kill',
+                            onAction: () => {},
+                            disabledReason: 'Another recovery action is running.',
+                          }
+                      : undefined
+                  }
                   explain={{
                     // The recovery snapshot in state is the durable home:
                     // the same snapshot-id/item-key pair the recovery log
@@ -392,23 +412,7 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
                       ? `↳ ${humanizeAction(outcome.action)} submitted`
                       : '⊘ Not started'}
                   </p>
-                ) : (
-                  <div className="recovery-workspace__item-actions">
-                    {item.allowedActions.includes('kill') ? (
-                      <button
-                        type="button"
-                        className="recovery-workspace__action recovery-workspace__action--kill"
-                        disabled={executingKey !== null}
-                        onClick={(event) => {
-                          killTriggerRef.current = event.currentTarget;
-                          setKillTarget(item);
-                        }}
-                      >
-                        Kill
-                      </button>
-                    ) : null}
-                  </div>
-                )}
+                ) : null}
               </li>
             );
           })}

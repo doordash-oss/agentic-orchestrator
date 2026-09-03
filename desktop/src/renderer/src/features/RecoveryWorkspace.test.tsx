@@ -102,9 +102,12 @@ describe('RecoveryWorkspace', () => {
     expect(pidTag).toHaveTextContent('PID 4242');
     expect(pidTag?.closest('.recovery-workspace__item-header')).not.toBeNull();
 
-    // Kill stays a sibling control and still opens the impact dialog.
-    const kill = within(queue).getByRole('button', { name: 'Kill' });
-    expect(kill).toHaveClass('recovery-workspace__action--kill');
+    // Resume and Kill form one remediation group inside the owning card.
+    const actionRow = card.querySelector('.error-surface__action-row');
+    expect(actionRow).not.toBeNull();
+    expect(within(actionRow as HTMLElement).getByRole('button', { name: 'Resume' })).toBeVisible();
+    const kill = within(actionRow as HTMLElement).getByRole('button', { name: 'Kill' });
+    expect(kill).toHaveClass('error-surface__secondary-action');
     await user.click(kill);
     expect(await screen.findByRole('dialog', { name: 'Confirm kill' })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -166,7 +169,7 @@ describe('RecoveryWorkspace', () => {
     expect(disclosure).toHaveTextContent('Phase: final_review');
     expect(disclosure).toHaveTextContent('Iteration 1');
     expect(within(card).getByRole('button', { name: 'Resume' })).toBeEnabled();
-    expect(within(queue).getByRole('button', { name: 'Kill' })).toBeVisible();
+    expect(within(card).getByRole('button', { name: 'Kill' })).toBeVisible();
     // A dead session renders no PID tag even when the PID is known.
     expect(document.querySelector('.recovery-workspace__item-pid')).toBeNull();
     expect(document.querySelector('.recovery-workspace__item-facts')).toBeNull();

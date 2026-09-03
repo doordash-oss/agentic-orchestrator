@@ -114,8 +114,6 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 function throwCanonicalError(canonical: CanonicalError): never {
   const error = new Error(CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(canonical));
   Object.assign(error, {
-    code: canonical.code,
-    remediation: canonical.remediation?.hint,
     canonical,
   });
   throw error;

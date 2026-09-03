@@ -7,8 +7,14 @@
  * fields the server projection and the explain-in-chat wiring share.
  */
 import type { ErrorReference } from '../../../shared/ipc';
+import { useSyncExternalStore } from 'react';
 
 const cards = new Map<string, HTMLElement>();
+const listeners = new Set<() => void>();
+
+function notifyListeners(): void {
+  for (const listener of listeners) listener();
+}
 
 /** The stable registry key for one durable error home. */
 export function errorCardKey(ref: ErrorReference): string {
@@ -30,10 +36,24 @@ export function errorCardKey(ref: ErrorReference): string {
 export function registerErrorCard(ref: ErrorReference, element: HTMLElement | null): void {
   const key = errorCardKey(ref);
   if (element === null) {
-    cards.delete(key);
+    if (cards.delete(key)) notifyListeners();
     return;
   }
   cards.set(key, element);
+  notifyListeners();
+}
+
+/** True while a durable error already has an owning card in the mounted view. */
+export function useRegisteredErrorCard(ref: ErrorReference | undefined): boolean {
+  const key = ref === undefined ? null : errorCardKey(ref);
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    () => key !== null && cards.has(key),
+    () => false,
+  );
 }
 
 /**

@@ -1017,7 +1017,7 @@ export class RuntimeGateway {
    * when at least one other server (local or remote) can be listed beside
    * it, so the user picks a working server instead of staring at the error
    * surface. Returns false when nothing else is live — the caller then
-   * emits the regular E_EXTERNAL_SERVER_LOST error.
+   * emits the profile-specific lost-server error.
    */
   private async parkChoiceForDeadRemote(generation: number, dead: KnownServer): Promise<boolean> {
     if (this.cancelled(generation)) {
@@ -1209,7 +1209,9 @@ export class RuntimeGateway {
         stage: 'connect',
         detail: 'The bundled runtime could not be started.',
         ownership: 'none',
-        error: this.ownedError('E_LAUNCH_FAILED', { params: { reason: safe.summary } }),
+        error: this.ownedError('E_LAUNCH_FAILED', {
+          ...(safe.diagnostics === undefined ? {} : { diagnostics: safe.diagnostics }),
+        }),
       });
       return;
     }
@@ -1233,13 +1235,14 @@ export class RuntimeGateway {
       // Packaging bug: the app's own bundled server disagrees with the app.
       // This child is app-owned, so stopping it is permitted.
       await this.supervision.stop();
-      this.deps.log(`bundled runtime is incompatible: ${verdict.reason}`);
+      const error = this.ownedError('E_BUNDLED_INCOMPATIBLE', { params: verdict });
+      this.deps.log(`bundled runtime is incompatible: ${error.summary}`);
       this.setState({
         status: 'launch-failed',
         stage: 'wait-health',
         detail: 'The bundled runtime does not match this app build.',
         ownership: 'none',
-        error: this.ownedError('E_BUNDLED_INCOMPATIBLE', { params: { reason: verdict.reason } }),
+        error,
       });
       return;
     }

@@ -82,19 +82,6 @@ func IsRelationshipWarning(code Code) bool {
 	return relationshipWarningCodes[code]
 }
 
-// orphanSessionCodes is the closed set of codes an orphan-session recovery
-// item can carry.
-var orphanSessionCodes = map[Code]bool{
-	OrphanSessionLive:  true,
-	OrphanSessionStale: true,
-}
-
-// IsOrphanSession reports whether code is one of the orphan-session recovery
-// codes.
-func IsOrphanSession(code Code) bool {
-	return orphanSessionCodes[code]
-}
-
 // EffortDriftParams carries the role label, effort, and model names an
 // effort-drift summary interpolates.
 type EffortDriftParams struct {

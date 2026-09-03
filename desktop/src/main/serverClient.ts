@@ -415,15 +415,6 @@ function toSessionDetail(session: ServerSessionDetail): SessionDetail {
       ...(session.initial_prompt === undefined ? {} : { initialPrompt: session.initial_prompt }),
       canAttach: session.can_attach,
       logAvailable: session.log_available,
-      // The server's free-text terminal error string is redacted and wrapped
-      // in a desktop catalog canonical; it never crosses raw.
-      ...(session.safe_error === undefined
-        ? {}
-        : {
-            safeError: buildCanonicalError('E_SESSION_ERROR', {
-              params: { reason: redactText(session.safe_error) },
-            }),
-          }),
     },
     SessionDetailSchema,
   );

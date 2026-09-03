@@ -134,7 +134,25 @@ describe('error-markup static check', () => {
       expect(violations[0]).toMatchObject({
         file: join(tree.sourceDir, 'main', 'bad.ts'),
         line: 1,
-        rule: 'literal user-facing reason authored outside the desktop error catalog',
+        rule: 'user-facing reason authored outside the desktop error catalog',
+      });
+    } finally {
+      rmSync(tree.root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails when main forwards a string variable through a reason parameter', () => {
+    const tree = writeTree({
+      'src/main/bad.ts':
+        "function fail(reason: string) { return buildCanonicalError('E_INTERNAL', { params: { reason } }); }\n",
+    });
+    try {
+      const violations = checkErrorMarkup(optionsFor(tree));
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toMatchObject({
+        file: join(tree.sourceDir, 'main', 'bad.ts'),
+        line: 1,
+        rule: 'user-facing reason authored outside the desktop error catalog',
       });
     } finally {
       rmSync(tree.root, { recursive: true, force: true });

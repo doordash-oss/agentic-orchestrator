@@ -35,10 +35,11 @@ const VALID_CLASSES = new Set(['blocking', 'needs_action', 'warning']);
 
 /** Builds an entry's summary with placeholder values for its typed parameters. */
 function summaryOf(spec: (typeof ERROR_CATALOG)[CatalogCode]): string {
-  const params = new Proxy({} as Record<string, string>, {
-    get: (_target, key) => (typeof key === 'string' ? 'param' : undefined),
+  const params = new Proxy({} as Record<string, string | boolean>, {
+    get: (_target, key) =>
+      key === 'code' ? 'missing_contract' : key === 'compatible' ? false : 'param',
   });
-  return (spec as CatalogSpec<Record<string, string>>).summary(params);
+  return (spec as CatalogSpec<Record<string, string | boolean>>).summary(params);
 }
 
 describe('ERROR_CATALOG', () => {
@@ -104,15 +105,12 @@ describe('buildCanonicalError', () => {
   });
 
   it('keeps the internal fallback summary catalog-authored', () => {
-    const err = buildCanonicalError('E_INTERNAL', {
-      params: { reason: 'boom at /Users/somebody/app with Bearer tok123' },
-    });
+    const err = buildCanonicalError('E_INTERNAL');
     expect(err.summary).toBe('The request failed unexpectedly.');
   });
 
   it('redacts free-form diagnostics', () => {
     const err = buildCanonicalError('E_LAUNCH_FAILED', {
-      params: { reason: 'spawn failed' },
       diagnostics: 'read /Users/somebody/secret.txt then Bearer tok123',
     });
     expect(err.diagnostics).toContain('[path]');
@@ -123,7 +121,6 @@ describe('buildCanonicalError', () => {
 
   it('redacts a remediation-hint override', () => {
     const err = buildCanonicalError('E_INTERNAL', {
-      params: { reason: 'the request failed' },
       remediationHint: 're-paste from /Users/somebody/notes with Bearer tok123',
     });
     expect(err.remediation?.hint).not.toContain('/Users/somebody');
@@ -133,9 +130,7 @@ describe('buildCanonicalError', () => {
 
 describe('toCanonicalError', () => {
   it('passes an existing CanonicalErrorException through untouched', () => {
-    const canonical = buildCanonicalError('E_INTERNAL', {
-      params: { reason: 'original' },
-    });
+    const canonical = buildCanonicalError('E_INTERNAL');
     const exc = new CanonicalErrorException(canonical);
     expect(toCanonicalError(exc, 'E_GATEWAY')).toBe(canonical);
   });
@@ -161,6 +156,26 @@ describe('toCanonicalError', () => {
     expect(JSON.stringify(err)).not.toContain('hunter2');
     expect(err.summary).toBe('The request failed unexpectedly.');
     expect(err.diagnostics).toBeUndefined();
+  });
+
+  it('keeps every caught-exception fallback message in diagnostics', () => {
+    const codes = [
+      'E_INTERNAL',
+      'E_GATEWAY',
+      'E_RECOVERY_DELAY',
+      'E_LAUNCH_FAILED',
+      'E_EVENT_STREAM',
+      'E_STOP_FAILED',
+      'E_LINK_ADD_FAILED',
+      'E_SESSION_STREAM',
+      'E_UPLOAD',
+    ] as const;
+    for (const code of codes) {
+      const err = toCanonicalError(new Error('private failure detail'), code);
+      expect(err.summary).toBe(summaryOf(ERROR_CATALOG[code]));
+      expect(err.summary).not.toContain('private failure detail');
+      expect(err.diagnostics).toBe('private failure detail');
+    }
   });
 
   it('maps a fetch abort to the typed timeout code instead of its raw DOM message', () => {

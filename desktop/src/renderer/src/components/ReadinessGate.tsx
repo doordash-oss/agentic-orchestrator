@@ -21,13 +21,8 @@ limitations under the License.
  * gate is unsatisfied, and the main view once everything passes. Mounted
  * fresh on every reconnect, so resume always starts from the server truth.
  */
-import { useCallback, useState, type Dispatch, type SetStateAction } from 'react';
-import type {
-  AttentionItem,
-  ReadinessSnapshot,
-  RoutedRequest,
-  UpdateState,
-} from '../../../shared/ipc';
+import { useCallback, type Dispatch, type SetStateAction } from 'react';
+import type { AttentionItem, RoutedRequest, UpdateState } from '../../../shared/ipc';
 import { WorkspaceShell } from '../features/WorkspaceShell';
 import type { AttentionDrafts } from '../features/AttentionInbox';
 import { deriveWizardState } from '../wizard/deriveWizardState';
@@ -79,8 +74,7 @@ export function ReadinessGate({
   amaUnread?: boolean;
 }) {
   const load = useCallback(() => window.agentico.getReadiness(), []);
-  const { state, reload } = useIpcLoad(load, []);
-  const [adoptedSnapshot, setAdoptedSnapshot] = useState<ReadinessSnapshot | null>(null);
+  const { state, reload, replace } = useIpcLoad(load, []);
 
   if (state.phase === 'loading') {
     return (
@@ -103,7 +97,7 @@ export function ReadinessGate({
     );
   }
 
-  const snapshot = adoptedSnapshot ?? state.data;
+  const snapshot = state.data;
   const derived = deriveWizardState(snapshot);
   if (derived.complete) {
     return (
@@ -129,5 +123,5 @@ export function ReadinessGate({
     );
   }
 
-  return <SetupWizard snapshot={snapshot} onSnapshot={setAdoptedSnapshot} />;
+  return <SetupWizard snapshot={snapshot} onSnapshot={replace} />;
 }

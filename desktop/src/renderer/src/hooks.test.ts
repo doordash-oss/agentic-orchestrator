@@ -39,6 +39,21 @@ describe('useIpcLoad', () => {
     await act(async () => resolveFirst('stale'));
     expect(result.current.state).toEqual({ phase: 'loaded', data: 'new' });
   });
+
+  it('replaces loaded data and prevents an in-flight request from overwriting it', async () => {
+    let resolveLoad!: (value: string) => void;
+    const load = vi.fn<() => Promise<string>>(
+      () => new Promise((resolve) => (resolveLoad = resolve)),
+    );
+    const { result } = renderHook(() => useIpcLoad(load, []));
+    await waitFor(() => expect(load).toHaveBeenCalledOnce());
+
+    act(() => result.current.replace('adopted'));
+    expect(result.current.state).toEqual({ phase: 'loaded', data: 'adopted' });
+
+    await act(async () => resolveLoad('stale'));
+    expect(result.current.state).toEqual({ phase: 'loaded', data: 'adopted' });
+  });
 });
 
 describe('useConnectionState', () => {

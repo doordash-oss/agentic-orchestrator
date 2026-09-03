@@ -31,7 +31,7 @@ import type {
 } from '../../../../shared/ipc';
 import { ErrorSurface } from '../../components/ErrorSurface';
 import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../../components/FieldError';
-import { retryAction, useConnectionState, type LoadState } from '../../hooks';
+import { retryAction, useConnectionState, useIpcLoad } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
 import type { CanonicalError } from '../../../../shared/ipc';
 import {
@@ -57,11 +57,6 @@ import {
   type CheckpointState,
   type Pipeline,
 } from '../runContract';
-type SeedState = LoadState<{
-  phase: 'ready';
-  defaults: FeatureConfigSnapshot['defaults'];
-}>;
-
 const STEPS = ['What', 'Pipeline', 'Review'] as const;
 
 export interface RefactorLauncherProps {
@@ -77,7 +72,6 @@ export function RefactorLauncher({
   onCancel,
   onDispatched,
 }: RefactorLauncherProps): React.ReactElement {
-  const [seed, setSeed] = useState<SeedState>({ phase: 'loading' });
   const [stepIndex, setStepIndex] = useState(0);
   const [name, setName] = useState(`Refactor ${snapshot.name}`);
   const [description, setDescription] = useState('');
@@ -120,37 +114,37 @@ export function RefactorLauncher({
     isBlockingStagedItem(item, serverKey),
   );
 
-  const loadSeed = useCallback(() => {
-    setSeed({ phase: 'loading' });
-    window.agentico
-      .getFeatureConfig(featureId)
-      .then((config) => {
-        // The parent's current configuration is the authoritative seed for
-        // every paired-review axis; the effective workspace defaults label
-        // the untouched rows, exactly as in the parent's config editor.
-        const choices: Partial<Record<PhaseKey, string>> = {};
-        const efforts: Partial<Record<PhaseKey, EffortLevel>> = {};
-        for (const key of Object.keys(config.current.models) as PhaseKey[]) {
-          const model = config.current.models[key];
-          if (model !== undefined && model !== '') choices[key] = model;
-        }
-        for (const key of Object.keys(config.current.effort) as Array<
-          keyof typeof config.current.effort
-        >) {
-          const effort = config.current.effort[key];
-          if (effort !== undefined) efforts[key] = effort;
-        }
-        setModelChoices(choices);
-        setEffortChoices(efforts);
-        setInquireness(config.current.inquireness);
-        setCheckpoints({ ...config.current.checkpoints });
-        if (isPipeline(config.current.pipeline)) setPipeline(config.current.pipeline);
-        setSeed({ phase: 'ready', defaults: config.defaults });
-      })
-      .catch((err: unknown) => setSeed({ phase: 'error', error: parseIpcError(err) }));
-  }, [featureId]);
+  const loadSeed = useCallback(
+    (): Promise<FeatureConfigSnapshot> => window.agentico.getFeatureConfig(featureId),
+    [featureId],
+  );
+  const { state: seed, reload: reloadSeed } = useIpcLoad(loadSeed, [featureId]);
 
-  useEffect(loadSeed, [loadSeed]);
+  useEffect(() => {
+    if (seed.phase !== 'loaded') return;
+    const config = seed.data;
+    // The parent's current configuration is the authoritative seed for
+    // every paired-review axis; the effective workspace defaults label
+    // the untouched rows, exactly as in the parent's config editor.
+    const choices: Partial<Record<PhaseKey, string>> = {};
+    const efforts: Partial<Record<PhaseKey, EffortLevel>> = {};
+    for (const key of Object.keys(config.current.models) as PhaseKey[]) {
+      const model = config.current.models[key];
+      if (model !== undefined && model !== '') choices[key] = model;
+    }
+    for (const key of Object.keys(config.current.effort) as Array<
+      keyof typeof config.current.effort
+    >) {
+      const effort = config.current.effort[key];
+      if (effort !== undefined) efforts[key] = effort;
+    }
+    setModelChoices(choices);
+    setEffortChoices(efforts);
+    setInquireness(config.current.inquireness);
+    setCheckpoints({ ...config.current.checkpoints });
+    if (isPipeline(config.current.pipeline)) setPipeline(config.current.pipeline);
+  }, [seed]);
+
   useEffect(() => {
     if (formError !== null) formErrorRef.current?.focus();
   }, [formError]);
@@ -169,7 +163,7 @@ export function RefactorLauncher({
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
-    if (pending || uploadsBlocking || seed.phase !== 'ready') return;
+    if (pending || uploadsBlocking || seed.phase !== 'loaded') return;
     if (!validateName()) {
       setStepIndex(0);
       return;
@@ -234,15 +228,15 @@ export function RefactorLauncher({
   if (seed.phase === 'error')
     return (
       <section className="refactor-wizard" aria-label="Start refactor">
-        <ErrorSurface error={seed.error} variant="compact" localAction={retryAction(loadSeed)} />
+        <ErrorSurface error={seed.error} variant="compact" localAction={retryAction(reloadSeed)} />
       </section>
     );
 
   const currentStep = STEPS[stepIndex];
   const gates = applicableGates(pipeline);
   const visibleGates = GATE_FIELDS.filter((gate) => gates.has(gate.key));
-  const modelDefaults = seed.defaults.models;
-  const effortDefaults = seed.defaults.effort;
+  const modelDefaults = seed.data.defaults.models;
+  const effortDefaults = seed.data.defaults.effort;
 
   return (
     <form

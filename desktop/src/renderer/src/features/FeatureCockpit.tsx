@@ -93,6 +93,7 @@ import type { CompletionAction } from './completion/completionShared';
 import type { FeatureActionResult, PublishFeatureActionRequest } from '../../../shared/ipc';
 import {
   AttentionDetail,
+  OwnerAwareAttention,
   attentionActionNotice,
   attentionErrorMessage,
   runAttentionSubmit,
@@ -2174,19 +2175,21 @@ export function FeatureCockpit({
   );
   const standaloneAttention =
     activeAttentionItem === undefined ? null : (
-      <section className="live-preview__attention" aria-label="Agent request">
-        <AttentionDetail
-          key={`${activeAttentionItem.kind}:${activeAttentionItem.id}`}
-          item={activeAttentionItem}
-          busy={attentionBusy === activeAttentionItem.id}
-          drafts={attentionDrafts}
-          setDrafts={setAttentionDrafts}
-          saveDraft={(action, options) =>
-            saveAttentionDraft(activeAttentionItem.id, action, options)
-          }
-          submit={(action, options) => void submitAttention(activeAttentionItem, action, options)}
-        />
-      </section>
+      <OwnerAwareAttention item={activeAttentionItem}>
+        <section className="live-preview__attention" aria-label="Agent request">
+          <AttentionDetail
+            key={`${activeAttentionItem.kind}:${activeAttentionItem.id}`}
+            item={activeAttentionItem}
+            busy={attentionBusy === activeAttentionItem.id}
+            drafts={attentionDrafts}
+            setDrafts={setAttentionDrafts}
+            saveDraft={(action, options) =>
+              saveAttentionDraft(activeAttentionItem.id, action, options)
+            }
+            submit={(action, options) => void submitAttention(activeAttentionItem, action, options)}
+          />
+        </section>
+      </OwnerAwareAttention>
     );
 
   if (!isArchiveMode && postImplementationMode.kind !== 'regular') {
@@ -2733,19 +2736,21 @@ export function FeatureCockpit({
                             onSubmit={submitQuestionAnswers}
                           />
                         ) : (
-                          <AttentionDetail
-                            key={`${activeAttentionItem.kind}:${activeAttentionItem.id}`}
-                            item={activeAttentionItem}
-                            busy={attentionBusy === activeAttentionItem.id}
-                            drafts={attentionDrafts}
-                            setDrafts={setAttentionDrafts}
-                            saveDraft={(action, options) =>
-                              saveAttentionDraft(activeAttentionItem.id, action, options)
-                            }
-                            submit={(action, options) =>
-                              void submitAttention(activeAttentionItem, action, options)
-                            }
-                          />
+                          <OwnerAwareAttention item={activeAttentionItem}>
+                            <AttentionDetail
+                              key={`${activeAttentionItem.kind}:${activeAttentionItem.id}`}
+                              item={activeAttentionItem}
+                              busy={attentionBusy === activeAttentionItem.id}
+                              drafts={attentionDrafts}
+                              setDrafts={setAttentionDrafts}
+                              saveDraft={(action, options) =>
+                                saveAttentionDraft(activeAttentionItem.id, action, options)
+                              }
+                              submit={(action, options) =>
+                                void submitAttention(activeAttentionItem, action, options)
+                              }
+                            />
+                          </OwnerAwareAttention>
                         )
                       }
                     />

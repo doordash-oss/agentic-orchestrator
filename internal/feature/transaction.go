@@ -217,15 +217,6 @@ func (f *Feature) IntegrationAttentionRecord() *errcat.FailureRecord {
 	return f.Parent.Transaction.AttentionRecord()
 }
 
-// IntegrationAttentionCode returns the child's integration attention catalog
-// code, or "" when the child carries no attention record.
-func (f *Feature) IntegrationAttentionCode() errcat.Code {
-	if f == nil || f.Parent == nil {
-		return ""
-	}
-	return f.Parent.Transaction.AttentionCode()
-}
-
 // HasIntegrationAttention reports whether the child's integration
 // transaction is parked at attention and needs the operator's action.
 func (f *Feature) HasIntegrationAttention() bool {

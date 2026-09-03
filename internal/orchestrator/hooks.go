@@ -287,11 +287,9 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 				// Iteration counters live on the run / feature under the
 				// unified flow, not per-repo.
 				status := "untouched"
-				repoError := ""
 				switch {
 				case rs.Error != nil:
 					status = "failed"
-					repoError = errcat.RenderRecord(*rs.Error).Summary
 				case rs.PRURL != "":
 					status = "published"
 				case rs.Touched:
@@ -301,7 +299,6 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 					Status:    status,
 					Iteration: 0,
 					PRURL:     rs.PRURL,
-					LastError: repoError,
 				}
 			}
 			errorCode, errorClass := "", ""

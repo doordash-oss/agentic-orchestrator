@@ -59,6 +59,8 @@ export interface ErrorSurfaceProps {
    * both throws in development, and the local action wins in production.
    */
   localAction?: ErrorSurfaceLocalAction;
+  /** A secondary local choice grouped beside the primary remediation action. */
+  secondaryAction?: ErrorSurfaceLocalAction;
   /** Lands on the root div so a hosting surface can focus the banner. */
   rootRef?: Ref<HTMLDivElement>;
   /** Forwarded to the root div when a host focuses it programmatically. */
@@ -218,6 +220,7 @@ export function ErrorSurface({
   resolveAction,
   onAction,
   localAction,
+  secondaryAction,
   rootRef,
   rootTabIndex,
   explain,
@@ -279,8 +282,22 @@ export function ErrorSurface({
       <span className="error-surface__action-reason">{resolvedAction.disabledReason}</span>
     ) : null;
   const actionSlot = localActionSlot ?? resolvedActionSlot;
+  const secondaryActionSlot =
+    secondaryAction == null ? null : secondaryAction.disabledReason != null ? (
+      <span className="error-surface__action-reason">{secondaryAction.disabledReason}</span>
+    ) : (
+      <button
+        type="button"
+        className="error-surface__secondary-action"
+        onClick={secondaryAction.onAction}
+      >
+        {secondaryAction.label}
+      </button>
+    );
   const remediationHasContent =
-    (remediationHint != null && remediationHint !== '') || actionSlot != null;
+    (remediationHint != null && remediationHint !== '') ||
+    actionSlot != null ||
+    secondaryActionSlot != null;
   const diagnostics =
     error.diagnostics != null && error.diagnostics !== '' ? error.diagnostics : null;
   const hasDetails = contextHasContent(error.context);
@@ -311,7 +328,12 @@ export function ErrorSurface({
           {remediationHint != null && (
             <p className="error-surface__remediation-hint">{remediationHint}</p>
           )}
-          {actionSlot}
+          {actionSlot != null || secondaryActionSlot != null ? (
+            <div className="error-surface__action-row">
+              {actionSlot}
+              {secondaryActionSlot}
+            </div>
+          ) : null}
         </div>
       )}
       {/* The explain-in-chat follow-up rides after the remediation block so

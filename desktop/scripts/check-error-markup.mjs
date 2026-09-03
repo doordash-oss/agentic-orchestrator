@@ -170,15 +170,15 @@ export function checkErrorMarkup(options) {
     (path) => !isTestFile(path),
   )) {
     const source = readFileSync(file, 'utf8');
-    const match = /params\s*:\s*\{\s*reason\s*:\s*['"`]/m.exec(source);
+    const match = /params\s*:\s*\{\s*reason(?:\s*:|\s*[,}])/m.exec(source);
     if (match !== null) {
       const line = source.slice(0, match.index).split('\n').length;
       violations.push({
         file,
         line,
-        rule: 'literal user-facing reason authored outside the desktop error catalog',
+        rule: 'user-facing reason authored outside the desktop error catalog',
         snippet: source.split('\n')[line - 1].trim(),
-        fix: 'give the fixed condition its own E_ code and author its title, summary, and hint in shared/errors.ts',
+        fix: 'give the condition its own E_ code and author its title, summary, and hint in shared/errors.ts; caught exception text belongs in diagnostics',
       });
     }
   }

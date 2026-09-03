@@ -1110,7 +1110,7 @@ function SidebarRow({
     stageCount: number;
     activeIndex: number;
     atRest: boolean;
-    tone: 'progress' | 'attention';
+    tone: 'progress' | 'attention' | 'danger';
   };
   selected: boolean;
   onSelect(): void;
@@ -1190,7 +1190,7 @@ function SidebarFeatureRow({
           ? undefined
           : {
               ...pipInfo,
-              tone: lane === 'running' ? 'progress' : 'attention',
+              tone: lane === 'running' ? 'progress' : lane === 'failed' ? 'danger' : 'attention',
             }
       }
     />
@@ -1343,11 +1343,16 @@ function overviewRowPip(
   stageCount: number;
   activeIndex: number;
   atRest: boolean;
-  tone: 'progress' | 'attention';
+  tone: 'progress' | 'attention' | 'danger';
 } | null {
   if (lane === 'waiting' || lane === 'failed' || lane === 'running') {
     const info = pipRailFor(feature);
-    return info === null ? null : { ...info, tone: lane === 'running' ? 'progress' : 'attention' };
+    return info === null
+      ? null
+      : {
+          ...info,
+          tone: lane === 'running' ? 'progress' : lane === 'failed' ? 'danger' : 'attention',
+        };
   }
   const stages = spineStages(feature.activeChild?.pipeline ?? feature.pipeline);
   return {

@@ -431,7 +431,8 @@ describe('SessionService output subscriptions', () => {
         code: 'E_SESSION_STREAM',
         class: 'blocking',
         title: 'The session stream failed',
-        summary: 'stream setup failed',
+        summary: 'The session output stream stopped unexpectedly.',
+        diagnostics: 'stream setup failed',
       },
     });
   });

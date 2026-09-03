@@ -50,7 +50,6 @@ type RepoSummaryInput struct {
 	Status    string
 	Iteration int
 	PRURL     string
-	LastError string
 }
 
 // BuildFeatureSummaryInput is a convenience adapter that populates a

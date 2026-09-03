@@ -70,16 +70,16 @@ func (e AutomaticReviewStateMode) Valid() bool {
 
 // Defines values for AutomaticReviewStateSource.
 const (
-	Feature AutomaticReviewStateSource = "feature"
-	Global  AutomaticReviewStateSource = "global"
+	AutomaticReviewStateSourceFeature AutomaticReviewStateSource = "feature"
+	AutomaticReviewStateSourceGlobal  AutomaticReviewStateSource = "global"
 )
 
 // Valid indicates whether the value is a known member of the AutomaticReviewStateSource enum.
 func (e AutomaticReviewStateSource) Valid() bool {
 	switch e {
-	case Feature:
+	case AutomaticReviewStateSourceFeature:
 		return true
-	case Global:
+	case AutomaticReviewStateSourceGlobal:
 		return true
 	default:
 		return false
@@ -143,6 +143,120 @@ func (e CreateFeatureMutationRequestRiskLevel) Valid() bool {
 	case CreateFeatureMutationRequestRiskLevelLow:
 		return true
 	case CreateFeatureMutationRequestRiskLevelMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ErrorClass.
+const (
+	ErrorClassBlocking    ErrorClass = "blocking"
+	ErrorClassNeedsAction ErrorClass = "needs_action"
+	ErrorClassWarning     ErrorClass = "warning"
+)
+
+// Valid indicates whether the value is a known member of the ErrorClass enum.
+func (e ErrorClass) Valid() bool {
+	switch e {
+	case ErrorClassBlocking:
+		return true
+	case ErrorClassNeedsAction:
+		return true
+	case ErrorClassWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ErrorScope.
+const (
+	ErrorScopeRecovery    ErrorScope = "recovery"
+	ErrorScopeRepository  ErrorScope = "repository"
+	ErrorScopeRun         ErrorScope = "run"
+	ErrorScopeSetup       ErrorScope = "setup"
+	ErrorScopeTransaction ErrorScope = "transaction"
+)
+
+// Valid indicates whether the value is a known member of the ErrorScope enum.
+func (e ErrorScope) Valid() bool {
+	switch e {
+	case ErrorScopeRecovery:
+		return true
+	case ErrorScopeRepository:
+		return true
+	case ErrorScopeRun:
+		return true
+	case ErrorScopeSetup:
+		return true
+	case ErrorScopeTransaction:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FeatureAction.
+const (
+	FeatureActionCleanup            FeatureAction = "cleanup"
+	FeatureActionDelete             FeatureAction = "delete"
+	FeatureActionDiscard            FeatureAction = "discard"
+	FeatureActionMarkDone           FeatureAction = "mark-done"
+	FeatureActionMerge              FeatureAction = "merge"
+	FeatureActionNeedUserInput      FeatureAction = "need-user-input"
+	FeatureActionNeedUserInputDraft FeatureAction = "need-user-input-draft"
+	FeatureActionPauseStop          FeatureAction = "pause-stop"
+	FeatureActionPublish            FeatureAction = "publish"
+	FeatureActionRebase             FeatureAction = "rebase"
+	FeatureActionRefactor           FeatureAction = "refactor"
+	FeatureActionRestart            FeatureAction = "restart"
+	FeatureActionResume             FeatureAction = "resume"
+	FeatureActionRetry              FeatureAction = "retry"
+	FeatureActionReviewFeedback     FeatureAction = "review-feedback"
+	FeatureActionRewind             FeatureAction = "rewind"
+	FeatureActionSetup              FeatureAction = "setup"
+	FeatureActionStart              FeatureAction = "start"
+)
+
+// Valid indicates whether the value is a known member of the FeatureAction enum.
+func (e FeatureAction) Valid() bool {
+	switch e {
+	case FeatureActionCleanup:
+		return true
+	case FeatureActionDelete:
+		return true
+	case FeatureActionDiscard:
+		return true
+	case FeatureActionMarkDone:
+		return true
+	case FeatureActionMerge:
+		return true
+	case FeatureActionNeedUserInput:
+		return true
+	case FeatureActionNeedUserInputDraft:
+		return true
+	case FeatureActionPauseStop:
+		return true
+	case FeatureActionPublish:
+		return true
+	case FeatureActionRebase:
+		return true
+	case FeatureActionRefactor:
+		return true
+	case FeatureActionRestart:
+		return true
+	case FeatureActionResume:
+		return true
+	case FeatureActionRetry:
+		return true
+	case FeatureActionReviewFeedback:
+		return true
+	case FeatureActionRewind:
+		return true
+	case FeatureActionSetup:
+		return true
+	case FeatureActionStart:
 		return true
 	default:
 		return false
@@ -230,6 +344,24 @@ func (e NeedUserInputVerificationAction) Valid() bool {
 	}
 }
 
+// Defines values for PermissionAnswerRequestAutoApproveScope.
+const (
+	PermissionAnswerRequestAutoApproveScopeFeature   PermissionAnswerRequestAutoApproveScope = "feature"
+	PermissionAnswerRequestAutoApproveScopeWorkspace PermissionAnswerRequestAutoApproveScope = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the PermissionAnswerRequestAutoApproveScope enum.
+func (e PermissionAnswerRequestAutoApproveScope) Valid() bool {
+	switch e {
+	case PermissionAnswerRequestAutoApproveScopeFeature:
+		return true
+	case PermissionAnswerRequestAutoApproveScopeWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PermissionAnswerRequestDecision.
 const (
 	AllowOnce     PermissionAnswerRequestDecision = "allow_once"
@@ -245,39 +377,6 @@ func (e PermissionAnswerRequestDecision) Valid() bool {
 	case AllowRemember:
 		return true
 	case Deny:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ReadinessIssueCode.
-const (
-	InvalidConfiguration ReadinessIssueCode = "invalid_configuration"
-	InvalidRepository    ReadinessIssueCode = "invalid_repository"
-	InvalidWorkspaceRoot ReadinessIssueCode = "invalid_workspace_root"
-	MissingExecutable    ReadinessIssueCode = "missing_executable"
-	ModelsUnavailable    ReadinessIssueCode = "models_unavailable"
-	Unauthenticated      ReadinessIssueCode = "unauthenticated"
-	UnsupportedVersion   ReadinessIssueCode = "unsupported_version"
-)
-
-// Valid indicates whether the value is a known member of the ReadinessIssueCode enum.
-func (e ReadinessIssueCode) Valid() bool {
-	switch e {
-	case InvalidConfiguration:
-		return true
-	case InvalidRepository:
-		return true
-	case InvalidWorkspaceRoot:
-		return true
-	case MissingExecutable:
-		return true
-	case ModelsUnavailable:
-		return true
-	case Unauthenticated:
-		return true
-	case UnsupportedVersion:
 		return true
 	default:
 		return false
@@ -347,6 +446,27 @@ func (e RewindWorktreeConsequenceResetKind) Valid() bool {
 	}
 }
 
+// Defines values for SSEEventErrorClass.
+const (
+	SSEEventErrorClassBlocking    SSEEventErrorClass = "blocking"
+	SSEEventErrorClassNeedsAction SSEEventErrorClass = "needs_action"
+	SSEEventErrorClassWarning     SSEEventErrorClass = "warning"
+)
+
+// Valid indicates whether the value is a known member of the SSEEventErrorClass enum.
+func (e SSEEventErrorClass) Valid() bool {
+	switch e {
+	case SSEEventErrorClassBlocking:
+		return true
+	case SSEEventErrorClassNeedsAction:
+		return true
+	case SSEEventErrorClassWarning:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskActivityState.
 const (
 	TaskActivityStateCancelled TaskActivityState = "cancelled"
@@ -365,72 +485,6 @@ func (e TaskActivityState) Valid() bool {
 	case TaskActivityStateFailed:
 		return true
 	case TaskActivityStateRunning:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for FeatureAction.
-const (
-	FeatureActionCleanup            FeatureAction = "cleanup"
-	FeatureActionDelete             FeatureAction = "delete"
-	FeatureActionDiscard            FeatureAction = "discard"
-	FeatureActionMarkDone           FeatureAction = "mark-done"
-	FeatureActionMerge              FeatureAction = "merge"
-	FeatureActionNeedUserInput      FeatureAction = "need-user-input"
-	FeatureActionNeedUserInputDraft FeatureAction = "need-user-input-draft"
-	FeatureActionPauseStop          FeatureAction = "pause-stop"
-	FeatureActionPublish            FeatureAction = "publish"
-	FeatureActionRebase             FeatureAction = "rebase"
-	FeatureActionRefactor           FeatureAction = "refactor"
-	FeatureActionRestart            FeatureAction = "restart"
-	FeatureActionResume             FeatureAction = "resume"
-	FeatureActionRetry              FeatureAction = "retry"
-	FeatureActionReviewFeedback     FeatureAction = "review-feedback"
-	FeatureActionRewind             FeatureAction = "rewind"
-	FeatureActionSetup              FeatureAction = "setup"
-	FeatureActionStart              FeatureAction = "start"
-)
-
-// Valid indicates whether the value is a known member of the FeatureAction enum.
-func (e FeatureAction) Valid() bool {
-	switch e {
-	case FeatureActionCleanup:
-		return true
-	case FeatureActionDelete:
-		return true
-	case FeatureActionDiscard:
-		return true
-	case FeatureActionMarkDone:
-		return true
-	case FeatureActionMerge:
-		return true
-	case FeatureActionNeedUserInput:
-		return true
-	case FeatureActionNeedUserInputDraft:
-		return true
-	case FeatureActionPauseStop:
-		return true
-	case FeatureActionPublish:
-		return true
-	case FeatureActionRebase:
-		return true
-	case FeatureActionRefactor:
-		return true
-	case FeatureActionRestart:
-		return true
-	case FeatureActionResume:
-		return true
-	case FeatureActionRetry:
-		return true
-	case FeatureActionReviewFeedback:
-		return true
-	case FeatureActionRewind:
-		return true
-	case FeatureActionSetup:
-		return true
-	case FeatureActionStart:
 		return true
 	default:
 		return false
@@ -620,72 +674,6 @@ func (e RunFeatureActionParamsXAgenticoClient) Valid() bool {
 	}
 }
 
-// Defines values for RunFeatureActionParamsAction.
-const (
-	RunFeatureActionParamsActionCleanup            RunFeatureActionParamsAction = "cleanup"
-	RunFeatureActionParamsActionDelete             RunFeatureActionParamsAction = "delete"
-	RunFeatureActionParamsActionDiscard            RunFeatureActionParamsAction = "discard"
-	RunFeatureActionParamsActionMarkDone           RunFeatureActionParamsAction = "mark-done"
-	RunFeatureActionParamsActionMerge              RunFeatureActionParamsAction = "merge"
-	RunFeatureActionParamsActionNeedUserInput      RunFeatureActionParamsAction = "need-user-input"
-	RunFeatureActionParamsActionNeedUserInputDraft RunFeatureActionParamsAction = "need-user-input-draft"
-	RunFeatureActionParamsActionPauseStop          RunFeatureActionParamsAction = "pause-stop"
-	RunFeatureActionParamsActionPublish            RunFeatureActionParamsAction = "publish"
-	RunFeatureActionParamsActionRebase             RunFeatureActionParamsAction = "rebase"
-	RunFeatureActionParamsActionRefactor           RunFeatureActionParamsAction = "refactor"
-	RunFeatureActionParamsActionRestart            RunFeatureActionParamsAction = "restart"
-	RunFeatureActionParamsActionResume             RunFeatureActionParamsAction = "resume"
-	RunFeatureActionParamsActionRetry              RunFeatureActionParamsAction = "retry"
-	RunFeatureActionParamsActionReviewFeedback     RunFeatureActionParamsAction = "review-feedback"
-	RunFeatureActionParamsActionRewind             RunFeatureActionParamsAction = "rewind"
-	RunFeatureActionParamsActionSetup              RunFeatureActionParamsAction = "setup"
-	RunFeatureActionParamsActionStart              RunFeatureActionParamsAction = "start"
-)
-
-// Valid indicates whether the value is a known member of the RunFeatureActionParamsAction enum.
-func (e RunFeatureActionParamsAction) Valid() bool {
-	switch e {
-	case RunFeatureActionParamsActionCleanup:
-		return true
-	case RunFeatureActionParamsActionDelete:
-		return true
-	case RunFeatureActionParamsActionDiscard:
-		return true
-	case RunFeatureActionParamsActionMarkDone:
-		return true
-	case RunFeatureActionParamsActionMerge:
-		return true
-	case RunFeatureActionParamsActionNeedUserInput:
-		return true
-	case RunFeatureActionParamsActionNeedUserInputDraft:
-		return true
-	case RunFeatureActionParamsActionPauseStop:
-		return true
-	case RunFeatureActionParamsActionPublish:
-		return true
-	case RunFeatureActionParamsActionRebase:
-		return true
-	case RunFeatureActionParamsActionRefactor:
-		return true
-	case RunFeatureActionParamsActionRestart:
-		return true
-	case RunFeatureActionParamsActionResume:
-		return true
-	case RunFeatureActionParamsActionRetry:
-		return true
-	case RunFeatureActionParamsActionReviewFeedback:
-		return true
-	case RunFeatureActionParamsActionRewind:
-		return true
-	case RunFeatureActionParamsActionSetup:
-		return true
-	case RunFeatureActionParamsActionStart:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for RunFeatureSubactionParamsXAgenticoClient.
 const (
 	RunFeatureSubactionParamsXAgenticoClientLocal RunFeatureSubactionParamsXAgenticoClient = "local"
@@ -695,72 +683,6 @@ const (
 func (e RunFeatureSubactionParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case RunFeatureSubactionParamsXAgenticoClientLocal:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for RunFeatureSubactionParamsAction.
-const (
-	RunFeatureSubactionParamsActionCleanup            RunFeatureSubactionParamsAction = "cleanup"
-	RunFeatureSubactionParamsActionDelete             RunFeatureSubactionParamsAction = "delete"
-	RunFeatureSubactionParamsActionDiscard            RunFeatureSubactionParamsAction = "discard"
-	RunFeatureSubactionParamsActionMarkDone           RunFeatureSubactionParamsAction = "mark-done"
-	RunFeatureSubactionParamsActionMerge              RunFeatureSubactionParamsAction = "merge"
-	RunFeatureSubactionParamsActionNeedUserInput      RunFeatureSubactionParamsAction = "need-user-input"
-	RunFeatureSubactionParamsActionNeedUserInputDraft RunFeatureSubactionParamsAction = "need-user-input-draft"
-	RunFeatureSubactionParamsActionPauseStop          RunFeatureSubactionParamsAction = "pause-stop"
-	RunFeatureSubactionParamsActionPublish            RunFeatureSubactionParamsAction = "publish"
-	RunFeatureSubactionParamsActionRebase             RunFeatureSubactionParamsAction = "rebase"
-	RunFeatureSubactionParamsActionRefactor           RunFeatureSubactionParamsAction = "refactor"
-	RunFeatureSubactionParamsActionRestart            RunFeatureSubactionParamsAction = "restart"
-	RunFeatureSubactionParamsActionResume             RunFeatureSubactionParamsAction = "resume"
-	RunFeatureSubactionParamsActionRetry              RunFeatureSubactionParamsAction = "retry"
-	RunFeatureSubactionParamsActionReviewFeedback     RunFeatureSubactionParamsAction = "review-feedback"
-	RunFeatureSubactionParamsActionRewind             RunFeatureSubactionParamsAction = "rewind"
-	RunFeatureSubactionParamsActionSetup              RunFeatureSubactionParamsAction = "setup"
-	RunFeatureSubactionParamsActionStart              RunFeatureSubactionParamsAction = "start"
-)
-
-// Valid indicates whether the value is a known member of the RunFeatureSubactionParamsAction enum.
-func (e RunFeatureSubactionParamsAction) Valid() bool {
-	switch e {
-	case RunFeatureSubactionParamsActionCleanup:
-		return true
-	case RunFeatureSubactionParamsActionDelete:
-		return true
-	case RunFeatureSubactionParamsActionDiscard:
-		return true
-	case RunFeatureSubactionParamsActionMarkDone:
-		return true
-	case RunFeatureSubactionParamsActionMerge:
-		return true
-	case RunFeatureSubactionParamsActionNeedUserInput:
-		return true
-	case RunFeatureSubactionParamsActionNeedUserInputDraft:
-		return true
-	case RunFeatureSubactionParamsActionPauseStop:
-		return true
-	case RunFeatureSubactionParamsActionPublish:
-		return true
-	case RunFeatureSubactionParamsActionRebase:
-		return true
-	case RunFeatureSubactionParamsActionRefactor:
-		return true
-	case RunFeatureSubactionParamsActionRestart:
-		return true
-	case RunFeatureSubactionParamsActionResume:
-		return true
-	case RunFeatureSubactionParamsActionRetry:
-		return true
-	case RunFeatureSubactionParamsActionReviewFeedback:
-		return true
-	case RunFeatureSubactionParamsActionRewind:
-		return true
-	case RunFeatureSubactionParamsActionSetup:
-		return true
-	case RunFeatureSubactionParamsActionStart:
 		return true
 	default:
 		return false
@@ -1175,6 +1097,14 @@ type ChatEndResponse struct {
 	SessionID  string       `json:"session_id"`
 }
 
+// ChatStartRequest defines model for ChatStartRequest.
+type ChatStartRequest struct {
+	Context      ErrorReference `json:"context,omitempty"`
+	ImageUploads []string       `json:"image_uploads,omitempty"`
+	Images       []string       `json:"images,omitempty"`
+	Message      string         `json:"message"`
+}
+
 // ChatStartResponse defines model for ChatStartResponse.
 type ChatStartResponse struct {
 	APIVersion string       `json:"api_version"`
@@ -1192,18 +1122,6 @@ type Checkpoints struct {
 	PhasePlanReview bool `json:"phase_plan_review"`
 	ResearchReview  bool `json:"research_review"`
 	RoadmapReview   bool `json:"roadmap_review"`
-}
-
-// ChildDirtyDiagnostics defines model for ChildDirtyDiagnostics.
-type ChildDirtyDiagnostics struct {
-	Path           string   `json:"path,omitempty"`
-	Repo           string   `json:"repo,omitempty"`
-	Staged         []string `json:"staged,omitempty"`
-	StagedTotal    int      `json:"staged_total,omitempty"`
-	Unstaged       []string `json:"unstaged,omitempty"`
-	UnstagedTotal  int      `json:"unstaged_total,omitempty"`
-	Untracked      []string `json:"untracked,omitempty"`
-	UntrackedTotal int      `json:"untracked_total,omitempty"`
 }
 
 // ChildFeatureResponse defines model for ChildFeatureResponse.
@@ -1260,11 +1178,11 @@ type CompletionPreflightRepo struct {
 	// Branch Server-authored feature branch for this repository.
 	Branch string `json:"branch,omitempty"`
 
+	// Error Canonical catalog-rendered publish failure record this repository owns, when any.
+	Error *Error `json:"error,omitempty"`
+
 	// Freshness Server-authored freshness state.
 	Freshness string `json:"freshness,omitempty"`
-
-	// LastError Safe, bounded last error text.
-	LastError string `json:"last_error,omitempty"`
 
 	// PendingCommits Commits on this repository's branch that have not reached its delivery destination — the remote pull-request branch, or the base branch for a local-only repository.
 	PendingCommits int `json:"pending_commits,omitempty"`
@@ -1317,8 +1235,9 @@ type ConfigRepo struct {
 
 // ConfigurationReadiness defines model for ConfigurationReadiness.
 type ConfigurationReadiness struct {
-	Issue *ReadinessIssue `json:"issue,omitempty"`
-	Valid bool            `json:"valid"`
+	// Issue Canonical catalog-rendered error.
+	Issue *Error `json:"issue,omitempty"`
+	Valid bool   `json:"valid"`
 }
 
 // Context defines model for Context.
@@ -1328,17 +1247,19 @@ type Context struct {
 
 // ControlRequest defines model for ControlRequest.
 type ControlRequest struct {
-	FeatureID    string                     `json:"feature_id,omitempty"`
-	Input        map[string]interface{}     `json:"input,omitempty"`
-	Phase        string                     `json:"phase,omitempty"`
-	Questions    []AskUserQuestion          `json:"questions,omitempty"`
-	Remember     *PermissionRememberPreview `json:"remember,omitempty"`
-	RequestID    string                     `json:"request_id"`
-	SessionID    string                     `json:"session_id,omitempty"`
-	Status       string                     `json:"status"`
-	Summary      string                     `json:"summary,omitempty"`
-	ToolName     string                     `json:"tool_name"`
-	WaitingSince time.Time                  `json:"waiting_since"`
+	// AutoApprove Present when automatic Bash review is off for the session but would have handled this request had it been on.
+	AutoApprove  *PermissionAutoApproveOffer `json:"auto_approve,omitempty"`
+	FeatureID    string                      `json:"feature_id,omitempty"`
+	Input        map[string]interface{}      `json:"input,omitempty"`
+	Phase        string                      `json:"phase,omitempty"`
+	Questions    []AskUserQuestion           `json:"questions,omitempty"`
+	Remember     *PermissionRememberPreview  `json:"remember,omitempty"`
+	RequestID    string                      `json:"request_id"`
+	SessionID    string                      `json:"session_id,omitempty"`
+	Status       string                      `json:"status"`
+	Summary      string                      `json:"summary,omitempty"`
+	ToolName     string                      `json:"tool_name"`
+	WaitingSince time.Time                   `json:"waiting_since"`
 }
 
 // Cost defines model for Cost.
@@ -1411,25 +1332,116 @@ type DiscardChildResponse struct {
 // EffortConfig defines model for EffortConfig.
 type EffortConfig = config.EffortConfig
 
-// Error defines model for Error.
+// Error Canonical catalog-rendered error.
 type Error struct {
-	Code    string                 `json:"code"`
-	Message string                 `json:"message"`
-	Status  int                    `json:"status"`
-	Target  map[string]interface{} `json:"target,omitempty"`
+	// Class Severity treatment class.
+	Class ErrorClass `json:"class"`
+
+	// Code Stable snake_case catalog code.
+	Code string `json:"code"`
+
+	// Context Typed context blocks the error code declared.
+	Context *ErrorContext `json:"context,omitempty"`
+
+	// Diagnostics Raw detail text, deepest disclosure only.
+	Diagnostics string `json:"diagnostics,omitempty"`
+
+	// Remediation Catalog-authored next step for an error code.
+	Remediation *ErrorRemediation `json:"remediation,omitempty"`
+
+	// Summary Catalog-authored summary, with request-scoped facts interpolated as human text; never empty.
+	Summary string `json:"summary"`
+
+	// Title Catalog-authored title; never empty.
+	Title string `json:"title"`
+}
+
+// ErrorClass Severity treatment class.
+type ErrorClass string
+
+// ErrorCommandContext Failed command a code references.
+type ErrorCommandContext struct {
+	ExitCode int      `json:"exit_code,omitempty"`
+	LogPaths []string `json:"log_paths,omitempty"`
+}
+
+// ErrorContext Typed context blocks the error code declared.
+type ErrorContext struct {
+	// Command Failed command a code references.
+	Command *ErrorCommandContext `json:"command,omitempty"`
+
+	// Phase Phase a code references.
+	Phase        *ErrorPhaseContext       `json:"phase,omitempty"`
+	Repositories []ErrorRepositoryContext `json:"repositories,omitempty"`
+
+	// SetupTask Setup task that owns a setup failure.
+	SetupTask *ErrorSetupTaskContext `json:"setup_task,omitempty"`
+}
+
+// ErrorPhaseContext Phase a code references.
+type ErrorPhaseContext struct {
+	Iteration int    `json:"iteration,omitempty"`
+	Name      string `json:"name"`
+}
+
+// ErrorReference defines model for ErrorReference.
+type ErrorReference struct {
+	Code       string     `json:"code"`
+	FeatureID  string     `json:"feature_id,omitempty"`
+	Key        string     `json:"key,omitempty"`
+	Repository string     `json:"repository,omitempty"`
+	Scope      ErrorScope `json:"scope"`
+	SnapshotID string     `json:"snapshot_id,omitempty"`
+	TaskKey    string     `json:"task_key,omitempty"`
+}
+
+// ErrorRemediation Catalog-authored next step for an error code.
+type ErrorRemediation struct {
+	// Actions Referenced feature actions the user can run next.
+	Actions []FeatureAction `json:"actions,omitempty"`
+	Hint    string          `json:"hint,omitempty"`
+}
+
+// ErrorRepositoryContext Repository a code references.
+type ErrorRepositoryContext struct {
+	Branch          string   `json:"branch,omitempty"`
+	CandidateSha    string   `json:"candidate_sha,omitempty"`
+	ChildHeadSha    string   `json:"child_head_sha,omitempty"`
+	ConflictFiles   []string `json:"conflict_files,omitempty"`
+	DirtyFiles      []string `json:"dirty_files,omitempty"`
+	ExpectedRefSha  string   `json:"expected_ref_sha,omitempty"`
+	MergeHead       string   `json:"merge_head,omitempty"`
+	Name            string   `json:"name"`
+	ObservedSha     string   `json:"observed_sha,omitempty"`
+	ParentAnchorSha string   `json:"parent_anchor_sha,omitempty"`
+
+	// RebaseTarget Rebase target branch of a conflicted publish pull-rebase, when known.
+	RebaseTarget string `json:"rebase_target,omitempty"`
+
+	// RemoteOnlyCommits Commits on the remote pull-request branch that are not in this workspace, when known.
+	RemoteOnlyCommits int `json:"remote_only_commits,omitempty"`
 }
 
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
 	APIVersion string `json:"api_version"`
-	Error      Error  `json:"error"`
+
+	// Error Canonical catalog-rendered error.
+	Error Error `json:"error"`
 }
 
-// Failure defines model for Failure.
-type Failure struct {
-	Message string `json:"message,omitempty"`
-	Type    string `json:"type,omitempty"`
+// ErrorScope defines model for ErrorScope.
+type ErrorScope string
+
+// ErrorSetupTaskContext Setup task that owns a setup failure.
+type ErrorSetupTaskContext struct {
+	Key   string `json:"key"`
+	Kind  string `json:"kind"`
+	Label string `json:"label"`
 }
+
+// FeatureAction Feature lifecycle action identifier.
+type FeatureAction string
 
 // FeatureActionResult defines model for FeatureActionResult.
 type FeatureActionResult struct {
@@ -1516,14 +1528,19 @@ type FeatureDetail struct {
 	CloseOutcome string `json:"close_outcome,omitempty"`
 
 	// ClosedAt Relationship close timestamp; only set on closed child features.
-	ClosedAt       *time.Time          `json:"closed_at,omitempty"`
-	Cost           Cost                `json:"cost"`
-	CreatedAt      time.Time           `json:"created_at"`
-	CurrentPhase   string              `json:"current_phase"`
-	Description    string              `json:"description,omitempty"`
-	Effort         EffortConfig        `json:"effort,omitempty"`
-	ExitCriteria   string              `json:"exit_criteria,omitempty"`
-	Failure        *Failure            `json:"failure,omitempty"`
+	ClosedAt     *time.Time   `json:"closed_at,omitempty"`
+	Cost         Cost         `json:"cost"`
+	CreatedAt    time.Time    `json:"created_at"`
+	CurrentPhase string       `json:"current_phase"`
+	Description  string       `json:"description,omitempty"`
+	Effort       EffortConfig `json:"effort,omitempty"`
+
+	// Errors Current non-warning errors this feature or its active child owns, each pairing the catalog-rendered error (without diagnostics) with the reference to its durable home. Entries are ordered blocking first, then needs_action, stable by scope and key; absent when there are none. Warning-class records never appear here.
+	Errors       []OwnedError `json:"errors,omitempty"`
+	ExitCriteria string       `json:"exit_criteria,omitempty"`
+
+	// Failure Canonical catalog-rendered error.
+	Failure        *Error              `json:"failure,omitempty"`
 	HistoricalRuns []RunSummary        `json:"historical_runs"`
 	ID             string              `json:"id"`
 	Inquireness    feature.Inquireness `json:"inquireness,omitempty"`
@@ -1566,7 +1583,9 @@ type FeatureDetail struct {
 	Transaction       TransactionJournal `json:"transaction,omitempty"`
 	VerificationItems []VerificationItem `json:"verification_items,omitempty"`
 	WaitReason        string             `json:"wait_reason,omitempty"`
-	Warnings          []Warning          `json:"warnings,omitempty"`
+
+	// Warnings Canonical warning-class errors for this feature, such as effort-capability drift; absent when there is nothing to warn about.
+	Warnings []Error `json:"warnings,omitempty"`
 }
 
 // FeatureDetailResponse defines model for FeatureDetailResponse.
@@ -1581,7 +1600,9 @@ type FeatureListResponse struct {
 	APIVersion string           `json:"api_version"`
 	Features   []FeatureSummary `json:"features"`
 	Meta       ResponseMeta     `json:"meta,omitempty"`
-	Warnings   []Warning        `json:"warnings,omitempty"`
+
+	// Warnings Canonical warning errors for feature files that could not be loaded at list level; absent when every feature loaded.
+	Warnings []Error `json:"warnings,omitempty"`
 }
 
 // FeatureProgress defines model for FeatureProgress.
@@ -1643,23 +1664,28 @@ type FeatureSummary struct {
 	ChildHistoryTotal int `json:"child_history_total,omitempty"`
 
 	// ChildHistoryTruncated True when child_history omits older closed children.
-	ChildHistoryTruncated bool            `json:"child_history_truncated,omitempty"`
-	CreatedAt             time.Time       `json:"created_at"`
-	CurrentPhase          string          `json:"current_phase"`
-	ID                    string          `json:"id"`
-	Name                  string          `json:"name"`
-	Progress              FeatureProgress `json:"progress"`
-	Repos                 []string        `json:"repos"`
+	ChildHistoryTruncated bool      `json:"child_history_truncated,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
+	CurrentPhase          string    `json:"current_phase"`
+
+	// Errors Current non-warning errors this feature or its active child owns, each pairing the catalog-rendered error (without diagnostics) with the reference to its durable home. Entries are ordered blocking first, then needs_action, stable by scope and key; absent when there are none. Warning-class records never appear here.
+	Errors   []OwnedError    `json:"errors,omitempty"`
+	ID       string          `json:"id"`
+	Name     string          `json:"name"`
+	Progress FeatureProgress `json:"progress"`
+	Repos    []string        `json:"repos"`
 
 	// ResumeCount Number of persisted provider-session resumptions for the active phase unit.
 	ResumeCount int `json:"resume_count"`
 
 	// Resumed Whether the active phase unit has resumed a persisted provider session.
-	Resumed  bool      `json:"resumed"`
-	RunCount int       `json:"run_count"`
-	Slug     string    `json:"slug"`
-	Status   string    `json:"status"`
-	Warnings []Warning `json:"warnings,omitempty"`
+	Resumed  bool   `json:"resumed"`
+	RunCount int    `json:"run_count"`
+	Slug     string `json:"slug"`
+	Status   string `json:"status"`
+
+	// Warnings Canonical warning-class errors for this feature, such as effort-capability drift; absent when there is nothing to warn about.
+	Warnings []Error `json:"warnings,omitempty"`
 }
 
 // FileChange defines model for FileChange.
@@ -1775,9 +1801,11 @@ type ModelDefaults = config.ModelConfig
 
 // ModelReadiness defines model for ModelReadiness.
 type ModelReadiness struct {
-	Available bool            `json:"available"`
-	Issue     *ReadinessIssue `json:"issue,omitempty"`
-	Models    []string        `json:"models,omitempty"`
+	Available bool `json:"available"`
+
+	// Issue Canonical catalog-rendered error.
+	Issue  *Error   `json:"issue,omitempty"`
+	Models []string `json:"models,omitempty"`
 }
 
 // NeedUserInputDraftResponse defines model for NeedUserInputDraftResponse.
@@ -1849,6 +1877,13 @@ type Observability struct {
 	OTelServiceName string `json:"otel_service_name,omitempty"`
 }
 
+// OwnedError defines model for OwnedError.
+type OwnedError struct {
+	// Error Canonical catalog-rendered error.
+	Error Error          `json:"error"`
+	Ref   ErrorReference `json:"ref"`
+}
+
 // Owner defines model for Owner.
 type Owner struct {
 	PGID      int       `json:"pgid,omitempty"`
@@ -1859,14 +1894,19 @@ type Owner struct {
 
 // PermissionAnswerSchema defines model for PermissionAnswerRequest.
 type PermissionAnswerSchema struct {
-	Decision        PermissionAnswerRequestDecision `json:"decision"`
-	RememberPattern string                          `json:"remember_pattern,omitempty"`
+	// AutoApproveScope Turn automatic Bash review on for the request's feature or for the whole workspace before answering. Not allowed with deny.
+	AutoApproveScope PermissionAnswerRequestAutoApproveScope `json:"auto_approve_scope,omitempty"`
+	Decision         PermissionAnswerRequestDecision         `json:"decision"`
+	RememberPattern  string                                  `json:"remember_pattern,omitempty"`
 
 	// RememberScope Existing permission cache scope. Empty string means global.
 	RememberScope *string `json:"remember_scope,omitempty"`
 	RequestID     string  `json:"request_id"`
 	SessionID     string  `json:"session_id,omitempty"`
 }
+
+// PermissionAnswerRequestAutoApproveScope Turn automatic Bash review on for the request's feature or for the whole workspace before answering. Not allowed with deny.
+type PermissionAnswerRequestAutoApproveScope string
 
 // PermissionAnswerRequestDecision defines model for PermissionAnswerRequest.Decision.
 type PermissionAnswerRequestDecision string
@@ -1881,6 +1921,12 @@ type PermissionAnswerResponse struct {
 	RequestID      string       `json:"request_id"`
 	Result         string       `json:"result"`
 	SessionID      string       `json:"session_id"`
+}
+
+// PermissionAutoApproveOffer Present when automatic Bash review is off for the session but would have handled this request had it been on.
+type PermissionAutoApproveOffer struct {
+	// WouldFastPath The deterministic guardrail alone would have approved the command.
+	WouldFastPath bool `json:"would_fast_path"`
 }
 
 // PermissionRememberPreview defines model for PermissionRememberPreview.
@@ -1923,11 +1969,13 @@ type ProviderModelRefreshResponse struct {
 
 // ProviderReadiness defines model for ProviderReadiness.
 type ProviderReadiness struct {
-	Installed bool            `json:"installed"`
-	Issue     *ReadinessIssue `json:"issue,omitempty"`
-	Name      string          `json:"name"`
-	Ready     bool            `json:"ready"`
-	Version   string          `json:"version,omitempty"`
+	Installed bool `json:"installed"`
+
+	// Issue Canonical catalog-rendered error.
+	Issue   *Error `json:"issue,omitempty"`
+	Name    string `json:"name"`
+	Ready   bool   `json:"ready"`
+	Version string `json:"version,omitempty"`
 }
 
 // PublishDescriptionResponse defines model for PublishDescriptionResponse.
@@ -1954,30 +2002,15 @@ type Publishability struct {
 	Repos         map[string]bool `json:"repos"`
 }
 
-// ReadinessIssue defines model for ReadinessIssue.
-type ReadinessIssue struct {
-	// Code Readiness problem taxonomy. missing_executable — a provider CLI binary is not installed; unsupported_version — an installed provider CLI is below the enforced minimum version; unauthenticated — a provider CLI is installed but its authentication flow has not been completed; models_unavailable — no usable provider exposes any model; invalid_configuration — the runtime configuration is unusable; invalid_workspace_root — a configured workspace root does not resolve to a directory; invalid_repository — a configured repository path is not a git repository.
-	Code ReadinessIssueCode `json:"code"`
-
-	// Message Human-readable problem summary. Never contains credentials.
-	Message string `json:"message"`
-
-	// Remedy Safe remediation metadata, such as the CLI command to run. Never contains credentials or non-configured filesystem paths.
-	Remedy string `json:"remedy,omitempty"`
-}
-
-// ReadinessIssueCode Readiness problem taxonomy. missing_executable — a provider CLI binary is not installed; unsupported_version — an installed provider CLI is below the enforced minimum version; unauthenticated — a provider CLI is installed but its authentication flow has not been completed; models_unavailable — no usable provider exposes any model; invalid_configuration — the runtime configuration is unusable; invalid_workspace_root — a configured workspace root does not resolve to a directory; invalid_repository — a configured repository path is not a git repository.
-type ReadinessIssueCode string
-
 // ReadinessResponse defines model for ReadinessResponse.
 type ReadinessResponse struct {
 	APIVersion    string                 `json:"api_version"`
 	Configuration ConfigurationReadiness `json:"configuration"`
 
-	// Issues Flattened outstanding issues across all sections.
-	Issues []ReadinessIssue `json:"issues,omitempty"`
-	Meta   ResponseMeta     `json:"meta,omitempty"`
-	Models ModelReadiness   `json:"models"`
+	// Issues Flattened outstanding issues across all sections, each the canonical catalog-rendered error for its readiness code.
+	Issues []Error        `json:"issues,omitempty"`
+	Meta   ResponseMeta   `json:"meta,omitempty"`
+	Models ModelReadiness `json:"models"`
 
 	// ProbedAt When provider probes last ran.
 	ProbedAt  *time.Time          `json:"probed_at,omitempty"`
@@ -2011,10 +2044,13 @@ type RecoveryActionResponse struct {
 type RecoveryItem struct {
 	AllowedActions []string `json:"allowed_actions"`
 	DefaultAction  string   `json:"default_action"`
-	FeatureID      string   `json:"feature_id"`
-	FeatureName    string   `json:"feature_name,omitempty"`
-	Iteration      int      `json:"iteration,omitempty"`
-	Key            string   `json:"key"`
+
+	// Error Canonical needs_action error classifying this orphan session by liveness, with the phase and repositories context blocks; carries no diagnostics and no filesystem paths.
+	Error       Error  `json:"error"`
+	FeatureID   string `json:"feature_id"`
+	FeatureName string `json:"feature_name,omitempty"`
+	Iteration   int    `json:"iteration,omitempty"`
+	Key         string `json:"key"`
 
 	// LogAvailable Whether a bounded log read is available for this item.
 	LogAvailable bool   `json:"log_available,omitempty"`
@@ -2058,19 +2094,12 @@ type RefactorFeatureResponse struct {
 	Result     string       `json:"result"`
 }
 
-// RelationshipAttention defines model for RelationshipAttention.
-type RelationshipAttention struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Repo    string `json:"repo,omitempty"`
-}
-
 // RelationshipChild defines model for RelationshipChild.
 type RelationshipChild struct {
-	Attention       []RelationshipAttention      `json:"attention"`
-	CleanupWarnings []RelationshipCleanupWarning `json:"cleanup_warnings"`
-	ClosedAt        *time.Time                   `json:"closed_at,omitempty"`
-	Cost            Cost                         `json:"cost"`
+	// Attention Canonical error rendering the child's stored integration attention record; absent when integration is not parked.
+	Attention *Error     `json:"attention,omitempty"`
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+	Cost      Cost       `json:"cost"`
 
 	// DiffSummary Preserved read-only diff summary captured at close time, before the child's disposable worktrees and ephemeral branches were removed. Bounded to 256 KiB: a per-file stat header followed by the diff body, truncated on a line boundary with a marker stating how many bytes were omitted. Empty when no diff was preserved.
 	DiffSummary string `json:"diff_summary,omitempty"`
@@ -2086,10 +2115,7 @@ type RelationshipChild struct {
 	ID               string `json:"id"`
 	IntegrationState string `json:"integration_state"`
 	Kind             string `json:"kind"`
-
-	// LastError Setup failure message when the child's setup failed.
-	LastError string `json:"last_error,omitempty"`
-	Name      string `json:"name"`
+	Name             string `json:"name"`
 
 	// Outcome Recorded relationship close outcome; absent while the child is open.
 	Outcome  RelationshipChildOutcome `json:"outcome,omitempty"`
@@ -2104,6 +2130,9 @@ type RelationshipChild struct {
 
 	// Status Stored child lifecycle status; closure never rewrites it.
 	Status string `json:"status"`
+
+	// Warnings Canonical warning-class errors for this child's stored cleanup and review-feedback tail records; absent when both settled cleanly.
+	Warnings []Error `json:"warnings"`
 }
 
 // RelationshipChildOutcome Recorded relationship close outcome; absent while the child is open.
@@ -2111,10 +2140,10 @@ type RelationshipChildOutcome string
 
 // RelationshipChildSummary List-safe projection of a relationship child. Carries every relationship field except the preserved diff body, so a parent with many closed children cannot inflate a list response without bound. Fetch RelationshipChild on a detail route for the body itself.
 type RelationshipChildSummary struct {
-	Attention       []RelationshipAttention      `json:"attention"`
-	CleanupWarnings []RelationshipCleanupWarning `json:"cleanup_warnings"`
-	ClosedAt        *time.Time                   `json:"closed_at,omitempty"`
-	Cost            Cost                         `json:"cost"`
+	// Attention Canonical error rendering the child's stored integration attention record; absent when integration is not parked.
+	Attention *Error     `json:"attention,omitempty"`
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+	Cost      Cost       `json:"cost"`
 
 	// DisplayState Human-readable relationship state. Closed children use exactly "Closed — Completed" or "Closed — Discarded".
 	DisplayState string `json:"display_state"`
@@ -2127,10 +2156,7 @@ type RelationshipChildSummary struct {
 	ID               string `json:"id"`
 	IntegrationState string `json:"integration_state"`
 	Kind             string `json:"kind"`
-
-	// LastError Setup failure message when the child's setup failed.
-	LastError string `json:"last_error,omitempty"`
-	Name      string `json:"name"`
+	Name             string `json:"name"`
 
 	// Outcome Recorded relationship close outcome; absent while the child is open.
 	Outcome  RelationshipChildOutcome `json:"outcome,omitempty"`
@@ -2145,45 +2171,41 @@ type RelationshipChildSummary struct {
 
 	// Status Stored child lifecycle status; closure never rewrites it.
 	Status string `json:"status"`
-}
 
-// RelationshipCleanupWarning defines model for RelationshipCleanupWarning.
-type RelationshipCleanupWarning struct {
-	Message string `json:"message"`
-	Repo    string `json:"repo,omitempty"`
+	// Warnings Canonical warning-class errors for this child's stored cleanup and review-feedback tail records; absent when both settled cleanly.
+	Warnings []Error `json:"warnings"`
 }
 
 // RepoStatus defines model for RepoStatus.
 type RepoStatus struct {
 	ConflictFiles []string `json:"conflict_files,omitempty"`
-	Freshness     string   `json:"freshness,omitempty"`
-	LastError     string   `json:"last_error,omitempty"`
-	Name          string   `json:"name"`
-	PRURL         string   `json:"pr_url,omitempty"`
-	Publishable   bool     `json:"publishable"`
-	RebaseStatus  string   `json:"rebase_status,omitempty"`
-	RebaseTarget  string   `json:"rebase_target,omitempty"`
-	Touched       bool     `json:"touched"`
+
+	// Error Canonical catalog-rendered publish failure record this repository owns, when any.
+	Error        *Error `json:"error,omitempty"`
+	Freshness    string `json:"freshness,omitempty"`
+	Name         string `json:"name"`
+	PRURL        string `json:"pr_url,omitempty"`
+	Publishable  bool   `json:"publishable"`
+	RebaseStatus string `json:"rebase_status,omitempty"`
+	RebaseTarget string `json:"rebase_target,omitempty"`
+	Touched      bool   `json:"touched"`
 }
 
 // RepoTransactionEntry defines model for RepoTransactionEntry.
 type RepoTransactionEntry struct {
-	ApplyState     string   `json:"apply_state,omitempty"`
-	CandidateSha   string   `json:"candidate_sha,omitempty"`
-	ChildHeadSha   string   `json:"child_head_sha,omitempty"`
-	CleanupWarning string   `json:"cleanup_warning,omitempty"`
-	ConflictFiles  []string `json:"conflict_files,omitempty"`
-	Diagnostics    string   `json:"diagnostics,omitempty"`
+	ApplyState      string `json:"apply_state,omitempty"`
+	CandidateSha    string `json:"candidate_sha,omitempty"`
+	ChildHeadSha    string `json:"child_head_sha,omitempty"`
+	ExpectedRefSha  string `json:"expected_ref_sha,omitempty"`
+	MergeHead       string `json:"merge_head,omitempty"`
+	ObservedSha     string `json:"observed_sha,omitempty"`
+	ParentAnchorSha string `json:"parent_anchor_sha,omitempty"`
+	ParentBranch    string `json:"parent_branch,omitempty"`
 
-	// Dirty Categorized parent-worktree diagnostics recorded when a dirty preflight blocked preparation for this repository.
-	Dirty           []ChildDirtyDiagnostics `json:"dirty,omitempty"`
-	ExpectedRefSha  string                  `json:"expected_ref_sha,omitempty"`
-	MergeHead       string                  `json:"merge_head,omitempty"`
-	ObservedSha     string                  `json:"observed_sha,omitempty"`
-	ParentAnchorSha string                  `json:"parent_anchor_sha,omitempty"`
-	ParentBranch    string                  `json:"parent_branch,omitempty"`
-	PrepState       string                  `json:"prep_state,omitempty"`
-	Repo            string                  `json:"repo,omitempty"`
+	// PendingSync True when this applied entry's parent worktree sync failed after the ref update; closure retries the sync automatically.
+	PendingSync bool   `json:"pending_sync,omitempty"`
+	PrepState   string `json:"prep_state,omitempty"`
+	Repo        string `json:"repo,omitempty"`
 }
 
 // RepositoryDiffFile defines model for RepositoryDiffFile.
@@ -2210,7 +2232,10 @@ type RepositoryDiffFile struct {
 // RepositoryDiffResponse defines model for RepositoryDiffResponse.
 type RepositoryDiffResponse struct {
 	APIVersion string `json:"api_version"`
-	FeatureID  string `json:"feature_id"`
+
+	// Error Canonical warning-class error rendering the typed partial failure of this repository's inspection; absent when the repository was fully inspected.
+	Error     *Error `json:"error,omitempty"`
+	FeatureID string `json:"feature_id"`
 
 	// FileBinary Whether the single-file content is binary and cannot be displayed.
 	FileBinary bool `json:"file_binary,omitempty"`
@@ -2225,10 +2250,7 @@ type RepositoryDiffResponse struct {
 	FileUnavailable bool                 `json:"file_unavailable,omitempty"`
 	Files           []RepositoryDiffFile `json:"files"`
 	Meta            ResponseMeta         `json:"meta,omitempty"`
-
-	// PartialFailure Safe, server-authored reason one repository could not be fully inspected, when non-empty.
-	PartialFailure string `json:"partial_failure,omitempty"`
-	Repo           string `json:"repo"`
+	Repo            string               `json:"repo"`
 
 	// SourceRevision Authoritative revision of the repository state this diff observed.
 	SourceRevision string `json:"source_revision,omitempty"`
@@ -2267,10 +2289,11 @@ type RepositoryPathDTO struct {
 
 // RepositoryReadiness defines model for RepositoryReadiness.
 type RepositoryReadiness struct {
-	Issue *ReadinessIssue `json:"issue,omitempty"`
-	Name  string          `json:"name"`
-	Path  string          `json:"path"`
-	Valid bool            `json:"valid"`
+	// Issue Canonical catalog-rendered error.
+	Issue *Error `json:"issue,omitempty"`
+	Name  string `json:"name"`
+	Path  string `json:"path"`
+	Valid bool   `json:"valid"`
 }
 
 // Resource defines model for Resource.
@@ -2492,10 +2515,9 @@ type RewindFeatureResponse struct {
 	SourceRunNumber int    `json:"source_run_number,omitempty"`
 	TargetPhase     string `json:"target_phase,omitempty"`
 	UpgradePipeline string `json:"upgrade_pipeline,omitempty"`
-	WarningCount    int    `json:"warning_count,omitempty"`
 
-	// Warnings Redacted non-fatal warning details (PR close, backup branch, worktree reset failures).
-	Warnings []string `json:"warnings,omitempty"`
+	// Warnings Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset).
+	Warnings []Error `json:"warnings,omitempty"`
 }
 
 // RewindPRConsequence defines model for RewindPRConsequence.
@@ -2683,8 +2705,11 @@ type SSEEvent struct {
 	APIVersion string    `json:"api_version"`
 	At         time.Time `json:"at"`
 	Epoch      string    `json:"epoch,omitempty"`
-	ID         string    `json:"id"`
-	Kind       string    `json:"kind"`
+
+	// Error Canonical failure identity for failure-carrying lifecycle events (feature lifecycle failed). Absent on every other event kind.
+	Error *SSEEventError `json:"error,omitempty"`
+	ID    string         `json:"id"`
+	Kind  string         `json:"kind"`
 
 	// RecordCount Session's current transcript record count at emission time — the same index space /transcript and /output/stream use. Only set on session.output.activity events.
 	RecordCount      int      `json:"record_count,omitempty"`
@@ -2695,6 +2720,18 @@ type SSEEvent struct {
 	SnapshotRequired bool     `json:"snapshot_required"`
 	Summary          string   `json:"summary,omitempty"`
 }
+
+// SSEEventError Canonical failure identity for failure-carrying lifecycle events (feature lifecycle failed). Absent on every other event kind.
+type SSEEventError struct {
+	// Class Severity treatment class.
+	Class SSEEventErrorClass `json:"class"`
+
+	// Code Stable snake_case catalog code.
+	Code string `json:"code"`
+}
+
+// SSEEventErrorClass Severity treatment class.
+type SSEEventErrorClass string
 
 // SessionDetail defines model for SessionDetail.
 type SessionDetail struct {
@@ -2716,7 +2753,6 @@ type SessionDetail struct {
 	Repo             string           `json:"repo,omitempty"`
 	RunNumber        int              `json:"run_number"`
 	RunningTaskCount int              `json:"running_task_count"`
-	SafeError        string           `json:"safe_error,omitempty"`
 	StartedAt        time.Time        `json:"started_at"`
 	Status           string           `json:"status"`
 	TaskActivities   []TaskActivity   `json:"task_activities"`
@@ -2779,7 +2815,6 @@ type SessionSummary struct {
 type Setup struct {
 	Attempt       int                  `json:"attempt,omitempty"`
 	CompletedAt   *time.Time           `json:"completed_at,omitempty"`
-	LastError     string               `json:"last_error,omitempty"`
 	LatestLogPath string               `json:"latest_log_path,omitempty"`
 	StartedAt     *time.Time           `json:"started_at,omitempty"`
 	Status        string               `json:"status"`
@@ -2789,13 +2824,15 @@ type Setup struct {
 
 // SetupTask defines model for SetupTask.
 type SetupTask struct {
-	Attempt          int        `json:"attempt,omitempty"`
-	Branch           string     `json:"branch,omitempty"`
-	EndedAt          *time.Time `json:"ended_at,omitempty"`
+	Attempt int        `json:"attempt,omitempty"`
+	Branch  string     `json:"branch,omitempty"`
+	EndedAt *time.Time `json:"ended_at,omitempty"`
+
+	// Error Canonical error rendering the task's stored failure record; absent when the task has not failed.
+	Error            *Error     `json:"error,omitempty"`
 	Key              string     `json:"key"`
 	Kind             string     `json:"kind"`
 	Label            string     `json:"label,omitempty"`
-	LastError        string     `json:"last_error,omitempty"`
 	Path             string     `json:"path,omitempty"`
 	Repo             string     `json:"repo,omitempty"`
 	SourcePath       string     `json:"source_path,omitempty"`
@@ -2881,7 +2918,8 @@ type ToolCall struct {
 
 // TransactionJournal Ordered per-repository transaction journal for multi-repository child-to-parent integration.
 type TransactionJournal struct {
-	Attention string                 `json:"attention,omitempty"`
+	// Attention Canonical error rendering the journal's single stored attention record; absent when integration is not parked.
+	Attention *Error                 `json:"attention,omitempty"`
 	Entries   []RepoTransactionEntry `json:"entries,omitempty"`
 
 	// Phase Aggregate transaction phase: preparing, prepared, applying, applied, rolling_back, rolled_back, attention, or merged.
@@ -2928,13 +2966,6 @@ type VerificationItem struct {
 	State string `json:"state"`
 }
 
-// Warning defines model for Warning.
-type Warning struct {
-	Code      string `json:"code"`
-	FeatureID string `json:"feature_id,omitempty"`
-	Message   string `json:"message"`
-}
-
 // WorkspaceReadiness defines model for WorkspaceReadiness.
 type WorkspaceReadiness struct {
 	Repositories []RepositoryReadiness    `json:"repositories"`
@@ -2953,16 +2984,14 @@ type WorkspaceRepository struct {
 
 // WorkspaceRootReadiness defines model for WorkspaceRootReadiness.
 type WorkspaceRootReadiness struct {
-	Issue *ReadinessIssue `json:"issue,omitempty"`
-	Path  string          `json:"path"`
-	Valid bool            `json:"valid"`
+	// Issue Canonical catalog-rendered error.
+	Issue *Error `json:"issue,omitempty"`
+	Path  string `json:"path"`
+	Valid bool   `json:"valid"`
 }
 
 // ArtifactID defines model for ArtifactID.
 type ArtifactID = string
-
-// FeatureAction defines model for FeatureAction.
-type FeatureAction string
 
 // FeatureID defines model for FeatureID.
 type FeatureID = string
@@ -3124,9 +3153,6 @@ type RunFeatureActionParams struct {
 // RunFeatureActionParamsXAgenticoClient defines parameters for RunFeatureAction.
 type RunFeatureActionParamsXAgenticoClient string
 
-// RunFeatureActionParamsAction defines parameters for RunFeatureAction.
-type RunFeatureActionParamsAction string
-
 // RunFeatureSubactionJSONBody defines parameters for RunFeatureSubaction.
 type RunFeatureSubactionJSONBody map[string]interface{}
 
@@ -3138,9 +3164,6 @@ type RunFeatureSubactionParams struct {
 
 // RunFeatureSubactionParamsXAgenticoClient defines parameters for RunFeatureSubaction.
 type RunFeatureSubactionParamsXAgenticoClient string
-
-// RunFeatureSubactionParamsAction defines parameters for RunFeatureSubaction.
-type RunFeatureSubactionParamsAction string
 
 // RunFeatureSubactionParamsSubaction defines parameters for RunFeatureSubaction.
 type RunFeatureSubactionParamsSubaction string
@@ -3267,9 +3290,6 @@ type EndChatPromptParams struct {
 
 // EndChatPromptParamsXAgenticoClient defines parameters for EndChatPrompt.
 type EndChatPromptParamsXAgenticoClient string
-
-// StartChatPromptJSONBody defines parameters for StartChatPrompt.
-type StartChatPromptJSONBody map[string]interface{}
 
 // StartChatPromptParams defines parameters for StartChatPrompt.
 type StartChatPromptParams struct {
@@ -3421,7 +3441,7 @@ type AnswerAskUserPromptJSONRequestBody AnswerAskUserPromptJSONBody
 type EndChatPromptJSONRequestBody EndChatPromptJSONBody
 
 // StartChatPromptJSONRequestBody defines body for StartChatPrompt for application/json ContentType.
-type StartChatPromptJSONRequestBody StartChatPromptJSONBody
+type StartChatPromptJSONRequestBody = ChatStartRequest
 
 // SendHelpPromptJSONRequestBody defines body for SendHelpPrompt for application/json ContentType.
 type SendHelpPromptJSONRequestBody SendHelpPromptJSONBody

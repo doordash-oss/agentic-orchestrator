@@ -16,6 +16,7 @@ package ports
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -105,26 +106,22 @@ type FeatureLifecycle interface {
 	CleanWorktree(featureID string) error
 
 	// Failure / restart
-	MarkFailed(featureID, failureType, lastError string) error
+	MarkFailed(featureID string, failure errcat.FailureRecord) error
 
 	// Rewind / pipeline
-	RewindToPhase(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error)
-	RewindWithRequest(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error)
+	RewindToPhase(featureID string, targetPhase feature.Phase) ([]feature.RewindWarning, feature.Phase, error)
+	RewindWithRequest(featureID string, request feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error)
 	UpgradePipeline(featureID string, newProfile feature.PipelineProfile) error
 
 	// Per-repo implementation state. The unified flow tracks per-repo
-	// signal in RepoStates (Touched, PRURL, LastError); orchestration
+	// signal in RepoStates (Touched, PRURL, Error); orchestration
 	// readers consume it via Feature.AllReposPublished / Feature.TouchedRepos.
 	InitRepoImpl(featureID string) error
 	SetRepoPublished(featureID, repoName, prURL string) error
-	SetRepoPublishError(featureID, repoName, errMsg string) error
+	SetRepoPublishError(featureID, repoName string, record errcat.FailureRecord) error
 	TryCompletePublish(featureID string) (bool, error)
 	// RetryPhase clears feature-level error/gate state so the unified
 	// phase-implement loop can re-run the active phase from iteration 1.
 	// Per-repo Touched flags are monotonic and intentionally preserved.
 	RetryPhase(featureID string, repoNames []string) error
-	// FailRepoImplementation records a failure error on one repo's state.
-	// Phase-atomic failures land via agent.AtomicPhaseStamp(PhaseOutcomeFailed);
-	// this helper survives for cycle-cleanup callers.
-	FailRepoImplementation(featureID, repoName, errMsg string) error
 }

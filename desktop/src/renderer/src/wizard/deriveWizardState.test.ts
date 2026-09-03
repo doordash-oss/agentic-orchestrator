@@ -1,7 +1,34 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { describe, expect, it } from 'vitest';
-import type { ReadinessSnapshot } from '../../../shared/ipc';
+import type { ReadinessIssue, ReadinessSnapshot } from '../../../shared/ipc';
 import { readySnapshot, unreadySnapshot } from '../test/agenticoMock';
 import { WIZARD_STEPS, deriveWizardState } from './deriveWizardState';
+
+const canonicalIssue = (
+  code: ReadinessIssue['code'],
+  title: string,
+  summary: string,
+): ReadinessIssue => ({
+  code,
+  class: 'blocking',
+  title,
+  summary,
+});
 
 describe('deriveWizardState', () => {
   it('derives the fresh-install state: providers step active, nothing satisfied', () => {
@@ -29,7 +56,7 @@ describe('deriveWizardState', () => {
           name: 'codex',
           installed: false,
           ready: false,
-          issue: { code: 'missing_executable', message: 'not installed' },
+          issue: canonicalIssue('missing_executable', 'Missing executable', 'not installed'),
         },
       ],
     });
@@ -56,7 +83,11 @@ describe('deriveWizardState', () => {
         {
           path: '/gone',
           valid: false,
-          issue: { code: 'invalid_workspace_root', message: 'missing directory' },
+          issue: canonicalIssue(
+            'invalid_workspace_root',
+            'Invalid workspace root',
+            'missing directory',
+          ),
         },
       ],
       repositories: [
@@ -64,12 +95,12 @@ describe('deriveWizardState', () => {
           name: 'broken',
           path: '/work/space/broken',
           valid: false,
-          issue: { code: 'invalid_repository', message: 'not a git repository' },
+          issue: canonicalIssue('invalid_repository', 'Invalid repository', 'not a git repository'),
         },
       ],
       issues: [
-        { code: 'invalid_workspace_root', message: 'missing directory' },
-        { code: 'invalid_repository', message: 'not a git repository' },
+        canonicalIssue('invalid_workspace_root', 'Invalid workspace root', 'missing directory'),
+        canonicalIssue('invalid_repository', 'Invalid repository', 'not a git repository'),
       ],
     });
     const state = deriveWizardState(snapshot);
@@ -85,10 +116,12 @@ describe('deriveWizardState', () => {
   });
 
   it('surfaces an invalid configuration as a cross-cutting blocker', () => {
-    const issue = {
-      code: 'invalid_configuration' as const,
-      message: 'config.yaml is unreadable',
-      remedy: 'Fix config.yaml',
+    const issue: ReadinessIssue = {
+      code: 'invalid_configuration',
+      class: 'blocking',
+      title: 'Invalid configuration',
+      summary: 'config.yaml is unreadable',
+      remediation: { hint: 'Fix config.yaml' },
     };
     const snapshot = readySnapshot({ ready: false, configuration: { valid: false, issue } });
     const state = deriveWizardState(snapshot);
@@ -108,7 +141,7 @@ describe('deriveWizardState', () => {
   it('maps model issues to the models step blockers', () => {
     const snapshot = unreadySnapshot({
       providers: [{ name: 'claude', installed: true, ready: true }],
-      issues: [{ code: 'models_unavailable', message: 'no models' }],
+      issues: [canonicalIssue('models_unavailable', 'Models unavailable', 'no models')],
     });
     const state = deriveWizardState(snapshot);
     expect(state.activeStep).toBe('models');

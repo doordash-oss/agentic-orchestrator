@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { expect, test } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
@@ -265,8 +281,9 @@ test('packaged attention notifications are private, deduplicated, bounded, passi
     await waitForNotificationCount(handle, 2);
     notifications = await capturedNotifications(handle);
     // Exactly the two intended notifications: the hidden-window permission
-    // notice and the previewed question. A focus leak would surface here as
-    // extra no-preview notifications.
+    // notice and the previewed question. The test focus override prevents
+    // other full-suite workers on the shared Linux display from injecting an
+    // ambient no-preview notice into this count.
     expect(notifications).toHaveLength(2);
     const askNotification = notifications[1];
     expect(askNotification?.body).toContain('Questions');
@@ -404,7 +421,9 @@ async function ensureMainWindowFocus(handle: AppHandle): Promise<void> {
   await handle.app.evaluate(({ BrowserWindow, app }) => {
     const global = globalThis as typeof globalThis & {
       __agenticoMainWindowFocusState?: { focused: boolean };
+      __agenticoSetMainWindowAttentionFocusOverride?: (focused: boolean) => void;
     };
+    global.__agenticoSetMainWindowAttentionFocusOverride?.(true);
     if (global.__agenticoMainWindowFocusState?.focused === true) return;
     const window = BrowserWindow.getAllWindows()[0];
     if (window === undefined) throw new Error('main window missing');

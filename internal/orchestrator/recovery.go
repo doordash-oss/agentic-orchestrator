@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -496,32 +497,35 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 		return fmt.Errorf("parent %s not found", f.Parent.ParentID)
 	}
 
-	// Classify each ref against journaled old and candidate SHAs.
+	// Classify each ref against journaled old and candidate SHAs. Every
+	// unclassifiable condition becomes a finding for the stored attention
+	// record; a ref race or a missing repository park exactly as the
+	// transaction boundary would.
 	allAtCandidate := true
 	anyApplied := false
-	anyUnclassifiable := false
+	findings := []integrationFinding{}
 	anyRolledBack := false
 	for i := range journal.Entries {
 		entry := &journal.Entries[i]
 		parentRepo := featureRepoByName(parent, entry.Repo)
 		if parentRepo == nil {
-			entry.Diagnostics = fmt.Sprintf("parent no longer has repository %s", entry.Repo)
-			anyUnclassifiable = true
+			findings = append(findings, entryFinding(entry, errcat.IntegrationRepositoryMissing,
+				fmt.Sprintf("parent no longer has repository %s", entry.Repo)))
 			continue
 		}
 		ref := "refs/heads/" + entry.ParentBranch
 		current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 		if err != nil {
-			entry.Diagnostics = fmt.Sprintf("reading ref %s: %v", ref, err)
-			anyUnclassifiable = true
+			findings = append(findings, entryFinding(entry, errcat.IntegrationCandidateFailed,
+				fmt.Sprintf("reading ref %s: %v", ref, err)))
 			continue
 		}
 		entry.ObservedSHA = current
 		if passThroughCandidate(entry) {
 			if current != entry.ParentAnchorSHA {
-				anyUnclassifiable = true
-				entry.Diagnostics = fmt.Sprintf("ref %s externally moved: pass-through anchor %s observed %s",
-					ref, entry.ParentAnchorSHA, current)
+				findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
+					fmt.Sprintf("ref %s externally moved: pass-through anchor %s observed %s",
+						ref, entry.ParentAnchorSHA, current)))
 			}
 			if entry.ApplyState != feature.RepoApplyApplied {
 				allAtCandidate = false
@@ -550,23 +554,22 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 				anyRolledBack = true
 			case entry.ApplyState == feature.RepoApplyApplied:
 				// Was applied but ref moved back — external reset.
-				anyUnclassifiable = true
-				entry.Diagnostics = fmt.Sprintf("ref %s was applied but regressed to old SHA", ref)
+				findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
+					fmt.Sprintf("ref %s was applied but regressed to old SHA", ref)))
 			}
 		default:
-			anyUnclassifiable = true
-			entry.Diagnostics = fmt.Sprintf("ref %s externally moved: old %s candidate %s observed %s",
-				ref, entry.ParentAnchorSHA, entry.CandidateSHA, current)
+			findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
+				fmt.Sprintf("ref %s externally moved: old %s candidate %s observed %s",
+					ref, entry.ParentAnchorSHA, entry.CandidateSHA, current)))
 		}
 		if entry.ApplyState != feature.RepoApplyApplied {
 			allAtCandidate = false
 		}
 	}
 
-	if anyUnclassifiable {
+	if len(findings) > 0 {
 		journal.Phase = feature.TransactionPhaseAttention
-		journal.Attention = transactionAttentionSummary(journal)
-		return o.persistTransaction(f.ID, journal)
+		return o.parkIntegrationAttention(f, journal, findings)
 	}
 
 	if allAtCandidate && anyApplied {
@@ -578,13 +581,13 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 	}
 
 	if anyApplied && !allAtCandidate {
-		return o.rollbackTransaction(f, parent, journal, -1)
+		return o.rollbackTransaction(f, parent, journal, -1, integrationFinding{})
 	}
 
 	// If some entries were rolled back during a partially completed
 	// rollback, continue the rollback for remaining applied entries.
 	if anyRolledBack && journal.Phase == feature.TransactionPhaseRollingBack {
-		return o.rollbackTransaction(f, parent, journal, -1)
+		return o.rollbackTransaction(f, parent, journal, -1, integrationFinding{})
 	}
 
 	return nil

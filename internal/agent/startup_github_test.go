@@ -15,8 +15,9 @@
 package agent
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 )
 
 func isolateGitHubAuth(t *testing.T) {
@@ -28,25 +29,32 @@ func isolateGitHubAuth(t *testing.T) {
 
 func TestCheckRequiredToolsWarnsWithoutGitHubCredentials(t *testing.T) {
 	isolateGitHubAuth(t)
-	_, warnings := CheckRequiredTools()
+	hard, soft := checkRequiredTools(func(string) (string, error) {
+		return "/usr/bin/git", nil
+	})
+	if len(hard) != 0 {
+		t.Fatalf("hard = %v; want none when git is present", hard)
+	}
 	found := false
-	for _, w := range warnings {
-		if strings.Contains(w, "no GitHub credentials") {
+	for _, issue := range soft {
+		if issue.Code == errcat.GithubCredentialsMissing {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("warnings = %v; want a no-GitHub-credentials warning", warnings)
+		t.Fatalf("soft = %v; want a GitHub credentials warning", soft)
 	}
 }
 
 func TestCheckRequiredToolsAcceptsEnvToken(t *testing.T) {
 	isolateGitHubAuth(t)
 	t.Setenv("GH_TOKEN", "env-token")
-	_, warnings := CheckRequiredTools()
-	for _, w := range warnings {
-		if strings.Contains(w, "GitHub credentials") {
-			t.Fatalf("warnings = %v; want no credentials warning with GH_TOKEN set", warnings)
+	_, soft := checkRequiredTools(func(string) (string, error) {
+		return "/usr/bin/git", nil
+	})
+	for _, issue := range soft {
+		if issue.Code == errcat.GithubCredentialsMissing {
+			t.Fatalf("soft = %v; want no credentials warning with GH_TOKEN set", soft)
 		}
 	}
 }

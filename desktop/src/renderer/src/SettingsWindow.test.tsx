@@ -1,10 +1,31 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { defaultSettings, type ModelCatalogue, type Settings } from '../../shared/ipc';
 import SettingsWindow from './SettingsWindow';
 import { SETTINGS_PANE_CATALOGUE } from './features/settingsPanes';
-import { defaultUpdateState, installAgenticoMock, readySnapshot } from './test/agenticoMock';
+import {
+  defaultUpdateState,
+  installAgenticoMock,
+  ipcError,
+  readySnapshot,
+} from './test/agenticoMock';
 
 afterEach(cleanup);
 
@@ -284,7 +305,7 @@ describe('SettingsWindow pane restoration', () => {
 
   it('falls back to Workspace roots when the settings read fails', async () => {
     const mock = installSettingsWindowMock();
-    mock.api.getSettings.mockRejectedValue(new Error('E_SETTINGS: unreadable'));
+    mock.api.getSettings.mockRejectedValue(ipcError('E_INTERNAL', 'unreadable'));
     render(<SettingsWindow />);
 
     expect(await screen.findByRole('option', { name: 'Workspace roots' })).toHaveAttribute(

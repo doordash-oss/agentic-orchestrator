@@ -29,3 +29,8 @@ var ErrNeedUserInputGateOpen = errors.New("feature is waiting on a user input re
 // ErrPhaseFinalizing is returned when an execution verb arrives while the
 // feature is inside the synchronous end-of-phase git boundary.
 var ErrPhaseFinalizing = errors.New("feature is finalizing the current phase")
+
+// ErrRepositoryNotFound reports a repository name that is not part of the
+// addressed feature's repositories. Inspection endpoints map it to the
+// not_found envelope naming the repository.
+var ErrRepositoryNotFound = errors.New("repository not found")

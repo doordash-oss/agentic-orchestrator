@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1252,4 +1253,99 @@ func TestWriteFeatureSummary_FiltersEventsByActiveRun(t *testing.T) {
 			t.Errorf("Totals.InputTokens = %d, want 60 (10+20+30, filter disabled)", summary.Totals.InputTokens)
 		}
 	})
+}
+
+// TestWriteFeatureSummary_FailedFeatureCarriesErrorCodeAndClass asserts the
+// feature block serializes the run's canonical error_code and error_class for
+// a failed feature, and that no legacy failure_type or last_error key appears
+// anywhere in the summary YAML.
+func TestWriteFeatureSummary_FailedFeatureCarriesErrorCodeAndClass(t *testing.T) {
+	featureDir := t.TempDir()
+	featureID := "summary_failed_feature"
+
+	input := BuildFeatureSummaryInput(
+		featureID, featureDir, "failed-feature", "failed",
+		"worktree_setup_failed", "blocking",
+		0, 0, nil, nil, nil, 1,
+	)
+	if err := writeFeatureSummaryImpl(input); err != nil {
+		t.Fatalf("writeFeatureSummaryImpl: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(featureDir, "observe-summary.yaml"))
+	if err != nil {
+		t.Fatalf("reading observe-summary.yaml: %v", err)
+	}
+	var summary SummaryArtifact
+	if err := yaml.Unmarshal(data, &summary); err != nil {
+		t.Fatalf("unmarshaling summary YAML: %v", err)
+	}
+
+	if summary.Feature.ErrorCode != "worktree_setup_failed" {
+		t.Errorf("Feature.ErrorCode = %q, want %q", summary.Feature.ErrorCode, "worktree_setup_failed")
+	}
+	if summary.Feature.ErrorClass != "blocking" {
+		t.Errorf("Feature.ErrorClass = %q, want %q", summary.Feature.ErrorClass, "blocking")
+	}
+
+	text := string(data)
+	if !strings.Contains(text, "error_code: worktree_setup_failed") {
+		t.Errorf("summary YAML missing serialized error_code; yaml:\n%s", text)
+	}
+	if !strings.Contains(text, "error_class: blocking") {
+		t.Errorf("summary YAML missing serialized error_class; yaml:\n%s", text)
+	}
+	if strings.Contains(text, "failure_type") {
+		t.Errorf("summary YAML contains failure_type key; yaml:\n%s", text)
+	}
+	if strings.Contains(text, "last_error") {
+		t.Errorf("summary YAML contains last_error key; yaml:\n%s", text)
+	}
+}
+
+// TestWriteFeatureSummary_HealthyFeatureOmitsErrorKeys asserts the feature
+// block omits error_code and error_class for a healthy feature, and that no
+// legacy failure_type or last_error key appears anywhere in the summary YAML.
+func TestWriteFeatureSummary_HealthyFeatureOmitsErrorKeys(t *testing.T) {
+	featureDir := t.TempDir()
+	featureID := "summary_healthy_feature"
+
+	input := BuildFeatureSummaryInput(
+		featureID, featureDir, "healthy-feature", "done",
+		"", "",
+		0, 0, nil, nil, nil, 1,
+	)
+	if err := writeFeatureSummaryImpl(input); err != nil {
+		t.Fatalf("writeFeatureSummaryImpl: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(featureDir, "observe-summary.yaml"))
+	if err != nil {
+		t.Fatalf("reading observe-summary.yaml: %v", err)
+	}
+	var summary SummaryArtifact
+	if err := yaml.Unmarshal(data, &summary); err != nil {
+		t.Fatalf("unmarshaling summary YAML: %v", err)
+	}
+
+	if summary.Feature.ErrorCode != "" {
+		t.Errorf("Feature.ErrorCode = %q, want empty for a healthy feature", summary.Feature.ErrorCode)
+	}
+	if summary.Feature.ErrorClass != "" {
+		t.Errorf("Feature.ErrorClass = %q, want empty for a healthy feature", summary.Feature.ErrorClass)
+	}
+
+	text := string(data)
+	if strings.Contains(text, "error_code") {
+		t.Errorf("summary YAML contains error_code key for a healthy feature; yaml:\n%s", text)
+	}
+	if strings.Contains(text, "error_class") {
+		t.Errorf("summary YAML contains error_class key for a healthy feature; yaml:\n%s", text)
+	}
+	if strings.Contains(text, "failure_type") {
+		t.Errorf("summary YAML contains failure_type key; yaml:\n%s", text)
+	}
+	if strings.Contains(text, "last_error") {
+		t.Errorf("summary YAML contains last_error key; yaml:\n%s", text)
+	}
 }

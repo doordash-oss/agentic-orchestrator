@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
@@ -253,8 +254,8 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload parent: %v", err)
 	}
-	if parent2.RepoStates["repoA"].LastError == "" {
-		t.Fatalf("parent repo publish error not recorded after failed PR creation: %+v", parent2.RepoStates["repoA"])
+	if record := parent2.RepoStates["repoA"].Error; record == nil || record.Code != errcat.PublishPullRequestFailed {
+		t.Fatalf("parent repo publish record = %+v, want publish_pull_request_failed after failed PR creation", parent2.RepoStates["repoA"].Error)
 	}
 }
 

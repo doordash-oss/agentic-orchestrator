@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Main-process feature operations. Everything talks to the authoritative
  * server through the runtime gateway's bearer transport and returns strict
@@ -9,10 +25,11 @@
  * `dispatchAction`.
  */
 import {
+  CanonicalErrorException,
   isRequestTimeout,
   redactText,
+  redactedCanonicalError,
   requiresLocalServerError,
-  SafeErrorException,
 } from '../shared/errors';
 import {
   FeatureActionResponseSchema,
@@ -30,6 +47,7 @@ import {
   ReviewFeedbackFeatureResponseSchema,
   validateWithSchema,
   type ServerFeatureDetail,
+  type ServerOwnedError,
   type ServerRelationshipChild,
   type ServerReviewFeedbackComment,
   type ServerReviewFeedbackDraftComment,
@@ -53,10 +71,11 @@ import {
   type EffortLevel,
   type FeatureSetupView,
   type FeatureSnapshot,
+  type FeaturesListResult,
   type FeatureActionRequest,
   type FeatureActionResult,
+  type OwnedError,
   type PublishDescriptionResult,
-  type FeatureSummaryView,
   type ReadinessSnapshot,
   type RepositoryFileRef,
   type LaunchRebaseChildRequest,
@@ -100,21 +119,6 @@ export interface FeatureServiceDeps {
   locality?: LocalitySource;
 }
 
-/** Concrete, safe next steps per structured server error code. */
-const REMEDY_BY_CODE: Record<string, string> = {
-  not_ready: 'Complete the outstanding runtime setup steps, then try again.',
-  bad_request: 'Correct the highlighted input, then try again.',
-  not_found: 'The feature no longer exists on the server. Close its tab.',
-  conflict: 'The server rejected the action in its current state. Refresh and retry.',
-  invalid_transition: "The feature's current state doesn't allow this action. Refresh and retry.",
-  need_user_input_open: 'Answer the open input request to continue.',
-  phase_finalizing: 'The phase is being finalized; wait for it to finish.',
-  publish_remote_diverged:
-    'Review and reconcile the pull-request branch on GitHub, then refresh and retry.',
-  publish_remote_changed:
-    'Refresh the publish state and retry; Agentico did not overwrite the newer branch.',
-};
-
 const PHASE_MODEL_LABELS: ReadonlyArray<readonly [string, string]> = [
   ['inquiry', 'Inquiry'],
   ['research', 'Research'],
@@ -137,7 +141,7 @@ function assertNoLocalPathsRemotely(remote: boolean, ...groups: readonly string[
   if (!remote) return;
   for (const group of groups) {
     if (group.length > 0) {
-      throw new SafeErrorException(requiresLocalServerError());
+      throw new CanonicalErrorException(requiresLocalServerError());
     }
   }
 }
@@ -296,38 +300,41 @@ export class FeatureService {
     };
   }
 
-  async listFeatures(): Promise<FeatureSummaryView[]> {
+  async listFeatures(): Promise<FeaturesListResult> {
     const body = await this.api('/api/v1/features');
     const response = validateWithSchema(body, FeatureListResponseSchema);
-    return response.features.map((feature) => ({
-      id: validateWithSchema(feature.id, FeatureIdSchema),
-      name: feature.name,
-      status: feature.status,
-      currentPhase: feature.current_phase,
-      repos: feature.repos,
-      createdAt: feature.created_at,
-      activeRun: feature.active_run,
-      runCount: feature.run_count,
-      ...(feature.progress.current_phase_status === undefined
-        ? {}
-        : { phaseStatus: feature.progress.current_phase_status }),
-      warnings: (feature.warnings ?? []).map((warning) => ({
-        code: warning.code,
-        message: redactText(warning.message),
+    return {
+      features: response.features.map((feature) => ({
+        id: validateWithSchema(feature.id, FeatureIdSchema),
+        name: feature.name,
+        status: feature.status,
+        currentPhase: feature.current_phase,
+        repos: feature.repos,
+        createdAt: feature.created_at,
+        activeRun: feature.active_run,
+        runCount: feature.run_count,
+        ...(feature.progress.current_phase_status === undefined
+          ? {}
+          : { phaseStatus: feature.progress.current_phase_status }),
+        // Canonical warning objects cross IPC intact except diagnostics,
+        // which pass through the same redaction as every other raw text.
+        warnings: (feature.warnings ?? []).map(redactedCanonicalError),
+        errors: (feature.errors ?? []).map(toOwnedErrorView),
+        ...(feature.active_child === undefined
+          ? {}
+          : { activeChild: toRelationshipChildView(feature.active_child) }),
+        ...(feature.child_history === undefined
+          ? {}
+          : { childHistory: feature.child_history.map(toRelationshipChildView) }),
+        ...(feature.child_history_total === undefined
+          ? {}
+          : { childHistoryTotal: feature.child_history_total }),
+        ...(feature.child_history_truncated === undefined
+          ? {}
+          : { childHistoryTruncated: feature.child_history_truncated }),
       })),
-      ...(feature.active_child === undefined
-        ? {}
-        : { activeChild: toRelationshipChildView(feature.active_child) }),
-      ...(feature.child_history === undefined
-        ? {}
-        : { childHistory: feature.child_history.map(toRelationshipChildView) }),
-      ...(feature.child_history_total === undefined
-        ? {}
-        : { childHistoryTotal: feature.child_history_total }),
-      ...(feature.child_history_truncated === undefined
-        ? {}
-        : { childHistoryTruncated: feature.child_history_truncated }),
-    }));
+      warnings: (response.warnings ?? []).map(redactedCanonicalError),
+    };
   }
 
   /** Dispatches only allowlisted server-catalogue actions, single-flight per input. */
@@ -556,15 +563,12 @@ export class FeatureService {
   // --- transport helpers -----------------------------------------------------
 
   /**
-   * One authenticated request through the shared server client. The 409
-   * `not_ready` rejection carries its outstanding readiness issues; their
-   * safe messages are folded into the remediation so the form can show why.
+   * One authenticated request through the shared server client. Canonical
+   * server rejections (including 409 `not_ready` with its readiness titles)
+   * cross unchanged; the catalog owns their text.
    */
   private api(path: string, init?: ApiRequestInit): Promise<unknown> {
-    return serverRequest(this.deps.transport, path, init, {
-      remedyByCode: REMEDY_BY_CODE,
-      foldTargetIssues: true,
-    });
+    return serverRequest(this.deps.transport, path, init);
   }
 
   private async runOperationalAction(input: FeatureActionRequest): Promise<FeatureActionResult> {
@@ -689,6 +693,10 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
       feature.active_run_detail?.phase_status ?? feature.progress.current_phase_status,
     ),
     ...(setup === null ? {} : { setup }),
+    // Canonical warning objects cross IPC intact except diagnostics, which
+    // pass through the same redaction as every other raw text.
+    warnings: (feature.warnings ?? []).map(redactedCanonicalError),
+    errors: (feature.errors ?? []).map(toOwnedErrorView),
     automaticReview: {
       mode: feature.automatic_review.mode,
       enabled: feature.automatic_review.enabled,
@@ -758,9 +766,20 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
       : {
           transaction: {
             ...spreadDefined('phase', feature.transaction.phase),
-            ...(feature.transaction.attention === undefined || feature.transaction.attention === ''
+            ...(feature.transaction.attention === undefined
               ? {}
-              : { attention: redactText(feature.transaction.attention) }),
+              : {
+                  // The canonical object crosses IPC intact except
+                  // diagnostics, which pass through the same redaction as
+                  // every other raw text the renderer receives.
+                  attention: {
+                    ...feature.transaction.attention,
+                    diagnostics:
+                      feature.transaction.attention.diagnostics === undefined
+                        ? undefined
+                        : redactText(feature.transaction.attention.diagnostics),
+                  },
+                }),
             ...(feature.transaction.entries === undefined
               ? {}
               : {
@@ -768,37 +787,9 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
                     ...spreadDefined('repo', entry.repo),
                     ...spreadDefined('prepState', entry.prep_state),
                     ...spreadDefined('applyState', entry.apply_state),
-                    ...(entry.conflict_files === undefined
+                    ...(entry.pending_sync === undefined
                       ? {}
-                      : { conflictFiles: entry.conflict_files }),
-                    ...(entry.dirty === undefined
-                      ? {}
-                      : {
-                          dirty: entry.dirty.map((dirty) => ({
-                            ...spreadDefined('repo', dirty.repo),
-                            ...spreadDefined('path', dirty.path),
-                            ...(dirty.staged === undefined ? {} : { staged: dirty.staged }),
-                            ...(dirty.unstaged === undefined ? {} : { unstaged: dirty.unstaged }),
-                            ...(dirty.untracked === undefined
-                              ? {}
-                              : { untracked: dirty.untracked }),
-                            ...(dirty.staged_total === undefined
-                              ? {}
-                              : { stagedTotal: dirty.staged_total }),
-                            ...(dirty.unstaged_total === undefined
-                              ? {}
-                              : { unstagedTotal: dirty.unstaged_total }),
-                            ...(dirty.untracked_total === undefined
-                              ? {}
-                              : { untrackedTotal: dirty.untracked_total }),
-                          })),
-                        }),
-                    ...(entry.cleanup_warning === undefined || entry.cleanup_warning === ''
-                      ? {}
-                      : { cleanupWarning: redactText(entry.cleanup_warning) }),
-                    ...(entry.diagnostics === undefined || entry.diagnostics === ''
-                      ? {}
-                      : { diagnostics: redactText(entry.diagnostics) }),
+                      : { pendingSync: entry.pending_sync }),
                   })),
                 }),
           },
@@ -814,9 +805,20 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
             ...(repo.freshness === undefined || repo.freshness === ''
               ? {}
               : { freshness: repo.freshness }),
-            ...(repo.last_error === undefined || repo.last_error === ''
+            // The canonical object crosses IPC intact except diagnostics,
+            // which pass through the same redaction as every other raw
+            // text the renderer receives.
+            ...(repo.error === undefined
               ? {}
-              : { lastError: redactText(repo.last_error) }),
+              : {
+                  error: {
+                    ...repo.error,
+                    diagnostics:
+                      repo.error.diagnostics === undefined
+                        ? undefined
+                        : redactText(repo.error.diagnostics),
+                  },
+                }),
             ...(repo.rebase_status === undefined || repo.rebase_status === ''
               ? {}
               : { rebaseStatus: repo.rebase_status }),
@@ -848,13 +850,38 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
     ...(feature.failure === undefined
       ? {}
       : {
+          // The canonical object crosses IPC intact except diagnostics,
+          // which pass through the same redaction as every other raw text
+          // the renderer receives.
           failure: {
-            ...(feature.failure.type === undefined ? {} : { type: feature.failure.type }),
-            ...(feature.failure.message === undefined
-              ? {}
-              : { message: redactText(feature.failure.message) }),
+            ...feature.failure,
+            diagnostics:
+              feature.failure.diagnostics === undefined
+                ? undefined
+                : redactText(feature.failure.diagnostics),
           },
         }),
+  };
+}
+
+/**
+ * Maps a validated server owned-error entry (snake_case) to the
+ * renderer-facing view (camelCase). Entries never carry diagnostics, so no
+ * redaction applies; the class and reference discipline were validated at
+ * the parse boundary.
+ */
+function toOwnedErrorView(entry: ServerOwnedError): OwnedError {
+  return {
+    ref: {
+      scope: entry.ref.scope,
+      code: entry.ref.code,
+      ...(entry.ref.feature_id === undefined ? {} : { featureId: entry.ref.feature_id }),
+      ...(entry.ref.repository === undefined ? {} : { repository: entry.ref.repository }),
+      ...(entry.ref.task_key === undefined ? {} : { taskKey: entry.ref.task_key }),
+      ...(entry.ref.snapshot_id === undefined ? {} : { snapshotId: entry.ref.snapshot_id }),
+      ...(entry.ref.key === undefined ? {} : { key: entry.ref.key }),
+    },
+    error: entry.error,
   };
 }
 
@@ -875,18 +902,23 @@ function toRelationshipChildView(child: ServerRelationshipChild) {
     ...spreadDefined('closedAt', child.closed_at),
     cost: { totalUsd: child.cost.total_usd, byPhase: child.cost.by_phase },
     integrationState: child.integration_state,
-    attention: child.attention.map((attention) => ({
-      code: attention.code,
-      message: redactText(attention.message),
-      ...spreadDefined('repo', attention.repo),
-    })),
-    cleanupWarnings: child.cleanup_warnings.map((warning) => ({
-      message: redactText(warning.message),
-      ...spreadDefined('repo', warning.repo),
-    })),
-    ...(child.last_error === undefined || child.last_error === ''
+    ...(child.attention === undefined
       ? {}
-      : { lastError: redactText(child.last_error) }),
+      : {
+          // The canonical object crosses IPC intact except diagnostics,
+          // which pass through the same redaction as every other raw text
+          // the renderer receives.
+          attention: {
+            ...child.attention,
+            diagnostics:
+              child.attention.diagnostics === undefined
+                ? undefined
+                : redactText(child.attention.diagnostics),
+          },
+        }),
+    // Canonical warning objects cross IPC intact except diagnostics, which
+    // pass through the same redaction as every other raw text.
+    warnings: child.warnings.map(redactedCanonicalError),
     ...spreadDefined('diffSummary', child.diff_summary),
     ...(hasDiffSummary === undefined ? {} : { hasDiffSummary }),
   };
@@ -938,17 +970,25 @@ function toSetupView(setup: ServerSetup | undefined): FeatureSetupView | null {
       status: taskStatus.data,
       ...(task.branch === undefined || task.branch === '' ? {} : { branch: task.branch }),
       attempt: task.attempt ?? 0,
-      ...(task.last_error === undefined || task.last_error === ''
+      ...(task.error === undefined
         ? {}
-        : { error: redactText(task.last_error) }),
+        : {
+            // The task's canonical failure object crosses IPC intact except
+            // diagnostics, which pass through the same redaction as every
+            // other raw text the renderer receives.
+            error: {
+              ...task.error,
+              diagnostics:
+                task.error.diagnostics === undefined
+                  ? undefined
+                  : redactText(task.error.diagnostics),
+            },
+          }),
     });
   }
   return {
     status: status.data,
     attempt: setup.attempt ?? 0,
     tasks: taskViews,
-    ...(setup.last_error === undefined || setup.last_error === ''
-      ? {}
-      : { lastError: redactText(setup.last_error) }),
   };
 }

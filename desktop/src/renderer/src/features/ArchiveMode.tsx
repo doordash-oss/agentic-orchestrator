@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Archive mode: a persistent, read-only cockpit view for a sealed run.
  * Renders a run selector, a "Sealed run · Read only" band, a sealed-tone
@@ -15,7 +31,10 @@ import {
   type SessionSummary,
   type SessionTranscript,
 } from '../../../shared/ipc';
-import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { parseIpcError } from '../wizard/ipcError';
+import type { CanonicalError } from '../../../shared/ipc';
+import { ErrorSurface } from '../components/ErrorSurface';
+import { retryAction, type LoadState } from '../hooks';
 import { PhaseRail } from './PhaseRailRow';
 import { archiveRailSegments, railTrio } from './phaseRail';
 import {
@@ -38,13 +57,10 @@ export interface ArchiveModeProps {
   onReturnToCurrent(): void;
 }
 
-type ArchiveState =
-  | { phase: 'loading' }
-  | { phase: 'error'; error: WizardError }
-  | {
-      phase: 'loaded';
-      detail: RunDetailView | null;
-    };
+type ArchiveState = LoadState<{
+  phase: 'loaded';
+  detail: RunDetailView | null;
+}>;
 
 export function ArchiveMode(props: ArchiveModeProps) {
   const {
@@ -68,9 +84,9 @@ export function ArchiveMode(props: ArchiveModeProps) {
   const [selectedSession, setSelectedSession] = useState<SessionTranscript | null>(null);
   const [sessions, setSessions] = useState<RunSessionsListResult | null>(null);
   const [loadingArtifact, setLoadingArtifact] = useState(false);
-  const [inspectionError, setInspectionError] = useState<WizardError | null>(null);
-  const [artifactLoadError, setArtifactLoadError] = useState<WizardError | null>(null);
-  const [sessionLoadError, setSessionLoadError] = useState<WizardError | null>(null);
+  const [inspectionError, setInspectionError] = useState<CanonicalError | null>(null);
+  const [artifactLoadError, setArtifactLoadError] = useState<CanonicalError | null>(null);
+  const [sessionLoadError, setSessionLoadError] = useState<CanonicalError | null>(null);
   const loadRef = useRef(0);
   const selectionRef = useRef<string | null>(null);
 
@@ -105,19 +121,17 @@ export function ArchiveMode(props: ArchiveModeProps) {
     };
   }, [active, featureId, selectedRunNumber, load]);
 
-  // Load artifacts + sessions for the selected run
-  useEffect(() => {
-    if (state.phase !== 'loaded') return;
-    setArtifactContent(null);
-    setLogContent(null);
-    setSelectedSession(null);
-    setArtifacts([]);
-    setLogs([]);
-    setSessions(null);
-    setInspectionError(null);
+  /**
+   * Loads the sealed run's resources (artifacts, historical sessions, bounded
+   * logs), settling each independently: a rejected load is captured as its
+   * canonical error and rendered through its own Retry, which re-invokes
+   * this load. Shared by the run-change effect and every error card's Retry.
+   */
+  const loadResources = useCallback(async () => {
     setArtifactLoadError(null);
     setSessionLoadError(null);
-    Promise.all([
+    setInspectionError(null);
+    const [arts, sess, runLogs] = await Promise.all([
       window.agentico
         .listRunArtifacts({ featureId, runNumber: selectedRunNumber })
         .catch((error: unknown) => {
@@ -136,12 +150,23 @@ export function ArchiveMode(props: ArchiveModeProps) {
           setInspectionError(parseIpcError(error));
           return { logs: [] };
         }),
-    ]).then(([arts, sess, runLogs]) => {
-      setArtifacts(arts.artifacts);
-      setSessions(sess);
-      setLogs(runLogs.logs);
-    });
-  }, [featureId, selectedRunNumber, state.phase]);
+    ]);
+    setArtifacts(arts.artifacts);
+    setSessions(sess);
+    setLogs(runLogs.logs);
+  }, [featureId, selectedRunNumber]);
+
+  // Load artifacts + sessions for the selected run
+  useEffect(() => {
+    if (state.phase !== 'loaded') return;
+    setArtifactContent(null);
+    setLogContent(null);
+    setSelectedSession(null);
+    setArtifacts([]);
+    setLogs([]);
+    setSessions(null);
+    void loadResources();
+  }, [state.phase, loadResources]);
 
   // App-event invalidation: refetch run list but stay pinned
   useEffect(() => {
@@ -218,9 +243,11 @@ export function ArchiveMode(props: ArchiveModeProps) {
   if (state.phase === 'error') {
     return (
       <ArchiveShell state="error" onReturnToCurrent={onReturnToCurrent}>
-        <div role="alert" className="archive-mode__error">
-          {state.error.message}
-        </div>
+        <ErrorSurface
+          error={state.error}
+          variant="compact"
+          localAction={retryAction(() => void load(selectedRunNumber))}
+        />
       </ArchiveShell>
     );
   }
@@ -332,15 +359,19 @@ export function ArchiveMode(props: ArchiveModeProps) {
 
           <div className="archive-mode__artifacts">
             {inspectionError !== null ? (
-              <p className="archive-mode__error" role="alert">
-                {inspectionError.message}
-              </p>
+              <ErrorSurface
+                error={inspectionError}
+                variant="compact"
+                localAction={retryAction(() => void loadResources())}
+              />
             ) : null}
             <h3 className="archive-mode__section-title">Artifacts</h3>
             {artifactLoadError !== null ? (
-              <p className="archive-mode__error" role="alert">
-                Could not load artifacts: {artifactLoadError.message}
-              </p>
+              <ErrorSurface
+                error={artifactLoadError}
+                variant="compact"
+                localAction={retryAction(() => void loadResources())}
+              />
             ) : artifacts.length === 0 ? (
               <p className="archive-mode__empty">No artifacts for this run.</p>
             ) : (
@@ -409,9 +440,11 @@ export function ArchiveMode(props: ArchiveModeProps) {
             <div className="archive-mode__sessions">
               <h3 className="archive-mode__section-title">Historical timeline</h3>
               {sessionLoadError !== null ? (
-                <p className="archive-mode__error" role="alert">
-                  Could not load historical sessions: {sessionLoadError.message}
-                </p>
+                <ErrorSurface
+                  error={sessionLoadError}
+                  variant="compact"
+                  localAction={retryAction(() => void loadResources())}
+                />
               ) : sessions.sessions.length === 0 ? (
                 <p className="archive-mode__empty">
                   No completed sessions were recorded for this run.

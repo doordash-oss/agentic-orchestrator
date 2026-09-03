@@ -29,11 +29,8 @@ import (
 // through the tracer path.
 //
 //  1. Create feature → run-001 exists with run.yaml.
-//  2. Simulate inquire/research/design: lifecycle transitions plus real
-//     artifact writes from the agent package (agent.LogPhaseError, the
-//     run-aware path helpers PhaseDir / RunDir). These are the same writers
-//     production PhaseRunner code goes through — NOT hand-seeded markers —
-//     so the test genuinely exercises the routing layer.
+//  2. Simulate inquire/research/design: lifecycle transitions plus neutral
+//     marker writes routed through the agent package's run-aware path helpers.
 //  3. Rewind to PhaseInquire → run-001 sealed in place, run-002 forked;
 //     sealed artifacts preserved, run-002 empty.
 //  4. Run the writers again against the reloaded feature (ActiveRun=2) and
@@ -101,9 +98,8 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	}
 
 	// --- Step 2: Simulate inquire → research → design ------------------
-	// Drive lifecycle transitions and exercise REAL agent-package path
-	// writers against the feature. agent.LogPhaseError is the canonical
-	// per-phase writer; if it still targeted the feature root, markers
+	// Drive lifecycle transitions and exercise the agent-package run path
+	// helpers against the feature. If routing targeted the feature root, markers
 	// would land outside runs/run-001/ and step 4's writes would overwrite
 	// step 2's fixtures after rewind.
 	run1Dir := filepath.Join(stateDir, f.ID, "runs", "run-001")
@@ -117,8 +113,8 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	if f, err = mgr.Get(f.ID); err != nil {
 		t.Fatalf("Get after inquire: %v", err)
 	}
-	agent.LogPhaseError(stateDir, f, "inquire", "r1-inquire-error")
-	assertUnderActiveRun(t, stateDir, f, "inquire", "error.log")
+	writePhaseMarker(t, stateDir, f, "inquire", "r1-inquire")
+	assertUnderActiveRun(t, stateDir, f, "inquire", "routing.marker")
 
 	if err := mgr.StartResearch(f.ID); err != nil {
 		t.Fatalf("StartResearch: %v", err)
@@ -129,8 +125,8 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	if f, err = mgr.Get(f.ID); err != nil {
 		t.Fatalf("Get after research: %v", err)
 	}
-	agent.LogPhaseError(stateDir, f, "research", "r1-research-error")
-	assertUnderActiveRun(t, stateDir, f, "research", "error.log")
+	writePhaseMarker(t, stateDir, f, "research", "r1-research")
+	assertUnderActiveRun(t, stateDir, f, "research", "routing.marker")
 
 	if err := mgr.StartDesign(f.ID); err != nil {
 		t.Fatalf("StartDesign: %v", err)
@@ -141,8 +137,8 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	if f, err = mgr.Get(f.ID); err != nil {
 		t.Fatalf("Get after design: %v", err)
 	}
-	agent.LogPhaseError(stateDir, f, "design", "r1-design-error")
-	assertUnderActiveRun(t, stateDir, f, "design", "error.log")
+	writePhaseMarker(t, stateDir, f, "design", "r1-design")
+	assertUnderActiveRun(t, stateDir, f, "design", "routing.marker")
 
 	// Also verify the exported path helpers all root inside run-001.
 	phaseDir := agent.PhaseDir(stateDir, f, 1)
@@ -159,9 +155,9 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 		t.Errorf("RoadmapDir = %q, want under %q", got, run1Dir)
 	}
 
-	// No error.log should have leaked to the feature root.
+	// No routing.marker should have leaked to the feature root.
 	for _, phase := range []string{"inquire", "research", "design"} {
-		leaked := filepath.Join(stateDir, f.ID, phase, "error.log")
+		leaked := filepath.Join(stateDir, f.ID, phase, "routing.marker")
 		if _, err := os.Stat(leaked); !os.IsNotExist(err) {
 			t.Errorf("leak: %s exists at feature root (should be under runs/run-001/)", leaked)
 		}
@@ -199,18 +195,17 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	if len(sealedRun.BackupBranches) != 0 {
 		t.Errorf("BackupBranches should be empty, got %v", sealedRun.BackupBranches)
 	}
-	// The real error.log files written by LogPhaseError must still exist in
-	// the sealed run tree — seal+fork must not delete anything.
+	// The routed marker files must still exist in the sealed run tree.
 	for _, phase := range []string{"inquire", "research", "design"} {
-		path := filepath.Join(run1Dir, phase, "error.log")
+		path := filepath.Join(run1Dir, phase, "routing.marker")
 		data, err := os.ReadFile(path)
 		if err != nil {
-			t.Errorf("sealed run-001/%s/error.log missing: %v (seal+fork must preserve artifacts)", phase, err)
+			t.Errorf("sealed run-001/%s/routing.marker missing: %v (seal+fork must preserve artifacts)", phase, err)
 			continue
 		}
 		// Content should still include the original marker substring.
-		if want := "r1-" + phase + "-error"; !containsSubstr(string(data), want) {
-			t.Errorf("sealed run-001/%s/error.log = %q, should contain %q", phase, string(data), want)
+		if want := "r1-" + phase; !containsSubstr(string(data), want) {
+			t.Errorf("sealed run-001/%s/routing.marker = %q, should contain %q", phase, string(data), want)
 		}
 	}
 
@@ -281,27 +276,27 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	}
 	// Real writer again — this one must land inside run-002/, not run-001/,
 	// because ActiveRun is now 2.
-	agent.LogPhaseError(stateDir, reloaded, "inquire", "r2-inquire-error")
-	assertUnderActiveRun(t, stateDir, reloaded, "inquire", "error.log")
+	writePhaseMarker(t, stateDir, reloaded, "inquire", "r2-inquire")
+	assertUnderActiveRun(t, stateDir, reloaded, "inquire", "routing.marker")
 
-	// run-001 untouched — its error.log still contains the r1 marker.
-	if data, err := os.ReadFile(filepath.Join(run1Dir, "inquire", "error.log")); err != nil {
-		t.Errorf("run-001/inquire/error.log vanished: %v", err)
-	} else if got := string(data); !containsSubstr(got, "r1-inquire-error") {
-		t.Errorf("run-001 inquire error.log = %q, should contain r1-inquire-error (NOT overwritten)", got)
+	// run-001 untouched — its routing.marker still contains the r1 marker.
+	if data, err := os.ReadFile(filepath.Join(run1Dir, "inquire", "routing.marker")); err != nil {
+		t.Errorf("run-001/inquire/routing.marker vanished: %v", err)
+	} else if got := string(data); !containsSubstr(got, "r1-inquire") {
+		t.Errorf("run-001 inquire routing.marker = %q, should contain r1-inquire (NOT overwritten)", got)
 	}
 
 	// run-002 now has its own inquire error log.
-	r2LogPath := filepath.Join(run2Dir, "inquire", "error.log")
+	r2LogPath := filepath.Join(run2Dir, "inquire", "routing.marker")
 	if data, err := os.ReadFile(r2LogPath); err != nil {
-		t.Errorf("run-002/inquire/error.log missing: %v", err)
-	} else if got := string(data); !containsSubstr(got, "r2-inquire-error") {
-		t.Errorf("run-002 inquire error.log = %q, should contain r2-inquire-error", got)
+		t.Errorf("run-002/inquire/routing.marker missing: %v", err)
+	} else if got := string(data); !containsSubstr(got, "r2-inquire") {
+		t.Errorf("run-002 inquire routing.marker = %q, should contain r2-inquire", got)
 	}
 
-	// Final defense: no error.log anywhere at feature root.
+	// Final defense: no routing.marker anywhere at feature root.
 	for _, phase := range []string{"inquire", "research", "design"} {
-		leaked := filepath.Join(stateDir, f.ID, phase, "error.log")
+		leaked := filepath.Join(stateDir, f.ID, phase, "routing.marker")
 		if _, err := os.Stat(leaked); !os.IsNotExist(err) {
 			t.Errorf("final leak: %s exists at feature root", leaked)
 		}
@@ -311,6 +306,21 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 // assertUnderActiveRun verifies that the given `<phase>/<file>` path exists
 // inside the feature's active run directory. The feature must be reloaded
 // from disk before this call so ActiveRun is current.
+
+// writePhaseMarker writes a neutral fixture under the feature's active run
+// directory so run placement and rewind carry-forward remain pinned.
+func writePhaseMarker(t *testing.T, stateDir string, f *feature.Feature, phase, msg string) {
+	t.Helper()
+	dir := filepath.Join(agent.ActiveRunDir(stateDir, f), phase)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	path := filepath.Join(dir, "routing.marker")
+	if err := os.WriteFile(path, []byte(msg+"\n"), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
 func assertUnderActiveRun(t *testing.T, stateDir string, f *feature.Feature, phase, file string) {
 	t.Helper()
 	runDir := agent.ActiveRunDir(stateDir, f)

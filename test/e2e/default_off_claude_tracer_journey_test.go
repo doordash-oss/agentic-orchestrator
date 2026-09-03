@@ -121,30 +121,26 @@ func TestDefaultOffClaudeTracerJourney(t *testing.T) {
 		}
 	})
 
-	t.Run("vertical_journey_snapshot_isolates_from_config_edit", func(t *testing.T) {
+	t.Run("vertical_journey_config_edit_applies_to_running_session", func(t *testing.T) {
 		// Build a session with auto-review enabled, then disable it in the
-		// config. The first session's handler must still auto-approve
-		// because the snapshot was taken at build time. A second session
-		// built after the edit must not auto-approve.
+		// config. The running session reads the enabled flag live, so it
+		// stops auto-approving and instead offers auto-approve on the
+		// deferral. Re-enabling restores auto-approval without a rebuild.
 		cfg := config.NewDefault()
 		cfg.Defaults.AutomaticReviewEnabled = true
 		reg := fakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
 		handler1 := buildSessionViaPhaseRunner(t, cfg, reg, workDir)
 
-		// Edit config: disable auto-review.
 		cfg.Defaults.AutomaticReviewEnabled = false
-
-		// First session's handler is unaffected by the edit.
 		got1, err := handler1.CanUseTool(bashReq("go test ./..."))
-		if err != nil || got1.Behavior != "allow" {
-			t.Fatalf("first session should still auto-approve (snapshot): got %+v err %v", got1, err)
+		if err != nil || got1.Behavior != "" || got1.AutoApproveOffer == nil {
+			t.Fatalf("running session after disable should defer with an offer: got %+v err %v", got1, err)
 		}
 
-		// Second session built after the edit must not auto-approve.
-		handler2 := buildSessionViaPhaseRunner(t, cfg, reg, workDir)
-		got2, err := handler2.CanUseTool(bashReq("go test ./..."))
-		if err != nil || got2.Behavior != "" {
-			t.Fatalf("second session should defer after config disable: got %+v err %v", got2, err)
+		cfg.Defaults.AutomaticReviewEnabled = true
+		got2, err := handler1.CanUseTool(bashReq("go test ./..."))
+		if err != nil || got2.Behavior != "allow" {
+			t.Fatalf("running session after re-enable should auto-approve: got %+v err %v", got2, err)
 		}
 	})
 

@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Main-process consumption of the server's global SSE invalidation stream
  * (`GET /api/v1/events`), mirroring the Go client's cursor/epoch semantics
@@ -18,7 +34,7 @@
  * module; summaries, payloads, and credentials never cross to the renderer.
  */
 import { z } from 'zod';
-import { redactText, toSafeError } from '../../shared/errors';
+import { redactText, toCanonicalError } from '../../shared/errors';
 import { AppEventSchema, type AppEvent } from '../../shared/ipc';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../../shared/sanitize';
 
@@ -364,8 +380,8 @@ export class EventStreamSupervisor {
           }
         }
       } catch (err) {
-        const safe = toSafeError(err, 'E_EVENT_STREAM');
-        this.deps.log(`event stream attempt failed: ${safe.code}: ${redactText(safe.message)}`);
+        const safe = toCanonicalError(err, 'E_EVENT_STREAM');
+        this.deps.log(`event stream attempt failed: ${safe.code}: ${redactText(safe.summary)}`);
       } finally {
         this.current?.close();
         this.current = null;

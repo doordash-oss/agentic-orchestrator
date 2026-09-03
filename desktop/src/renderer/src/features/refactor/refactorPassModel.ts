@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Pure presentation model for the refactor pass workspace. Everything here is
  * derived from the parent snapshot, the child snapshot, and the server action
@@ -6,11 +22,12 @@
  */
 import {
   isPendingReviewStatus,
+  type ErrorReference,
   type FeatureSnapshot,
   type RelationshipChildView,
-  type RelationshipTransactionView,
   type ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
+import type { CanonicalError } from '../../../../shared/api/parse';
 import { actionById, displayStatusLabel, isReadyToStart } from '../featureView';
 
 export type PassStateId =
@@ -35,35 +52,10 @@ export interface PassState {
   /** One sentence under the pass name: what is happening and what comes next. */
   sentence: string;
   tone: 'quiet' | 'live' | 'attention' | 'danger';
-  /** Repository-level diagnostics when integration parks (conflicts, dirt). */
-  problems?: string[];
 }
 
 const ACTIVE_TRANSACTION_PHASES = new Set(['preparing', 'prepared', 'applying']);
 const PARKED_TRANSACTION_PHASES = new Set(['attention', 'rolling_back', 'rolled_back']);
-
-function transactionProblems(transaction: RelationshipTransactionView): string[] {
-  const problems: string[] = [];
-  for (const entry of transaction.entries ?? []) {
-    const repo = entry.repo === undefined ? '' : `${entry.repo}: `;
-    if (entry.diagnostics !== undefined && entry.diagnostics !== '') {
-      problems.push(`${repo}${entry.diagnostics}`);
-    } else if (entry.conflictFiles !== undefined && entry.conflictFiles.length > 0) {
-      problems.push(`${repo}conflicts in ${entry.conflictFiles.join(', ')}`);
-    }
-    if (entry.cleanupWarning !== undefined && entry.cleanupWarning !== '') {
-      problems.push(`${repo}${entry.cleanupWarning}`);
-    }
-  }
-  if (
-    problems.length === 0 &&
-    transaction.attention !== undefined &&
-    transaction.attention !== ''
-  ) {
-    problems.push(transaction.attention);
-  }
-  return problems;
-}
 
 export function passState(child: FeatureSnapshot): PassState {
   const transaction = child.transaction;
@@ -79,14 +71,19 @@ export function passState(child: FeatureSnapshot): PassState {
     return { id: 'closed', sentence: 'The pass is closed without merging.', tone: 'quiet' };
   }
   if (transactionPhase !== undefined && PARKED_TRANSACTION_PHASES.has(transactionPhase)) {
+    // The attention card owns the parked condition: the attention phase
+    // renders no sentence at all, and rollback states keep a neutral
+    // progress sentence with no diagnostics.
+    if (transactionPhase === 'attention') {
+      return { id: 'integration-attention', sentence: '', tone: 'attention' };
+    }
     return {
       id: 'integration-attention',
       sentence:
-        transactionPhase === 'attention'
-          ? 'Integration needs attention. Review the repository details below.'
-          : 'Integration was rolled back. Review the repository details below.',
+        transactionPhase === 'rolling_back'
+          ? 'Integration is rolling back after a failed apply.'
+          : 'Integration rolled back after a failed apply. Retry runs it again.',
       tone: 'attention',
-      problems: transaction === undefined ? [] : transactionProblems(transaction),
     };
   }
   if (transactionPhase === 'applied') {
@@ -104,11 +101,10 @@ export function passState(child: FeatureSnapshot): PassState {
     };
   }
   if (child.setup?.status === 'failed') {
-    return {
-      id: 'setup-failed',
-      sentence: 'Worktree setup failed. Retry setup to continue.',
-      tone: 'danger',
-    };
+    // No sentence: the owning setup task's canonical error renders as the
+    // workspace's single full error card, exactly as parked integration
+    // attention does.
+    return { id: 'setup-failed', sentence: '', tone: 'danger' };
   }
   if (child.setupComplete === false || child.status === 'SettingUpWorktrees') {
     return {
@@ -120,7 +116,7 @@ export function passState(child: FeatureSnapshot): PassState {
   if (child.status === 'Failed') {
     return {
       id: 'failed',
-      sentence: child.failure?.message ?? 'The pass stopped on a failure.',
+      sentence: child.failure?.summary ?? 'The pass stopped on a failure.',
       tone: 'danger',
     };
   }
@@ -249,7 +245,7 @@ export function custodyStations(
 ): [CustodyStation, CustodyStation, CustodyStation] {
   const state = child === null ? null : passState(child);
   const attention =
-    view.attention.length > 0 || state?.tone === 'attention' || state?.tone === 'danger';
+    view.attention != null || state?.tone === 'attention' || state?.tone === 'danger';
   return [
     {
       id: 'parent',
@@ -313,7 +309,9 @@ function passActionLabel(id: PassAction['id'], child: FeatureSnapshot): string {
     case 'resume':
       return 'Resume';
     case 'retry':
-      return child.setup?.status === 'failed' ? 'Retry setup' : 'Retry';
+      if (child.setup?.status === 'failed') return 'Retry setup';
+      if (child.transaction?.attention != null) return 'Retry integration';
+      return 'Retry';
     case 'pause-stop':
       return 'Stop';
     case 'restart':
@@ -334,21 +332,10 @@ export function passKindLabel(kind: string): string {
 }
 
 /**
- * The active-pass status chip label, switching on the child kind. Unknown kinds
- * fall back to a neutral "Working" rather than impersonating "Refactoring".
+ * The active-pass verb, switching on the child kind. Unknown kinds fall
+ * back to a neutral "Working" rather than impersonating "Refactoring".
  */
-export function refactoringStatusChip(view: RelationshipChildView): {
-  label: string;
-  tone: 'info' | 'attention';
-} {
-  const attention = view.attention.length > 0 || view.integrationState === 'attention';
-  const active = passActiveVerb(view.kind);
-  return attention
-    ? { label: `${active} — needs attention`, tone: 'attention' }
-    : { label: active, tone: 'info' };
-}
-
-function passActiveVerb(kind: string): string {
+export function passActiveVerb(kind: string): string {
   if (kind === 'review-feedback') return 'Addressing review feedback';
   if (kind === 'rebase') return 'Rebasing';
   if (kind === 'refactor') return 'Refactoring';
@@ -376,4 +363,26 @@ export const COMMENT_TYPE_LABEL: Record<ReviewFeedbackCommentView['type'], strin
 /** Stable identity key for a review-feedback comment, including type to avoid same-ID collisions across inline-review and issue-comment sequences. */
 export function commentKey(comment: ReviewFeedbackCommentView): string {
   return `${comment.repo}:${comment.type}:${comment.id}`;
+}
+
+/**
+ * The explain-in-chat context a child's relationship warning carries: a
+ * transaction-scoped reference naming the child and, when the warning's
+ * context names one, the repository whose journal entry owns the record, so
+ * the server resolves the entry rather than the attention record.
+ */
+export function relationshipWarningExplain(
+  child: Pick<RelationshipChildView, 'id' | 'name'>,
+  warning: CanonicalError,
+): { reference: ErrorReference; featureName: string } {
+  const repository = warning.context?.repositories?.[0]?.name;
+  return {
+    reference: {
+      scope: 'transaction',
+      code: warning.code,
+      featureId: child.id,
+      ...(repository !== undefined ? { repository } : {}),
+    },
+    featureName: child.name,
+  };
 }

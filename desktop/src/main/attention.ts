@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import {
   FeatureListResponseSchema,
   PermissionSnapshotResponseSchema,
@@ -28,17 +44,10 @@ import {
   type PermissionDecisionRequest,
   type VerificationGateAction,
 } from '../shared/ipc';
-import { SafeErrorException } from '../shared/errors';
+import { CanonicalErrorException } from '../shared/errors';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
 
-const REMEDIES = {
-  remedyByCode: {
-    bad_request: 'Refresh the item and correct the response.',
-    conflict: ATTENTION_ALREADY_RESOLVED_NOTICE,
-    not_found: ATTENTION_ALREADY_RESOLVED_NOTICE,
-  },
-};
 const fallbackTime = '1970-01-01T00:00:00.000Z';
 
 // Fallback for servers that predate HelpQueue.kind: mirrors the synthetic
@@ -96,6 +105,14 @@ function supportedVerificationActions(actions: string[]): VerificationGateAction
 
 /** Server-owned blocking prompts, translated once in the main process. */
 export class AttentionService {
+  /**
+   * The time this service first observed each error item id. The server's
+   * projection carries no timestamps, so the inbox's wait duration starts
+   * at first observation; ids that disappear are pruned so a returning
+   * entry reads as freshly waiting.
+   */
+  private readonly errorFirstSeen = new Map<string, string>();
+
   constructor(private readonly transport: ServerTransport) {}
 
   async getSnapshot(): Promise<AttentionSnapshot> {
@@ -124,6 +141,43 @@ export class AttentionService {
       const parent = featureID === undefined ? undefined : parentByChild.get(featureID);
       return parent === undefined ? {} : { parentFeatureId: parent };
     };
+    // One attention item per owned error on every listed feature's summary
+    // projection. Child-scoped entries route to the parent tab; the wait
+    // clock is this service's first observation of the item id.
+    const errorItems = featuresRaw.features.flatMap((feature) =>
+      (feature.errors ?? []).flatMap((entry) => {
+        // The parse boundary already rejects warning-class entries; this
+        // check keeps the item's class type honest without trusting it.
+        if (entry.error.class === 'warning') return [];
+        const refFeatureId = entry.ref.feature_id ?? feature.id;
+        const id = `error:${refFeatureId}:${entry.ref.scope}:${entry.ref.repository ?? entry.ref.task_key ?? ''}:${entry.error.code}`;
+        return [
+          {
+            kind: 'error' as const,
+            id,
+            featureId: refFeatureId,
+            ...(refFeatureId === feature.id ? {} : parentOf(refFeatureId)),
+            waitingSince: this.observeErrorItem(id),
+            ref: {
+              scope: entry.ref.scope,
+              code: entry.ref.code,
+              ...(entry.ref.feature_id === undefined ? {} : { featureId: entry.ref.feature_id }),
+              ...(entry.ref.repository === undefined ? {} : { repository: entry.ref.repository }),
+              ...(entry.ref.task_key === undefined ? {} : { taskKey: entry.ref.task_key }),
+              ...(entry.ref.snapshot_id === undefined ? {} : { snapshotId: entry.ref.snapshot_id }),
+              ...(entry.ref.key === undefined ? {} : { key: entry.ref.key }),
+            },
+            class: entry.error.class,
+            code: entry.error.code,
+            title: entry.error.title,
+          },
+        ];
+      }),
+    );
+    const errorIds = new Set(errorItems.map((item) => item.id));
+    for (const id of this.errorFirstSeen.keys()) {
+      if (!errorIds.has(id)) this.errorFirstSeen.delete(id);
+    }
     const items: AttentionItem[] = [
       ...permissionsRaw.requests
         .filter((request) => request.status === 'pending' && hasListedFeature(request.feature_id))
@@ -147,6 +201,9 @@ export class AttentionService {
                   scopeDisplay: request.remember.scope_display,
                 },
               }),
+          ...(request.auto_approve === undefined
+            ? {}
+            : { autoApprove: { wouldFastPath: request.auto_approve.would_fast_path } }),
         })),
       ...promptsRaw.ask_user_questions
         .filter(
@@ -251,6 +308,7 @@ export class AttentionService {
           reviewKind: reviewKindLabel(feature.status),
           phase: feature.current_phase,
         })),
+      ...errorItems,
     ];
     const unique = new Map(items.map((item) => [item.id, item]));
     const classRank: Record<AttentionItem['kind'], number> = {
@@ -259,7 +317,8 @@ export class AttentionService {
       questions: 2,
       gate: 3,
       review: 4,
-      help: 5,
+      error: 5,
+      help: 6,
     };
     return validateWithSchema(
       {
@@ -283,6 +342,9 @@ export class AttentionService {
       ...(input.decision === 'allow_remember'
         ? { remember_pattern: input.rememberPattern, remember_scope: input.rememberScope }
         : {}),
+      ...(input.autoApproveScope === undefined
+        ? {}
+        : { auto_approve_scope: input.autoApproveScope }),
     });
   }
   async answerQuestions(request: AskUserAnswerRequest): Promise<AttentionActionResult> {
@@ -319,20 +381,27 @@ export class AttentionService {
     path: string,
     schema: { parse: (value: unknown) => T },
   ): Promise<T> {
-    const body = await serverRequest(this.transport, path, undefined, REMEDIES);
+    const body = await serverRequest(this.transport, path, undefined);
     return schema.parse(body);
+  }
+
+  /** Records (or returns) this service's first observation of an error item id. */
+  private observeErrorItem(id: string): string {
+    const seen = this.errorFirstSeen.get(id);
+    if (seen !== undefined) return seen;
+    const now = new Date().toISOString();
+    this.errorFirstSeen.set(id, now);
+    return now;
   }
   private async mutate(
     path: string,
     body: Record<string, unknown>,
   ): Promise<AttentionActionResult> {
     try {
-      const response = await serverRequest(
-        this.transport,
-        path,
-        { method: 'POST', body } as ApiRequestInit,
-        REMEDIES,
-      );
+      const response = await serverRequest(this.transport, path, {
+        method: 'POST',
+        body,
+      } as ApiRequestInit);
       const value = response as {
         result?: unknown;
         permission_answer_response?: { audit_warning?: unknown; already_existed?: unknown };
@@ -348,18 +417,21 @@ export class AttentionService {
           : {}),
       };
     } catch (error) {
-      if (
-        error instanceof SafeErrorException &&
-        (error.safe.code === 'conflict' ||
-          error.safe.code === 'not_found' ||
-          (error.safe.code === 'bad_request' &&
-            /^pending request \S+ not found$/i.test(error.safe.message)))
-      )
+      // A submission racing the item's resolution reads as already resolved
+      // when the canonical bad_request's diagnostics name the missing pending
+      // request; every other canonical rejection (conflict, not_found, ...)
+      // propagates so the surface renders the server's authored card.
+      const canonical = error instanceof CanonicalErrorException ? error.canonical : undefined;
+      const stalePendingRequest =
+        canonical?.code === 'bad_request' &&
+        /^pending request \S+ not found$/i.test(canonical.diagnostics ?? '');
+      if (stalePendingRequest === true) {
         return {
           result: 'Already resolved.',
           alreadyResolved: true,
           notice: ATTENTION_ALREADY_RESOLVED_NOTICE,
         };
+      }
       throw error;
     }
   }

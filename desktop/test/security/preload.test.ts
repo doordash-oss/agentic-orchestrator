@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EXPECTED_API_SURFACE } from '../fixtures/agentico-api-surface';
 
@@ -93,23 +109,33 @@ describe('preload surface', () => {
     expect(invoke).toHaveBeenCalledWith('agentico:connection:get-status');
   });
 
-  it('rejects with the safe error message on error envelopes', async () => {
+  it('rejects with the sentinel-prefixed canonical payload on error envelopes', async () => {
     const api = exposeInMainWorld.mock.calls[0]![1] as {
       getSettings(): Promise<unknown>;
     };
-    invoke.mockResolvedValueOnce({
-      ok: false,
-      error: { code: 'E_INTERNAL', message: 'nope', remediation: 'retry' },
-    });
-    await expect(api.getSettings()).rejects.toThrow(/E_INTERNAL/);
+    const canonical = {
+      code: 'E_INTERNAL',
+      class: 'blocking',
+      title: 'Request failed',
+      summary: 'The request failed unexpectedly.',
+    };
+    invoke.mockResolvedValueOnce({ ok: false, error: canonical });
+    const rejection = await api.getSettings().catch((err: unknown) => err);
+    expect(rejection).toBeInstanceOf(Error);
+    // Custom Error properties do not survive the context bridge, so the
+    // canonical object rides the message behind the sentinel prefix.
+    expect((rejection as Error).message).toBe('E_CANONICAL_ERROR ' + JSON.stringify(canonical));
   });
 
-  it('fails closed when main returns a malformed envelope', async () => {
+  it('fails closed with the IPC-protocol canonical when main returns a malformed envelope', async () => {
     const api = exposeInMainWorld.mock.calls[0]![1] as {
       getSettings(): Promise<unknown>;
     };
     invoke.mockResolvedValueOnce({ unexpected: true });
-    await expect(api.getSettings()).rejects.toThrow(/E_IPC_PROTOCOL/);
+    const rejection = await api.getSettings().catch((err: unknown) => err);
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toContain('E_CANONICAL_ERROR ');
+    expect((rejection as Error).message).toContain('E_IPC_PROTOCOL');
   });
 
   it('forwards provider-scoped model refreshes over the dedicated channel', async () => {
@@ -222,9 +248,30 @@ describe('preload surface', () => {
     expect(cb).toHaveBeenCalledWith({ target: 'settings', settingsSection: 'updates' });
 
     cb.mockClear();
+    // The routed chat draft rides the ama target only and crosses intact.
+    const amaRoute = {
+      target: 'ama',
+      draft: 'Explain the "Run failed" error (run_failed) on add-login.',
+      autoSubmit: true,
+      chatContext: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+    };
+    listener({}, amaRoute);
+    expect(cb).toHaveBeenCalledWith(amaRoute);
+
+    cb.mockClear();
     listener({}, { target: 'shell' });
     listener({}, { target: 'settings', settingsSection: 'secrets' });
     listener({}, { target: 'attention', token: 'tok-leak' });
+    // A non-ama route cannot smuggle any of the chat draft fields through.
+    listener({}, { target: 'home', draft: 'smuggled draft' });
+    listener({}, { target: 'home', autoSubmit: true });
+    listener(
+      {},
+      {
+        target: 'settings',
+        chatContext: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+      },
+    );
     listener({}, JSON.parse('{"__proto__": {}, "target": "home"}'));
     expect(cb).not.toHaveBeenCalled();
 

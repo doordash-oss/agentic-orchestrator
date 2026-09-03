@@ -74,7 +74,7 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	// Commit any uncommitted changes.
 	if git.HasUncommittedChanges(workDir) {
 		if commitErr := git.CommitAll(workDir, f.Name); commitErr != nil {
-			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, commitErr.Error())
+			o.storePublishFailure(f, repoName, commitErr)
 			return "", fmt.Errorf("commit failed: %w", commitErr)
 		}
 	}
@@ -88,8 +88,9 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	if title == "" || body == "" {
 		generatedTitle, generatedBody, generateErr := o.generatePRDescription(f, prCtx)
 		if generateErr != nil {
-			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, generateErr.Error())
-			return "", fmt.Errorf("generate PR description: %w", generateErr)
+			generateErr = &PublishDescriptionError{RepoName: repoName, Err: generateErr}
+			o.storePublishFailure(f, repoName, generateErr)
+			return "", generateErr
 		}
 		if title == "" {
 			title = generatedTitle
@@ -109,19 +110,19 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 		res := git.PullRebase(workDir, branch)
 		switch res.Outcome {
 		case git.PullRebaseConflict:
-			errMsg := fmt.Sprintf("pull-rebase conflict in repo %s", repoName)
-			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, errMsg)
-			return "", &PublishConflictError{
+			conflictErr := &PublishConflictError{
 				RepoName:     repoName,
 				Branch:       branch,
 				RebaseTarget: o.resolveRebaseTarget(f, &repo),
 			}
+			o.storePublishFailure(f, repoName, conflictErr)
+			return "", conflictErr
 		case git.PullRebaseFailure:
 			reason := "pull-rebase failed"
 			if res.Err != nil {
 				reason = res.Err.Error()
 			}
-			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, reason)
+			o.storePublishFailure(f, repoName, errors.New(reason))
 			return "", fmt.Errorf("pull-rebase failed: %s", reason)
 		}
 	}
@@ -129,11 +130,11 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	// Push branch.
 	if leasePush {
 		if err := o.pushRewrittenBranch(repoName, workDir, branch); err != nil {
-			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
+			o.storePublishFailure(f, repoName, err)
 			return "", err
 		}
 	} else if err := o.deps.Remote.Push(workDir, branch); err != nil {
-		_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
+		o.storePublishFailure(f, repoName, err)
 		return "", fmt.Errorf("push failed: %w", err)
 	}
 
@@ -144,8 +145,9 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	}
 	prURL, err := o.deps.Remote.CreatePR(repoPath, branch, title, body, repo.BaseBranch, f.Checkpoints.DraftPublish)
 	if err != nil {
-		_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
-		return "", fmt.Errorf("PR creation failed: %w", err)
+		err = &PublishPRCreateError{RepoName: repoName, Err: err}
+		o.storePublishFailure(f, repoName, err)
+		return "", err
 	}
 
 	// Record per-repo success.
@@ -171,12 +173,12 @@ func (o *Orchestrator) republishRepo(f *feature.Feature, repo feature.FeatureRep
 	}
 	if git.HasUncommittedChanges(workDir) {
 		if err := git.CommitAll(workDir, f.Name); err != nil {
-			_ = o.deps.Lifecycle.SetRepoPublishError(f.ID, repo.Name, err.Error())
+			o.storePublishFailure(f, repo.Name, err)
 			return "", fmt.Errorf("commit failed: %w", err)
 		}
 	}
 	if err := o.pushRepublish(repo.Name, workDir, branch); err != nil {
-		_ = o.deps.Lifecycle.SetRepoPublishError(f.ID, repo.Name, err.Error())
+		o.storePublishFailure(f, repo.Name, err)
 		return "", err
 	}
 	if err := o.deps.Lifecycle.SetRepoPublished(f.ID, repo.Name, prURL); err != nil {
@@ -203,10 +205,9 @@ func (o *Orchestrator) assertPRAcceptsUpdates(f *feature.Feature, repo feature.F
 	if err != nil || state == "" || state == git.PRStateOpen {
 		return nil
 	}
-	reason := fmt.Sprintf(
-		"pull request %s is %s; new commits cannot be delivered to it", prURL, state)
-	_ = o.deps.Lifecycle.SetRepoPublishError(f.ID, repo.Name, reason)
-	return errors.New(reason)
+	closedErr := &PublishPRClosedError{RepoName: repo.Name, PRURL: prURL, State: state}
+	o.storePublishFailure(f, repo.Name, closedErr)
+	return closedErr
 }
 
 // pushRepublish always delegates transport selection to the guarded rewritten
@@ -245,9 +246,9 @@ func publishRequiresLeasePush(f *feature.Feature) bool {
 }
 
 // generatePRDescription produces a PR title/body from a structured PRContext
-// using the description-generation agent. Generation errors are logged to the
-// feature-scoped publish error log and returned so publishing cannot proceed
-// with synthetic fallback content.
+// using the description-generation agent. Generation errors are returned so
+// publishing cannot proceed with synthetic fallback content; the publish
+// boundary classifies and stores them on the repository state.
 func (o *Orchestrator) generatePRDescription(f *feature.Feature, prCtx agent.PRContext) (string, string, error) {
 	if o.deps.PhaseRunner == nil {
 		return "", "", errors.New("description generation agent is unavailable")
@@ -263,7 +264,6 @@ func (o *Orchestrator) generatePRDescription(f *feature.Feature, prCtx agent.PRC
 		prCtx,
 	)
 	if err != nil {
-		agent.LogPhaseError(o.deps.PhaseRunner.StateDir, f, "publish", "description generation: "+err.Error())
 		return "", "", err
 	}
 	return title, body, nil
@@ -405,7 +405,7 @@ func buildCrossRefEntries(f *feature.Feature, justPublishedRepo, justPublishedUR
 			entry.PRURL = justPublishedURL
 		} else if hasState && state != nil {
 			entry.PRURL = state.PRURL
-			if state.LastError != "" {
+			if state.Error != nil {
 				entry.PRURL = "(failed)"
 			}
 		}

@@ -15,11 +15,13 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -41,21 +43,21 @@ func (h *apiHandler) handleRunList(w http.ResponseWriter, r *http.Request, featu
 	}
 	page, ok := parseIntQuery(r, "page", 1)
 	if !ok {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid page", map[string]any{"feature_id": featureID})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("invalid page for feature %q", featureID)))
 		return
 	}
 	pageSize, ok := parseIntQuery(r, "page_size", defaultRunListPageSize)
 	if !ok {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid page_size", map[string]any{"feature_id": featureID})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("invalid page_size for feature %q", featureID)))
 		return
 	}
 	if page < 1 || pageSize < 1 || pageSize > maxRunListPageSize {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid pagination bounds", map[string]any{"feature_id": featureID})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("invalid pagination bounds for feature %q", featureID)))
 		return
 	}
 	runNumbers, err := h.store.ListRuns(featureID)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "list runs", map[string]any{"feature_id": featureID})
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics(fmt.Sprintf("list runs for feature %q", featureID)))
 		return
 	}
 	total := len(runNumbers)
@@ -64,7 +66,7 @@ func (h *apiHandler) handleRunList(w http.ResponseWriter, r *http.Request, featu
 		totalPages = (total + pageSize - 1) / pageSize
 	}
 	if page > totalPages && totalPages > 0 {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "page out of range", map[string]any{"feature_id": featureID})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("page out of range for feature %q", featureID)))
 		return
 	}
 	// Newest first: walk the ascending enumeration backwards, then slice.

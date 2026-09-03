@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Runtime readiness wizard, shown only while the runtime cannot run work at
  * all. Every step derives entirely from the latest authoritative readiness
@@ -10,9 +26,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderReadiness, ReadinessSnapshot } from '../../../../shared/ipc';
 import { useNarrowViewport } from '../../hooks';
 import { deriveWizardState, type WizardStepId } from '../../wizard/deriveWizardState';
-import { parseIpcError, type WizardError } from '../../wizard/ipcError';
+import { parseIpcError } from '../../wizard/ipcError';
+import type { CanonicalError } from '../../../../shared/ipc';
 import { PhaseRailTrack } from '../../features/PhaseRailRow';
 import { stepSegments } from '../../features/phaseRail';
+import { ErrorSurface } from '../../components/ErrorSurface';
 
 const STEP_LABELS: Record<WizardStepId, string> = {
   providers: 'Providers',
@@ -31,7 +49,7 @@ export function SetupWizard({ snapshot, onSnapshot }: SetupWizardProps) {
   const narrow = useNarrowViewport();
 
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<WizardError | null>(null);
+  const [error, setError] = useState<CanonicalError | null>(null);
   const [announcement, setAnnouncement] = useState('');
   const [helpCollapsed, setHelpCollapsed] = useState(false);
   const errorRef = useRef<HTMLDivElement | null>(null);
@@ -130,13 +148,10 @@ export function SetupWizard({ snapshot, onSnapshot }: SetupWizardProps) {
       />
 
       {derived.configurationIssue !== null ? (
-        <div className="setup-wizard__banner" role="alert">
-          <span className="setup-wizard__error-code">invalid_configuration</span>
-          <p className="setup-wizard__banner-message">{derived.configurationIssue.message}</p>
-          {derived.configurationIssue.remedy !== undefined ? (
-            <code className="setup-wizard__code">{derived.configurationIssue.remedy}</code>
-          ) : null}
-        </div>
+        // The invalid-configuration gate is the canonical readiness issue:
+        // code, catalog title, summary, and the configuration remedy as the
+        // remediation hint all come from the object.
+        <ErrorSurface error={derived.configurationIssue} variant="compact" />
       ) : null}
 
       <p className="setup-wizard__announcement" role="status" aria-live="polite">
@@ -144,16 +159,7 @@ export function SetupWizard({ snapshot, onSnapshot }: SetupWizardProps) {
       </p>
 
       {error !== null ? (
-        <div
-          ref={errorRef}
-          tabIndex={-1}
-          role="alert"
-          className="setup-wizard__error"
-          aria-label="Setup error"
-        >
-          <span className="setup-wizard__error-code">{error.code}</span>
-          <p className="setup-wizard__error-message">{error.message}</p>
-        </div>
+        <ErrorSurface error={error} variant="compact" rootRef={errorRef} rootTabIndex={-1} />
       ) : null}
 
       {derived.activeStep === 'providers' ? (
@@ -172,6 +178,7 @@ export function SetupWizard({ snapshot, onSnapshot }: SetupWizardProps) {
           helpCollapsed={helpCollapsed}
           refreshing={refreshing}
           onCheckAgain={checkAgain}
+          onCopy={copyCommand}
         />
       ) : null}
 
@@ -255,7 +262,7 @@ interface ProviderRowProps {
 
 function ProviderRow({ provider, onCopy }: ProviderRowProps) {
   const issue = provider.issue;
-  const remedy = issue?.remedy;
+  const remedy = issue?.remediation?.hint;
   const executable = provider.installed ? 'installed' : 'not found';
   const authentication = !provider.installed
     ? '—'
@@ -288,23 +295,22 @@ function ProviderRow({ provider, onCopy }: ProviderRowProps) {
         </div>
       </dl>
       {issue !== undefined ? (
-        <div className="provider-row__issue">
-          <p className="provider-row__issue-message">{issue.message}</p>
+        <>
+          {/* The readiness issue is the canonical error; its remediation
+           * hint is the install/upgrade/auth command. The Copy control is a
+           * sibling of the surface so the command stays copyable. */}
+          <ErrorSurface error={issue} variant="compact" />
           {remedy !== undefined ? (
-            <p className="provider-row__remedy">
-              <span className="setup-step__hint">Run in your terminal, then check again:</span>
-              <code className="setup-wizard__code">{remedy}</code>
-              <button
-                type="button"
-                className="provider-row__copy"
-                aria-label={`Copy the ${provider.name} command`}
-                onClick={() => onCopy(remedy, provider.name)}
-              >
-                Copy
-              </button>
-            </p>
+            <button
+              type="button"
+              className="provider-row__copy"
+              aria-label={`Copy the ${provider.name} command`}
+              onClick={() => onCopy(remedy, provider.name)}
+            >
+              Copy
+            </button>
           ) : null}
-        </div>
+        </>
       ) : null}
     </li>
   );
@@ -317,10 +323,19 @@ interface StepWithSnapshotProps {
   helpCollapsed: boolean;
   refreshing: boolean;
   onCheckAgain(): void;
+  onCopy(command: string, providerName: string): void;
 }
 
-function ModelsStep({ snapshot, helpCollapsed, refreshing, onCheckAgain }: StepWithSnapshotProps) {
+function ModelsStep({
+  snapshot,
+  helpCollapsed,
+  refreshing,
+  onCheckAgain,
+  onCopy,
+}: StepWithSnapshotProps) {
   const models = snapshot.models;
+  const issue = models.issue;
+  const remedy = issue?.remediation?.hint;
   return (
     <div className="setup-step" aria-labelledby="setup-step-models">
       <h2 id="setup-step-models" className="setup-step__title">
@@ -340,14 +355,26 @@ function ModelsStep({ snapshot, helpCollapsed, refreshing, onCheckAgain }: StepW
             </li>
           ))}
         </ul>
+      ) : issue !== undefined ? (
+        // An unavailable models gate renders its canonical issue through the
+        // same compact surface as a provider row; only the no-issue case is
+        // an empty state.
+        <>
+          <ErrorSurface error={issue} variant="compact" />
+          {remedy !== undefined ? (
+            <button
+              type="button"
+              className="provider-row__copy"
+              aria-label="Copy the models command"
+              onClick={() => onCopy(remedy, 'models')}
+            >
+              Copy
+            </button>
+          ) : null}
+        </>
       ) : (
-        <p className="setup-step__empty">
-          {models.issue?.message ?? 'No models are available yet.'}
-        </p>
+        <p className="setup-step__empty">No models are available yet.</p>
       )}
-      {models.issue?.remedy !== undefined ? (
-        <code className="setup-wizard__code">{models.issue.remedy}</code>
-      ) : null}
       <button
         type="button"
         className="setup-wizard__action"

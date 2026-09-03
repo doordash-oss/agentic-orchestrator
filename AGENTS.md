@@ -2,12 +2,13 @@
 
 ## License header (required on every new source file)
 
-Every new source file (`*.go`, `*.sh`, `*.py`) must begin with the Apache 2.0
-notice below. For shell/Python files keep any shebang on line 1 and place the
-block immediately after it. For Go files place the block above the `package`
-clause; if the file has a package doc comment, separate the copyright block
-from the doc comment with one blank line so the doc comment still attaches to
-`package`.
+Every new source file (`*.go`, `*.sh`, `*.py`, `*.ts`, `*.tsx`, `*.mts`,
+`*.cts`, `*.js`, `*.jsx`, `*.mjs`, `*.cjs`, `*.css`, `*.html`) must begin with
+the Apache 2.0 notice below. For shell/Python files keep any shebang on line 1
+and place the block immediately after it. For Go files place the block above
+the `package` clause; if the file has a package doc comment, separate the
+copyright block from the doc comment with one blank line so the doc comment
+still attaches to `package`.
 
 ```
 Copyright <YEAR> DoorDash, Inc.
@@ -25,7 +26,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-Use `//` as the comment prefix for `.go` files and `#` for `.sh` / `.py`.
+Use `//` as the comment prefix for `.go` files, `#` for `.sh` / `.py`, block
+comments (`/* ... */`) for TypeScript (`.ts` / `.tsx` / `.mts` / `.cts`),
+JavaScript (`.js` / `.jsx` / `.mjs` / `.cjs`), and `.css`, and HTML comments
+(`<!-- ... -->`) for `.html`.
 Set `<YEAR>` to the year the file is first authored.
 
 ## Verification tiers

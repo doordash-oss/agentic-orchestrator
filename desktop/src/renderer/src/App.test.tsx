@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -8,7 +24,12 @@ import {
   type ConnectionState,
 } from '../../shared/ipc';
 import App from './App';
-import { defaultUpdateState, installAgenticoMock, readySnapshot } from './test/agenticoMock';
+import {
+  defaultUpdateState,
+  installAgenticoMock,
+  ipcError,
+  readySnapshot,
+} from './test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from './test/setup';
 
 /** Builds a state through the schema, so tests can only emit valid variants. */
@@ -142,6 +163,7 @@ describe('App readiness gating', () => {
           activeRun: 1,
           runCount: 1,
           warnings: [],
+          errors: [],
         },
       ],
       attention: { items: [attention] },
@@ -287,7 +309,12 @@ describe('App readiness gating', () => {
           status: 'crashed',
           stage: 'connect',
           detail: 'The app-managed runtime exited unexpectedly.',
-          error: { code: 'E_SERVER_CRASHED', message: 'exited', remediation: 'Retry.' },
+          error: {
+            code: 'E_SERVER_CRASHED',
+            class: 'blocking',
+            title: 'The app-managed runtime crashed',
+            summary: 'The app-managed Agentico runtime exited unexpectedly.',
+          },
         }),
       );
     });
@@ -350,7 +377,7 @@ describe('App settings-window routing', () => {
 
   it('keeps the surface untouched when the window fails to open', async () => {
     const mock = readyMock();
-    mock.api.openSettingsWindow.mockRejectedValueOnce(new Error('E_WINDOW: refused'));
+    mock.api.openSettingsWindow.mockRejectedValueOnce(ipcError('E_INTERNAL', 'refused'));
     render(<App />);
     await screen.findByRole('option', { name: 'Overview' });
 

@@ -26,6 +26,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -419,7 +420,7 @@ func TestOrchestrator_PublishRepo_PullRebaseConflict_Sentinel(t *testing.T) {
 		},
 	}
 	lc := lifecycleForFeature(f)
-	lc.SetRepoPublishErrorFn = func(id, repo, msg string) error { return nil }
+	lc.SetRepoPublishErrorFn = func(id, repo string, record errcat.FailureRecord) error { return nil }
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
 	fs := newFeatureStore(f)
 
@@ -524,7 +525,7 @@ func TestOrchestrator_Publish_RewrittenBranchRemoteDiverged(t *testing.T) {
 		RepoStates: map[string]*feature.RepoState{"r1": {Touched: true}},
 	}
 	lc := lifecycleForFeature(f)
-	lc.SetRepoPublishErrorFn = func(id, repo, msg string) error { return nil }
+	lc.SetRepoPublishErrorFn = func(id, repo string, record errcat.FailureRecord) error { return nil }
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
 	pub := mocks.NewMockRemoteOps()
 	pub.PushRewrittenBranchFn = func(path, branch string) error {
@@ -568,7 +569,7 @@ func TestOrchestrator_Publish_RewrittenBranchRemoteChanged(t *testing.T) {
 		RepoStates: map[string]*feature.RepoState{"r1": {Touched: true}},
 	}
 	lc := lifecycleForFeature(f)
-	lc.SetRepoPublishErrorFn = func(id, repo, msg string) error { return nil }
+	lc.SetRepoPublishErrorFn = func(id, repo string, record errcat.FailureRecord) error { return nil }
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
 	pub := mocks.NewMockRemoteOps()
 	pub.PushRewrittenBranchFn = func(path, branch string) error {
@@ -640,7 +641,7 @@ func TestOrchestrator_PublishRepo_UsesPhaseRunnerDescriptionGeneration(t *testin
 	}
 }
 
-func TestOrchestrator_PublishRepo_FailsAndLogsDescriptionGenerationErrors(t *testing.T) {
+func TestOrchestrator_PublishRepo_DescriptionGenerationFailureStoresRecord(t *testing.T) {
 	f := &feature.Feature{
 		ID:     "feat-pub-fallback",
 		Name:   "cool-feature",
@@ -654,6 +655,13 @@ func TestOrchestrator_PublishRepo_FailsAndLogsDescriptionGenerationErrors(t *tes
 	lc := lifecycleForFeature(f)
 	lc.SetRepoPublishedFn = func(id, repo, url string) error { return nil }
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
+	var storedRecord errcat.FailureRecord
+	var storedRepo string
+	lc.SetRepoPublishErrorFn = func(id, repo string, record errcat.FailureRecord) error {
+		storedRepo = repo
+		storedRecord = record
+		return nil
+	}
 	fs := newFeatureStore(f)
 
 	pub := mocks.NewMockRemoteOps()
@@ -684,13 +692,24 @@ func TestOrchestrator_PublishRepo_FailsAndLogsDescriptionGenerationErrors(t *tes
 		t.Fatalf("CreatePR calls = %d, want 0", createPRCalls)
 	}
 
-	logPath := filepath.Join(agent.ActiveRunDir(pr.StateDir, f), "publish", "error.log")
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q): %v", logPath, err)
+	// The repository owns the condition through its stored record; no
+	// publish-scoped error log is written.
+	if storedRepo != "r1" {
+		t.Errorf("SetRepoPublishError repo = %q, want r1", storedRepo)
 	}
-	if !strings.Contains(string(data), "description generation: generating description:") {
-		t.Errorf("error log = %q, want description generation context", string(data))
+	if storedRecord.Code != errcat.PublishDescriptionFailed {
+		t.Errorf("stored record code = %q, want publish_description_failed", storedRecord.Code)
+	}
+	if storedRecord.Context == nil || len(storedRecord.Context.Repositories) != 1 ||
+		storedRecord.Context.Repositories[0].Name != "r1" {
+		t.Fatalf("stored record repositories = %+v, want r1", storedRecord.Context)
+	}
+	if !strings.Contains(storedRecord.Diagnostics, "generating description") {
+		t.Errorf("stored record diagnostics = %q, want the raw generation failure", storedRecord.Diagnostics)
+	}
+	runDir := agent.ActiveRunDir(pr.StateDir, f)
+	if _, statErr := os.Stat(filepath.Join(runDir, "publish", "error.log")); !os.IsNotExist(statErr) {
+		t.Errorf("publish error.log exists under %s, want none (the record owns the condition)", runDir)
 	}
 }
 
@@ -1152,7 +1171,7 @@ func TestOrchestrator_Republish_PushFailureRecorded(t *testing.T) {
 	testutil.CommitFile(t, repoPath, "later.txt", "later\n", "later pass")
 	f := republishFeature("feat-republish-fail", repoPath, "feature/republish-fail")
 	lc := lifecycleForFeature(f)
-	lc.SetRepoPublishErrorFn = func(id, repo, msg string) error { return nil }
+	lc.SetRepoPublishErrorFn = func(id, repo string, record errcat.FailureRecord) error { return nil }
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
 	fs := newFeatureStore(f)
 
@@ -1313,7 +1332,7 @@ func TestOrchestrator_Republish_StaleTrackingRefAllowsRedundantLiveMerge(t *test
 	f := republishFeature("feat-republish-stale-redundant-merge", repoPath, branch)
 	lc := lifecycleForFeature(f)
 	lc.SetRepoPublishedFn = func(id, repo, url string) error { return nil }
-	lc.SetRepoPublishErrorFn = func(id, repo, msg string) error { return nil }
+	lc.SetRepoPublishErrorFn = func(id, repo string, record errcat.FailureRecord) error { return nil }
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
@@ -1355,7 +1374,7 @@ func TestOrchestrator_Republish_RemoteDivergedErrorFromRealGit(t *testing.T) {
 
 	f := republishFeature("feat-republish-lease", repoPath, branch)
 	lc := lifecycleForFeature(f)
-	lc.SetRepoPublishErrorFn = func(id, repo, msg string) error { return nil }
+	lc.SetRepoPublishErrorFn = func(id, repo string, record errcat.FailureRecord) error { return nil }
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
 	fs := newFeatureStore(f)
 
@@ -1402,7 +1421,7 @@ func TestOrchestrator_Republish_RefusesWhenPRNoLongerOpen(t *testing.T) {
 			testutil.CommitFile(t, repoPath, "later.txt", "later\n", "later pass")
 			f := republishFeature("feat-republish-"+state, repoPath, "feature/republish-"+state)
 			lc := lifecycleForFeature(f)
-			lc.SetRepoPublishErrorFn = func(id, repo, msg string) error { return nil }
+			lc.SetRepoPublishErrorFn = func(id, repo string, record errcat.FailureRecord) error { return nil }
 			lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
 			fs := newFeatureStore(f)
 

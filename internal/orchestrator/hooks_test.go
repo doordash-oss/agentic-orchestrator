@@ -23,12 +23,14 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"gopkg.in/yaml.v3"
 )
 
 var errTestLifecycleFailed = errors.New("lifecycle delete failed")
@@ -232,7 +234,7 @@ func TestBuildHooks_PopulatedHooksEmit(t *testing.T) {
 		},
 		{
 			name:       "OnFeatureFailed",
-			invoke:     func() { h.OnFeatureFailed("f2", "execution_failed", "boom") },
+			invoke:     func() { h.OnFeatureFailed("f2", errcat.SessionCrashed, errcat.ClassBlocking, "boom") },
 			wantEvType: "feature.failed",
 		},
 		{
@@ -302,7 +304,7 @@ func TestBuildHooks_AllFieldsPopulated_AndNilSafe(t *testing.T) {
 	h.OnFeatureStarted("x")
 	h.OnFeatureInterrupted("x")
 	h.OnFeatureCompleted("x", f)
-	h.OnFeatureFailed("x", "t", "e")
+	h.OnFeatureFailed("x", errcat.SessionCrashed, errcat.ClassBlocking, "e")
 	h.OnPhaseStarted("x", feature.PhaseImplement)
 	h.OnPhaseCompleted("x", feature.PhaseImplement, nil)
 	h.OnRecoveryScanned([]ports.RecoveryItem{})
@@ -456,6 +458,84 @@ func TestBuildHooks_OnFeatureResumed_FiresObserver(t *testing.T) {
 	if data["resume_count"] != float64(2) {
 		t.Errorf("data.resume_count = %v, want 2", data["resume_count"])
 	}
+}
+
+// TestBuildHooks_OnFeatureSummaryNeeded_BuildsInputFromRunFailureRecord
+// verifies that OnFeatureSummaryNeeded renders the run's stored canonical
+// failure record into the summary input: a failed feature's
+// observe-summary.yaml carries the record's catalog code and class, while a
+// healthy feature's summary leaves both empty.
+func TestBuildHooks_OnFeatureSummaryNeeded_BuildsInputFromRunFailureRecord(t *testing.T) {
+	writeSummary := func(t *testing.T, f *feature.Feature) observe.SummaryArtifact {
+		t.Helper()
+		tmp := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(tmp, f.ID), 0o755); err != nil {
+			t.Fatalf("mkdir feature dir: %v", err)
+		}
+		obs := newTestObserver(tmp)
+		defer obs.Shutdown()
+
+		fs := mocks.NewMockFeatureStore()
+		fs.LoadFn = func(id string) (*feature.Feature, error) { return f, nil }
+
+		h := orchestrator.BuildHooks(obs, nil, fs, tmp)
+		if h.OnFeatureSummaryNeeded == nil {
+			t.Fatal("OnFeatureSummaryNeeded hook is nil")
+		}
+		h.OnFeatureSummaryNeeded(f.ID, f)
+		obs.Shutdown()
+
+		data, err := os.ReadFile(filepath.Join(tmp, f.ID, "observe-summary.yaml"))
+		if err != nil {
+			t.Fatalf("read observe-summary.yaml: %v", err)
+		}
+		var summary observe.SummaryArtifact
+		if err := yaml.Unmarshal(data, &summary); err != nil {
+			t.Fatalf("unmarshal observe-summary.yaml: %v\n%s", err, data)
+		}
+		return summary
+	}
+
+	t.Run("failed feature carries record code and class", func(t *testing.T) {
+		f := &feature.Feature{
+			ID:           "fsum-failed",
+			Name:         "Summary failure",
+			Status:       feature.StatusFailed,
+			CurrentPhase: feature.PhaseImplement,
+			Repos:        []feature.FeatureRepo{{Name: "r", Path: "/tmp/r"}},
+		}
+		f.Run().Failure = &errcat.FailureRecord{
+			Code:        errcat.IterationBudgetExhausted,
+			Context:     &errcat.RecordContext{Phase: &errcat.CodePhase{Name: feature.PhaseImplement.FailureName()}},
+			Diagnostics: "iteration cap",
+		}
+
+		summary := writeSummary(t, f)
+		if summary.Feature.ErrorCode != string(errcat.IterationBudgetExhausted) {
+			t.Errorf("error_code = %q, want %q", summary.Feature.ErrorCode, errcat.IterationBudgetExhausted)
+		}
+		if summary.Feature.ErrorClass != string(errcat.ClassBlocking) {
+			t.Errorf("error_class = %q, want %q", summary.Feature.ErrorClass, errcat.ClassBlocking)
+		}
+	})
+
+	t.Run("healthy feature leaves error fields empty", func(t *testing.T) {
+		f := &feature.Feature{
+			ID:           "fsum-healthy",
+			Name:         "Summary healthy",
+			Status:       feature.StatusDone,
+			CurrentPhase: feature.PhasePublish,
+			Repos:        []feature.FeatureRepo{{Name: "r", Path: "/tmp/r"}},
+		}
+
+		summary := writeSummary(t, f)
+		if summary.Feature.ErrorCode != "" {
+			t.Errorf("error_code = %q, want empty for a healthy feature", summary.Feature.ErrorCode)
+		}
+		if summary.Feature.ErrorClass != "" {
+			t.Errorf("error_class = %q, want empty for a healthy feature", summary.Feature.ErrorClass)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,24 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { useState, useCallback, useMemo } from 'react';
 import { E_REQUEST_TIMEOUT } from '../../../../shared/errors';
 import { parseIpcError } from '../../wizard/ipcError';
+import { ErrorSurface } from '../../components/ErrorSurface';
+import type { CanonicalError } from '../../../../shared/ipc';
 
 export type DiffLayout = 'side-by-side' | 'unified';
 export type CompletionAction = 'publish' | 'merge' | 'mark-done' | 'cleanup' | 'delete';
@@ -8,16 +26,11 @@ export type CompletionAction = 'publish' | 'merge' | 'mark-done' | 'cleanup' | '
 /**
  * `reconciling` is not a failure: the mutation outran its request bound and is
  * still running server-side, so its outcome arrives through the feature refresh.
+ * Failures carry the parsed canonical object so the shared result box can
+ * render its code and remediation instead of a bare message.
  */
 export type ActionResult =
-  | { ok: true; result: string }
-  | {
-      ok: false;
-      code: string;
-      message: string;
-      remediation?: string;
-      reconciling?: boolean;
-    };
+  { ok: true; result: string } | { ok: false; error: CanonicalError; reconciling?: boolean };
 
 export const STATUS_LABELS: Record<string, string> = {
   eligible: 'Eligible',
@@ -143,21 +156,10 @@ export function useCompletionAction() {
           } catch {
             // The cockpit converges through its own invalidation path.
           }
-          setResult({
-            ok: false,
-            code: parsed.code,
-            message: parsed.message,
-            ...(parsed.remediation === undefined ? {} : { remediation: parsed.remediation }),
-            reconciling: true,
-          });
+          setResult({ ok: false, error: parsed, reconciling: true });
           return false;
         }
-        setResult({
-          ok: false,
-          code: parsed.code,
-          message: parsed.message,
-          ...(parsed.remediation === undefined ? {} : { remediation: parsed.remediation }),
-        });
+        setResult({ ok: false, error: parsed });
         return false;
       } finally {
         setBusy(false);
@@ -189,7 +191,20 @@ export function PrLinkButton({
   );
 }
 
-export function ResultBox({ result }: { result: ActionResult | null }) {
+/**
+ * The shared action-result line. Success and the reconciling timeout state
+ * stay plain status lines; a failure renders as one compact ErrorSurface fed
+ * by the canonical object the action result carries. `remediationHint`
+ * overrides the card's hint for hosts that own the next step's handoff text
+ * (the merge modal's rebase handoff).
+ */
+export function ResultBox({
+  result,
+  remediationHint,
+}: {
+  result: ActionResult | null;
+  remediationHint?: string;
+}) {
   if (result === null) return null;
   if (result.ok) {
     return (
@@ -214,20 +229,17 @@ export function ResultBox({ result }: { result: ActionResult | null }) {
           {'⟳'}
         </span>
         <span className="completion-workspace__result-text">
-          still running on the server — reconciling: {result.message}
+          still running on the server — reconciling: {result.error.summary}
         </span>
       </div>
     );
   }
-  return (
-    <div
-      className="completion-workspace__result completion-workspace__result--failure"
-      role="alert"
-    >
-      <span className="completion-workspace__result-icon" aria-hidden="true">
-        {'⚠'}
-      </span>
-      <span className="completion-workspace__result-text">failed: {result.message}</span>
-    </div>
-  );
+  const failure =
+    remediationHint === undefined
+      ? result.error
+      : {
+          ...result.error,
+          remediation: { ...(result.error.remediation ?? {}), hint: remediationHint },
+        };
+  return <ErrorSurface error={failure} variant="compact" />;
 }

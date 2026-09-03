@@ -1,6 +1,22 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { describe, expect, it, vi } from 'vitest';
 
-import { SafeErrorException, safeError } from '../../shared/errors';
+import { buildCanonicalError, CanonicalErrorException } from '../../shared/errors';
 import type { AppRouteEvent, RemoteServerAddResult } from '../../shared/ipc';
 import {
   addServerFromLink,
@@ -168,9 +184,7 @@ describe('addServerFromLink', () => {
   it('surfaces a pipeline failure on the add form with the pane error copy', async () => {
     const { deps, routes, notifications, switched } = makeDeps({
       addServer: async () => {
-        throw new SafeErrorException(
-          safeError('E_REMOTE_AUTH_REJECTED', 'The server rejected the token.'),
-        );
+        throw new CanonicalErrorException(buildCanonicalError('E_REMOTE_AUTH_REJECTED'));
       },
     });
     await addServerFromLink(CONNECTION_STRING, deps);
@@ -178,15 +192,15 @@ describe('addServerFromLink', () => {
     expect(routes).toEqual([
       { target: 'settings', settingsSection: 'servers', settingsFocus: 'add-server' },
     ]);
-    expect(notifications).toEqual(['The token was rejected. The server rejected the token.']);
+    expect(notifications).toEqual([
+      'The token was rejected. The server rejected the token from the connection string.',
+    ]);
   });
 
   it('never leaks the link or token into logs, routes, or notifications', async () => {
     const failing = makeDeps({
       addServer: async () => {
-        throw new SafeErrorException(
-          safeError('E_REMOTE_UNREACHABLE', 'Could not reach the server.'),
-        );
+        throw new CanonicalErrorException(buildCanonicalError('E_REMOTE_UNREACHABLE'));
       },
     });
     await addServerFromLink(CONNECTION_STRING, failing.deps);

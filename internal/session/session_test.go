@@ -1448,6 +1448,76 @@ func TestSessionSendUserMessageRecordsChatTurn(t *testing.T) {
 	}
 }
 
+// wireRecordingProtocol is a llm.Protocol test double that records the text
+// of every SendUserMessage call.
+type wireRecordingProtocol struct {
+	sent []string
+}
+
+func (p *wireRecordingProtocol) SetStdin(io.Writer)                         {}
+func (p *wireRecordingProtocol) Handshake(context.Context) error            { return nil }
+func (p *wireRecordingProtocol) ParseLine([]byte) ([]llm.SDKMessage, error) { return nil, nil }
+func (p *wireRecordingProtocol) SendUserMessage(text string) error {
+	p.sent = append(p.sent, text)
+	return nil
+}
+func (p *wireRecordingProtocol) RespondToControl(string, bool, json.RawMessage, string) error {
+	return nil
+}
+func (p *wireRecordingProtocol) RespondToHook(string) error { return nil }
+func (p *wireRecordingProtocol) Interrupt() error           { return nil }
+func (p *wireRecordingProtocol) RespondToAskUser(string, json.RawMessage, map[string]string, map[string]llm.AskUserAnnotation) error {
+	return nil
+}
+func (p *wireRecordingProtocol) SessionID() string      { return "" }
+func (p *wireRecordingProtocol) TranscriptPath() string { return "" }
+func (p *wireRecordingProtocol) Close() error           { return nil }
+
+// TestSessionSendUserMessageWithHiddenContextSplitsWireFromEcho pins the
+// chat-turn split: the provider receives the hidden text, a blank line,
+// then the visible message, while the echoed and persisted transcript user
+// record carries only the visible message.
+func TestSessionSendUserMessageWithHiddenContextSplitsWireFromEcho(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: in-process protocol double with per-test session state.
+	s := NewSession("chat-hidden-test", "__chat__", feature.PhaseResearch)
+	s.SetKind(ports.KindChat)
+	proto := &wireRecordingProtocol{}
+	s.protocol = proto
+	s.transcriptPath = filepath.Join(t.TempDir(), "transcript.jsonl")
+
+	const hidden = "Chat context — run error on feature \"Fix login\" (abcd1234)"
+	if err := s.SendUserMessageWithHiddenContext("Explain this failure", hidden); err != nil {
+		t.Fatalf("SendUserMessageWithHiddenContext: %v", err)
+	}
+	if len(proto.sent) != 1 || proto.sent[0] != hidden+"\n\n"+"Explain this failure" {
+		t.Fatalf("provider wire text = %q, want hidden context, blank line, visible message", proto.sent)
+	}
+	messages := s.MessageLog().Messages()
+	if len(messages) != 1 || messages[0].User == nil {
+		t.Fatalf("messages = %+v, want one user message", messages)
+	}
+	if got := messages[0].User.Message.Content; len(got) != 1 || got[0].Text != "Explain this failure" {
+		t.Fatalf("echoed user content = %+v, want the visible message only", got)
+	}
+
+	persisted, err := readPersistedTranscript(s.transcriptPath)
+	if err != nil {
+		t.Fatalf("readPersistedTranscript: %v", err)
+	}
+	if len(persisted) != 1 || persisted[0].User == nil || persisted[0].User.Message.Content[0].Text != "Explain this failure" {
+		t.Fatalf("persisted messages = %+v, want the visible message only", persisted)
+	}
+
+	// A turn without hidden context keeps the plain wire text.
+	if err := s.SendUserMessage("Follow up"); err != nil {
+		t.Fatalf("SendUserMessage: %v", err)
+	}
+	if len(proto.sent) != 2 || proto.sent[1] != "Follow up" {
+		t.Fatalf("provider wire text = %q, want the plain follow-up unchanged", proto.sent)
+	}
+}
+
 func TestSessionWriteJSON(t *testing.T) {
 	resp := llm.NewAllowResponse("req_1")
 	data, err := json.Marshal(resp)

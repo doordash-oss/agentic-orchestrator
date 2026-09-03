@@ -1,12 +1,28 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { describe, expect, it, vi } from 'vitest';
 import {
   ConnectionStateSchema,
   MAX_KNOWN_SERVERS,
+  type CanonicalError,
   type ConnectionState,
   type KnownServer,
   type ServersPrefs,
 } from '../../shared/ipc';
-import type { SafeError } from '../../shared/errors';
 import { serverKeyForBaseUrl } from '../connectionString';
 import type { RegistryScan } from '../gateway/registry';
 import type { LoadResult } from '../gateway/remoteTokenStore';
@@ -337,7 +353,7 @@ function makeEnv(options: EnvOptions = {}): Env {
   return env;
 }
 
-function requireError(state: ConnectionState): SafeError {
+function requireError(state: ConnectionState): CanonicalError {
   if (state.status !== 'error' && state.status !== 'incompatible') {
     throw new Error(`expected a failure state, got ${state.status}`);
   }
@@ -415,7 +431,7 @@ describe('RuntimeGateway remote attach profile', () => {
     expect(env.spawnCalls).toBe(0);
   });
 
-  it('an unreachable remote lands in E_EXTERNAL_SERVER_LOST with retry remediation and no spawn', async () => {
+  it('an unreachable remote lands in E_REMOTE_HEALTH_UNANSWERED with retry remediation and no spawn', async () => {
     const env = makeEnv({ remoteHealth: new Error('connection refused') });
     env.updateServers({ upsertKnown: remoteEntry(), lastUsed: remoteKey() });
     env.tokens.save(remoteKey(), REMOTE_TOKEN);
@@ -425,13 +441,15 @@ describe('RuntimeGateway remote attach profile', () => {
     const state = env.gateway.getState();
     expect(state.status).toBe('error');
     const error = requireError(state);
-    expect(error.code).toBe('E_EXTERNAL_SERVER_LOST');
-    expect(error.remediation ?? '').toContain('Retry');
+    expect(error.code).toBe('E_REMOTE_HEALTH_UNANSWERED');
+    expect(error.class).toBe('blocking');
+    expect(error.title).toBe('The server connection was lost');
+    expect(error.remediation?.hint ?? '').toContain('Retry');
     expect(env.spawnCalls).toBe(0);
     expectNoTokenLeak(env);
   });
 
-  it('absent token lands in E_REMOTE_TOKEN_REPASTE; after save + retry the attach succeeds', async () => {
+  it('absent token lands in E_REMOTE_TOKEN_MISSING; after save + retry the attach succeeds', async () => {
     const env = makeEnv({});
     env.updateServers({ upsertKnown: remoteEntry(), lastUsed: remoteKey() });
 
@@ -440,8 +458,10 @@ describe('RuntimeGateway remote attach profile', () => {
     const failed = env.gateway.getState();
     expect(failed.status).toBe('error');
     const error = requireError(failed);
-    expect(error.code).toBe('E_REMOTE_TOKEN_REPASTE');
-    expect(error.remediation ?? '').toContain('Re-enter the remote server token');
+    expect(error.code).toBe('E_REMOTE_TOKEN_MISSING');
+    expect(error.class).toBe('needs_action');
+    expect(error.title).toBe('Re-enter the remote server token');
+    expect(error.remediation?.hint ?? '').toContain('Re-enter the remote server token');
     expect(env.spawnCalls).toBe(0);
 
     env.tokens.save(remoteKey(), REMOTE_TOKEN);
@@ -451,7 +471,7 @@ describe('RuntimeGateway remote attach profile', () => {
     expectNoTokenLeak(env);
   });
 
-  it('re-paste-required token lands in E_REMOTE_TOKEN_REPASTE and never spawns', async () => {
+  it('re-paste-required token lands in E_REMOTE_TOKEN_UNREADABLE and never spawns', async () => {
     const env = makeEnv({});
     env.updateServers({ upsertKnown: remoteEntry(), lastUsed: remoteKey() });
     env.tokens.save(remoteKey(), REMOTE_TOKEN);
@@ -461,11 +481,11 @@ describe('RuntimeGateway remote attach profile', () => {
 
     const state = env.gateway.getState();
     expect(state.status).toBe('error');
-    expect(requireError(state).code).toBe('E_REMOTE_TOKEN_REPASTE');
+    expect(requireError(state).code).toBe('E_REMOTE_TOKEN_UNREADABLE');
     expect(env.spawnCalls).toBe(0);
   });
 
-  it('a remote rejecting the stored token lands in E_REMOTE_TOKEN_REPASTE', async () => {
+  it('a remote rejecting the stored token lands in E_REMOTE_STORED_TOKEN_REJECTED', async () => {
     const env = makeEnv({ readinessErrors: { [REMOTE_BASE]: true } });
     env.updateServers({ upsertKnown: remoteEntry(), lastUsed: remoteKey() });
     env.tokens.save(remoteKey(), REMOTE_TOKEN);
@@ -475,8 +495,8 @@ describe('RuntimeGateway remote attach profile', () => {
     const state = env.gateway.getState();
     expect(state.status).toBe('error');
     const error = requireError(state);
-    expect(error.code).toBe('E_REMOTE_TOKEN_REPASTE');
-    expect(error.remediation ?? '').toContain('Re-enter the remote server token');
+    expect(error.code).toBe('E_REMOTE_STORED_TOKEN_REJECTED');
+    expect(error.remediation?.hint ?? '').toContain('Re-enter the remote server token');
     // The rejected token was still registered for redaction by the store.
     expect(env.secrets).toContain(REMOTE_TOKEN);
     expectNoTokenLeak(env);
@@ -526,7 +546,7 @@ describe('RuntimeGateway remote loss and re-probe', () => {
     }
   }
 
-  it('remote loss lands in E_EXTERNAL_SERVER_LOST with retry remediation; no spawn, no crash loop', async () => {
+  it('remote loss lands in the warning-class E_REMOTE_SERVER_LOST_REPROBING; no spawn, no crash loop', async () => {
     const env = makeEnv({});
     await startRemote(env);
     const realFetch = env.deps.fetchJson;
@@ -542,8 +562,9 @@ describe('RuntimeGateway remote loss and re-probe', () => {
     const state = env.gateway.getState();
     expect(state.status).toBe('error');
     const error = requireError(state);
-    expect(error.code).toBe('E_EXTERNAL_SERVER_LOST');
-    expect(error.remediation ?? '').toContain('Retry');
+    expect(error.code).toBe('E_REMOTE_SERVER_LOST_REPROBING');
+    expect(error.class).toBe('warning');
+    expect(error.remediation?.hint ?? '').toContain('Retry');
     expect(state.ownership).toBe('external');
     expect(env.spawnCalls).toBe(0);
     expect(env.states.some((s) => s.status === 'crashed')).toBe(false);
@@ -564,7 +585,7 @@ describe('RuntimeGateway remote loss and re-probe', () => {
 
     await env.gateway.handleGlobalStreamStale();
     expect(env.gateway.getState().status).toBe('error');
-    expect(requireError(env.gateway.getState()).code).toBe('E_EXTERNAL_SERVER_LOST');
+    expect(requireError(env.gateway.getState()).code).toBe('E_REMOTE_SERVER_LOST_REPROBING');
 
     // First re-probe: server still down, state unchanged.
     pumpSleep(env);
@@ -845,7 +866,7 @@ describe('RuntimeGateway remote switching', () => {
     expectNoTokenLeak(env);
   });
 
-  it('a dead last-used remote alone keeps the E_EXTERNAL_SERVER_LOST surface (no 1-row picker)', async () => {
+  it('a dead last-used remote alone keeps the E_REMOTE_HEALTH_UNANSWERED surface (no 1-row picker)', async () => {
     const env = makeEnv({ remoteHealth: new Error('connection refused') });
     env.updateServers({ upsertKnown: remoteEntry(), lastUsed: remoteKey() });
     env.tokens.save(remoteKey(), REMOTE_TOKEN);
@@ -854,7 +875,7 @@ describe('RuntimeGateway remote switching', () => {
 
     const state = env.gateway.getState();
     expect(state.status).toBe('error');
-    expect(requireError(state).code).toBe('E_EXTERNAL_SERVER_LOST');
+    expect(requireError(state).code).toBe('E_REMOTE_HEALTH_UNANSWERED');
     expect(env.states.some((s) => s.status === 'awaiting-server-choice')).toBe(false);
     expect(env.spawnCalls).toBe(0);
   });

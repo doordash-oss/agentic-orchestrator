@@ -1,32 +1,68 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   CompletionPreflightResult,
   FeatureActionResult,
+  FeatureActionView,
   PublishFeatureActionRequest,
 } from '../../../../shared/ipc';
-import { E_REQUEST_TIMEOUT } from '../../../../shared/errors';
+import { E_REQUEST_TIMEOUT, buildCanonicalError } from '../../../../shared/errors';
+import { ErrorSurface, type ErrorSurfaceAction } from '../../components/ErrorSurface';
+import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../../components/FieldError';
 import { useModalDismiss } from '../../components/useModalDismiss';
+import { catalogErrorAction } from '../featureView';
 import { parseIpcError } from '../../wizard/ipcError';
-import { PrLinkButton, isEligibleForPublish, type ActionResult } from './completionShared';
+import type { CanonicalError } from '../../../../shared/ipc';
+import { PrLinkButton, isEligibleForPublish } from './completionShared';
 import { UNPUBLISHED_CHANGES, pendingDeliveryDetail } from './pendingDelivery';
 
-const PUBLISH_FAILURE_COPY: Record<string, { title: string; next: string }> = {
-  publish_remote_diverged: {
-    title: "The pull-request branch contains changes that aren't in this workspace.",
-    next: 'Review and reconcile the branch on GitHub, then refresh and retry.',
-  },
-  publish_remote_changed: {
-    title: 'The pull-request branch changed while Agentico was publishing.',
-    next: 'Refresh the publish state and retry. Agentico did not overwrite the newer branch.',
-  },
-};
 const PUBLISH_TIMEOUT_LOCKED_MESSAGE =
   'Publish may still be running. Quit and reopen Agentico before publishing again.';
-const UNKNOWN_PUBLISH_FAILURE_NEXT = 'Review the details, then refresh and retry.';
+const PUBLISH_ACTION_ID = 'publish';
+
+/**
+ * The publish timeout's canonical warning: the request outran its bound and
+ * the operation may still complete server-side, so the sheet stays disarmed
+ * and the quit-and-reopen guidance rides as the remediation hint.
+ */
+function publishTimeoutLockedError(): CanonicalError {
+  return buildCanonicalError(E_REQUEST_TIMEOUT, {
+    remediationHint: PUBLISH_TIMEOUT_LOCKED_MESSAGE,
+  });
+}
+
+/**
+ * A publish outcome is either success, the reconciling timeout state (the
+ * mutation outran its request bound and is still running server-side), or a
+ * rejection carrying the parsed IPC error so the compact ErrorSurface can
+ * render the canonical object when the main process carried one.
+ */
+type PublishOutcome =
+  | { ok: true; result: string }
+  | { ok: false; reconciling: true; message: string }
+  | { ok: false; reconciling: true; timeoutLocked: true }
+  | { ok: false; reconciling?: undefined; error: CanonicalError };
 
 export interface PublishModalProps {
   featureId: string;
   preflight: CompletionPreflightResult;
+  /** The feature's server action catalog; each row card resolves `publish` in it. */
+  actions: readonly FeatureActionView[];
   dispatchAction(request: PublishFeatureActionRequest): Promise<FeatureActionResult>;
   generatePublishDescription(
     featureId: string,
@@ -39,46 +75,19 @@ export interface PublishModalProps {
   setPublishTimeoutLocked(locked: boolean): void;
 }
 
-function PublishFailureNotice({
-  result,
-  noticeRef,
-}: {
-  result: ActionResult | null;
-  noticeRef?: React.RefObject<HTMLDivElement | null>;
-}) {
-  if (result === null || result.ok || result.reconciling) return null;
-  const copy = PUBLISH_FAILURE_COPY[result.code];
-  return (
-    <div ref={noticeRef} className="completion-publish-sheet__failure" role="alert" tabIndex={-1}>
-      <strong>{copy?.title ?? "Agentico couldn't prepare this publish."}</strong>
-      {copy !== undefined ? <p>{copy.next}</p> : null}
-      {copy === undefined ? (
-        <>
-          <p>{result.remediation ?? UNKNOWN_PUBLISH_FAILURE_NEXT}</p>
-          <details>
-            <summary>Show details</summary>
-            <p>{result.message}</p>
-          </details>
-        </>
-      ) : null}
-    </div>
-  );
-}
-
 function PublishStatusNotice({
   result,
   publishTimeoutLocked,
 }: {
-  result: ActionResult | null;
+  result: PublishOutcome | null;
   publishTimeoutLocked: boolean;
 }) {
+  // Success and the in-flight reconciliation stay plain status lines; the
+  // timeout-locked state is a failure condition and renders as the
+  // E_REQUEST_TIMEOUT canonical warning through a compact ErrorSurface.
   if (result === null) {
     if (!publishTimeoutLocked) return null;
-    return (
-      <div className="completion-publish-sheet__status" role="status">
-        {PUBLISH_TIMEOUT_LOCKED_MESSAGE}
-      </div>
-    );
+    return <ErrorSurface error={publishTimeoutLockedError()} variant="compact" />;
   }
   if (result.ok) {
     return (
@@ -87,7 +96,10 @@ function PublishStatusNotice({
       </div>
     );
   }
-  if (result.reconciling) {
+  if (result.reconciling === true) {
+    if ('timeoutLocked' in result) {
+      return <ErrorSurface error={publishTimeoutLockedError()} variant="compact" />;
+    }
     return (
       <div className="completion-publish-sheet__status" role="status">
         {result.message}
@@ -100,6 +112,7 @@ function PublishStatusNotice({
 export function PublishModal({
   featureId,
   preflight,
+  actions,
   dispatchAction,
   generatePublishDescription,
   openExternal,
@@ -123,10 +136,10 @@ export function PublishModal({
   const [publishBody, setPublishBody] = useState('');
   const [titleVisited, setTitleVisited] = useState(false);
   const [generatingDescription, setGeneratingDescription] = useState(false);
-  const [publishGenResult, setPublishGenResult] = useState<ActionResult | null>(null);
+  const [publishGenResult, setPublishGenResult] = useState<CanonicalError | null>(null);
   const [publishBusy, setPublishBusy] = useState(false);
   const [timedOutThisOpen, setTimedOutThisOpen] = useState(false);
-  const [publishResult, setPublishResult] = useState<ActionResult | null>(null);
+  const [publishResult, setPublishResult] = useState<PublishOutcome | null>(null);
   const publishLocked = publishTimeoutLocked || timedOutThisOpen;
 
   const eligibleRepos = useMemo(() => preflight.repos.filter(isEligibleForPublish), [preflight]);
@@ -168,6 +181,14 @@ export function PublishModal({
     !publishBusy &&
     !publishLocked;
 
+  // The repository row cards own publish-failure presentation: once any
+  // selected repository carries a stored record, a rejected publish renders
+  // no whole-sheet rejection notice.
+  const selectedRepoCarriesError = useMemo(
+    () => preflight.repos.some((repo) => publishRepos.has(repo.repo) && repo.error !== undefined),
+    [preflight, publishRepos],
+  );
+
   const requestClose = useCallback(() => {
     if (!publishBusy) onClose();
   }, [onClose, publishBusy]);
@@ -184,8 +205,8 @@ export function PublishModal({
 
   useEffect(() => {
     if (
-      (publishResult !== null && !publishResult.ok && !publishResult.reconciling) ||
-      (publishGenResult !== null && !publishGenResult.ok)
+      (publishResult !== null && !publishResult.ok && publishResult.reconciling !== true) ||
+      (publishGenResult !== null && publishResult === null)
     ) {
       failureRef.current?.focus();
     }
@@ -208,17 +229,69 @@ export function PublishModal({
       setPublishTitle(result.title);
       setPublishBody(result.body);
     } catch (error) {
-      const parsed = parseIpcError(error);
-      setPublishGenResult({
-        ok: false,
-        code: parsed.code,
-        message: parsed.message,
-        ...(parsed.remediation === undefined ? {} : { remediation: parsed.remediation }),
-      });
+      setPublishGenResult(parseIpcError(error));
     } finally {
       setGeneratingDescription(false);
     }
   }, [featureId, generatePublishDescription, publishRepos]);
+
+  const runPublish = useCallback(
+    async (repos: string[]) => {
+      const title = publishTitle.trim();
+      const request: PublishFeatureActionRequest = {
+        featureId,
+        action: 'publish',
+        body: {
+          source_revision: preflight.sourceRevision,
+          repos,
+          ...(title === '' ? {} : { title }),
+          ...(publishBody.trim() === '' ? {} : { body: publishBody }),
+        },
+      };
+      setPublishBusy(true);
+      setPublishResult(null);
+      try {
+        const result = await dispatchAction(request);
+        await onDispatched();
+        setPublishResult({ ok: true, result: result.result });
+      } catch (error) {
+        const parsed = parseIpcError(error);
+        if (parsed.code === E_REQUEST_TIMEOUT) {
+          setTimedOutThisOpen(true);
+          setPublishTimeoutLocked(true);
+          setPublishResult({
+            ok: false,
+            reconciling: true,
+            message: 'Publish may still be running. Refreshing the latest publish state…',
+          });
+          try {
+            await onDispatched();
+          } catch {
+            // Refresh hooks can deliberately absorb their own transport errors.
+          }
+          setPublishResult({ ok: false, reconciling: true, timeoutLocked: true });
+        } else {
+          try {
+            await onDispatched();
+          } catch {
+            // Preserve the publish failure when the best-effort refresh also fails.
+          }
+          setPublishResult({ ok: false, error: parsed });
+        }
+      } finally {
+        setPublishBusy(false);
+      }
+    },
+    [
+      dispatchAction,
+      featureId,
+      onDispatched,
+      preflight.sourceRevision,
+      setPublishTimeoutLocked,
+      publishBody,
+      publishTitle,
+    ],
+  );
 
   const handlePublish = useCallback(async () => {
     const title = publishTitle.trim();
@@ -228,72 +301,53 @@ export function PublishModal({
       return;
     }
     if (!canPublish) return;
-    const request: PublishFeatureActionRequest = {
-      featureId,
-      action: 'publish',
-      body: {
-        source_revision: preflight.sourceRevision,
-        repos: Array.from(publishRepos),
-        ...(title === '' ? {} : { title }),
-        ...(publishBody.trim() === '' ? {} : { body: publishBody }),
-      },
-    };
-    setPublishBusy(true);
-    setPublishResult(null);
-    try {
-      const result = await dispatchAction(request);
-      await onDispatched();
-      setPublishResult({ ok: true, result: result.result });
-    } catch (error) {
-      const parsed = parseIpcError(error);
-      if (parsed.code === E_REQUEST_TIMEOUT) {
-        setTimedOutThisOpen(true);
-        setPublishTimeoutLocked(true);
-        setPublishResult({
-          ok: false,
-          code: parsed.code,
-          message: 'Publish may still be running. Refreshing the latest publish state…',
-          reconciling: true,
-        });
-        try {
-          await onDispatched();
-        } catch {
-          // Refresh hooks can deliberately absorb their own transport errors.
-        }
-        setPublishResult({
-          ok: false,
-          code: parsed.code,
-          message: PUBLISH_TIMEOUT_LOCKED_MESSAGE,
-          reconciling: true,
-        });
-      } else {
-        try {
-          await onDispatched();
-        } catch {
-          // Preserve the publish failure when the best-effort refresh also fails.
-        }
-        setPublishResult({
-          ok: false,
-          code: parsed.code,
-          message: parsed.message,
-          ...(parsed.remediation === undefined ? {} : { remediation: parsed.remediation }),
-        });
-      }
-    } finally {
-      setPublishBusy(false);
-    }
-  }, [
-    canPublish,
-    dispatchAction,
-    featureId,
-    onDispatched,
-    preflight.sourceRevision,
-    setPublishTimeoutLocked,
-    publishBody,
-    publishRepos,
-    publishTitle,
-    titleRequired,
-  ]);
+    await runPublish(Array.from(publishRepos));
+  }, [canPublish, publishRepos, runPublish, titleRef, titleRequired, publishTitle]);
+
+  const handleRetryPublish = useCallback(
+    async (repo: PublishRepo) => {
+      // The retry button is disabled under these preconditions; the guard
+      // keeps a stale dispatch from racing a just-changed form.
+      if (publishBusy || publishLocked || preflight.sourceRevision.trim() === '') return;
+      if (repo.prUrl === undefined && publishTitle.trim() === '') return;
+      await runPublish([repo.repo]);
+    },
+    [preflight.sourceRevision, publishBody, publishLocked, publishTitle, publishBusy, runPublish],
+  );
+
+  // One resolver per row card: the label is fixed, the enabled state is the
+  // catalog's `publish` state plus the modal's own preconditions for that
+  // single repository, and the disabled reason reports whichever blocks it.
+  const retryActionFor = useCallback(
+    (repo: PublishRepo) => {
+      const modalReason =
+        publishBusy || publishLocked
+          ? 'A publish is already running.'
+          : preflight.sourceRevision.trim() === ''
+            ? 'Refresh the preflight, then retry.'
+            : repo.prUrl === undefined && publishTitle.trim() === ''
+              ? 'Add a PR title to retry this publish.'
+              : undefined;
+      return (actionId: string): ErrorSurfaceAction | undefined => {
+        if (actionId !== PUBLISH_ACTION_ID) return undefined;
+        const base = catalogErrorAction({ actions }, actionId, 'Retry publish');
+        if (base === undefined) return undefined;
+        const reason = base.enabled ? modalReason : base.disabledReason;
+        return {
+          ...base,
+          enabled: base.enabled && modalReason === undefined,
+          ...(reason === undefined ? {} : { disabledReason: reason }),
+        };
+      };
+    },
+    [actions, preflight.sourceRevision, publishBusy, publishLocked, publishTitle],
+  );
+
+  const rejection =
+    publishResult !== null && !publishResult.ok && publishResult.reconciling !== true
+      ? publishResult.error
+      : null;
+  const genRejection = publishResult === null ? publishGenResult : null;
 
   return (
     <div className="sheet-scrim completion-publish-sheet__scrim" onMouseDown={requestClose}>
@@ -321,9 +375,12 @@ export function PublishModal({
                 <PublishRepoRow
                   key={repo.repo}
                   repo={repo}
+                  featureId={featureId}
                   checked={publishRepos.has(repo.repo)}
                   onToggle={togglePublishRepo}
                   openExternal={openExternal}
+                  resolveAction={retryActionFor(repo)}
+                  onRetryPublish={() => void handleRetryPublish(repo)}
                 />
               ))}
               {unpublishedRepos.length > 0 ? (
@@ -333,9 +390,12 @@ export function PublishModal({
                     <PublishRepoRow
                       key={repo.repo}
                       repo={repo}
+                      featureId={featureId}
                       checked={publishRepos.has(repo.repo)}
                       onToggle={togglePublishRepo}
                       openExternal={openExternal}
+                      resolveAction={retryActionFor(repo)}
+                      onRetryPublish={() => void handleRetryPublish(repo)}
                     />
                   ))}
                 </div>
@@ -383,8 +443,8 @@ export function PublishModal({
                   <input
                     ref={titleRef}
                     aria-label="PR title"
-                    aria-invalid={titleInvalid || undefined}
-                    aria-describedby={titleInvalid ? 'publish-title-error' : undefined}
+                    aria-invalid={fieldAriaInvalid(titleInvalid)}
+                    aria-describedby={fieldAriaDescribedBy('publish-title-error', titleInvalid)}
                     value={publishTitle}
                     onChange={(event) => {
                       setPublishTitle(event.target.value);
@@ -395,11 +455,10 @@ export function PublishModal({
                     placeholder="Enter PR title"
                   />
                 </label>
-                {titleInvalid ? (
-                  <p id="publish-title-error" className="completion-publish-sheet__field-error">
-                    Add a title to create the pull request.
-                  </p>
-                ) : null}
+                <FieldError
+                  id="publish-title-error"
+                  message={titleInvalid ? 'Add a title to create the pull request.' : undefined}
+                />
                 <label className="completion-workspace__field">
                   <span>
                     PR body <em>Optional</em>
@@ -436,9 +495,23 @@ export function PublishModal({
               result={publishResult}
               publishTimeoutLocked={publishTimeoutLocked}
             />
-            <PublishFailureNotice result={publishResult} noticeRef={failureRef} />
-            {publishGenResult !== null && publishResult === null ? (
-              <PublishFailureNotice result={publishGenResult} noticeRef={failureRef} />
+            {rejection !== null && !selectedRepoCarriesError ? (
+              <ErrorSurface
+                error={rejection}
+                variant="compact"
+                caption="Publish was rejected"
+                rootRef={failureRef}
+                rootTabIndex={-1}
+              />
+            ) : null}
+            {rejection === null && genRejection !== null ? (
+              <ErrorSurface
+                error={genRejection}
+                variant="compact"
+                caption="Narrative generation was rejected"
+                rootRef={failureRef}
+                rootTabIndex={-1}
+              />
             ) : null}
           </div>
         </div>
@@ -470,14 +543,20 @@ type PublishRepo = CompletionPreflightResult['repos'][number];
 
 function PublishRepoRow({
   repo,
+  featureId,
   checked,
   onToggle,
   openExternal,
+  resolveAction,
+  onRetryPublish,
 }: {
   repo: PublishRepo;
+  featureId: string;
   checked: boolean;
   onToggle(repo: string): void;
   openExternal(url: string): Promise<{ ok: boolean }>;
+  resolveAction(actionId: string): ErrorSurfaceAction | undefined;
+  onRetryPublish(): void;
 }) {
   return (
     <div className="completion-workspace__publish-repo">
@@ -489,11 +568,6 @@ function PublishRepoRow({
           onChange={() => onToggle(repo.repo)}
         />
         <span className="completion-workspace__publish-repo-name">{repo.repo}</span>
-        {repo.lastError !== undefined ? (
-          <span className="completion-workspace__repo-outcome-detail" role="alert">
-            {repo.lastError}
-          </span>
-        ) : null}
       </div>
       <div className="completion-workspace__publish-repo-meta">
         {repo.status === UNPUBLISHED_CHANGES ? (
@@ -512,6 +586,24 @@ function PublishRepoRow({
         <p className="completion-workspace__pending-note">
           Rewrites the pull-request branch with a safety lease.
         </p>
+      ) : null}
+      {repo.error !== undefined ? (
+        <ErrorSurface
+          error={repo.error}
+          resolveAction={resolveAction}
+          onAction={onRetryPublish}
+          explain={{
+            // The stored publish-failure record lives on the repository's
+            // own state; the modal has no feature name in scope, so the
+            // question names only the card's title and code.
+            reference: {
+              scope: 'repository',
+              code: repo.error.code,
+              featureId,
+              repository: repo.repo,
+            },
+          }}
+        />
       ) : null}
     </div>
   );

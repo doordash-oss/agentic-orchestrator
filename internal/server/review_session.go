@@ -329,7 +329,7 @@ func (s *reviewSessionService) resolveContext(featureID string) (reviewSessionCo
 		return reviewSessionContext{}, err
 	}
 	if !f.Status.IsNeedsReview() {
-		return reviewSessionContext{}, &ActionConflictError{Message: "feature is not paused on a review gate", Target: map[string]any{"feature_id": featureID}}
+		return reviewSessionContext{}, &ActionConflictError{Detail: fmt.Sprintf("feature %q is not paused on a review gate", featureID)}
 	}
 	run := f.Run()
 	if run == nil || run.RunNumber <= 0 {
@@ -533,13 +533,12 @@ func reviewSessionResponseFromMeta(meta reviewSessionMeta, text string) ReviewSe
 	}
 }
 
+// staleReviewRevisionError rejects a review mutation addressed to a draft
+// revision that has since moved. The conflict is identified by its code
+// alone; clients refetch the draft for the current revision instead of
+// reading revision facts off the error body.
 func staleReviewRevisionError(reviewID, current string) error {
 	return &ActionConflictError{
-		Message: "review draft revision is stale",
-		Target: map[string]any{
-			"review_id":         reviewID,
-			"current_revision":  current,
-			"expected_revision": current,
-		},
+		Detail: fmt.Sprintf("review draft revision is stale (review %q, current revision %q)", reviewID, current),
 	}
 }

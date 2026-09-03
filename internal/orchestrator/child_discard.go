@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -156,8 +157,7 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 		if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
 			f.DiscardIntent.ClosedAt = &now
 			f.DiscardIntent.Step = feature.DiscardStepClosed
-			f.LastError = ""
-			f.FailureType = ""
+			f.Run().Failure = nil
 			return nil
 		}); err != nil {
 			return fmt.Errorf("closing child as discarded: %w", err)
@@ -337,6 +337,7 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 
 	allSafe := true
 	inspectedRefs := false
+	findings := []integrationFinding{}
 	for i := range journal.Entries {
 		entry := &journal.Entries[i]
 		// Already rolled back — nothing to do.
@@ -352,15 +353,17 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 		inspectedRefs = true
 		parentRepo := featureRepoByName(parent, entry.Repo)
 		if parentRepo == nil {
-			entry.Diagnostics = fmt.Sprintf("parent no longer has repository %s", entry.Repo)
 			allSafe = false
+			findings = append(findings, entryFinding(entry, errcat.IntegrationRepositoryMissing,
+				fmt.Sprintf("parent no longer has repository %s", entry.Repo)))
 			continue
 		}
 		ref := "refs/heads/" + entry.ParentBranch
 		current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 		if err != nil {
-			entry.Diagnostics = fmt.Sprintf("reading ref %s: %v", ref, err)
 			allSafe = false
+			findings = append(findings, entryFinding(entry, errcat.IntegrationCandidateFailed,
+				fmt.Sprintf("reading ref %s: %v", ref, err)))
 			continue
 		}
 		entry.ObservedSHA = current
@@ -368,8 +371,8 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 		if current == entry.CandidateSHA {
 			// Ref still at candidate — CAS rollback to anchor.
 			if err := o.deps.Worktrees.UpdateRef(parentRepo.Path, ref, entry.CandidateSHA, entry.ParentAnchorSHA); err != nil {
-				entry.Diagnostics = fmt.Sprintf("repo %s rollback CAS failed for %s: %v", entry.Repo, ref, err)
 				allSafe = false
+				findings = append(findings, refUpdateFinding(entry, ref, err))
 				continue
 			}
 			entry.ApplyState = feature.RepoApplyRolledBack
@@ -379,8 +382,9 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 				parentWorktree = parentRepo.Path
 			}
 			if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.ParentAnchorSHA); err != nil {
-				entry.Diagnostics = fmt.Sprintf("repo %s syncing parent worktree for %s after rollback: %v", entry.Repo, entry.Repo, err)
 				allSafe = false
+				findings = append(findings, entryFinding(entry, errcat.IntegrationWorktreeSyncFailed,
+					fmt.Sprintf("repo %s syncing parent worktree after rollback: %v", entry.Repo, err)))
 				continue
 			}
 		} else if current == entry.ParentAnchorSHA {
@@ -388,23 +392,29 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 			entry.ApplyState = feature.RepoApplyRolledBack
 		} else {
 			// Externally moved — cannot overwrite.
-			entry.Diagnostics = fmt.Sprintf("repo %s ref %s externally moved: anchor %s candidate %s observed %s",
-				entry.Repo, ref, entry.ParentAnchorSHA, entry.CandidateSHA, current)
 			allSafe = false
+			findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
+				fmt.Sprintf("repo %s ref %s externally moved: anchor %s candidate %s observed %s",
+					entry.Repo, ref, entry.ParentAnchorSHA, entry.CandidateSHA, current)))
 		}
 	}
 
-	// Persist the updated journal.
+	// Persist the updated journal. An unsafe outcome parks at attention with
+	// the stored record; a safe outcome records the clean rollback and
+	// clears any prior attention record.
 	if inspectedRefs || journal.Phase == feature.TransactionPhaseAttention {
 		if allSafe {
 			journal.Phase = feature.TransactionPhaseRolledBack
+			journal.Attention = nil
+			if err := o.persistTransaction(childID, journal); err != nil {
+				return false, fmt.Errorf("persisting discard ref safety: %w", err)
+			}
 		} else {
 			journal.Phase = feature.TransactionPhaseAttention
-			journal.Attention = transactionAttentionSummary(journal)
+			if err := o.parkIntegrationAttention(child, journal, findings); err != nil {
+				return false, fmt.Errorf("persisting discard ref safety: %w", err)
+			}
 		}
-	}
-	if err := o.persistTransaction(childID, journal); err != nil {
-		return false, fmt.Errorf("persisting discard ref safety: %w", err)
 	}
 
 	return allSafe, nil

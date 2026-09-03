@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -5,10 +21,10 @@ import {
   isConnectionErrorState,
   MAX_KNOWN_SERVERS,
   type ConnectionState,
+  type CanonicalError,
   type KnownServer,
   type ServersPrefs,
 } from '../../shared/ipc';
-import type { SafeError } from '../../shared/errors';
 import type { RegistryScan } from '../gateway/registry';
 import { DEFAULT_STOP_TIMEOUT_MS, type ChildExit } from '../gateway/serverProcess';
 import {
@@ -274,8 +290,8 @@ function makeEnv(options: EnvOptions = {}): Env {
   return env;
 }
 
-/** Narrows to the failure variant; terminal states always carry an error. */
-function requireError(state: ConnectionState): SafeError {
+/** Narrows to the failure variant; terminal states always carry a canonical error. */
+function requireError(state: ConnectionState): CanonicalError {
   if (!isConnectionErrorState(state)) {
     throw new Error(`expected a failure state, got ${state.status}`);
   }
@@ -417,9 +433,11 @@ describe('RuntimeGateway attach', () => {
     expect(state.ownership).toBe('external');
     const error = requireError(state);
     expect(error.code).toBe('E_INCOMPATIBLE_SERVER');
-    expect(error.remediation).toMatch(/update/i);
+    expect(error.class).toBe('blocking');
+    expect(error.title).toBe('The server is not compatible with this app');
+    expect(error.remediation?.hint).toMatch(/update/i);
     // Guided resolution never offers to stop the external process.
-    expect(`${error.message} ${error.remediation ?? ''}`).not.toMatch(
+    expect(`${error.summary} ${error.remediation?.hint ?? ''}`).not.toMatch(
       /\b(kill|terminate|stop the)\b/i,
     );
     expect(env.spawnCalls).toHaveLength(0);
@@ -450,7 +468,11 @@ describe('RuntimeGateway attach', () => {
     await env.gateway.start();
     const state = env.gateway.getState();
     expect(state.status).toBe('error');
-    expect(requireError(state).code).toBe('E_ATTACH_AUTH');
+    const attachError = requireError(state);
+    expect(attachError.code).toBe('E_ATTACH_AUTH');
+    expect(attachError.class).toBe('blocking');
+    expect(attachError.title).toBe('Authentication with the running runtime failed');
+    expect(attachError.remediation?.hint).toBeTruthy();
     expect(env.spawnCalls).toHaveLength(0);
     expectNoTokenLeak(env);
   });
@@ -586,17 +608,33 @@ describe('RuntimeGateway launch', () => {
     expect(state.status).toBe('resources-missing');
     const error = requireError(state);
     expect(error.code).toBe('E_RESOURCES_MISSING');
-    expect(error.remediation).toBeTruthy();
+    expect(error.class).toBe('blocking');
+    expect(error.remediation?.hint).toBeTruthy();
     expect(env.spawnCalls).toHaveLength(0);
     expectNoTokenLeak(env);
   });
 
   it('maps a spawn failure (e.g. permissions) to launch-failed with remediation', async () => {
-    const env = makeEnv({ spawnError: new Error('EACCES: permission denied') });
+    // A full 20-line log tail: the newest line (the last) usually carries the
+    // actual launch error, so the scrub must keep it alongside the leading
+    // cause and command-context lines.
+    const diagnosticLines = Array.from({ length: 20 }, (_, index) => `log line ${index}`);
+    const env = makeEnv({
+      spawnError: new Error('EACCES: permission denied'),
+      diagnosticLines,
+    });
     await env.gateway.start();
     const state = env.gateway.getState();
     expect(state.status).toBe('launch-failed');
-    expect(requireError(state).code).toBe('E_LAUNCH_FAILED');
+    const error = requireError(state);
+    expect(error.code).toBe('E_LAUNCH_FAILED');
+    expect(error.diagnostics).toContain('EACCES: permission denied');
+    expect(error.diagnostics).toContain(
+      'bundled agentico server --config [path] --state-dir [path]',
+    );
+    const lines = (error.diagnostics ?? '').split('\n');
+    expect(lines).toHaveLength(22);
+    expect(lines.at(-1)).toBe('log line 19');
     expectNoTokenLeak(env);
   });
 
@@ -609,7 +647,9 @@ describe('RuntimeGateway launch', () => {
     await env.gateway.start();
     const state = env.gateway.getState();
     expect(state.status).toBe('launch-failed');
-    expect(requireError(state).message).toMatch(/exited/i);
+    const error = requireError(state);
+    expect(error.code).toBe('E_SERVER_EXITED');
+    expect(error.summary).toMatch(/exited/i);
     expectNoTokenLeak(env);
   });
 
@@ -644,17 +684,19 @@ describe('RuntimeGateway supervision', () => {
     const state = env.gateway.getState();
     expect(state.status).toBe('crashed');
     if (state.status !== 'crashed') throw new Error('expected crash state');
-    expect(state.diagnostics?.commandContext).toBe(
-      'bundled agentico server --config [path] --state-dir [path]',
-    );
-    expect(state.diagnostics?.logTail).toHaveLength(20);
-    expect(state.diagnostics?.logTail[0]).toContain('line 5');
-    expect(state.diagnostics?.logTail.every((line) => line.length <= 512)).toBe(true);
-    const rendered = JSON.stringify(state.diagnostics);
-    expect(rendered).not.toContain(LAUNCH_TOKEN);
-    expect(rendered).not.toContain('/private/runtime');
-    expect(rendered).toContain('[redacted]');
-    expect(rendered).toContain('[path]');
+    // The canonical error folds the launch command context and the bounded
+    // log tail into one diagnostics string: 1 command line + last 20 lines.
+    const diagnostics = state.error.diagnostics ?? '';
+    const lines = diagnostics.split('\n');
+    expect(lines).toHaveLength(21);
+    expect(lines[0]).toBe('bundled agentico server --config [path] --state-dir [path]');
+    expect(lines[0]!.length).toBeLessThanOrEqual(256);
+    expect(lines[1]).toContain('line 5');
+    expect(lines.slice(1).every((line) => line.length <= 512)).toBe(true);
+    expect(diagnostics).not.toContain(LAUNCH_TOKEN);
+    expect(diagnostics).not.toContain('/private/runtime');
+    expect(diagnostics).toContain('[redacted]');
+    expect(diagnostics).toContain('[path]');
   });
 
   it('drops a lost external runtime after stale-stream verification without taking ownership', async () => {
@@ -668,11 +710,11 @@ describe('RuntimeGateway supervision', () => {
 
     const state = env.gateway.getState();
     expect(state).toMatchObject({ status: 'error', ownership: 'external' });
-    expect(requireError(state).code).toBe('E_EXTERNAL_SERVER_LOST');
+    expect(requireError(state).code).toBe('E_EXTERNAL_RUNTIME_UNRESPONSIVE');
     expect(env.spawnCalls).toHaveLength(0);
     expect(env.gateway.hasOwnedChild()).toBe(false);
     await expect(env.gateway.apiRequest('/api/v1/readiness')).rejects.toMatchObject({
-      safe: { code: 'E_NOT_CONNECTED' },
+      canonical: { code: 'E_NOT_CONNECTED' },
     });
   });
 
@@ -716,7 +758,9 @@ describe('RuntimeGateway supervision', () => {
       detail: 'Automatic recovery could not be scheduled.',
       error: {
         code: 'E_SERVER_CRASHED',
-        remediation: 'Use Retry to start a fresh supervised cycle.',
+        remediation: {
+          hint: 'Agentico retries the restart automatically within a bounded crash budget; use Retry to start a fresh supervised cycle.',
+        },
       },
     });
   });
@@ -827,7 +871,11 @@ describe('RuntimeGateway supervision', () => {
     const state = env.gateway.getState();
     expect(state.status).toBe('crashed');
     expect(state.ownership).toBe('none');
-    expect(requireError(state).code).toBe('E_SERVER_CRASHED');
+    const crashError = requireError(state);
+    expect(crashError.code).toBe('E_SERVER_CRASHED');
+    expect(crashError.class).toBe('blocking');
+    expect(crashError.title).toBe('The app-managed runtime crashed');
+    expect(crashError.remediation?.hint).toBeTruthy();
     expect(env.gateway.hasOwnedChild()).toBe(false);
     expectNoTokenLeak(env);
   });
@@ -928,7 +976,7 @@ describe('RuntimeGateway apiRequest', () => {
   it('rejects with E_NOT_CONNECTED before the gateway is ready', async () => {
     const env = makeEnv();
     await expect(env.gateway.apiRequest('/api/v1/readiness')).rejects.toMatchObject({
-      safe: { code: 'E_NOT_CONNECTED' },
+      canonical: { code: 'E_NOT_CONNECTED' },
     });
     expect(env.fetchCalls).toHaveLength(0);
   });
@@ -937,7 +985,7 @@ describe('RuntimeGateway apiRequest', () => {
     const env = makeEnv();
     await expect(
       env.gateway.apiUpload('/api/v1/uploads?kind=image&name=a.png', new Uint8Array([1])),
-    ).rejects.toMatchObject({ safe: { code: 'E_NOT_CONNECTED' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_NOT_CONNECTED' } });
   });
 
   it('apiUpload sends raw bytes with the bearer once ready, through the allowlisted query', async () => {
@@ -983,7 +1031,7 @@ describe('RuntimeGateway apiRequest', () => {
       '/api/v1/uploads/../uploads?kind=image&name=a.png',
     ]) {
       await expect(env.gateway.apiUpload(path, new Uint8Array([1]))).rejects.toMatchObject({
-        safe: { code: 'E_BAD_API_PATH' },
+        canonical: { code: 'E_BAD_API_PATH' },
       });
     }
   });
@@ -994,7 +1042,7 @@ describe('RuntimeGateway apiRequest', () => {
 
     await expect(
       env.gateway.apiUpload('/api/v1/uploads?kind=image&name=a.png', new Uint8Array([1])),
-    ).rejects.toMatchObject({ safe: { code: 'E_UPLOAD_UNAVAILABLE' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_UPLOAD_UNAVAILABLE' } });
   });
 
   it('sends authenticated requests to the attached runtime once ready', async () => {
@@ -1093,7 +1141,7 @@ describe('RuntimeGateway apiRequest', () => {
       '/api/v1/features/feature-1/repositories/repo-a/diff?file_path=',
     ]) {
       await expect(env.gateway.apiRequest(path)).rejects.toMatchObject({
-        safe: { code: 'E_BAD_API_PATH' },
+        canonical: { code: 'E_BAD_API_PATH' },
       });
     }
   });
@@ -1106,7 +1154,7 @@ describe('RuntimeGateway apiRequest', () => {
     });
     env.spawned[0]!.emitExit(1, null);
     await expect(env.gateway.apiRequest('/api/v1/readiness')).rejects.toMatchObject({
-      safe: { code: 'E_NOT_CONNECTED' },
+      canonical: { code: 'E_NOT_CONNECTED' },
     });
   });
 
@@ -1115,7 +1163,7 @@ describe('RuntimeGateway apiRequest', () => {
     await env.gateway.start();
     await env.gateway.shutdown();
     await expect(env.gateway.apiRequest('/api/v1/readiness')).rejects.toMatchObject({
-      safe: { code: 'E_NOT_CONNECTED' },
+      canonical: { code: 'E_NOT_CONNECTED' },
     });
   });
 });
@@ -1138,7 +1186,7 @@ describe('RuntimeGateway openEventStream', () => {
     const env = makeEnv();
     env.deps.openSse = () => Promise.reject(new Error('must not be called'));
     await expect(env.gateway.openEventStream()).rejects.toMatchObject({
-      safe: { code: 'E_NOT_CONNECTED' },
+      canonical: { code: 'E_NOT_CONNECTED' },
     });
   });
 
@@ -1167,7 +1215,7 @@ describe('RuntimeGateway openEventStream', () => {
     const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
     await env.gateway.start();
     await expect(env.gateway.openEventStream()).rejects.toMatchObject({
-      safe: { code: 'E_SSE_UNAVAILABLE' },
+      canonical: { code: 'E_SSE_UNAVAILABLE' },
     });
   });
 
@@ -1177,7 +1225,7 @@ describe('RuntimeGateway openEventStream', () => {
     await env.gateway.start();
     await env.gateway.shutdown();
     await expect(env.gateway.openEventStream()).rejects.toMatchObject({
-      safe: { code: 'E_NOT_CONNECTED' },
+      canonical: { code: 'E_NOT_CONNECTED' },
     });
   });
 });
@@ -1553,7 +1601,11 @@ describe('RuntimeGateway registry-first startup selection', () => {
     expect(env.gateway.getState().status).toBe('awaiting-server-choice');
 
     const state = await env.gateway.chooseServer({ serverKey: alpha.serverKey });
-    expect(requireError(state).code).toBe('E_ATTACH_UNREACHABLE');
+    const attachError = requireError(state);
+    expect(attachError.code).toBe('E_ATTACH_UNREACHABLE');
+    expect(attachError.class).toBe('blocking');
+    expect(attachError.title).toBe('The selected server is unreachable');
+    expect(attachError.remediation?.hint).toBeTruthy();
 
     // Retry rescans from scratch: alpha is gone from the new scan, beta alone
     // attaches silently.

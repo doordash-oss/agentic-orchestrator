@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Rebase pass journey: aftercare → one-click "Start rebase pass" → kind-aware
  * pass workspace (no modal) → completion → pass history + parent returned to
@@ -124,7 +140,7 @@ test('rebase pass: behind feature → card click → pass workspace → completi
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
     transcript.step(`created feature \`${featureName}\` through the form; cockpit visible`);
 
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 
@@ -178,8 +194,11 @@ test('rebase pass: behind feature → card click → pass workspace → completi
     await expect(pass).toBeVisible({ timeout: 60_000 });
     transcript.step('rebase pass workspace visible with kind-aware labeling, no modal');
 
-    await expect(handle.page.getByText('Rebasing')).toBeVisible({ timeout: 30_000 });
-    transcript.step('status chip reads "Rebasing" while the pass is active');
+    // A pass with no owned errors renders no error chip: the plain status
+    // label stays while the pass runs.
+    const statusChip = handle.page.getByRole('status', { name: 'Current feature status' });
+    await expect(statusChip).toContainText('Published', { timeout: 30_000 });
+    transcript.step('the plain status label stays while the pass owns no errors');
 
     transcript.section('Wait for the rebase pass to reach a terminal state');
     await waitFor(
@@ -207,6 +226,170 @@ test('rebase pass: behind feature → card click → pass workspace → completi
     transcript.step(
       'rebase child completed; parent returned to aftercare with Publish updates and pass history',
     );
+    transcript.json('final feature status', finalSnapshot.status);
+  } finally {
+    if (handle !== null) {
+      await closeApp(handle);
+    }
+    destroyWorld(world);
+  }
+  transcript.write(testInfo);
+});
+
+test('rebase pass dirty parent: one attention card, chip focuses it, retry completes', async ({}, testInfo: TestInfo) => {
+  test.setTimeout(300_000);
+  const transcript = new Transcript('rebase-pass-dirty', 'Rebase pass dirty-parent journey');
+  const world = createWorld('rebase-pass-dirty', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+    rebaseProvider: true,
+  });
+  const alphaRepo = createRepo(world, 'alpha', { commit: true });
+  addBareRemote(world, alphaRepo);
+  git(alphaRepo, 'push', '-u', 'origin', 'main');
+  transcript.section('World');
+  transcript.step(`isolated world at \`${world.root}\``);
+  transcript.step('committed repository: alpha');
+
+  let handle: AppHandle | null = null;
+  try {
+    transcript.section('Launch');
+    handle = await launchApp(world, testInfo, { traceName: 'rebase-pass-dirty' });
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    transcript.step('app launched and reached the ready workspace');
+
+    transcript.section('Create feature through the UI form and open cockpit');
+    const featureName = `RebaseDirty${Math.random().toString(16).slice(2, 8)}`;
+    const cockpit = await createFeatureViaForm(handle, {
+      name: featureName,
+      description: 'rebase pass dirty-parent journey',
+      repoPatterns: [/alpha/],
+      waitForReady: true,
+    });
+    await expect(cockpit).toBeVisible({ timeout: 30_000 });
+    transcript.step(`created feature \`${featureName}\` through the form; cockpit visible`);
+
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
+    const featureId = features[0]!.id;
+    transcript.json('feature id', featureId);
+
+    transcript.section('Quit, seed Published, advance main, relaunch');
+    const discovery = readDiscovery(world);
+    await closeApp(handle);
+    handle = null;
+    if (discovery !== null) {
+      await waitFor(
+        () => !processAlive(discovery.pid),
+        `first app-owned server ${discovery.pid} to be reaped`,
+        15_000,
+      );
+    }
+
+    setFeatureStatus(world.stateDir, featureId, 'Published');
+    transcript.step('seeded feature to Published status');
+
+    seedBehindFeature(world, featureId);
+    transcript.step('advanced local main so the feature is behind its target');
+
+    handle = await launchApp(world, testInfo, { traceName: 'rebase-pass-dirty-seeded' });
+    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
+    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
+    await overviewOption.click();
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 10_000,
+    });
+    transcript.step('relaunched against seeded Published state with behind repo');
+
+    transcript.section('Open feature cockpit, start the rebase pass, dirty the parent');
+    const featureOption = handle.page.getByRole('option', { name: featureName });
+    await featureOption.click();
+    const seededCockpit = handle.page.getByLabel(`Feature ${featureName}`);
+    await expect(seededCockpit).toBeVisible({ timeout: 30_000 });
+
+    const aftercare = seededCockpit.getByRole('region', { name: 'Feature aftercare' });
+    await expect(aftercare).toBeVisible({ timeout: 15_000 });
+
+    const startRebase = aftercare.getByRole('button', { name: /Start rebase pass/ });
+    await expect(startRebase).toBeVisible();
+    await startRebase.click();
+    transcript.step('clicked "Start rebase pass" in aftercare');
+
+    const pass = seededCockpit.getByRole('region', { name: 'Rebase pass' });
+    await expect(pass).toBeVisible({ timeout: 60_000 });
+    transcript.step('rebase pass workspace visible');
+
+    // Dirt the parent worktree before the stub provider finishes
+    // implementation and review: integration's preparation preflight then
+    // parks the child with the integration_parent_dirty record.
+    const parentWorktrees = parseFeatureRepos(
+      fs.readFileSync(featureYamlPath(world, featureId), 'utf8'),
+    );
+    const parentAlpha = parentWorktrees['alpha'];
+    if (parentAlpha === undefined) {
+      throw new Error('feature.yaml missing parent worktree alpha');
+    }
+    const strayFile = path.join(parentAlpha, 'stray-parent.txt');
+    fs.writeFileSync(strayFile, 'park integration\n');
+    transcript.step('wrote an untracked file into the parent worktree');
+
+    transcript.section('Assert exactly one full attention card and the attention chip');
+    const card = pass.getByRole('alert');
+    await expect(card).toBeVisible({ timeout: 180_000 });
+    await expect(pass.getByRole('alert')).toHaveCount(1);
+    await expect(card).toContainText('Needs your action');
+    await expect(card).toContainText('integration_parent_dirty');
+    await expect(card).toContainText('Parent worktree is dirty');
+    // The repository and the untracked file sit under the Details disclosure.
+    await expect(card).toContainText('alpha');
+    await expect(card).toContainText('stray-parent.txt');
+    // The catalog title appears only at its owning card and the parent's
+    // waiting-lane sub-line; the live surface does not repeat the error.
+    await expect(handle.page.getByText('Parent worktree is dirty', { exact: true })).toHaveCount(2);
+    const parentRow = handle.page
+      .getByRole('navigation', { name: 'Feature sidebar' })
+      .getByRole('option', { name: new RegExp(featureName) });
+    await expect(parentRow.locator('.sidebar__row-subline')).toHaveText('Parent worktree is dirty');
+    transcript.step(
+      'one full ErrorSurface carries the parked condition; the sidebar sub-line names it too',
+    );
+
+    const chip = handle.page.getByRole('button', {
+      name: 'Rebasing — Needs your action. Parent worktree is dirty. Focus the error card.',
+    });
+    await expect(chip).toBeVisible({ timeout: 30_000 });
+    await chip.click();
+    await expect(card).toBeFocused();
+    transcript.step('attention chip focused the card');
+
+    transcript.section('Clean the worktree and retry from the card');
+    fs.rmSync(strayFile);
+    transcript.step('removed the untracked file');
+    await card.getByRole('button', { name: 'Retry integration' }).click();
+    transcript.step('clicked the card Retry integration button');
+
+    await waitFor(
+      async () => {
+        const feature = await handle!.page.evaluate(
+          (id: string) => window.agentico.getFeature(id),
+          featureId,
+        );
+        return feature.activeChild === undefined;
+      },
+      `feature ${featureId} rebase child to complete after retry`,
+      180_000,
+    );
+    const finalSnapshot = await handle.page.evaluate(
+      (id: string) => window.agentico.getFeature(id),
+      featureId,
+    );
+    expect(finalSnapshot.activeChild).toBeUndefined();
+    const hasRebase = (finalSnapshot.childHistory ?? []).some((child) => child.kind === 'rebase');
+    expect(hasRebase, 'rebase pass should appear in child history after retry').toBe(true);
+    await expect(aftercare).toBeVisible({ timeout: 30_000 });
+    await expect(pass).not.toBeVisible({ timeout: 30_000 });
+    transcript.step('retry completed the pass; parent returned to aftercare and the card is gone');
     transcript.json('final feature status', finalSnapshot.status);
   } finally {
     if (handle !== null) {
@@ -248,7 +431,7 @@ test('rebase pass up-to-date: card click renders inline notice, stays in afterca
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
     transcript.step(`created feature \`${featureName}\` through the form; cockpit visible`);
 
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 
@@ -291,9 +474,14 @@ test('rebase pass up-to-date: card click renders inline notice, stays in afterca
     transcript.step('clicked "Start rebase pass" on an up-to-date feature');
 
     transcript.section('Assert inline already-up-to-date notice, cockpit stays in aftercare');
-    const errorAlert = seededCockpit.getByRole('alert');
-    await expect(errorAlert).toBeVisible({ timeout: 30_000 });
-    await expect(errorAlert).toContainText('rebase_already_up_to_date');
+    // The catalog renders the already-up-to-date rejection as a warning
+    // surface, so it reads as a status — not an alert. Scope past the
+    // cockpit's other live statuses by the stable code tag.
+    const errorStatus = seededCockpit
+      .getByRole('status')
+      .filter({ hasText: 'rebase_already_up_to_date' });
+    await expect(errorStatus).toBeVisible({ timeout: 30_000 });
+    await expect(errorStatus).toContainText('rebase_already_up_to_date');
     transcript.step('inline already-up-to-date notice rendered near the aftercare surface');
 
     await expect(aftercare).toBeVisible({ timeout: 5_000 });

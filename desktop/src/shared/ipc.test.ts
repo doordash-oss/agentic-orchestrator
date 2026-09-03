@@ -1,20 +1,52 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { describe, expect, it } from 'vitest';
 import {
+  CompletionPreflightRepoSchema,
   ConnectionStateSchema,
+  CreationFileUploadResultSchema,
+  FeatureSetupViewSchema,
+  FeatureSummaryViewSchema,
   IPC_CHANNELS,
   IPC_EVENTS,
   InitRepositoryRequestSchema,
   IpcEnvelopeSchema,
   AbsolutePathSchema,
+  OwnedErrorSchema,
   ReadinessSnapshotSchema,
+  RelationshipChildViewSchema,
+  RelationshipTransactionViewSchema,
+  FeatureActionResultSchema,
+  RepositoryDiffResultSchema,
+  RecoveryItemViewSchema,
   SettingsPatchSchema,
   SettingsSchema,
   FeatureActionRequestSchema,
+  AttentionItemSchema,
+  UpdateStateSchema,
+  actionableAttentionCount,
+  type AttentionItem,
+  FeatureSnapshotSchema,
   GateResumeRequestSchema,
   ChatStartRequestSchema,
   SessionIdSchema,
   SessionTranscriptRequestSchema,
   SessionOutputEventSchema,
+  SetupTaskViewSchema,
   isActiveChatSession,
   isTerminalChatStatus,
   defaultAmaGeometry,
@@ -36,12 +68,196 @@ import {
   LocalReviewDraftSaveRequestSchema,
   LocalReviewDraftStoreSchema,
   PublishDescriptionRequestSchema,
+  RepoStatusViewSchema,
   AppRouteEventSchema,
   ServerRemoveRequestSchema,
   ServerTokenStatusRequestSchema,
   ServerTokenStatusResultSchema,
 } from './ipc';
+import * as ipcModule from './ipc';
 import { assertNoPrototypePollution } from './sanitize';
+
+const canonicalErrorFixture = {
+  code: 'E_INTERNAL',
+  class: 'blocking' as const,
+  title: 'Request failed',
+  summary: 'The connection attempt failed unexpectedly: boom.',
+  remediation: { hint: 'Retry.' },
+};
+
+describe('module surface', () => {
+  it('exports no safe-error schema: the canonical error is the one error shape', () => {
+    // Matched structurally (not by name) so this file never spells the
+    // deleted identifier the static check guards against.
+    expect(Object.keys(ipcModule).some((key) => /safe.?error/i.test(key))).toBe(false);
+  });
+});
+
+describe('FeatureSnapshot failure schema', () => {
+  const failureSchema = FeatureSnapshotSchema.shape.failure;
+  const canonicalFailure = {
+    code: 'worktree_setup_failed',
+    class: 'blocking' as const,
+    title: 'Worktree setup failed',
+    summary: 'Setting up the worktree for repository "repo-a" failed.',
+    remediation: {
+      hint: 'Resolve the reported problem in the repository, then retry setup.',
+      actions: ['setup'],
+    },
+    context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+    diagnostics: 'git worktree add failed: no commits yet',
+  };
+
+  it('accepts the canonical failure crossing IPC', () => {
+    const parsed = failureSchema?.safeParse(canonicalFailure);
+    expect(parsed?.success).toBe(true);
+  });
+
+  it('rejects a failure missing any required canonical field', () => {
+    for (const field of ['code', 'class', 'title', 'summary'] as const) {
+      const incomplete = { ...canonicalFailure } as Record<string, unknown>;
+      delete incomplete[field];
+      expect(failureSchema?.safeParse(incomplete).success).toBe(false);
+    }
+  });
+});
+
+describe('Setup task and setup view schemas', () => {
+  const canonicalError = {
+    code: 'worktree_setup_failed',
+    class: 'blocking' as const,
+    title: 'Worktree setup failed',
+    summary: 'Setting up the worktree for repository "repo-a" failed.',
+    remediation: {
+      hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+      actions: ['setup'],
+    },
+    context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+    diagnostics: 'git worktree add failed: no commits yet',
+  };
+  const setupTask = {
+    key: 'worktree:repo-a',
+    kind: 'worktree',
+    label: 'Worktree: repo-a',
+    repo: 'repo-a',
+    status: 'failed',
+    branch: 'feature/search-revamp',
+    attempt: 1,
+    error: canonicalError,
+  };
+
+  it('accepts a setup task carrying its canonical error record', () => {
+    expect(SetupTaskViewSchema.safeParse(setupTask).success).toBe(true);
+  });
+
+  it('rejects a task error missing any required canonical field', () => {
+    for (const field of ['code', 'class', 'title', 'summary'] as const) {
+      const incomplete = {
+        ...setupTask,
+        error: { ...canonicalError } as Record<string, unknown>,
+      } as Record<string, unknown>;
+      delete (incomplete.error as Record<string, unknown>)[field];
+      expect(SetupTaskViewSchema.safeParse(incomplete).success).toBe(false);
+    }
+  });
+
+  it('rejects the removed lastError keys on setup and relationship child views', () => {
+    const setupView = {
+      status: 'failed',
+      attempt: 1,
+      tasks: [setupTask],
+    };
+    expect(FeatureSetupViewSchema.safeParse(setupView).success).toBe(true);
+    expect(FeatureSetupViewSchema.safeParse({ ...setupView, lastError: 'boom' }).success).toBe(
+      false,
+    );
+    expect(SetupTaskViewSchema.safeParse({ ...setupTask, lastError: 'boom' }).success).toBe(false);
+
+    const childView = {
+      id: 'abcd1234ef567890',
+      name: 'Refactor pass',
+      kind: 'refactor',
+      displayToken: 'R1',
+      displayState: 'Completed',
+      pipeline: 'medium',
+      status: 'Done',
+      startedAt: '2026-07-14T00:00:00Z',
+      cost: { totalUsd: 0, byPhase: {} },
+      integrationState: 'merged',
+      warnings: [],
+    };
+    expect(RelationshipChildViewSchema.safeParse(childView).success).toBe(true);
+    expect(RelationshipChildViewSchema.safeParse({ ...childView, lastError: 'boom' }).success).toBe(
+      false,
+    );
+    expect(
+      RelationshipChildViewSchema.safeParse({ ...childView, cleanupWarnings: [] }).success,
+    ).toBe(false);
+  });
+
+  it('rejects removed warning shapes on renderer-facing result views', () => {
+    const transactionEntry = {
+      repo: 'repo-a',
+      prepState: 'applied',
+      pendingSync: true,
+    };
+    const transaction = RelationshipTransactionViewSchema.safeParse({
+      phase: 'applied',
+      entries: [transactionEntry],
+    });
+    expect(transaction.success).toBe(true);
+    const staleTransaction = RelationshipTransactionViewSchema.safeParse({
+      phase: 'applied',
+      entries: [{ ...transactionEntry, cleanupWarning: 'stale string' }],
+    });
+    expect(staleTransaction.success).toBe(false);
+
+    const actionResult = {
+      featureId: 'abcd1234ef567890',
+      action: 'rewind',
+      result: 'rewound',
+      sessionIds: [],
+    };
+    expect(FeatureActionResultSchema.safeParse(actionResult).success).toBe(true);
+    const staleWarnings = FeatureActionResultSchema.safeParse({
+      ...actionResult,
+      warnings: ['stale string warning'],
+    });
+    expect(staleWarnings.success).toBe(false);
+
+    const diffResult = {
+      featureId: 'abcd1234ef567890',
+      repo: 'repo-a',
+      files: [],
+    };
+    expect(RepositoryDiffResultSchema.safeParse(diffResult).success).toBe(true);
+    const staleDiff = RepositoryDiffResultSchema.safeParse({
+      ...diffResult,
+      partialFailure: 'stale string',
+    });
+    expect(staleDiff.success).toBe(false);
+  });
+
+  it('requires the canonical orphan error on every recovery item view', () => {
+    const recoveryItem = {
+      key: 'feature-alpha:repo-a',
+      featureId: 'alpha1234ef567890',
+      processAlive: true,
+      allowedActions: ['resume', 'kill'],
+      defaultAction: 'resume',
+      error: {
+        code: 'orphan_session_live',
+        class: 'needs_action',
+        title: 'Orphan session still running',
+        summary: 'The session process is still alive after its run was interrupted.',
+      },
+    };
+    expect(RecoveryItemViewSchema.safeParse(recoveryItem).success).toBe(true);
+    const { error: _removed, ...withoutError } = recoveryItem;
+    void _removed;
+    expect(RecoveryItemViewSchema.safeParse(withoutError).success).toBe(false);
+  });
+});
 
 describe('IPC channel registry', () => {
   it('defines a zod request/response contract for every invokable channel', () => {
@@ -201,6 +417,30 @@ describe('operational IPC schemas', () => {
     );
   });
 
+  it('accepts a run chat context reference and rejects undisciplined ones', () => {
+    const request = {
+      message: 'Explain this error',
+      context: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'abcd1234' },
+    };
+    expect(ChatStartRequestSchema.parse(request)).toStrictEqual(request);
+    // Unknown scopes, extra keys, and keys missing for or foreign to the
+    // scope never reach the wire.
+    for (const context of [
+      { scope: 'session', code: 'x', featureId: 'abcd1234' },
+      { scope: 'run', code: 'x', featureId: 'abcd1234', extra: 'x' },
+      { scope: 'run', code: 'x', featureId: 'abcd1234', taskKey: 'setup-worktrees' },
+      { scope: 'run', code: 'x', repository: 'main' },
+      { scope: 'run', code: 'x' },
+      { scope: 'setup', code: 'x', featureId: 'abcd1234' },
+      { scope: 'recovery', code: 'x' },
+    ]) {
+      expect(
+        ChatStartRequestSchema.safeParse({ message: 'Explain this error', context }).success,
+        JSON.stringify(context),
+      ).toBe(false);
+    }
+  });
+
   it('rejects foreign and prototype-polluting output records', () => {
     const valid = {
       subscriptionId: 'sub-1',
@@ -218,6 +458,27 @@ describe('operational IPC schemas', () => {
         ),
       ),
     ).toThrow();
+  });
+
+  it('carries the session-output error event as one canonical error', () => {
+    const event = {
+      subscriptionId: 'sub-1',
+      type: 'error',
+      sessionId: 'session-1',
+      error: {
+        code: 'E_SESSION_STREAM',
+        class: 'blocking',
+        title: 'The session stream failed',
+        summary: 'The session output stream ended unexpectedly.',
+      },
+    };
+    expect(SessionOutputEventSchema.parse(event)).toStrictEqual(event);
+    expect(
+      SessionOutputEventSchema.safeParse({
+        ...event,
+        error: { code: 'E_SESSION_STREAM', message: 'stream broke' },
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -330,37 +591,59 @@ describe('ConnectionStateSchema', () => {
     expect(ConnectionStateSchema.safeParse({ ...base, serverName: 42 }).success).toBe(false);
   });
 
-  it('accepts terminal error states with redacted diagnostics', () => {
+  it('accepts terminal error states carrying a canonical error with folded diagnostics', () => {
     const state = {
       status: 'incompatible',
       stage: 'connect',
       detail: 'A running Agentico runtime is not compatible with this app.',
       ownership: 'external',
-      error: { code: 'E_INCOMPATIBLE_SERVER', message: 'nope', remediation: 'update' },
+      error: {
+        code: 'E_INCOMPATIBLE_SERVER',
+        class: 'blocking',
+        title: 'The server is not compatible with this app',
+        summary: 'The server build is too old for this app.',
+        remediation: { hint: 'Update the app and the runtime to matching releases.' },
+        diagnostics: 'bundled agentico server\nlast redacted log line',
+      },
     };
     expect(ConnectionStateSchema.parse(state)).toEqual(state);
   });
 
-  it('bounds app-owned failure diagnostics at the IPC boundary', () => {
+  it('rejects a terminal error carrying a message, a structured diagnostics object, or a state-level diagnostics sibling', () => {
     const base = {
       status: 'crashed',
       stage: 'connect',
       detail: 'The app-owned runtime stopped.',
       ownership: 'none',
-      error: { code: 'E_SERVER_CRASHED', message: 'stopped' },
-      diagnostics: { commandContext: 'bundled agentico server', logTail: ['redacted line'] },
+      error: {
+        code: 'E_SERVER_CRASHED',
+        class: 'blocking',
+        title: 'The app-managed runtime crashed',
+        summary: 'The app-managed Agentico runtime exited with code 1.',
+        diagnostics: 'bundled agentico server\nredacted line',
+      },
     };
     expect(ConnectionStateSchema.safeParse(base).success).toBe(true);
     expect(
       ConnectionStateSchema.safeParse({
         ...base,
-        diagnostics: { ...base.diagnostics, logTail: Array.from({ length: 21 }, () => 'line') },
+        error: { ...base.error, message: 'stopped' },
       }).success,
     ).toBe(false);
     expect(
       ConnectionStateSchema.safeParse({
         ...base,
-        diagnostics: { ...base.diagnostics, logTail: ['x'.repeat(513)] },
+        error: {
+          ...base.error,
+          diagnostics: { commandContext: 'bundled agentico server', logTail: ['redacted line'] },
+        },
+      }).success,
+    ).toBe(false);
+    // The pre-canonical state-level structured diagnostics sibling is gone.
+    expect(
+      ConnectionStateSchema.safeParse({
+        ...base,
+        diagnostics: { commandContext: 'bundled agentico server', logTail: ['redacted line'] },
       }).success,
     ).toBe(false);
   });
@@ -399,7 +682,7 @@ describe('ConnectionStateSchema', () => {
         detail: 'Connected.',
         ownership: 'app-owned',
         kind: 'local',
-        error: { code: 'E_X', message: 'impossible' },
+        error: canonicalErrorFixture,
       }).success,
     ).toBe(false);
   });
@@ -432,7 +715,7 @@ describe('ConnectionStateSchema', () => {
           stage: 'discover',
           detail: 'working',
           ownership: 'none',
-          error: { code: 'E_X', message: 'impossible' },
+          error: canonicalErrorFixture,
         }).success,
         `${status} must not carry an error`,
       ).toBe(false);
@@ -490,7 +773,7 @@ describe('ConnectionStateSchema', () => {
           status === 'launch-failed' ||
           status === 'crashed' ||
           status === 'error'
-            ? { error: { code: 'E_X', message: 'failed' } }
+            ? { error: canonicalErrorFixture }
             : {}),
         }).success,
         `${status} must only accept its lifecycle stage`,
@@ -731,6 +1014,31 @@ describe('Servers pane IPC contracts', () => {
     ).toBe(false);
   });
 
+  it('AppRouteEvent: draft, autoSubmit, and chatContext ride the ama target only', () => {
+    const amaRoute = {
+      target: 'ama',
+      draft: 'Explain the "Run failed" error (run_failed) on add-login.',
+      autoSubmit: true,
+      chatContext: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+    };
+    expect(AppRouteEventSchema.parse(amaRoute)).toEqual(amaRoute);
+    expect(AppRouteEventSchema.parse({ target: 'ama' })).toEqual({ target: 'ama' });
+    // A non-ama route carrying any chat field — or an undisciplined
+    // reference — fails closed.
+    for (const bad of [
+      { target: 'home', draft: 'hello' },
+      { target: 'home', autoSubmit: true },
+      { target: 'settings', chatContext: { scope: 'run', code: 'x', featureId: 'abcd1234' } },
+      {
+        target: 'ama',
+        draft: 'hello',
+        chatContext: { scope: 'run', code: 'x', featureId: 'abcd1234', taskKey: 't' },
+      },
+    ]) {
+      expect(AppRouteEventSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it('ServerRemoveRequest: strict shape, non-empty key', () => {
     expect(ServerRemoveRequestSchema.parse({ serverKey: 'a'.repeat(32) })).toEqual({
       serverKey: 'a'.repeat(32),
@@ -889,6 +1197,13 @@ describe('window purposes', () => {
 });
 
 describe('ReadinessSnapshotSchema', () => {
+  const issue = {
+    code: 'unauthenticated',
+    class: 'blocking',
+    title: 'Unauthenticated',
+    summary: 'A provider CLI is installed but its authentication flow has not been completed.',
+    remediation: { hint: 'claude login' },
+  };
   const snapshot = {
     ready: false,
     probedAt: '2026-07-14T10:00:00Z',
@@ -898,25 +1213,51 @@ describe('ReadinessSnapshotSchema', () => {
         installed: true,
         version: '2.1.0',
         ready: false,
-        issue: { code: 'unauthenticated', message: 'not authenticated', remedy: 'claude login' },
+        issue,
       },
     ],
-    models: { available: false, issue: { code: 'models_unavailable', message: 'no models' } },
+    models: {
+      available: false,
+      issue: {
+        code: 'models_unavailable',
+        class: 'blocking',
+        title: 'Models unavailable',
+        summary: 'No usable provider exposes any model.',
+      },
+    },
     configuration: { valid: true },
     workspaceRoots: [{ path: '/w', valid: true }],
     repositories: [{ name: 'r', path: '/w/r', valid: true }],
-    issues: [{ code: 'unauthenticated', message: 'not authenticated', remedy: 'claude login' }],
+    issues: [issue],
   };
 
-  it('accepts a complete snapshot', () => {
+  it('accepts a complete snapshot whose issues are canonical errors', () => {
     expect(ReadinessSnapshotSchema.parse(snapshot)).toEqual(snapshot);
   });
 
-  it('rejects unknown issue codes and token-shaped extras fail-closed', () => {
+  it('rejects the pre-canonical message/remedy issue shape fail-closed', () => {
     expect(
       ReadinessSnapshotSchema.safeParse({
         ...snapshot,
-        issues: [{ code: 'mystery', message: 'x' }],
+        issues: [{ code: 'unauthenticated', message: 'not authenticated' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      ReadinessSnapshotSchema.safeParse({
+        ...snapshot,
+        providers: [
+          {
+            name: 'claude',
+            installed: true,
+            version: '2.1.0',
+            ready: false,
+            issue: {
+              code: 'unauthenticated',
+              message: 'not authenticated',
+              remedy: 'claude login',
+            },
+          },
+        ],
       }).success,
     ).toBe(false);
     for (const extra of [{ authToken: 'x' }, { token: 'x' }, { baseUrl: 'http://127.0.0.1:1' }]) {
@@ -951,16 +1292,52 @@ describe('InitRepositoryRequestSchema', () => {
 });
 
 describe('IpcEnvelopeSchema', () => {
-  it('accepts ok and error envelopes', () => {
+  it('accepts ok and error envelopes, the error member being one canonical error', () => {
     expect(IpcEnvelopeSchema.safeParse({ ok: true, value: { any: 1 } }).success).toBe(true);
+    expect(IpcEnvelopeSchema.safeParse({ ok: false, error: canonicalErrorFixture }).success).toBe(
+      true,
+    );
+  });
+
+  it('rejects the pre-canonical {code,message} error shape', () => {
     expect(
       IpcEnvelopeSchema.safeParse({ ok: false, error: { code: 'E_X', message: 'm' } }).success,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('rejects malformed envelopes', () => {
     expect(IpcEnvelopeSchema.safeParse({ ok: false }).success).toBe(false);
     expect(IpcEnvelopeSchema.safeParse({ value: 1 }).success).toBe(false);
+  });
+});
+
+describe('creation file upload results', () => {
+  const failed = {
+    ok: false as const,
+    name: 'shot.png',
+    error: {
+      code: 'E_UPLOAD_TOO_LARGE',
+      class: 'needs_action',
+      title: 'The file is too large',
+      summary: 'The file is larger than the 10 MiB upload limit.',
+      remediation: {
+        hint: 'Choose a smaller file: images are limited to 10 MiB and attachments to 25 MiB.',
+      },
+    },
+  };
+
+  it('accepts a failed-upload entry carrying one canonical error', () => {
+    expect(CreationFileUploadResultSchema.safeParse(failed).success).toBe(true);
+    expect(CreationFileUploadResultSchema.parse(failed)).toEqual(failed);
+  });
+
+  it('rejects the pre-canonical {code,message} failure entry', () => {
+    expect(
+      CreationFileUploadResultSchema.safeParse({
+        ...failed,
+        error: { code: 'E_UPLOAD_TOO_LARGE', message: 'too large' },
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -991,5 +1368,221 @@ describe('recoverable local review draft schemas', () => {
     expect(LocalReviewDraftStoreSchema.safeParse({ schemaVersion: 2, drafts: [] }).success).toBe(
       false,
     );
+  });
+});
+
+describe('repository publish-failure error views', () => {
+  const repoError = {
+    code: 'publish_pull_request_failed',
+    class: 'needs_action',
+    title: 'Pull-request creation failed',
+    summary: 'Creating the pull request for repository "repo-a" failed.',
+    remediation: { hint: 'Check GitHub access, then retry.', actions: ['publish'] },
+    context: { repositories: [{ name: 'repo-a', branch: 'feature/f', remote_only_commits: 3 }] },
+    diagnostics: 'POST /repos/org/repo-a/pulls: 502 Bad Gateway',
+  };
+  const repoStatusView = {
+    name: 'repo-a',
+    publishable: true,
+    touched: true,
+    error: repoError,
+  };
+  const preflightRepoView = {
+    repo: 'repo-a',
+    publishable: true,
+    touched: true,
+    status: 'unpublished_changes',
+    error: repoError,
+  };
+
+  it('accepts both views carrying the canonical error', () => {
+    expect(RepoStatusViewSchema.safeParse(repoStatusView).success).toBe(true);
+    expect(CompletionPreflightRepoSchema.safeParse(preflightRepoView).success).toBe(true);
+  });
+
+  it('rejects an error lacking code, class, title, or summary on both views', () => {
+    for (const dropped of ['code', 'class', 'title', 'summary'] as const) {
+      const degraded = { ...repoError };
+      delete degraded[dropped];
+      expect(RepoStatusViewSchema.safeParse({ ...repoStatusView, error: degraded }).success).toBe(
+        false,
+      );
+      expect(
+        CompletionPreflightRepoSchema.safeParse({ ...preflightRepoView, error: degraded }).success,
+      ).toBe(false);
+    }
+  });
+
+  it('rejects stale lastError keys on both views', () => {
+    expect(RepoStatusViewSchema.safeParse({ ...repoStatusView, lastError: 'boom' }).success).toBe(
+      false,
+    );
+    expect(
+      CompletionPreflightRepoSchema.safeParse({ ...preflightRepoView, lastError: 'boom' }).success,
+    ).toBe(false);
+  });
+});
+
+describe('owned errors on the feature summary and snapshot views', () => {
+  const ownedRunError = {
+    ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'abcd1234ef567890' },
+    error: {
+      code: 'iteration_budget_exhausted',
+      class: 'blocking',
+      title: 'Iteration budget exhausted',
+      summary: 'The Implement phase exhausted its iteration budget.',
+    },
+  };
+  const ownedRepoError = {
+    ref: {
+      scope: 'repository',
+      code: 'publish_rebase_conflict',
+      featureId: 'abcd1234ef567890',
+      repository: 'repo-a',
+    },
+    error: {
+      code: 'publish_rebase_conflict',
+      class: 'needs_action',
+      title: 'Pull-rebase conflict',
+      summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
+    },
+  };
+  const summaryView = {
+    id: 'abcd1234ef567890',
+    name: 'Search revamp',
+    status: 'Failed',
+    currentPhase: 'Implement',
+    repos: ['repo-a'],
+    createdAt: '2026-07-14T10:00:00Z',
+    activeRun: 1,
+    runCount: 1,
+    warnings: [],
+    errors: [ownedRunError, ownedRepoError],
+  };
+
+  it('accepts a summary carrying two owned-error entries', () => {
+    const parsed = FeatureSummaryViewSchema.parse(summaryView);
+    expect(parsed.errors).toHaveLength(2);
+    expect(parsed.errors?.[0]?.ref.scope).toBe('run');
+    expect(parsed.errors?.[1]?.ref.repository).toBe('repo-a');
+  });
+
+  it('rejects an entry whose error carries the warning class', () => {
+    const warningEntry = {
+      ref: { scope: 'run', code: 'rewind_worktree_reset', featureId: 'abcd1234ef567890' },
+      error: {
+        code: 'rewind_worktree_reset',
+        class: 'warning',
+        title: 'Worktree reset to anchor',
+        summary: 'The worktree was reset.',
+      },
+    };
+    expect(OwnedErrorSchema.safeParse(warningEntry).success).toBe(false);
+    expect(
+      FeatureSummaryViewSchema.safeParse({ ...summaryView, errors: [warningEntry] }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an entry whose setup reference lacks the task key', () => {
+    const undisciplined = {
+      ...ownedRunError,
+      ref: { scope: 'setup', code: 'worktree_setup_failed', featureId: 'abcd1234ef567890' },
+    };
+    expect(OwnedErrorSchema.safeParse(undisciplined).success).toBe(false);
+    expect(
+      FeatureSummaryViewSchema.safeParse({ ...summaryView, errors: [undisciplined] }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an entry carrying unknown keys', () => {
+    expect(OwnedErrorSchema.safeParse({ ...ownedRunError, diagnostics: 'raw' }).success).toBe(
+      false,
+    );
+    expect(OwnedErrorSchema.safeParse({ ...ownedRunError, owner: 'feature' }).success).toBe(false);
+  });
+
+  it('carries the same list on the feature snapshot view', () => {
+    const { runCount: _summaryOnly, ...snapshotSummary } = summaryView;
+    void _summaryOnly;
+    const snapshotView = {
+      ...snapshotSummary,
+      slug: 'search-revamp',
+      actions: [],
+      reviewGate: {
+        reviewingGate: false,
+        reviewFixing: false,
+        validatingPlan: false,
+        validatorStatuses: {},
+      },
+      automaticReview: { mode: 'default', enabled: false, source: 'global' },
+    };
+    const parsed = FeatureSnapshotSchema.parse(snapshotView);
+    expect(parsed.errors).toHaveLength(2);
+    expect(parsed.errors?.[0]?.error.title).toBe('Iteration budget exhausted');
+  });
+});
+
+describe('error attention items', () => {
+  const errorItem: AttentionItem = {
+    kind: 'error',
+    id: 'error:feature-1:run::iteration_budget_exhausted',
+    featureId: 'abcd1234ef567890',
+    waitingSince: '2026-08-05T12:00:00Z',
+    ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'abcd1234ef567890' },
+    class: 'blocking',
+    code: 'iteration_budget_exhausted',
+    title: 'Iteration budget exhausted',
+  };
+
+  it('counts error items as actionable attention', () => {
+    expect(actionableAttentionCount([errorItem])).toBe(1);
+  });
+
+  it('rejects an error item whose class is warning', () => {
+    expect(AttentionItemSchema.safeParse({ ...errorItem, class: 'warning' }).success).toBe(false);
+    expect(AttentionItemSchema.safeParse(errorItem).success).toBe(true);
+  });
+});
+
+describe('UpdateStateSchema canonical error presence', () => {
+  const base = {
+    currentVersion: '0.1.0',
+    packageFormat: 'macos',
+    signatureStatus: 'unknown',
+    message: 'Agentico is up to date.',
+  } as const;
+  const canonicalError = {
+    code: 'E_UPDATE_CHECK_FAILED',
+    class: 'blocking',
+    title: 'Update check failed',
+    summary: 'GitHub Releases returned HTTP 503.',
+  } as const;
+
+  it("rejects a 'failed' state that carries no canonical error", () => {
+    expect(UpdateStateSchema.safeParse({ ...base, status: 'failed' }).success).toBe(false);
+  });
+
+  it('rejects a non-failed state that carries a canonical error', () => {
+    for (const status of [
+      'idle',
+      'checking',
+      'current',
+      'available',
+      'downloading',
+      'ready',
+      'scheduled',
+      'installing',
+    ] as const) {
+      expect(
+        UpdateStateSchema.safeParse({ ...base, status, error: canonicalError }).success,
+        status,
+      ).toBe(false);
+    }
+  });
+
+  it("accepts a 'failed' state carrying a canonical E_ error", () => {
+    expect(
+      UpdateStateSchema.safeParse({ ...base, status: 'failed', error: canonicalError }).success,
+    ).toBe(true);
   });
 });

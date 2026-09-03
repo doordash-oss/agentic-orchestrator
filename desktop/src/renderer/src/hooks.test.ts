@@ -1,8 +1,60 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionState } from '../../shared/ipc';
 import { installAgenticoMock } from './test/agenticoMock';
-import { useConnectionState, useSystemAccentMirror, useTheme } from './hooks';
+import { useConnectionState, useIpcLoad, useSystemAccentMirror, useTheme } from './hooks';
+
+describe('useIpcLoad', () => {
+  it('reloads through one request lane and ignores a stale completion', async () => {
+    let resolveFirst!: (value: string) => void;
+    let resolveSecond!: (value: string) => void;
+    const load = vi
+      .fn<() => Promise<string>>()
+      .mockReturnValueOnce(new Promise((resolve) => (resolveFirst = resolve)))
+      .mockReturnValueOnce(new Promise((resolve) => (resolveSecond = resolve)));
+    const { result } = renderHook(() => useIpcLoad(load, []));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+
+    act(() => result.current.reload());
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    await act(async () => resolveSecond('new'));
+    expect(result.current.state).toEqual({ phase: 'loaded', data: 'new' });
+
+    await act(async () => resolveFirst('stale'));
+    expect(result.current.state).toEqual({ phase: 'loaded', data: 'new' });
+  });
+
+  it('replaces loaded data and prevents an in-flight request from overwriting it', async () => {
+    let resolveLoad!: (value: string) => void;
+    const load = vi.fn<() => Promise<string>>(
+      () => new Promise((resolve) => (resolveLoad = resolve)),
+    );
+    const { result } = renderHook(() => useIpcLoad(load, []));
+    await waitFor(() => expect(load).toHaveBeenCalledOnce());
+
+    act(() => result.current.replace('adopted'));
+    expect(result.current.state).toEqual({ phase: 'loaded', data: 'adopted' });
+
+    await act(async () => resolveLoad('stale'));
+    expect(result.current.state).toEqual({ phase: 'loaded', data: 'adopted' });
+  });
+});
 
 describe('useConnectionState', () => {
   it('does not let a stale initial snapshot overwrite a pushed state', async () => {

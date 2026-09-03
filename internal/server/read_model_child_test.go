@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -54,10 +55,29 @@ func seedReadChildFeature(t *testing.T, store *feature.Store, parentID string, s
 			Bases:    []feature.ChildRepoBase{{Repo: repoNameSelf, SHA: "deadbeefcafe", ParentBranch: "main"}},
 		},
 	}
-	child.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: setupStatus, LastError: setupErr}})
+	child.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: setupStatus}})
 	if setupStatus == feature.SetupStatusFailed {
-		child.FailureType = feature.FailureWorktreeSetup
-		child.LastError = setupErr
+		// Mirror the setup runner's durable shape: the owning task carries
+		// the full record, the run carries the thin setup_task record.
+		key := "worktree:" + repoNameSelf
+		child.Run().Setup.Tasks = map[string]feature.SetupTask{key: {
+			Key: key, Kind: feature.SetupTaskWorktree, Label: "Worktree: " + repoNameSelf,
+			Repo: repoNameSelf, Status: feature.SetupStatusFailed,
+			Error: &errcat.FailureRecord{
+				Code: errcat.WorktreeSetupFailed,
+				Context: &errcat.RecordContext{
+					Repositories: []errcat.CodeRepository{{Name: repoNameSelf, Branch: "feature/rework-auth"}},
+				},
+				Diagnostics: setupErr,
+			},
+		}}
+		child.Run().Setup.TaskOrder = []string{key}
+		child.Run().Failure = &errcat.FailureRecord{
+			Code: errcat.WorktreeSetupFailed,
+			Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{
+				Key: key, Kind: "worktree", Label: "Worktree: " + repoNameSelf,
+			}},
+		}
 	}
 	if err := store.Save(child); err != nil {
 		t.Fatalf("Save(child) error = %v", err)
@@ -127,7 +147,7 @@ func TestChildFeatureExcludedFromTopLevelListButDetailWorks(t *testing.T) {
 	for _, raw := range actions {
 		ids[raw.(map[string]any)["id"].(string)] = true
 	}
-	want := map[string]bool{actionStart: true, actionPauseStop: true, actionResume: true, actionRestart: true, actionRetry: true, actionDiscard: true}
+	want := map[string]bool{actionStart: true, actionPauseStop: true, actionResume: true, actionRestart: true, actionSetup: true, actionRetry: true, actionDiscard: true}
 	if len(actions) != len(want) {
 		t.Fatalf("child detail actions = %v, want %v", ids, want)
 	}
@@ -160,8 +180,9 @@ func TestParentDetailIgnoresLegacyProviderStateInFeatureStore(t *testing.T) {
 }
 
 // TestParentProjectionsCarryActiveChildDerivedState covers the derived-state
-// matrix on both parent summary and parent detail: failed setup surfaces
-// last_error and stays setting_up; done setup flips to setup_complete.
+// matrix on both parent summary and parent detail: a failed setup surfaces
+// setup_status and stays setting_up with no last_error key; done setup flips
+// to setup_complete.
 func TestParentProjectionsCarryActiveChildDerivedState(t *testing.T) {
 	t.Parallel()
 
@@ -176,8 +197,8 @@ func TestParentProjectionsCarryActiveChildDerivedState(t *testing.T) {
 		if activeChild["relationship_state"] != "setting_up" || activeChild["setup_status"] != string(feature.SetupStatusFailed) {
 			t.Fatalf("active_child = %+v, want setting_up with failed setup", activeChild)
 		}
-		if activeChild["last_error"] != gitWorktreeAddFailedMsg {
-			t.Fatalf("active_child last_error = %v, want setup failure", activeChild["last_error"])
+		if _, ok := activeChild["last_error"]; ok {
+			t.Fatalf("active_child = %+v, want no last_error for a failed child setup", activeChild)
 		}
 	})
 
@@ -215,6 +236,50 @@ func TestParentProjectionsCarryActiveChildDerivedState(t *testing.T) {
 		detail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)
 		if _, ok := detail[entityFeature].(map[string]any)["active_child"]; ok {
 			t.Fatalf("parent detail carries active_child without a child: %+v", detail[entityFeature])
+		}
+	})
+}
+
+// TestRelationshipChildSummaryProjectsOnlySetupStatus pins that the parent's
+// active_child summary indicates a failed child setup through setup_status
+// alone and never projects setup text of any kind.
+func TestRelationshipChildSummaryProjectsOnlySetupStatus(t *testing.T) {
+	t.Parallel()
+
+	t.Run("failed setup projects setup_status only", func(t *testing.T) {
+		t.Parallel()
+		store, parent := seedReadFeature(t)
+		seedReadChildFeature(t, store, parent.ID, feature.StatusFailed, feature.SetupStatusFailed, gitWorktreeAddFailedMsg)
+		handler := NewHandler(baseReadHandlerOptions(store))
+
+		detail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)
+		activeChild := detail[entityFeature].(map[string]any)["active_child"].(map[string]any)
+		if activeChild["setup_status"] != string(feature.SetupStatusFailed) {
+			t.Fatalf("active_child setup_status = %v, want failed", activeChild["setup_status"])
+		}
+		if _, ok := activeChild["last_error"]; ok {
+			t.Fatalf("active_child = %+v, want no last_error for a failed child setup", activeChild)
+		}
+	})
+
+	t.Run("run failure record alone projects nothing", func(t *testing.T) {
+		t.Parallel()
+		store, parent := seedReadFeature(t)
+		child := seedReadChildFeature(t, store, parent.ID, feature.StatusFailed, feature.SetupStatusDone, "")
+		child.Run().Failure = &errcat.FailureRecord{
+			Code:        errcat.SessionCrashed,
+			Context:     &errcat.RecordContext{Phase: &errcat.CodePhase{Name: "implement"}},
+			Diagnostics: "agent session crashed",
+		}
+		if err := store.Save(child); err != nil {
+			t.Fatalf("Save(child) error = %v", err)
+		}
+		handler := NewHandler(baseReadHandlerOptions(store))
+
+		detail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)
+		activeChild := detail[entityFeature].(map[string]any)["active_child"].(map[string]any)
+		if _, ok := activeChild["last_error"]; ok {
+			t.Fatalf("active_child = %+v, want no last_error for a run-only failure record", activeChild)
 		}
 	})
 }
@@ -257,11 +322,27 @@ func TestParentProjectionsCarryCompleteRelationshipHistory(t *testing.T) {
 	closed.StartedAt = &closedStartedAt
 	closed.PhaseCosts = map[string]float64{"implement": 2.5}
 	closed.Parent.Transaction = &feature.TransactionJournal{
-		Phase:     feature.TransactionPhaseMerged,
-		Attention: "manual inspection required",
+		Phase: feature.TransactionPhaseMerged,
+		// The journal's attention is one stored canonical record; rendered
+		// text is produced by the catalog at projection time.
+		Attention: &errcat.FailureRecord{
+			Code: errcat.IntegrationMergeConflict,
+			Context: &errcat.RecordContext{
+				Repositories: []errcat.CodeRepository{{
+					Name:          repoNameSelf,
+					Branch:        "main",
+					ConflictFiles: []string{"internal/server/read_model.go"},
+				}},
+			},
+			Diagnostics: repoNameSelf + ": merge candidate conflict: [internal/server/read_model.go]",
+		},
 		Entries: []feature.RepoTransactionEntry{{
-			Repo:           repoNameSelf,
-			CleanupWarning: "branch cleanup pending",
+			Repo: repoNameSelf,
+			Cleanup: &errcat.FailureRecord{
+				Code:        errcat.ChildCleanupIncomplete,
+				Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: repoNameSelf}}},
+				Diagnostics: "branch cleanup pending",
+			},
 		}},
 	}
 	if err := store.Save(closed); err != nil {
@@ -271,13 +352,13 @@ func TestParentProjectionsCarryCompleteRelationshipHistory(t *testing.T) {
 	handler := NewHandler(baseReadHandlerOptions(store))
 	list := getJSONMap(t, handler, apiPathFeatures)
 	parentSummary := list["features"].([]any)[0].(map[string]any)
-	assertRelationshipProjection(t, parentSummary["active_child"], active.ID, "", "Active")
+	assertRelationshipProjection(t, parentSummary["active_child"], active.ID, "", "Active", false)
 
 	history, ok := parentSummary["child_history"].([]any)
 	if !ok || len(history) != 1 {
 		t.Fatalf("parent list child_history = %#v, want one closed child", parentSummary["child_history"])
 	}
-	assertRelationshipProjection(t, history[0], closed.ID, feature.ChildCloseOutcomeCompleted, "Closed — Completed")
+	assertRelationshipProjection(t, history[0], closed.ID, feature.ChildCloseOutcomeCompleted, "Closed — Completed", true)
 
 	parentDetail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
 	if got := mustMarshalJSON(t, parentDetail["child_history"]); got != mustMarshalJSON(t, parentSummary["child_history"]) {
@@ -629,7 +710,11 @@ func TestParentReviewFeedbackDirtyReasonCarriesDiagnostics(t *testing.T) {
 	t.Fatal("review-feedback action missing")
 }
 
-func assertRelationshipProjection(t *testing.T, raw any, wantID, wantOutcome, wantDisplayPrefix string) {
+// assertRelationshipProjection pins the shared relationship projection
+// fields. Attention is one canonical error object when the child's journal
+// carries a stored record and is wholly absent for a clean child; the old
+// per-repository attention items no longer exist on this surface.
+func assertRelationshipProjection(t *testing.T, raw any, wantID, wantOutcome, wantDisplayPrefix string, wantAttention bool) {
 	t.Helper()
 	projection, ok := raw.(map[string]any)
 	if !ok {
@@ -643,9 +728,25 @@ func assertRelationshipProjection(t *testing.T, raw any, wantID, wantOutcome, wa
 	if !strings.HasPrefix(display, wantDisplayPrefix) {
 		t.Fatalf("relationship display_state = %q, want prefix %q", display, wantDisplayPrefix)
 	}
-	for _, field := range []string{"display_token", "pipeline", "started_at", "cost", "integration_state", "attention", "cleanup_warnings"} {
+	for _, field := range []string{"display_token", "pipeline", "started_at", "cost", "integration_state", "warnings"} {
 		if _, exists := projection[field]; !exists {
 			t.Fatalf("relationship projection missing %q: %#v", field, projection)
+		}
+	}
+	attention, hasAttention := projection["attention"]
+	if hasAttention != wantAttention {
+		t.Fatalf("relationship attention presence = %v, want %v: %#v", hasAttention, wantAttention, projection)
+	}
+	if !wantAttention {
+		return
+	}
+	record, ok := attention.(map[string]any)
+	if !ok {
+		t.Fatalf("relationship attention = %#v, want canonical error object", attention)
+	}
+	for _, field := range []string{"code", "class", "title", "summary"} {
+		if _, exists := record[field]; !exists {
+			t.Fatalf("relationship attention missing %q: %#v", field, record)
 		}
 	}
 }

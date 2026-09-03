@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Shared description composer for the creation and refactor wizards: one
  * textarea that accepts pasted or dropped images and documents, an attach
@@ -18,7 +34,8 @@ import {
   type CreationFileKind,
   type RepositoryFileRef,
 } from '../../../shared/ipc';
-import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { parseIpcError } from '../wizard/ipcError';
+import type { CanonicalError } from '../../../shared/ipc';
 import { useConnectionState } from '../hooks';
 import { FILE_SEARCH_REQUIRES_LOCAL_SERVER } from '../localServerCopy';
 import {
@@ -78,7 +95,7 @@ export interface DescriptionComposerProps {
   onRepositoryFilesChange(
     update: (files: readonly RepositoryFileRef[]) => readonly RepositoryFileRef[],
   ): void;
-  onError(error: WizardError): void;
+  onError(error: CanonicalError): void;
 }
 
 export function DescriptionComposer({
@@ -174,7 +191,7 @@ export function DescriptionComposer({
         apply((items) => reconcileUploadResults(items, pending, result.results));
       })
       .catch((err: unknown) => {
-        const message = parseIpcError(err).message;
+        const message = parseIpcError(err).summary;
         apply((items) => failPendingUploads(items, pending, message));
       });
   };

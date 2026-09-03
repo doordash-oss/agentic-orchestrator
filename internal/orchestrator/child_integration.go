@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -227,7 +228,7 @@ func (o *Orchestrator) runTransactionIntegration(childID string, child, parent *
 	// remaining applied entries. On completion the journal transitions
 	// to rolled_back or attention.
 	if journal != nil && journal.Phase == feature.TransactionPhaseRollingBack {
-		if err := o.rollbackTransaction(child, parent, journal, -1); err != nil {
+		if err := o.rollbackTransaction(child, parent, journal, -1, integrationFinding{}); err != nil {
 			return err
 		}
 		var err error
@@ -311,8 +312,7 @@ func (o *Orchestrator) invalidateFinalReview(childID string, journal *feature.Tr
 		f.Parent.Transaction = nil
 		f.Status = feature.StatusReviewPassed
 		f.CurrentPhase = feature.PhaseFinalReview
-		f.LastError = ""
-		f.FailureType = ""
+		f.Run().Failure = nil
 		return nil
 	}); err != nil {
 		return fmt.Errorf("invalidating final review: %w", err)
@@ -381,23 +381,19 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 		}
 		if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.CandidateSHA); err != nil {
 			syncErr := fmt.Errorf("syncing parent worktree for repo %s: %w", entry.Repo, err)
-			if modifyErr := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
-				f.LastError = syncErr.Error()
-				return nil
-			}); modifyErr != nil {
-				return fmt.Errorf("persisting parent worktree sync error: %v (original error: %w)", modifyErr, syncErr)
+			// The journal's attention record and the relationship event own
+			// this failure; the phase stays applied so recovery semantics
+			// are unchanged and the pass remains resumable, and the child's
+			// run carries no failure record until a later phase classifies
+			// it.
+			finding := entryFinding(entry, errcat.IntegrationWorktreeSyncFailed, syncErr.Error())
+			if err := o.parkIntegrationAttention(child, journal, []integrationFinding{finding}); err != nil {
+				return fmt.Errorf("recording closure sync attention: %w", err)
 			}
-			o.emitEvent(ports.Event{
-				Type:      ports.RelationshipIntegrationChanged,
-				FeatureID: childID,
-				ParentID:  parentID,
-				ChildID:   childID,
-				Message:   "child integration needs attention: " + syncErr.Error(),
-			})
 			return syncErr
 		}
-		if strings.HasPrefix(entry.Diagnostics, "worktree sync pending after apply for repo ") {
-			entry.Diagnostics = ""
+		if entry.PendingSync {
+			entry.PendingSync = false
 			if err := o.persistTransaction(childID, journal); err != nil {
 				return fmt.Errorf("clearing pending worktree sync for repo %s: %w", entry.Repo, err)
 			}
@@ -416,15 +412,12 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 	if err := o.closeChildRelationship(childID, feature.ChildCloseOutcomeCompleted, now); err != nil {
 		return fmt.Errorf("close child relationship: %w", err)
 	}
-	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
-		f.LastError = ""
-		return nil
-	}); err != nil {
-		return fmt.Errorf("clear child relationship error: %w", err)
-	}
 
-	// Persist the merged phase AFTER both transitions are durable.
+	// Persist the merged phase AFTER both transitions are durable. Closure
+	// succeeded, so the journal carries no attention record and no pending
+	// sync flag.
 	journal.Phase = feature.TransactionPhaseMerged
+	journal.Attention = nil
 	if err := o.persistTransaction(childID, journal); err != nil {
 		return fmt.Errorf("recording merged transaction: %w", err)
 	}
@@ -534,11 +527,21 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 	}
 	if parent.IsPublishable() && parent.Checkpoints.AutoPublish() {
 		if err := o.publishWithOptionsLocked(parentID, PublishOptions{}); err != nil {
-			o.emitEvent(ports.Event{
+			event := ports.Event{
 				Type:      ports.RepoStatusChanged,
 				FeatureID: parentID,
 				Message:   "parent auto-publish after child integration failed: " + err.Error(),
-			})
+				Error:     err,
+			}
+			// The failing repository's stored record owns the condition; the
+			// event carries its rendered canonical error so the SSE
+			// projection matches the feature-failure shape.
+			if freshParent, getErr := o.deps.Lifecycle.Get(parentID); getErr == nil {
+				if rendered, ok := firstFailedRepoError(freshParent); ok {
+					event.CanonicalError = &rendered
+				}
+			}
+			o.emitEvent(event)
 		}
 	}
 	// Parent-scoped event after the tail's last mutation: clients that reload
@@ -559,9 +562,9 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 // type-appropriate routing, resolves inline review threads whose reply
 // succeeded, and records the addressed comment IDs. Repos without selected
 // comments are not pushed. Failures are terminal warnings: the tail
-// attempts every step once, records per-repo failures in the new
-// TailWarning journal field, and marks itself settled regardless. The
-// parent ends Published whether or not any step failed.
+// attempts every step once, records per-repo failures in the entry's stored
+// tail warning record, and marks itself settled regardless. The parent ends
+// Published whether or not any step failed.
 func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feature) error {
 	// Group selected comments by repo, preserving the parent repo order.
 	commentsByRepo := make(map[string][]feature.ReviewFeedbackComment)
@@ -710,20 +713,46 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 }
 
 // recordTransactionCleanupWarning durably records the outcome of a per-repo
-// cleanup pass on the transaction journal (empty clears a previous warning
-// for that repo).
-func (o *Orchestrator) recordTransactionCleanupWarning(childID, repoName, warning string) error {
+// cleanup pass on the transaction journal: an empty cause clears the stored
+// record for that repo (cleanup finished cleanly), a non-empty cause stores
+// the canonical child_cleanup_incomplete record with the repositories block
+// and the raw cause as diagnostics.
+func (o *Orchestrator) recordTransactionCleanupWarning(childID, repoName, cause string) error {
 	return o.deps.Store.Modify(childID, func(f *feature.Feature) error {
 		if f.Parent.Transaction != nil {
 			for i := range f.Parent.Transaction.Entries {
 				if f.Parent.Transaction.Entries[i].Repo == repoName {
-					f.Parent.Transaction.Entries[i].CleanupWarning = warning
+					if cause == "" {
+						f.Parent.Transaction.Entries[i].Cleanup = nil
+					} else {
+						f.Parent.Transaction.Entries[i].Cleanup = &errcat.FailureRecord{
+							Code: errcat.ChildCleanupIncomplete,
+							Context: &errcat.RecordContext{
+								Repositories: []errcat.CodeRepository{{
+									Name:   repoName,
+									Branch: childRepoBranch(f, repoName),
+								}},
+							},
+							Diagnostics: cause,
+						}
+					}
 					return nil
 				}
 			}
 		}
 		return nil
 	})
+}
+
+// childRepoBranch returns the branch recorded for repoName on the feature's
+// repositories, or "" when the repository is not listed.
+func childRepoBranch(f *feature.Feature, repoName string) string {
+	for i := range f.Repos {
+		if f.Repos[i].Name == repoName {
+			return f.Repos[i].Branch
+		}
+	}
+	return ""
 }
 
 // reviewFeedbackLedger is the store capability for reading and writing the
@@ -734,21 +763,37 @@ type reviewFeedbackLedger interface {
 }
 
 // recordTransactionTailWarning durably records a review-feedback integration
-// tail failure for a repo on the transaction journal's TailWarning field.
-// The warning is terminal — it never blocks the remaining comments or repos
-// and the tail still settles.
-func (o *Orchestrator) recordTransactionTailWarning(childID, repoName, warning string) {
+// tail failure for a repo on the transaction journal entry's stored tail
+// record. The first failure for a repository creates the
+// review_feedback_tail_incomplete record with the repositories block; every
+// further failure appends one raw diagnostics line. The warning is terminal —
+// it never blocks the remaining comments or repos and the tail still settles.
+func (o *Orchestrator) recordTransactionTailWarning(childID, repoName, cause string) {
 	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
 		if f.Parent.Transaction != nil {
 			for i := range f.Parent.Transaction.Entries {
-				if f.Parent.Transaction.Entries[i].Repo == repoName {
-					existing := f.Parent.Transaction.Entries[i].TailWarning
-					if existing != "" {
-						existing += "; "
-					}
-					f.Parent.Transaction.Entries[i].TailWarning = existing + warning
-					return nil
+				entry := &f.Parent.Transaction.Entries[i]
+				if entry.Repo != repoName {
+					continue
 				}
+				if entry.Tail == nil {
+					entry.Tail = &errcat.FailureRecord{
+						Code: errcat.ReviewFeedbackTailIncomplete,
+						Context: &errcat.RecordContext{
+							Repositories: []errcat.CodeRepository{{
+								Name:   repoName,
+								Branch: entry.ParentBranch,
+							}},
+						},
+						Diagnostics: cause,
+					}
+				} else if cause != "" {
+					if entry.Tail.Diagnostics != "" {
+						entry.Tail.Diagnostics += "\n"
+					}
+					entry.Tail.Diagnostics += cause
+				}
+				return nil
 			}
 		}
 		return nil

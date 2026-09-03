@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Review-feedback triage journey: aftercare entry → full-screen multi-repo
  * workspace → repository-sectioned feed with ledger coverage → author filter
@@ -126,7 +142,7 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
     transcript.step(`created feature \`${featureName}\` through the form; cockpit visible`);
 
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 
@@ -552,7 +568,7 @@ test('review-feedback recovery: failed-save Retry/Reload → conflict convergenc
       repoPatterns: [/alpha/],
     });
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 
@@ -765,7 +781,7 @@ test('review-feedback recovery: failed-save Retry/Reload → conflict convergenc
     transcript.step('replay transitioned to the child with the original reconciliation banner');
 
     // Exactly one child exists, carried on the parent's activeChild slot.
-    const afterReplay = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const afterReplay = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     expect(afterReplay).toHaveLength(1);
     expect(afterReplay[0]!.activeChild?.id).toBe(originalChildId);
     // Single auto-started child: the pass leaves "ready" without a manual click.

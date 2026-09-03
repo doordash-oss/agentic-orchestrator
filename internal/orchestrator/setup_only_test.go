@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
@@ -117,8 +118,8 @@ func TestRetrySetupOnlyRerunsOnlyUnfinishedTasksWithoutStarting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load failed feature: %v", err)
 	}
-	if failed.Status != feature.StatusFailed || failed.FailureType != feature.FailureWorktreeSetup {
-		t.Fatalf("failed feature = %s/%s; want Failed/worktree_setup", failed.Status, failed.FailureType)
+	if failed.Status != feature.StatusFailed || failed.FailureCode() != errcat.WorktreeSetupFailed {
+		t.Fatalf("failed feature = %s/%s; want Failed/worktree_setup_failed", failed.Status, failed.FailureCode())
 	}
 	createsAfterFirstRun := countWorktreeCreates(worktrees)
 

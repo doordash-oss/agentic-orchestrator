@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
@@ -81,13 +82,14 @@ func multiRepoChild() *feature.Feature {
 // failedSetupChild returns a child whose durable setup failed (recoverable
 // only via RetrySetup).
 func failedSetupChild() *feature.Feature {
-	return &feature.Feature{
-		ID:          "child-failed",
-		Status:      feature.StatusFailed,
-		FailureType: feature.FailureWorktreeSetup,
-		Pipeline:    feature.PipelineMedium,
-		Parent:      &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor},
+	f := &feature.Feature{
+		ID:       "child-failed",
+		Status:   feature.StatusFailed,
+		Pipeline: feature.PipelineMedium,
+		Parent:   &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor},
 	}
+	f.Run().Failure = &errcat.FailureRecord{Code: errcat.WorktreeSetupFailed}
+	return f
 }
 
 // closedCompletedChild returns a settled Completed Medium single-repository

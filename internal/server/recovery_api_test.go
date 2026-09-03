@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -99,6 +100,107 @@ func TestRecoveryLogReadReturnsBoundedRedactedText(t *testing.T) {
 	}
 	if resp.Text == "" || !contains(resp.Text, "line one") {
 		t.Fatalf("text = %q; want bounded log content", resp.Text)
+	}
+}
+
+// TestRecoverySnapshotItemsCarryCanonicalOrphanError pins the orphan-card
+// wire contract: every recovery item carries one canonical needs_action
+// error classifying the orphan by liveness, with the catalog title and
+// summary, the phase block with iteration, the repositories block when the
+// item is repository-scoped, the resume remediation reference, and no
+// diagnostics or filesystem paths.
+func TestRecoverySnapshotItemsCarryCanonicalOrphanError(t *testing.T) {
+	t.Parallel()
+	logPath := writeRecoveryLogFixture(t, "orphan log\n")
+	target := &recoveryLogMutationTarget{
+		items: []ports.RecoveryItem{
+			{
+				PIDFile:      ports.PIDFile{FeatureID: fixtureFeatureID, RepoName: "repo-a", Phase: "implement", Iteration: 3, LogPath: logPath},
+				ProcessAlive: true,
+				Feature:      &feature.Feature{ID: fixtureFeatureID, Name: "Fixture"},
+				RepoName:     "repo-a",
+			},
+			{
+				PIDFile:      ports.PIDFile{FeatureID: "feature-stale-001", Phase: "final_review", Iteration: 2},
+				ProcessAlive: false,
+			},
+		},
+	}
+	handler := NewHandler(HandlerOptions{
+		Mutations:             target,
+		AuthToken:             testAuthToken,
+		DisableHostValidation: true,
+	})
+
+	scan := authedGet(handler, apiPathRecovery)
+	if scan.Code != http.StatusOK {
+		t.Fatalf("scan status = %d body=%s", scan.Code, scan.Body.String())
+	}
+	raw := scan.Body.String()
+	if contains(raw, logPath) || contains(raw, "diagnostics") {
+		t.Fatalf("snapshot body leaks a filesystem path or diagnostics: %s", raw)
+	}
+	var snap RecoverySnapshotResponse
+	if err := json.NewDecoder(scan.Result().Body).Decode(&snap); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if len(snap.Items) != 2 {
+		t.Fatalf("snapshot items = %d; want 2", len(snap.Items))
+	}
+
+	live := snap.Items[0].Error
+	if live.Code != string(errcat.OrphanSessionLive) {
+		t.Fatalf("live item error code = %q; want %q", live.Code, errcat.OrphanSessionLive)
+	}
+	if live.Class != ErrorClass(errcat.ClassNeedsAction) {
+		t.Fatalf("live item error class = %q; want needs_action", live.Class)
+	}
+	if entry, ok := errcat.Lookup(errcat.OrphanSessionLive); !ok || live.Title != entry.Title {
+		t.Fatalf("live item error title = %q; want the catalog title", live.Title)
+	}
+	for _, want := range []string{"Implement", "iteration 3", "repo-a"} {
+		if !contains(live.Summary, want) {
+			t.Fatalf("live item summary = %q; want it to name %q", live.Summary, want)
+		}
+	}
+	if live.Context == nil || live.Context.Phase == nil ||
+		live.Context.Phase.Name != "implement" || live.Context.Phase.Iteration != 3 {
+		t.Fatalf("live item phase block = %+v; want implement at iteration 3", live.Context)
+	}
+	if live.Context.Repositories == nil || len(live.Context.Repositories) != 1 ||
+		live.Context.Repositories[0].Name != "repo-a" {
+		t.Fatalf("live item repositories block = %+v; want repo-a", live.Context)
+	}
+	if live.Remediation == nil || len(live.Remediation.Actions) != 1 ||
+		string(live.Remediation.Actions[0]) != actionResume {
+		t.Fatalf("live item remediation = %+v; want the resume action", live.Remediation)
+	}
+	if live.Diagnostics != "" {
+		t.Fatalf("live item diagnostics = %q; want none", live.Diagnostics)
+	}
+
+	stale := snap.Items[1].Error
+	if stale.Code != string(errcat.OrphanSessionStale) {
+		t.Fatalf("stale item error code = %q; want %q", stale.Code, errcat.OrphanSessionStale)
+	}
+	if stale.Class != ErrorClass(errcat.ClassNeedsAction) {
+		t.Fatalf("stale item error class = %q; want needs_action", stale.Class)
+	}
+	for _, want := range []string{"Final review", "iteration 2"} {
+		if !contains(stale.Summary, want) {
+			t.Fatalf("stale item summary = %q; want it to name %q", stale.Summary, want)
+		}
+	}
+	if stale.Context == nil || stale.Context.Phase == nil ||
+		stale.Context.Phase.Name != "final_review" || stale.Context.Phase.Iteration != 2 {
+		t.Fatalf("stale item phase block = %+v; want final_review at iteration 2", stale.Context)
+	}
+	if stale.Context.Repositories != nil {
+		t.Fatalf("stale item repositories block = %+v; want none for a feature-scoped orphan", stale.Context.Repositories)
+	}
+	if stale.Remediation == nil || len(stale.Remediation.Actions) != 1 ||
+		string(stale.Remediation.Actions[0]) != actionResume {
+		t.Fatalf("stale item remediation = %+v; want the resume action", stale.Remediation)
 	}
 }
 

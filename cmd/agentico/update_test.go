@@ -403,8 +403,53 @@ func TestRunUpdateWithReportsLookupErrors(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("code = %d, want 1", code)
 	}
+	if !strings.HasPrefix(stderr.String(), "error[update_check_failed]: Update check failed\n") {
+		t.Errorf("stderr = %q, want the update check failure heading", stderr.String())
+	}
 	if !strings.Contains(stderr.String(), "no published stable release") {
 		t.Errorf("stderr = %q, want no stable release message", stderr.String())
+	}
+}
+
+func TestRunUpdateWithReportsSlugAndFetchErrors(t *testing.T) {
+	cases := []struct {
+		name        string
+		slug        func() (string, error)
+		fetch       func(context.Context, string) (string, error)
+		wantSummary string
+	}{
+		{
+			name:        "slug resolution failure",
+			slug:        func() (string, error) { return "", errors.New("build info unavailable") },
+			fetch:       fakeFetch("", nil),
+			wantSummary: "could not determine the release repository: build info unavailable",
+		},
+		{
+			name:        "fetch failure",
+			slug:        okSlug,
+			fetch:       fakeFetch("", errors.New("network unreachable")),
+			wantSummary: "could not check for the latest release: network unreachable",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runUpdateWith(context.Background(), true, &stdout, &stderr, updateDeps{
+				currentVersion: "1.2.3",
+				method:         fixedMethod(installMethodTarball),
+				slug:           tc.slug,
+				fetchLatest:    tc.fetch,
+			})
+			if code != 1 {
+				t.Fatalf("code = %d, want 1", code)
+			}
+			if !strings.HasPrefix(stderr.String(), "error[update_check_failed]: Update check failed\n") {
+				t.Fatalf("stderr = %q, want the update check failure heading", stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "  "+tc.wantSummary) {
+				t.Fatalf("stderr = %q, want summary %q", stderr.String(), tc.wantSummary)
+			}
+		})
 	}
 }
 

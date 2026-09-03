@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { expect, test } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
@@ -40,7 +56,7 @@ test('rewind: full-phase preview, typed confirmation, atomic fork, provenance, w
     });
 
     const featureId = await handle.page.evaluate(async () => {
-      const features = await window.agentico.listFeatures();
+      const features = (await window.agentico.listFeatures()).features;
       return features.find((feature) => feature.name === 'Rewind Journey')?.id;
     });
     if (!featureId) throw new Error('created rewind feature was not listed');
@@ -128,6 +144,12 @@ test('rewind: full-phase preview, typed confirmation, atomic fork, provenance, w
 
     transcript.section('Open the completed fork and verify durable provenance');
     await expect(handle.page.locator('.rewind-journey__success')).toBeVisible({ timeout: 30_000 });
+    // No bespoke rewind-warnings element renders: a clean rewind carries no
+    // warnings, and any warning this journey ever yields renders as a
+    // status-role ErrorSurface with a rewind code tag instead.
+    await expect(handle.page.locator('.rewind-journey__warnings')).toHaveCount(0);
+    await expect(handle.page.locator('.rewind-journey__warnings-list')).toHaveCount(0);
+    await expect(handle.page.locator('.cockpit__rewind-warnings')).toHaveCount(0);
     await handle.page.getByRole('button', { name: 'Open new run' }).click();
     await expect(handle.page.getByLabel('Rewind outcome')).toBeVisible({ timeout: 15_000 });
     await expect(handle.page.getByText(/forked from sealed Run 7/)).toBeVisible();

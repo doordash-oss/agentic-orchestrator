@@ -1,9 +1,27 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Pure presentation logic for the feature creation flow and cockpit. All
  * inputs are the strict renderer-facing views; nothing here talks to the
  * preload API or stores state.
  */
-import type { FeatureSnapshot, FeatureSetupView } from '../../../shared/ipc';
+import type { FeatureSnapshot, FeatureSetupView, OwnedError } from '../../../shared/ipc';
+import { ERROR_CLASS_LABELS } from '../../../shared/ipc';
+import type { ErrorSurfaceAction } from '../components/ErrorSurface';
 
 export type DashboardBucket = 'intervention' | 'active' | 'startable' | 'inactive';
 export type DashboardTone = 'danger' | 'attention' | 'active' | 'ready' | 'quiet';
@@ -60,27 +78,48 @@ const BUCKET_ORDER: Record<DashboardBucket, number> = {
   inactive: 3,
 };
 
-/** Human state and priority derived from server status and catalogue only. */
+/**
+ * The highest-severity owned error on a snapshot: a blocking entry wins over
+ * every needs_action entry regardless of list order. Warnings never ride the
+ * owned-error list, so the return value is always a presence-class error or
+ * undefined.
+ */
+export function highestSeverityError(errors: readonly OwnedError[]): OwnedError | undefined {
+  let needsAction: OwnedError | undefined;
+  for (const entry of errors) {
+    if (entry.error.class === 'blocking') return entry;
+    if (entry.error.class === 'needs_action' && needsAction === undefined) {
+      needsAction = entry;
+    }
+  }
+  return needsAction;
+}
+
+/** The intervention state derived from a snapshot's highest-severity owned error. */
+function errorIntervention(entry: OwnedError): DashboardState {
+  if (entry.error.class === 'blocking') {
+    return { bucket: 'intervention', label: ERROR_CLASS_LABELS.blocking, tone: 'danger' };
+  }
+  return { bucket: 'intervention', label: ERROR_CLASS_LABELS.needs_action, tone: 'attention' };
+}
+
+/** Human state and priority derived from the owned-error projection and catalogue only. */
 export function dashboardState(snapshot: FeatureSnapshot): DashboardState {
   const child = snapshot.activeChild;
+  const entry = highestSeverityError(snapshot.errors);
+  if (entry !== undefined) {
+    // Presence comes from the owned-error projection, never from status
+    // strings: a blocking error (the feature's or the active child's) reads
+    // "Failed", a needs_action one reads "Needs your action".
+    return errorIntervention(entry);
+  }
   if (child !== undefined) {
-    // A parent with an active refactor pass is in progress even though its
-    // stored status stays Published/CodeReady while the pass is labeled "Refactoring".
-    if (child.attention.length > 0 || child.integrationState === 'attention') {
-      return { bucket: 'intervention', label: 'Refactoring — needs attention', tone: 'attention' };
-    }
-    if (child.status === 'Failed') {
-      return { bucket: 'intervention', label: 'Refactoring — pass failed', tone: 'danger' };
-    }
     // A pass launched without auto-start hasn't run anything yet; a live
     // "Refactoring" badge would claim work that never began.
     if (child.status === 'Created') {
       return { bucket: 'startable', label: 'Pass ready to start', tone: 'ready' };
     }
     return { bucket: 'active', label: 'Refactoring', tone: 'active' };
-  }
-  if (snapshot.status === 'Failed') {
-    return { bucket: 'intervention', label: 'Failed', tone: 'danger' };
   }
   if (snapshot.status === 'Interrupted') {
     return { bucket: 'intervention', label: 'Interrupted', tone: 'attention' };
@@ -308,10 +347,39 @@ export function runningPhaseSubline(
 }
 
 export function actionById(
-  snapshot: FeatureSnapshot,
+  snapshot: { actions: readonly FeatureSnapshot['actions'][number][] },
   id: string,
 ): FeatureSnapshot['actions'][number] | undefined {
   return snapshot.actions.find((action) => action.id === id);
+}
+
+/** Friendly renderer copy for catalog reasons that otherwise expose machine phrasing. */
+const DISABLED_REASON_COPY: Readonly<Record<string, string>> = {
+  worktree_state_unknown:
+    'Could not read the repository worktrees — check that they still exist and are a valid checkout.',
+};
+
+export function disabledReasonCopy(reason: { code: string; message: string }): string {
+  return DISABLED_REASON_COPY[reason.code] ?? reason.message;
+}
+
+/** Adapts one server catalog action to the shared error-card action contract. */
+export function catalogErrorAction(
+  snapshot: { actions: readonly FeatureSnapshot['actions'][number][] },
+  actionId: string,
+  label: string,
+): ErrorSurfaceAction | undefined {
+  const action = actionById(snapshot, actionId);
+  if (action === undefined) return undefined;
+  return {
+    enabled: action.enabled,
+    label,
+    disabledReason: action.enabled
+      ? undefined
+      : action.disabledReasons
+          .map((reason) => displayFeatureMessage(disabledReasonCopy(reason)))
+          .join(' '),
+  };
 }
 
 /**
@@ -339,18 +407,25 @@ export function featureBranch(snapshot: FeatureSnapshot): string | null {
 
 export type CreationErrorField = 'name' | 'repos' | 'form';
 
-/** Routes a structured server rejection to the control that owns it. */
+/**
+ * Routes a structured server rejection to the control that owns it. The
+ * catalog's bad_request summary is fixed ("The request was not valid.");
+ * the specifics — "name is required", an unknown repo — ride in
+ * diagnostics, so both fields are searched.
+ */
 export function fieldForCreationError(error: {
   code: string;
-  message: string;
+  summary: string;
+  diagnostics?: string;
 }): CreationErrorField {
   if (error.code === 'not_ready') {
     return 'form';
   }
-  if (error.code === 'bad_request' && /\bname\b/i.test(error.message)) {
+  const detail = `${error.summary}\n${error.diagnostics ?? ''}`;
+  if (error.code === 'bad_request' && /\bname\b/i.test(detail)) {
     return 'name';
   }
-  if (/\brepo(sitor(y|ies))?s?\b/i.test(error.message)) {
+  if (/\brepo(sitor(y|ies))?s?\b/i.test(detail)) {
     return 'repos';
   }
   return 'form';

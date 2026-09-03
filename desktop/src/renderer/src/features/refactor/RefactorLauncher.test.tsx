@@ -1,4 +1,20 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -171,7 +187,25 @@ describe('RefactorLauncher', () => {
     const { mock, onDispatched, user } = await renderLauncher();
     mock.api.launchRefactorChild
       .mockRejectedValueOnce(
-        new Error('parent_worktrees_dirty: /work/repo-a: 1 staged, 2 untracked'),
+        Object.assign(
+          new Error(
+            "parent_worktrees_dirty: The parent feature's worktrees have uncommitted changes.",
+          ),
+          {
+            canonical: {
+              code: 'parent_worktrees_dirty',
+              class: 'needs_action',
+              title: 'Parent worktrees are dirty',
+              summary: "The parent feature's worktrees have uncommitted changes.",
+              remediation: {
+                hint: 'Commit or stash the listed changes in each repository, then retry.',
+              },
+              context: {
+                repositories: [{ name: 'repo-a', dirty_files: ['src/one.ts', 'src/two.ts'] }],
+              },
+            },
+          },
+        ),
       )
       .mockResolvedValueOnce({
         childId: 'child1234ef567890',
@@ -185,7 +219,21 @@ describe('RefactorLauncher', () => {
     await user.selectOptions(screen.getByLabelText('Risk'), 'high');
     await user.click(screen.getByRole('button', { name: 'Launch and start' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('1 staged, 2 untracked');
+    // The canonical needs-action surface carries the class label and hint, and
+    // the dirty repository list rides the compact disclosure (presence, not
+    // visibility — it is folded by default).
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface--needs-action');
+    expect(screen.getByText('Needs your action')).toBeVisible();
+    expect(
+      screen.getByText('Commit or stash the listed changes in each repository, then retry.'),
+    ).toBeVisible();
+    expect(within(surface).getByText('repo-a')).toBeInTheDocument();
+    expect(within(surface).getByText('src/one.ts')).toBeInTheDocument();
+    expect(within(surface).getByText('src/two.ts')).toBeInTheDocument();
+    expect(screen.getByText('parent_worktrees_dirty')).toHaveClass('error-surface__code');
+    // The rejection banner still takes focus through the forwarded root ref.
+    expect(surface).toHaveFocus();
     expect(screen.getByText(/repo-a, repo-b \(inherited\)/)).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: 'Launch and start' }));
@@ -218,6 +266,17 @@ describe('RefactorLauncher', () => {
     await user.clear(screen.getByLabelText('Child name'));
     await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
     expect(screen.getByText('Enter a child name.')).toBeVisible();
-    expect(document.getElementById('refactor-child-name')).toHaveFocus();
+    // Client-side validation is a per-field message exposed as the input's
+    // description — no form-level error surface.
+    expect(screen.getByText('Enter a child name.')).toHaveClass('field-error');
+    expect(screen.getByText('Enter a child name.')).toHaveAttribute(
+      'id',
+      'refactor-child-name-error',
+    );
+    const input = document.getElementById('refactor-child-name') as HTMLElement;
+    expect(input).toHaveAttribute('aria-describedby', 'refactor-child-name-error');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(document.querySelector('.error-surface')).toBeNull();
+    expect(input).toHaveFocus();
   });
 });

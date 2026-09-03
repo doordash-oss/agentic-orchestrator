@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * "Address review feedback" full-screen workspace. Replaces the old modal: it
  * swaps the cockpit content for a review inbox backed by the server-owned
@@ -41,7 +57,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FeatureSnapshot } from '../../../../shared/ipc';
 import { useMediaQuery } from '../../hooks';
-import { parseIpcError, type WizardError } from '../../wizard/ipcError';
+import { parseIpcError } from '../../wizard/ipcError';
+import type { CanonicalError } from '../../../../shared/ipc';
+import { ErrorSurface } from '../../components/ErrorSurface';
 import { ScopeDrawer } from './ScopeDrawer';
 import { ScopePanel, type ScopeLedgerEntry } from './ScopePanel';
 import { ReviewFeedbackFeed, type FeedSection } from './ReviewFeedbackFeed';
@@ -87,7 +105,7 @@ export function ReviewFeedbackWorkspace({
   const [scope, setScope] = useState<string>('all');
   const [filters, setFilters] = useState<ReviewFeedbackFilters>(EMPTY_FILTERS);
   // A launch dispatch that failed before durable creation; Launch re-enables.
-  const [launchError, setLaunchError] = useState<WizardError | null>(null);
+  const [launchError, setLaunchError] = useState<CanonicalError | null>(null);
   const [gate, setGate] = useState(true);
   const [launching, setLaunching] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -418,38 +436,33 @@ export function ReviewFeedbackWorkspace({
       ) : null}
 
       {saveFailure !== null ? (
-        <div
-          role="alert"
-          className="create-form__error review-feedback-recovery"
-          ref={saveFailureAlertRef}
-          tabIndex={-1}
-        >
-          <b className="create-form__error-code">Choices not saved</b>
-          <p className="create-form__error-message">
-            Your latest selection changes could not be saved. They stay visible below as unsaved
-            choices over the last saved view, and nothing else can change until you save them or
-            deliberately reload the saved selections.
-          </p>
-          <p className="review-feedback-recovery__detail">
-            Error detail: {saveFailure.code}
-            {saveFailure.message !== '' ? ` — ${saveFailure.message}` : ''}
-          </p>
-          <div className="review-feedback-recovery__actions">
-            <button type="button" disabled={draft.retrying} onClick={draft.retrySave}>
-              Retry save
-            </button>
-            <button
-              type="button"
-              disabled={draft.retrying}
-              onClick={() => {
-                setLaunchError(null);
-                draft.reloadSavedSelections();
-              }}
-            >
-              Reload saved selections
-            </button>
-          </div>
-        </div>
+        <>
+          {/* The frozen recovery card: the canonical error owns the text, the
+           * hardcoded lead rides as the caption, Retry save is the primary
+           * in-card action, and Reload saved selections stays a sibling. */}
+          <ErrorSurface
+            error={saveFailure}
+            variant="compact"
+            caption="Choices not saved"
+            rootRef={saveFailureAlertRef}
+            rootTabIndex={-1}
+            localAction={
+              draft.retrying
+                ? { label: 'Retry save', disabledReason: 'Retrying…' }
+                : { label: 'Retry save', onAction: draft.retrySave }
+            }
+          />
+          <button
+            type="button"
+            disabled={draft.retrying}
+            onClick={() => {
+              setLaunchError(null);
+              draft.reloadSavedSelections();
+            }}
+          >
+            Reload saved selections
+          </button>
+        </>
       ) : null}
 
       {recovery?.kind === 'conflictReloading' ? (
@@ -459,66 +472,40 @@ export function ReviewFeedbackWorkspace({
       ) : null}
 
       {recovery?.kind === 'conflictReloadFailed' ? (
-        <div
-          role="alert"
-          className="create-form__error review-feedback-recovery"
-          ref={conflictReloadAlertRef}
-          tabIndex={-1}
-        >
-          <b className="create-form__error-code">Selections could not be reloaded</b>
-          <p className="create-form__error-message">
-            {recovery.conflict.code === ZERO_LAUNCHABLE_CODE
-              ? 'None of the comments you kept selected are still launchable, but reloading the latest feedback failed. Your screen may be stale; nothing else can change until the reload succeeds.'
-              : 'Another writer committed changes to this draft first, but reloading their committed view failed. Your screen may be stale; nothing else can change until the saved selections load successfully.'}
-          </p>
-          <p className="review-feedback-recovery__detail">
-            Error detail: {recovery.error.code}
-            {recovery.error.message !== '' ? ` — ${recovery.error.message}` : ''}
-          </p>
-          <div className="review-feedback-recovery__actions">
-            <button type="button" onClick={draft.retryConflictReload}>
-              Retry reload
-            </button>
-          </div>
-        </div>
+        <ErrorSurface
+          error={recovery.error}
+          variant="compact"
+          caption="Selections could not be reloaded"
+          rootRef={conflictReloadAlertRef}
+          rootTabIndex={-1}
+          localAction={{ label: 'Retry reload', onAction: draft.retryConflictReload }}
+        />
       ) : null}
 
       {draft.conflictNotice !== null ? (
-        <div role="alert" className="create-form__error" ref={conflictAlertRef} tabIndex={-1}>
-          {draft.conflictNotice.code === ZERO_LAUNCHABLE_CODE ? (
-            <>
-              <b className="create-form__error-code">Selected feedback is gone</b>
-              <p className="create-form__error-message">
-                None of the comments you kept selected are still launchable — they were addressed or
-                removed since this workspace loaded. The latest feedback was reloaded below; choose
-                what to address and try again.
-              </p>
-            </>
-          ) : (
-            <>
-              <b className="create-form__error-code">Selections reloaded</b>
-              <p className="create-form__error-message">
-                Another writer committed changes to this draft first. Your selections were reloaded
-                from their committed view; any unsent edits were discarded and the workspace is
-                ready for new choices.
-              </p>
-            </>
-          )}
-          <p className="review-feedback-recovery__detail">
-            Error detail: {draft.conflictNotice.code}
-            {draft.conflictNotice.message !== '' ? ` — ${draft.conflictNotice.message}` : ''}
-          </p>
-        </div>
+        <ErrorSurface
+          error={draft.conflictNotice}
+          variant="compact"
+          caption={
+            draft.conflictNotice.code === ZERO_LAUNCHABLE_CODE
+              ? 'Selected feedback is gone'
+              : 'Selections reloaded'
+          }
+          rootRef={conflictAlertRef}
+          rootTabIndex={-1}
+        />
       ) : null}
 
       {launchError !== null ? (
-        <div role="alert" className="create-form__error" ref={launchAlertRef} tabIndex={-1}>
-          <b className="create-form__error-code">Comments could not be addressed</b>
-          <p className="create-form__error-message">
-            The child pass could not be launched. Your saved selections are unchanged; fix the issue
-            and choose Address comments again. {launchError.message}
-          </p>
-        </div>
+        /* The footer's Address comments button is the retry; it stays where
+         * the user already is instead of being duplicated in the card. */
+        <ErrorSurface
+          error={launchError}
+          variant="compact"
+          caption="Comments could not be addressed"
+          rootRef={launchAlertRef}
+          rootTabIndex={-1}
+        />
       ) : null}
 
       {draft.reloaded ? (
@@ -534,22 +521,18 @@ export function ReviewFeedbackWorkspace({
       ) : null}
 
       {lifecycle.phase === 'error' ? (
-        <div className="review-feedback-workspace__error">
-          <p className="form-field__error" role="alert">
-            {lifecycle.error.message}
-          </p>
-          <button
-            type="button"
-            className="review-feedback-workspace__retry"
-            disabled={launching}
-            onClick={() => {
+        <ErrorSurface
+          error={lifecycle.error}
+          variant="compact"
+          caption="Review feedback could not be loaded"
+          localAction={{
+            label: 'Retry',
+            onAction: () => {
               setLaunchError(null);
               draft.reload();
-            }}
-          >
-            Try again
-          </button>
-        </div>
+            },
+          }}
+        />
       ) : null}
 
       {lifecycle.phase === 'ready' ? (

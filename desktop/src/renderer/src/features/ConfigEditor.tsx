@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Structured configuration editor: models per phase, behavior (inquireness,
  * input alerts), and gates. Two variants share one form:
@@ -15,6 +31,7 @@
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import type {
   AutomaticReviewMode,
+  CanonicalError,
   Checkpoints,
   EffortLevel,
   FeatureConfig,
@@ -25,6 +42,8 @@ import type {
   PhaseModels,
   WorkspaceDefaults,
 } from '../../../shared/ipc';
+import { ErrorSurface } from '../components/ErrorSurface';
+import { retryAction, useIpcLoad } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 
 export type PhaseKey = keyof PhaseModels;
@@ -63,9 +82,9 @@ export const PHASE_FIELDS: ReadonlyArray<PhaseField> = [
   { key: 'kbBuild', label: 'KB Build', role: 'kb_build', hint: 'Knowledge base construction' },
   {
     key: 'automaticReview',
-    label: 'Automatic review',
+    label: 'Auto mode reviewer',
     role: 'automatic_review',
-    hint: 'Reviewer for unresolved Bash permission requests',
+    hint: 'Model that reviews shell commands when auto mode is on',
     workspaceOnly: true,
     supportsEffort: false,
   },
@@ -569,11 +588,11 @@ function ConfigForm({
           </select>
         </label>
         <label className="config-editor__row">
-          <span className="config-editor__row-label">Automatic review</span>
+          <span className="config-editor__row-label">Auto mode</span>
           <span className="config-editor__row-hint">{automaticReview.hint}</span>
           <select
             className="config-editor__select"
-            aria-label="Automatic review"
+            aria-label="Auto mode"
             value={automaticReview.value}
             onChange={(event) => onAutomaticReviewChange(event.target.value)}
           >
@@ -609,14 +628,11 @@ function ConfigForm({
   );
 }
 
-type LoadState<T> =
-  { phase: 'loading' } | { phase: 'error'; message: string } | { phase: 'ready'; data: T };
-
 interface SaveBarProps {
   dirty: boolean;
   saving: boolean;
   saved: boolean;
-  error: string | null;
+  error: CanonicalError | null;
   effectNote: string;
   onSave(): void;
   onReset(): void;
@@ -625,17 +641,22 @@ interface SaveBarProps {
 function SaveBar({ dirty, saving, saved, error, effectNote, onSave, onReset }: SaveBarProps) {
   return (
     <footer className="config-editor__footer">
-      <span className="config-editor__status" role="status">
-        {error !== null
-          ? `Save failed — ${error}`
-          : saving
+      {/* The failure branch is the canonical card; the bar's own Save button
+       * is the retry, so the card carries no action of its own. Success,
+       * progress, and the clean note stay a status line. */}
+      {error !== null ? (
+        <ErrorSurface error={error} variant="compact" />
+      ) : (
+        <span className="config-editor__status" role="status">
+          {saving
             ? 'Saving…'
             : dirty
               ? 'Unsaved changes'
               : saved
                 ? `Saved. ${effectNote}`
                 : effectNote}
-      </span>
+        </span>
+      )}
       <div className="config-editor__actions">
         <button
           type="button"
@@ -691,91 +712,51 @@ const FEATURE_AUTOMATIC_REVIEW_OPTIONS = [
 
 export function FeatureConfigPanel({ featureId }: { featureId: string }) {
   const catalogue = useModelCatalogue();
-  const [state, setState] = useState<
-    LoadState<{
-      baseline: FeatureConfig;
-      draft: FeatureConfig;
-      manualPublishAvailable: boolean;
-      defaults: FeatureConfig;
-    }>
-  >({ phase: 'loading' });
+  const loadConfig = useCallback(async () => {
+    const snapshot = await window.agentico.getFeatureConfig(featureId);
+    return {
+      baseline: snapshot.current,
+      draft: snapshot.current,
+      defaults: snapshot.defaults,
+      manualPublishAvailable: snapshot.manualPublishAvailable,
+    };
+  }, [featureId]);
+  const { state, reload, replace } = useIpcLoad(loadConfig, [featureId]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [retryNonce, setRetryNonce] = useState(0);
-
-  useEffect(() => {
-    let alive = true;
-    setState({ phase: 'loading' });
-    setSaved(false);
-    setSaveError(null);
-    void window.agentico
-      .getFeatureConfig(featureId)
-      .then((snapshot) => {
-        if (!alive) return;
-        setState({
-          phase: 'ready',
-          data: {
-            baseline: snapshot.current,
-            draft: snapshot.current,
-            defaults: snapshot.defaults,
-            manualPublishAvailable: snapshot.manualPublishAvailable,
-          },
-        });
-      })
-      .catch((e: unknown) => {
-        if (alive) setState({ phase: 'error', message: parseIpcError(e).message });
-      });
-    return () => {
-      alive = false;
-    };
-  }, [featureId, retryNonce]);
+  const [saveError, setSaveError] = useState<CanonicalError | null>(null);
 
   const save = useCallback(() => {
-    if (state.phase !== 'ready') return;
+    if (state.phase !== 'loaded') return;
     setSaving(true);
     setSaveError(null);
     void window.agentico
       .updateFeatureConfig({ featureId, config: state.data.draft })
       .then((snapshot) => {
-        setState({
-          phase: 'ready',
-          data: {
-            baseline: snapshot.current,
-            draft: snapshot.current,
-            defaults: snapshot.defaults,
-            manualPublishAvailable: snapshot.manualPublishAvailable,
-          },
+        replace({
+          baseline: snapshot.current,
+          draft: snapshot.current,
+          defaults: snapshot.defaults,
+          manualPublishAvailable: snapshot.manualPublishAvailable,
         });
         setSaved(true);
       })
-      .catch((e: unknown) => setSaveError(parseIpcError(e).message))
+      .catch((e: unknown) => setSaveError(parseIpcError(e)))
       .finally(() => setSaving(false));
-  }, [featureId, state]);
+  }, [featureId, replace, state]);
 
   if (state.phase === 'loading') {
     return <p className="config-editor__notice">Loading configuration…</p>;
   }
   if (state.phase === 'error') {
-    return (
-      <div className="config-editor__notice config-editor__notice--error" role="alert">
-        <p>Could not load configuration — {state.message}</p>
-        <button
-          type="button"
-          className="config-editor__btn"
-          onClick={() => setRetryNonce((n) => n + 1)}
-        >
-          Retry
-        </button>
-      </div>
-    );
+    return <ErrorSurface error={state.error} variant="compact" localAction={retryAction(reload)} />;
   }
 
   const { baseline, draft, defaults, manualPublishAvailable } = state.data;
   const dirty = JSON.stringify(baseline) !== JSON.stringify(draft);
   const setDraft = (next: FeatureConfig) => {
     setSaved(false);
-    setState({ phase: 'ready', data: { ...state.data, draft: next } });
+    replace({ ...state.data, draft: next });
   };
 
   return (
@@ -795,7 +776,7 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
         inputAlerts={{ value: draft.inputNotifications, options: FEATURE_ALERT_OPTIONS }}
         automaticReview={{
           value: draft.automaticReviewMode,
-          hint: 'Override the workspace default for new sessions in this feature',
+          hint: 'Override the workspace setting for this feature',
           options: FEATURE_AUTOMATIC_REVIEW_OPTIONS,
         }}
         onChange={(next) => setDraft({ ...draft, ...next })}
@@ -836,69 +817,41 @@ export function WorkspaceDefaultsPanel({
 } = {}) {
   const loadedCatalogue = useModelCatalogue();
   const catalogue = catalogueOverride ?? loadedCatalogue;
-  const [state, setState] = useState<
-    LoadState<{ baseline: WorkspaceDefaults; draft: WorkspaceDefaults }>
-  >({ phase: 'loading' });
+  const loadDefaults = useCallback(async () => {
+    const defaults = await window.agentico.getWorkspaceDefaults();
+    return { baseline: defaults, draft: defaults };
+  }, []);
+  const { state, reload, replace } = useIpcLoad(loadDefaults, []);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [retryNonce, setRetryNonce] = useState(0);
-
-  useEffect(() => {
-    let alive = true;
-    setState({ phase: 'loading' });
-    setSaved(false);
-    setSaveError(null);
-    void window.agentico
-      .getWorkspaceDefaults()
-      .then((defaults) => {
-        if (alive) setState({ phase: 'ready', data: { baseline: defaults, draft: defaults } });
-      })
-      .catch((e: unknown) => {
-        if (alive) setState({ phase: 'error', message: parseIpcError(e).message });
-      });
-    return () => {
-      alive = false;
-    };
-  }, [retryNonce]);
+  const [saveError, setSaveError] = useState<CanonicalError | null>(null);
 
   const save = useCallback(() => {
-    if (state.phase !== 'ready') return;
+    if (state.phase !== 'loaded') return;
     setSaving(true);
     setSaveError(null);
     void window.agentico
       .updateWorkspaceDefaults(state.data.draft)
       .then((defaults) => {
-        setState({ phase: 'ready', data: { baseline: defaults, draft: defaults } });
+        replace({ baseline: defaults, draft: defaults });
         setSaved(true);
       })
-      .catch((e: unknown) => setSaveError(parseIpcError(e).message))
+      .catch((e: unknown) => setSaveError(parseIpcError(e)))
       .finally(() => setSaving(false));
-  }, [state]);
+  }, [replace, state]);
 
   if (state.phase === 'loading') {
     return <p className="config-editor__notice">Loading workspace defaults…</p>;
   }
   if (state.phase === 'error') {
-    return (
-      <div className="config-editor__notice config-editor__notice--error" role="alert">
-        <p>Could not load workspace defaults — {state.message}</p>
-        <button
-          type="button"
-          className="config-editor__btn"
-          onClick={() => setRetryNonce((n) => n + 1)}
-        >
-          Retry
-        </button>
-      </div>
-    );
+    return <ErrorSurface error={state.error} variant="compact" localAction={retryAction(reload)} />;
   }
 
   const { baseline, draft } = state.data;
   const dirty = JSON.stringify(baseline) !== JSON.stringify(draft);
   const setDraft = (next: WorkspaceDefaults) => {
     setSaved(false);
-    setState({ phase: 'ready', data: { ...state.data, draft: next } });
+    replace({ ...state.data, draft: next });
   };
 
   return (
@@ -921,7 +874,7 @@ export function WorkspaceDefaultsPanel({
         }}
         automaticReview={{
           value: draft.automaticReviewEnabled ? 'enabled' : 'disabled',
-          hint: 'Automatically review unresolved Bash requests for new sessions',
+          hint: 'Approve shell commands automatically instead of asking you',
           options: WORKSPACE_AUTOMATIC_REVIEW_OPTIONS,
         }}
         onChange={(next) => setDraft({ ...draft, ...next })}

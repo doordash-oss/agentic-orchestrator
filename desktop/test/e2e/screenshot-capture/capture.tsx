@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 
@@ -149,12 +165,24 @@ const SETUP_WIZARD_MODELS_STEP: ReadinessSnapshot = {
   providers: [{ name: 'claude', installed: true, version: '2.1.0', ready: true }],
   models: {
     available: false,
-    issue: { code: 'models_unavailable', message: 'No models are configured yet.' },
+    issue: {
+      code: 'models_unavailable',
+      class: 'blocking',
+      title: 'Models unavailable',
+      summary: 'No models are configured yet.',
+    },
   },
   configuration: { valid: true },
   workspaceRoots: [{ path: '/work/space', valid: true }],
   repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true }],
-  issues: [{ code: 'models_unavailable', message: 'No models are configured yet.' }],
+  issues: [
+    {
+      code: 'models_unavailable',
+      class: 'blocking',
+      title: 'Models unavailable',
+      summary: 'No models are configured yet.',
+    },
+  ],
 };
 
 /** The setup wizard mounted the way it appears before the workspace exists:
@@ -1207,6 +1235,11 @@ function CompletionScene({ scene }: { scene: string }): React.ReactElement {
           <PublishModal
             featureId="feat-electron-app"
             preflight={completion.preflight}
+            actions={[
+              { id: 'publish', enabled: true, disabledReasons: [] },
+              { id: 'merge', enabled: true, disabledReasons: [] },
+              { id: 'mark-done', enabled: true, disabledReasons: [] },
+            ]}
             dispatchAction={dispatchPublish}
             generatePublishDescription={(id, repos) =>
               api.generatePublishDescription({ featureId: id, repos })
@@ -1676,6 +1709,16 @@ function CaptureApp() {
   }
   if (scene === 'setup-wizard') {
     return <SetupWizardScene />;
+  }
+  if (scene === 'error-overview-lanes') {
+    return <OverviewLanesScene />;
+  }
+  if (
+    scene === 'error-run-failed' ||
+    scene === 'error-setup-failed' ||
+    scene === 'error-action-rejected'
+  ) {
+    return <AftercareScene />;
   }
   if (scene.startsWith('aftercare') || scene.startsWith('refactor-pass')) {
     return <AftercareScene />;

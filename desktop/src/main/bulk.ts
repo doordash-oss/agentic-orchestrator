@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Main-process bulk resume/retry service. Composes a fresh authoritative
  * preview from per-feature action catalogues (no server-side bulk endpoint
@@ -12,11 +28,11 @@ export class BulkService {
   constructor(private readonly featureService: FeatureService) {}
 
   async preview(): Promise<BulkPreview> {
-    const features = await this.featureService.listFeatures();
+    const list = await this.featureService.listFeatures();
     const eligible: BulkPreviewRow[] = [];
     const excluded: BulkPreviewRow[] = [];
 
-    for (const summary of features) {
+    for (const summary of list.features) {
       let snapshot: FeatureSnapshot | null = null;
       try {
         snapshot = await this.featureService.getFeature(summary.id);

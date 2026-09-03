@@ -1,5 +1,21 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { describe, expect, it, vi } from 'vitest';
-import { SafeErrorException } from '../../shared/errors';
+import { CanonicalErrorException } from '../../shared/errors';
 import {
   applyServersPatch,
   type ConnectionState,
@@ -130,8 +146,8 @@ describe('removeKnownServer', () => {
 
     const error = await harness.run('e'.repeat(32)).catch((err: unknown) => err);
 
-    expect(error).toBeInstanceOf(SafeErrorException);
-    expect((error as SafeErrorException).safe.code).toBe(E_SERVER_UNKNOWN);
+    expect(error).toBeInstanceOf(CanonicalErrorException);
+    expect((error as CanonicalErrorException).canonical.code).toBe(E_SERVER_UNKNOWN);
     expect(harness.removedTokens).toEqual([]);
     expect(harness.disconnectCalls).toEqual([]);
     expect(harness.prefs.known).toHaveLength(1);
@@ -184,7 +200,7 @@ describe('serverTokenStatus', () => {
 
   it('an unknown key throws E_SERVER_UNKNOWN', () => {
     expect(() => tokenStatusHarness({ status: 'absent' }, null).run(REMOTE_KEY)).toThrowError(
-      SafeErrorException,
+      CanonicalErrorException,
     );
   });
 });

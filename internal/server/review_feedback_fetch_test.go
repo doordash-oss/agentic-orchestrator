@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -87,11 +88,12 @@ func TestReviewFeedbackFetchFailsAtomicallyAndNamesRepo(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
-	if response.Error.Code != "review_feedback_fetch_failed" || !strings.Contains(response.Error.Message, "web") {
+	if response.Error.Code != string(errcat.ReviewFeedbackFetchFailed) || !strings.Contains(response.Error.Diagnostics, "web") {
 		t.Fatalf("error = %+v, want atomic fetch failure naming web", response.Error)
 	}
-	if got := response.Error.Target["repo"]; got != "web" {
-		t.Fatalf("error target repo = %v, want web", got)
+	if response.Error.Context == nil || len(response.Error.Context.Repositories) != 1 ||
+		response.Error.Context.Repositories[0].Name != "web" {
+		t.Fatalf("error context = %+v, want web repository context", response.Error.Context)
 	}
 }
 
@@ -261,8 +263,8 @@ func TestReviewFeedbackFetchRejectsConsumedAbsenceWhileIntentIsPending(t *testin
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode fetch response: %v", err)
 	}
-	if response.Error.Code != errCodeReviewFeedbackRevisionConflict {
-		t.Fatalf("error code = %q, want %q", response.Error.Code, errCodeReviewFeedbackRevisionConflict)
+	if response.Error.Code != string(errcat.ReviewFeedbackRevisionConflict) {
+		t.Fatalf("error code = %q, want %q", response.Error.Code, errcat.ReviewFeedbackRevisionConflict)
 	}
 	if kept, err := store.LoadReviewFeedbackDraft(f.ID); err != nil || kept != nil {
 		t.Fatalf("draft after rejected fetch = %+v (err %v), want absent", kept, err)

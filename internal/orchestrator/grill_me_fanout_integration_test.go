@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -598,7 +599,7 @@ func TestGrillMeFanout_StartPaths_DriveEntryPath(t *testing.T) {
 			// BuildSession returns ErrShuttingDown; the orchestrator routes
 			// that through markFailedWithEvent. Provide MarkFailed so the
 			// dispatch goroutine completes cleanly.
-			lc.MarkFailedFn = func(id, ft, msg string) error {
+			lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
 				f.Status = feature.StatusFailed
 				return nil
 			}
@@ -622,7 +623,7 @@ func TestGrillMeFanout_StartPaths_DriveEntryPath(t *testing.T) {
 
 			failedSignal := make(chan struct{}, 1)
 			hooks := Hooks{
-				OnFeatureFailed: func(featureID, failureType, errorMsg string) {
+				OnFeatureFailed: func(featureID string, code errcat.Code, class errcat.Class, errorMsg string) {
 					select {
 					case failedSignal <- struct{}{}:
 					default:

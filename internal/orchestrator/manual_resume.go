@@ -24,9 +24,14 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
-// ErrResumeConflict reports that a feature already has active work or another
-// resumer currently owns its bookkeeping-plus-dispatch window.
+// ErrResumeConflict reports that a feature already has an active session or
+// another resumer currently owns its bookkeeping-plus-dispatch window.
 var ErrResumeConflict = errors.New("resume already in progress")
+
+// ErrResumeNotAvailable reports that the feature's status does not admit a
+// manual resume, such as an already-running, completed, or otherwise
+// non-resumable feature.
+var ErrResumeNotAvailable = errors.New("resume is not available for the feature's current status")
 
 // ResumeFeature dispatches existing provider sessions when a failed sequential
 // or composite phase has strict-match resume records. Ineligible records retain
@@ -96,7 +101,7 @@ func (o *Orchestrator) ResumeFeature(featureID string) error {
 		// Continue below: Failed is the only status whose action-catalog
 		// eligibility selects between provider continuation and fresh retry.
 	default:
-		return ErrResumeConflict
+		return ErrResumeNotAvailable
 	}
 
 	if f.CurrentPhase == feature.PhaseReview || f.CurrentPhase == feature.PhaseFinalReview {
@@ -271,7 +276,7 @@ func (o *Orchestrator) resumeEligibleFailedFeature(featureID string, phase featu
 // for a provider continuation and dispatches it, reverting the transition when
 // dispatch fails. Without the revert, a failed StartFeature strands the
 // feature in StatusImplementing — a status ResumeFeature refuses — so every
-// subsequent resume attempt would return ErrResumeConflict with no recovery
+// subsequent resume attempt would return ErrResumeNotAvailable with no recovery
 // path. Mirrors the rollback contract of the need-user-input dispatch path.
 func (o *Orchestrator) startFeatureForImplementationResume(featureID string, revertTo feature.Status) error {
 	if err := o.transitionImplementationResume(featureID); err != nil {

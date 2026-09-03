@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { expect, test, type Page } from '@playwright/test';
 import { capture, skipWithoutEvidenceDir } from './evidence-capture';
 
@@ -545,7 +561,9 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     '.recovery-workspace__header',
     async (p) => {
       await expect(p.locator('.recovery-workspace__queue')).toBeVisible({ timeout: 15_000 });
-      await expect(p.locator('.recovery-attention')).toBeVisible({ timeout: 5_000 });
+      // The priority banner was folded into the header scan summary; the
+      // per-item needs-action cards own the condition itself.
+      await expect(p.locator('.recovery-workspace__summary')).toBeVisible({ timeout: 5_000 });
       // Open the attention inbox so the recovery-priority item is visible
       // alongside other attention classes, sorted first.
       await p.locator('.attention-bell').click();
@@ -563,7 +581,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     '.recovery-workspace__header',
     async (p) => {
       await expect(p.locator('.recovery-workspace__queue')).toBeVisible({ timeout: 15_000 });
-      await expect(p.locator('.recovery-attention')).toBeVisible({ timeout: 5_000 });
+      await expect(p.locator('.recovery-workspace__summary')).toBeVisible({ timeout: 5_000 });
       await p.locator('.attention-bell').click();
       await expect(p.locator('.attention-popover')).toBeVisible({ timeout: 5_000 });
     },
@@ -582,7 +600,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
       // Open the Kill impact dialog on the second item so the per-item
       // action and the confirmation are visible in one viewport.
       const secondItem = p.locator('.recovery-workspace__item').nth(1);
-      const killButton = secondItem.locator('.recovery-workspace__action--kill');
+      const killButton = secondItem.getByRole('button', { name: 'Kill' });
       await expect(killButton).toBeVisible({ timeout: 5_000 });
       await killButton.click();
       await expect(p.locator('.impact-dialog__backdrop')).toBeVisible({ timeout: 5_000 });
@@ -776,12 +794,14 @@ test('completion workspace screenshots', async ({ page }) => {
     '.completion-workspace__publish',
     async (p) => {
       await expect(p.locator('.completion-workspace__publish')).toBeVisible({ timeout: 15_000 });
-      // Verify the partial outcome scene: already-published, failed-with-last_error, and
+      // Verify the partial outcome scene: already-published, failed-with-canonical-error, and
       // local-only-excluded are all in frame before capturing.
       await expect(p.getByText('Already published')).toBeVisible({ timeout: 10_000 });
-      await expect(p.locator('.completion-workspace__repo-outcome--failure')).toBeVisible({
-        timeout: 10_000,
-      });
+      await expect(
+        p
+          .locator('.completion-workspace__publish .error-surface__code')
+          .filter({ hasText: 'publish_push_failed' }),
+      ).toBeVisible({ timeout: 10_000 });
       await expect(p.locator('.completion-workspace__ineligible-repos')).toBeVisible({
         timeout: 10_000,
       });

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
@@ -792,14 +793,14 @@ func (m *Manager) CleanWorktree(featureID string) error {
 	})
 }
 
-// MarkFailed transitions a feature to Failed with error context.
-func (m *Manager) MarkFailed(featureID, failureType, lastError string) error {
+// MarkFailed transitions a feature to Failed and stores the canonical
+// failure record on the active run.
+func (m *Manager) MarkFailed(featureID string, failure errcat.FailureRecord) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		if err := f.Transition(StatusFailed); err != nil {
 			return err
 		}
-		f.FailureType = failureType
-		f.LastError = lastError
+		f.Run().Failure = &failure
 		return nil
 	})
 }
@@ -977,11 +978,25 @@ func roadmapPhaseType(phase, total int) string {
 //	    external PR state on GitHub may have advanced for the closed
 //	    subset; the next rewind simply re-issues close calls and warns on
 //	    the already-closed entries.
-func (m *Manager) RewindToPhase(featureID string, targetPhase Phase) (warnings []string, effectiveTarget Phase, err error) {
+func (m *Manager) RewindToPhase(featureID string, targetPhase Phase) (warnings []RewindWarning, effectiveTarget Phase, err error) {
 	return m.RewindWithRequest(featureID, RewindRequest{TargetPhase: targetPhase})
 }
 
-func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (warnings []string, effectiveTarget Phase, err error) {
+// repoBranch returns the branch recorded for repoName on the feature's
+// repositories, or "" when the repository is not listed.
+func (f *Feature) repoBranch(repoName string) string {
+	if f == nil {
+		return ""
+	}
+	for i := range f.Repos {
+		if f.Repos[i].Name == repoName {
+			return f.Repos[i].Branch
+		}
+	}
+	return ""
+}
+
+func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (warnings []RewindWarning, effectiveTarget Phase, err error) {
 	targetPhase := request.TargetPhase
 	f, err := m.Store.Load(featureID)
 	if err != nil {
@@ -1003,7 +1018,7 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 		return nil, 0, err
 	}
 
-	var warns []string
+	var warns []RewindWarning
 
 	// Mark the feature as interrupted so any running phase goroutine
 	// (e.g. the implement loop) detects the rewind and stops writing
@@ -1028,7 +1043,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 				continue
 			}
 			if err := m.PRs.ClosePR(url); err != nil {
-				warns = append(warns, fmt.Sprintf("failed to close PR for %s: %v", repoName, err))
+				warns = append(warns, RewindWarning{
+					Kind:   RewindWarningPullRequestClose,
+					Repo:   repoName,
+					Branch: f.repoBranch(repoName),
+					Err:    err,
+				})
 			}
 		}
 	}
@@ -1045,7 +1065,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 			}
 			branchName, err := git.CreateBackupBranch(repo.WorktreePath, f.Slug)
 			if err != nil {
-				warns = append(warns, fmt.Sprintf("failed to create backup branch for %s: %v", repo.Name, err))
+				warns = append(warns, RewindWarning{
+					Kind:   RewindWarningBackupBranch,
+					Repo:   repo.Name,
+					Branch: repo.Branch,
+					Err:    err,
+				})
 				continue
 			}
 			if branchName != "" {
@@ -1071,7 +1096,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 					resetErr = m.Worktrees.ResetToBase(repo.WorktreePath, repo.BaseBranch)
 				}
 				if resetErr != nil {
-					warns = append(warns, fmt.Sprintf("failed to reset worktree: %v", resetErr))
+					warns = append(warns, RewindWarning{
+						Kind:   RewindWarningWorktreeReset,
+						Repo:   repo.Name,
+						Branch: repo.Branch,
+						Err:    resetErr,
+					})
 				}
 			}
 		}
@@ -1400,7 +1430,7 @@ func (m *Manager) InitRepoImpl(featureID string) error {
 }
 
 // SetRepoPublished updates a repo's implementation state after successful publish.
-// Sets Touched=true, PRURL, and clears LastError.
+// Sets Touched=true, PRURL, and clears the stored failure record.
 func (m *Manager) SetRepoPublished(featureID, repoName, prURL string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		if f.RepoStates == nil {
@@ -1413,19 +1443,22 @@ func (m *Manager) SetRepoPublished(featureID, repoName, prURL string) error {
 		}
 		state.Touched = true
 		state.PRURL = prURL
-		state.LastError = ""
+		state.Error = nil
 		return nil
 	})
 }
 
-// SetRepoPublishError records a publish error on a repo's state.
-func (m *Manager) SetRepoPublishError(featureID, repoName, errMsg string) error {
+// SetRepoPublishError records a publish failure on a repo's state as the
+// stored canonical record. The record is the sole owner of the condition:
+// no run-level failure is written for a publish failure.
+func (m *Manager) SetRepoPublishError(featureID, repoName string, record errcat.FailureRecord) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		if f.RepoStates == nil {
 			return nil
 		}
 		if state, ok := f.RepoStates[repoName]; ok && state != nil {
-			state.LastError = errMsg
+			stored := record
+			state.Error = &stored
 		}
 		return nil
 	})
@@ -1441,29 +1474,9 @@ func (m *Manager) TryCompletePublish(featureID string) (bool, error) {
 	if !f.AllReposPublished() {
 		return false, nil
 	}
-	// A manual publish can successfully finish after an earlier Publish-phase
-	// failure. Recover that stale terminal state now that every touched repo
-	// has a PR, clearing the failure fields before entering a successful status.
-	if f.Status == StatusFailed && f.CurrentPhase == PhasePublish {
-		if err := m.Store.Modify(featureID, func(current *Feature) error {
-			if current.Status != StatusFailed || current.CurrentPhase != PhasePublish || !current.AllReposPublished() {
-				return nil
-			}
-			if err := current.Transition(StatusCodeReady); err != nil {
-				return err
-			}
-			current.LastError = ""
-			current.FailureType = ""
-			return nil
-		}); err != nil {
-			return false, err
-		}
-		f, err = m.Get(featureID)
-		if err != nil {
-			return false, err
-		}
-	}
-	// Only transition if feature is at ReviewPassed or CodeReady.
+	// Only transition if feature is at ReviewPassed or CodeReady. A publish
+	// failure never marks the run Failed, so no terminal publish state can
+	// exist here that a later successful publish would need to repair.
 	if f.Status != StatusReviewPassed && f.Status != StatusCodeReady {
 		return false, nil
 	}
@@ -1482,8 +1495,8 @@ func (m *Manager) TryCompletePublish(featureID string) (bool, error) {
 // RetryPhase clears any feature-level error/gate state so the unified
 // phase-implement loop can re-run the active phase from iteration 1.
 // Per-repo Touched flags are monotonic and intentionally preserved —
-// RetryPhase only resets the cross-cutting LastError on phase-declared
-// repos so the next pass starts clean.
+// RetryPhase only resets the cross-cutting stored failure records on
+// phase-declared repos so the next pass starts clean.
 //
 // Caller responsibilities: identify the phase-declared repo subset (typically
 // agent.PhaseScopeResult.Repos for the active phase plan); transition the
@@ -1500,32 +1513,11 @@ func (m *Manager) RetryPhase(featureID string, repoNames []string) error {
 				f.RepoStates[name] = &RepoState{}
 				continue
 			}
-			state.LastError = ""
+			state.Error = nil
 		}
-		f.LastError = ""
-		f.FailureType = ""
+		f.Run().Failure = nil
 		f.PendingNeedUserInputPath = ""
 		f.CurrentPhaseStatus = ""
-		return nil
-	})
-}
-
-// FailRepoImplementation marks a single repo's state as failed by recording
-// the error message on RepoStates. Phase-atomic failures land via
-// agent.AtomicPhaseStamp(PhaseOutcomeFailed); this helper survives for
-// cycle-cleanup callers that fail one repo outside the phase-stamp path.
-func (m *Manager) FailRepoImplementation(featureID, repoName, errMsg string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if f.RepoStates == nil {
-			return fmt.Errorf("no repo_states for feature %q", featureID)
-		}
-		state, ok := f.RepoStates[repoName]
-		if !ok || state == nil {
-			state = &RepoState{}
-			f.RepoStates[repoName] = state
-		}
-		state.Touched = true
-		state.LastError = errMsg
 		return nil
 	})
 }

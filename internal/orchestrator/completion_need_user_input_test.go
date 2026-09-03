@@ -94,7 +94,7 @@ func TestOrchestrator_HandlePhaseCompletion_MultiRepo_NeedUserInput_PausesFeatur
 	}
 	// Per-repo state untouched: gate is feature-scoped.
 	for _, name := range []string{repoName, repoNameB, repoNameC} {
-		if st := f.RepoStates[name]; st != nil && (st.Touched || st.LastError != "") {
+		if st := f.RepoStates[name]; st != nil && (st.Touched || st.Error != nil) {
 			t.Errorf("RepoStates[%q] = %+v, want untouched (feature-scoped gate must not mutate per-repo state)", name, st)
 		}
 	}

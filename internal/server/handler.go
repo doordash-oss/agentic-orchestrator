@@ -18,6 +18,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
@@ -174,6 +176,10 @@ const routeSegmentConfig = "config"
 // scoped resources (Resource.Type, ActionScope.Type, etc).
 const entityFeature = "feature"
 
+// entityFeatureSubject is the human noun for entityFeature in error
+// summaries.
+const entityFeatureSubject = "Feature"
+
 // Resource type discriminators used by SSE refresh routing.
 const (
 	resourceTypeSession      = "session"
@@ -209,6 +215,13 @@ func (h *apiHandler) routes() http.Handler {
 	for _, route := range topLevelServerRoutes {
 		mux.HandleFunc(route.pattern, route.handler(h))
 	}
+	// Every non-2xx response carries the canonical error envelope, including
+	// unmatched routes that would otherwise fall through to net/http's
+	// plain-text NotFound.
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound,
+			errcat.WithParams(errcat.SubjectParams{Subject: "Endpoint"}))
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.rejectInvalidHost(w, r) {
 			return
@@ -253,7 +266,7 @@ func (h *apiHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 	features, warnings, err := listFeatures(h.features)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "list features", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("list features"))
 		return
 	}
 	// One relationship pass for the whole list; the per-parent scan re-reads
@@ -262,7 +275,7 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 	if reader, ok := h.store.(BulkRelationshipReader); ok {
 		bulkChildren, err = reader.AllRelationshipChildren()
 		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "relationship_read_failed", "read relationship history", nil)
+			writeAPIError(w, http.StatusInternalServerError, errcat.RelationshipReadFailed, errcat.WithDiagnostics("read relationship history"))
 			return
 		}
 	}
@@ -281,18 +294,20 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 			var relationshipErr error
 			children, relationshipErr = h.relationshipChildrenOf(f.ID, features)
 			if relationshipErr != nil {
-				writeAPIError(w, http.StatusInternalServerError, "relationship_read_failed", "read relationship history", map[string]any{"parent_id": f.ID})
+				writeAPIError(w, http.StatusInternalServerError, errcat.RelationshipReadFailed,
+					errcat.WithDiagnostics(fmt.Sprintf("read relationship history for parent %q", f.ID)))
 				return
 			}
 		}
 		summary.ActiveChild = relationshipChildSummaryDTO(children.Active)
 		summary.ChildHistory, summary.ChildHistoryTotal, summary.ChildHistoryTruncated = listChildHistory(children.Closed)
+		summary.Errors = ownedErrorsDTO(f, children.Active)
 		summary.Warnings = append(summary.Warnings, effortDriftWarnings(f, h.registry)...)
 		summaries = append(summaries, summary)
 	}
 	revision := revisionForAny(struct {
 		Features []FeatureSummary
-		Warnings []Warning
+		Warnings []Error
 	}{Features: summaries, Warnings: warnings})
 	h.writeRevisionedJSON(w, r, revision, FeatureListResponse{
 		APIVersion: APIVersion,
@@ -305,7 +320,7 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request) {
 	parts := splitPath(strings.TrimPrefix(r.URL.Path, apiPathFeatures+"/"))
 	if invalidPathParts(parts) || len(parts) == 0 || !validEntityID(parts[0]) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid feature id", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("invalid feature id"))
 		return
 	}
 	featureID := parts[0]
@@ -318,7 +333,7 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 		case "completion":
 			if r.Method != http.MethodGet {
 				w.Header().Set("Allow", "GET")
-				writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+				writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 				return
 			}
 			h.handleCompletionPreflight(w, r, featureID)
@@ -328,7 +343,7 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 	if len(parts) == 4 && parts[1] == "repositories" && parts[3] == "diff" {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
-			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+			writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 			return
 		}
 		h.handleRepositoryDiff(w, r, featureID, parts[2])
@@ -337,7 +352,7 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 	if len(parts) == 4 && parts[1] == "repositories" && parts[3] == "path" {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
-			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+			writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 			return
 		}
 		h.handleRepositoryPath(w, r, featureID, parts[2])
@@ -348,7 +363,7 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 	}
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET, POST")
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 		return
 	}
 	switch {
@@ -363,7 +378,7 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 	case len(parts) >= 2 && parts[1] == "runs":
 		h.handleRunsRoute(w, r, featureID, parts[2:])
 	default:
-		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Endpoint"}))
 	}
 }
 
@@ -378,19 +393,21 @@ func (h *apiHandler) handleRunsRoute(w http.ResponseWriter, r *http.Request, fea
 	case len(parts) == 1:
 		runNumber, ok := parseRunNumber(parts[0])
 		if !ok {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid run number", map[string]any{"feature_id": featureID})
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+				errcat.WithDiagnostics(fmt.Sprintf("invalid run number %q for feature %q", parts[0], featureID)))
 			return
 		}
 		h.handleRunDetail(w, r, featureID, runNumber)
 	case len(parts) >= 2:
 		runNumber, ok := parseRunNumber(parts[0])
 		if !ok {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid run number", map[string]any{"feature_id": featureID})
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+				errcat.WithDiagnostics(fmt.Sprintf("invalid run number %q for feature %q", parts[0], featureID)))
 			return
 		}
 		h.handleRunRoute(w, r, featureID, runNumber, parts[1:])
 	default:
-		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Endpoint"}))
 	}
 }
 
@@ -407,7 +424,7 @@ func (h *apiHandler) handleRunRoute(w http.ResponseWriter, r *http.Request, feat
 	case len(parts) == 1 && parts[0] == "sessions":
 		h.handleRunSessions(w, r, featureID, runNumber)
 	default:
-		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Endpoint"}))
 	}
 }
 
@@ -419,7 +436,7 @@ func (h *apiHandler) handleFeatureDetail(w http.ResponseWriter, r *http.Request,
 	}
 	detail, err := h.featureDetailDTO(f)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "build feature detail", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("build feature detail"))
 		return
 	}
 	revision := revisionForAny(detail)
@@ -435,7 +452,7 @@ func (h *apiHandler) handleFeatureDetail(w http.ResponseWriter, r *http.Request,
 func (h *apiHandler) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 	parts := splitPath(strings.TrimPrefix(r.URL.Path, apiPathSessions+"/"))
 	if invalidPathParts(parts) || len(parts) == 0 || !validEntityID(parts[0]) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid session id", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("invalid session id"))
 		return
 	}
 	switch {
@@ -446,7 +463,7 @@ func (h *apiHandler) handleSessionRoutes(w http.ResponseWriter, r *http.Request)
 	case len(parts) == 3 && parts[1] == "output" && parts[2] == "stream":
 		h.handleSessionOutputStream(w, r, parts[0])
 	default:
-		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Endpoint"}))
 	}
 }
 
@@ -473,7 +490,7 @@ func methodHandler(fn http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
-			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+			writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 			return
 		}
 		fn(w, r)
@@ -488,11 +505,11 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 		return true
 	}
 	w.Header().Set("Allow", method)
-	writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+	writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 	return false
 }
 
-func listFeatures(lister FeatureLister) ([]*feature.Feature, []Warning, error) {
+func listFeatures(lister FeatureLister) ([]*feature.Feature, []Error, error) {
 	if lister == nil {
 		return nil, nil, nil
 	}
@@ -504,13 +521,17 @@ func listFeatures(lister FeatureLister) ([]*feature.Feature, []Warning, error) {
 	if !errors.As(err, &partial) {
 		return nil, nil, err
 	}
-	warnings := make([]Warning, 0, len(partial.Warnings))
+	warnings := make([]Error, 0, len(partial.Warnings))
 	for _, w := range partial.Warnings {
-		warnings = append(warnings, Warning{
-			Code:      "partial_load",
-			FeatureID: w.ID,
-			Message:   "feature could not be loaded",
-		})
+		var diagnostics string
+		if w.Err != nil {
+			diagnostics = SafeDisplayText(w.Err.Error(), 240)
+		}
+		warnings = append(warnings, wireError(errcat.New(
+			errcat.FeatureLoadFailed,
+			errcat.WithParams(errcat.FeatureLoadFailedParams{FeatureID: w.ID}),
+			errcat.WithDiagnostics(diagnostics),
+		)))
 	}
 	return features, warnings, nil
 }
@@ -585,12 +606,13 @@ func validEntityID(id string) bool {
 }
 
 func writeStoreError(w http.ResponseWriter, err error, id string) {
-	target := map[string]any{entityFeature + "_id": id}
 	if errors.Is(err, os.ErrNotExist) {
-		writeAPIError(w, http.StatusNotFound, "not_found", entityFeature+" not found", target)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound,
+			errcat.WithParams(errcat.SubjectParams{Subject: entityFeatureSubject, Name: id}))
 		return
 	}
-	writeAPIError(w, http.StatusInternalServerError, "internal_error", "read "+entityFeature, target)
+	writeAPIError(w, http.StatusInternalServerError, errcat.InternalError,
+		errcat.WithDiagnostics(fmt.Sprintf("read %s %q: %v", entityFeature, id, err)))
 }
 
 func (h *apiHandler) responseMeta(revision string) ResponseMeta {
@@ -628,7 +650,7 @@ func (h *apiHandler) rejectUnauthorized(w http.ResponseWriter, r *http.Request) 
 	if h.authorized(r) {
 		return false
 	}
-	writeAPIError(w, http.StatusUnauthorized, "unauthorized", http.StatusText(http.StatusUnauthorized), nil)
+	writeAPIError(w, http.StatusUnauthorized, errcat.Unauthorized)
 	return true
 }
 
@@ -645,7 +667,7 @@ func (h *apiHandler) rejectInvalidHost(w http.ResponseWriter, r *http.Request) b
 	if isAllowedLoopbackHost(r.Host) {
 		return false
 	}
-	writeAPIError(w, http.StatusForbidden, "forbidden", "invalid host", nil)
+	writeAPIError(w, http.StatusForbidden, errcat.Forbidden, errcat.WithDiagnostics("invalid host"))
 	return true
 }
 
@@ -722,16 +744,74 @@ func revisionMatches(r *http.Request, revision string) bool {
 	return false
 }
 
-func writeAPIError(w http.ResponseWriter, status int, code, message string, target map[string]any) {
+// writeAPIError is the single emit point for every non-2xx response body.
+// It accepts a catalog code, never a string literal, so the compiler pins
+// every emit site to the catalog; title, summary, and remediation are
+// rendered by the catalog at write time. HTTP status stays transport-only.
+func writeAPIError(w http.ResponseWriter, status int, code errcat.Code, opts ...errcat.Option) {
 	writeJSON(w, status, ErrorResponse{
 		APIVersion: APIVersion,
-		Error: Error{
-			Code:    code,
-			Message: message,
-			Status:  status,
-			Target:  target,
-		},
+		Error:      wireError(errcat.New(code, opts...)),
 	})
+}
+
+// WireCanonicalError projects a rendered canonical error onto the generated
+// wire model for adapters outside this package (the mutation target), so
+// every boundary renders canonical objects through one projection.
+func WireCanonicalError(rendered errcat.Error) Error {
+	return wireError(rendered)
+}
+
+// wireError projects a rendered canonical error onto the generated model.
+func wireError(rendered errcat.Error) Error {
+	body := Error{
+		Code:        string(rendered.Code),
+		Class:       ErrorClass(rendered.Class),
+		Title:       rendered.Title,
+		Summary:     rendered.Summary,
+		Diagnostics: rendered.Diagnostics,
+	}
+	if rendered.Remediation != nil {
+		remediation := ErrorRemediation{Hint: rendered.Remediation.Hint}
+		for _, action := range rendered.Remediation.Actions {
+			remediation.Actions = append(remediation.Actions, FeatureAction(action))
+		}
+		body.Remediation = &remediation
+	}
+	if rendered.Context != nil {
+		context := ErrorContext{}
+		for _, repo := range rendered.Context.Repositories {
+			context.Repositories = append(context.Repositories, ErrorRepositoryContext{
+				Name:              repo.Name,
+				Branch:            repo.Branch,
+				RebaseTarget:      repo.RebaseTarget,
+				RemoteOnlyCommits: repo.RemoteOnlyCommits,
+				ConflictFiles:     repo.ConflictFiles,
+				DirtyFiles:        repo.DirtyFiles,
+				ParentAnchorSha:   repo.ParentAnchorSHA,
+				ExpectedRefSha:    repo.ExpectedRefSHA,
+				ChildHeadSha:      repo.ChildHeadSHA,
+				CandidateSha:      repo.CandidateSHA,
+				MergeHead:         repo.MergeHEAD,
+				ObservedSha:       repo.ObservedSHA,
+			})
+		}
+		if rendered.Context.Phase != nil {
+			context.Phase = &ErrorPhaseContext{Name: rendered.Context.Phase.Name, Iteration: rendered.Context.Phase.Iteration}
+		}
+		if rendered.Context.Command != nil {
+			context.Command = &ErrorCommandContext{ExitCode: rendered.Context.Command.ExitCode, LogPaths: rendered.Context.Command.LogPaths}
+		}
+		if rendered.Context.SetupTask != nil {
+			context.SetupTask = &ErrorSetupTaskContext{
+				Key:   rendered.Context.SetupTask.Key,
+				Kind:  rendered.Context.SetupTask.Kind,
+				Label: rendered.Context.SetupTask.Label,
+			}
+		}
+		body.Context = &context
+	}
+	return body
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

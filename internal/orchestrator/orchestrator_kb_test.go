@@ -26,6 +26,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -390,16 +391,17 @@ func TestOrchestrator_StartKB_SessionBuildFailureMarksFeatureFailed(t *testing.T
 		Repos:        []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
 	}
 	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id, failureType, lastError string) error {
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
 		f.Status = feature.StatusFailed
-		f.FailureType = failureType
-		f.LastError = lastError
+		rec := failure
+		f.Run().Failure = &rec
 		return nil
 	}
 	fs := newFeatureStore(f)
 	cpr.pr.FeatureStore = fs
 
-	var failureType, failureMessage string
+	var failureCode errcat.Code
+	var failureMessage string
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   lc,
 		Store:       fs,
@@ -407,8 +409,8 @@ func TestOrchestrator_StartKB_SessionBuildFailureMarksFeatureFailed(t *testing.T
 		PhaseRunner: cpr.pr,
 		CmdRunner:   cpr.cmd,
 	}, orchestrator.Hooks{
-		OnFeatureFailed: func(id string, ft, msg string) {
-			failureType = ft
+		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, msg string) {
+			failureCode = code
 			failureMessage = msg
 		},
 	})
@@ -420,14 +422,16 @@ func TestOrchestrator_StartKB_SessionBuildFailureMarksFeatureFailed(t *testing.T
 	if f.Status != feature.StatusFailed {
 		t.Fatalf("feature status = %s; want Failed", f.Status)
 	}
-	if f.FailureType != feature.FailureInfrastructure {
-		t.Fatalf("FailureType = %q; want %q", f.FailureType, feature.FailureInfrastructure)
+	if f.FailureCode() != errcat.InfrastructureFailure {
+		t.Fatalf("FailureCode = %q; want %q", f.FailureCode(), errcat.InfrastructureFailure)
 	}
-	if !strings.Contains(f.LastError, "run KB for repo repo-a") || !strings.Contains(f.LastError, "sonnet[200K]") {
-		t.Fatalf("LastError = %q; want persisted KB spawn error", f.LastError)
+	if rec := f.FailureRecord(); rec == nil ||
+		!strings.Contains(rec.Diagnostics, "run KB for repo repo-a") ||
+		!strings.Contains(rec.Diagnostics, "sonnet[200K]") {
+		t.Fatalf("FailureRecord = %+v; want persisted KB spawn error", f.FailureRecord())
 	}
-	if failureType != feature.FailureInfrastructure || failureMessage != f.LastError {
-		t.Fatalf("OnFeatureFailed = %q/%q; want infrastructure/%q", failureType, failureMessage, f.LastError)
+	if failureCode != errcat.InfrastructureFailure || failureMessage != f.FailureRecord().Diagnostics {
+		t.Fatalf("OnFeatureFailed = %q/%q; want infrastructure_failure/%q", failureCode, failureMessage, f.FailureRecord().Diagnostics)
 	}
 	if got := len(cpr.startSessionsByPhase(feature.PhaseKnowledgeBase)); got != 0 {
 		t.Fatalf("KB sessions = %d; want none when session build fails", got)
@@ -664,7 +668,7 @@ func TestOrchestrator_wakeKBWaiters_AdvancesPastSkippedKB(t *testing.T) {
 // HandlePhaseCompletion → onKBCompleted's failure branch.
 //
 // Pre-fix: onKBCompleted unconditionally called markFailedWithEvent with
-// FailureSessionCrash, emitting feature.failed *before* InterruptFeature
+// session_crashed, emitting feature.failed *before* InterruptFeature
 // finished emitting feature.interrupted, and stamping last_error with the
 // agent's mid-flight reasoning. The fix adds a terminal-state guard so when
 // the feature is already at StatusInterrupted (or Failed), the failure branch

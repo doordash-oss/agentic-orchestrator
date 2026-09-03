@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Journey 7 — configuration, workspace, degraded-remediation, and
  * deferred-restart against the packaged app and real bundled server:
@@ -127,7 +143,7 @@ test('configuration, workspace, and restart journey against the packaged app', a
     transcript.step('feature config saved through the server');
 
     const persisted = await handle.page.evaluate(async () => {
-      const list = await window.agentico.listFeatures();
+      const list = (await window.agentico.listFeatures()).features;
       const feature = list.find((f) => f.name === 'Config Journey');
       if (!feature) throw new Error('feature not found');
       const snapshot = await window.agentico.getFeatureConfig(feature.id);
@@ -197,7 +213,7 @@ test('configuration, workspace, and restart journey against the packaged app', a
     const firstDegraded = degradedProviders.first();
     await expect(firstDegraded).toContainText('Not ready');
     const degradedCause = await settings
-      .locator('.settings-panel__provider.is-degraded .settings-panel__provider-cause')
+      .locator('.settings-panel__provider.is-degraded .error-surface')
       .first()
       .textContent();
     expect(degradedCause).toBeTruthy();

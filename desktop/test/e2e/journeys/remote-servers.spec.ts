@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Remote server journeys (packaged app): the harness spawns the bundled
  * server as a test-owned child with an ISOLATED state dir deliberately
@@ -491,21 +507,22 @@ test('remote add failures: distinct inline errors, nothing persisted, nothing su
     await selectSettingsPane(settings, 'Servers');
     const badPort = await freeLoopbackPort();
     const wrongToken = (remote.token.startsWith('A') ? 'B' : 'A') + remote.token.slice(1);
+    // Titles are the desktop catalog's authored ErrorSurface titles.
     const cases: { label: string; connectionString: string; title: string }[] = [
       {
         label: 'malformed scheme',
         connectionString: 'https://not-a-token@127.0.0.1:1',
-        title: 'The connection string could not be parsed.',
+        title: 'The connection string could not be parsed',
       },
       {
         label: 'dead host',
         connectionString: `agentico://${remote.token}@127.0.0.1:${String(badPort)}?name=ghost-remote`,
-        title: 'The server could not be reached.',
+        title: 'The server could not be reached',
       },
       {
         label: 'wrong token',
         connectionString: remote.connectionString.replace(remote.token, wrongToken),
-        title: 'The token was rejected.',
+        title: 'The token was rejected',
       },
     ];
     for (const candidate of cases) {

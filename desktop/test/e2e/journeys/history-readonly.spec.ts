@@ -56,7 +56,7 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     });
 
     const featureId = await handle.page.evaluate(async () => {
-      const features = await window.agentico.listFeatures();
+      const features = (await window.agentico.listFeatures()).features;
       return features.find((feature) => feature.name === 'History Journey')?.id;
     });
     if (!featureId) throw new Error('created history feature was not listed');

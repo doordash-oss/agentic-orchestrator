@@ -138,7 +138,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     reorderWorkspaceRoots: vi.fn(() => Promise.resolve(snapshot())),
     initRepository: vi.fn(() => Promise.resolve(snapshot())),
     listRepositories: vi.fn(() => Promise.resolve([])),
-    listFeatures: vi.fn(() => Promise.resolve([])),
+    listFeatures: vi.fn(() => Promise.resolve({ features: [], warnings: [] })),
     getFeature: vi.fn(() => Promise.reject(new Error('not_found: feature not found'))),
     createFeature: vi.fn(() => Promise.resolve({ featureId: 'abcd1234ef567890' })),
     dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),
@@ -245,7 +245,7 @@ function register(services = makeServices()) {
 interface Envelope {
   ok: boolean;
   value?: unknown;
-  error?: { code: string; message: string };
+  error?: { code: string };
 }
 
 describe('setup IPC surface: sender validation', () => {

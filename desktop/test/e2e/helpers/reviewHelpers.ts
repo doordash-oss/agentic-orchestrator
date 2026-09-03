@@ -23,9 +23,9 @@ export async function findFeatureId(handle: AppHandle, name: string): Promise<st
   let id = '';
   await waitFor(
     async () => {
-      const feature = (await handle.page.evaluate(() => window.agentico.listFeatures())).find(
-        (candidate) => candidate.name === name,
-      );
+      const feature = (
+        await handle.page.evaluate(() => window.agentico.listFeatures())
+      ).features.find((candidate) => candidate.name === name);
       id = feature?.id ?? '';
       return id !== '';
     },

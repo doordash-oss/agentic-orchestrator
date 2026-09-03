@@ -1267,8 +1267,8 @@ func TestRunFeatureFinalReviewLoop_MaxIterationsAtomicFailureStamp(t *testing.T)
 	}
 	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
-		if st == nil || st.LastError == "" {
-			t.Errorf("repo %s = %+v, want failed", name, st)
+		if st == nil || !st.Touched {
+			t.Errorf("repo %s = %+v, want the failed stamp (Touched)", name, st)
 		}
 	}
 }
@@ -1330,8 +1330,8 @@ func TestRunFeatureFinalReviewLoop_ConsecutiveFailuresSafetyRail(t *testing.T) {
 	}
 	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
-		if st == nil || st.LastError == "" {
-			t.Errorf("repo %s = %+v, want failed", name, st)
+		if st == nil || !st.Touched {
+			t.Errorf("repo %s = %+v, want the failed stamp (Touched)", name, st)
 		}
 	}
 }

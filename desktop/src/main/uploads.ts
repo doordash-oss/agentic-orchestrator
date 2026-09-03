@@ -27,7 +27,7 @@ limitations under the License.
  */
 import path from 'node:path';
 import { z } from 'zod';
-import { SafeErrorException, safeError, toSafeError } from '../shared/errors';
+import { buildCanonicalError, CanonicalErrorException, toCanonicalError } from '../shared/errors';
 import { validateWithSchema } from '../shared/api/parse';
 import {
   AbsolutePathSchema,
@@ -76,22 +76,12 @@ const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(
   CREATION_IMAGE_FORMATS.map((format) => format.extension),
 );
 
-/** Concrete, safe next steps per structured server error code. */
-const UPLOAD_REMEDIES: Readonly<Record<string, string>> = {
-  request_too_large:
-    'Choose a smaller file: images are limited to 10 MiB and attachments to 25 MiB.',
-  bad_request:
-    'The server rejected this file. Images must be PNG, JPEG, GIF, or WebP; check the file and retry.',
-  unauthenticated: 'Reconnect to the server in Settings, then retry.',
-  unavailable: 'The server cannot stage uploads right now. Wait a moment, then retry.',
-};
-
 export class UploadService {
   constructor(private readonly deps: UploadServiceDeps) {}
 
   /**
    * Stages every file in request order. Individual failures are reported in
-   * place (SafeError-shaped) so one bad file cannot take down the batch.
+   * place (canonical-error-shaped) so one bad file cannot take down the batch.
    */
   async stageFiles(
     kind: CreationFileKind,
@@ -107,7 +97,7 @@ export class UploadService {
         results.push({
           ok: false,
           name: name === '' ? 'selected file' : name,
-          error: toSafeError(err, 'E_UPLOAD'),
+          error: toCanonicalError(err, 'E_UPLOAD'),
         });
       }
     }
@@ -119,39 +109,23 @@ export class UploadService {
     const validated = validateWithSchema(filePath, AbsolutePathSchema);
     const name = path.basename(validated);
     if (name === '' || name.length > 255) {
-      throw new SafeErrorException(
-        safeError(
-          'E_UPLOAD_NAME',
-          'The file name is not usable for upload.',
-          'Rename the file and retry.',
-        ),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_UPLOAD_NAME'));
     }
     if (kind === 'image' && !isImageExtension(name)) {
-      throw new SafeErrorException(
-        safeError(
-          'bad_request',
-          'Only PNG, JPEG, GIF, or WebP images can be attached.',
-          'Choose an image in a supported format.',
-        ),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_UPLOAD_TYPE_UNSUPPORTED'));
     }
     const { size } = await this.deps.statFile(validated);
     const limit = UPLOAD_BYTE_LIMITS[kind];
     if (size > limit) {
-      throw new SafeErrorException(
-        safeError(
-          'request_too_large',
-          `The file is larger than the ${kind === 'image' ? '10 MiB image' : '25 MiB attachment'} upload limit.`,
-          UPLOAD_REMEDIES.request_too_large,
-        ),
+      throw new CanonicalErrorException(
+        buildCanonicalError('E_UPLOAD_TOO_LARGE', {
+          params: { limit: kind === 'image' ? '10 MiB image' : '25 MiB attachment' },
+        }),
       );
     }
     const upload = this.deps.transport.apiUpload;
     if (upload === undefined) {
-      throw new SafeErrorException(
-        safeError('E_UPLOAD_UNAVAILABLE', 'This build has no upload transport wired.'),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_UPLOAD_UNAVAILABLE'));
     }
     const body = await this.deps.readFile(validated);
     const query = new URLSearchParams({ kind, name });
@@ -161,18 +135,12 @@ export class UploadService {
       body,
     );
     if (result.status < 200 || result.status >= 300) {
-      throw mapServerError(result, { remedyByCode: UPLOAD_REMEDIES });
+      throw mapServerError(result);
     }
     const staged = validateWithSchema(result.body, StageUploadResponseSchema);
     const serverKey = this.deps.serverKey();
     if (serverKey === null) {
-      throw new SafeErrorException(
-        safeError(
-          'E_NOT_CONNECTED',
-          'The app is not connected to an Agentico runtime.',
-          'Wait for the connection to become ready, then retry.',
-        ),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED'));
     }
     return {
       reference: staged.reference,

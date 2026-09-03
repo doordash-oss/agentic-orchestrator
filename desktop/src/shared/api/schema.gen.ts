@@ -671,7 +671,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start a chat prompt session. */
+        /**
+         * Start a chat prompt session.
+         * @description Sends one user turn to the singleton AMA chat session, starting the session when none is live. An optional `context` reference points at the durable home of an error the question is about; the server resolves it into a hidden context bundle the provider sees but the transcript never echoes. Failure machine codes: 400 `chat_context_invalid` (malformed reference) and 404 `chat_context_not_found` (referenced error no longer present); both are rejected before any chat turn is sent.
+         */
         post: operations["startChatPrompt"];
         delete?: never;
         options?: never;
@@ -927,13 +930,74 @@ export interface components {
             api_version: string;
             error: components["schemas"]["Error"];
         };
+        /**
+         * @description Feature lifecycle action identifier.
+         * @enum {string}
+         */
+        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
+        /** @description Canonical catalog-rendered error. */
         Error: {
+            /** @description Stable snake_case catalog code. */
             code: string;
-            message: string;
-            status: number;
-            target?: {
-                [key: string]: unknown;
-            };
+            /**
+             * @description Severity treatment class.
+             * @enum {string}
+             */
+            class: "blocking" | "needs_action" | "warning";
+            /** @description Catalog-authored title; never empty. */
+            title: string;
+            /** @description Catalog-authored summary, with request-scoped facts interpolated as human text; never empty. */
+            summary: string;
+            remediation?: components["schemas"]["ErrorRemediation"];
+            context?: components["schemas"]["ErrorContext"];
+            /** @description Raw detail text, deepest disclosure only. */
+            diagnostics?: string;
+        };
+        /** @description Catalog-authored next step for an error code. */
+        ErrorRemediation: {
+            hint?: string;
+            /** @description Referenced feature actions the user can run next. */
+            actions?: components["schemas"]["FeatureAction"][];
+        };
+        /** @description Typed context blocks the error code declared. */
+        ErrorContext: {
+            repositories?: components["schemas"]["ErrorRepositoryContext"][];
+            phase?: components["schemas"]["ErrorPhaseContext"];
+            command?: components["schemas"]["ErrorCommandContext"];
+            setup_task?: components["schemas"]["ErrorSetupTaskContext"];
+        };
+        /** @description Setup task that owns a setup failure. */
+        ErrorSetupTaskContext: {
+            key: string;
+            kind: string;
+            label: string;
+        };
+        /** @description Repository a code references. */
+        ErrorRepositoryContext: {
+            name: string;
+            branch?: string;
+            /** @description Rebase target branch of a conflicted publish pull-rebase, when known. */
+            rebase_target?: string;
+            /** @description Commits on the remote pull-request branch that are not in this workspace, when known. */
+            remote_only_commits?: number;
+            conflict_files?: string[];
+            dirty_files?: string[];
+            parent_anchor_sha?: string;
+            expected_ref_sha?: string;
+            child_head_sha?: string;
+            candidate_sha?: string;
+            merge_head?: string;
+            observed_sha?: string;
+        };
+        /** @description Phase a code references. */
+        ErrorPhaseContext: {
+            name: string;
+            iteration?: number;
+        };
+        /** @description Failed command a code references. */
+        ErrorCommandContext: {
+            exit_code?: number;
+            log_paths?: string[];
         };
         PermissionAnswerRequest: {
             request_id: string;
@@ -978,6 +1042,7 @@ export interface components {
             summary?: string;
             /** @description Session's current transcript record count at emission time — the same index space /transcript and /output/stream use. Only set on session.output.activity events. */
             record_count?: number;
+            error?: components["schemas"]["SSEEventError"];
         };
         SessionOutputChunk: {
             api_version: string;
@@ -987,6 +1052,16 @@ export interface components {
             /** @description A TranscriptMessageDTO row (see the /transcript response). */
             message?: components["schemas"]["TranscriptMessage"];
             done?: boolean;
+        };
+        /** @description Canonical failure identity for failure-carrying lifecycle events (feature lifecycle failed). Absent on every other event kind. */
+        SSEEventError: {
+            /** @description Stable snake_case catalog code. */
+            code: string;
+            /**
+             * @description Severity treatment class.
+             * @enum {string}
+             */
+            class: "blocking" | "needs_action" | "warning";
         };
         JSONResponse: {
             api_version: string;
@@ -1023,44 +1098,32 @@ export interface components {
             runtime_policy: string;
             server_build: components["schemas"]["BuildIdentity"];
         };
-        /**
-         * @description Readiness problem taxonomy. missing_executable — a provider CLI binary is not installed; unsupported_version — an installed provider CLI is below the enforced minimum version; unauthenticated — a provider CLI is installed but its authentication flow has not been completed; models_unavailable — no usable provider exposes any model; invalid_configuration — the runtime configuration is unusable; invalid_workspace_root — a configured workspace root does not resolve to a directory; invalid_repository — a configured repository path is not a git repository.
-         * @enum {string}
-         */
-        ReadinessIssueCode: "missing_executable" | "unsupported_version" | "unauthenticated" | "models_unavailable" | "invalid_configuration" | "invalid_workspace_root" | "invalid_repository";
-        ReadinessIssue: {
-            code: components["schemas"]["ReadinessIssueCode"];
-            /** @description Human-readable problem summary. Never contains credentials. */
-            message: string;
-            /** @description Safe remediation metadata, such as the CLI command to run. Never contains credentials or non-configured filesystem paths. */
-            remedy?: string;
-        };
         ProviderReadiness: {
             name: string;
             installed: boolean;
             version?: string;
             ready: boolean;
-            issue?: components["schemas"]["ReadinessIssue"];
+            issue?: components["schemas"]["Error"];
         };
         ModelReadiness: {
             available: boolean;
             models?: string[];
-            issue?: components["schemas"]["ReadinessIssue"];
+            issue?: components["schemas"]["Error"];
         };
         ConfigurationReadiness: {
             valid: boolean;
-            issue?: components["schemas"]["ReadinessIssue"];
+            issue?: components["schemas"]["Error"];
         };
         WorkspaceRootReadiness: {
             path: string;
             valid: boolean;
-            issue?: components["schemas"]["ReadinessIssue"];
+            issue?: components["schemas"]["Error"];
         };
         RepositoryReadiness: {
             name: string;
             path: string;
             valid: boolean;
-            issue?: components["schemas"]["ReadinessIssue"];
+            issue?: components["schemas"]["Error"];
         };
         RepositoryInitRequest: {
             /** @description Absolute directory to initialize, confined to a configured workspace root. May not yet exist; an existing directory must be empty and not already a git repository. */
@@ -1095,12 +1158,13 @@ export interface components {
             models: components["schemas"]["ModelReadiness"];
             configuration: components["schemas"]["ConfigurationReadiness"];
             workspace: components["schemas"]["WorkspaceReadiness"];
-            /** @description Flattened outstanding issues across all sections. */
-            issues?: components["schemas"]["ReadinessIssue"][];
+            /** @description Flattened outstanding issues across all sections, each the canonical catalog-rendered error for its readiness code. */
+            issues?: components["schemas"]["Error"][];
         };
         FeatureListResponse: components["schemas"]["JSONResponse"] & {
             features: components["schemas"]["FeatureSummary"][];
-            warnings?: components["schemas"]["Warning"][];
+            /** @description Canonical warning errors for feature files that could not be loaded at list level; absent when every feature loaded. */
+            warnings?: components["schemas"]["Error"][];
         };
         FeatureDetailResponse: components["schemas"]["JSONResponse"] & {
             feature: components["schemas"]["FeatureDetail"];
@@ -1329,6 +1393,27 @@ export interface components {
             session_id: string;
             result: string;
         };
+        /** @enum {string} */
+        ErrorScope: "run" | "transaction" | "repository" | "setup" | "recovery";
+        ErrorReference: {
+            scope: components["schemas"]["ErrorScope"];
+            code: string;
+            feature_id?: string;
+            repository?: string;
+            task_key?: string;
+            snapshot_id?: string;
+            key?: string;
+        };
+        OwnedError: {
+            ref: components["schemas"]["ErrorReference"];
+            error: components["schemas"]["Error"];
+        };
+        ChatStartRequest: {
+            message: string;
+            images?: string[];
+            image_uploads?: string[];
+            context?: components["schemas"]["ErrorReference"];
+        };
         ChatStartResponse: components["schemas"]["ActionBaseResponse"] & {
             session_id: string;
             result: string;
@@ -1348,14 +1433,13 @@ export interface components {
             target_phase?: string;
             effective_phase?: string;
             roadmap_phase?: number;
-            warning_count?: number;
             upgrade_pipeline?: string;
             /** @description The run that was sealed (rewind source). */
             source_run_number?: number;
             /** @description The new active run forked by the rewind. */
             new_run_number?: number;
-            /** @description Redacted non-fatal warning details (PR close, backup branch, worktree reset failures). */
-            warnings?: string[];
+            /** @description Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset). */
+            warnings?: components["schemas"]["Error"][];
         };
         RewindPreviewResponse: components["schemas"]["JSONResponse"] & components["schemas"]["RewindPreview"];
         RewindPreview: {
@@ -1522,8 +1606,8 @@ export interface components {
             blocker?: string;
             /** @description Server-authored freshness state. */
             freshness?: string;
-            /** @description Safe, bounded last error text. */
-            last_error?: string;
+            /** @description Canonical catalog-rendered publish failure record this repository owns, when any. */
+            error?: components["schemas"]["Error"];
             /** @description Server-authored base branch for this repository. */
             base_branch?: string;
             /** @description Server-authored feature branch for this repository. */
@@ -1555,8 +1639,8 @@ export interface components {
             file_binary?: boolean;
             /** @description Whether the single-file diff content is unavailable. */
             file_unavailable?: boolean;
-            /** @description Safe, server-authored reason one repository could not be fully inspected, when non-empty. */
-            partial_failure?: string;
+            /** @description Canonical warning-class error rendering the typed partial failure of this repository's inspection; absent when the repository was fully inspected. */
+            error?: components["schemas"]["Error"];
         };
         RepositoryPathDTO: components["schemas"]["JSONResponse"] & {
             feature_id: string;
@@ -1724,6 +1808,8 @@ export interface components {
             iteration?: number;
             pid?: number;
             process_alive: boolean;
+            /** @description Canonical needs_action error classifying this orphan session by liveness, with the phase and repositories context blocks; carries no diagnostics and no filesystem paths. */
+            error: components["schemas"]["Error"];
             /** @description Whether a bounded log read is available for this item. */
             log_available?: boolean;
             default_action: string;
@@ -1741,7 +1827,6 @@ export interface components {
                 [key: string]: components["schemas"]["SetupTask"];
             };
             task_order?: string[];
-            last_error?: string;
         };
         SetupTask: {
             key: string;
@@ -1759,7 +1844,8 @@ export interface components {
             started_at?: string;
             /** Format: date-time */
             ended_at?: string;
-            last_error?: string;
+            /** @description Canonical error rendering the task's stored failure record; absent when the task has not failed. */
+            error?: components["schemas"]["Error"];
         };
         ToolCall: {
             summary?: string;
@@ -1803,11 +1889,6 @@ export interface components {
             tool_call?: components["schemas"]["ToolCall"];
             task?: components["schemas"]["Task"];
         };
-        Warning: {
-            code: string;
-            feature_id?: string;
-            message: string;
-        };
         Checkpoints: {
             inquiry_review: boolean;
             research_review: boolean;
@@ -1827,15 +1908,6 @@ export interface components {
             repo: string;
             sha: string;
             parent_branch?: string;
-        };
-        RelationshipAttention: {
-            code: string;
-            message: string;
-            repo?: string;
-        };
-        RelationshipCleanupWarning: {
-            message: string;
-            repo?: string;
         };
         /**
          * @description Recorded relationship close outcome; absent while the child is open.
@@ -1865,10 +1937,10 @@ export interface components {
             closed_at?: string;
             cost: components["schemas"]["Cost"];
             integration_state: string;
-            attention: components["schemas"]["RelationshipAttention"][];
-            cleanup_warnings: components["schemas"]["RelationshipCleanupWarning"][];
-            /** @description Setup failure message when the child's setup failed. */
-            last_error?: string;
+            /** @description Canonical error rendering the child's stored integration attention record; absent when integration is not parked. */
+            attention?: components["schemas"]["Error"];
+            /** @description Canonical warning-class errors for this child's stored cleanup and review-feedback tail records; absent when both settled cleanly. */
+            warnings: components["schemas"]["Error"][];
             /** @description True when a preserved diff summary exists for this closed child. The body itself is only carried by RelationshipChild on a detail route. */
             has_diff_summary?: boolean;
         };
@@ -1889,7 +1961,10 @@ export interface components {
             created_at: string;
             checkpoints: components["schemas"]["Checkpoints"];
             progress: components["schemas"]["FeatureProgress"];
-            warnings?: components["schemas"]["Warning"][];
+            /** @description Canonical warning-class errors for this feature, such as effort-capability drift; absent when there is nothing to warn about. */
+            warnings?: components["schemas"]["Error"][];
+            /** @description Current non-warning errors this feature or its active child owns, each pairing the catalog-rendered error (without diagnostics) with the reference to its durable home. Entries are ordered blocking first, then needs_action, stable by scope and key; absent when there are none. Warning-class records never appear here. */
+            errors?: components["schemas"]["OwnedError"][];
             active_child?: components["schemas"]["RelationshipChildSummary"];
             /** @description Newest closed children in authoritative store order, capped at a fixed server-side limit. Consult child_history_total and child_history_truncated for the full extent, and the feature detail route for the complete history. */
             child_history?: components["schemas"]["RelationshipChildSummary"][];
@@ -1934,10 +2009,6 @@ export interface components {
                 [key: string]: string;
             };
         };
-        Failure: {
-            type?: string;
-            message?: string;
-        };
         NeedUserInputGate: {
             feature_id?: string;
             open: boolean;
@@ -1979,7 +2050,8 @@ export interface components {
             conflict_files?: string[];
             touched: boolean;
             pr_url?: string;
-            last_error?: string;
+            /** @description Canonical catalog-rendered publish failure record this repository owns, when any. */
+            error?: components["schemas"]["Error"];
             publishable: boolean;
         };
         RunSummary: {
@@ -2094,7 +2166,7 @@ export interface components {
             cost: components["schemas"]["Cost"];
             review_gate: components["schemas"]["ReviewGate"];
             verification_items?: components["schemas"]["VerificationItem"][];
-            failure?: components["schemas"]["Failure"];
+            failure?: components["schemas"]["Error"];
             need_user_input?: components["schemas"]["NeedUserInputGate"];
             actions: components["schemas"]["Action"][];
             revision: string;
@@ -2121,21 +2193,12 @@ export interface components {
             /** @description Persisted selected comments captured at launch for a review-feedback child; absent for refactor children and parents. */
             review_feedback?: components["schemas"]["ReviewFeedbackComment"][];
         };
-        ChildDirtyDiagnostics: {
-            repo?: string;
-            path?: string;
-            staged?: string[];
-            unstaged?: string[];
-            untracked?: string[];
-            staged_total?: number;
-            unstaged_total?: number;
-            untracked_total?: number;
-        };
         /** @description Ordered per-repository transaction journal for multi-repository child-to-parent integration. */
         TransactionJournal: {
             /** @description Aggregate transaction phase: preparing, prepared, applying, applied, rolling_back, rolled_back, attention, or merged. */
             phase?: string;
-            attention?: string;
+            /** @description Canonical error rendering the journal's single stored attention record; absent when integration is not parked. */
+            attention?: components["schemas"]["Error"];
             entries?: components["schemas"]["RepoTransactionEntry"][];
         };
         RepoTransactionEntry: {
@@ -2149,11 +2212,8 @@ export interface components {
             prep_state?: string;
             apply_state?: string;
             observed_sha?: string;
-            conflict_files?: string[];
-            /** @description Categorized parent-worktree diagnostics recorded when a dirty preflight blocked preparation for this repository. */
-            dirty?: components["schemas"]["ChildDirtyDiagnostics"][];
-            cleanup_warning?: string;
-            diagnostics?: string;
+            /** @description True when this applied entry's parent worktree sync failed after the ref update; closure retries the sync automatically. */
+            pending_sync?: boolean;
         };
         Usage: {
             input_tokens?: number;
@@ -2260,7 +2320,6 @@ export interface components {
             initial_prompt?: string;
             can_attach: boolean;
             log_available: boolean;
-            safe_error?: string;
         };
     };
     responses: {
@@ -2603,7 +2662,7 @@ export interface components {
         ReviewID: string;
         LogID: string;
         SessionID: string;
-        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
+        FeatureAction: components["schemas"]["FeatureAction"];
         FeatureSubaction: "description" | "fetch";
         Offset: number;
         Limit: number;
@@ -3438,7 +3497,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: components["requestBodies"]["JSONMutation"];
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatStartRequest"];
+            };
+        };
         responses: {
             200: components["responses"]["ActionResponse"];
             401: components["responses"]["Unauthorized"];

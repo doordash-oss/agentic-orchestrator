@@ -14,11 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionState } from '../../../shared/ipc';
-import { creationDefaults, installAgenticoMock, readySnapshot } from '../test/agenticoMock';
+import {
+  creationDefaults,
+  installAgenticoMock,
+  ipcError,
+  readySnapshot,
+} from '../test/agenticoMock';
 import { CreateFeatureForm } from './CreateFeatureForm';
 
 afterEach(cleanup);
@@ -73,7 +78,14 @@ describe('the creation sheet across its four steps', () => {
     expect(screen.getByRole('heading', { name: 'Define the work' })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
     expect(document.getElementById('feature-name')).toHaveFocus();
-    expect(screen.getByText('Enter a feature name.')).toBeVisible();
+    // A missing name is a per-field message: FieldError exposed as the
+    // input's description, with no form-level error surface.
+    expect(screen.getByText('Enter a feature name.')).toHaveClass('field-error');
+    expect(screen.getByText('Enter a feature name.')).toHaveAttribute('id', 'feature-name-error');
+    const nameInput = document.getElementById('feature-name') as HTMLElement;
+    expect(nameInput).toHaveAttribute('aria-describedby', 'feature-name-error');
+    expect(nameInput).toHaveAttribute('aria-invalid', 'true');
+    expect(document.querySelector('.error-surface')).toBeNull();
   });
 
   it('leads an empty workspace with the folder picker instead of a filter miss', async () => {
@@ -84,6 +96,32 @@ describe('the creation sheet across its four steps', () => {
     expect(screen.getByText(/an empty folder to start something new/i)).toBeVisible();
     expect(screen.queryByLabelText('Search repositories')).toBeNull();
     expect(screen.queryByText(/No repositories match/)).toBeNull();
+  });
+
+  it('renders a rejected defaults load as a compact ErrorSurface whose Retry reloads', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getCreationDefaults
+      .mockRejectedValueOnce(
+        ipcError('not_ready', 'The runtime is not ready to create a feature.', {
+          title: 'Not ready',
+        }),
+      )
+      .mockResolvedValueOnce(creationDefaults());
+    render(<CreateFeatureForm onCreated={vi.fn()} onClose={vi.fn()} />);
+
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('not_ready')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Not ready')).toBeVisible();
+    expect(
+      within(surface).getByText('The runtime is not ready to create a feature.'),
+    ).toBeVisible();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(mock.api.getCreationDefaults).toHaveBeenCalledTimes(2);
+    await screen.findByRole('button', { name: 'Next: Describe' });
   });
 
   it('adopts a folder that is itself a repository and selects it', async () => {
@@ -155,9 +193,10 @@ describe('the creation sheet across its four steps', () => {
       readySnapshot({ workspaceRoots: [{ path: '/work/space/full', valid: true }] }),
     );
     mock.api.initRepository.mockRejectedValue(
-      new Error(
-        'directory_not_empty: the directory contains files. Choose an empty folder, a new folder name, or an existing git repository instead.',
-      ),
+      ipcError('directory_not_empty', 'The directory is not empty and is not a git repository.', {
+        title: 'Directory not empty',
+        remediation: 'Choose an empty folder or an existing repository.',
+      }),
     );
     const { user } = await renderForm(mock);
 
@@ -167,6 +206,9 @@ describe('the creation sheet across its four steps', () => {
     await user.click(screen.getByRole('button', { name: 'Initialize repository' }));
 
     const alert = await screen.findByRole('alert');
+    // The form-level card carries the code tag and the remediation hint the
+    // canonical object authors.
+    expect(alert).toHaveClass('error-surface', 'error-surface--compact');
     expect(alert).toHaveTextContent('directory_not_empty');
     expect(alert).toHaveTextContent(/choose an empty folder/i);
     expect(mock.api.removeWorkspaceRoot).toHaveBeenCalledWith('/work/space');
@@ -487,11 +529,22 @@ describe('the creation sheet across its four steps', () => {
   it('keeps the final submit single-flight and retryable after an authoritative error', async () => {
     const mock = installAgenticoMock();
     mock.api.getCreationDefaults.mockResolvedValue(creationDefaults());
-    mock.api.createFeature.mockRejectedValueOnce(new Error('conflict: try again'));
+    mock.api.createFeature.mockRejectedValueOnce(
+      ipcError('conflict', 'Another feature is already running from this branch.', {
+        title: 'Feature conflict',
+      }),
+    );
     const { user } = await renderForm(mock);
     await reachContract(user);
     await user.click(screen.getByRole('button', { name: 'Create and start' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('conflict');
+
+    // The rejection renders as the compact form-level card, takes focus, and
+    // leaves the submit control armed for the retry.
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('conflict')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Feature conflict')).toBeVisible();
+    expect(surface).toHaveFocus();
     expect(screen.getByRole('button', { name: 'Create and start' })).toBeEnabled();
     expect(mock.api.dispatchFeatureAction).not.toHaveBeenCalled();
   });
@@ -567,15 +620,20 @@ describe('the creation sheet across its four steps', () => {
   it('routes an authoritative name error back to the Describe step and focuses the field', async () => {
     const mock = installAgenticoMock();
     mock.api.createFeature.mockRejectedValueOnce(
-      new Error('bad_request: a feature with that name already exists'),
+      ipcError('bad_request', 'a feature with that name already exists'),
     );
     const { user } = await renderForm(mock);
     await reachContract(user);
     await user.click(screen.getByRole('button', { name: 'Create and start' }));
 
     expect(await screen.findByRole('heading', { name: 'Define the work' })).toBeVisible();
-    expect(screen.getByText(/a feature with that name already exists/)).toBeVisible();
-    expect(document.getElementById('feature-name')).toHaveFocus();
+    // A server rejection routed to the field shows the canonical summary as
+    // the field message; the code tag stays on the (absent) form-level card.
+    expect(screen.getByText(/a feature with that name already exists/)).toHaveClass('field-error');
+    const nameInput = document.getElementById('feature-name') as HTMLElement;
+    expect(nameInput).toHaveAttribute('aria-describedby', 'feature-name-error');
+    expect(nameInput).toHaveFocus();
+    expect(document.querySelector('.error-surface')).toBeNull();
   });
 
   it('submits draftPublish untouched with no control offering it', async () => {
@@ -646,7 +704,9 @@ describe('the creation sheet on a remote server', () => {
     // A non-absolute entry is refused before the server is ever asked.
     await user.type(field, 'srv/work/solo');
     await user.click(screen.getByRole('button', { name: 'Use this path' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/starting with \//);
+    expect(await screen.findByText(/starting with \//)).toHaveClass('field-error');
+    expect(field).toHaveAttribute('aria-describedby', 'creation-folder-path-error');
+    expect(field).toHaveAttribute('aria-invalid', 'true');
     expect(mock.api.pickWorkspaceDirectory).not.toHaveBeenCalled();
     expect(mock.api.addWorkspaceRoot).not.toHaveBeenCalled();
 
@@ -655,11 +715,13 @@ describe('the creation sheet on a remote server', () => {
     await user.type(field, '/srv/work/solo');
     await user.click(screen.getByRole('button', { name: 'Use this path' }));
     mock.api.addWorkspaceRoot.mockRejectedValueOnce(
-      new Error('invalid_workspace_root: /srv/work/solo does not exist on this server'),
+      ipcError('invalid_workspace_root', '/srv/work/solo does not exist on this server'),
     );
     await user.click(screen.getByRole('button', { name: 'Use this folder' }));
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('/srv/work/solo does not exist on this server');
+    expect(await screen.findByText('/srv/work/solo does not exist on this server')).toHaveClass(
+      'field-error',
+    );
+    expect(field).toHaveAttribute('aria-describedby', 'creation-folder-path-error');
 
     // A valid path saves and the discovered repository selects itself.
     await user.click(screen.getByRole('button', { name: 'Use this folder' }));
@@ -686,7 +748,7 @@ describe('the creation sheet on a remote server', () => {
     );
     mock.api.initRepository
       .mockRejectedValueOnce(
-        new Error('directory_not_empty: the directory contains files. Empty it or pick another.'),
+        ipcError('directory_not_empty', 'the directory contains files. Empty it or pick another.'),
       )
       .mockResolvedValue(
         readySnapshot({
@@ -712,7 +774,7 @@ describe('the creation sheet on a remote server', () => {
       path: '/srv/work/fresh',
       consent: true,
     });
-    expect(await screen.findByRole('alert')).toHaveTextContent('the directory contains files');
+    expect(await screen.findByText(/the directory contains files/)).toHaveClass('field-error');
 
     await user.click(screen.getByRole('button', { name: /Initialize it as a repository/ }));
     await user.click(screen.getByRole('button', { name: 'Initialize repository' }));

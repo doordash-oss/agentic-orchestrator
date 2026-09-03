@@ -17,8 +17,10 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -122,12 +124,12 @@ func TestReviewFeedbackSelectionRejectsMalformedUnknownAndCrossParentRefs(t *tes
 	tests := []struct {
 		name     string
 		ref      string
-		wantCode string
+		wantCode errcat.Code
 	}{
-		{name: "malformed", ref: "not-a-ref", wantCode: errCodeReviewFeedbackMalformedReference},
-		{name: "unsupported type", ref: "api:gist:22", wantCode: errCodeReviewFeedbackMalformedReference},
-		{name: "unknown repository", ref: "stranger:review:1", wantCode: errCodeReviewFeedbackUnknownReference},
-		{name: "not in draft", ref: "api:issue:999999", wantCode: errCodeReviewFeedbackUnknownReference},
+		{name: "malformed", ref: "not-a-ref", wantCode: errcat.ReviewFeedbackMalformedReference},
+		{name: "unsupported type", ref: "api:gist:22", wantCode: errcat.ReviewFeedbackMalformedReference},
+		{name: "unknown repository", ref: "stranger:review:1", wantCode: errcat.ReviewFeedbackUnknownReference},
+		{name: "not in draft", ref: "api:issue:999999", wantCode: errcat.ReviewFeedbackUnknownReference},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -142,8 +144,11 @@ func TestReviewFeedbackSelectionRejectsMalformedUnknownAndCrossParentRefs(t *tes
 			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 				t.Fatal(err)
 			}
-			if body.Error.Code != tt.wantCode {
+			if body.Error.Code != string(tt.wantCode) {
 				t.Fatalf("code = %q, want %q", body.Error.Code, tt.wantCode)
+			}
+			if !strings.Contains(body.Error.Diagnostics, tt.ref) {
+				t.Fatalf("diagnostics = %q, want raw detail naming %q", body.Error.Diagnostics, tt.ref)
 			}
 		})
 	}
@@ -165,8 +170,8 @@ func TestReviewFeedbackSelectionRevisionConflictIsTyped(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Error.Code != errCodeReviewFeedbackRevisionConflict {
-		t.Fatalf("code = %q, want %q", body.Error.Code, errCodeReviewFeedbackRevisionConflict)
+	if body.Error.Code != string(errcat.ReviewFeedbackRevisionConflict) {
+		t.Fatalf("code = %q, want %q", body.Error.Code, errcat.ReviewFeedbackRevisionConflict)
 	}
 	// No partial application: the durable draft keeps its revision.
 	kept, _ := store.LoadReviewFeedbackDraft(f.ID)
@@ -190,8 +195,8 @@ func TestReviewFeedbackSelectionBoundsAndMissingDraft(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Error.Code != errCodeReviewFeedbackDraftNotFound {
-		t.Fatalf("code = %q, want %q", body.Error.Code, errCodeReviewFeedbackDraftNotFound)
+	if body.Error.Code != string(errcat.ReviewFeedbackDraftNotFound) {
+		t.Fatalf("code = %q, want %q", body.Error.Code, errcat.ReviewFeedbackDraftNotFound)
 	}
 
 	draft := seedReviewFeedbackSelectionDraft(t, store, f.ID)
@@ -209,8 +214,8 @@ func TestReviewFeedbackSelectionBoundsAndMissingDraft(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Error.Code != errCodeReviewFeedbackSelectionBounds {
-		t.Fatalf("code = %q, want %q", body.Error.Code, errCodeReviewFeedbackSelectionBounds)
+	if body.Error.Code != string(errcat.ReviewFeedbackSelectionTooLarge) {
+		t.Fatalf("code = %q, want %q", body.Error.Code, errcat.ReviewFeedbackSelectionTooLarge)
 	}
 }
 

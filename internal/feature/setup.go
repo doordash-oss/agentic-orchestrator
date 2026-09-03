@@ -17,6 +17,8 @@ package feature
 import (
 	"strconv"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 )
 
 type SetupStatus string
@@ -59,7 +61,11 @@ type SetupTask struct {
 	Attempt          int        `yaml:"attempt,omitempty"`
 	StartedAt        *time.Time `yaml:"started_at,omitempty"`
 	EndedAt          *time.Time `yaml:"ended_at,omitempty"`
-	LastError        string     `yaml:"last_error,omitempty"`
+	// Error is the task's stored canonical failure record: a setup failure
+	// has exactly one owner, the failing setup task, and this is its durable
+	// home. Legacy `last_error` YAML keys are ignored on load and never
+	// written.
+	Error *errcat.FailureRecord `yaml:"error,omitempty"`
 }
 
 type SetupState struct {
@@ -70,7 +76,6 @@ type SetupState struct {
 	LatestLogPath string               `yaml:"latest_log_path,omitempty"`
 	Tasks         map[string]SetupTask `yaml:"tasks,omitempty"`
 	TaskOrder     []string             `yaml:"task_order,omitempty"`
-	LastError     string               `yaml:"last_error,omitempty"`
 }
 
 type SetupInitOptions struct {

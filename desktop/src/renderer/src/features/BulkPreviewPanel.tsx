@@ -22,7 +22,8 @@ limitations under the License.
  */
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { parseIpcError } from '../wizard/ipcError';
-import type { BulkPreview, BulkPreviewRow } from '../../../shared/ipc';
+import { ErrorSurface } from '../components/ErrorSurface';
+import type { CanonicalError, BulkPreview, BulkPreviewRow } from '../../../shared/ipc';
 
 type QueueOutcome = 'success' | 'ineligible' | 'failed' | 'not-started';
 
@@ -31,6 +32,7 @@ interface QueueRowResult {
   featureName?: string;
   action: 'resume' | 'retry';
   outcome: QueueOutcome;
+  /** The canonical title for failures; the server's reason otherwise. */
   message?: string;
 }
 
@@ -43,7 +45,7 @@ function humanizeAction(action: 'resume' | 'retry'): string {
 export function BulkPreviewPanel({ autoPreviewKey = null }: { autoPreviewKey?: number | null }) {
   const [phase, setPhase] = useState<BulkPhase>('idle');
   const [preview, setPreview] = useState<BulkPreview | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<CanonicalError | null>(null);
   const [outcomes, setOutcomes] = useState<QueueRowResult[]>([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [wasCancelled, setWasCancelled] = useState(false);
@@ -60,7 +62,7 @@ export function BulkPreviewPanel({ autoPreviewKey = null }: { autoPreviewKey?: n
       setPreview(result);
       setPhase('preview');
     } catch (err) {
-      setError(parseIpcError(err).message);
+      setError(parseIpcError(err));
       setPhase('idle');
     }
   }, []);
@@ -125,7 +127,8 @@ export function BulkPreviewPanel({ autoPreviewKey = null }: { autoPreviewKey?: n
           featureName: row.featureName,
           action: row.action,
           outcome: 'failed',
-          message: parseIpcError(err).message,
+          // Per-row outcome text derives from the canonical title.
+          message: parseIpcError(err).title,
         });
       }
       setOutcomes([...results]);
@@ -163,9 +166,11 @@ export function BulkPreviewPanel({ autoPreviewKey = null }: { autoPreviewKey?: n
       </header>
 
       {error !== null ? (
-        <p className="form-field__error" role="alert">
-          {error}
-        </p>
+        <ErrorSurface
+          error={error}
+          variant="compact"
+          localAction={{ label: 'Refresh', onAction: () => void loadPreview() }}
+        />
       ) : null}
 
       {phase === 'preview' || phase === 'running' || phase === 'complete' ? (

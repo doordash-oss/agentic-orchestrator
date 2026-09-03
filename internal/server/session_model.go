@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -96,7 +97,8 @@ func (h *apiHandler) handleSessionList(w http.ResponseWriter, r *http.Request) {
 func (h *apiHandler) handleSessionDetail(w http.ResponseWriter, r *http.Request, sessionID string) {
 	sess := h.getSession(sessionID)
 	if sess == nil {
-		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{sessionIDErrorField: sessionID})
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound,
+			errcat.WithParams(errcat.SubjectParams{Subject: "Session", Name: sessionID}))
 		return
 	}
 	detail := sessionDetailFromSummary(sessionSummaryDTO(sess))
@@ -109,7 +111,6 @@ func (h *apiHandler) handleSessionDetail(w http.ResponseWriter, r *http.Request,
 	detail.InitialPrompt = SafeDisplayText(sess.InitialPrompt(), 2000)
 	detail.CanAttach = sess.IsActive()
 	detail.LogAvailable = fileExists(sess.LogFilePath())
-	detail.SafeError = SafeDisplayText(firstNonEmpty(sess.ErrorDetail(), sess.ExitCodeDetail()), 240)
 	revision := revisionForAny(detail)
 	h.writeRevisionedJSON(w, r, revision, SessionDetailResponse{
 		APIVersion: APIVersion,
@@ -121,14 +122,16 @@ func (h *apiHandler) handleSessionDetail(w http.ResponseWriter, r *http.Request,
 func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, sessionID string) {
 	sess := h.getSession(sessionID)
 	if sess == nil {
-		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{sessionIDErrorField: sessionID})
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound,
+			errcat.WithParams(errcat.SubjectParams{Subject: "Session", Name: sessionID}))
 		return
 	}
 	total := sess.MessageLog().Len()
 	offset := int(parseInt64Query(r, "offset", 0))
 	limit := int(parseInt64Query(r, "limit", 100))
 	if offset < 0 || limit <= 0 || limit > 500 {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid transcript bounds", map[string]any{sessionIDErrorField: sessionID})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics(fmt.Sprintf("invalid transcript bounds for session %q", sessionID)))
 		return
 	}
 	if offset > total {
@@ -161,17 +164,19 @@ func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, se
 func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Request, sessionID string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "streaming unavailable", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("streaming unavailable"))
 		return
 	}
 	sess := h.getSession(sessionID)
 	if sess == nil {
-		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{sessionIDErrorField: sessionID})
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound,
+			errcat.WithParams(errcat.SubjectParams{Subject: "Session", Name: sessionID}))
 		return
 	}
 	fromOffset := sessionOutputStreamOffset(r)
 	if fromOffset < 0 {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid output offset", map[string]any{sessionIDErrorField: sessionID})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics(fmt.Sprintf("invalid output offset for session %q", sessionID)))
 		return
 	}
 	from := int(fromOffset)

@@ -37,16 +37,18 @@ limitations under the License.
  * adapter.
  */
 import {
-  SafeErrorException,
-  safeError,
-  toSafeError,
+  buildCanonicalError,
+  CanonicalErrorException,
   redactText,
   stripSecrets,
+  toCanonicalError,
+  type BuildCanonicalErrorOptions,
+  type CatalogCode,
 } from '../../shared/errors';
+import type { CanonicalError } from '../../shared/api/parse';
 import {
   isConnectionErrorState,
   MAX_SERVER_CHOICE_CANDIDATES,
-  type ConnectionDiagnostics,
   type ConnectionState,
   type ChooseServerRequest,
   type KnownServer,
@@ -223,6 +225,13 @@ export class RuntimeGateway {
 
   /** Bearer credential; never leaves the main process. */
   private token: string | null = null;
+  /**
+   * Every credential this gateway has presented. Connection teardown clears
+   * `token` (often before an owned-crash error is built), but emitted text
+   * must still be scrubbed against the credential the crashed launch used,
+   * so the secrets seen here outlive the active connection.
+   */
+  private readonly knownSecrets: string[] = [];
   /** Base URL of the connected runtime; only set while status is ready. */
   private baseUrl: string | null = null;
   private busy = false;
@@ -297,6 +306,9 @@ export class RuntimeGateway {
       scrubServerText: (text, secret) => this.scrubServerText(text, secret),
       setToken: (token) => {
         this.token = token;
+        if (token !== null) {
+          this.rememberSecret(token);
+        }
       },
       liveOwnedPid: () => this.supervision.liveChildPid(),
       parkChoiceForDeadRemote: (generation, dead) => this.parkChoiceForDeadRemote(generation, dead),
@@ -328,7 +340,8 @@ export class RuntimeGateway {
         this.token = null;
         this.baseUrl = null;
       },
-      ownedDiagnosticsField: () => this.ownedDiagnosticsField(),
+      ownedCrashError: (outcome) => this.ownedError('E_SERVER_CRASHED', { params: { outcome } }),
+      ownedCrashLoopError: () => this.ownedError('E_SERVER_CRASH_LOOP'),
       startFromRecovery: () => this.start(),
     };
   }
@@ -365,18 +378,10 @@ export class RuntimeGateway {
    */
   async apiRequest(path: string, init: ApiRequestInit = {}): Promise<HttpResult> {
     if (!isAllowedApiPath(path)) {
-      throw new SafeErrorException(
-        safeError('E_BAD_API_PATH', 'The requested API path is not allowed.'),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_BAD_API_PATH'));
     }
     if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
-      throw new SafeErrorException(
-        safeError(
-          'E_NOT_CONNECTED',
-          'The app is not connected to an Agentico runtime.',
-          'Wait for the connection to become ready, then retry.',
-        ),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED'));
     }
     const method = init.method ?? 'GET';
     return this.deps.fetchJson(`${this.baseUrl}${path}`, {
@@ -394,24 +399,14 @@ export class RuntimeGateway {
    */
   async apiUpload(path: string, body: Uint8Array): Promise<HttpResult> {
     if (!isAllowedApiPath(path)) {
-      throw new SafeErrorException(
-        safeError('E_BAD_API_PATH', 'The requested API path is not allowed.'),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_BAD_API_PATH'));
     }
     if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
-      throw new SafeErrorException(
-        safeError(
-          'E_NOT_CONNECTED',
-          'The app is not connected to an Agentico runtime.',
-          'Wait for the connection to become ready, then retry.',
-        ),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED'));
     }
     const fetchOctetPost = this.deps.fetchOctetPost;
     if (fetchOctetPost === undefined) {
-      throw new SafeErrorException(
-        safeError('E_UPLOAD_UNAVAILABLE', 'This build has no upload transport wired.'),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_UPLOAD_UNAVAILABLE'));
     }
     return fetchOctetPost(`${this.baseUrl}${path}`, {
       token: this.token,
@@ -427,19 +422,11 @@ export class RuntimeGateway {
    */
   async openEventStream(options: { afterSeq?: number; epoch?: string } = {}): Promise<SseStream> {
     if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
-      throw new SafeErrorException(
-        safeError(
-          'E_NOT_CONNECTED',
-          'The app is not connected to an Agentico runtime.',
-          'Wait for the connection to become ready, then retry.',
-        ),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED'));
     }
     const openSse = this.deps.openSse;
     if (openSse === undefined) {
-      throw new SafeErrorException(
-        safeError('E_SSE_UNAVAILABLE', 'This build has no event-stream transport wired.'),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_SSE_UNAVAILABLE'));
     }
     const query = new URLSearchParams();
     if (options.afterSeq !== undefined && options.afterSeq > 0) {
@@ -458,29 +445,19 @@ export class RuntimeGateway {
     options: { from?: number } = {},
   ): Promise<SseStream> {
     if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
-      throw new SafeErrorException(
-        safeError(
-          'E_NOT_CONNECTED',
-          'The app is not connected to an Agentico runtime.',
-          'Wait for the connection to become ready, then retry.',
-        ),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED'));
     }
     if (!SESSION_ID_PATTERN.test(sessionId)) {
-      throw new SafeErrorException(safeError('E_BAD_SESSION_ID', 'The session ID is not allowed.'));
+      throw new CanonicalErrorException(buildCanonicalError('E_BAD_SESSION_ID'));
     }
     const openSse = this.deps.openSse;
     if (openSse === undefined) {
-      throw new SafeErrorException(
-        safeError('E_SSE_UNAVAILABLE', 'This build has no event-stream transport wired.'),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_SSE_UNAVAILABLE'));
     }
     const query = new URLSearchParams();
     if (options.from !== undefined) {
       if (!Number.isSafeInteger(options.from) || options.from < 0) {
-        throw new SafeErrorException(
-          safeError('E_BAD_TRANSCRIPT_CURSOR', 'The transcript cursor is not allowed.'),
-        );
+        throw new CanonicalErrorException(buildCanonicalError('E_BAD_TRANSCRIPT_CURSOR'));
       }
       query.set('from', String(options.from));
     }
@@ -651,22 +628,22 @@ export class RuntimeGateway {
           stage: 'connect',
           detail: 'The selected server is not running.',
           ownership: 'none',
-          error: {
-            code: 'E_SWITCH_UNAVAILABLE',
-            message: 'The selected Agentico server is no longer running.',
-            remediation:
-              previous !== null
-                ? 'Use Retry to try again, or go back to the previous server.'
-                : 'Use Retry to try again.',
-          },
+          error:
+            previous !== null
+              ? buildCanonicalError('E_SWITCH_UNAVAILABLE')
+              : // Without a previous server there is no back option, so the
+                // catalog hint narrows to the one remaining affordance.
+                buildCanonicalError('E_SWITCH_UNAVAILABLE', {
+                  remediationHint: 'Use Retry to try again.',
+                }),
           switchContext,
         });
         return this.state;
       }
       await this.attachCandidate(generation, candidate, 'error', switchContext);
     } catch (err) {
-      const safe = toSafeError(err, 'E_GATEWAY');
-      this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.message}`);
+      const safe = toCanonicalError(err, 'E_GATEWAY');
+      this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.summary}`);
       const attempted: ServerChoiceCandidate = {
         serverKey: request.serverKey,
         kind: known?.kind ?? 'local',
@@ -806,8 +783,8 @@ export class RuntimeGateway {
     this.serverKey = null;
     if (this.connectedKind === 'remote' && this.remoteEntry !== null) {
       // Lost remote: never spawn, never consume the crash budget. Surface a
-      // retry-level error and probe in the background so a server that comes
-      // back reconnects itself with the stored credentials.
+      // warning-class error — the background re-probe below keeps trying and
+      // reconnects a server that comes back with its stored credentials.
       const entry = this.remoteEntry;
       this.connectedKind = null;
       this.setState({
@@ -815,14 +792,7 @@ export class RuntimeGateway {
         stage: 'connect',
         detail: 'The remote Agentico server is no longer reachable.',
         ownership: 'external',
-        error: {
-          code: 'E_EXTERNAL_SERVER_LOST',
-          message: 'The remote Agentico server stopped responding.',
-          remediation:
-            'Check that the remote server is running and reachable. The app keeps ' +
-            'probing in the background for a few minutes and reconnects automatically; ' +
-            'you can also use Retry.',
-        },
+        error: buildCanonicalError('E_REMOTE_SERVER_LOST_REPROBING'),
       });
       this.scheduleRemoteReprobe(this.generation, entry);
       return;
@@ -832,11 +802,7 @@ export class RuntimeGateway {
       stage: 'connect',
       detail: 'The externally managed runtime is no longer reachable.',
       ownership: 'external',
-      error: {
-        code: 'E_EXTERNAL_SERVER_LOST',
-        message: 'The externally managed Agentico runtime stopped responding.',
-        remediation: 'Restart it from where it was started, then use Retry.',
-      },
+      error: buildCanonicalError('E_EXTERNAL_RUNTIME_UNRESPONSIVE'),
     });
   }
 
@@ -1051,7 +1017,7 @@ export class RuntimeGateway {
    * when at least one other server (local or remote) can be listed beside
    * it, so the user picks a working server instead of staring at the error
    * surface. Returns false when nothing else is live — the caller then
-   * emits the regular E_EXTERNAL_SERVER_LOST error.
+   * emits the profile-specific lost-server error.
    */
   private async parkChoiceForDeadRemote(generation: number, dead: KnownServer): Promise<boolean> {
     if (this.cancelled(generation)) {
@@ -1202,8 +1168,8 @@ export class RuntimeGateway {
       if (this.remoteReprobeGeneration === generation) {
         this.remoteReprobeGeneration = null;
       }
-      const safe = toSafeError(err, 'E_RECOVERY_DELAY');
-      this.deps.log(`remote re-probe failed: ${safe.message}`);
+      const safe = toCanonicalError(err, 'E_RECOVERY_DELAY');
+      this.deps.log(`remote re-probe failed: ${safe.summary}`);
     });
   }
 
@@ -1225,13 +1191,7 @@ export class RuntimeGateway {
         stage: 'connect',
         detail: 'The bundled runtime binary is missing from the application resources.',
         ownership: 'none',
-        error: {
-          code: 'E_RESOURCES_MISSING',
-          message: 'The bundled agentico server binary was not found in the application resources.',
-          remediation:
-            'Reinstall the application. In development, run "make build" or point ' +
-            'AGENTICO_SERVER_BIN at a built agentico binary, then retry.',
-        },
+        error: buildCanonicalError('E_RESOURCES_MISSING'),
       });
       return;
     }
@@ -1242,19 +1202,15 @@ export class RuntimeGateway {
     try {
       child = this.deps.spawnServer(resolved.path, args);
     } catch (err) {
-      const safe = toSafeError(err, 'E_LAUNCH_FAILED');
-      this.deps.log(`server spawn failed: ${safe.message}`);
+      this.deps.log('server spawn failed: E_LAUNCH_FAILED');
       this.setState({
         status: 'launch-failed',
         stage: 'connect',
         detail: 'The bundled runtime could not be started.',
         ownership: 'none',
-        error: {
-          code: 'E_LAUNCH_FAILED',
-          message: safe.message,
-          remediation: 'Check that the application files are intact and executable, then retry.',
-        },
-        ...this.ownedDiagnosticsField(),
+        error: this.ownedError('E_LAUNCH_FAILED', {
+          ...(err instanceof Error && err.message !== '' ? { diagnostics: err.message } : {}),
+        }),
       });
       return;
     }
@@ -1278,18 +1234,14 @@ export class RuntimeGateway {
       // Packaging bug: the app's own bundled server disagrees with the app.
       // This child is app-owned, so stopping it is permitted.
       await this.supervision.stop();
-      this.deps.log(`bundled runtime is incompatible: ${verdict.reason}`);
+      const error = this.ownedError('E_BUNDLED_INCOMPATIBLE', { params: verdict });
+      this.deps.log(`bundled runtime is incompatible: ${error.summary}`);
       this.setState({
         status: 'launch-failed',
         stage: 'wait-health',
         detail: 'The bundled runtime does not match this app build.',
         ownership: 'none',
-        error: {
-          code: 'E_BUNDLED_INCOMPATIBLE',
-          message: verdict.reason,
-          remediation: 'Reinstall the application so the bundled runtime matches the app.',
-        },
-        ...this.ownedDiagnosticsField(),
+        error,
       });
       return;
     }
@@ -1302,16 +1254,12 @@ export class RuntimeGateway {
         stage: 'authenticate',
         detail: 'The launched runtime published no credentials.',
         ownership: 'none',
-        error: {
-          code: 'E_LAUNCH_NO_TOKEN',
-          message: 'The launched runtime did not publish an auth token in its discovery record.',
-          remediation: 'Retry. If this persists, reinstall the application.',
-        },
-        ...this.ownedDiagnosticsField(),
+        error: this.ownedError('E_LAUNCH_NO_TOKEN'),
       });
       return;
     }
     this.token = token;
+    this.rememberSecret(token);
     this.deps.registerSecret(token);
 
     this.setState({
@@ -1327,7 +1275,6 @@ export class RuntimeGateway {
       return;
     }
     if (!authenticated) {
-      const diagnostics = this.ownedDiagnosticsField();
       this.token = null;
       await this.supervision.stop();
       this.setState({
@@ -1335,12 +1282,7 @@ export class RuntimeGateway {
         stage: 'authenticate',
         detail: 'Could not authenticate with the launched runtime.',
         ownership: 'none',
-        error: {
-          code: 'E_LAUNCH_AUTH',
-          message: 'The launched runtime rejected its own published credentials.',
-          remediation: 'Retry. If this persists, reinstall the application.',
-        },
-        ...diagnostics,
+        error: this.ownedError('E_LAUNCH_AUTH'),
       });
       return;
     }
@@ -1384,12 +1326,7 @@ export class RuntimeGateway {
           stage: 'wait-health',
           detail: 'The runtime exited during startup.',
           ownership: 'none',
-          error: {
-            code: 'E_SERVER_EXITED',
-            message: 'The bundled runtime exited during startup.',
-            remediation: 'Retry. Local diagnostics were recorded for this launch attempt.',
-          },
-          ...this.ownedDiagnosticsField(),
+          error: this.ownedError('E_SERVER_EXITED'),
         });
         return null;
       }
@@ -1430,12 +1367,7 @@ export class RuntimeGateway {
       stage: 'wait-health',
       detail: 'The runtime did not become healthy in time.',
       ownership: 'none',
-      error: {
-        code: 'E_LAUNCH_TIMEOUT',
-        message: 'The launched runtime did not become healthy within the startup bound.',
-        remediation: 'Retry. If this persists, inspect the runtime log in the runtime directory.',
-      },
-      ...this.ownedDiagnosticsField(),
+      error: this.ownedError('E_LAUNCH_TIMEOUT'),
     });
     return null;
   }
@@ -1490,8 +1422,8 @@ export class RuntimeGateway {
     err: unknown,
     options: { stage: Extract<ConnectionState, { status: 'error' }>['stage'] },
   ): void {
-    const safe = toSafeError(err, 'E_GATEWAY');
-    this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.message}`);
+    const safe = toCanonicalError(err, 'E_GATEWAY');
+    this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.summary}`);
     this.setState({
       status: 'error',
       stage: options.stage,
@@ -1551,32 +1483,46 @@ export class RuntimeGateway {
 
   /** Defense in depth: no emitted text ever carries bearer material. */
   private sanitizeState(state: ConnectionState): ConnectionState {
-    const scrub = (text: string): string =>
-      this.token === null ? redactText(text) : stripSecrets(redactText(text), [this.token]);
+    const scrub = (text: string): string => stripSecrets(redactText(text), this.knownSecrets);
     if (!isConnectionErrorState(state)) {
       return { ...state, detail: scrub(state.detail) };
     }
     return {
       ...state,
       detail: scrub(state.detail),
-      ...(!('diagnostics' in state) || state.diagnostics === undefined
-        ? {}
-        : {
-            diagnostics: {
-              commandContext: scrub(state.diagnostics.commandContext).slice(0, 256),
-              logTail: state.diagnostics.logTail
-                .slice(-20)
-                .map((line) => this.scrubDiagnosticLine(scrub(line)).slice(0, 512)),
-            },
-          }),
       error: {
-        code: state.error.code,
-        message: scrub(state.error.message),
-        ...(state.error.remediation === undefined
+        ...state.error,
+        title: scrub(state.error.title),
+        summary: scrub(state.error.summary),
+        ...(state.error.remediation?.hint === undefined
           ? {}
-          : { remediation: scrub(state.error.remediation) }),
+          : {
+              remediation: {
+                ...state.error.remediation,
+                hint: scrub(state.error.remediation.hint),
+              },
+            }),
+        ...(state.error.diagnostics === undefined
+          ? {}
+          : { diagnostics: this.scrubOwnedDiagnostics(scrub(state.error.diagnostics)) }),
       },
     };
+  }
+
+  /**
+   * Re-applies the owned-diagnostics bounding to an already-folded
+   * diagnostics string: an optional leading cause line plus the launch
+   * command context (≤256 chars each) and the last 20 log lines (≤512 chars
+   * each). The newest log line — usually the one carrying the actual launch
+   * error — is the tail, so over-length input is trimmed from the middle,
+   * never from the end.
+   */
+  private scrubOwnedDiagnostics(text: string): string {
+    const lines = text.split('\n');
+    const bounded = lines.length <= 22 ? lines : [...lines.slice(0, 2), ...lines.slice(-20)];
+    return bounded
+      .map((line, index) => this.scrubDiagnosticLine(line).slice(0, index < 2 ? 256 : 512))
+      .join('\n');
   }
 
   /**
@@ -1591,25 +1537,52 @@ export class RuntimeGateway {
     return stripSecrets(text, [secret]).slice(0, 64);
   }
 
-  private ownedDiagnosticsField(): { diagnostics?: ConnectionDiagnostics } {
-    if (this.launchCommandContext === null) return {};
+  /**
+   * The bounded, redacted diagnostics string for a failure of the app-owned
+   * child: the launch command context (≤256 chars) joined with the last 20
+   * log lines (≤512 chars each), scrubbed. Undefined until a launch has
+   * published its command context.
+   */
+  private ownedDiagnosticsText(): string | undefined {
+    if (this.launchCommandContext === null) return undefined;
     const lines = this.deps.readDiagnosticLines?.() ?? [];
-    return {
-      diagnostics: {
-        commandContext: this.launchCommandContext,
-        logTail: lines.slice(-20).map((line) => this.scrubDiagnosticLine(line).slice(0, 512)),
-      },
-    };
+    return [
+      this.launchCommandContext.slice(0, 256),
+      ...lines.slice(-20).map((line) => this.scrubDiagnosticLine(line).slice(0, 512)),
+    ].join('\n');
+  }
+
+  /**
+   * Builds the canonical error for an app-owned failure, folding the bounded,
+   * redacted launch diagnostics into the error's `diagnostics` string.
+   */
+  private ownedError<C extends CatalogCode>(
+    code: C,
+    options: BuildCanonicalErrorOptions<C> = {},
+  ): CanonicalError {
+    const diagnostics = [options.diagnostics, this.ownedDiagnosticsText()]
+      .filter((text): text is string => text !== undefined && text !== '')
+      .join('\n');
+    return buildCanonicalError(code, {
+      ...options,
+      ...(diagnostics === '' ? {} : { diagnostics }),
+    });
   }
 
   /** Removes generic absolute paths in addition to shared token/user-path redaction. */
   private scrubDiagnosticLine(line: string): string {
-    let out = redactText(line);
-    if (this.token !== null && this.token.length > 0) {
-      out = out.split(this.token).join('[redacted]');
-    }
+    const out = stripSecrets(redactText(line), this.knownSecrets);
     return out
       .replace(/[A-Za-z]:\\[^\s"']+/g, '[path]')
       .replace(/(^|[\s("'=])\/(?!\/)[^\s"']+/g, '$1[path]');
+  }
+
+  /** Records a presented credential so emitted text stays scrubbed after teardown. */
+  private rememberSecret(secret: string): void {
+    if (secret.length === 0 || this.knownSecrets.includes(secret)) return;
+    this.knownSecrets.push(secret);
+    if (this.knownSecrets.length > 8) {
+      this.knownSecrets.shift();
+    }
   }
 }

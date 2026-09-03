@@ -24,6 +24,7 @@ limitations under the License.
  * informational only and never gate attachment.
  */
 import { CompatibilityDeclarationSchema, type BuildIdentity } from '../../shared/api/parse';
+import type { CompatibilityFailure } from '../../shared/errors';
 
 export type { BuildIdentity };
 
@@ -47,7 +48,7 @@ export const SUPPORTED_RUNTIME_POLICIES: readonly string[] = [
 ];
 
 export type CompatibilityVerdict =
-  { compatible: true; serverBuild: BuildIdentity } | { compatible: false; reason: string };
+  { compatible: true; serverBuild: BuildIdentity } | CompatibilityFailure;
 
 /**
  * Evaluates the server's declaration. Absent or unparseable declarations
@@ -58,41 +59,43 @@ export function evaluateCompatibility(declaration: unknown): CompatibilityVerdic
   if (declaration === undefined || declaration === null) {
     return {
       compatible: false,
-      reason: 'The server does not declare a compatibility contract.',
+      code: 'missing_contract',
     };
   }
   const parsed = CompatibilityDeclarationSchema.safeParse(declaration);
   if (!parsed.success) {
     return {
       compatible: false,
-      reason: 'The server declares an unrecognized compatibility contract.',
+      code: 'unrecognized_contract',
     };
   }
   const decl = parsed.data;
   if (!SUPPORTED_SERVER_API_VERSIONS.includes(decl.api_version)) {
     return {
       compatible: false,
-      reason: `The server serves API ${decl.api_version}, which this app does not support.`,
+      code: 'unsupported_api',
+      apiVersion: decl.api_version,
     };
   }
   if (!SUPPORTED_SERVER_SCHEMA_VERSIONS.includes(decl.schema_version)) {
     return {
       compatible: false,
-      reason: `The server declares schema series ${decl.schema_version}, which this app does not support.`,
+      code: 'unsupported_schema',
+      schemaVersion: String(decl.schema_version),
     };
   }
   if (decl.min_client_schema > DESKTOP_SCHEMA_VERSION) {
     return {
       compatible: false,
-      reason:
-        `The server requires client schema ${decl.min_client_schema}, ` +
-        `but this desktop build implements ${DESKTOP_SCHEMA_VERSION}.`,
+      code: 'newer_client_schema_required',
+      schemaVersion: String(decl.min_client_schema),
+      clientSchemaVersion: String(DESKTOP_SCHEMA_VERSION),
     };
   }
   if (!SUPPORTED_RUNTIME_POLICIES.includes(decl.runtime_policy)) {
     return {
       compatible: false,
-      reason: 'The server enforces a runtime policy this app does not support.',
+      code: 'unsupported_runtime_policy',
     };
   }
   const serverBuild: BuildIdentity =

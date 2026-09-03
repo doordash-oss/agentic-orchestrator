@@ -28,7 +28,7 @@ export interface PipRailProps {
   activeIndex: number;
   /** True when the active stop is the run's final resting state, not a live needle. */
   atRest?: boolean;
-  tone?: 'progress' | 'attention';
+  tone?: 'progress' | 'attention' | 'danger';
   /** Accessible label for the whole strip (e.g. "<feature> progress"). */
   label: string;
 }

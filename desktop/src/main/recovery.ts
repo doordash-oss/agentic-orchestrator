@@ -26,6 +26,7 @@ import {
   TextContentResponseSchema,
   validateWithSchema,
 } from '../shared/api/parse';
+import { redactedCanonicalError } from '../shared/errors';
 import {
   FeatureIdSchema,
   RecoveryExecuteRequestSchema,
@@ -41,12 +42,6 @@ import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
 
 export type RecoveryTransport = ServerTransport;
-
-const REMEDY_BY_CODE: Record<string, string> = {
-  not_found: 'The recovery snapshot is stale. Refresh the scan and try again.',
-  bad_request: 'The recovery action was rejected. Refresh and retry.',
-  conflict: 'The recovery item state changed. Refresh the scan and try again.',
-};
 
 export class RecoveryService {
   constructor(private readonly transport: RecoveryTransport) {}
@@ -67,6 +62,10 @@ export class RecoveryService {
       ...(item.iteration === undefined ? {} : { iteration: item.iteration }),
       ...(item.pid === undefined ? {} : { pid: item.pid }),
       processAlive: item.process_alive,
+      // Canonical error object crosses IPC intact except diagnostics, which
+      // pass through the same redaction defensively even though the server
+      // promises none.
+      error: redactedCanonicalError(item.error),
       ...(item.log_available === undefined ? {} : { logAvailable: item.log_available }),
       allowedActions: item.allowed_actions ?? [],
       defaultAction: item.default_action,
@@ -111,8 +110,6 @@ export class RecoveryService {
   }
 
   private api(path: string, init?: ApiRequestInit): Promise<unknown> {
-    return serverRequest(this.transport, path, init, {
-      remedyByCode: REMEDY_BY_CODE,
-    });
+    return serverRequest(this.transport, path, init);
   }
 }

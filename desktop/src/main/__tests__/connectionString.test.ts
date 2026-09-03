@@ -17,7 +17,7 @@ limitations under the License.
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 
-import { SafeErrorException } from '../../shared/errors';
+import { CanonicalErrorException } from '../../shared/errors';
 import {
   E_CONNECTION_STRING_HOST,
   E_CONNECTION_STRING_HOST_INVALID,
@@ -30,12 +30,12 @@ import {
   serverKeyForBaseUrl,
 } from '../connectionString';
 
-function parseError(raw: string): SafeErrorException {
+function parseError(raw: string): CanonicalErrorException {
   try {
     parseConnectionString(raw);
   } catch (err) {
-    expect(err).toBeInstanceOf(SafeErrorException);
-    return err as SafeErrorException;
+    expect(err).toBeInstanceOf(CanonicalErrorException);
+    return err as CanonicalErrorException;
   }
   throw new Error(`expected parseConnectionString(${raw}) to throw`);
 }
@@ -139,13 +139,13 @@ describe('parseConnectionString malformed matrix (distinct messages)', () => {
       label: 'missing token',
       raw: 'agentico://10.1.2.3:8080',
       code: E_CONNECTION_STRING_TOKEN,
-      want: 'bearer token',
+      want: 'access token',
     },
     {
       label: 'empty token',
       raw: 'agentico://@10.1.2.3:8080',
       code: E_CONNECTION_STRING_TOKEN,
-      want: 'bearer token',
+      want: 'access token',
     },
     {
       label: 'missing host',
@@ -212,13 +212,15 @@ describe('parseConnectionString malformed matrix (distinct messages)', () => {
   for (const tc of cases) {
     it(`rejects ${tc.label} with ${tc.code}`, () => {
       const err = parseError(tc.raw);
-      expect(err.safe.code).toBe(tc.code);
-      expect(err.safe.message).toContain(tc.want);
-      expect(err.safe.remediation).toBeTruthy();
+      expect(err.canonical.code).toBe(tc.code);
+      expect(err.canonical.class).toBe('needs_action');
+      expect(err.canonical.title.length).toBeGreaterThan(0);
+      expect(err.canonical.summary).toContain(tc.want);
+      expect(err.canonical.remediation?.hint).toBeTruthy();
     });
   }
 
-  it('gives each failure mode a distinct message', () => {
+  it('gives each failure mode a distinct code and summary', () => {
     const raws = [
       'http://tok@10.1.2.3:8080',
       'agentico://10.1.2.3:8080',
@@ -228,15 +230,17 @@ describe('parseConnectionString malformed matrix (distinct messages)', () => {
       'agentico://tok@10.1.2.3',
       'agentico://tok@10.1.2.3:99999',
     ];
-    const messages = new Set(raws.map((raw) => parseError(raw).safe.message));
-    expect(messages.size).toBe(raws.length);
+    const codes = new Set(raws.map((raw) => parseError(raw).canonical.code));
+    const summaries = new Set(raws.map((raw) => parseError(raw).canonical.summary));
+    expect(codes.size).toBe(raws.length);
+    expect(summaries.size).toBe(raws.length);
   });
 
   it('never echoes the raw string (which may carry the token) in the error', () => {
     const raw = 'agentico://s3cr3t-tok@0.0.0.0:8080';
     const err = parseError(raw);
-    expect(err.safe.message).not.toContain('s3cr3t-tok');
-    expect(err.safe.remediation ?? '').not.toContain('s3cr3t-tok');
+    expect(err.canonical.summary).not.toContain('s3cr3t-tok');
+    expect(err.canonical.remediation?.hint ?? '').not.toContain('s3cr3t-tok');
   });
 });
 

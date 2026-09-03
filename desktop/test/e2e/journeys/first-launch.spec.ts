@@ -207,7 +207,7 @@ test(
       );
       await evidenceShotBothThemes(handle, 'ready-to-start');
 
-      const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+      const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
       expect(features).toHaveLength(1);
       const feature = await handle.page.evaluate(
         (id) => window.agentico.getFeature(id),

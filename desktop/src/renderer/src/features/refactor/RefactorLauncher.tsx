@@ -29,8 +29,11 @@ import type {
   FeatureSnapshot,
   RepositoryFileRef,
 } from '../../../../shared/ipc';
-import { parseIpcError, type WizardError } from '../../wizard/ipcError';
-import { useConnectionState } from '../../hooks';
+import { ErrorSurface } from '../../components/ErrorSurface';
+import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../../components/FieldError';
+import { retryAction, useConnectionState, useIpcLoad } from '../../hooks';
+import { parseIpcError } from '../../wizard/ipcError';
+import type { CanonicalError } from '../../../../shared/ipc';
 import {
   isBlockingStagedItem,
   STAGED_ITEMS_BLOCK_SUBMIT,
@@ -54,11 +57,6 @@ import {
   type CheckpointState,
   type Pipeline,
 } from '../runContract';
-type SeedState =
-  | { phase: 'loading' }
-  | { phase: 'error'; error: WizardError }
-  | { phase: 'ready'; defaults: FeatureConfigSnapshot['defaults'] };
-
 const STEPS = ['What', 'Pipeline', 'Review'] as const;
 
 export interface RefactorLauncherProps {
@@ -74,7 +72,6 @@ export function RefactorLauncher({
   onCancel,
   onDispatched,
 }: RefactorLauncherProps): React.ReactElement {
-  const [seed, setSeed] = useState<SeedState>({ phase: 'loading' });
   const [stepIndex, setStepIndex] = useState(0);
   const [name, setName] = useState(`Refactor ${snapshot.name}`);
   const [description, setDescription] = useState('');
@@ -105,7 +102,7 @@ export function RefactorLauncher({
   const [pending, setPending] = useState(false);
   const [autoStart, setAutoStart] = useState(true);
   const [nameError, setNameError] = useState<string | null>(null);
-  const [formError, setFormError] = useState<WizardError | null>(null);
+  const [formError, setFormError] = useState<CanonicalError | null>(null);
   const catalogue = useModelCatalogue();
   const nameRef = useRef<HTMLInputElement | null>(null);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
@@ -117,37 +114,37 @@ export function RefactorLauncher({
     isBlockingStagedItem(item, serverKey),
   );
 
-  const loadSeed = useCallback(() => {
-    setSeed({ phase: 'loading' });
-    window.agentico
-      .getFeatureConfig(featureId)
-      .then((config) => {
-        // The parent's current configuration is the authoritative seed for
-        // every paired-review axis; the effective workspace defaults label
-        // the untouched rows, exactly as in the parent's config editor.
-        const choices: Partial<Record<PhaseKey, string>> = {};
-        const efforts: Partial<Record<PhaseKey, EffortLevel>> = {};
-        for (const key of Object.keys(config.current.models) as PhaseKey[]) {
-          const model = config.current.models[key];
-          if (model !== undefined && model !== '') choices[key] = model;
-        }
-        for (const key of Object.keys(config.current.effort) as Array<
-          keyof typeof config.current.effort
-        >) {
-          const effort = config.current.effort[key];
-          if (effort !== undefined) efforts[key] = effort;
-        }
-        setModelChoices(choices);
-        setEffortChoices(efforts);
-        setInquireness(config.current.inquireness);
-        setCheckpoints({ ...config.current.checkpoints });
-        if (isPipeline(config.current.pipeline)) setPipeline(config.current.pipeline);
-        setSeed({ phase: 'ready', defaults: config.defaults });
-      })
-      .catch((err: unknown) => setSeed({ phase: 'error', error: parseIpcError(err) }));
-  }, [featureId]);
+  const loadSeed = useCallback(
+    (): Promise<FeatureConfigSnapshot> => window.agentico.getFeatureConfig(featureId),
+    [featureId],
+  );
+  const { state: seed, reload: reloadSeed } = useIpcLoad(loadSeed, [featureId]);
 
-  useEffect(loadSeed, [loadSeed]);
+  useEffect(() => {
+    if (seed.phase !== 'loaded') return;
+    const config = seed.data;
+    // The parent's current configuration is the authoritative seed for
+    // every paired-review axis; the effective workspace defaults label
+    // the untouched rows, exactly as in the parent's config editor.
+    const choices: Partial<Record<PhaseKey, string>> = {};
+    const efforts: Partial<Record<PhaseKey, EffortLevel>> = {};
+    for (const key of Object.keys(config.current.models) as PhaseKey[]) {
+      const model = config.current.models[key];
+      if (model !== undefined && model !== '') choices[key] = model;
+    }
+    for (const key of Object.keys(config.current.effort) as Array<
+      keyof typeof config.current.effort
+    >) {
+      const effort = config.current.effort[key];
+      if (effort !== undefined) efforts[key] = effort;
+    }
+    setModelChoices(choices);
+    setEffortChoices(efforts);
+    setInquireness(config.current.inquireness);
+    setCheckpoints({ ...config.current.checkpoints });
+    if (isPipeline(config.current.pipeline)) setPipeline(config.current.pipeline);
+  }, [seed]);
+
   useEffect(() => {
     if (formError !== null) formErrorRef.current?.focus();
   }, [formError]);
@@ -166,7 +163,7 @@ export function RefactorLauncher({
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
-    if (pending || uploadsBlocking || seed.phase !== 'ready') return;
+    if (pending || uploadsBlocking || seed.phase !== 'loaded') return;
     if (!validateName()) {
       setStepIndex(0);
       return;
@@ -231,21 +228,15 @@ export function RefactorLauncher({
   if (seed.phase === 'error')
     return (
       <section className="refactor-wizard" aria-label="Start refactor">
-        <div role="alert" className="create-form__error">
-          <b>{seed.error.code}</b>
-          <p>{seed.error.message}</p>
-        </div>
-        <button type="button" onClick={loadSeed}>
-          Try again
-        </button>
+        <ErrorSurface error={seed.error} variant="compact" localAction={retryAction(reloadSeed)} />
       </section>
     );
 
   const currentStep = STEPS[stepIndex];
   const gates = applicableGates(pipeline);
   const visibleGates = GATE_FIELDS.filter((gate) => gates.has(gate.key));
-  const modelDefaults = seed.defaults.models;
-  const effortDefaults = seed.defaults.effort;
+  const modelDefaults = seed.data.defaults.models;
+  const effortDefaults = seed.data.defaults.effort;
 
   return (
     <form
@@ -285,21 +276,12 @@ export function RefactorLauncher({
         })}
       </nav>
       {formError !== null ? (
-        <div ref={formErrorRef} tabIndex={-1} role="alert" className="create-form__error">
-          <b>{formError.code}</b>
-          <p>{formError.message}</p>
-          {formError.dirtyWorktrees?.map((repo, index) => (
-            <div key={`${repo.repo ?? 'repo'}:${index}`} className="create-form__error-detail">
-              <strong>{repo.repo ?? 'Repository'}</strong>
-              {repo.path === undefined ? null : <span> · {repo.path}</span>}
-              <p>
-                Staged {repo.stagedTotal ?? repo.staged?.length ?? 0} · Unstaged{' '}
-                {repo.unstagedTotal ?? repo.unstaged?.length ?? 0} · Untracked{' '}
-                {repo.untrackedTotal ?? repo.untracked?.length ?? 0}
-              </p>
-            </div>
-          ))}
-        </div>
+        <ErrorSurface
+          error={formError}
+          variant="compact"
+          rootRef={formErrorRef}
+          rootTabIndex={-1}
+        />
       ) : null}
 
       {currentStep === 'What' ? (
@@ -315,18 +297,17 @@ export function RefactorLauncher({
               className="form-field__input"
               value={name}
               maxLength={200}
-              aria-invalid={nameError !== null}
-              aria-describedby={nameError ? 'refactor-child-name-error' : undefined}
+              aria-invalid={fieldAriaInvalid(nameError !== null)}
+              aria-describedby={fieldAriaDescribedBy(
+                'refactor-child-name-error',
+                nameError !== null,
+              )}
               onChange={(event) => {
                 setName(event.target.value);
                 setNameError(null);
               }}
             />
-            {nameError ? (
-              <span id="refactor-child-name-error" className="form-field__error">
-                {nameError}
-              </span>
-            ) : null}
+            <FieldError id="refactor-child-name-error" message={nameError} />
           </label>
           <DescriptionComposer
             id="refactor-brief"

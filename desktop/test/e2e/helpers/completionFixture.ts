@@ -178,7 +178,7 @@ export function activeRunYamlPath(world: JourneyWorld, featureId: string): strin
   );
 }
 
-/** Removes failure_type and last_error lines from run.yaml. */
+/** Removes the failure record block from run.yaml. */
 export function clearRunFailures(runYaml: string): string {
-  return runYaml.replace(/^failure_type:.*$\n?/m, '').replace(/^last_error:.*$\n?/m, '');
+  return replaceTopLevelBlock(runYaml, 'failure', []);
 }

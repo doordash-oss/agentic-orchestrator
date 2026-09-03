@@ -165,12 +165,24 @@ const SETUP_WIZARD_MODELS_STEP: ReadinessSnapshot = {
   providers: [{ name: 'claude', installed: true, version: '2.1.0', ready: true }],
   models: {
     available: false,
-    issue: { code: 'models_unavailable', message: 'No models are configured yet.' },
+    issue: {
+      code: 'models_unavailable',
+      class: 'blocking',
+      title: 'Models unavailable',
+      summary: 'No models are configured yet.',
+    },
   },
   configuration: { valid: true },
   workspaceRoots: [{ path: '/work/space', valid: true }],
   repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true }],
-  issues: [{ code: 'models_unavailable', message: 'No models are configured yet.' }],
+  issues: [
+    {
+      code: 'models_unavailable',
+      class: 'blocking',
+      title: 'Models unavailable',
+      summary: 'No models are configured yet.',
+    },
+  ],
 };
 
 /** The setup wizard mounted the way it appears before the workspace exists:
@@ -1223,6 +1235,11 @@ function CompletionScene({ scene }: { scene: string }): React.ReactElement {
           <PublishModal
             featureId="feat-electron-app"
             preflight={completion.preflight}
+            actions={[
+              { id: 'publish', enabled: true, disabledReasons: [] },
+              { id: 'merge', enabled: true, disabledReasons: [] },
+              { id: 'mark-done', enabled: true, disabledReasons: [] },
+            ]}
             dispatchAction={dispatchPublish}
             generatePublishDescription={(id, repos) =>
               api.generatePublishDescription({ featureId: id, repos })
@@ -1692,6 +1709,16 @@ function CaptureApp() {
   }
   if (scene === 'setup-wizard') {
     return <SetupWizardScene />;
+  }
+  if (scene === 'error-overview-lanes') {
+    return <OverviewLanesScene />;
+  }
+  if (
+    scene === 'error-run-failed' ||
+    scene === 'error-setup-failed' ||
+    scene === 'error-action-rejected'
+  ) {
+    return <AftercareScene />;
   }
   if (scene.startsWith('aftercare') || scene.startsWith('refactor-pass')) {
     return <AftercareScene />;

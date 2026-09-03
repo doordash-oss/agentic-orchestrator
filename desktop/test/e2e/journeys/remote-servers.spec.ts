@@ -507,21 +507,22 @@ test('remote add failures: distinct inline errors, nothing persisted, nothing su
     await selectSettingsPane(settings, 'Servers');
     const badPort = await freeLoopbackPort();
     const wrongToken = (remote.token.startsWith('A') ? 'B' : 'A') + remote.token.slice(1);
+    // Titles are the desktop catalog's authored ErrorSurface titles.
     const cases: { label: string; connectionString: string; title: string }[] = [
       {
         label: 'malformed scheme',
         connectionString: 'https://not-a-token@127.0.0.1:1',
-        title: 'The connection string could not be parsed.',
+        title: 'The connection string could not be parsed',
       },
       {
         label: 'dead host',
         connectionString: `agentico://${remote.token}@127.0.0.1:${String(badPort)}?name=ghost-remote`,
-        title: 'The server could not be reached.',
+        title: 'The server could not be reached',
       },
       {
         label: 'wrong token',
         connectionString: remote.connectionString.replace(remote.token, wrongToken),
-        title: 'The token was rejected.',
+        title: 'The token was rejected',
       },
     ];
     for (const candidate of cases) {

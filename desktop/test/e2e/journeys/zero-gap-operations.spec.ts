@@ -62,9 +62,9 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
       60_000,
     );
 
-    const feature = (await handle.page.evaluate(() => window.agentico.listFeatures())).find(
-      (candidate) => candidate.name === featureName,
-    );
+    const feature = (
+      await handle.page.evaluate(() => window.agentico.listFeatures())
+    ).features.find((candidate) => candidate.name === featureName);
     if (feature === undefined) throw new Error('created operations feature was not listed');
     const detail = await handle.page.evaluate(
       (featureId) => window.agentico.getFeature(featureId),
@@ -192,7 +192,7 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
       async () => {
         const snapshot = await handle!.page.evaluate(
           (featureId) => window.agentico.getFeature(featureId),
-          (await handle!.page.evaluate(() => window.agentico.listFeatures())).find(
+          (await handle!.page.evaluate(() => window.agentico.listFeatures())).features.find(
             (feature) => feature.name === featureName,
           )!.id,
         );

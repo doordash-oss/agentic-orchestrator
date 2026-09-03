@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -313,8 +314,8 @@ func TestChildIntegrationHappyPath(t *testing.T) {
 	if tx.Entries[0].MergeHEAD != mergeHEAD {
 		t.Fatalf("transaction merge head = %s, want parent tip %s", tx.Entries[0].MergeHEAD, mergeHEAD)
 	}
-	if tx.Entries[0].CleanupWarning != "" {
-		t.Fatalf("unexpected cleanup warning: %q", tx.Entries[0].CleanupWarning)
+	if tx.Entries[0].Cleanup != nil {
+		t.Fatalf("unexpected cleanup warning record: %#v", tx.Entries[0].Cleanup)
 	}
 
 	// The child's diff was captured before cleanup removed the disposable
@@ -378,11 +379,13 @@ func TestChildIntegrationDirtyParentBlocksMerge(t *testing.T) {
 	if tx.Entries[0].MergeHEAD != "" {
 		t.Fatalf("merge head recorded (%s) although the merge was blocked", tx.Entries[0].MergeHEAD)
 	}
-	if len(tx.Entries[0].Dirty) != 1 || tx.Entries[0].Dirty[0].UntrackedTotal != 1 {
-		t.Fatalf("dirty diagnostics = %+v, want categorized untracked entry", tx.Entries[0].Dirty)
+	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationParentDirty {
+		t.Fatalf("attention record = %+v, want integration_parent_dirty", tx.Attention)
 	}
-	if !strings.Contains(tx.Attention, "uncommitted changes") {
-		t.Fatalf("attention = %q, want dirty summary", tx.Attention)
+	if tx.Attention.Context == nil || len(tx.Attention.Context.Repositories) != 1 ||
+		len(tx.Attention.Context.Repositories[0].DirtyFiles) != 1 ||
+		tx.Attention.Context.Repositories[0].DirtyFiles[0] != "stray.txt" {
+		t.Fatalf("attention repositories = %+v, want the untracked stray.txt in dirty_files", tx.Attention.Context)
 	}
 	if child.Parent.CloseOutcome != "" || !child.IsActiveChild() {
 		t.Fatalf("child closed (%q) on blocked integration", child.Parent.CloseOutcome)
@@ -451,8 +454,13 @@ func TestChildIntegrationConflictAttentionAndRetry(t *testing.T) {
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
-	if !strings.Contains(tx.Attention, "merge") {
-		t.Fatalf("attention = %q, want merge failure detail", tx.Attention)
+	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationMergeConflict {
+		t.Fatalf("attention record = %+v, want integration_merge_conflict", tx.Attention)
+	}
+	if tx.Attention.Context == nil || len(tx.Attention.Context.Repositories) != 1 ||
+		len(tx.Attention.Context.Repositories[0].ConflictFiles) == 0 ||
+		tx.Attention.Context.Repositories[0].ConflictFiles[0] != "child.txt" {
+		t.Fatalf("attention repositories = %+v, want the conflicted child.txt in conflict_files", tx.Attention.Context)
 	}
 	if child.Parent.CloseOutcome != "" {
 		t.Fatalf("child closed on conflicted integration")
@@ -690,8 +698,20 @@ func TestChildIntegrationCleanupWarningNonFatal(t *testing.T) {
 	if parent.Status != feature.StatusCodeReady {
 		t.Fatalf("parent status = %s, want CodeReady", parent.Status)
 	}
-	if child.Parent.Transaction == nil || child.Parent.Transaction.Entries[0].CleanupWarning == "" {
-		t.Fatalf("cleanup warning not recorded: %+v", child.Parent.Transaction)
+	if child.Parent.Transaction == nil || child.Parent.Transaction.Entries[0].Cleanup == nil {
+		t.Fatalf("cleanup warning record not recorded: %+v", child.Parent.Transaction)
+	}
+	cleanup := child.Parent.Transaction.Entries[0].Cleanup
+	if cleanup.Code != errcat.ChildCleanupIncomplete {
+		t.Fatalf("cleanup warning code = %q; want %q", cleanup.Code, errcat.ChildCleanupIncomplete)
+	}
+	if cleanup.Context == nil || len(cleanup.Context.Repositories) != 1 ||
+		cleanup.Context.Repositories[0].Name != child.Repos[0].Name ||
+		cleanup.Context.Repositories[0].Branch != child.Repos[0].Branch {
+		t.Fatalf("cleanup warning repositories block = %#v; want the child repository and branch", cleanup.Context)
+	}
+	if cleanup.Diagnostics == "" {
+		t.Fatal("cleanup warning diagnostics missing the raw cause")
 	}
 	// The merge boundary is durable and complete.
 	parents := childIntegrationGit(t, fx.repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
@@ -709,8 +729,8 @@ func TestChildIntegrationCleanupWarningNonFatal(t *testing.T) {
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 		t.Fatalf("child close outcome = %q after cleanup retry, want still completed", child.Parent.CloseOutcome)
 	}
-	if child.Parent.Transaction.Entries[0].CleanupWarning != "" {
-		t.Fatalf("cleanup warning not cleared by retry: %q", child.Parent.Transaction.Entries[0].CleanupWarning)
+	if child.Parent.Transaction.Entries[0].Cleanup != nil {
+		t.Fatalf("cleanup warning record not cleared by retry: %#v", child.Parent.Transaction.Entries[0].Cleanup)
 	}
 	if child.Repos[0].WorktreePath != "" {
 		t.Fatalf("child durable worktree path %q not cleared by retry", child.Repos[0].WorktreePath)
@@ -852,6 +872,52 @@ func TestReviewFeedbackIntegrationTailReturnsParentPublished(t *testing.T) {
 	}
 }
 
+// TestRecordTransactionTailWarningAccumulates proves two tail failures on
+// one repository store as a single review_feedback_tail_incomplete record
+// whose diagnostics carry both causes on separate lines, with the
+// repositories block naming the repository and its parent branch.
+func TestRecordTransactionTailWarningAccumulates(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
+	o := fx.orchestrator()
+	if err := fx.store.Modify(fx.child.ID, func(f *feature.Feature) error {
+		f.Parent.Transaction = &feature.TransactionJournal{
+			Phase:   feature.TransactionPhaseMerged,
+			Entries: []feature.RepoTransactionEntry{{Repo: "repoA", ParentBranch: fx.parentBranch}},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed transaction journal: %v", err)
+	}
+
+	o.recordTransactionTailWarning(fx.child.ID, "repoA", "push failed: rejected (non-fast-forward)")
+	o.recordTransactionTailWarning(fx.child.ID, "repoA", "resolve thread 42: 403 Forbidden")
+
+	_, child := fx.reload()
+	tx := child.Parent.Transaction
+	if tx == nil || len(tx.Entries) != 1 {
+		t.Fatalf("transaction = %+v, want one entry", tx)
+	}
+	tail := tx.Entries[0].Tail
+	if tail == nil {
+		t.Fatalf("tail warning record missing: %+v", tx.Entries[0])
+	}
+	if tail.Code != errcat.ReviewFeedbackTailIncomplete {
+		t.Fatalf("tail warning code = %q; want %q", tail.Code, errcat.ReviewFeedbackTailIncomplete)
+	}
+	if tail.Context == nil || len(tail.Context.Repositories) != 1 ||
+		tail.Context.Repositories[0].Name != "repoA" ||
+		tail.Context.Repositories[0].Branch != fx.parentBranch {
+		t.Fatalf("tail warning repositories block = %#v; want repoA on %s", tail.Context, fx.parentBranch)
+	}
+	want := "push failed: rejected (non-fast-forward)\nresolve thread 42: 403 Forbidden"
+	if tail.Diagnostics != want {
+		t.Fatalf("tail warning diagnostics = %q; want %q", tail.Diagnostics, want)
+	}
+}
+
 // TestAdvanceAfterFinalReviewRoutesChildToIntegration pins the terminal
 // handoff: a child with a successful final review enters integration instead
 // of MarkCodeReady or any delivery path.
@@ -932,8 +998,8 @@ func TestChildIntegrationParentBranchMismatch(t *testing.T) {
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention on branch mismatch", tx)
 	}
-	if !strings.Contains(tx.Attention, "recorded parent branch") {
-		t.Fatalf("attention = %q, want recorded-branch diagnostic", tx.Attention)
+	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationParentBranchMismatch {
+		t.Fatalf("attention record = %+v, want integration_parent_branch_mismatch", tx.Attention)
 	}
 	if got := childIntegrationGit(t, fx.repoDir, "rev-parse", "feature/parent"); got != preHEAD {
 		t.Fatalf("parent branch moved to %s while another branch was checked out", got)
@@ -1100,10 +1166,11 @@ func TestChildIntegrationCleanupWarningPersistenceFailure(t *testing.T) {
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
 	// Transaction path Modify calls on child: 1=prep progress, 2=prepared,
-	// 3=applying, 4=apply progress, 5=applied, 6=close write,
-	// 7=clear closure error, 8=merged, 9=cleanup warning record.
+	// 3=applying, 4=apply progress, 5=applied, 6=close write, 7=merged,
+	// 8=cleanup warning record. (The closure-error clear that used to sit
+	// between close and merged was removed with the child last-error mirror.)
 	o.deps.Worktrees = failingRemoveWorktrees{WorktreeManager: fx.wm, removeErr: errors.New("simulated worktree removal failure")}
-	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 9, err: errors.New("simulated warning-write failure")}
+	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 8, err: errors.New("simulated warning-write failure")}
 	o.deps.Store = store
 
 	err := o.RunChildIntegration(fx.child.ID)
@@ -1117,8 +1184,8 @@ func TestChildIntegrationCleanupWarningPersistenceFailure(t *testing.T) {
 	if parent.Status != feature.StatusCodeReady {
 		t.Fatalf("parent status = %s, want CodeReady", parent.Status)
 	}
-	if child.Parent.Transaction == nil || child.Parent.Transaction.Entries[0].CleanupWarning != "" {
-		t.Fatalf("cleanup warning = %+v, want unset (the write failed and must not be faked)", child.Parent.Transaction)
+	if child.Parent.Transaction == nil || child.Parent.Transaction.Entries[0].Cleanup != nil {
+		t.Fatalf("cleanup warning record = %+v, want unset (the write failed and must not be faked)", child.Parent.Transaction)
 	}
 	if child.IntegrationResumable() {
 		t.Fatal("closed child must never become user-restartable")
@@ -1130,8 +1197,8 @@ func TestChildIntegrationCleanupWarningPersistenceFailure(t *testing.T) {
 		t.Fatalf("ReconcileIntegrationTransactions() error = %v", err)
 	}
 	_, child = fx.reload()
-	if child.Parent.Transaction.Entries[0].CleanupWarning != "" {
-		t.Fatalf("cleanup warning = %q after settled retry, want cleared", child.Parent.Transaction.Entries[0].CleanupWarning)
+	if child.Parent.Transaction.Entries[0].Cleanup != nil {
+		t.Fatalf("cleanup warning record = %#v after settled retry, want cleared", child.Parent.Transaction.Entries[0].Cleanup)
 	}
 	if child.Repos[0].WorktreePath != "" {
 		t.Fatalf("child worktree path %q not cleared on retry", child.Repos[0].WorktreePath)

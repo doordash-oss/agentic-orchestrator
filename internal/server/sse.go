@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -342,7 +343,7 @@ func (b *eventBroker) streamResetEventLocked() SSEEvent {
 func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "streaming unavailable", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("streaming unavailable"))
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -510,6 +511,17 @@ func eventDTOFromDomain(ev ports.Event) SSEEvent {
 		}
 		dto := snapshotRequiredEventDTO(sseEventLifecycleUpdated, resource)
 		dto.Summary = safeEventSummary(ev)
+		if ev.CanonicalError != nil {
+			// A relationship integration event carrying a canonical error
+			// (a parked transaction) carries the catalog title as the
+			// summary and the canonical code/class identity as the error
+			// object, exactly as failure-carrying feature events do.
+			dto.Summary = ev.CanonicalError.Title
+			dto.Error = &SSEEventError{
+				Code:  string(ev.CanonicalError.Code),
+				Class: SSEEventErrorClass(ev.CanonicalError.Class),
+			}
+		}
 		return dto
 	}
 	switch ev.Type {
@@ -550,6 +562,20 @@ func eventDTOFromDomain(ev ports.Event) SSEEvent {
 		dto = snapshotRequiredEventDTO(kind, resource)
 	}
 	dto.Summary = safeEventSummary(ev)
+	if (ev.Type == ports.FeatureFailed || ev.Type == ports.SetupFailed ||
+		ev.Type == ports.PublishCompleted || ev.Type == ports.RepoStatusChanged) &&
+		ev.CanonicalError != nil {
+		// Failure-carrying lifecycle events carry the catalog title as the
+		// summary and the canonical code/class identity as the error object.
+		// A repository publish failure rides the publish-completed and
+		// repository-status-changed kinds the same way, snapshot-required
+		// semantics unchanged.
+		dto.Summary = ev.CanonicalError.Title
+		dto.Error = &SSEEventError{
+			Code:  string(ev.CanonicalError.Code),
+			Class: SSEEventErrorClass(ev.CanonicalError.Class),
+		}
+	}
 	return dto
 }
 

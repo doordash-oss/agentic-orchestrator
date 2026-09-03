@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
@@ -500,9 +502,13 @@ func TestServerMutationTargetStartFeatureBlocksChildren(t *testing.T) {
 	t.Run("failed-setup child", func(t *testing.T) {
 		target, childID := newChildTarget(t, func(f *feature.Feature) {
 			f.Status = feature.StatusFailed
-			// SetRun syncs run->shadows, so stamp shadow fields after it.
+			// SetRun syncs run->shadows, so stamp run-scoped state after it.
 			f.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
-			f.FailureType = feature.FailureWorktreeSetup
+			f.Run().Failure = &errcat.FailureRecord{
+				Code:        errcat.WorktreeSetupFailed,
+				Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: testRepoAName}}},
+				Diagnostics: "git worktree add failed",
+			}
 		})
 		resp, err := target.StartFeature(childID)
 		if !errors.Is(err, feature.ErrChildExecutionBlocked) {
@@ -802,7 +808,7 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 		workspaceDir: testWorkspaceDir,
 	}
 
-	result, err := target.StartChat(serverruntime.ChatStartRequest{Message: "What is running?"})
+	result, err := target.StartChat(serverruntime.ChatStartRequest{Message: "What is running?"}, "")
 	if err != nil {
 		t.Fatalf("StartChat() error = %v", err)
 	}
@@ -860,6 +866,95 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 		t.Fatalf("StartSession StderrPath = %q, want chat stderr capture", start.opts.StderrPath)
 	}
 	assertJSONDoesNotContain(t, result, "What is running?")
+}
+
+// TestServerMutationTargetStartChatFreshSessionCarriesHiddenContext pins
+// the fresh-session split: the wire prompt is skill instruction, hidden
+// bundle, then visible message, while the stored initial prompt stays the
+// visible message alone and the response never carries bundle text.
+func TestServerMutationTargetStartChatFreshSessionCarriesHiddenContext(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	stateDir := filepath.Join(runtimeRoot, "features")
+	skillsDir := filepath.Join(runtimeRoot, "skills")
+	var captured []agent.BuildSessionOpts
+	phaseRunner := &agent.PhaseRunner{
+		StateDir:  stateDir,
+		SkillsDir: skillsDir,
+		BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			captured = append(captured, opts)
+			return []string{"agent"}, []string{"AGENT_TEST=1"}, &ports.SessionOpts{}, nil
+		},
+	}
+	sessions := &mutationTargetSessionManager{}
+	target := serverMutationTarget{
+		cfg:         config.NewDefault(),
+		sessions:    sessions,
+		phaseRunner: phaseRunner,
+	}
+
+	const bundle = "Chat context — run error on feature \"Fix login\" (abcd1234)"
+	result, err := target.StartChat(serverruntime.ChatStartRequest{Message: "Explain this failure"}, bundle)
+	if err != nil {
+		t.Fatalf("StartChat() error = %v", err)
+	}
+	if result.Result != resultStarted {
+		t.Fatalf("StartChat() result = %+v, want chat session started", result)
+	}
+	if len(captured) != 1 || len(sessions.startCalls) != 1 {
+		t.Fatalf("BuildSession/StartSession calls = %d/%d, want 1/1", len(captured), len(sessions.startCalls))
+	}
+	prompt := captured[0].Prompt
+	skillIdx := strings.Index(prompt, filepath.Join(skillsDir, chatName, "SKILL.md"))
+	bundleIdx := strings.Index(prompt, bundle)
+	messageIdx := strings.Index(prompt, "Explain this failure")
+	if skillIdx < 0 || bundleIdx < 0 || messageIdx < 0 {
+		t.Fatalf("BuildSession prompt missing pieces:\n%s", prompt)
+	}
+	if !(skillIdx < bundleIdx && bundleIdx < messageIdx) {
+		t.Fatalf("BuildSession prompt order = skill %d, bundle %d, message %d; want skill, bundle, message", skillIdx, bundleIdx, messageIdx)
+	}
+	start := sessions.startCalls[0]
+	if start.opts == nil || start.opts.InitialPrompt != "Explain this failure" {
+		t.Fatalf("StartSession opts.InitialPrompt = %+v, want the visible message only", start.opts)
+	}
+	assertJSONDoesNotContain(t, result, bundle)
+}
+
+// TestServerMutationTargetStartChatLiveSessionSendsBundleAsHiddenContext
+// pins the live-session split: the visible message is the echo and the
+// bundle rides as hidden context, while a turn without a bundle keeps the
+// plain send path.
+func TestServerMutationTargetStartChatLiveSessionSendsBundleAsHiddenContext(t *testing.T) {
+	sess := &mutationTargetSessionView{id: serverChatSessionID, status: ports.SessionRunning, active: true}
+	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
+	target := serverMutationTarget{cfg: config.NewDefault(), sessions: sessions}
+
+	const bundle = "Chat context — run error on feature \"Fix login\" (abcd1234)"
+	result, err := target.StartChat(serverruntime.ChatStartRequest{Message: "Explain this failure"}, bundle)
+	if err != nil {
+		t.Fatalf("StartChat() error = %v", err)
+	}
+	if result.Result != resultSent || result.SessionID != serverChatSessionID {
+		t.Fatalf("StartChat() result = %+v, want sent to the live chat session", result)
+	}
+	if !reflect.DeepEqual(sess.sentMessages, []string{"Explain this failure"}) {
+		t.Fatalf("SendUserMessage echoes = %v, want only the visible message", sess.sentMessages)
+	}
+	if len(sess.hiddenContextTurns) != 1 || sess.hiddenContextTurns[0].hidden != bundle || sess.hiddenContextTurns[0].visible != "Explain this failure" {
+		t.Fatalf("hidden-context turns = %+v, want the bundle as hidden context", sess.hiddenContextTurns)
+	}
+
+	result, err = target.StartChat(serverruntime.ChatStartRequest{Message: "Follow up"}, "")
+	if err != nil {
+		t.Fatalf("StartChat() follow-up error = %v", err)
+	}
+	if !reflect.DeepEqual(sess.sentMessages, []string{"Explain this failure", "Follow up"}) {
+		t.Fatalf("SendUserMessage echoes = %v, want plain sends without a bundle", sess.sentMessages)
+	}
+	if len(sess.hiddenContextTurns) != 1 {
+		t.Fatalf("hidden-context turns = %d after a plain turn, want unchanged", len(sess.hiddenContextTurns))
+	}
+	assertJSONDoesNotContain(t, result, bundle)
 }
 
 func TestChatMessageWithImagesAddsInspectableLocalPaths(t *testing.T) {
@@ -1456,11 +1551,13 @@ func TestServerMutationTargetSetupFeatureRetriesOnlyUnfinishedWorkWithoutStartin
 	if err != nil {
 		t.Fatalf("Load failed feature: %v", err)
 	}
-	if failed.Status != feature.StatusFailed || failed.FailureType != feature.FailureWorktreeSetup {
-		t.Fatalf("failed feature = %s/%s; want Failed/worktree_setup with preserved state", failed.Status, failed.FailureType)
+	if failed.Status != feature.StatusFailed || failed.FailureCode() != errcat.WorktreeSetupFailed {
+		t.Fatalf("failed feature = %s/%s; want Failed/worktree_setup_failed with preserved state", failed.Status, failed.FailureCode())
 	}
-	if failedSetup := failed.Run().Setup; failedSetup == nil || failedSetup.LastError == "" {
-		t.Fatalf("failed setup = %+v; want durable last_error", failedSetup)
+	failedTask := failed.FailedSetupTask()
+	if failedTask == nil || failedTask.Key != "worktree:"+testRepoBName || failedTask.Status != feature.SetupStatusFailed ||
+		failedTask.Error == nil || !strings.Contains(failedTask.Error.Diagnostics, "transient checkout failure") {
+		t.Fatalf("owning task = %+v, want failed worktree:repo-b carrying the raw diagnostic", failedTask)
 	}
 	createsAfterFailure := creates
 
@@ -1489,6 +1586,103 @@ func TestServerMutationTargetSetupFeatureRetriesOnlyUnfinishedWorkWithoutStartin
 	}
 	if started != 0 {
 		t.Fatalf("OnFeatureStarted fired %d times; want 0 for setup retry", started)
+	}
+}
+
+func TestServerMutationTargetSetupFeatureOnFailedSetupChildRerunsUnfinishedAndParksCreated(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	cfg.Repos[testRepoBName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoBName)}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	failRepoB := true
+	creates := 0
+	worktrees := mocks.NewMockWorktreeOps()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		creates++
+		if repoName == testRepoBName && failRepoB {
+			return "", errors.New("transient checkout failure")
+		}
+		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+	}
+	manager.Worktrees = worktrees
+
+	parent := &feature.Feature{
+		ID: "p-setup-child", Name: "Parent", Slug: "p-setup-child", Status: feature.StatusPublished,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(parent); err != nil {
+		t.Fatalf("Save parent: %v", err)
+	}
+	child := &feature.Feature{
+		ID: "c-setup-child", Name: "Child Setup", Slug: "c-setup-child",
+		Status: feature.StatusSettingUpWorktrees, CurrentPhase: feature.PhasePlan,
+		ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent,
+		Repos: []feature.FeatureRepo{
+			{Name: testRepoAName, Path: cfg.Repos[testRepoAName].Path, BaseBranch: "main", Branch: "feature/c-setup-child"},
+			{Name: testRepoBName, Path: cfg.Repos[testRepoBName].Path, BaseBranch: "main", Branch: "feature/c-setup-child"},
+		},
+		Parent: &feature.ChildRelationship{ParentID: parent.ID, Kind: feature.ChildKindRefactor},
+	}
+	child.SetRun(&feature.Run{RunNumber: 1, Setup: feature.NewActiveSetupState(child.Repos, nil, nil, time.Now())})
+	if err := store.Save(child); err != nil {
+		t.Fatalf("Save child: %v", err)
+	}
+
+	started := 0
+	target := serverMutationTarget{
+		orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{
+			OnFeatureStarted: func(string) { started++ },
+		}),
+		store:         store,
+		dispatchAsync: func(fn func()) { fn() },
+	}
+
+	if _, err := target.SetupFeature(child.ID); err != nil {
+		t.Fatalf("SetupFeature() dispatch error = %v; want dispatch success with durable failure", err)
+	}
+	failed, err := store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("Load failed child: %v", err)
+	}
+	if failed.Status != feature.StatusFailed || failed.FailureCode() != errcat.WorktreeSetupFailed {
+		t.Fatalf("failed child = %s/%s; want Failed/worktree_setup_failed", failed.Status, failed.FailureCode())
+	}
+	owner := failed.FailedSetupTask()
+	if owner == nil || owner.Key != "worktree:"+testRepoBName || owner.Status != feature.SetupStatusFailed {
+		t.Fatalf("owning task = %+v, want failed worktree:%s", owner, testRepoBName)
+	}
+	if done := failed.Run().Setup.Tasks["worktree:"+testRepoAName]; done.Status != feature.SetupStatusDone {
+		t.Fatalf("repo-a task = %+v, want done before the repo-b failure", done)
+	}
+	createsAfterFailure := creates
+
+	failRepoB = false
+	result, err := target.SetupFeature(child.ID)
+	if err != nil {
+		t.Fatalf("SetupFeature() retry error = %v", err)
+	}
+	if result.Result != resultSetupStarted {
+		t.Fatalf("retry result = %+v; want setup_started", result)
+	}
+
+	updated, err := store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("Load retried child: %v", err)
+	}
+	if updated.Status != feature.StatusCreated {
+		t.Fatalf("child status = %s; want Created (children park after setup; never start)", updated.Status)
+	}
+	setup := updated.Run().Setup
+	if setup == nil || setup.Status != feature.SetupStatusDone || setup.Attempt != 2 {
+		t.Fatalf("setup = %+v; want done on attempt 2", setup)
+	}
+	if creates-createsAfterFailure != 1 {
+		t.Fatalf("retry worktree creates = %d; want only the previously failed task", creates-createsAfterFailure)
+	}
+	if started != 0 {
+		t.Fatalf("OnFeatureStarted fired %d times; want 0 for a child setup retry", started)
 	}
 }
 
@@ -1561,10 +1755,16 @@ func TestServerMutationTargetRetryFeatureDispatchesFailedPhase(t *testing.T) {
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusFailed
 		ff.CurrentPhase = feature.PhaseImplement
-		ff.FailureType = feature.FailureMaxIterations
 		ff.MaxIterations = 10
 		ff.MaxPlanIterations = 3
-		ff.LastError = "no progress for 3 consecutive iterations"
+		ff.Run().Failure = &errcat.FailureRecord{
+			Code: errcat.IterationBudgetExhausted,
+			Context: &errcat.RecordContext{
+				Phase:        &errcat.CodePhase{Name: "implement"},
+				Repositories: []errcat.CodeRepository{{Name: testRepoAName}},
+			},
+			Diagnostics: "no progress for 3 consecutive iterations",
+		}
 		ff.Artifacts = map[string]string{"plan": planPath}
 		return nil
 	}); err != nil {
@@ -1612,6 +1812,12 @@ func TestServerMutationTargetRetryFeatureDispatchesFailedPhase(t *testing.T) {
 func TestRetryFeatureIterationDeltas(t *testing.T) {
 	t.Parallel()
 
+	failedWithRecord := func(code errcat.Code) *feature.Feature {
+		f := &feature.Feature{Status: feature.StatusFailed, CurrentPhase: feature.PhasePlan}
+		f.Run().Failure = &errcat.FailureRecord{Code: code}
+		return f
+	}
+
 	tests := []struct {
 		name     string
 		feature  *feature.Feature
@@ -1619,30 +1825,26 @@ func TestRetryFeatureIterationDeltas(t *testing.T) {
 		wantPlan int
 	}{
 		{
-			name: "max iterations",
-			feature: &feature.Feature{
-				Status:       feature.StatusFailed,
-				FailureType:  feature.FailureMaxIterations,
-				CurrentPhase: feature.PhasePlan,
-			},
+			name:     "iteration budget exhausted",
+			feature:  failedWithRecord(errcat.IterationBudgetExhausted),
 			wantMax:  10,
 			wantPlan: 2,
 		},
 		{
-			name: "other failure",
-			feature: &feature.Feature{
-				Status:       feature.StatusFailed,
-				FailureType:  feature.FailureInfrastructure,
-				CurrentPhase: feature.PhasePlan,
-			},
+			name:    "worktree setup failure routes to setup retry without deltas",
+			feature: failedWithRecord(errcat.WorktreeSetupFailed),
 		},
 		{
-			name: "stale failure type on active feature",
-			feature: &feature.Feature{
-				Status:       feature.StatusImplementing,
-				FailureType:  feature.FailureMaxIterations,
-				CurrentPhase: feature.PhaseImplement,
-			},
+			name:    "other failure",
+			feature: failedWithRecord(errcat.InfrastructureFailure),
+		},
+		{
+			name: "failure record on active feature",
+			feature: func() *feature.Feature {
+				f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
+				f.Run().Failure = &errcat.FailureRecord{Code: errcat.IterationBudgetExhausted}
+				return f
+			}(),
 		},
 		{name: "missing feature"},
 	}
@@ -1932,45 +2134,7 @@ func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata
 	assertJSONDoesNotContain(t, result, "https://github.com/acme/repo-a/pull/12")
 }
 
-func TestServerMutationTargetPublishActionRecoversFailedPublish(t *testing.T) {
-	target, manager, store, f := newPublishActionTarget(t)
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusFailed
-		ff.LastError = "commit failed: index.lock already exists"
-		ff.FailureType = feature.FailureInfrastructure
-		return nil
-	}); err != nil {
-		t.Fatalf("mark feature failed: %v", err)
-	}
-	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
-		prURL := "https://github.com/acme/repo-a/pull/13"
-		if err := manager.SetRepoPublished(featureID, repoName, prURL); err != nil {
-			return "", err
-		}
-		return prURL, nil
-	})
-
-	result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{Repos: []string{testRepoAName}})
-	if err != nil {
-		t.Fatalf("PublishFeature() error = %v", err)
-	}
-
-	updated, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("Load feature: %v", err)
-	}
-	if updated.Status != feature.StatusPublished {
-		t.Fatalf("feature status = %s, want Published", updated.Status)
-	}
-	if updated.LastError != "" || updated.FailureType != "" {
-		t.Fatalf("terminal failure = (%q, %q), want cleared", updated.LastError, updated.FailureType)
-	}
-	if result.FeatureID != f.ID || result.Result != "published" {
-		t.Fatalf("PublishFeature() result = %+v; want published feature", result)
-	}
-}
-
-func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *testing.T) {
+func TestServerMutationTargetPublishActionMapsConflictToRebaseConflictCode(t *testing.T) {
 	target, _, _, f := newPublishActionTarget(t)
 	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
 		return "", &orchestrator.PublishConflictError{
@@ -1995,20 +2159,39 @@ func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *te
 	if result.FeatureID != f.ID || result.Result != resultConflict {
 		t.Fatalf("PublishFeature() result = %+v; want conflict feature", result)
 	}
-	assertTarget(t, actionConflict.Target, map[string]any{
-		resultConflict:  phaseNamePublish,
-		repoConflictKey: testRepoAName,
-		"branch":        "feature/publish-conflict",
-		"rebase_target": "main",
-	})
+	if actionConflict.Code != errcat.PublishRebaseConflict {
+		t.Fatalf("ActionConflictError.Code = %q; want %q", actionConflict.Code, errcat.PublishRebaseConflict)
+	}
+	rendered := errcat.New(errcat.PublishRebaseConflict, actionConflict.Options...)
+	if rendered.Class != errcat.ClassNeedsAction {
+		t.Fatalf("rendered class = %q, want needs_action", rendered.Class)
+	}
+	if rendered.Context == nil || len(rendered.Context.Repositories) != 1 {
+		t.Fatalf("rendered context = %+v; want one repository", rendered.Context)
+	}
+	repo := rendered.Context.Repositories[0]
+	if repo.Name != testRepoAName || repo.Branch != "feature/publish-conflict" {
+		t.Fatalf("rendered repository = %+v; want %s on feature/publish-conflict", repo, testRepoAName)
+	}
+	if repo.RebaseTarget != "main" {
+		t.Fatalf("rendered repository rebase target = %q, want main", repo.RebaseTarget)
+	}
+	if !strings.Contains(rendered.Summary, `"main"`) || !strings.Contains(rendered.Summary, testRepoAName) {
+		t.Fatalf("rendered summary = %q, want repo and rebase target named", rendered.Summary)
+	}
+	if !strings.Contains(rendered.Diagnostics, "pull-rebase conflict") {
+		t.Fatalf("rendered diagnostics = %q; want raw publish conflict detail", rendered.Diagnostics)
+	}
 }
 
 func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		publishErr error
-		wantCode   string
-		wantTarget map[string]any
+		name        string
+		publishErr  error
+		wantCode    errcat.Code
+		wantSummary string
+		wantRepo    string
+		wantBranch  string
 	}{
 		{
 			name: "remote diverged",
@@ -2017,12 +2200,10 @@ func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T
 				Branch:            "feature/remote-diverged",
 				RemoteOnlyCommits: 2,
 			},
-			wantCode: serverruntime.ErrorCodePublishRemoteDiverged,
-			wantTarget: map[string]any{
-				"repo":                testRepoAName,
-				"branch":              "feature/remote-diverged",
-				"remote_only_commits": 2,
-			},
+			wantCode:    errcat.PublishRemoteDiverged,
+			wantSummary: fmt.Sprintf("The pull-request branch for %q contains 2 remote commits that are not in this workspace.", testRepoAName),
+			wantRepo:    testRepoAName,
+			wantBranch:  "feature/remote-diverged",
 		},
 		{
 			name: "remote changed",
@@ -2030,11 +2211,10 @@ func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T
 				RepoName: testRepoAName,
 				Branch:   "feature/remote-changed",
 			},
-			wantCode: serverruntime.ErrorCodePublishRemoteChanged,
-			wantTarget: map[string]any{
-				"repo":   testRepoAName,
-				"branch": "feature/remote-changed",
-			},
+			wantCode:    errcat.PublishRemoteChanged,
+			wantSummary: fmt.Sprintf("The pull-request branch for %q changed while Agentico was publishing.", testRepoAName),
+			wantRepo:    testRepoAName,
+			wantBranch:  "feature/remote-changed",
 		},
 	} {
 		tc := tc
@@ -2058,7 +2238,17 @@ func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T
 			if result.Result != resultConflict {
 				t.Fatalf("PublishFeature() result = %q; want %q", result.Result, resultConflict)
 			}
-			assertTarget(t, conflict.Target, tc.wantTarget)
+			rendered := errcat.New(tc.wantCode, conflict.Options...)
+			if rendered.Summary != tc.wantSummary {
+				t.Fatalf("rendered summary = %q; want %q", rendered.Summary, tc.wantSummary)
+			}
+			if rendered.Context == nil || len(rendered.Context.Repositories) != 1 {
+				t.Fatalf("rendered context = %+v; want one repository", rendered.Context)
+			}
+			repo := rendered.Context.Repositories[0]
+			if repo.Name != tc.wantRepo || repo.Branch != tc.wantBranch {
+				t.Fatalf("rendered repository = %+v; want %s@%s", repo, tc.wantRepo, tc.wantBranch)
+			}
 		})
 	}
 }
@@ -2139,8 +2329,11 @@ func TestServerMutationTargetCompletionActionsRejectStaleSourceRevision(t *testi
 			if result != resultFailed {
 				t.Fatalf("result = %q; want %q", result, resultFailed)
 			}
-			if conflict.Target["reason"] != "stale_preflight" {
-				t.Fatalf("conflict target = %+v; want stale_preflight reason", conflict.Target)
+			if !errors.Is(conflict.Err, orchestrator.ErrStalePreflight) {
+				t.Fatalf("conflict err = %v; want stale preflight sentinel", conflict.Err)
+			}
+			if !strings.Contains(conflict.Detail, "stale completion preflight") {
+				t.Fatalf("conflict detail = %q; want stale completion preflight diagnostics", conflict.Detail)
 			}
 			if _, err := store.Load(f.ID); err != nil {
 				t.Fatalf("feature was mutated or deleted despite stale preflight: %v", err)
@@ -2176,7 +2369,7 @@ func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testi
 	if updated.Status != feature.StatusPlanNeedsReview || !updated.IsRewind {
 		t.Fatalf("rewound feature status/is_rewind = %s/%v, want PlanNeedsReview/true", updated.Status, updated.IsRewind)
 	}
-	if result.FeatureID != f.ID || result.TargetPhase != phaseNameImplement || result.EffectivePhase != phaseNameImplement || result.WarningCount != 0 {
+	if result.FeatureID != f.ID || result.TargetPhase != phaseNameImplement || result.EffectivePhase != phaseNameImplement || len(result.Warnings) != 0 {
 		t.Fatalf("RewindFeature() result = %+v; want effective implement rewind", result)
 	}
 }
@@ -2318,7 +2511,10 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusFailed
 		ff.CurrentPhase = feature.PhaseImplement
-		ff.LastError = "previous worker died with secret=do-not-leak"
+		ff.Run().Failure = &errcat.FailureRecord{
+			Code:        errcat.SessionCrashed,
+			Diagnostics: "previous worker died with secret=do-not-leak",
+		}
 		ff.Artifacts = map[string]string{"plan": planPath}
 		return nil
 	}); err != nil {
@@ -2627,17 +2823,24 @@ func (m *mutationTargetSessionManager) Shutdown()            {}
 func (m *mutationTargetSessionManager) IsShuttingDown() bool { return false }
 
 type mutationTargetSessionView struct {
-	id               string
-	featureID        string
-	phase            feature.Phase
-	status           ports.SessionStatus
-	active           bool
-	permCacheScope   string
-	pending          []*llm.ControlRequestMessage
-	sentMessages     []string
-	controlCalls     []mutationTargetControlCall
-	askCalls         []mutationTargetAskUserCall
-	onRespondControl func() error
+	id                 string
+	featureID          string
+	phase              feature.Phase
+	status             ports.SessionStatus
+	active             bool
+	permCacheScope     string
+	pending            []*llm.ControlRequestMessage
+	sentMessages       []string
+	hiddenContextTurns []mutationTargetHiddenTurn
+	controlCalls       []mutationTargetControlCall
+	askCalls           []mutationTargetAskUserCall
+	onRespondControl   func() error
+}
+
+// mutationTargetHiddenTurn records one hidden-context user turn.
+type mutationTargetHiddenTurn struct {
+	visible string
+	hidden  string
 }
 
 type mutationTargetControlCall struct {
@@ -2715,6 +2918,11 @@ func (s *mutationTargetSessionView) SendUserMessage(text string) error {
 	s.sentMessages = append(s.sentMessages, text)
 	return nil
 }
+func (s *mutationTargetSessionView) SendUserMessageWithHiddenContext(visible, hiddenContext string) error {
+	s.sentMessages = append(s.sentMessages, visible)
+	s.hiddenContextTurns = append(s.hiddenContextTurns, mutationTargetHiddenTurn{visible: visible, hidden: hiddenContext})
+	return nil
+}
 func (s *mutationTargetSessionView) RespondToControl(requestID string, allow bool, reason string) error {
 	if s.onRespondControl != nil {
 		if err := s.onRespondControl(); err != nil {
@@ -2780,15 +2988,6 @@ func assertJSONDoesNotContain(t *testing.T, value any, banned ...string) {
 	for _, b := range banned {
 		if b != "" && strings.Contains(string(raw), b) {
 			t.Fatalf("response leaked %q in %s", b, raw)
-		}
-	}
-}
-
-func assertTarget(t *testing.T, got map[string]any, want map[string]any) {
-	t.Helper()
-	for k, wantValue := range want {
-		if got[k] != wantValue {
-			t.Fatalf("target[%q] = %#v, want %#v; target = %#v", k, got[k], wantValue, got)
 		}
 	}
 }
@@ -2941,4 +3140,76 @@ func TestServerMutationTargetAnswerPermissionAutoApproveScopeEnablesBeforeAnswer
 			t.Fatalf("RespondToControl calls = %+v; want none", sess.controlCalls)
 		}
 	})
+}
+
+// TestServerMutationTargetCompletionPreflightCarriesRepoError pins the
+// completion-preflight adapter: a repository carrying a stored publish
+// failure record renders through the catalog at projection time as the
+// canonical error object on that repository's preflight entry, with the
+// publish action reference and bounded diagnostics.
+func TestServerMutationTargetCompletionPreflightCarriesRepoError(t *testing.T) {
+	target, _, store, f := newPublishActionTarget(t)
+	diagnostics := "creating pull request: POST /repos/org/repo-a/pulls: 502 Bad Gateway " +
+		"with a diagnostics tail well past the safe-display bound so the adapter must bound it " +
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.RepoStates[testRepoAName].Error = &errcat.FailureRecord{
+			Code: errcat.PublishPullRequestFailed,
+			Context: &errcat.RecordContext{
+				Repositories: []errcat.CodeRepository{{Name: testRepoAName, Branch: "feature/publish-via-rest"}},
+			},
+			Diagnostics: diagnostics,
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("store repo record: %v", err)
+	}
+
+	resp, err := target.CompletionPreflight(f.ID)
+	if err != nil {
+		t.Fatalf("CompletionPreflight: %v", err)
+	}
+	if len(resp.Repos) != 1 {
+		t.Fatalf("preflight repos = %+v, want one repository", resp.Repos)
+	}
+	repo := resp.Repos[0]
+	if repo.Repo != testRepoAName {
+		t.Fatalf("preflight repo = %q, want %q", repo.Repo, testRepoAName)
+	}
+	if repo.Error == nil {
+		t.Fatalf("preflight repo error = nil, want the canonical object")
+	}
+	if repo.Error.Code != string(errcat.PublishPullRequestFailed) {
+		t.Fatalf("preflight repo error code = %q, want %q", repo.Error.Code, errcat.PublishPullRequestFailed)
+	}
+	if repo.Error.Class != serverruntime.ErrorClassNeedsAction {
+		t.Fatalf("preflight repo error class = %q, want needs_action", repo.Error.Class)
+	}
+	if repo.Error.Title != "Pull-request creation failed" {
+		t.Fatalf("preflight repo error title = %q, want the catalog title", repo.Error.Title)
+	}
+	if repo.Error.Summary != fmt.Sprintf("Creating the pull request for repository %q failed.", testRepoAName) {
+		t.Fatalf("preflight repo error summary = %q, want the catalog summary naming the repository", repo.Error.Summary)
+	}
+	if repo.Error.Context == nil || len(repo.Error.Context.Repositories) != 1 ||
+		repo.Error.Context.Repositories[0].Name != testRepoAName ||
+		repo.Error.Context.Repositories[0].Branch != "feature/publish-via-rest" {
+		t.Fatalf("preflight repo error repositories = %+v, want the repository block", repo.Error.Context)
+	}
+	if repo.Error.Remediation == nil || len(repo.Error.Remediation.Actions) != 1 ||
+		repo.Error.Remediation.Actions[0] != serverruntime.FeatureActionPublish {
+		t.Fatalf("preflight repo error remediation = %+v, want [publish]", repo.Error.Remediation)
+	}
+	if len(repo.Error.Diagnostics) == 0 || len(repo.Error.Diagnostics) >= len(diagnostics) {
+		t.Fatalf("preflight repo error diagnostics = %q (len %d), want the bounded raw text", repo.Error.Diagnostics, len(repo.Error.Diagnostics))
+	}
+
+	// The wire carries no repository last_error key anymore.
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("Marshal response: %v", err)
+	}
+	if strings.Contains(string(raw), "last_error") {
+		t.Fatalf("preflight response carries a last_error key: %s", raw)
+	}
 }

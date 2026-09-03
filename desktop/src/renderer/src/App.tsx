@@ -31,6 +31,7 @@ import {
 } from 'react';
 import { emptyAttentionDrafts, type AttentionDrafts } from './features/AttentionInbox';
 import { useConnectionState, useSystemAccentMirror, useTheme } from './hooks';
+import { ExplainChatProvider } from './explainChat';
 
 export default function App() {
   // Called purely for its side effect (mirroring the resolved theme onto
@@ -200,58 +201,63 @@ export default function App() {
   const attentionItems: AttentionItem[] = serverAttentionItems;
 
   return (
-    <div className="app-frame">
-      {runtimeReady ? (
-        <>
-          <ReadinessGate
-            attentionItems={attentionItems}
-            refreshAttention={refreshAttention}
-            attentionDrafts={attentionDrafts}
-            setAttentionDrafts={setAttentionDrafts}
-            attentionJump={attentionJump}
-            onAttentionJumpHandled={() => setAttentionJump(null)}
-            routeRequest={routeRequest}
-            onAttentionJump={(featureId, attentionId) => {
-              routeSequence.current += 1;
-              setAttentionJump({
-                requestId: routeSequence.current,
-                featureId,
-                ...(attentionId === undefined ? {} : { attentionId }),
-              });
-            }}
-            updateState={updateState}
-            updateDismissedVersion={updateDismissedVersion}
-            schedulingUpdate={schedulingUpdate}
-            onDismissUpdate={(version) => setUpdateDismissedVersion(version)}
-            onOpenUpdatesSettings={() =>
-              requestRoute({ target: 'settings', settingsSection: 'updates' })
-            }
-            onOpenAma={() => requestRoute({ target: 'ama' })}
-            onOpenPalette={() => requestRoute({ target: 'palette' })}
-            amaUnread={amaUnread}
-            onInstallUpdateWhenIdle={async () => {
-              try {
-                setSchedulingUpdate(true);
-                setUpdateState(await window.agentico.installUpdateWhenIdle());
-              } finally {
-                setSchedulingUpdate(false);
+    // The explain-in-chat provider rides at the renderer root so every
+    // ErrorSurface — in the shell tree or the AMA panel — can route a
+    // question without prop drilling the root requester through panels.
+    <ExplainChatProvider requestRoute={requestRoute}>
+      <div className="app-frame">
+        {runtimeReady ? (
+          <>
+            <ReadinessGate
+              attentionItems={attentionItems}
+              refreshAttention={refreshAttention}
+              attentionDrafts={attentionDrafts}
+              setAttentionDrafts={setAttentionDrafts}
+              attentionJump={attentionJump}
+              onAttentionJumpHandled={() => setAttentionJump(null)}
+              routeRequest={routeRequest}
+              onAttentionJump={(featureId, attentionId) => {
+                routeSequence.current += 1;
+                setAttentionJump({
+                  requestId: routeSequence.current,
+                  featureId,
+                  ...(attentionId === undefined ? {} : { attentionId }),
+                });
+              }}
+              updateState={updateState}
+              updateDismissedVersion={updateDismissedVersion}
+              schedulingUpdate={schedulingUpdate}
+              onDismissUpdate={(version) => setUpdateDismissedVersion(version)}
+              onOpenUpdatesSettings={() =>
+                requestRoute({ target: 'settings', settingsSection: 'updates' })
               }
-            }}
-          />
-          <AmaPanel
-            attentionItems={attentionItems}
-            refreshAttention={refreshAttention}
-            attentionDrafts={attentionDrafts}
-            setAttentionDrafts={setAttentionDrafts}
-            routeRequest={routeRequest}
-            onUnreadChange={setAmaUnread}
-          />
-        </>
-      ) : (
-        <ConnectionShell />
-      )}
-      <CommandPalette ready={runtimeReady} routeRequest={routeRequest} onRoute={requestRoute} />
-      <HelpOverlay routeRequest={routeRequest} />
-    </div>
+              onOpenAma={() => requestRoute({ target: 'ama' })}
+              onOpenPalette={() => requestRoute({ target: 'palette' })}
+              amaUnread={amaUnread}
+              onInstallUpdateWhenIdle={async () => {
+                try {
+                  setSchedulingUpdate(true);
+                  setUpdateState(await window.agentico.installUpdateWhenIdle());
+                } finally {
+                  setSchedulingUpdate(false);
+                }
+              }}
+            />
+            <AmaPanel
+              attentionItems={attentionItems}
+              refreshAttention={refreshAttention}
+              attentionDrafts={attentionDrafts}
+              setAttentionDrafts={setAttentionDrafts}
+              routeRequest={routeRequest}
+              onUnreadChange={setAmaUnread}
+            />
+          </>
+        ) : (
+          <ConnectionShell />
+        )}
+        <CommandPalette ready={runtimeReady} routeRequest={routeRequest} onRoute={requestRoute} />
+        <HelpOverlay routeRequest={routeRequest} />
+      </div>
+    </ExplainChatProvider>
   );
 }

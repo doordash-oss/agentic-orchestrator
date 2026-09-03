@@ -34,7 +34,7 @@ limitations under the License.
  * module; summaries, payloads, and credentials never cross to the renderer.
  */
 import { z } from 'zod';
-import { redactText, toSafeError } from '../../shared/errors';
+import { redactText, toCanonicalError } from '../../shared/errors';
 import { AppEventSchema, type AppEvent } from '../../shared/ipc';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../../shared/sanitize';
 
@@ -380,8 +380,8 @@ export class EventStreamSupervisor {
           }
         }
       } catch (err) {
-        const safe = toSafeError(err, 'E_EVENT_STREAM');
-        this.deps.log(`event stream attempt failed: ${safe.code}: ${redactText(safe.message)}`);
+        const safe = toCanonicalError(err, 'E_EVENT_STREAM');
+        this.deps.log(`event stream attempt failed: ${safe.code}: ${redactText(safe.summary)}`);
       } finally {
         this.current?.close();
         this.current = null;

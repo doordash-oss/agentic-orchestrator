@@ -75,7 +75,7 @@ test('bulk resume/retry: fresh preview, sequential dispatch, cancellation, and s
       });
     }
 
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     expect(features.length).toBeGreaterThanOrEqual(3);
     const featureIds = features.slice(0, 3).map((f) => f.id);
     transcript.json('created feature ids', featureIds);

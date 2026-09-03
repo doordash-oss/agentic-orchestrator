@@ -16,8 +16,10 @@ limitations under the License.
 
 import { describe, expect, it } from 'vitest';
 import { featureSnapshot } from '../test/agenticoMock';
+import type { OwnedError } from '../../../shared/ipc';
 import {
   actionById,
+  catalogErrorAction,
   childStatusSpineIndex,
   dashboardState,
   displayFeatureMessage,
@@ -27,6 +29,7 @@ import {
   fieldForCreationError,
   formatDuration,
   formatElapsed,
+  highestSeverityError,
   isReadyToStart,
   isRunAtRest,
   orderDashboardFeatures,
@@ -37,6 +40,27 @@ import {
   spineStages,
   spineTone,
 } from './featureView';
+
+function ownedError(
+  scope: 'run' | 'transaction',
+  errorClass: 'blocking' | 'needs_action',
+  featureId: string,
+): OwnedError {
+  const code =
+    errorClass === 'blocking' ? 'iteration_budget_exhausted' : 'integration_parent_dirty';
+  return {
+    ref: { scope, code, featureId },
+    error: {
+      code,
+      class: errorClass,
+      title: errorClass === 'blocking' ? 'Iteration budget exhausted' : 'Parent worktree is dirty',
+      summary:
+        errorClass === 'blocking'
+          ? 'The Implement phase exhausted its iteration budget.'
+          : 'The parent worktree for repository "repo-a" has 1 uncommitted change.',
+    },
+  };
+}
 
 describe('displayStatusLabel', () => {
   it('translates server enum spellings into user-facing status labels', () => {
@@ -60,6 +84,26 @@ describe('displayFeatureMessage', () => {
   });
 });
 
+describe('catalogErrorAction', () => {
+  it('uses the shared friendly reason copy for every error surface', () => {
+    const snapshot = featureSnapshot({
+      actions: [
+        {
+          id: 'publish',
+          enabled: false,
+          disabledReasons: [{ code: 'worktree_state_unknown', message: 'raw server wording' }],
+        },
+      ],
+    });
+    expect(catalogErrorAction(snapshot, 'publish', 'Retry publish')).toEqual({
+      enabled: false,
+      label: 'Retry publish',
+      disabledReason:
+        'Could not read the repository worktrees — check that they still exist and are a valid checkout.',
+    });
+  });
+});
+
 describe('intervention-first dashboard ordering', () => {
   const snapshot = (id: string, status: string, createdAt: string, startEnabled = false) =>
     featureSnapshot({
@@ -76,10 +120,16 @@ describe('intervention-first dashboard ordering', () => {
       snapshot('done', 'Done', '2026-07-15T08:00:00Z'),
       snapshot('start-old', 'Created', '2026-07-11T08:00:00Z', true),
       snapshot('active', 'Implementing', '2026-07-10T08:00:00Z'),
-      snapshot('failed-old', 'Failed', '2026-07-12T08:00:00Z'),
+      featureSnapshot({
+        ...snapshot('failed-old', 'Failed', '2026-07-12T08:00:00Z'),
+        errors: [ownedError('run', 'blocking', 'failed-old')],
+      }),
       snapshot('review', 'PlanNeedsReview', '2026-07-14T08:00:00Z'),
       snapshot('input', 'NeedUserInput', '2026-07-13T08:00:00Z'),
-      snapshot('failed-new', 'Failed', '2026-07-15T08:00:00Z'),
+      featureSnapshot({
+        ...snapshot('failed-new', 'Failed', '2026-07-15T08:00:00Z'),
+        errors: [ownedError('run', 'blocking', 'failed-new')],
+      }),
       snapshot('start-new', 'ImplementReady', '2026-07-14T08:00:00Z', true),
     ];
 
@@ -96,10 +146,29 @@ describe('intervention-first dashboard ordering', () => {
   });
 
   it('labels blocked and operational states without recreating start eligibility', () => {
-    expect(dashboardState(snapshot('failed', 'Failed', '2026-07-15T08:00:00Z'))).toStrictEqual({
+    expect(
+      dashboardState(
+        featureSnapshot({
+          ...snapshot('failed', 'Failed', '2026-07-15T08:00:00Z'),
+          errors: [ownedError('run', 'blocking', 'failed')],
+        }),
+      ),
+    ).toStrictEqual({
       bucket: 'intervention',
       label: 'Failed',
       tone: 'danger',
+    });
+    expect(
+      dashboardState(
+        featureSnapshot({
+          ...snapshot('parked', 'Published', '2026-07-15T08:00:00Z'),
+          errors: [ownedError('transaction', 'needs_action', 'child1234ef567890')],
+        }),
+      ),
+    ).toStrictEqual({
+      bucket: 'intervention',
+      label: 'Needs your action',
+      tone: 'attention',
     });
     expect(
       dashboardState(snapshot('review', 'ResearchNeedsReview', '2026-07-15T08:00:00Z')),
@@ -107,6 +176,14 @@ describe('intervention-first dashboard ordering', () => {
     expect(
       dashboardState(snapshot('ready', 'UnexpectedStatus', '2026-07-15T08:00:00Z', true)),
     ).toStrictEqual({ bucket: 'startable', label: 'Ready to start', tone: 'ready' });
+  });
+
+  it('derives the highest-severity owned error regardless of list order', () => {
+    const blocking = ownedError('run', 'blocking', 'feature-1');
+    const needsAction = ownedError('transaction', 'needs_action', 'child1234ef567890');
+    expect(highestSeverityError([needsAction, blocking])).toBe(blocking);
+    expect(highestSeverityError([needsAction])).toBe(needsAction);
+    expect(highestSeverityError([])).toBeUndefined();
   });
 
   it('surfaces an active refactor pass as Refactoring in the in-progress group', () => {
@@ -121,8 +198,7 @@ describe('intervention-first dashboard ordering', () => {
       startedAt: '2026-07-30T10:00:00Z',
       cost: { totalUsd: 0, byPhase: {} },
       integrationState: 'pending',
-      attention: [],
-      cleanupWarnings: [],
+      warnings: [],
     };
     const refactoring = featureSnapshot({ status: 'Published', activeChild: child });
     expect(dashboardState(refactoring)).toStrictEqual({
@@ -130,16 +206,18 @@ describe('intervention-first dashboard ordering', () => {
       label: 'Refactoring',
       tone: 'active',
     });
+    // A parked pass arrives as the parent's needs_action transaction entry.
     expect(
       dashboardState(
         featureSnapshot({
           status: 'Published',
           activeChild: { ...child, integrationState: 'attention' },
+          errors: [ownedError('transaction', 'needs_action', 'child1234ef567890')],
         }),
       ),
     ).toStrictEqual({
       bucket: 'intervention',
-      label: 'Refactoring — needs attention',
+      label: 'Needs your action',
       tone: 'attention',
     });
     // A pass that was created but never started must not claim to be running.
@@ -152,14 +230,18 @@ describe('intervention-first dashboard ordering', () => {
       label: 'Pass ready to start',
       tone: 'ready',
     });
-    // A failed pass is an intervention state, not live refactoring.
+    // A failed pass arrives as the parent's child-keyed blocking entry.
     expect(
       dashboardState(
-        featureSnapshot({ status: 'Published', activeChild: { ...child, status: 'Failed' } }),
+        featureSnapshot({
+          status: 'Published',
+          activeChild: { ...child, status: 'Failed' },
+          errors: [ownedError('run', 'blocking', 'child1234ef567890')],
+        }),
       ),
     ).toStrictEqual({
       bucket: 'intervention',
-      label: 'Refactoring — pass failed',
+      label: 'Failed',
       tone: 'danger',
     });
   });
@@ -381,15 +463,44 @@ describe('runningPhaseSubline', () => {
 
 describe('fieldForCreationError', () => {
   it('routes structured rejections to the owning control', () => {
-    expect(fieldForCreationError({ code: 'not_ready', message: 'runtime is not ready' })).toBe(
+    expect(fieldForCreationError({ code: 'not_ready', summary: 'runtime is not ready' })).toBe(
       'form',
     );
-    expect(fieldForCreationError({ code: 'bad_request', message: 'name is required' })).toBe(
+    expect(fieldForCreationError({ code: 'bad_request', summary: 'name is required' })).toBe(
       'name',
     );
-    expect(fieldForCreationError({ code: 'bad_request', message: 'unknown repo "x"' })).toBe(
+    expect(fieldForCreationError({ code: 'bad_request', summary: 'unknown repo "x"' })).toBe(
       'repos',
     );
-    expect(fieldForCreationError({ code: 'E_HTTP_500', message: 'server exploded' })).toBe('form');
+    expect(
+      fieldForCreationError({
+        code: 'E_HTTP_REJECTED',
+        summary: 'The runtime rejected the request (HTTP 500).',
+      }),
+    ).toBe('form');
+  });
+
+  it('routes the fixed bad_request summary by its diagnostics', () => {
+    expect(
+      fieldForCreationError({
+        code: 'bad_request',
+        summary: 'The request was not valid.',
+        diagnostics: 'name is required',
+      }),
+    ).toBe('name');
+    expect(
+      fieldForCreationError({
+        code: 'bad_request',
+        summary: 'The request was not valid.',
+        diagnostics: 'unknown repo "x"',
+      }),
+    ).toBe('repos');
+    expect(
+      fieldForCreationError({
+        code: 'bad_request',
+        summary: 'The request was not valid.',
+        diagnostics: 'inquiries must be a list',
+      }),
+    ).toBe('form');
   });
 });

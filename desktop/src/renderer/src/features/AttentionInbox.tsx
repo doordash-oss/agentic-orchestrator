@@ -22,6 +22,7 @@ import {
   useState,
   type Dispatch,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
   type SetStateAction,
 } from 'react';
 import {
@@ -30,13 +31,18 @@ import {
   ATTENTION_SUBMITTED_NOTICE,
   attentionOwnerFeatureId,
   CHAT_SESSION_ID,
+  ERROR_CLASS_LABELS,
   isSyntheticHelpItem,
   type AttentionActionResult,
   type AttentionItem,
   type AutoApproveScope,
+  type CanonicalError,
   type VerificationGateAction,
 } from '../../../shared/ipc';
 import { BellIcon, ChevronDownIcon } from '../components/icons';
+import { parseIpcError } from '../wizard/ipcError';
+import { ErrorSurface } from '../components/ErrorSurface';
+import { useRegisteredErrorCard } from '../components/errorCardRegistry';
 import { ToolbarPopover, ToolbarPopoverAnchor } from '../components/ToolbarPopover';
 import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import {
@@ -55,6 +61,18 @@ export interface AttentionDrafts {
   questions: Record<string, Record<string, QuestionAnswerDraft>>;
   help: Record<string, string>;
   gates: Record<string, Record<number, string>>;
+}
+
+/** Omits a projected error when its owning card is already mounted in this view. */
+export function OwnerAwareAttention({
+  item,
+  children,
+}: {
+  item: AttentionItem;
+  children: ReactNode;
+}) {
+  const ownerIsVisible = useRegisteredErrorCard(item.kind === 'error' ? item.ref : undefined);
+  return ownerIsVisible ? null : children;
 }
 
 export function emptyAttentionDrafts(): AttentionDrafts {
@@ -113,7 +131,16 @@ export function attentionActionNotice(
 }
 
 export function attentionErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Could not submit this response.';
+  return attentionError(error).title;
+}
+
+/**
+ * The canonical object behind a rejected inbox action: the catalog owns the
+ * text, and the notice slot renders the whole canonical through a compact
+ * ErrorSurface instead of a bare title line.
+ */
+export function attentionError(error: unknown): CanonicalError {
+  return parseIpcError(error);
 }
 
 /**
@@ -148,6 +175,9 @@ export function AttentionInbox({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
+  // The notice slot's failure branch: a canonical error rendered as a compact
+  // ErrorSurface. Success notices stay the plain status line.
+  const [noticeError, setNoticeError] = useState<CanonicalError | null>(null);
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
   const bell = useRef<HTMLButtonElement>(null);
   const itemButtons = useRef(new Map<string, HTMLButtonElement>());
@@ -188,6 +218,7 @@ export function AttentionInbox({
     if (expanded === null || busy !== null) return;
     if (items.some((item) => item.id === expanded)) return;
     const next = items[0];
+    setNoticeError(null);
     setNotice(ATTENTION_ALREADY_RESOLVED_NOTICE);
     setExpanded(next?.id ?? null);
     setPendingFocus(hasActiveModalDialog() ? null : (next?.id ?? null));
@@ -215,8 +246,10 @@ export function AttentionInbox({
     if (busy !== null) return;
     setBusy(id);
     setNotice('');
+    setNoticeError(null);
     try {
       const { latest, notice: nextNotice } = await runAttentionSubmit(action, refresh, options);
+      setNoticeError(null);
       setNotice(nextNotice);
       const stillPending = latest.some((item) => item.id === id);
       if (options.collapseOnSuccess !== false && !stillPending) {
@@ -227,15 +260,22 @@ export function AttentionInbox({
         setPendingFocus(next?.id ?? null);
       }
     } catch (error) {
-      setNotice(attentionErrorMessage(error));
+      setNotice('');
+      setNoticeError(attentionError(error));
     } finally {
       setBusy(null);
     }
   };
 
   const saveDraft = useAttentionDraftSaves({
-    notify: (result, options) => setNotice(attentionActionNotice(result, options)),
-    notifyError: (error) => setNotice(attentionErrorMessage(error)),
+    notify: (result, options) => {
+      setNoticeError(null);
+      setNotice(attentionActionNotice(result, options));
+    },
+    notifyError: (error) => {
+      setNotice('');
+      setNoticeError(attentionError(error));
+    },
     onAlreadyResolved: async () => {
       await refresh();
     },
@@ -274,9 +314,9 @@ export function AttentionInbox({
           </span>
         ) : null}
       </button>
-      {notice !== '' && !open ? (
+      {(notice !== '' || noticeError !== null) && !open ? (
         <p className="sr-only" role="status">
-          {notice}
+          {noticeError !== null ? noticeError.title : notice}
         </p>
       ) : null}
       <ToolbarPopover
@@ -292,7 +332,11 @@ export function AttentionInbox({
           <h2>Attention inbox</h2>
           <span className="attention-popover__count">{actionableCount} waiting</span>
         </header>
-        {notice !== '' ? (
+        {noticeError !== null ? (
+          // A rejected inbox action renders the whole canonical error; a
+          // success notice stays the plain polite status line.
+          <ErrorSurface error={noticeError} variant="compact" />
+        ) : notice !== '' ? (
           <p className="attention-status" role="status" aria-live="polite">
             {notice}
           </p>
@@ -351,10 +395,10 @@ export function AttentionInbox({
                     busy={busy === item.id}
                     submit={(action, options) => submit(item.id, action, options)}
                     saveDraft={(action, options) => saveDraft(item.id, action, options)}
-                    onJump={(featureId) => {
+                    onJump={(featureId, attentionId) => {
                       setExpanded(null);
                       setOpen(false);
-                      onJump?.(featureId);
+                      onJump?.(featureId, attentionId);
                     }}
                     drafts={drafts}
                     setDrafts={setDrafts}
@@ -461,7 +505,8 @@ export function AttentionDetail({
   busy: boolean;
   submit(action: AttentionAction, options?: AttentionSubmitOptions): void;
   saveDraft?(action: AttentionAction, options?: AttentionSubmitOptions): Promise<void>;
-  onJump?: (featureId: string) => void;
+  /** Jumps to the feature, optionally carrying the attention item id. */
+  onJump?: (featureId: string, attentionId?: string) => void;
   drafts: AttentionDrafts;
   setDrafts: Dispatch<SetStateAction<AttentionDrafts>>;
 }) {
@@ -913,6 +958,26 @@ export function AttentionDetail({
       </div>
     );
 
+  if (item.kind === 'error')
+    return (
+      <div className="attention-detail" data-class={item.class}>
+        {/* The class label as eyebrow, the catalog title, and one way to the
+         * owning card — never summary, remediation, diagnostics, or actions,
+         * which belong to the card alone. */}
+        <AttentionContextMeta item={item} />
+        <p className="attention-detail__summary">{item.title}</p>
+        <div className="attention-detail__actions">
+          <button
+            type="button"
+            className="attention-button attention-button--primary"
+            onClick={() => onJump?.(item.featureId, item.id)}
+          >
+            Open
+          </button>
+        </div>
+      </div>
+    );
+
   const exhaustive: never = item;
   throw new Error(`Unhandled attention item: ${JSON.stringify(exhaustive)}`);
 }
@@ -955,6 +1020,8 @@ function attentionAskLabel(item: Exclude<AttentionItem, { kind: 'recovery' }>): 
       return 'Input needed';
     case 'review':
       return 'Review waiting';
+    case 'error':
+      return ERROR_CLASS_LABELS[item.class];
     default: {
       const exhaustive: never = item;
       return exhaustive;
@@ -1011,6 +1078,10 @@ function attentionKindLabel(item: AttentionItem): string {
       return 'Review';
     case 'recovery':
       return 'Recovery';
+    // An error row is labeled by its class, the same word every other
+    // presence surface renders.
+    case 'error':
+      return ERROR_CLASS_LABELS[item.class];
     default: {
       const exhaustive: never = item;
       return exhaustive;

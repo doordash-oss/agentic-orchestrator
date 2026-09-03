@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
@@ -828,8 +829,8 @@ func TestRebaseChildGateAncestorFailureJourney(t *testing.T) {
 	postReviewSessionProceed(t, fx.srv.URL, childID)
 
 	// Wait for integration to park at attention (child stays active, not
-	// closed). Poll the child until its transaction is in attention with the
-	// not-ancestor gate code, or timeout.
+	// closed). Poll the child until its transaction is in attention with
+	// the not-ancestor gate record, or timeout.
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		c, err := fx.store.Load(childID)
@@ -838,8 +839,7 @@ func TestRebaseChildGateAncestorFailureJourney(t *testing.T) {
 		}
 		if c.Parent != nil && c.Parent.Transaction != nil &&
 			c.Parent.Transaction.Phase == feature.TransactionPhaseAttention &&
-			len(c.Parent.Transaction.Entries) > 0 &&
-			c.Parent.Transaction.Entries[0].GateCode == feature.GateCodeNotAncestor {
+			c.Parent.Transaction.AttentionCode() == errcat.RebaseGateNotAncestor {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -848,21 +848,31 @@ func TestRebaseChildGateAncestorFailureJourney(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 
+	// The gate record's repositories block names the gated repository.
+	parked, err := fx.store.Load(childID)
+	if err != nil {
+		t.Fatalf("Load(child) error = %v", err)
+	}
+	if block := attentionRepoBlock(parked.Parent.Transaction.AttentionRecord(), repo.name); block == nil {
+		t.Fatalf("gate attention record = %+v, want repositories block naming %s",
+			parked.Parent.Transaction.AttentionRecord(), repo.name)
+	}
+
 	// Every parent ref is byte-identical before and after.
 	if parentRefAfter := journeyGit(t, repo.repoDir, "rev-parse", branch); parentRefAfter != parentRefBefore {
 		t.Fatalf("parent ref changed: before=%s after=%s; gate must not touch parent refs", parentRefBefore, parentRefAfter)
 	}
 
 	// Re-running integration re-evaluates the gate idempotently: it stays
-	// parked at attention with the same code.
+	// parked at attention with the same record.
 	if err := fx.orch.RunChildIntegration(childID); err != nil {
 		t.Fatalf("RunChildIntegration() re-run error = %v; want nil", err)
 	}
 	childRerun, _ := fx.store.Load(childID)
 	if childRerun.Parent.Transaction == nil ||
 		childRerun.Parent.Transaction.Phase != feature.TransactionPhaseAttention ||
-		childRerun.Parent.Transaction.Entries[0].GateCode != feature.GateCodeNotAncestor {
-		t.Fatalf("re-run gate = %+v; want attention/not-ancestor", childRerun.Parent.Transaction)
+		childRerun.Parent.Transaction.AttentionCode() != errcat.RebaseGateNotAncestor {
+		t.Fatalf("re-run gate = %+v; want attention/%s", childRerun.Parent.Transaction, errcat.RebaseGateNotAncestor)
 	}
 	if parentRefAfter := journeyGit(t, repo.repoDir, "rev-parse", branch); parentRefAfter != parentRefBefore {
 		t.Fatalf("parent ref changed on re-run: before=%s after=%s", parentRefBefore, parentRefAfter)

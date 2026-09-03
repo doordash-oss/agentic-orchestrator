@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	gitadapter "github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	gitadapter "github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 func launchTestParent() *feature.Feature {
@@ -192,7 +192,11 @@ func TestLaunchFromDraftCarriesLargeCurrentContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	installLaunchFetchStub(t, map[string][]gitadapter.ReviewComment{
-		"api": {func() gitadapter.ReviewComment { c := launchComment(11, feature.ReviewFeedbackCommentTypeReview, "alice", big+"y"); c.DiffHunk = big; return c }()},
+		"api": {func() gitadapter.ReviewComment {
+			c := launchComment(11, feature.ReviewFeedbackCommentTypeReview, "alice", big+"y")
+			c.DiffHunk = big
+			return c
+		}()},
 	})
 
 	result, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, nil)

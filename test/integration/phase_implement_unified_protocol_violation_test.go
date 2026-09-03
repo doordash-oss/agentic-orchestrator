@@ -22,7 +22,9 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -159,10 +161,7 @@ func TestPhaseImplementUnified_ProtocolViolation_EndToEnd(t *testing.T) {
 			t.Errorf("repo %q state = %+v, want failed phase stamp", repo, st)
 			continue
 		}
-		if !strings.Contains(st.LastError, "protocol violation") || !strings.Contains(st.LastError, "progress.md") {
-			t.Errorf("repo %q LastError = %q, want protocol violation progress.md reason", repo, st.LastError)
-		}
-		t.Logf("behavior observed repo stamp: repo=%s touched=%v last_error=%q", repo, st.Touched, st.LastError)
+		t.Logf("behavior observed repo stamp: repo=%s touched=%v", repo, st.Touched)
 	}
 	if st := got.RepoStates["repo-c"]; st == nil || st.PRURL == "" {
 		t.Errorf("repo-c state = %+v, want outside-phase PR state preserved", st)
@@ -199,5 +198,153 @@ func protocolViolationBuildSession(agentScript, reviewScript string) func(agent.
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
 		}, nil
+	}
+}
+
+// TestPhaseImplementUnified_ProtocolViolation_PersistsFailureRecord pins the
+// propagation of the unified loop's protocol-violation outcome into the run's
+// durable canonical failure record at the orchestrator completion boundary:
+// the per-repo protocol_violation statuses classify once into a
+// protocol_violation record whose phase block names implement, whose
+// repositories block lists the failed phase repos, and whose diagnostics
+// carry the loop's raw last-error text.
+func TestPhaseImplementUnified_ProtocolViolation_PersistsFailureRecord(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmp := t.TempDir()
+	stateDir := filepath.Join(tmp, "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	repoA := testutil.InitGitRepo(t)
+	repoB := testutil.InitGitRepo(t)
+
+	store := feature.NewStore(stateDir)
+	f := &feature.Feature{
+		ID:            "phase-protocol-violation-record",
+		Name:          "Phase protocol violation record",
+		Slug:          "phase-protocol-violation-record",
+		Description:   "Protocol violation persists canonical failure record",
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos: []feature.FeatureRepo{
+			{Name: "repo-a", Path: repoA, WorktreePath: repoA, Branch: "feature/test", BaseBranch: "main"},
+			{Name: "repo-b", Path: repoB, WorktreePath: repoB, Branch: "feature/test", BaseBranch: "main"},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"repo-a": {},
+			"repo-b": {},
+		},
+		MaxIterations: 5,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("reload feature: %v", err)
+	}
+	f = loaded
+
+	planDir := filepath.Join(agent.ActiveRunDir(stateDir, f), "implement")
+	if err := os.MkdirAll(planDir, 0o755); err != nil {
+		t.Fatalf("mkdir plan dir: %v", err)
+	}
+	planText := "# Plan\n\n" +
+		"## Tasks\n\n" +
+		"### Task 1: A work\n\n" +
+		"**Repo:** repo-a\n\n" +
+		"#### Automated Verification:\n" +
+		"- [ ] a tests: `go test ./...`\n\n" +
+		"### Task 2: B work\n\n" +
+		"**Repo:** repo-b\n\n" +
+		"#### Automated Verification:\n" +
+		"- [ ] b tests: `go test ./...`\n"
+	planPath := filepath.Join(planDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte(planText), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+
+	diagnostics := "protocol violation: implementer @ iteration-01: missing required artifact progress.md"
+	stubImpl := func(_ agent.ImplementConfig, _ ports.SessionManager) (*agent.LoopResult, error) {
+		return &agent.LoopResult{
+			FinalStatus: "protocol_violation",
+			Iterations:  1,
+			LastError:   diagnostics,
+		}, nil
+	}
+
+	cfg := agent.OrchestratorConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		PlanPath:       planPath,
+		StateDir:       stateDir,
+		MaxIterations:  5,
+		RunImplementFn: stubImpl,
+	}
+
+	mr, err := agent.RunMultiRepoImplementation(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunMultiRepoImplementation: %v", err)
+	}
+	if mr.FinalStatus != "failed" {
+		t.Fatalf("multi-repo FinalStatus = %q, want failed", mr.FinalStatus)
+	}
+	if mr.LastError != diagnostics {
+		t.Fatalf("multi-repo LastError = %q, want %q", mr.LastError, diagnostics)
+	}
+	wantPhaseRepos := []string{"repo-a", "repo-b"}
+	if !reflect.DeepEqual(mr.FailedRepos, wantPhaseRepos) {
+		t.Fatalf("FailedRepos = %v, want %v", mr.FailedRepos, wantPhaseRepos)
+	}
+	for _, repo := range wantPhaseRepos {
+		if mr.RepoStatuses[repo] != "protocol_violation" {
+			t.Fatalf("RepoStatuses[%q] = %q, want protocol_violation", repo, mr.RepoStatuses[repo])
+		}
+	}
+
+	orch := orchestrator.New(orchestrator.Deps{
+		Lifecycle: feature.NewManager(store, nil),
+		Store:     store,
+	}, orchestrator.Hooks{})
+	if err := orch.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+		Phase:           feature.PhaseImplement,
+		MultiRepoResult: mr,
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+
+	got, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load feature after completion: %v", err)
+	}
+	if got.Status != feature.StatusFailed {
+		t.Fatalf("Status = %v, want Failed", got.Status)
+	}
+	if code := got.FailureCode(); code != errcat.ProtocolViolation {
+		t.Fatalf("FailureCode() = %q, want %q", code, errcat.ProtocolViolation)
+	}
+	rec := got.FailureRecord()
+	if rec == nil {
+		t.Fatalf("failure record missing after protocol-violation completion")
+	}
+	if rec.Diagnostics != diagnostics {
+		t.Errorf("record diagnostics = %q, want %q", rec.Diagnostics, diagnostics)
+	}
+	if rec.Context == nil || rec.Context.Phase == nil || rec.Context.Phase.Name != "implement" {
+		t.Fatalf("record phase block = %+v, want implement", rec.Context)
+	}
+	repoNames := make([]string, 0, len(rec.Context.Repositories))
+	for _, repo := range rec.Context.Repositories {
+		repoNames = append(repoNames, repo.Name)
+	}
+	if !reflect.DeepEqual(repoNames, wantPhaseRepos) {
+		t.Errorf("record repositories = %v, want %v", repoNames, wantPhaseRepos)
 	}
 }

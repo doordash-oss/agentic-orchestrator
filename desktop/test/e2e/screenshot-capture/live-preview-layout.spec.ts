@@ -312,7 +312,9 @@ test('aftercare already-up-to-date notice reserves runway space', async ({ page 
   await expect(startRebase).toBeVisible();
   await startRebase.click();
 
-  const alert = aftercare.getByRole('alert');
+  // The up-to-date outcome is a warning-class canonical surface: it renders
+  // with the status role, not the alert role of a blocking failure.
+  const alert = aftercare.locator('.error-surface');
   await expect(alert).toBeVisible({ timeout: 10_000 });
   await expect(alert).toContainText('rebase_already_up_to_date');
 

@@ -21,6 +21,7 @@ import {
   featureConfigSnapshot,
   featureSnapshot,
   installAgenticoMock,
+  ipcError,
   type AgenticoMock,
 } from '../../test/agenticoMock';
 import { matchMediaState } from '../../test/setup';
@@ -593,9 +594,7 @@ describe('ReviewFeedbackWorkspace', () => {
     const { mock, user } = await renderWorkspace({ draft });
     mock.api.updateReviewFeedbackSelection
       .mockResolvedValueOnce({ revision: 8, repos: draft.repos })
-      .mockRejectedValueOnce(
-        Object.assign(new Error('stale'), { code: 'review_feedback_revision_conflict' }),
-      );
+      .mockRejectedValueOnce(ipcError('review_feedback_revision_conflict', 'stale'));
     await user.click(screen.getByRole('button', { name: 'Clear visible (600)' }));
     await waitFor(() => expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledTimes(2));
     // No third batch is ever sent against the stale revision.
@@ -647,9 +646,7 @@ describe('ReviewFeedbackWorkspace', () => {
 
   it('refetches and adopts the server view on a revision conflict', async () => {
     const { mock, user } = await renderWorkspace();
-    const conflict = Object.assign(new Error('stale'), {
-      code: 'review_feedback_revision_conflict',
-    });
+    const conflict = ipcError('review_feedback_revision_conflict', 'stale');
     mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(conflict);
     const comment90 = screen.getByLabelText(/Overall looks good/);
     await user.click(comment90);
@@ -665,9 +662,11 @@ describe('ReviewFeedbackWorkspace', () => {
     it('a failed conflict refetch surfaces a focused actionable retry alert and never claims the workspace is reloaded', async () => {
       const { mock, user } = await renderWorkspace();
       mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(
-        Object.assign(new Error('stale'), { code: 'review_feedback_revision_conflict' }),
+        ipcError('review_feedback_revision_conflict', 'stale'),
       );
-      mock.api.fetchReviewFeedback.mockRejectedValueOnce(new Error('fetch unavailable'));
+      mock.api.fetchReviewFeedback.mockRejectedValueOnce(
+        ipcError('E_INTERNAL', 'fetch unavailable'),
+      );
       const comment90 = screen.getByLabelText(/Overall looks good/);
       await user.click(comment90);
       await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledTimes(2));
@@ -686,9 +685,11 @@ describe('ReviewFeedbackWorkspace', () => {
     it('retrying a failed conflict reload recovers and then shows the focused conflict notice', async () => {
       const { mock, user } = await renderWorkspace();
       mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(
-        Object.assign(new Error('stale'), { code: 'review_feedback_revision_conflict' }),
+        ipcError('review_feedback_revision_conflict', 'stale'),
       );
-      mock.api.fetchReviewFeedback.mockRejectedValueOnce(new Error('fetch unavailable'));
+      mock.api.fetchReviewFeedback.mockRejectedValueOnce(
+        ipcError('E_INTERNAL', 'fetch unavailable'),
+      );
       await user.click(screen.getByLabelText(/Overall looks good/));
       const failedAlert = await screen.findByRole('alert');
       expect(failedAlert).toHaveTextContent('Selections could not be reloaded');
@@ -782,9 +783,7 @@ describe('ReviewFeedbackWorkspace', () => {
   it('recovers a zero-launchable rejection by adopting the latest feedback, then focuses the notice', async () => {
     const { mock, user } = await renderWorkspace();
     mock.api.launchReviewFeedbackChild.mockRejectedValue(
-      Object.assign(new Error('review_feedback_zero_launchable_selection: nothing launchable'), {
-        code: 'review_feedback_zero_launchable_selection',
-      }),
+      ipcError('review_feedback_zero_launchable_selection', 'nothing launchable'),
     );
     await user.click(screen.getByRole('button', { name: /Address comments \(2\)/ }));
     // The draft is preserved and the latest authoritative feedback is
@@ -803,15 +802,16 @@ describe('ReviewFeedbackWorkspace', () => {
   it('keeps a focused retry when the zero-launchable refresh itself fails', async () => {
     const { mock, user } = await renderWorkspace();
     mock.api.launchReviewFeedbackChild.mockRejectedValue(
-      Object.assign(new Error('review_feedback_zero_launchable_selection: nothing launchable'), {
-        code: 'review_feedback_zero_launchable_selection',
-      }),
+      ipcError('review_feedback_zero_launchable_selection', 'nothing launchable'),
     );
-    mock.api.fetchReviewFeedback.mockRejectedValueOnce(new Error('fetch unavailable'));
+    mock.api.fetchReviewFeedback.mockRejectedValueOnce(ipcError('E_INTERNAL', 'fetch unavailable'));
     await user.click(screen.getByRole('button', { name: /Address comments \(2\)/ }));
     const alert = await screen.findByRole('alert');
+    // The failed reload is a compact ErrorSurface: caption plus the refetch
+    // failure's canonical text, with the in-card Retry reload.
+    expect(alert).toHaveClass('error-surface', 'error-surface--compact');
     expect(alert).toHaveTextContent('Selections could not be reloaded');
-    expect(alert).toHaveTextContent(/still launchable/);
+    expect(alert).toHaveTextContent(/fetch unavailable/);
     expect(alert).toHaveFocus();
     // The generic launch path never returns; the focused retry reconciles.
     expect(
@@ -831,9 +831,16 @@ describe('ReviewFeedbackWorkspace', () => {
       const comment41 = screen.getByLabelText(/Rewrite this to avoid the bearer token/);
       await user.click(comment41);
       const alert = await screen.findByRole('alert');
+      expect(alert).toHaveClass('error-surface', 'error-surface--compact');
       expect(alert).toHaveTextContent('Choices not saved');
-      expect(alert).toHaveTextContent(/Retry save/);
-      expect(alert).toHaveTextContent(/Reload saved selections/);
+      expect(within(alert).getByRole('button', { name: 'Retry save' })).toHaveClass(
+        'error-surface__action',
+      );
+      // The secondary control stays a sibling outside the surface.
+      expect(screen.getByRole('button', { name: 'Reload saved selections' })).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Reload saved selections' }).closest('.error-surface'),
+      ).toBeNull();
       expect(alert).toHaveFocus();
       // The user's choice stays visible as unsaved; the server view was not
       // adopted over it (no refetch).
@@ -1019,7 +1026,9 @@ describe('ReviewFeedbackWorkspace', () => {
       mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(new Error('socket dropped'));
       await user.click(screen.getByLabelText(/Consider extracting the parser/));
       await screen.findByRole('alert');
-      mock.api.fetchReviewFeedback.mockRejectedValueOnce(new Error('fetch unavailable'));
+      mock.api.fetchReviewFeedback.mockRejectedValueOnce(
+        ipcError('E_INTERNAL', 'fetch unavailable'),
+      );
       await user.click(screen.getByRole('button', { name: 'Reload saved selections' }));
       await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledTimes(2));
       expect(await screen.findByRole('alert')).toHaveTextContent('Choices not saved');
@@ -1063,7 +1072,9 @@ describe('ReviewFeedbackWorkspace', () => {
 
     it('surfaces a launch failure in a focused plain-language alert and re-enables an explicit retry', async () => {
       const { mock, onDispatched, user } = await renderWorkspace();
-      mock.api.launchReviewFeedbackChild.mockRejectedValueOnce(new Error('github unavailable'));
+      mock.api.launchReviewFeedbackChild.mockRejectedValueOnce(
+        ipcError('E_INTERNAL', 'github unavailable'),
+      );
       await user.click(screen.getByRole('button', { name: /Address comments \(2\)/ }));
       const alert = await screen.findByRole('alert');
       expect(alert).toHaveTextContent('Comments could not be addressed');

@@ -146,8 +146,10 @@ describe('DescriptionComposer on a remote server', () => {
           name: 'big.png',
           error: {
             code: 'request_too_large',
-            message: 'File exceeds limit.',
-            remediation: 'Choose a smaller file.',
+            class: 'needs_action',
+            title: 'Request too large',
+            summary: 'File exceeds limit.',
+            remediation: { hint: 'Choose a smaller file.' },
           },
         },
       ],

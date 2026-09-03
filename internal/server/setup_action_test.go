@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -75,7 +76,7 @@ func TestFeatureSetupActionDispatchesServerOwnedSetup(t *testing.T) {
 func TestFeatureSetupActionRejectsConflicts(t *testing.T) {
 	t.Parallel()
 	target := &setupActionMutationTarget{
-		setupErr: &ActionConflictError{Message: "feature has no pending setup"},
+		setupErr: &ActionConflictError{Code: errcat.Conflict, Detail: "feature has no pending setup"},
 	}
 	handler := NewHandler(HandlerOptions{
 		Mutations:             target,
@@ -86,8 +87,12 @@ func TestFeatureSetupActionRejectsConflicts(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d; want 409", w.Code)
 	}
-	if body := decodeErrorBody(t, w); body.Error.Code != errCodeConflict {
-		t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeConflict)
+	body := decodeErrorBody(t, w)
+	if body.Error.Code != string(errcat.Conflict) {
+		t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.Conflict)
+	}
+	if body.Error.Diagnostics != "feature has no pending setup" {
+		t.Fatalf("diagnostics = %q; want the setup conflict detail", body.Error.Diagnostics)
 	}
 }
 
@@ -126,11 +131,34 @@ func TestActionCatalogSetupAndStartLifecycle(t *testing.T) {
 	}
 
 	failedSetup := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable)
-	failedSetup.FailureType = feature.FailureWorktreeSetup
-	failedSetup.Run().Setup = &feature.SetupState{Status: feature.SetupStatusFailed}
+	failedSetup.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
+	failedSetup.Run().Failure = &errcat.FailureRecord{
+		Code:        errcat.WorktreeSetupFailed,
+		Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: repoNameSelf}}},
+		Diagnostics: "git worktree add failed",
+	}
 	actions = actionCatalogDTOs(failedSetup)
 	if got := actionDTOByID(t, actions, actionSetup); !got.Enabled {
 		t.Fatalf("setup action = %+v; want enabled for failed setup (retry)", got)
+	}
+
+	// Every setup failure code — worktree, asset copy, and interrupted —
+	// enables the setup action for a failed feature with failed setup state.
+	for _, tc := range []struct {
+		name string
+		code errcat.Code
+	}{
+		{"worktree", errcat.WorktreeSetupFailed},
+		{"asset copy", errcat.SetupAssetCopyFailed},
+		{"interrupted", errcat.SetupInterrupted},
+	} {
+		setup := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable)
+		setup.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
+		setup.Run().Failure = &errcat.FailureRecord{Code: tc.code, Diagnostics: "raw setup failure"}
+		actions := actionCatalogDTOs(setup)
+		if got := actionDTOByID(t, actions, actionSetup); !got.Enabled {
+			t.Fatalf("%s: setup action = %+v; want enabled for a failed setup with code %s", tc.name, got, tc.code)
+		}
 	}
 
 	// After successful setup the feature is Created: Start is enabled and

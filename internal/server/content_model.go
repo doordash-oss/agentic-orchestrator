@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -39,14 +40,6 @@ const (
 	// contentCategoryArtifact is the Artifact.Category value for a plain
 	// (non-log) artifact.
 	contentCategoryArtifact = "artifact"
-
-	// artifactIDErrorField is the error-detail map key naming the artifact ID
-	// involved in a content-lookup failure.
-	artifactIDErrorField = "artifact_id"
-
-	// sessionIDErrorField is the error-detail map key naming the session ID
-	// involved in a session-lookup failure.
-	sessionIDErrorField = "session_id"
 
 	// phaseNameDescription is the "publish description" phase/subaction name,
 	// shared between the description-review artifact's Phase field and the
@@ -97,7 +90,7 @@ func (h *apiHandler) handleArtifactList(w http.ResponseWriter, r *http.Request, 
 
 func (h *apiHandler) handleArtifactContent(w http.ResponseWriter, r *http.Request, featureID string, runNumber int, artifactID string) {
 	if !validEntityID(artifactID) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid artifact id", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("invalid artifact id"))
 		return
 	}
 	f, run, err := h.featureAndRun(featureID, runNumber)
@@ -110,17 +103,17 @@ func (h *apiHandler) handleArtifactContent(w http.ResponseWriter, r *http.Reques
 			h.writeTextFileSlice(w, r, artifactID, path)
 			return
 		}
-		writeAPIError(w, http.StatusNotFound, "not_found", "artifact not found", map[string]any{artifactIDErrorField: artifactID})
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Artifact", Name: artifactID}))
 		return
 	}
 	rel, ok := run.Artifacts[artifactID]
 	if !ok {
-		writeAPIError(w, http.StatusNotFound, "not_found", "artifact not found", map[string]any{artifactIDErrorField: artifactID})
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Artifact", Name: artifactID}))
 		return
 	}
 	path, ok := resolveRunArtifactPath(h.store.RunDir(featureID, runNumber), rel)
 	if !ok {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid artifact target", map[string]any{artifactIDErrorField: artifactID})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("invalid artifact target for artifact %q", artifactID)))
 		return
 	}
 	h.writeTextFileSlice(w, r, artifactID, path)
@@ -178,7 +171,7 @@ func descriptionReviewArtifactPathForRun(featureID, runDir string, pipeline feat
 
 func (h *apiHandler) handleLogContent(w http.ResponseWriter, r *http.Request, featureID string, runNumber int, logID string) {
 	if !validEntityID(logID) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid log id", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("invalid log id"))
 		return
 	}
 	if _, _, err := h.featureAndRun(featureID, runNumber); err != nil {
@@ -187,7 +180,7 @@ func (h *apiHandler) handleLogContent(w http.ResponseWriter, r *http.Request, fe
 	}
 	logs, err := discoverRunLogs(h.store.RunDir(featureID, runNumber))
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "discover run logs", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("discover run logs"))
 		return
 	}
 	var selected *discoveredRunLog
@@ -208,12 +201,12 @@ func (h *apiHandler) handleLogContent(w http.ResponseWriter, r *http.Request, fe
 		}
 	}
 	if selected == nil {
-		writeAPIError(w, http.StatusNotFound, "not_found", "log not found", map[string]any{"log_id": logID})
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Log", Name: logID}))
 		return
 	}
 	path, ok := safeJoin(h.store.RunDir(featureID, runNumber), selected.RelativePath)
 	if !ok {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid log target", map[string]any{"log_id": logID})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("invalid log target for log %q", logID)))
 		return
 	}
 	h.writeTextFileSlice(w, r, logID, path)
@@ -233,7 +226,7 @@ func (h *apiHandler) handleLogList(w http.ResponseWriter, r *http.Request, featu
 	}
 	logs, err := discoverRunLogs(h.store.RunDir(featureID, runNumber))
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "discover run logs", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("discover run logs"))
 		return
 	}
 	dtos := make([]RunLog, 0, len(logs))
@@ -296,30 +289,30 @@ func (h *apiHandler) writeTextFileSlice(w http.ResponseWriter, r *http.Request, 
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			writeAPIError(w, http.StatusNotFound, "not_found", "content not found", map[string]any{"id": id})
+			writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Content", Name: id}))
 			return
 		}
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "read content metadata", map[string]any{"id": id})
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics(fmt.Sprintf("read content metadata for %q", id)))
 		return
 	}
 	if info.IsDir() || !boundedTextFile(path) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "content is not available as bounded text", map[string]any{"id": id})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("content is not available as bounded text for %q", id)))
 		return
 	}
 	offset := parseInt64Query(r, "offset", 0)
 	limit := parseInt64Query(r, "limit", defaultTextLimit)
 	if offset < 0 || limit <= 0 || limit > maxTextLimit {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid slice bounds", map[string]any{"id": id})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("invalid slice bounds for %q", id)))
 		return
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "open content", map[string]any{"id": id})
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics(fmt.Sprintf("open content for %q", id)))
 		return
 	}
 	defer file.Close()
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid slice offset", map[string]any{"id": id})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("invalid slice offset for %q", id)))
 		return
 	}
 	remaining := info.Size() - offset
@@ -329,7 +322,7 @@ func (h *apiHandler) writeTextFileSlice(w http.ResponseWriter, r *http.Request, 
 	buf := make([]byte, min(limit, remaining))
 	n, err := io.ReadFull(file, buf)
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "read content", map[string]any{"id": id})
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics(fmt.Sprintf("read content for %q", id)))
 		return
 	}
 	text := SafeDisplayText(string(buf[:n]), int(limit))

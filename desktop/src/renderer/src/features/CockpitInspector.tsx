@@ -53,12 +53,14 @@ export function InspectorContent({
   stale,
   runMetrics,
   onOpenPullRequest,
+  onOpenPublish,
 }: {
   snapshot: FeatureSnapshot;
   branch: string | null;
   stale: boolean;
   runMetrics: RunMetrics | null;
   onOpenPullRequest(url: string): void;
+  onOpenPublish?(): void;
 }) {
   return (
     <>
@@ -93,7 +95,11 @@ export function InspectorContent({
         </section>
       ) : null}
       {snapshot.repoStatus !== undefined && snapshot.repoStatus.length > 0 ? (
-        <RepositoryInstrument repos={snapshot.repoStatus} onOpenPullRequest={onOpenPullRequest} />
+        <RepositoryInstrument
+          repos={snapshot.repoStatus}
+          onOpenPullRequest={onOpenPullRequest}
+          onOpenPublish={onOpenPublish}
+        />
       ) : null}
     </>
   );

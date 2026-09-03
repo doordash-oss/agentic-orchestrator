@@ -31,6 +31,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -269,8 +270,8 @@ func (o *Orchestrator) SetDesignReady(featureID string) error {
 }
 
 // RewindToPhase delegates to Lifecycle.RewindToPhase. Returns the effective
-// target phase and warnings computed during the rewind.
-func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error) {
+// target phase and typed warnings computed during the rewind.
+func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase) ([]feature.RewindWarning, feature.Phase, error) {
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
 	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
@@ -288,7 +289,7 @@ func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase
 
 // RewindWithRequest delegates to Lifecycle.RewindWithRequest for rewind
 // flows that carry additional request fields such as a roadmap phase.
-func (o *Orchestrator) RewindWithRequest(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
+func (o *Orchestrator) RewindWithRequest(featureID string, request feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error) {
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
 	return o.rewindWithRequestLocked(featureID, request)
@@ -297,7 +298,7 @@ func (o *Orchestrator) RewindWithRequest(featureID string, request feature.Rewin
 // rewindWithRequestLocked is the lock-held rewind entry point. Callers must
 // hold the relationship read lock so the guard check and the rewind execute
 // atomically with any preceding mutations (e.g. pipeline upgrade).
-func (o *Orchestrator) rewindWithRequestLocked(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
+func (o *Orchestrator) rewindWithRequestLocked(featureID string, request feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error) {
 	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
 		return nil, 0, err
 	}
@@ -317,7 +318,7 @@ func (o *Orchestrator) rewindWithRequestLocked(featureID string, request feature
 // same read lock so a concurrent refactor launch cannot interleave a child
 // creation between the guard check and the mutations. Callers that need a
 // plain rewind (no pipeline upgrade) should use RewindWithRequest.
-func (o *Orchestrator) RewindWithUpgrade(featureID string, request feature.RewindRequest, upgradePipeline feature.PipelineProfile) ([]string, feature.Phase, error) {
+func (o *Orchestrator) RewindWithUpgrade(featureID string, request feature.RewindRequest, upgradePipeline feature.PipelineProfile) ([]feature.RewindWarning, feature.Phase, error) {
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
 	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
@@ -430,10 +431,10 @@ func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
 
 // RecordPublishUIFailure marks a single-repo feature failed when the publish
 // UI surfaces an error already emitted by the publish pipeline. This typed
-// boundary fires the FeatureFailed hook with FailureInfrastructure when there
-// is no per-repository fan-out path.
+// boundary fires the FeatureFailed hook with an infrastructure_failure
+// record when there is no per-repository fan-out path.
 func (o *Orchestrator) RecordPublishUIFailure(featureID, errMsg string) error {
-	return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+	return o.markFailedWithEvent(featureID, o.delegateFailureRecord(featureID, errcat.InfrastructureFailure, errMsg))
 }
 
 // ReportMissingArtifactFailure marks a feature failed when a phase runner
@@ -441,13 +442,13 @@ func (o *Orchestrator) RecordPublishUIFailure(featureID, errMsg string) error {
 // at the SDK/session bridge so the phase-completion handler cannot see it; this
 // method routes the failure through a typed boundary instead of MarkFailed.
 func (o *Orchestrator) ReportMissingArtifactFailure(featureID, errMsg string) error {
-	return o.markFailedWithEvent(featureID, feature.FailureMissingArtifact, errMsg)
+	return o.markFailedWithEvent(featureID, o.delegateFailureRecord(featureID, errcat.ArtifactMissing, errMsg))
 }
 
 // ReportProtocolViolation marks a feature failed when a root turn violates the
 // completion protocol or produces artifacts that violate its role contract.
 func (o *Orchestrator) ReportProtocolViolation(featureID, errMsg string) error {
-	return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
+	return o.markFailedWithEvent(featureID, o.delegateFailureRecord(featureID, errcat.ProtocolViolation, errMsg))
 }
 
 // CommitUncommittedForPublish commits uncommitted changes in each repository
@@ -588,14 +589,13 @@ func (o *Orchestrator) ExtendFailedPhaseBudget(featureID string, maxIterationsDe
 		if f.Status != feature.StatusFailed {
 			return nil
 		}
-		if f.FailureType == feature.FailureMaxIterations && maxIterationsDelta > 0 {
+		if f.FailureCode() == errcat.IterationBudgetExhausted && maxIterationsDelta > 0 {
 			f.MaxIterations += maxIterationsDelta
 		}
 		if f.CurrentPhase == feature.PhasePlan && maxPlanIterationsDelta > 0 {
 			f.MaxPlanIterations += maxPlanIterationsDelta
 		}
-		f.LastError = ""
-		f.FailureType = ""
+		f.Run().Failure = nil
 		return nil
 	})
 }
@@ -765,7 +765,7 @@ type RestartOutcome struct {
 //     the phase the caller should relaunch.
 //
 // maxIterationsDelta / maxPlanIterationsDelta are the config-derived bumps
-// used when the feature's FailureType == FailureMaxIterations (or the phase
+// used when the run's failure code is iteration_budget_exhausted (or the phase
 // is Plan). Pass 0 to skip the bump; callers supply configured defaults so the
 // orchestrator boundary stays free of config plumbing.
 func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPlanIterationsDelta int) (RestartOutcome, error) {
@@ -961,14 +961,13 @@ func (o *Orchestrator) resetFailedFinalReviewForRestart(featureID string) error 
 	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		f.Status = feature.StatusReviewPassed
 		f.CurrentPhase = feature.PhaseFinalReview
-		f.LastError = ""
-		f.FailureType = ""
+		f.Run().Failure = nil
 		f.CurrentPhaseStatus = ""
 		f.ReviewFixing = false
 		f.ReviewingGate = false
 		for _, r := range f.Repos {
 			if st := f.RepoStates[r.Name]; st != nil {
-				st.LastError = ""
+				st.Error = nil
 			}
 		}
 		clearPendingFeatureAttention(f)

@@ -27,6 +27,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -865,7 +866,7 @@ func TestScanRecovery_ReconcilesAbandonedSetupBeforeScan(t *testing.T) {
 				t.Fatalf("load during scan: %v", err)
 			}
 			scanSawFailed = got.Status == feature.StatusFailed &&
-				got.FailureType == feature.FailureWorktreeSetup &&
+				errcat.IsSetupFailure(got.FailureCode()) &&
 				got.Run().Setup != nil &&
 				got.Run().Setup.Status == feature.SetupStatusFailed
 			return nil, nil

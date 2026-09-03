@@ -17,13 +17,26 @@ limitations under the License.
 import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { SafeErrorException } from '../../shared/errors';
+import { CanonicalErrorException } from '../../shared/errors';
 import { ReadinessSnapshotSchema } from '../../shared/ipc';
 import type { ApiRequestInit, HttpResult } from '../gateway/runtimeGateway';
 import { SetupService, type SetupServiceDeps } from '../setup';
 import { CreationFilesService } from '../creationFiles';
 
 function serverReadiness(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const claudeIssue = {
+    code: 'unauthenticated',
+    class: 'blocking',
+    title: 'Unauthenticated',
+    summary: 'A provider CLI is installed but its authentication flow has not been completed.',
+    remediation: { hint: 'claude login' },
+  };
+  const modelsIssue = {
+    code: 'models_unavailable',
+    class: 'blocking',
+    title: 'Models unavailable',
+    summary: 'No usable provider exposes any model.',
+  };
   return {
     api_version: 'v1',
     ready: false,
@@ -34,28 +47,17 @@ function serverReadiness(overrides: Record<string, unknown> = {}): Record<string
         installed: true,
         version: '2.1.0',
         ready: false,
-        issue: {
-          code: 'unauthenticated',
-          message: 'The claude CLI is not authenticated.',
-          remedy: 'claude login',
-        },
+        issue: claudeIssue,
       },
       { name: 'codex', installed: false, ready: false },
     ],
-    models: { available: false, issue: { code: 'models_unavailable', message: 'No models.' } },
+    models: { available: false, issue: modelsIssue },
     configuration: { valid: true },
     workspace: {
       roots: [{ path: '/work/space', valid: true }],
       repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true }],
     },
-    issues: [
-      {
-        code: 'unauthenticated',
-        message: 'The claude CLI is not authenticated.',
-        remedy: 'claude login',
-      },
-      { code: 'models_unavailable', message: 'No models.' },
-    ],
+    issues: [claudeIssue, modelsIssue],
     ...overrides,
   };
 }
@@ -91,7 +93,7 @@ describe('SetupService.getReadiness', () => {
     expect(snapshot.ready).toBe(false);
     expect(snapshot.probedAt).toBe('2026-07-14T10:00:00Z');
     expect(snapshot.providers).toHaveLength(2);
-    expect(snapshot.providers[0]?.issue?.remedy).toBe('claude login');
+    expect(snapshot.providers[0]?.issue?.remediation?.hint).toBe('claude login');
     expect(snapshot.workspaceRoots).toEqual([{ path: '/work/space', valid: true }]);
     expect(snapshot.repositories[0]?.name).toBe('repo-a');
     expect(snapshot.issues.map((issue) => issue.code)).toEqual([
@@ -106,7 +108,7 @@ describe('SetupService.getReadiness', () => {
       body: { api_version: 'v1', ready: 'yes' },
     }));
     await expect(service.getReadiness()).rejects.toMatchObject({
-      safe: { code: 'E_SCHEMA_MISMATCH' },
+      canonical: { code: 'E_SCHEMA_MISMATCH' },
     });
   });
 
@@ -164,7 +166,7 @@ describe('CreationFilesService', () => {
       ]);
       await expect(
         service.resolve([{ repoKey: 'repo-a', path: '../outside' }]),
-      ).rejects.toMatchObject({ safe: { code: 'E_INVALID_REPOSITORY_FILE' } });
+      ).rejects.toMatchObject({ canonical: { code: 'E_REPOSITORY_FILE_ESCAPED' } });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -215,7 +217,7 @@ describe('SetupService.addWorkspaceRoot', () => {
   it('rejects relative paths fail-closed without contacting the server', async () => {
     const { service, calls } = makeService(() => ({ status: 200, body: serverReadiness() }));
     await expect(service.addWorkspaceRoot('relative/path')).rejects.toBeInstanceOf(
-      SafeErrorException,
+      CanonicalErrorException,
     );
     expect(calls).toHaveLength(0);
   });
@@ -248,58 +250,121 @@ describe('SetupService.initRepository', () => {
     const { service, calls } = makeService(() => ({ status: 200, body: serverReadiness() }));
     await expect(
       service.initRepository({ path: '/work/space/x', consent: false as never }),
-    ).rejects.toMatchObject({ safe: { code: 'consent_required' } });
+    ).rejects.toMatchObject({
+      canonical: {
+        code: 'E_CONSENT_REQUIRED',
+        class: 'needs_action',
+        remediation: { hint: expect.stringContaining('consent') },
+      },
+    });
     expect(calls).toHaveLength(0);
   });
 
-  it('maps structured server rejections to safe errors with concrete remediation', async () => {
-    const { service } = makeService(() => ({
+  it.each([
+    {
+      code: 'consent_required',
+      status: 400,
+      errorClass: 'needs_action',
+      title: 'Consent required',
+      summary: 'Explicit consent is required to initialize a repository.',
+      hint: 'Confirm the initialization consent, then retry.',
+    },
+    {
+      code: 'invalid_repository_path',
+      status: 400,
+      errorClass: 'blocking',
+      title: 'Invalid repository path',
+      summary: 'The repository path "/work/space/x" is not valid.',
+      hint: 'Choose an absolute folder inside a configured workspace root.',
+    },
+    {
+      code: 'path_outside_workspace_root',
+      status: 400,
+      errorClass: 'blocking',
+      title: 'Path outside workspace root',
+      summary: 'The path "/work/space/x" is not strictly inside a configured workspace root.',
+      hint: 'Choose a folder inside a workspace root, or add its parent as a root first.',
+    },
+    {
+      code: 'already_repository',
       status: 409,
-      body: {
-        api_version: 'v1',
-        error: {
-          code: 'already_repository',
-          message: 'the target is already a git repository',
-          status: 409,
+      errorClass: 'blocking',
+      title: 'Already a repository',
+      summary: 'The selected path is already a git repository.',
+      hint: 'Select the existing repository instead of initializing it.',
+    },
+    {
+      code: 'directory_not_empty',
+      status: 409,
+      errorClass: 'blocking',
+      title: 'Directory not empty',
+      summary: 'The directory is not empty and is not a git repository.',
+      hint: 'Choose an empty folder or an existing repository.',
+    },
+    {
+      code: 'not_ready',
+      status: 409,
+      errorClass: 'needs_action',
+      title: 'Runtime not ready',
+      summary: 'The runtime is not ready to create features: Unauthenticated; Missing executable.',
+      hint: 'Complete the outstanding setup steps, then try again.',
+    },
+  ])(
+    'maps the canonical $code rejection with its catalog remedy',
+    async ({ code, status, errorClass, title, summary, hint }) => {
+      const { service } = makeService(() => ({
+        status,
+        body: {
+          api_version: 'v1',
+          error: { code, class: errorClass, title, summary, remediation: { hint } },
         },
-      },
-    }));
-    await expect(
-      service.initRepository({ path: '/work/space/existing', consent: true }),
-    ).rejects.toMatchObject({
-      safe: {
-        code: 'already_repository',
-        remediation: expect.stringMatching(/select it directly/i),
-      },
-    });
-  });
+      }));
+      const failure = await service
+        .initRepository({ path: '/work/space/x', consent: true })
+        .catch((e: unknown) => e);
+      expect(failure).toBeInstanceOf(CanonicalErrorException);
+      const canonical = (failure as CanonicalErrorException).canonical;
+      expect(canonical.code).toBe(code);
+      expect(canonical.class).toBe(errorClass);
+      expect(canonical.title).toBe(title);
+      expect(canonical.summary).toBe(summary);
+      expect(canonical.remediation?.hint).toBe(hint);
+    },
+  );
 
-  it('redacts token or home-path material in server error messages', async () => {
+  it('redacts token or home-path material in canonical diagnostics', async () => {
     const { service } = makeService(() => ({
       status: 400,
       body: {
         api_version: 'v1',
         error: {
           code: 'invalid_repository_path',
-          message: 'bad path /Users/somebody/secret with Bearer tok-123',
-          status: 400,
+          class: 'blocking',
+          title: 'Invalid repository path',
+          summary: 'The repository path "/work/space/x" is not valid.',
+          remediation: { hint: 'Choose an absolute folder inside a configured workspace root.' },
+          diagnostics: 'bad path /Users/somebody/secret with Bearer tok-123',
         },
       },
     }));
     const failure = await service
       .initRepository({ path: '/work/space/x', consent: true })
-      .catch((err: unknown) => err as SafeErrorException);
-    expect(failure).toBeInstanceOf(SafeErrorException);
-    const raw = JSON.stringify((failure as SafeErrorException).safe);
-    expect(raw).not.toContain('/Users/somebody');
-    expect(raw).not.toContain('tok-123');
+      .catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(CanonicalErrorException);
+    const diagnostics = (failure as CanonicalErrorException).canonical.diagnostics ?? '';
+    expect(diagnostics).toContain('[path]');
+    expect(diagnostics).toContain('[redacted]');
+    expect(diagnostics).not.toContain('/Users/somebody');
+    expect(diagnostics).not.toContain('tok-123');
   });
 
-  it('degrades to a generic safe error when the error body is unstructured', async () => {
+  it('degrades to the fixed HTTP rejection code with the status in the summary', async () => {
     const { service } = makeService(() => ({ status: 500, body: 'boom' }));
     await expect(
       service.initRepository({ path: '/work/space/x', consent: true }),
-    ).rejects.toMatchObject({ safe: { code: 'E_HTTP_500' } });
+    ).rejects.toMatchObject({
+      canonical: { code: 'E_HTTP_REJECTED', summary: expect.stringContaining('500') },
+    });
   });
 });
 
@@ -334,8 +399,8 @@ describe('SetupService.pickWorkspaceDirectory', () => {
       () => Promise.resolve('sneaky/relative'),
     );
     const failure = await service.pickWorkspaceDirectory().catch((err: unknown) => err);
-    expect(failure).toBeInstanceOf(SafeErrorException);
-    expect((failure as SafeErrorException).safe.code).toBe('E_INVALID_PATH');
-    expect(JSON.stringify((failure as SafeErrorException).safe)).not.toContain('sneaky');
+    expect(failure).toBeInstanceOf(CanonicalErrorException);
+    expect((failure as CanonicalErrorException).canonical.code).toBe('E_INVALID_PATH');
+    expect(JSON.stringify((failure as CanonicalErrorException).canonical)).not.toContain('sneaky');
   });
 });

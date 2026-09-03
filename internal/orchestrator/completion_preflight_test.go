@@ -15,6 +15,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -214,8 +215,8 @@ func TestRepositoryDiffListsChangedFiles(t *testing.T) {
 	if result.Repo != "repo-a" {
 		t.Fatalf("repo = %q; want repo-a", result.Repo)
 	}
-	if result.PartialFailure != "" {
-		t.Fatalf("partial_failure = %q; want empty", result.PartialFailure)
+	if result.PartialFailure != nil {
+		t.Fatalf("partial failure = %#v; want none", result.PartialFailure)
 	}
 	if len(result.Files) != 1 {
 		t.Fatalf("files len = %d; want 1", len(result.Files))
@@ -225,15 +226,12 @@ func TestRepositoryDiffListsChangedFiles(t *testing.T) {
 	}
 }
 
-func TestRepositoryDiffReportsNotFoundRepo(t *testing.T) {
+func TestRepositoryDiffUnknownRepoIsNotFoundError(t *testing.T) {
 	t.Parallel()
 	o := newCompletionOrchestrator(t)
-	result, err := o.RepositoryDiff("feat-completion", "nonexistent", "")
-	if err != nil {
-		t.Fatalf("RepositoryDiff: %v", err)
-	}
-	if result.PartialFailure != "repository not found" {
-		t.Fatalf("partial_failure = %q; want 'repository not found'", result.PartialFailure)
+	_, err := o.RepositoryDiff("feat-completion", "nonexistent", "")
+	if !errors.Is(err, feature.ErrRepositoryNotFound) {
+		t.Fatalf("RepositoryDiff error = %v; want feature.ErrRepositoryNotFound", err)
 	}
 }
 
@@ -273,8 +271,9 @@ func TestRepositoryDiffWithFilePathReportsDiffErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RepositoryDiff: %v", err)
 	}
-	if !strings.Contains(result.PartialFailure, "main") {
-		t.Fatalf("partial_failure = %q; want propagated diff error", result.PartialFailure)
+	if result.PartialFailure == nil || result.PartialFailure.Kind != RepositoryDiffFailed ||
+		!strings.Contains(result.PartialFailure.Err.Error(), "main") {
+		t.Fatalf("partial failure = %#v; want propagated diff error naming main", result.PartialFailure)
 	}
 	if result.FileUnavailable {
 		t.Fatal("FileUnavailable = true; want git error reported as partial_failure")

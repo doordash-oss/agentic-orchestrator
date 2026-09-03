@@ -46,7 +46,7 @@ describe('fetchJson', () => {
           method: 'POST',
           body: {},
         }),
-      ).rejects.toMatchObject({ safe: { code: 'E_REQUEST_TIMEOUT' } });
+      ).rejects.toMatchObject({ canonical: { code: 'E_REQUEST_TIMEOUT' } });
     });
   });
 
@@ -69,7 +69,7 @@ describe('fetchJson', () => {
           timeoutMs: 1000,
           maxResponseBytes: MAX_PROBE_RESPONSE_BYTES,
         }),
-      ).rejects.toMatchObject({ safe: { code: 'E_PAYLOAD_TOO_LARGE' } });
+      ).rejects.toMatchObject({ canonical: { code: 'E_PAYLOAD_TOO_LARGE' } });
     } finally {
       globalThis.fetch = original;
     }
@@ -86,7 +86,7 @@ describe('fetchJson', () => {
     try {
       await expect(
         fetchJson('http://127.0.0.1:9/api/v1/features', { timeoutMs: 1000 }),
-      ).rejects.toMatchObject({ safe: { code: 'E_PAYLOAD_TOO_LARGE' } });
+      ).rejects.toMatchObject({ canonical: { code: 'E_PAYLOAD_TOO_LARGE' } });
     } finally {
       globalThis.fetch = original;
     }

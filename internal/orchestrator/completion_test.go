@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
@@ -351,13 +352,14 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Failure(t *testing.T) {
 	}
 	lc := lifecycleForFeature(f)
 	lc.MarkRepoKBFailedFn = func(id, repo, msg string) error { return nil }
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 
-	var failureType, errMsg string
+	var failureCode errcat.Code
+	var errMsg string
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnFeatureFailed: func(id string, ft, em string) {
-			failureType = ft
+		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) {
+			failureCode = code
 			errMsg = em
 		},
 	})
@@ -373,8 +375,8 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Failure(t *testing.T) {
 
 	assertLifecycleCall(t, lc, "MarkRepoKBFailed")
 	assertLifecycleCall(t, lc, "MarkFailed")
-	if failureType != feature.FailureSessionCrash {
-		t.Errorf("failure type = %q, want %q", failureType, feature.FailureSessionCrash)
+	if failureCode != errcat.SessionCrashed {
+		t.Errorf("failure code = %q, want %q", failureCode, errcat.SessionCrashed)
 	}
 	if errMsg != "kb tanked" {
 		t.Errorf("error message = %q, want %q", errMsg, "kb tanked")
@@ -432,11 +434,11 @@ func newArtifactPhaseOrchestratorFixture(t *testing.T, tc artifactPhaseCase) (*o
 	lc.GetFn = func(id string) (*feature.Feature, error) {
 		return store.Load(id)
 	}
-	lc.MarkFailedFn = func(id, ft, msg string) error {
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
 		return store.Modify(id, func(ff *feature.Feature) error {
 			ff.Status = feature.StatusFailed
-			ff.FailureType = ft
-			ff.LastError = msg
+			rec := failure
+			ff.Run().Failure = &rec
 			return nil
 		})
 	}
@@ -633,12 +635,12 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Failure(t *testing.T) {
 		Pipeline:     feature.PipelineLarge,
 	}
 	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 
-	var failureType string
+	var failureCode errcat.Code
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnFeatureFailed: func(id string, ft, em string) { failureType = ft },
+		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
 	if err := o.HandlePhaseCompletion("feat-inq-fail", orchestrator.PhaseCompletionInput{
@@ -649,8 +651,8 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Failure(t *testing.T) {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	if failureType != feature.FailureSessionCrash {
-		t.Errorf("failure type = %q, want %q", failureType, feature.FailureSessionCrash)
+	if failureCode != errcat.SessionCrashed {
+		t.Errorf("failure code = %q, want %q", failureCode, errcat.SessionCrashed)
 	}
 	events := drainEvents(o)
 	if !hasEventType(events, ports.FeatureFailed) {
@@ -666,25 +668,25 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_ProtocolFailure(t *testing.T
 		Pipeline:     feature.PipelineLarge,
 	}
 	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 
-	var failureType string
+	var failureCode errcat.Code
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnFeatureFailed: func(id string, ft, em string) { failureType = ft },
+		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
 	if err := o.HandlePhaseCompletion("feat-inq-protocol", orchestrator.PhaseCompletionInput{
 		Phase:       feature.PhaseInquire,
 		Success:     false,
 		ErrorDetail: "protocol violation: inquirer @ /tmp/inquire: agentico-outcome is missing",
-		FailureType: feature.FailureProtocolViolation,
+		FailureCode: errcat.ProtocolViolation,
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	if failureType != feature.FailureProtocolViolation {
-		t.Errorf("failure type = %q, want %q", failureType, feature.FailureProtocolViolation)
+	if failureCode != errcat.ProtocolViolation {
+		t.Errorf("failure code = %q, want %q", failureCode, errcat.ProtocolViolation)
 	}
 }
 
@@ -846,8 +848,8 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_NeedsReview_NoGate_RaisesReview
 		f.Status = feature.StatusPlanNeedsReview
 		return nil
 	}
-	lc.MarkFailedFn = func(id, ft, msg string) error {
-		t.Fatalf("MarkFailed must not be called; needs_human_review must always open a gate, got ft=%q msg=%q", ft, msg)
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
+		t.Fatalf("MarkFailed must not be called; needs_human_review must always open a gate, got code=%q diagnostics=%q", failure.Code, failure.Diagnostics)
 		return nil
 	}
 	fs := newFeatureStore(f)
@@ -855,8 +857,8 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_NeedsReview_NoGate_RaisesReview
 	var reviewPhase feature.Phase
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
 		OnReviewRequired: func(id string, p feature.Phase) { reviewPhase = p },
-		OnFeatureFailed: func(id string, ft, em string) {
-			t.Fatalf("OnFeatureFailed must not fire; needs_human_review must always open a gate, got ft=%q em=%q", ft, em)
+		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) {
+			t.Fatalf("OnFeatureFailed must not fire; needs_human_review must always open a gate, got code=%q em=%q", code, em)
 		},
 	})
 
@@ -877,7 +879,7 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_NeedsReview_NoGate_RaisesReview
 	}
 }
 
-// Plan failed → markFailedWithEvent(FailureInfrastructure).
+// Plan failed → markFailedWithEvent(infrastructure_failure).
 func TestOrchestrator_HandlePhaseCompletion_Plan_Failed(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-plan-err",
@@ -886,13 +888,14 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_Failed(t *testing.T) {
 		Pipeline:     feature.PipelineMedium,
 	}
 	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 
-	var failureType, errMsg string
+	var failureCode errcat.Code
+	var errMsg string
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnFeatureFailed: func(id string, ft, em string) {
-			failureType = ft
+		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) {
+			failureCode = code
 			errMsg = em
 		},
 	})
@@ -907,8 +910,8 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_Failed(t *testing.T) {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	if failureType != feature.FailureInfrastructure {
-		t.Errorf("failure type = %q, want %q", failureType, feature.FailureInfrastructure)
+	if failureCode != errcat.InfrastructureFailure {
+		t.Errorf("failure code = %q, want %q", failureCode, errcat.InfrastructureFailure)
 	}
 	if errMsg != "validator exploded" {
 		t.Errorf("error message = %q, want %q", errMsg, "validator exploded")
@@ -923,13 +926,14 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_ProtocolViolation(t *testing.T)
 		Pipeline:     feature.PipelineMedium,
 	}
 	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 
-	var failureType, errMsg string
+	var failureCode errcat.Code
+	var errMsg string
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnFeatureFailed: func(id string, ft, em string) {
-			failureType = ft
+		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) {
+			failureCode = code
 			errMsg = em
 		},
 	})
@@ -944,8 +948,8 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_ProtocolViolation(t *testing.T)
 		t.Fatalf("HandlePhaseCompletion() error = %v", err)
 	}
 
-	if failureType != feature.FailureProtocolViolation {
-		t.Errorf("failure type = %q, want %q", failureType, feature.FailureProtocolViolation)
+	if failureCode != errcat.ProtocolViolation {
+		t.Errorf("failure code = %q, want %q", failureCode, errcat.ProtocolViolation)
 	}
 	if !strings.Contains(errMsg, "plan_phase_planner") {
 		t.Errorf("error message = %q, want planner role", errMsg)
@@ -973,7 +977,7 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_Interrupted_NoOp(t *testing.T) 
 	refuteLifecycleCall(t, lc, "MarkFailed")
 }
 
-// Plan result is nil → markFailedWithEvent(FailureInfrastructure).
+// Plan result is nil → markFailedWithEvent(infrastructure_failure).
 func TestOrchestrator_HandlePhaseCompletion_Plan_NilResult_Fails(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-plan-nil",
@@ -981,7 +985,7 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_NilResult_Fails(t *testing.T) {
 		CurrentPhase: feature.PhasePlan,
 	}
 	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
@@ -1122,7 +1126,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_WrongStatus_NoOp(t *
 	refuteLifecycleCall(t, lc, "CompleteImplementation")
 }
 
-// Multi-repo failed → MarkFailed(infrastructure).
+// Multi-repo failed → MarkFailed(infrastructure_failure default).
 func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-multi-err",
@@ -1130,12 +1134,12 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed(t *testing.T)
 		CurrentPhase: feature.PhaseImplement,
 	}
 	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 
-	var failureType string
+	var failureCode errcat.Code
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnFeatureFailed: func(id string, ft, em string) { failureType = ft },
+		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
 	if err := o.HandlePhaseCompletion("feat-multi-err", orchestrator.PhaseCompletionInput{
@@ -1148,8 +1152,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed(t *testing.T)
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	if failureType != feature.FailureInfrastructure {
-		t.Errorf("failure type = %q, want %q", failureType, feature.FailureInfrastructure)
+	if failureCode != errcat.InfrastructureFailure {
+		t.Errorf("failure code = %q, want %q", failureCode, errcat.InfrastructureFailure)
 	}
 }
 
@@ -1344,9 +1348,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceUsesLatestI
 }
 
 // Multi-repo failed with at least one repo reporting FinalStatus="max_iterations"
-// must surface FailureMaxIterations (not FailureInfrastructure). The restart
-// restart handler only grows the iteration budget when FailureType equals
-// FailureMaxIterations; losing that signal would
+// must surface iteration_budget_exhausted (not infrastructure_failure). The restart
+// restart handler only grows the iteration budget when the run's failure record
+// code is iteration_budget_exhausted; losing that signal would
 // silently revert to the default cap on resume. Regression guard for the
 // fix in completion.go:onMultiRepoImplementDone's "failed" branch.
 func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_MaxIterations_Preserved(t *testing.T) {
@@ -1360,12 +1364,12 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_MaxIterations
 		},
 	}
 	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 
-	var failureType string
+	var failureCode errcat.Code
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnFeatureFailed: func(id string, ft, em string) { failureType = ft },
+		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
 	if err := o.HandlePhaseCompletion("feat-multi-maxit", orchestrator.PhaseCompletionInput{
@@ -1382,8 +1386,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_MaxIterations
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	if failureType != feature.FailureMaxIterations {
-		t.Errorf("failure type = %q, want %q (single repo max_iterations must propagate)", failureType, feature.FailureMaxIterations)
+	if failureCode != errcat.IterationBudgetExhausted {
+		t.Errorf("failure code = %q, want %q (single repo max_iterations must propagate)", failureCode, errcat.IterationBudgetExhausted)
 	}
 }
 
@@ -1397,12 +1401,12 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_ProtocolViola
 		},
 	}
 	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 
-	var failureType string
+	var failureCode errcat.Code
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnFeatureFailed: func(id string, ft string, em string) { failureType = ft },
+		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
 	if err := o.HandlePhaseCompletion("feat-multi-protocol", orchestrator.PhaseCompletionInput{
@@ -1417,8 +1421,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_ProtocolViola
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion() error = %v", err)
 	}
-	if failureType != feature.FailureProtocolViolation {
-		t.Fatalf("failure type = %q, want %q", failureType, feature.FailureProtocolViolation)
+	if failureCode != errcat.ProtocolViolation {
+		t.Fatalf("failure code = %q, want %q", failureCode, errcat.ProtocolViolation)
 	}
 }
 
@@ -1432,12 +1436,12 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_SafetyRail_Pr
 		},
 	}
 	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 
-	var failureType string
+	var failureCode errcat.Code
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnFeatureFailed: func(id string, ft string, em string) { failureType = ft },
+		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
 	if err := o.HandlePhaseCompletion("feat-multi-safety-rail", orchestrator.PhaseCompletionInput{
@@ -1452,12 +1456,12 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_SafetyRail_Pr
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion() error = %v", err)
 	}
-	if failureType != feature.FailureSafetyRail {
-		t.Fatalf("failure type = %q, want %q", failureType, feature.FailureSafetyRail)
+	if failureCode != errcat.SafetyRailTripped {
+		t.Fatalf("failure code = %q, want %q", failureCode, errcat.SafetyRailTripped)
 	}
 }
 
-// Multi-repo failed without any max_iterations entries keeps FailureInfrastructure
+// Multi-repo failed without any max_iterations entries keeps infrastructure_failure
 // as the default. Companion to the max_iterations test — proves the status
 // scan does not over-trigger.
 func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_NoMaxIterations_DefaultsToInfra(t *testing.T) {
@@ -1470,12 +1474,12 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_NoMaxIteratio
 		},
 	}
 	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 
-	var failureType string
+	var failureCode errcat.Code
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnFeatureFailed: func(id string, ft, em string) { failureType = ft },
+		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
 	if err := o.HandlePhaseCompletion("feat-multi-infra", orchestrator.PhaseCompletionInput{
@@ -1489,8 +1493,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_NoMaxIteratio
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	if failureType != feature.FailureInfrastructure {
-		t.Errorf("failure type = %q, want %q", failureType, feature.FailureInfrastructure)
+	if failureCode != errcat.InfrastructureFailure {
+		t.Errorf("failure code = %q, want %q", failureCode, errcat.InfrastructureFailure)
 	}
 }
 
@@ -1582,7 +1586,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_NoPayload(t *testing.T) {
 		CurrentPhase: feature.PhaseImplement,
 	}
 	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
@@ -1624,7 +1628,7 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_UnknownStatus_Fails(t *testing.
 		CurrentPhase: feature.PhasePlan,
 	}
 	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
 

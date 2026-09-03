@@ -158,8 +158,8 @@ export function CommandPalette({
     // selection; the runtime owns it, so it is fetched per open.
     window.agentico
       .listFeatures()
-      .then((rows) => {
-        if (alive) setFeatures(rows);
+      .then((list) => {
+        if (alive) setFeatures(list.features);
       })
       .catch(() => {
         if (alive) setFeatures([]);

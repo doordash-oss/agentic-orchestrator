@@ -24,7 +24,7 @@ limitations under the License.
  * null signal (transitional/not-ready states) is deliberately treated like
  * local so local behavior stays byte-for-byte unchanged.
  */
-import { requiresLocalServerError, SafeErrorException } from '../shared/errors';
+import { CanonicalErrorException, requiresLocalServerError } from '../shared/errors';
 
 export type ConnectionLocality = 'local' | 'remote' | null;
 
@@ -39,6 +39,6 @@ export function alwaysLocal(): ConnectionLocality {
 /** Refuses local-filesystem work while the active connection is remote. */
 export function assertLocalConnection(locality: LocalitySource): void {
   if (locality() === 'remote') {
-    throw new SafeErrorException(requiresLocalServerError());
+    throw new CanonicalErrorException(requiresLocalServerError());
   }
 }

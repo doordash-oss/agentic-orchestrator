@@ -15,8 +15,11 @@ limitations under the License.
 */
 
 import { useCallback, useState } from 'react';
-import type { RelationshipChildView } from '../../../../shared/ipc';
-import { CHILD_KIND_LABEL } from './refactorPassModel';
+import type { CanonicalError, RelationshipChildView } from '../../../../shared/ipc';
+import { ErrorSurface } from '../../components/ErrorSurface';
+import { retryAction } from '../../hooks';
+import { parseIpcError } from '../../wizard/ipcError';
+import { CHILD_KIND_LABEL, relationshipWarningExplain } from './refactorPassModel';
 
 /**
  * Settled passes are immutable history: newest first, inspection
@@ -41,19 +44,19 @@ export function RefactorHistory({
 }): React.ReactElement | null {
   const [loaded, setLoaded] = useState<readonly RelationshipChildView[] | null>(null);
   const [loading, setLoading] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<CanonicalError | null>(null);
 
   const load = useCallback(() => {
     if (onLoadFullHistory === undefined || loading) return;
     setLoading(true);
-    setFailed(false);
+    setFailed(null);
     onLoadFullHistory().then(
       (full) => {
         setLoaded(full);
         setLoading(false);
       },
-      () => {
-        setFailed(true);
+      (reason: unknown) => {
+        setFailed(parseIpcError(reason));
         setLoading(false);
       },
     );
@@ -72,6 +75,8 @@ export function RefactorHistory({
         </span>
       </summary>
       {shortfall ? (
+        // A shortfall statement, not an error: the count is honest and the
+        // load affordance is the fix, so no alert semantics ride along.
         <p className="refactor-history__truncation">
           {`Showing the ${shown.length} most recent of ${total} settled passes.`}
           {loadable ? (
@@ -81,10 +86,8 @@ export function RefactorHistory({
           ) : null}
         </p>
       ) : null}
-      {failed ? (
-        <p className="refactor-history__truncation" role="alert">
-          Could not load the preserved history. Try again.
-        </p>
+      {failed !== null ? (
+        <ErrorSurface error={failed} variant="compact" localAction={retryAction(load)} />
       ) : null}
       <ol className="refactor-history__entries">
         {shown.map((entry) => (
@@ -121,17 +124,14 @@ export function RefactorHistory({
                 </div>
               </dl>
             </div>
-            {entry.cleanupWarnings.length > 0 ? (
-              <ul className="refactor-history__warnings">
-                {entry.cleanupWarnings.map((warning) => (
-                  <li key={`${warning.repo ?? ''}:${warning.message}`}>
-                    {warning.repo === undefined
-                      ? warning.message
-                      : `${warning.repo}: ${warning.message}`}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
+            {entry.warnings.map((warning, index) => (
+              <ErrorSurface
+                key={`${warning.code}:${index}`}
+                error={warning}
+                variant="compact"
+                explain={relationshipWarningExplain(entry, warning)}
+              />
+            ))}
             {entry.diffSummary !== undefined && entry.diffSummary !== '' ? (
               <details className="refactor-history__diff">
                 <summary>Preserved diff (read-only)</summary>

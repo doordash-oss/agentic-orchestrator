@@ -20,21 +20,15 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	gitadapter "github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 const (
-	actionReviewFeedback                         = "review-feedback"
-	reviewFeedbackSubactionFetch                 = "fetch"
-	reviewFeedbackSubactionSelection             = "selection"
-	errCodeReviewFeedbackFetchFailed             = "review_feedback_fetch_failed"
-	errCodeReviewFeedbackDraftNotFound           = "review_feedback_draft_not_found"
-	errCodeReviewFeedbackRevisionConflict        = "review_feedback_revision_conflict"
-	errCodeReviewFeedbackUnknownReference        = "review_feedback_unknown_reference"
-	errCodeReviewFeedbackMalformedReference      = "review_feedback_malformed_reference"
-	errCodeReviewFeedbackSelectionBounds         = "review_feedback_selection_update_too_large"
-	errCodeReviewFeedbackZeroLaunchableSelection = "review_feedback_zero_launchable_selection"
+	actionReviewFeedback             = "review-feedback"
+	reviewFeedbackSubactionFetch     = "fetch"
+	reviewFeedbackSubactionSelection = "selection"
 )
 
 // maxReviewFeedbackSelectionUpdates bounds one reference-only selection
@@ -76,30 +70,32 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 		return
 	}
 	if len(req) != 0 {
-		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, "review-feedback fetch request must be empty", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("review-feedback fetch request must be empty"))
 		return
 	}
 	if h.store == nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "feature store unavailable", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("feature store unavailable"))
 		return
 	}
 	parent, err := h.store.Load(parentID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			writeAPIError(w, http.StatusNotFound, "not_found", "feature not found", map[string]any{"feature_id": parentID})
+			writeAPIError(w, http.StatusNotFound, errcat.NotFound,
+				errcat.WithParams(errcat.SubjectParams{Subject: entityFeatureSubject, Name: parentID}))
 			return
 		}
-		writeAPIError(w, http.StatusInternalServerError, "feature_read_failed", "read feature", map[string]any{"feature_id": parentID})
+		writeAPIError(w, http.StatusInternalServerError, errcat.FeatureReadFailed,
+			errcat.WithDiagnostics(fmt.Sprintf("read feature %q: %v", parentID, err)))
 		return
 	}
 	addressedReader, ok := h.store.(addressedReviewFeedbackIDReader)
 	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "review-feedback addressed-ID store unavailable", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("review-feedback addressed-ID store unavailable"))
 		return
 	}
 	draftStore, ok := h.store.(reviewFeedbackDraftStore)
 	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "review-feedback draft store unavailable", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("review-feedback draft store unavailable"))
 		return
 	}
 
@@ -145,7 +141,7 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 
 	existing, loadErr := draftStore.LoadReviewFeedbackDraft(parent.ID)
 	if loadErr != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "read review feedback draft", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("read review feedback draft"))
 		return
 	}
 	// Converge a pending draft already consumed by a durable launch receipt:
@@ -162,7 +158,7 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 		} else if receiptReader, ok := h.store.(reviewFeedbackLaunchReceiptReader); ok {
 			_, receipt, receiptErr := receiptReader.ActiveReviewFeedbackLaunchReceipt(parent.ID)
 			if receiptErr != nil {
-				writeAPIError(w, http.StatusInternalServerError, "internal_error", "read review-feedback launch receipt", nil)
+				writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("read review-feedback launch receipt"))
 				return
 			}
 			if receipt != nil {
@@ -174,7 +170,7 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 				// Compare-and-delete under the store lock: a revision
 				// committed after the receipt is never treated as consumed.
 				if delErr := deleter.DeleteReviewFeedbackDraftIfRevision(parent.ID, consumedRevision); delErr != nil {
-					writeAPIError(w, http.StatusInternalServerError, "internal_error", "delete review feedback draft consumed by launch", nil)
+					writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("delete review feedback draft consumed by launch"))
 					return
 				}
 				existing = nil
@@ -190,10 +186,10 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 		var conflict *feature.ReviewFeedbackRevisionConflictError
 		var consumed *feature.ReviewFeedbackDraftConsumedError
 		if errors.As(saveErr, &conflict) || errors.As(saveErr, &consumed) {
-			writeAPIError(w, http.StatusConflict, errCodeReviewFeedbackRevisionConflict, saveErr.Error(), nil)
+			writeAPIError(w, http.StatusConflict, errcat.ReviewFeedbackRevisionConflict, errcat.WithDiagnostics(saveErr.Error()))
 			return
 		}
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "save review feedback draft", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("save review feedback draft"))
 		return
 	}
 
@@ -214,26 +210,28 @@ func (h *apiHandler) handleReviewFeedbackSelectionTrusted(w http.ResponseWriter,
 		return
 	}
 	if len(req.Updates) == 0 || len(req.Updates) > maxReviewFeedbackSelectionUpdates {
-		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackSelectionBounds,
-			fmt.Sprintf("selection updates must contain between 1 and %d stable references", maxReviewFeedbackSelectionUpdates), nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackSelectionTooLarge,
+			errcat.WithDiagnostics(fmt.Sprintf("selection updates must contain between 1 and %d stable references", maxReviewFeedbackSelectionUpdates)))
 		return
 	}
 	if h.store == nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "feature store unavailable", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("feature store unavailable"))
 		return
 	}
 	parent, err := h.store.Load(parentID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			writeAPIError(w, http.StatusNotFound, "not_found", "feature not found", map[string]any{"feature_id": parentID})
+			writeAPIError(w, http.StatusNotFound, errcat.NotFound,
+				errcat.WithParams(errcat.SubjectParams{Subject: entityFeatureSubject, Name: parentID}))
 			return
 		}
-		writeAPIError(w, http.StatusInternalServerError, "feature_read_failed", "read feature", map[string]any{"feature_id": parentID})
+		writeAPIError(w, http.StatusInternalServerError, errcat.FeatureReadFailed,
+			errcat.WithDiagnostics(fmt.Sprintf("read feature %q: %v", parentID, err)))
 		return
 	}
 	draftStore, ok := h.store.(reviewFeedbackDraftStore)
 	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "review-feedback draft store unavailable", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("review-feedback draft store unavailable"))
 		return
 	}
 
@@ -241,7 +239,7 @@ func (h *apiHandler) handleReviewFeedbackSelectionTrusted(w http.ResponseWriter,
 	for _, update := range req.Updates {
 		ref := feature.StableReviewFeedbackRef(update.StableRef)
 		if _, _, _, parseErr := feature.ParseStableReviewFeedbackRef(update.StableRef); parseErr != nil {
-			writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackMalformedReference, parseErr.Error(), nil)
+			writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackMalformedReference, errcat.WithDiagnostics(parseErr.Error()))
 			return
 		}
 		repo, _, _, _ := feature.ParseStableReviewFeedbackRef(update.StableRef)
@@ -253,8 +251,8 @@ func (h *apiHandler) handleReviewFeedbackSelectionTrusted(w http.ResponseWriter,
 			}
 		}
 		if !known {
-			writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackUnknownReference,
-				fmt.Sprintf("reference %q does not belong to a repository of feature %q", update.StableRef, parentID), nil)
+			writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackUnknownReference,
+				errcat.WithDiagnostics(fmt.Sprintf("reference %q does not belong to a repository of feature %q", update.StableRef, parentID)))
 			return
 		}
 		updates[ref] = update.Selected
@@ -262,20 +260,20 @@ func (h *apiHandler) handleReviewFeedbackSelectionTrusted(w http.ResponseWriter,
 
 	draft, loadErr := draftStore.LoadReviewFeedbackDraft(parent.ID)
 	if loadErr != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "read review feedback draft", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("read review feedback draft"))
 		return
 	}
 	if draft == nil {
-		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackDraftNotFound, "no pending review feedback draft; fetch first", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackDraftNotFound, errcat.WithDiagnostics("no pending review feedback draft; fetch first"))
 		return
 	}
 	if draft.Revision != int64(req.ExpectedRevision) {
-		writeAPIError(w, http.StatusConflict, errCodeReviewFeedbackRevisionConflict,
-			fmt.Sprintf("expected revision %d but draft is at revision %d", req.ExpectedRevision, draft.Revision), nil)
+		writeAPIError(w, http.StatusConflict, errcat.ReviewFeedbackRevisionConflict,
+			errcat.WithDiagnostics(fmt.Sprintf("expected revision %d but draft is at revision %d", req.ExpectedRevision, draft.Revision)))
 		return
 	}
 	if applyErr := feature.ApplyReviewFeedbackSelection(draft, updates); applyErr != nil {
-		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackUnknownReference, applyErr.Error(), nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackUnknownReference, errcat.WithDiagnostics(applyErr.Error()))
 		return
 	}
 	draft.Revision++
@@ -284,10 +282,10 @@ func (h *apiHandler) handleReviewFeedbackSelectionTrusted(w http.ResponseWriter,
 		var conflict *feature.ReviewFeedbackRevisionConflictError
 		var consumed *feature.ReviewFeedbackDraftConsumedError
 		if errors.As(saveErr, &conflict) || errors.As(saveErr, &consumed) {
-			writeAPIError(w, http.StatusConflict, errCodeReviewFeedbackRevisionConflict, saveErr.Error(), nil)
+			writeAPIError(w, http.StatusConflict, errcat.ReviewFeedbackRevisionConflict, errcat.WithDiagnostics(saveErr.Error()))
 			return
 		}
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "save review feedback draft", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("save review feedback draft"))
 		return
 	}
 
@@ -336,12 +334,15 @@ func reviewFeedbackDraftView(parent *feature.Feature, draft *feature.ReviewFeedb
 	return groups
 }
 
+// writeReviewFeedbackFetchError reports a review-feedback fetch failure for
+// one repository. The repo is named in the repositories context block and the
+// raw failure text stays in diagnostics.
 func writeReviewFeedbackFetchError(w http.ResponseWriter, repoName string, err error) {
 	writeAPIError(
 		w,
 		http.StatusBadGateway,
-		errCodeReviewFeedbackFetchFailed,
-		fmt.Sprintf("fetch review feedback for repo %q: %v", repoName, err),
-		map[string]any{"repo": repoName},
+		errcat.ReviewFeedbackFetchFailed,
+		errcat.WithRepositories(errcat.CodeRepository{Name: repoName}),
+		errcat.WithDiagnostics(fmt.Sprintf("fetch review feedback for repo %q: %v", repoName, err)),
 	)
 }

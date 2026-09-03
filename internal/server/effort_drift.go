@@ -15,22 +15,20 @@
 package server
 
 import (
-	"fmt"
-
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
-
-// effortDriftWarningCode is the Warning.Code for capability drift warnings.
-const effortDriftWarningCode = "effort_capability_drift"
 
 // effortDriftWarnings computes transient, non-durable warnings for every
 // configured role whose explicit effort value is no longer supported by the
 // selected model's capabilities. The warnings are computed on-the-fly from
 // current feature configuration and the provider registry — they are never
 // persisted and clear automatically when the model capability or configured
-// effort becomes valid. An empty registry or nil feature yields no warnings.
-func effortDriftWarnings(f *feature.Feature, reg *llm.Registry) []Warning {
+// effort becomes valid. Each renders through the catalog as a canonical
+// warning-class effort_capability_drift error. An empty registry or nil
+// feature yields no warnings.
+func effortDriftWarnings(f *feature.Feature, reg *llm.Registry) []Error {
 	if f == nil || reg == nil {
 		return nil
 	}
@@ -47,7 +45,7 @@ func effortDriftWarnings(f *feature.Feature, reg *llm.Registry) []Warning {
 		{"utilities", f.Models.Utilities, f.Effort.Utilities},
 		{"kb_build", f.Models.KBBuild, f.Effort.KBBuild},
 	}
-	var warnings []Warning
+	var warnings []Error
 	for _, r := range roles {
 		if r.effort == "" || r.effort == string(llm.EffortAuto) {
 			continue
@@ -61,12 +59,14 @@ func effortDriftWarnings(f *feature.Feature, reg *llm.Registry) []Warning {
 		}
 		caps := llm.EffortCapabilitiesForModel(prov, resolvedModel)
 		if llm.EffortDrifted(llm.EffortLevel(r.effort), caps) {
-			warnings = append(warnings, Warning{
-				Code:      effortDriftWarningCode,
-				FeatureID: f.ID,
-				Message: fmt.Sprintf("%s effort %q is not supported by model %q; using Auto until the configuration is updated",
-					r.label, r.effort, r.model),
-			})
+			warnings = append(warnings, wireError(errcat.New(
+				errcat.EffortCapabilityDrift,
+				errcat.WithParams(errcat.EffortDriftParams{
+					Role:   r.label,
+					Effort: r.effort,
+					Model:  r.model,
+				}),
+			)))
 		}
 	}
 	return warnings

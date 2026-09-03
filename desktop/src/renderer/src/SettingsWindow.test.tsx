@@ -20,7 +20,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { defaultSettings, type ModelCatalogue, type Settings } from '../../shared/ipc';
 import SettingsWindow from './SettingsWindow';
 import { SETTINGS_PANE_CATALOGUE } from './features/settingsPanes';
-import { defaultUpdateState, installAgenticoMock, readySnapshot } from './test/agenticoMock';
+import {
+  defaultUpdateState,
+  installAgenticoMock,
+  ipcError,
+  readySnapshot,
+} from './test/agenticoMock';
 
 afterEach(cleanup);
 
@@ -300,7 +305,7 @@ describe('SettingsWindow pane restoration', () => {
 
   it('falls back to Workspace roots when the settings read fails', async () => {
     const mock = installSettingsWindowMock();
-    mock.api.getSettings.mockRejectedValue(new Error('E_SETTINGS: unreadable'));
+    mock.api.getSettings.mockRejectedValue(ipcError('E_INTERNAL', 'unreadable'));
     render(<SettingsWindow />);
 
     expect(await screen.findByRole('option', { name: 'Workspace roots' })).toHaveAttribute(

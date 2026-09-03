@@ -64,8 +64,7 @@ describe('AftercareFacts', () => {
             startedAt: '2026-08-01T10:00:00Z',
             cost: { totalUsd: 0.32, byPhase: {} },
             integrationState: 'pending',
-            attention: [],
-            cleanupWarnings: [],
+            warnings: [],
           },
           childHistory: [
             {
@@ -82,8 +81,7 @@ describe('AftercareFacts', () => {
               outcome: 'completed',
               cost: { totalUsd: 1.25, byPhase: {} },
               integrationState: 'merged',
-              attention: [],
-              cleanupWarnings: [],
+              warnings: [],
             },
           ],
         })}

@@ -20,7 +20,7 @@ limitations under the License.
  */
 import { lstat, opendir, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { SafeErrorException, safeError } from '../shared/errors';
+import { buildCanonicalError, CanonicalErrorException } from '../shared/errors';
 import {
   AbsolutePathSchema,
   CREATION_ATTACHMENT_LIMIT,
@@ -120,20 +120,20 @@ export class CreationFilesService {
     for (const ref of refs) {
       const root = repositories.get(ref.repoKey);
       if (root === undefined || path.isAbsolute(ref.path) || ref.path.includes('\0')) {
-        throw invalidRepositoryFile('A selected repository file is no longer eligible.');
+        throw repositoryFileError('E_REPOSITORY_FILE_INELIGIBLE');
       }
       const rootReal = await realpath(root);
       const candidate = path.resolve(rootReal, ref.path);
       if (!isWithinRoot(rootReal, candidate)) {
-        throw invalidRepositoryFile('A selected repository file escaped its repository.');
+        throw repositoryFileError('E_REPOSITORY_FILE_ESCAPED');
       }
       const candidateReal = await realpath(candidate);
       if (!isWithinRoot(rootReal, candidateReal)) {
-        throw invalidRepositoryFile('A selected repository file resolved outside its repository.');
+        throw repositoryFileError('E_REPOSITORY_FILE_OUTSIDE');
       }
       const info = await lstat(candidate);
       if (!info.isFile() || info.isSymbolicLink()) {
-        throw invalidRepositoryFile('A selected repository file is not a regular file.');
+        throw repositoryFileError('E_REPOSITORY_FILE_NOT_REGULAR');
       }
       resolved.push(candidateReal);
     }
@@ -141,8 +141,14 @@ export class CreationFilesService {
   }
 }
 
-function invalidRepositoryFile(message: string): SafeErrorException {
-  return new SafeErrorException(safeError('E_INVALID_REPOSITORY_FILE', message));
+function repositoryFileError(
+  code:
+    | 'E_REPOSITORY_FILE_INELIGIBLE'
+    | 'E_REPOSITORY_FILE_ESCAPED'
+    | 'E_REPOSITORY_FILE_OUTSIDE'
+    | 'E_REPOSITORY_FILE_NOT_REGULAR',
+): CanonicalErrorException {
+  return new CanonicalErrorException(buildCanonicalError(code));
 }
 
 function isWithinRoot(root: string, candidate: string): boolean {

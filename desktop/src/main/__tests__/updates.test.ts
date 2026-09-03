@@ -177,10 +177,46 @@ describe('UpdateCoordinator', () => {
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
       signatureStatus: 'failed',
-      message: 'Signed update metadata could not be verified.',
+      message: 'Agentico could not verify the downloaded update.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(dir, 'updates', 'v0.2.0'))).toBe(false);
+  });
+
+  it('does not let a stale signature failure classify a later check failure', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes', {
+      servedEnvelopeBytes: Buffer.from('{"tampered":true}\n'),
+    });
+    let feedUnreachable = false;
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture: {
+        ...fixture,
+        fetch: (input, init) =>
+          feedUnreachable && fetchUrl(input) === RELEASES_API
+            ? Promise.reject(new TypeError('network down'))
+            : fixture.fetch(input, init),
+      },
+    });
+
+    // First check: the signed envelope is tampered — a genuine signature
+    // failure whose verdict persists on the failed state.
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      signatureStatus: 'failed',
+      message: 'Agentico could not verify the downloaded update.',
+    });
+
+    // Second check: the feed itself is unreachable before any signature
+    // is examined. The stale 'failed' verdict must not reclassify this
+    // pre-verification failure as a signature failure.
+    feedUnreachable = true;
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      message: 'Agentico could not complete the update check.',
+    });
   });
 
   it('rejects replaying an older signed envelope under a higher release tag', async () => {
@@ -197,7 +233,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The signed release envelope did not match the selected release.',
+      message: 'Agentico could not complete the update check.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -215,7 +251,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The signed release envelope did not contain the exact desktop package inventory.',
+      message: 'Agentico could not complete the update check.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -233,7 +269,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The release contained ambiguous desktop update assets.',
+      message: 'Agentico could not complete the update check.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -251,7 +287,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The release contained ambiguous signed update metadata.',
+      message: 'Agentico could not complete the update check.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -288,7 +324,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The signed release envelope did not contain the exact desktop package inventory.',
+      message: 'Agentico could not complete the update check.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -342,7 +378,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The signed release envelope did not match the selected update package.',
+      message: 'Agentico could not complete the update check.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -361,7 +397,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'No macos update package is available for darwin/arm64.',
+      message: 'No compatible update package is available for this platform.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -403,7 +439,7 @@ describe('UpdateCoordinator', () => {
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
       signatureStatus: 'failed',
-      message: 'The update package checksum did not match signed metadata.',
+      message: 'Agentico could not verify the downloaded update.',
     });
     expect(fs.existsSync(path.join(dir, 'updates', 'v0.2.0'))).toBe(false);
   });
@@ -421,7 +457,7 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.checkNow()).resolves.toMatchObject({
       status: 'failed',
-      message: 'The release feed offered an older version; downgrade rejected.',
+      message: 'The release feed offered an older version.',
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
@@ -632,7 +668,89 @@ describe('UpdateCoordinator', () => {
     expect(restart).not.toHaveBeenCalled();
   });
 
-  it('keeps a verified staged package retryable when native installation fails', async () => {
+  it('authors the canonical check-failure error when the release feed cannot be fetched', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
+    const failingFetch: typeof fetch = (input, init) =>
+      fetchUrl(input).endsWith('/releases')
+        ? Promise.reject(new Error('network unreachable at /Users/somebody/vpn'))
+        : fixture.fetch(input, init);
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture: { ...fixture, fetch: failingFetch },
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      error: {
+        code: 'E_UPDATE_CHECK_FAILED',
+        class: 'blocking',
+        title: 'Update check failed',
+      },
+    });
+    const error = update.getState().error;
+    expect(error?.summary).not.toContain('/Users/somebody');
+    expect(error?.diagnostics).toContain('[path]');
+    expect(error?.diagnostics ?? '').not.toContain('/Users/somebody');
+  });
+
+  it('authors the canonical signature-failure error when signed metadata fails verification', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes', {
+      servedEnvelopeBytes: Buffer.from('{"tampered":true}\n'),
+    });
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      signatureStatus: 'failed',
+      error: {
+        code: 'E_UPDATE_SIGNATURE_FAILED',
+        class: 'blocking',
+        title: 'Update signature verification failed',
+        summary: 'Agentico could not verify the downloaded update.',
+      },
+    });
+  });
+
+  it('authors the canonical download-failure error when the package transfer is incomplete', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
+    const truncatingFetch: typeof fetch = (input, init) => {
+      if (fetchUrl(input).includes('Agentico-mac-universal.dmg')) {
+        return Promise.resolve(
+          new Response('short', {
+            status: 200,
+            headers: { 'content-length': '13', 'content-type': 'application/octet-stream' },
+          }),
+        );
+      }
+      return fixture.fetch(input, init);
+    };
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture: { ...fixture, fetch: truncatingFetch },
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      error: {
+        code: 'E_UPDATE_DOWNLOAD_FAILED',
+        class: 'blocking',
+        title: 'Update download failed',
+        summary: 'Agentico could not download the selected update.',
+      },
+    });
+    expect(fs.existsSync(path.join(dir, 'updates', 'v0.2.0'))).toBe(false);
+  });
+
+  it('marks a failed install as failed with the canonical install error and redacted diagnostics', async () => {
     const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
     const update = makeCoordinator({
       platform: 'darwin',
@@ -644,11 +762,25 @@ describe('UpdateCoordinator', () => {
     await update.checkNow();
 
     await expect(update.restartToUpdate()).resolves.toMatchObject({
-      status: 'ready',
+      status: 'failed',
       signatureStatus: 'verified',
-      message: 'The verified update could not be installed. Retry or use the release notes.',
+      message: 'Agentico could not install the verified update.',
+      error: {
+        code: 'E_UPDATE_INSTALL_FAILED',
+        class: 'blocking',
+        title: 'Update install failed',
+        summary: 'Agentico could not install the verified update.',
+        remediation: {
+          hint: 'Retry the install from the Updates pane, or open the release notes.',
+        },
+      },
     });
-    expect(update.getState().message).not.toContain('/private/path');
+    const error = update.getState().error;
+    expect(error?.diagnostics).toContain('[path]');
+    expect(error?.diagnostics ?? '').not.toContain('/private/path');
+    // A fresh check recovers the staged, still-verified package.
+    await expect(update.checkNow()).resolves.toMatchObject({ status: 'ready' });
+    expect(update.getState().error).toBeUndefined();
   });
 
   it('keeps a verified staged package retryable, with an accurate message, when restart is postponed', async () => {
@@ -876,6 +1008,12 @@ function makeCoordinator({
     stopActiveWork,
     restart,
   });
+}
+
+function fetchUrl(input: Parameters<typeof fetch>[0]): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
 }
 
 interface SignedFixture {

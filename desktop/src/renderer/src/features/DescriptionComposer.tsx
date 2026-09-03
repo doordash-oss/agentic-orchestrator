@@ -34,7 +34,8 @@ import {
   type CreationFileKind,
   type RepositoryFileRef,
 } from '../../../shared/ipc';
-import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { parseIpcError } from '../wizard/ipcError';
+import type { CanonicalError } from '../../../shared/ipc';
 import { useConnectionState } from '../hooks';
 import { FILE_SEARCH_REQUIRES_LOCAL_SERVER } from '../localServerCopy';
 import {
@@ -94,7 +95,7 @@ export interface DescriptionComposerProps {
   onRepositoryFilesChange(
     update: (files: readonly RepositoryFileRef[]) => readonly RepositoryFileRef[],
   ): void;
-  onError(error: WizardError): void;
+  onError(error: CanonicalError): void;
 }
 
 export function DescriptionComposer({
@@ -190,7 +191,7 @@ export function DescriptionComposer({
         apply((items) => reconcileUploadResults(items, pending, result.results));
       })
       .catch((err: unknown) => {
-        const message = parseIpcError(err).message;
+        const message = parseIpcError(err).summary;
         apply((items) => failPendingUploads(items, pending, message));
       });
   };

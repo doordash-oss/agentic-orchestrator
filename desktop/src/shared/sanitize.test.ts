@@ -16,13 +16,13 @@ limitations under the License.
 
 import { describe, expect, it } from 'vitest';
 import { MAX_PAYLOAD_BYTES, assertNoPrototypePollution, assertWithinByteSize } from './sanitize';
-import { SafeErrorException } from './errors';
+import { CanonicalErrorException } from './errors';
 
 function codeOf(fn: () => void): string {
   try {
     fn();
   } catch (err) {
-    if (err instanceof SafeErrorException) return err.safe.code;
+    if (err instanceof CanonicalErrorException) return err.canonical.code;
     throw err;
   }
   throw new Error('expected function to throw');
@@ -51,13 +51,13 @@ describe('assertNoPrototypePollution', () => {
     expect(() => assertNoPrototypePollution({ safe: true })).not.toThrow();
   });
 
-  it('does not leak offending values in the error message', () => {
+  it('does not leak offending values in the error object', () => {
     try {
       assertNoPrototypePollution(JSON.parse('{"__proto__": {"secret": "hunter2"}}'));
       throw new Error('expected throw');
     } catch (err) {
-      expect(err).toBeInstanceOf(SafeErrorException);
-      expect(JSON.stringify((err as SafeErrorException).safe)).not.toContain('hunter2');
+      expect(err).toBeInstanceOf(CanonicalErrorException);
+      expect(JSON.stringify((err as CanonicalErrorException).canonical)).not.toContain('hunter2');
     }
   });
 });

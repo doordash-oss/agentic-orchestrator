@@ -15,8 +15,13 @@
 package server
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 // handleCompletionPreflight serves GET
@@ -29,7 +34,7 @@ import (
 // context; it renders this preview and sends the source revision back.
 func (h *apiHandler) handleCompletionPreflight(w http.ResponseWriter, r *http.Request, featureID string) {
 	if h.mutations == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "mutation service unavailable", nil)
+		writeAPIError(w, http.StatusServiceUnavailable, errcat.Unavailable)
 		return
 	}
 	resp, err := h.mutations.CompletionPreflight(featureID)
@@ -54,20 +59,27 @@ func (h *apiHandler) handleCompletionPreflight(w http.ResponseWriter, r *http.Re
 // returns structured partial outcomes when inspection fails.
 func (h *apiHandler) handleRepositoryDiff(w http.ResponseWriter, r *http.Request, featureID, repoName string) {
 	if h.mutations == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "mutation service unavailable", nil)
+		writeAPIError(w, http.StatusServiceUnavailable, errcat.Unavailable)
 		return
 	}
 	if !validRepoName(repoName) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid repo name", map[string]any{"feature_id": featureID})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("invalid repo name for feature %q", featureID)))
 		return
 	}
 	filePath := strings.TrimSpace(r.URL.Query().Get("file_path"))
 	if filePath != "" && !validDiffFilePath(filePath) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid file path", map[string]any{"feature_id": featureID})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("invalid file path for feature %q", featureID)))
 		return
 	}
 	resp, err := h.mutations.RepositoryDiff(featureID, repoName, filePath)
 	if err != nil {
+		// An unknown repository name is a client error: the not_found
+		// envelope names it instead of a success carrying a partial failure.
+		if errors.Is(err, feature.ErrRepositoryNotFound) {
+			writeAPIError(w, http.StatusNotFound, errcat.NotFound,
+				errcat.WithParams(errcat.SubjectParams{Subject: "Repository", Name: repoName}))
+			return
+		}
 		writeStoreError(w, err, featureID)
 		return
 	}
@@ -88,11 +100,11 @@ func (h *apiHandler) handleRepositoryDiff(w http.ResponseWriter, r *http.Request
 // feature/repository identifiers and never a host path.
 func (h *apiHandler) handleRepositoryPath(w http.ResponseWriter, r *http.Request, featureID, repoName string) {
 	if h.mutations == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "mutation service unavailable", nil)
+		writeAPIError(w, http.StatusServiceUnavailable, errcat.Unavailable)
 		return
 	}
 	if !validRepoName(repoName) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid repo name", map[string]any{"feature_id": featureID})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("invalid repo name for feature %q", featureID)))
 		return
 	}
 	resp, err := h.mutations.RepositoryPath(featureID, repoName)

@@ -19,12 +19,12 @@ limitations under the License.
  * responses (parsed in the main process before use) and IPC payloads.
  *
  * Order matters: byte-size gate, JSON parse, prototype-pollution scan,
- * API-version gate, then zod schema validation. Errors are typed SafeErrors
- * and never echo raw payload values.
+ * API-version gate, then zod schema validation. Errors are typed canonical
+ * errors and never echo raw payload values.
  */
 import { z } from 'zod';
 import { assertCompatibleApiVersion } from '../apiVersion';
-import { SafeErrorException, safeError } from '../errors';
+import { buildCanonicalError, CanonicalErrorException } from '../errors';
 import { MAX_PAYLOAD_BYTES, assertNoPrototypePollution, assertWithinByteSize } from '../sanitize';
 import type { components } from './schema.gen';
 
@@ -40,13 +40,7 @@ export function parseServerJson<Schema extends z.ZodType>(
   try {
     data = JSON.parse(raw);
   } catch {
-    throw new SafeErrorException(
-      safeError(
-        'E_MALFORMED_RESPONSE',
-        'The response was not valid JSON.',
-        'Retry; if this persists the server or transport is misbehaving.',
-      ),
-    );
+    throw new CanonicalErrorException(buildCanonicalError('E_MALFORMED_RESPONSE'));
   }
 
   assertNoPrototypePollution(data);
@@ -66,16 +60,13 @@ export function validateWithSchema<Schema extends z.ZodType>(
 ): z.output<Schema> {
   const result = schema.safeParse(data);
   if (!result.success) {
-    // Report only issue paths and codes — never received values.
+    // Report only issue paths and codes — never received values. The paths
+    // ride in the summary (redacted at build time), not free-form text.
     const paths = [...new Set(result.error.issues.map((i) => i.path.join('.') || '(root)'))]
       .slice(0, 5)
       .join(', ');
-    throw new SafeErrorException(
-      safeError(
-        'E_SCHEMA_MISMATCH',
-        `The payload did not match the expected schema at: ${paths}.`,
-        'Update the Agentico desktop app and the agentico server to matching releases.',
-      ),
+    throw new CanonicalErrorException(
+      buildCanonicalError('E_SCHEMA_MISMATCH', { params: { paths } }),
     );
   }
   return result.data;
@@ -139,66 +130,6 @@ export const HealthResponseSchema = z.object({
 });
 
 export type HealthResponse = z.output<typeof HealthResponseSchema>;
-
-// --- Readiness (GET /api/v1/readiness, POST /api/v1/readiness/refresh) -----
-
-export const ServerReadinessIssueSchema = z.object({
-  code: z.enum([
-    'missing_executable',
-    'unsupported_version',
-    'unauthenticated',
-    'models_unavailable',
-    'invalid_configuration',
-    'invalid_workspace_root',
-    'invalid_repository',
-  ]),
-  message: z.string(),
-  remedy: z.string().optional(),
-});
-
-export const ReadinessResponseSchema = z.object({
-  api_version: z.string(),
-  ready: z.boolean(),
-  probed_at: z.string().optional(),
-  providers: z.array(
-    z.object({
-      name: z.string(),
-      installed: z.boolean(),
-      version: z.string().optional(),
-      ready: z.boolean(),
-      issue: ServerReadinessIssueSchema.optional(),
-    }),
-  ),
-  models: z.object({
-    available: z.boolean(),
-    models: z.array(z.string()).optional(),
-    issue: ServerReadinessIssueSchema.optional(),
-  }),
-  configuration: z.object({
-    valid: z.boolean(),
-    issue: ServerReadinessIssueSchema.optional(),
-  }),
-  workspace: z.object({
-    roots: z.array(
-      z.object({
-        path: z.string(),
-        valid: z.boolean(),
-        issue: ServerReadinessIssueSchema.optional(),
-      }),
-    ),
-    repositories: z.array(
-      z.object({
-        name: z.string(),
-        path: z.string(),
-        valid: z.boolean(),
-        issue: ServerReadinessIssueSchema.optional(),
-      }),
-    ),
-  }),
-  issues: z.array(ServerReadinessIssueSchema).optional(),
-});
-
-export type ReadinessResponse = z.output<typeof ReadinessResponseSchema>;
 
 // --- Blocking attention (GET /api/v1/prompts, /api/v1/permissions) ---------
 // These responses are deliberately bounded before they are translated to the
@@ -332,19 +263,6 @@ export const ReviewDecisionResponseSchema = z.object({
 });
 export type ServerReviewDecision = z.output<typeof ReviewDecisionResponseSchema>;
 
-export const ReviewConflictResponseSchema = z.object({
-  api_version: z.string(),
-  error: z.object({
-    code: z.literal('conflict'),
-    message: z.string(),
-    target: z.object({
-      review_id: z.string().min(1),
-      current_revision: z.string().min(1),
-      expected_revision: z.string().min(1),
-    }),
-  }),
-});
-
 // --- Runtime config (GET /api/v1/config/runtime) — workspace-roots subset ---
 // Only the fields the desktop setup flow consumes; the full response has
 // many more, which z.object tolerates and strips.
@@ -355,6 +273,137 @@ export const RuntimeConfigWorkspaceSchema = z.object({
 });
 
 export type RuntimeConfigWorkspace = z.output<typeof RuntimeConfigWorkspaceSchema>;
+
+// --- Canonical server error body (ErrorResponse) -----------------------------
+// Strict on purpose: the canonical shape is a real contract, so unknown
+// properties, an unknown class, or the pre-canonical `{code,message,status}`
+// body all fail parsing and degrade to the main-process transport error.
+
+/**
+ * Canonical catalog-rendered error, mirroring the generated Error component.
+ * The code must be either a desktop-local `E_UPPER_SNAKE` code or a server
+ * lowercase snake_case code — the two families are disjoint by construction.
+ */
+export const CanonicalErrorSchema = z.strictObject({
+  code: z
+    .string()
+    .min(1)
+    .regex(/^(?:E_[A-Z0-9_]+|[a-z][a-z0-9]+(?:_[a-z0-9]{2,})*)$/),
+  class: z.enum(['blocking', 'needs_action', 'warning']),
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  remediation: z
+    .strictObject({
+      hint: z.string().optional(),
+      actions: z.array(z.string().min(1)).max(16).optional(),
+    })
+    .optional(),
+  context: z
+    .strictObject({
+      repositories: z
+        .array(
+          z.strictObject({
+            name: z.string().min(1),
+            branch: z.string().optional(),
+            rebase_target: z.string().optional(),
+            remote_only_commits: z.number().int().nonnegative().optional(),
+            // Uncapped on purpose: the Go producers store conflict lists
+            // unbounded, so any client-side cap would make one large
+            // conflict unparse the whole payload.
+            conflict_files: z.array(z.string()).optional(),
+            dirty_files: z.array(z.string()).max(500).optional(),
+            parent_anchor_sha: z.string().optional(),
+            expected_ref_sha: z.string().optional(),
+            child_head_sha: z.string().optional(),
+            candidate_sha: z.string().optional(),
+            merge_head: z.string().optional(),
+            observed_sha: z.string().optional(),
+          }),
+        )
+        .max(100)
+        .optional(),
+      phase: z
+        .strictObject({
+          name: z.string().min(1),
+          iteration: z.number().int().nonnegative().optional(),
+        })
+        .optional(),
+      command: z
+        .strictObject({
+          exit_code: z.number().int().optional(),
+          log_paths: z.array(z.string()).max(50).optional(),
+        })
+        .optional(),
+      setup_task: z
+        .strictObject({
+          key: z.string().min(1),
+          kind: z.string().min(1),
+          label: z.string().min(1),
+        })
+        .optional(),
+    })
+    .optional(),
+  diagnostics: z.string().optional(),
+});
+
+export type CanonicalError = z.output<typeof CanonicalErrorSchema>;
+
+/** The full non-2xx response envelope carrying one canonical error. */
+export const CanonicalErrorResponseSchema = z.strictObject({
+  api_version: z.string(),
+  error: CanonicalErrorSchema,
+});
+
+export type CanonicalErrorResponse = z.output<typeof CanonicalErrorResponseSchema>;
+
+// --- Readiness (GET /api/v1/readiness, POST /api/v1/readiness/refresh) -----
+// Readiness issues are the canonical catalog-rendered error for their code:
+// the strict CanonicalErrorSchema accepts them and rejects the pre-canonical
+// `{code, message, remedy}` shape.
+
+export const ReadinessResponseSchema = z.object({
+  api_version: z.string(),
+  ready: z.boolean(),
+  probed_at: z.string().optional(),
+  providers: z.array(
+    z.object({
+      name: z.string(),
+      installed: z.boolean(),
+      version: z.string().optional(),
+      ready: z.boolean(),
+      issue: CanonicalErrorSchema.optional(),
+    }),
+  ),
+  models: z.object({
+    available: z.boolean(),
+    models: z.array(z.string()).optional(),
+    issue: CanonicalErrorSchema.optional(),
+  }),
+  configuration: z.object({
+    valid: z.boolean(),
+    issue: CanonicalErrorSchema.optional(),
+  }),
+  workspace: z.object({
+    roots: z.array(
+      z.object({
+        path: z.string(),
+        valid: z.boolean(),
+        issue: CanonicalErrorSchema.optional(),
+      }),
+    ),
+    repositories: z.array(
+      z.object({
+        name: z.string(),
+        path: z.string(),
+        valid: z.boolean(),
+        issue: CanonicalErrorSchema.optional(),
+      }),
+    ),
+  }),
+  issues: z.array(CanonicalErrorSchema).optional(),
+});
+
+export type ReadinessResponse = z.output<typeof ReadinessResponseSchema>;
 
 // --- Features (GET/POST /api/v1/features, GET /api/v1/features/{id}) --------
 // Lenient subsets: z.object tolerates and strips fields this view does not
@@ -368,7 +417,11 @@ export const ServerSetupTaskSchema = z.object({
   status: z.string(),
   branch: z.string().optional(),
   attempt: z.number().int().optional(),
-  last_error: z.string().optional(),
+  // Canonical error rendering the task's stored failure record; absent when
+  // the task has not failed.
+  error: CanonicalErrorSchema.optional(),
+  // The removed last-error string must never reappear on the wire.
+  last_error: z.never().optional(),
 });
 
 export type ServerSetupTask = z.output<typeof ServerSetupTaskSchema>;
@@ -378,7 +431,8 @@ export const ServerSetupSchema = z.object({
   attempt: z.number().int().optional(),
   tasks: z.record(z.string(), ServerSetupTaskSchema).optional(),
   task_order: z.array(z.string()).optional(),
-  last_error: z.string().optional(),
+  // The removed last-error string must never reappear on the wire.
+  last_error: z.never().optional(),
 });
 
 export type ServerSetup = z.output<typeof ServerSetupSchema>;
@@ -429,17 +483,100 @@ export const ServerRelationshipChildSchema = z.object({
   closed_at: z.string().optional(),
   cost: z.object({ total_usd: z.number(), by_phase: z.record(z.string(), z.number()) }),
   integration_state: z.string(),
-  attention: z.array(
-    z.object({ code: z.string(), message: z.string(), repo: z.string().optional() }),
-  ),
-  cleanup_warnings: z.array(z.object({ repo: z.string().optional(), message: z.string() })),
-  last_error: z.string().optional(),
+  // Canonical error rendering the child's stored integration attention
+  // record; absent when integration is not parked. Strict canonical
+  // contract, same as ErrorResponse.
+  attention: CanonicalErrorSchema.optional(),
+  // Canonical warning-class errors for this child's stored cleanup and
+  // review-feedback tail records.
+  warnings: z.array(CanonicalErrorSchema).max(100),
+  // The removed cleanup-warning strings must never reappear on the wire.
+  cleanup_warnings: z.never().optional(),
+  // The removed last-error string must never reappear on the wire.
+  last_error: z.never().optional(),
   diff_summary: z.string().max(DIFF_SUMMARY_MAX_BYTES).optional(),
   // Set on list projections, which omit the body itself; the detail route
   // carries diff_summary instead.
   has_diff_summary: z.boolean().optional(),
 });
 export type ServerRelationshipChild = z.output<typeof ServerRelationshipChildSchema>;
+
+// --- Owned errors --------------------------------------------------------------
+// Strict on purpose: the entry is a real contract between the server's
+// projection and every presence surface, so an unknown key, a warning-class
+// error, or a reference whose keys are missing for or foreign to its scope
+// fails parsing at the trust boundary instead of reaching the renderer.
+
+/** The keys each scope requires; `transaction` additionally allows repository. */
+const SERVER_ERROR_REFERENCE_REQUIRED_KEYS = {
+  run: ['feature_id'],
+  transaction: ['feature_id'],
+  repository: ['feature_id', 'repository'],
+  setup: ['feature_id', 'task_key'],
+  recovery: ['snapshot_id', 'key'],
+} as const;
+
+/** The keys each scope rejects even when present and well-formed. */
+const SERVER_ERROR_REFERENCE_FORBIDDEN_KEYS = {
+  run: ['repository', 'task_key', 'snapshot_id', 'key'],
+  transaction: ['task_key', 'snapshot_id', 'key'],
+  repository: ['task_key', 'snapshot_id', 'key'],
+  setup: ['repository', 'snapshot_id', 'key'],
+  recovery: ['feature_id', 'repository', 'task_key'],
+} as const;
+
+/** Owner reference mirroring the generated ErrorReference component (snake_case). */
+export const ServerErrorReferenceSchema = z
+  .strictObject({
+    scope: z.enum(['run', 'transaction', 'repository', 'setup', 'recovery']),
+    code: z.string().min(1).max(128),
+    feature_id: z.string().min(1).max(200).optional(),
+    repository: z.string().min(1).max(200).optional(),
+    task_key: z.string().min(1).max(200).optional(),
+    snapshot_id: z.string().min(1).max(128).optional(),
+    key: z.string().min(1).max(500).optional(),
+  })
+  .superRefine((reference, ctx) => {
+    for (const field of SERVER_ERROR_REFERENCE_REQUIRED_KEYS[reference.scope]) {
+      if (reference[field] === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `A "${reference.scope}" error reference requires "${field}".`,
+        });
+      }
+    }
+    for (const field of SERVER_ERROR_REFERENCE_FORBIDDEN_KEYS[reference.scope]) {
+      if (reference[field] !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `"${field}" does not belong to a "${reference.scope}" error reference.`,
+        });
+      }
+    }
+  });
+export type ServerErrorReference = z.output<typeof ServerErrorReferenceSchema>;
+
+/** One owned-error entry on the feature summary, mirroring the generated OwnedError component. */
+export const ServerOwnedErrorSchema = z
+  .strictObject({
+    ref: ServerErrorReferenceSchema,
+    error: CanonicalErrorSchema,
+  })
+  .superRefine((entry, ctx) => {
+    // Warnings never own a presence surface; the entry's type stays as wide
+    // as the generated component so the compile-time drift guard holds, and
+    // a warning-class entry is rejected here at the boundary instead.
+    if (entry.error.class === 'warning') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['error', 'class'],
+        message: 'An owned error never carries the warning class.',
+      });
+    }
+  });
+export type ServerOwnedError = z.output<typeof ServerOwnedErrorSchema>;
 
 export const ServerFeatureSummarySchema = z.object({
   id: z.string(),
@@ -457,10 +594,12 @@ export const ServerFeatureSummarySchema = z.object({
     current_roadmap_phase: z.number().int().nonnegative().optional(),
     total_roadmap_phases: z.number().int().nonnegative().optional(),
   }),
-  warnings: z
-    .array(z.object({ code: z.string(), message: z.string() }))
-    .max(100)
-    .optional(),
+  // Canonical warning-class errors for this feature; absent when there is
+  // nothing to warn about.
+  warnings: z.array(CanonicalErrorSchema).max(100).optional(),
+  // Current non-warning errors this feature or its active child owns; absent
+  // when there are none.
+  errors: z.array(ServerOwnedErrorSchema).max(100).optional(),
   active_child: ServerRelationshipChildSchema.optional(),
   child_history: z.array(ServerRelationshipChildSchema).optional(),
   child_history_total: z.number().int().nonnegative().optional(),
@@ -475,7 +614,11 @@ export const ServerRepoStatusSchema = z.object({
   touched: z.boolean().optional(),
   pr_url: z.string().optional(),
   freshness: z.string().optional(),
-  last_error: z.string().optional(),
+  // Canonical error rendering the repository's stored publish-failure
+  // record; absent when the repository has not failed.
+  error: CanonicalErrorSchema.optional(),
+  // The removed last-error string must never reappear on the wire.
+  last_error: z.never().optional(),
   rebase_status: z.string().optional(),
   rebase_target: z.string().optional(),
   conflict_files: z.array(z.string()).optional(),
@@ -560,7 +703,9 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
     validator_statuses: z.record(z.string(), z.string()).optional(),
   }),
   need_user_input: ServerNeedUserInputGateDetailSchema.optional(),
-  failure: z.object({ type: z.string().optional(), message: z.string().optional() }).optional(),
+  // The durable run failure, rendered by the server through the error
+  // catalog at read time; strict canonical contract, same as ErrorResponse.
+  failure: CanonicalErrorSchema.optional(),
   verification_items: z.array(z.object({ name: z.string(), state: z.string() })).optional(),
   timing: z.object({ total_seconds: z.number().int().nonnegative() }).optional(),
   parent_id: z.string().optional(),
@@ -570,32 +715,29 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   close_outcome: z.string().optional(),
   closed_at: z.string().optional(),
   transaction: z
-    .object({
+    .strictObject({
       phase: z.string().optional(),
-      attention: z.string().optional(),
+      // Canonical error rendering the journal's single stored attention
+      // record; absent when integration is not parked.
+      attention: CanonicalErrorSchema.optional(),
       entries: z
         .array(
-          z.object({
+          // Strict: the entry block is a fully-specified trust-boundary
+          // contract mirroring the generated RepoTransactionEntry, so the
+          // deleted diagnostics, conflict-file, and dirty shapes fail
+          // parsing instead of slipping through as unknown keys.
+          z.strictObject({
             repo: z.string().optional(),
+            parent_branch: z.string().optional(),
+            parent_anchor_sha: z.string().optional(),
+            expected_ref_sha: z.string().optional(),
+            child_head_sha: z.string().optional(),
+            candidate_sha: z.string().optional(),
+            merge_head: z.string().optional(),
             prep_state: z.string().optional(),
             apply_state: z.string().optional(),
-            conflict_files: z.array(z.string()).optional(),
-            dirty: z
-              .array(
-                z.object({
-                  repo: z.string().optional(),
-                  path: z.string().optional(),
-                  staged: z.array(z.string()).optional(),
-                  unstaged: z.array(z.string()).optional(),
-                  untracked: z.array(z.string()).optional(),
-                  staged_total: z.number().int().nonnegative().optional(),
-                  unstaged_total: z.number().int().nonnegative().optional(),
-                  untracked_total: z.number().int().nonnegative().optional(),
-                }),
-              )
-              .optional(),
-            cleanup_warning: z.string().optional(),
-            diagnostics: z.string().optional(),
+            observed_sha: z.string().optional(),
+            pending_sync: z.boolean().optional(),
           }),
         )
         .optional(),
@@ -610,6 +752,9 @@ export type ServerFeatureDetail = z.output<typeof ServerFeatureDetailSchema>;
 export const FeatureListResponseSchema = z.object({
   api_version: z.string(),
   features: z.array(ServerFeatureSummarySchema),
+  // Canonical warning errors for feature files that could not be loaded at
+  // list level; absent when every feature loaded.
+  warnings: z.array(CanonicalErrorSchema).max(100).optional(),
 });
 
 export type FeatureListResponse = z.output<typeof FeatureListResponseSchema>;
@@ -764,10 +909,13 @@ export const RewindActionResponseSchema = z.object({
   effective_phase: z.string().optional(),
   roadmap_phase: z.number().int().nonnegative().optional(),
   upgrade_pipeline: z.string().optional(),
-  warning_count: z.number().int().nonnegative().optional(),
+  // The removed warning count must never reappear on the wire.
+  warning_count: z.never().optional(),
   source_run_number: z.number().int().nonnegative().optional(),
   new_run_number: z.number().int().nonnegative().optional(),
-  warnings: z.array(z.string()).optional(),
+  // Canonical warning-class errors for non-fatal rewind failures
+  // (pull-request close, backup branch, worktree reset).
+  warnings: z.array(CanonicalErrorSchema).max(100).optional(),
 });
 export type RewindActionResponse = z.output<typeof RewindActionResponseSchema>;
 
@@ -915,10 +1063,6 @@ export const SessionDetailResponseSchema = z.object({
       .optional(),
     can_attach: z.boolean(),
     log_available: z.boolean(),
-    safe_error: z
-      .string()
-      .max(1024 * 1024)
-      .optional(),
   }),
 });
 export type ServerSessionDetail = z.output<typeof SessionDetailResponseSchema>['session'];
@@ -988,48 +1132,6 @@ export const RuntimeConfigCreationSchema = z.object({
 
 export type RuntimeConfigCreation = z.output<typeof RuntimeConfigCreationSchema>;
 
-// --- Structured server error bodies (ErrorResponse) -------------------------
-// Lenient on purpose: error paths must degrade gracefully, never fail open.
-
-export const ServerErrorResponseSchema = z.object({
-  error: z.object({
-    code: z.string(),
-    message: z.string(),
-  }),
-});
-
-/**
- * Error body including the structured `target` payload the server attaches
- * to 409 `not_ready` creation rejections (outstanding readiness issues).
- */
-export const ServerErrorWithIssuesSchema = z.object({
-  error: z.object({
-    code: z.string(),
-    message: z.string(),
-    target: z
-      .object({
-        issues: z
-          .array(z.object({ code: z.string(), message: z.string(), remedy: z.string().optional() }))
-          .optional(),
-        repos: z
-          .array(
-            z.object({
-              repo: z.string().optional(),
-              path: z.string().optional(),
-              staged: z.array(z.string()).optional(),
-              unstaged: z.array(z.string()).optional(),
-              untracked: z.array(z.string()).optional(),
-              staged_total: z.number().int().nonnegative().optional(),
-              unstaged_total: z.number().int().nonnegative().optional(),
-              untracked_total: z.number().int().nonnegative().optional(),
-            }),
-          )
-          .optional(),
-      })
-      .optional(),
-  }),
-});
-
 // --- Recovery, cycle actions, preflight, and bulk preview -------------------
 
 export const ServerRecoveryItemSchema = z.object({
@@ -1041,6 +1143,9 @@ export const ServerRecoveryItemSchema = z.object({
   iteration: z.number().int().nonnegative().optional(),
   pid: z.number().int().optional(),
   process_alive: z.boolean(),
+  // Canonical needs_action error classifying this orphan session by
+  // liveness; required on every item.
+  error: CanonicalErrorSchema,
   log_available: z.boolean().optional(),
   allowed_actions: z.array(z.string()),
   default_action: z.string(),
@@ -1128,7 +1233,11 @@ export const CompletionPreflightRepoSchema = z.object({
   pr_url: z.string().optional(),
   blocker: z.string().optional(),
   freshness: z.string().optional(),
-  last_error: z.string().optional(),
+  // Canonical error rendering the repository's stored publish-failure
+  // record; absent when the repository has not failed.
+  error: CanonicalErrorSchema.optional(),
+  // The removed last-error string must never reappear on the wire.
+  last_error: z.never().optional(),
   base_branch: z.string().optional(),
   branch: z.string().optional(),
   pending_commits: z.number().optional(),
@@ -1171,7 +1280,11 @@ export const RepositoryDiffResponseSchema = z.object({
   file_truncated: z.boolean().optional(),
   file_binary: z.boolean().optional(),
   file_unavailable: z.boolean().optional(),
-  partial_failure: z.string().optional(),
+  // The removed partial-failure string must never reappear on the wire.
+  partial_failure: z.never().optional(),
+  // Canonical warning-class error rendering the typed partial failure of
+  // this repository's inspection; absent when it was fully inspected.
+  error: CanonicalErrorSchema.optional(),
 });
 export type RepositoryDiffResponse = z.output<typeof RepositoryDiffResponseSchema>;
 
@@ -1194,6 +1307,17 @@ export type PublishDescriptionResponse = z.output<typeof PublishDescriptionRespo
 
 // Compile-time drift guards: zod outputs must stay assignable to the
 // generated OpenAPI component types.
+// The canonical error schema is a strict superset check: the generated
+// component must remain assignable to the parsed output (remediation action
+// IDs parse as plain strings; the generated type narrows them to the
+// feature-action enum, which is what the server-side catalog test pins).
+type CanonicalErrorDTO = components['schemas']['Error'];
+const _canonicalErrorSubset = (value: CanonicalErrorDTO): CanonicalError => value;
+void _canonicalErrorSubset;
+type CanonicalErrorResponseDTO = components['schemas']['ErrorResponse'];
+const _canonicalErrorResponseSubset = (value: CanonicalErrorResponseDTO): CanonicalErrorResponse =>
+  value;
+void _canonicalErrorResponseSubset;
 type HealthDTO = components['schemas']['HealthResponse'];
 const _healthAssignable = (value: HealthResponse): HealthDTO => value;
 void _healthAssignable;
@@ -1201,8 +1325,12 @@ type CompatibilityDTO = components['schemas']['CompatibilityDeclaration'];
 const _compatibilityAssignable = (value: CompatibilityDeclaration): CompatibilityDTO => value;
 void _compatibilityAssignable;
 type ReadinessDTO = components['schemas']['ReadinessResponse'];
-const _readinessAssignable = (value: ReadinessResponse): ReadinessDTO => value;
-void _readinessAssignable;
+// Reverse guard for the readiness subset: the generated component (whose
+// issue entries are canonical Errors with feature-action-enum remediation
+// actions) must remain assignable to the parsed output, exactly like the
+// canonical error guard above.
+const _readinessSubset = (value: ReadinessDTO): ReadinessResponse => value;
+void _readinessSubset;
 // Reverse guard for the subset schema: every field it parses must exist on
 // the generated RuntimeConfigResponse with a compatible type.
 type RuntimeConfigDTO = components['schemas']['RuntimeConfigResponse'];

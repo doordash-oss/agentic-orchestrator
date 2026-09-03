@@ -19,8 +19,15 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttentionItem, FeatureSnapshot } from '../../../shared/ipc';
-import { featureSnapshot, featureConfigSnapshot, installAgenticoMock } from '../test/agenticoMock';
+import {
+  canonicalWarning,
+  featureSnapshot,
+  featureConfigSnapshot,
+  installAgenticoMock,
+  ipcError,
+} from '../test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from '../test/setup';
+import { ExplainChatProvider } from '../explainChat';
 import { emptyAttentionDrafts } from './AttentionInbox';
 import { FeatureCockpit } from './FeatureCockpit';
 import { runFeatureCommand, toggleActiveInspector } from './featureCommands';
@@ -75,7 +82,11 @@ const helpAttention: AttentionItem = {
   prompt: 'Feature waiting for implementation guidance.',
 };
 
-function renderCockpit(mock = installAgenticoMock(), active = true) {
+function renderCockpit(
+  mock = installAgenticoMock(),
+  active = true,
+  attentionItems: AttentionItem[] = [],
+) {
   const onClose = vi.fn();
   const onLoadedName = vi.fn();
   const view = render(
@@ -84,8 +95,8 @@ function renderCockpit(mock = installAgenticoMock(), active = true) {
       titleHint="Search revamp"
       onClose={onClose}
       onLoadedName={onLoadedName}
-      attentionItems={[]}
-      refreshAttention={() => Promise.resolve([])}
+      attentionItems={attentionItems}
+      refreshAttention={() => Promise.resolve(attentionItems)}
       attentionDrafts={emptyAttentionDrafts()}
       setAttentionDrafts={vi.fn()}
       active={active}
@@ -102,8 +113,8 @@ function renderCockpit(mock = installAgenticoMock(), active = true) {
           titleHint="Search revamp"
           onClose={onClose}
           onLoadedName={onLoadedName}
-          attentionItems={[]}
-          refreshAttention={() => Promise.resolve([])}
+          attentionItems={attentionItems}
+          refreshAttention={() => Promise.resolve(attentionItems)}
           attentionDrafts={emptyAttentionDrafts()}
           setAttentionDrafts={vi.fn()}
           active={next}
@@ -464,8 +475,7 @@ describe('FeatureCockpit snapshot rendering', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 0, byPhase: {} },
         integrationState: 'pending',
-        attention: [],
-        cleanupWarnings: [],
+        warnings: [],
       },
     });
     const child = featureSnapshot({
@@ -520,8 +530,19 @@ describe('FeatureCockpit snapshot rendering', () => {
       }),
     });
     mock.api.launchRebaseChild.mockRejectedValue(
-      new Error(
-        'rebase_already_up_to_date: Every repository is already up to date with its target branch. Nothing to merge.',
+      Object.assign(
+        new Error(
+          'rebase_already_up_to_date: Every repository is already up to date with its target branch. Nothing to merge.',
+        ),
+        {
+          canonical: {
+            code: 'rebase_already_up_to_date',
+            class: 'warning',
+            title: 'Already up to date',
+            summary:
+              'Every repository is already up to date with its target branch. Nothing to merge.',
+          },
+        },
       ),
     );
     renderCockpit(mock);
@@ -530,11 +551,24 @@ describe('FeatureCockpit snapshot rendering', () => {
     const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
     await user.click(within(aftercare).getByRole('button', { name: /Start rebase pass/ }));
 
-    // The typed failure renders inline near the aftercare cards with code + message.
-    const alert = await within(aftercare).findByRole('alert');
-    expect(alert).toHaveTextContent('rebase_already_up_to_date');
-    expect(alert).toHaveTextContent('Already up to date');
-    expect(alert).toHaveTextContent(/already up to date with its target branch/);
+    // The catalog warning renders inline near the aftercare cards as one
+    // compact error surface: title, summary, and the code tag.
+    await waitFor(() => {
+      expect(within(aftercare).getAllByText('Already up to date')).toHaveLength(1);
+    });
+    const surface = within(aftercare).getByText('Already up to date').closest('.error-surface');
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveAttribute('role', 'status');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(within(aftercare).getByText('Rebase was rejected')).toBeVisible();
+    expect(
+      within(aftercare).getByText(
+        'Every repository is already up to date with its target branch. Nothing to merge.',
+      ),
+    ).toBeVisible();
+    expect(within(aftercare).getByText('rebase_already_up_to_date')).toHaveClass(
+      'error-surface__code',
+    );
     // No pass workspace is mounted; the cockpit stays in aftercare.
     expect(screen.queryByRole('region', { name: 'Rebase pass' })).not.toBeInTheDocument();
     // The card remains available for another attempt.
@@ -551,8 +585,13 @@ describe('FeatureCockpit snapshot rendering', () => {
     });
     mock.api.launchRebaseChild
       .mockRejectedValueOnce(
-        new Error(
-          'rebase_target_resolution_failed: Could not resolve a target branch for repo-a. Check the repository default branch.',
+        ipcError(
+          'rebase_target_resolution_failed',
+          'The rebase target branch could not be resolved.',
+          {
+            title: 'Rebase target unresolved',
+            remediation: 'Check that the target branch exists on the remote, then retry.',
+          },
         ),
       )
       .mockResolvedValueOnce({
@@ -568,7 +607,12 @@ describe('FeatureCockpit snapshot rendering', () => {
 
     const alert = await within(aftercare).findByRole('alert');
     expect(alert).toHaveTextContent('rebase_target_resolution_failed');
-    expect(alert).toHaveTextContent(/Could not resolve a target branch/);
+    expect(alert).toHaveTextContent('Rebase target unresolved');
+    expect(alert).toHaveTextContent('The rebase target branch could not be resolved.');
+    expect(alert).toHaveClass('error-surface', 'error-surface--blocking');
+    expect(within(alert).getByText('rebase_target_resolution_failed')).toHaveClass(
+      'error-surface__code',
+    );
 
     // A new launch attempt clears the previous error.
     await user.click(within(aftercare).getByRole('button', { name: /Start rebase pass/ }));
@@ -634,8 +678,7 @@ describe('FeatureCockpit snapshot rendering', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 0, byPhase: {} },
         integrationState: 'pending',
-        attention: [],
-        cleanupWarnings: [],
+        warnings: [],
       },
     });
     const child = featureSnapshot({
@@ -674,8 +717,10 @@ describe('FeatureCockpit snapshot rendering', () => {
     // The contradictory "choose what comes next" hero never renders next to a live pass.
     expect(screen.queryByRole('region', { name: 'Feature aftercare' })).not.toBeInTheDocument();
     expect(screen.queryByText(/Choose what comes next/)).not.toBeInTheDocument();
+    // A pass with no owned errors renders no error chip: the plain status
+    // label stays and no button appears.
     const status = screen.getByRole('status', { name: 'Current feature status' });
-    expect(status).toHaveTextContent('Refactoring');
+    expect(status).toHaveTextContent('Published');
 
     // The pass verbs live in the action bar like any feature tab.
     const bar = screen.getByRole('group', { name: 'Feature actions' });
@@ -704,6 +749,280 @@ describe('FeatureCockpit snapshot rendering', () => {
     const config = await screen.findByRole('dialog', { name: 'Feature configuration' });
     expect(within(config).getByRole('heading', { name: 'Paired configuration' })).toBeVisible();
     expect(within(config).getByText(/Pipeline is preserved per record/)).toBeVisible();
+  });
+
+  it('makes the attention chip a button that focuses the pass attention card, which owns the condition', async () => {
+    const childId = 'child1234ef567890';
+    const parkedAttention = {
+      code: 'integration_merge_conflict',
+      class: 'needs_action' as const,
+      title: 'Integration merge conflict',
+      summary: 'The merge candidate for repository "repo-a" conflicted on 1 file.',
+      remediation: {
+        hint: 'Resolve the conflict in the pass worktree and retry.',
+        actions: ['retry'],
+      },
+      context: { repositories: [{ name: 'repo-a', branch: 'main', conflict_files: ['query.ts'] }] },
+      diagnostics: 'repo-a: merge candidate conflict: [query.ts]',
+    };
+    const parent = featureSnapshot({
+      id: FEATURE_ID,
+      status: 'Published',
+      actions: [],
+      errors: [
+        {
+          ref: { scope: 'transaction', code: 'integration_merge_conflict', featureId: childId },
+          error: parkedAttention,
+        },
+      ],
+      activeChild: {
+        id: childId,
+        name: 'Slop removal pass',
+        kind: 'refactor',
+        displayToken: `refactor:${childId}`,
+        displayState: 'Active — ReviewPassed',
+        pipeline: 'large',
+        status: 'ReviewPassed',
+        relationshipState: 'active',
+        startedAt: '2026-07-30T10:00:00Z',
+        cost: { totalUsd: 0, byPhase: {} },
+        integrationState: 'attention',
+        attention: parkedAttention,
+        warnings: [],
+      },
+    });
+    const child = featureSnapshot({
+      id: childId,
+      name: 'Slop removal pass',
+      status: 'ReviewPassed',
+      setupComplete: true,
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [
+        { id: 'retry', enabled: true, disabledReasons: [] },
+        { id: 'discard', enabled: true, disabledReasons: [] },
+      ],
+      transaction: { phase: 'attention', attention: parkedAttention },
+    });
+    const mock = installAgenticoMock({ feature: parent });
+    mock.api.getFeature.mockImplementation((id: string) =>
+      Promise.resolve(id === childId ? child : parent),
+    );
+    // jsdom has no scrollIntoView and no layout to scroll; the focus
+    // assertion is the observable behavior.
+    const scrollIntoView = vi.fn();
+    const original = (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = scrollIntoView;
+    try {
+      renderCockpit(mock);
+      const user = userEvent.setup();
+
+      expect(await screen.findByRole('region', { name: 'Refactor pass' })).toBeVisible();
+      // The chip is a button carrying only the owner verb and class label;
+      // the catalog title rides the accessible name and tooltip.
+      const chip = screen.getByRole('button', {
+        name: 'Refactoring — Needs your action. Integration merge conflict. Focus the error card.',
+      });
+      expect(chip).toHaveTextContent('Refactoring — Needs your action');
+      expect(chip).toHaveAttribute('title', 'Integration merge conflict');
+
+      // The card owns the condition: exactly one element carries the catalog
+      // title, and the summary appears only inside the card.
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Needs your action');
+      expect(alert).toHaveTextContent('Integration merge conflict');
+      expect(screen.getAllByText('Integration merge conflict')).toHaveLength(1);
+      expect(
+        screen.getAllByText('The merge candidate for repository "repo-a" conflicted on 1 file.'),
+      ).toHaveLength(1);
+
+      // Activating the chip scrolls to and focuses the card.
+      await user.click(chip);
+      expect(scrollIntoView).toHaveBeenCalled();
+      expect(alert).toHaveFocus();
+    } finally {
+      (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = original;
+    }
+  });
+
+  it('focuses the registered failure card from the chip for a run failure, reflecting the blocking entry', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(
+      featureSnapshot({
+        status: 'Failed',
+        failure: {
+          code: 'iteration_budget_exhausted',
+          class: 'blocking' as const,
+          title: 'Iteration budget exhausted',
+          summary: 'The Implement phase exhausted its iteration budget at iteration 3.',
+          remediation: { hint: 'Restart the phase.', actions: ['restart'] },
+          context: { phase: { name: 'implement', iteration: 3 } },
+        },
+        errors: [
+          {
+            ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: FEATURE_ID },
+            error: {
+              code: 'iteration_budget_exhausted',
+              class: 'blocking' as const,
+              title: 'Iteration budget exhausted',
+              summary: 'The Implement phase exhausted its iteration budget.',
+            },
+          },
+          {
+            ref: {
+              scope: 'repository',
+              code: 'publish_rebase_conflict',
+              featureId: FEATURE_ID,
+              repository: 'repo-a',
+            },
+            error: {
+              code: 'publish_rebase_conflict',
+              class: 'needs_action' as const,
+              title: 'Pull-rebase conflict',
+              summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
+            },
+          },
+        ],
+        actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+      }),
+    );
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    // Two entries exist; the chip reflects the blocking one.
+    const chip = screen.getByRole('button', {
+      name: 'Failed. Iteration budget exhausted. Focus the error card.',
+    });
+    expect(chip).toHaveTextContent('Failed');
+
+    const alert = screen.getByRole('alert');
+    await user.click(chip);
+    await waitFor(() => expect(alert).toHaveFocus());
+  });
+
+  it('focuses the registered setup task card from the chip', async () => {
+    const snapshot = featureSnapshot({
+      status: 'Failed',
+      // The run carries the thin record naming the owning task; the task's
+      // own record is what the card (and the projection) render.
+      failure: {
+        code: 'worktree_setup_failed',
+        class: 'blocking' as const,
+        title: 'Worktree setup failed',
+        summary: 'Setup task "Worktree: repo-a" failed.',
+        remediation: {
+          hint: 'Resolve the reported problem, then retry setup.',
+          actions: ['setup'],
+        },
+        context: {
+          setup_task: { key: 'worktree:repo-a', kind: 'worktree', label: 'Worktree: repo-a' },
+        },
+      },
+      setup: {
+        status: 'failed',
+        attempt: 1,
+        tasks: [
+          {
+            key: 'worktree:repo-a',
+            kind: 'worktree',
+            label: 'Worktree: repo-a',
+            repo: 'repo-a',
+            status: 'failed',
+            attempt: 1,
+            error: {
+              code: 'worktree_setup_failed',
+              class: 'blocking' as const,
+              title: 'Worktree setup failed',
+              summary: 'Setting up the worktree for repository "repo-a" failed.',
+              remediation: {
+                hint: 'Resolve the reported problem, then retry setup.',
+                actions: ['setup'],
+              },
+              context: { repositories: [{ name: 'repo-a' }] },
+            },
+          },
+        ],
+      },
+      errors: [
+        {
+          ref: {
+            scope: 'setup',
+            code: 'worktree_setup_failed',
+            featureId: FEATURE_ID,
+            taskKey: 'worktree:repo-a',
+          },
+          error: {
+            code: 'worktree_setup_failed',
+            class: 'blocking' as const,
+            title: 'Worktree setup failed',
+            summary: 'Setting up the worktree for repository "repo-a" failed.',
+          },
+        },
+      ],
+      actions: [{ id: 'setup', enabled: true, disabledReasons: [] }],
+    });
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(snapshot);
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const chip = screen.getByRole('button', {
+      name: 'Setup — Failed. Worktree setup failed. Focus the error card.',
+    });
+    expect(chip).toHaveTextContent('Setup — Failed');
+
+    const alert = screen.getByRole('alert');
+    await user.click(chip);
+    await waitFor(() => expect(alert).toHaveFocus());
+  });
+
+  it('opens the publish modal and focuses its repository card for a repository entry', async () => {
+    const repoError = {
+      code: 'publish_rebase_conflict',
+      class: 'needs_action' as const,
+      title: 'Pull-rebase conflict',
+      summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
+    };
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'CodeReady',
+        errors: [
+          {
+            ref: {
+              scope: 'repository',
+              code: 'publish_rebase_conflict',
+              featureId: FEATURE_ID,
+              repository: 'repo-a',
+            },
+            error: repoError,
+          },
+        ],
+        actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-complete',
+      canMarkDone: true,
+      repos: [
+        { repo: 'repo-a', publishable: true, touched: true, status: 'eligible', error: repoError },
+      ],
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const chip = screen.getByRole('button', {
+      name: 'Publishing — Needs your action. Pull-rebase conflict. Focus the error card.',
+    });
+    await user.click(chip);
+
+    // The modal opens first; its repository row's card then receives focus.
+    const dialog = await screen.findByRole('dialog', { name: 'Publish reviewed changes' });
+    expect(dialog).toBeInTheDocument();
+    const card = await within(dialog).findByRole('alert');
+    await waitFor(() => expect(card).toHaveFocus());
   });
 
   it('opens the completed transcript from Run record', async () => {
@@ -759,14 +1078,70 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(toggle).toHaveAttribute('aria-pressed', 'true');
     const facts = screen.getByRole('complementary', { name: 'Feature inspector' });
     expect(within(facts).getByRole('region', { name: 'Feature facts' })).toBeVisible();
+    // The repository instrument now shares the aftercare inspector pane.
+    expect(within(facts).getByRole('region', { name: 'Repository status' })).toBeVisible();
 
-    await user.click(within(facts).getByRole('button', { name: 'Open pull request' }));
+    const featureFacts = within(facts).getByRole('region', { name: 'Feature facts' });
+    await user.click(within(featureFacts).getByRole('button', { name: 'Open pull request' }));
     expect(mock.api.openExternal).toHaveBeenCalledWith({
       url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
     });
 
     await user.click(toggle);
     expect(screen.queryByRole('region', { name: 'Feature facts' })).not.toBeInTheDocument();
+  });
+
+  it('links the repository instrument publish indication into the publish modal', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Published',
+        activeRun: 8,
+        actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+        repoStatus: [
+          {
+            name: 'repo-a',
+            publishable: true,
+            prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+          },
+          {
+            name: 'repo-b',
+            publishable: true,
+            touched: true,
+            error: {
+              code: 'publish_pull_request_failed',
+              class: 'needs_action',
+              title: 'Pull-request creation failed',
+              summary: 'Creating the pull request for repository "repo-b" failed.',
+              remediation: { hint: 'Check GitHub access, then retry.', actions: ['publish'] },
+              context: { repositories: [{ name: 'repo-b', branch: 'feature/search-revamp' }] },
+            },
+          },
+        ],
+      }),
+    });
+    mock.api.openExternal.mockResolvedValue({ ok: true });
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-publish',
+      canMarkDone: false,
+      repos: [{ repo: 'repo-b', publishable: true, touched: true, status: 'eligible' }],
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await screen.findByRole('region', { name: 'Feature aftercare' });
+    await user.click(screen.getByRole('button', { name: 'Toggle inspector' }));
+    const facts = screen.getByRole('complementary', { name: 'Feature inspector' });
+    const instrument = within(facts).getByRole('region', { name: 'Repository status' });
+    // Indication, not a card: the title and the link, no alert role.
+    expect(within(instrument).getByText('Pull-request creation failed')).toBeVisible();
+    expect(within(instrument).queryByRole('alert')).not.toBeInTheDocument();
+
+    await user.click(within(instrument).getByRole('button', { name: 'Open publish' }));
+    expect(
+      await screen.findByRole('dialog', { name: 'Publish reviewed changes' }),
+    ).toBeInTheDocument();
+    expect(mock.api.preflightCompletion).toHaveBeenCalledWith({ featureId: FEATURE_ID });
   });
 
   it('presents the aftercare facts as a drawer at narrow widths', async () => {
@@ -955,31 +1330,51 @@ describe('FeatureCockpit wide-layout inspector', () => {
 });
 
 describe('FeatureCockpit failure and retry', () => {
+  function worktreeSetupFailure() {
+    return {
+      code: 'worktree_setup_failed',
+      class: 'blocking' as const,
+      title: 'Worktree setup failed',
+      summary: 'Setting up the worktree for repository "repo-a" failed.',
+      remediation: {
+        hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+        actions: ['setup'],
+      },
+      context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+      diagnostics: 'clone failed',
+    };
+  }
+
   function failedSnapshot() {
     return featureSnapshot({
       status: 'Failed',
-      failure: { type: 'worktree_setup', message: 'Setup failed in repo-a.' },
+      // The run carries the thin record: same code, a setup_task block
+      // naming the owning task, and no diagnostics.
+      failure: {
+        code: 'worktree_setup_failed',
+        class: 'blocking' as const,
+        title: 'Worktree setup failed',
+        summary: 'Setup task "Worktree: repo-a" failed.',
+        remediation: {
+          hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+          actions: ['setup'],
+        },
+        context: {
+          setup_task: { key: 'worktree:repo-a', kind: 'worktree', label: 'Worktree: repo-a' },
+        },
+      },
       setup: {
         status: 'failed',
         attempt: 1,
-        lastError: 'clone failed',
         tasks: [
           {
             key: 'worktree:repo-a',
             kind: 'worktree',
-            label: 'Create worktree',
-            repo: 'repo-a',
-            status: 'done',
-            attempt: 1,
-          },
-          {
-            key: 'kb:repo-a',
-            kind: 'kb',
-            label: 'Build knowledge base',
+            label: 'Worktree: repo-a',
             repo: 'repo-a',
             status: 'failed',
-            attempt: 2,
-            error: 'kb build exited with status 1',
+            attempt: 1,
+            error: worktreeSetupFailure(),
           },
         ],
       },
@@ -997,25 +1392,96 @@ describe('FeatureCockpit failure and retry', () => {
     });
   }
 
-  it('keeps the feature failure visible without the durable setup block', async () => {
+  it('renders the owning task once through the full ErrorSurface', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeature.mockResolvedValue(failedSnapshot());
     renderCockpit(mock);
     await openInspector();
     await screen.findByRole('region', { name: 'Feature Search revamp' });
 
-    expect(screen.getByText('Setup failed in repo-a.')).toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'Durable setup' })).not.toBeInTheDocument();
+    // Exactly one durable failure surface, keyed by the alert role the
+    // blocking class assigns: the owning task's canonical object, captioned
+    // with the task label.
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByText('Failed')).toBeInTheDocument();
+    expect(within(alert).getByText('worktree_setup_failed')).toBeInTheDocument();
+    expect(within(alert).getByText('Worktree setup failed')).toBeInTheDocument();
+    expect(within(alert).getByText('Worktree: repo-a')).toBeInTheDocument();
+    expect(
+      within(alert).getByText('Setting up the worktree for repository "repo-a" failed.'),
+    ).toBeInTheDocument();
+    expect(within(alert).getByText('repo-a')).toBeInTheDocument();
+
+    // The run failure's own summary text appears nowhere.
+    expect(screen.queryByText('Setup task "Worktree: repo-a" failed.')).not.toBeInTheDocument();
+
+    // Diagnostics sit behind the second disclosure and stay raw.
+    const diagnostics = alert.querySelector('details.error-surface__diagnostics');
+    expect(diagnostics).not.toBeNull();
+    expect(diagnostics?.textContent).toContain('clone failed');
+
+    // No element with the old form-error classes remains in the stage status.
+    expect(document.querySelector('.cockpit__stage-status .create-form__error')).toBeNull();
   });
 
-  it('retries via the server-authorized setup action on the SAME feature', async () => {
+  it('renders a non-setup terminal failure from the run record with Restart', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(
+      featureSnapshot({
+        status: 'Failed',
+        failure: {
+          code: 'iteration_budget_exhausted',
+          class: 'blocking' as const,
+          title: 'Iteration budget exhausted',
+          summary: 'The Implement phase exhausted its iteration budget at iteration 3.',
+          remediation: {
+            hint: 'Restart the phase with an extended iteration budget, or revise the plan so the work converges.',
+            actions: ['restart'],
+          },
+          context: { phase: { name: 'implement', iteration: 3 } },
+          diagnostics: 'no convergence',
+        },
+        actions: [
+          { id: 'restart', enabled: true, disabledReasons: [] },
+          { id: 'setup', enabled: false, disabledReasons: [] },
+        ],
+      }),
+    );
+    const attention: AttentionItem = {
+      kind: 'error',
+      id: `error:${FEATURE_ID}:iteration_budget_exhausted`,
+      featureId: FEATURE_ID,
+      waitingSince: '2026-07-15T10:00:00.000Z',
+      ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: FEATURE_ID },
+      class: 'blocking',
+      code: 'iteration_budget_exhausted',
+      title: 'Iteration budget exhausted',
+    };
+    renderCockpit(mock, true, [attention]);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByText('iteration_budget_exhausted')).toBeInTheDocument();
+    expect(within(alert).getByText('Iteration budget exhausted')).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: 'Restart' })).toBeEnabled();
+    expect(within(alert).queryByRole('button', { name: 'Retry setup' })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: 'Agent request' })).not.toBeInTheDocument();
+    });
+    expect(document.querySelector('.live-preview__attention')).toBeNull();
+  });
+
+  it('retries via the card action on the SAME feature', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeature.mockResolvedValue(failedSnapshot());
     renderCockpit(mock);
     const user = userEvent.setup();
     await screen.findByRole('region', { name: 'Feature Search revamp' });
 
-    const retry = screen.getByRole('button', { name: 'Retry setup' });
+    // The card's own Retry setup button drives the setup bridge; the toolbar
+    // keeps its primary Retry setup button too, so scope to the alert.
+    const alert = screen.getByRole('alert');
+    const retry = within(alert).getByRole('button', { name: 'Retry setup' });
     expect(retry).toBeEnabled();
     const callsBefore = mock.api.getFeature.mock.calls.length;
     await user.click(retry);
@@ -1024,6 +1490,25 @@ describe('FeatureCockpit failure and retry', () => {
     expect(mock.api.createFeature).not.toHaveBeenCalled();
     // The same feature is refreshed rather than duplicated.
     await waitFor(() => expect(mock.api.getFeature.mock.calls.length).toBeGreaterThan(callsBefore));
+  });
+
+  it('renders the disabled reason in the card action slot instead of a button', async () => {
+    const snapshot = failedSnapshot();
+    snapshot.actions = [
+      {
+        id: 'setup',
+        enabled: false,
+        disabledReasons: [{ code: 'setup_in_progress', message: 'setup is already running' }],
+      },
+    ];
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(snapshot);
+    renderCockpit(mock);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByText('setup is already running')).toBeInTheDocument();
+    expect(within(alert).queryByRole('button', { name: 'Retry setup' })).not.toBeInTheDocument();
   });
 
   it('attributes the server-provided reason to Start when the action is unavailable', async () => {
@@ -1037,6 +1522,290 @@ describe('FeatureCockpit failure and retry', () => {
     expect(screen.getByRole('menuitem', { name: 'Start' })).toBeDisabled();
     expect(screen.getByText('setup must succeed first')).toBeInTheDocument();
     expect(screen.getByText('refresh the current run')).toBeInTheDocument();
+  });
+});
+
+describe('FeatureCockpit explain-in-chat', () => {
+  /** Renders the cockpit inside a mounted provider with a spy requester. */
+  function renderCockpitWithChat(mock = installAgenticoMock()) {
+    const requestRoute = vi.fn();
+    render(
+      <ExplainChatProvider requestRoute={requestRoute}>
+        <FeatureCockpit
+          featureId={FEATURE_ID}
+          titleHint="Search revamp"
+          onClose={vi.fn()}
+          onLoadedName={vi.fn()}
+          attentionItems={[]}
+          refreshAttention={() => Promise.resolve([])}
+          attentionDrafts={emptyAttentionDrafts()}
+          setAttentionDrafts={vi.fn()}
+          active
+        />
+      </ExplainChatProvider>,
+    );
+    return { mock, requestRoute };
+  }
+
+  function runFailureSnapshot() {
+    return featureSnapshot({
+      status: 'Failed',
+      failure: {
+        code: 'iteration_budget_exhausted',
+        class: 'blocking' as const,
+        title: 'Iteration budget exhausted',
+        summary: 'The Implement phase exhausted its iteration budget at iteration 3.',
+        remediation: {
+          hint: 'Restart the phase with an extended iteration budget, or revise the plan so the work converges.',
+          actions: ['restart'],
+        },
+        context: { phase: { name: 'implement', iteration: 3 } },
+      },
+      actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+    });
+  }
+
+  function setupOwnedFailureSnapshot() {
+    const worktreeSetupFailure = {
+      code: 'worktree_setup_failed',
+      class: 'blocking' as const,
+      title: 'Worktree setup failed',
+      summary: 'Setting up the worktree for repository "repo-a" failed.',
+      remediation: {
+        hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+        actions: ['setup'],
+      },
+      context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+    };
+    return featureSnapshot({
+      status: 'Failed',
+      failure: {
+        code: 'worktree_setup_failed',
+        class: 'blocking' as const,
+        title: 'Worktree setup failed',
+        summary: 'Setup task "Worktree: repo-a" failed.',
+        context: {
+          setup_task: { key: 'worktree:repo-a', kind: 'worktree', label: 'Worktree: repo-a' },
+        },
+      },
+      setup: {
+        status: 'failed',
+        attempt: 1,
+        tasks: [
+          {
+            key: 'worktree:repo-a',
+            kind: 'worktree',
+            label: 'Worktree: repo-a',
+            repo: 'repo-a',
+            status: 'failed',
+            attempt: 1,
+            error: worktreeSetupFailure,
+          },
+        ],
+      },
+      actions: [{ id: 'setup', enabled: true, disabledReasons: [] }],
+    });
+  }
+
+  it('routes the run failure card as a run-scoped reference with the feature and code', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(runFailureSnapshot());
+    const { requestRoute } = renderCockpitWithChat(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const alert = screen.getByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledTimes(1);
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft:
+        'Explain the "Iteration budget exhausted" error (iteration_budget_exhausted) on Search revamp and what I should do next.',
+      autoSubmit: true,
+      chatContext: {
+        scope: 'run',
+        code: 'iteration_budget_exhausted',
+        featureId: FEATURE_ID,
+      },
+    });
+  });
+
+  it('routes the task-fed setup card as a setup reference with the owning task key', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(setupOwnedFailureSnapshot());
+    const { requestRoute } = renderCockpitWithChat(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const alert = screen.getByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft:
+        'Explain the "Worktree setup failed" error (worktree_setup_failed) on Search revamp and what I should do next.',
+      autoSubmit: true,
+      chatContext: {
+        scope: 'setup',
+        code: 'worktree_setup_failed',
+        featureId: FEATURE_ID,
+        taskKey: 'worktree:repo-a',
+      },
+    });
+  });
+
+  it('routes the action-rejection card with no chat context reference', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(
+      featureSnapshot({
+        status: 'Created',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
+      }),
+    );
+    mock.api.dispatchFeatureAction.mockRejectedValue(
+      Object.assign(new Error('conflict: Start is no longer available.'), {
+        canonical: {
+          code: 'conflict',
+          class: 'blocking',
+          title: 'Conflict',
+          summary: 'The request conflicts with the current state of the feature.',
+        },
+      }),
+    );
+    const { requestRoute } = renderCockpitWithChat(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    await user.click(screen.getByRole('button', { name: 'Start' }));
+    const alert = await screen.findByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft: 'Explain the "Conflict" error (conflict) on Search revamp and what I should do next.',
+      autoSubmit: true,
+    });
+  });
+});
+
+describe('FeatureCockpit warnings', () => {
+  const driftWarning = (model: string) =>
+    canonicalWarning({
+      summary: `The Implement effort "high" is beyond what ${model} supports.`,
+    });
+
+  it('renders one compact status surface per effort-drift warning with no action', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Implementing',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [],
+        warnings: [driftWarning('claude-sonnet-4-5'), driftWarning('claude-opus-4-1')],
+      }),
+    });
+    renderCockpit(mock);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const stage = document.querySelector('.cockpit__stage-status');
+    expect(stage).not.toBeNull();
+    const surfaces = stage?.querySelectorAll('.error-surface') ?? [];
+    expect(surfaces).toHaveLength(2);
+    surfaces.forEach((surface) => {
+      expect(surface).toHaveAttribute('role', 'status');
+      expect(surface.querySelector('.error-surface__label')).toHaveTextContent('Warning');
+      expect(surface.querySelector('.error-surface__code')).toHaveTextContent(
+        'effort_capability_drift',
+      );
+      expect(surface.querySelector('.error-surface__action')).toBeNull();
+    });
+    // No alert-role element renders from the warnings themselves.
+    expect(stage?.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('renders rewind warnings as compact status surfaces in the journey and on the landing', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        actions: [
+          {
+            id: 'rewind',
+            enabled: true,
+            disabledReasons: [],
+            inputs: [{ name: 'target_phase', options: ['implement'] }],
+          },
+        ],
+      }),
+    });
+    mock.api.getRewindPreview.mockResolvedValue({
+      eligible: true,
+      sourceRunNumber: 3,
+      sourceRevision: 'rev-3',
+      targetPhase: 'implement',
+      effectivePhase: 'implement',
+    });
+    mock.api.executeRewind.mockResolvedValue({
+      featureId: FEATURE_ID,
+      action: 'rewind',
+      result: 'rewound',
+      sessionIds: [],
+      sourceRunNumber: 3,
+      newRunNumber: 4,
+      warnings: [
+        canonicalWarning({
+          code: 'rewind_backup_branch_failed',
+          title: 'Backup branch could not be created',
+          summary: 'The backup branch for repository "repo-a" could not be created.',
+          context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+        }),
+        canonicalWarning({
+          code: 'rewind_worktree_reset_failed',
+          title: 'Worktree could not be reset',
+          summary: 'The worktree for repository "repo-b" could not be reset.',
+          context: { repositories: [{ name: 'repo-b' }] },
+        }),
+      ],
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const actions = await screen.findByRole('group', { name: 'Feature actions' });
+    await user.click(within(actions).getByLabelText('More actions'));
+    await user.click(within(actions).getByRole('menuitem', { name: 'Rewind feature' }));
+    const dialog = await screen.findByRole('dialog', { name: /Rewind/ });
+    await user.click(within(dialog).getByRole('radio', { name: 'Implement' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Continue' })).toBeEnabled(),
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    await user.type(within(dialog).getByLabelText(/Type REWIND to confirm/), 'REWIND');
+    await user.click(within(dialog).getByRole('button', { name: 'Rewind' }));
+
+    // Journey success step: one status-role surface per canonical warning, no
+    // action button, and none of the old rewind-warnings classes.
+    await screen.findByText('Rewind complete');
+    const journeySurfaces = document.querySelectorAll('.rewind-journey .error-surface');
+    expect(journeySurfaces).toHaveLength(2);
+    journeySurfaces.forEach((surface) => {
+      expect(surface).toHaveAttribute('role', 'status');
+      expect(surface.querySelector('.error-surface__action')).toBeNull();
+    });
+    expect(
+      screen.getAllByText(/rewind_backup_branch_failed|rewind_worktree_reset_failed/),
+    ).toHaveLength(2);
+    expect(document.querySelector('.rewind-journey__warnings')).toBeNull();
+    expect(document.querySelector('.rewind-journey__warnings-list')).toBeNull();
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Open new run' }));
+
+    // The durable landing mirrors the same treatment and renders no alert.
+    const landing = await screen.findByRole('status', { name: 'Rewind outcome' });
+    const landingSurfaces = landing.querySelectorAll('.error-surface');
+    expect(landingSurfaces).toHaveLength(2);
+    landingSurfaces.forEach((surface) => {
+      expect(surface).toHaveAttribute('role', 'status');
+      expect(surface.querySelector('.error-surface__action')).toBeNull();
+    });
+    expect(within(landing).queryByRole('alert')).not.toBeInTheDocument();
+    expect(document.querySelector('.cockpit__rewind-warnings')).toBeNull();
   });
 });
 
@@ -1109,7 +1878,16 @@ describe('FeatureCockpit ready-to-start', () => {
     (
       mock.api as unknown as { dispatchFeatureAction: ReturnType<typeof vi.fn> }
     ).dispatchFeatureAction = vi.fn(() =>
-      Promise.reject(new Error('conflict: Start is no longer available. Refresh and try again.')),
+      Promise.reject(
+        Object.assign(new Error('conflict: Start is no longer available. Refresh and try again.'), {
+          canonical: {
+            code: 'conflict',
+            class: 'blocking',
+            title: 'Conflict',
+            summary: 'The request conflicts with the current state of the feature.',
+          },
+        }),
+      ),
     );
     renderCockpit(mock);
     const user = userEvent.setup();
@@ -1118,9 +1896,16 @@ describe('FeatureCockpit ready-to-start', () => {
 
     await user.click(screen.getByRole('button', { name: 'Start' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Start was rejected — Start is no longer available. Refresh and try again.',
-    );
+    // Exactly one canonical error surface: caption, catalog title, summary,
+    // and the code tag — the rejection renders through the catalog.
+    expect(await screen.findByRole('alert')).toHaveClass('error-surface');
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    expect(screen.getByText('Start was rejected')).toBeVisible();
+    expect(screen.getByText('Conflict')).toBeVisible();
+    expect(
+      screen.getByText('The request conflicts with the current state of the feature.'),
+    ).toBeVisible();
+    expect(screen.getByText('conflict')).toHaveClass('error-surface__code');
     await waitFor(() => expect(mock.api.getFeature.mock.calls.length).toBeGreaterThan(callsBefore));
   });
 
@@ -1547,7 +2332,7 @@ describe('FeatureCockpit convergence', () => {
     renderCockpit(mock, true);
     expect(await screen.findByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
     await openInspector();
-    mock.api.getFeature.mockRejectedValueOnce(new Error('unavailable: runtime busy'));
+    mock.api.getFeature.mockRejectedValueOnce(ipcError('E_INTERNAL', 'runtime busy'));
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
     expect(await screen.findByText('Refreshing from the runtime…')).toBeVisible();
     expect(screen.getByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
@@ -1558,9 +2343,15 @@ describe('FeatureCockpit convergence', () => {
     const mock = installAgenticoMock();
     renderCockpit(mock, true);
     await screen.findByRole('region', { name: 'Feature Search revamp' });
-    mock.api.getFeature.mockRejectedValueOnce(new Error('not_found: feature not found'));
+    mock.api.getFeature.mockRejectedValueOnce(
+      ipcError('not_found', 'feature not found', { title: 'Feature not found' }),
+    );
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
-    expect(await screen.findByText('This feature no longer exists on the server.')).toBeVisible();
+    // The server's own not_found canonical renders through the compact surface.
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('not_found')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Feature not found')).toBeVisible();
   });
 
   it('does not compete with an unresolved initial load after an invalidation', async () => {
@@ -1570,7 +2361,7 @@ describe('FeatureCockpit convergence', () => {
       .mockImplementationOnce(
         () => new Promise((resolve) => (resolveInitial = resolve as typeof resolveInitial)),
       )
-      .mockRejectedValueOnce(new Error('unavailable: runtime busy'));
+      .mockRejectedValueOnce(ipcError('E_INTERNAL', 'runtime busy'));
     renderCockpit(mock);
     await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(1));
 
@@ -1718,15 +2509,61 @@ describe('FeatureCockpit convergence', () => {
 
   it('renders a close affordance instead of crashing when the feature vanished', async () => {
     const mock = installAgenticoMock();
-    mock.api.getFeature.mockRejectedValue(new Error('not_found: feature not found'));
+    mock.api.getFeature.mockRejectedValue(
+      ipcError('not_found', 'feature not found', { title: 'Feature not found' }),
+    );
     const { onClose } = renderCockpit(mock);
     const user = userEvent.setup();
 
-    expect(
-      await screen.findByText('This feature no longer exists on the server.'),
-    ).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Close tab' }));
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('not_found')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Feature not found')).toBeVisible();
+    await user.click(within(surface).getByRole('button', { name: 'Close tab' }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders one compact ErrorSurface with Retry when the initial feature load rejects', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeature
+      .mockRejectedValueOnce(ipcError('E_INTERNAL', 'runtime busy'))
+      .mockResolvedValue(featureSnapshot());
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    await user.click(within(surface).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
+  });
+
+  it('routes a failed setup retry through the action-rejection surface, never the announcement region', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        setup: { status: 'failed', attempt: 1, tasks: [] },
+        actions: [{ id: 'setup', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.dispatchFeatureSetup.mockRejectedValueOnce(ipcError('conflict', 'setup rejected'));
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    // Setup failed once, so the primary verb the state invites is Retry setup.
+    await user.click(screen.getByRole('button', { name: 'Retry setup' }));
+
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(screen.getByText('Retry was rejected')).toBeVisible();
+    expect(screen.getByText('conflict')).toHaveClass('error-surface__code');
+    expect(mock.api.dispatchFeatureSetup).toHaveBeenCalledWith(FEATURE_ID);
+    // Nothing is written to the announcement region for the failure.
+    document.querySelectorAll('.cockpit__announcement').forEach((region) => {
+      expect(region.textContent).toBe('');
+    });
+    expect(screen.queryByText(/Retry failed/)).not.toBeInTheDocument();
   });
 
   it('saves floating gate drafts while leaving the agent paused', async () => {
@@ -2002,12 +2839,27 @@ describe('FeatureCockpit convergence', () => {
 });
 
 describe('FeatureCockpit Restart', () => {
-  it('extends the budget when restarting a max-iteration failure', async () => {
+  function iterationBudgetFailure() {
+    return {
+      code: 'iteration_budget_exhausted',
+      class: 'blocking' as const,
+      title: 'Iteration budget exhausted',
+      summary: 'The Implement phase exhausted its iteration budget at iteration 3.',
+      remediation: {
+        hint: 'Restart the phase with an extended iteration budget, or revise the plan so the work converges.',
+        actions: ['restart'],
+      },
+      context: { phase: { name: 'implement', iteration: 3 } },
+      diagnostics: 'reached maximum iteration count',
+    };
+  }
+
+  it('extends the budget when restarting an iteration-budget failure', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Failed',
         currentPhase: 'Implement',
-        failure: { type: 'max_iterations', message: 'reached maximum iteration count' },
+        failure: iterationBudgetFailure(),
         actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
       }),
     });
@@ -2030,6 +2882,90 @@ describe('FeatureCockpit Restart', () => {
         },
       }),
     );
+  });
+
+  it('restarts an iteration-budget failure from the card with the budget-extension dialog', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Failed',
+        currentPhase: 'Implement',
+        failure: iterationBudgetFailure(),
+        actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    // The card's own Restart button is the primary action for this code.
+    const alert = screen.getByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Restart' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Restart Search revamp?' });
+    expect(dialog).toHaveTextContent('maximum-iteration restart');
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm restart' }));
+
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: FEATURE_ID,
+        action: 'restart',
+        body: {
+          max_iterations_delta: 10,
+          max_plan_iterations_delta: 2,
+        },
+      }),
+    );
+  });
+
+  it('restarts a session crash from the card with no request body', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Failed',
+        currentPhase: 'Implement',
+        failure: {
+          code: 'session_crashed',
+          class: 'blocking' as const,
+          title: 'Session crashed',
+          summary: 'The Implement phase lost its agent session.',
+          remediation: {
+            hint: 'Restart the phase; the session log has the crash details.',
+            actions: ['restart'],
+          },
+          context: { phase: { name: 'implement' } },
+          diagnostics: 'agent exited with status 1',
+        },
+        actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const alert = screen.getByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Restart' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Restart Search revamp?' });
+    expect(dialog).not.toHaveTextContent('maximum-iteration restart');
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm restart' }));
+
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: FEATURE_ID,
+        action: 'restart',
+      }),
+    );
+  });
+
+  it('renders no durable failure surface without a failure record', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Interrupted',
+        currentPhase: 'Implement',
+        actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('keeps ordinary restarts bodyless and does not claim a budget extension', async () => {
@@ -2164,7 +3100,14 @@ describe('FeatureCockpit Stop', () => {
   it('refreshes a rejected Stop and presents the structured safe error', async () => {
     const mock = installAgenticoMock({ feature: activeSnapshot() });
     mock.api.dispatchFeatureAction.mockRejectedValue(
-      new Error('conflict: The Stop action is stale. Refresh and try again.'),
+      Object.assign(new Error('conflict: The Stop action is stale. Refresh and try again.'), {
+        canonical: {
+          code: 'conflict',
+          class: 'blocking',
+          title: 'Conflict',
+          summary: 'The request conflicts with the current state of the feature.',
+        },
+      }),
     );
     renderCockpit(mock);
     const user = userEvent.setup();
@@ -2173,9 +3116,14 @@ describe('FeatureCockpit Stop', () => {
     await user.click(await screen.findByRole('button', { name: 'Stop' }));
     await user.click(screen.getByRole('button', { name: 'Confirm stop' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Stop was rejected — The Stop action is stale. Refresh and try again.',
-    );
+    expect(await screen.findByRole('alert')).toHaveClass('error-surface');
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    expect(screen.getByText('Stop was rejected')).toBeVisible();
+    expect(screen.getByText('Conflict')).toBeVisible();
+    expect(
+      screen.getByText('The request conflicts with the current state of the feature.'),
+    ).toBeVisible();
+    expect(screen.getByText('conflict')).toHaveClass('error-surface__code');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     await waitFor(() => expect(mock.api.getFeature.mock.calls.length).toBeGreaterThan(callsBefore));
   });
@@ -2225,7 +3173,15 @@ describe('FeatureCockpit delete', () => {
     await user.click(await screen.findByLabelText('More actions'));
     await user.click(screen.getByRole('menuitem', { name: 'Delete feature' }));
     const dialog = await screen.findByRole('dialog', { name: /Delete Search revamp/ });
-    expect(dialog).toHaveTextContent('Impact projection is missing or stale');
+    // The missing projection renders a warning-class surface from the
+    // desktop-local catalog code, not a hand-rolled alert line.
+    const warning = within(dialog).getByText('E_IMPACT_PROJECTION_STALE').closest('.error-surface');
+    expect(warning).not.toBeNull();
+    expect(warning).toHaveClass('error-surface--compact', 'error-surface--warning');
+    expect(warning).toHaveAttribute('role', 'status');
+    expect(
+      within(warning as HTMLElement).getByText('Impact projection is missing or stale'),
+    ).toBeVisible();
     expect(within(dialog).getByRole('button', { name: 'Delete feature' })).toBeDisabled();
   });
 
@@ -2385,8 +3341,7 @@ describe('FeatureCockpit review-feedback aftercare', () => {
       closedAt: '2026-07-29T10:00:00Z',
       cost: { totalUsd: 1, byPhase: {} },
       integrationState: 'merged',
-      attention: [],
-      cleanupWarnings: [],
+      warnings: [],
       hasDiffSummary: true,
     };
     const withoutBody = featureSnapshot({
@@ -2425,8 +3380,7 @@ describe('FeatureCockpit review-feedback aftercare', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 0, byPhase: {} },
         integrationState: 'pending',
-        attention: [],
-        cleanupWarnings: [],
+        warnings: [],
       },
     });
     const child = featureSnapshot({
@@ -2469,8 +3423,7 @@ describe('FeatureCockpit review-feedback aftercare', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 0, byPhase: {} },
         integrationState: 'pending',
-        attention: [],
-        cleanupWarnings: [],
+        warnings: [],
       },
     };
     const child = featureSnapshot({
@@ -2639,16 +3592,24 @@ describe('FeatureCockpit run switcher popup', () => {
     expect(within(menu).getByRole('button', { name: 'Load older' })).toBeInTheDocument();
   });
 
-  it('reports a failed run-history read inside the menu without losing the current run', async () => {
+  it('renders a compact ErrorSurface with Retry inside the menu when the run-history read fails', async () => {
     const mock = installAgenticoMock();
-    mock.api.listRuns.mockRejectedValue(new Error('history unavailable'));
+    mock.api.listRuns.mockRejectedValue(ipcError('E_INTERNAL', 'history unavailable'));
     renderWithSwitcher();
 
-    const { menu } = await openSwitcher();
-    expect(
-      await within(menu).findByText(/Could not load run history — history unavailable/),
-    ).toBeVisible();
+    const { user, menu } = await openSwitcher();
+    const surface = await within(menu).findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+    // The current run stays reachable while the history read is unusable.
     expect(within(menu).getByRole('menuitem', { name: 'Plan · current' })).toBeVisible();
+    await user.click(within(surface).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mock.api.listRuns).toHaveBeenCalledTimes(2));
+    expect(mock.api.listRuns).toHaveBeenLastCalledWith({
+      featureId: FEATURE_ID,
+      page: 1,
+      pageSize: 8,
+    });
   });
 });
 
@@ -2751,7 +3712,9 @@ describe('FeatureCockpit feature-command funnel', () => {
       .mockResolvedValueOnce(snapshot)
       .mockRejectedValue(new Error('refresh unavailable'));
     mock.api.dispatchFeatureAction.mockRejectedValue(
-      new Error('E_REQUEST_TIMEOUT: publish did not answer before the bound'),
+      ipcError('E_REQUEST_TIMEOUT', 'publish did not answer before the bound', {
+        class: 'warning',
+      }),
     );
     await mounted(mock);
     const user = userEvent.setup();

@@ -224,25 +224,25 @@ describe('remote token isolation across attach outcomes', () => {
       name: 'absent token',
       options: { tokenStatus: 'absent' },
       status: 'error',
-      errorCode: 'E_REMOTE_TOKEN_REPASTE',
+      errorCode: 'E_REMOTE_TOKEN_MISSING',
     },
     {
       name: 'undecryptable token',
       options: { tokenStatus: 're-paste-required' },
       status: 'error',
-      errorCode: 'E_REMOTE_TOKEN_REPASTE',
+      errorCode: 'E_REMOTE_TOKEN_UNREADABLE',
     },
     {
       name: 'unreachable server',
       options: { remoteHealth: new Error('connection refused') },
       status: 'error',
-      errorCode: 'E_EXTERNAL_SERVER_LOST',
+      errorCode: 'E_REMOTE_HEALTH_UNANSWERED',
     },
     {
       name: 'rejected credentials',
       options: { readinessStatus: 401, readinessBody: { message: 'denied' } },
       status: 'error',
-      errorCode: 'E_REMOTE_TOKEN_REPASTE',
+      errorCode: 'E_REMOTE_STORED_TOKEN_REJECTED',
     },
     {
       name: 'incompatible server',
@@ -296,9 +296,10 @@ describe('hostile remote server echoing the token', () => {
     if (state.status !== 'error') {
       throw new Error('unreachable');
     }
-    expect(state.error.code).toBe('E_REMOTE_TOKEN_REPASTE');
-    // Neither the fixed diagnostics nor the safe error echo server body text.
-    expect(state.error.message).not.toContain(REMOTE_TOKEN);
+    expect(state.error.code).toBe('E_REMOTE_STORED_TOKEN_REJECTED');
+    // Neither the fixed diagnostics nor the canonical error echo server body text.
+    expect(state.error.summary).not.toContain(REMOTE_TOKEN);
+    expect(state.error.diagnostics ?? '').not.toContain(REMOTE_TOKEN);
     expectTokenFree(env);
   });
 
@@ -423,7 +424,7 @@ describe('add-remote-server paste flow hygiene', () => {
     };
     await expect(
       addRemoteServer({ connectionString: `agentico://${REMOTE_TOKEN}@10.9.8.7:8080` }, deps),
-    ).rejects.toMatchObject({ safe: { code: 'E_REMOTE_UNREACHABLE' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REMOTE_UNREACHABLE' } });
 
     expect(JSON.stringify(record.logs)).not.toContain(REMOTE_TOKEN);
     expect(record.upserted).toHaveLength(0);

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 )
 
 type Phase int
@@ -92,6 +93,17 @@ func (p Phase) LogicalOrder() int {
 	default:
 		return 99
 	}
+}
+
+// FailureName returns the stable phase name stored in a failure record's
+// phase context block. It matches DirName except for the deferred final
+// review pass, which needs a name distinct from the per-iteration review
+// phase so load-time reconciliation can identify it without message text.
+func (p Phase) FailureName() string {
+	if p == PhaseFinalReview {
+		return "final_review"
+	}
+	return p.DirName()
 }
 
 func (p Phase) String() string {
@@ -181,12 +193,12 @@ func (i Inquireness) IsValid() bool {
 }
 
 // RepoState carries the minimal per-repo signal orchestration needs:
-// whether any phase touched the repo, the optional PR URL, and the most
-// recent error message. Persisted on Run.RepoStates.
+// whether any phase touched the repo, the optional PR URL, and the optional
+// stored publish-failure record. Persisted on Run.RepoStates.
 type RepoState struct {
-	Touched   bool   `yaml:"touched,omitempty"`
-	PRURL     string `yaml:"pr_url,omitempty"`
-	LastError string `yaml:"last_error,omitempty"`
+	Touched bool                  `yaml:"touched,omitempty"`
+	PRURL   string                `yaml:"pr_url,omitempty"`
+	Error   *errcat.FailureRecord `yaml:"error,omitempty"`
 
 	Freshness string `yaml:"-"`
 }
@@ -205,17 +217,6 @@ const (
 	RiskLow    RiskLevel = "low"
 	RiskMedium RiskLevel = "medium"
 	RiskHigh   RiskLevel = "high"
-)
-
-// Failure types categorize why a feature entered the Failed state.
-const (
-	FailureSafetyRail        = "safety_rail"
-	FailureMaxIterations     = "max_iterations"
-	FailureSessionCrash      = "session_crash"
-	FailureMissingArtifact   = "missing_artifact"
-	FailureProtocolViolation = "protocol_violation"
-	FailureInfrastructure    = "infrastructure"
-	FailureWorktreeSetup     = "worktree_setup"
 )
 
 type Status int
@@ -663,8 +664,6 @@ type Feature struct {
 	// via Feature.AllReposPublished / Feature.TouchedRepos. Persisted on
 	// Run.RepoStates.
 	RepoStates                      map[string]*RepoState    `yaml:"-"`
-	LastError                       string                   `yaml:"-"`
-	FailureType                     string                   `yaml:"-"`
 	KBWaitMessage                   string                   `yaml:"-"`
 	ForceKBRebuild                  bool                     `yaml:"-"`
 	KBStatus                        map[string]string        `yaml:"-"`
@@ -771,8 +770,6 @@ func (f *Feature) syncShadowsToRun() {
 		f.RoadmapPhaseFrontendByPhase = r.RoadmapPhaseFrontendByPhase
 	}
 	r.RepoStates = f.RepoStates
-	r.LastError = f.LastError
-	r.FailureType = f.FailureType
 	r.KBWaitMessage = f.KBWaitMessage
 	r.ForceKBRebuild = f.ForceKBRebuild
 	r.KBStatus = f.KBStatus
@@ -811,8 +808,6 @@ func (f *Feature) syncRunToShadows() {
 	f.Artifacts = r.Artifacts
 	f.RoadmapPhaseFrontendByPhase = r.RoadmapPhaseFrontendByPhase
 	f.RepoStates = r.RepoStates
-	f.LastError = r.LastError
-	f.FailureType = r.FailureType
 	f.KBWaitMessage = r.KBWaitMessage
 	f.ForceKBRebuild = r.ForceKBRebuild
 	f.KBStatus = r.KBStatus
@@ -832,15 +827,53 @@ func (f *Feature) syncRunToShadows() {
 	f.CurrentPhaseStatus = r.CurrentPhaseStatus
 }
 
-// HasTerminalFailure reports whether the active run carries terminal failure
-// context. These fields are run-scoped shadows, so a feature in a successful
-// terminal status with either value set is inconsistent and should be treated
-// as failed by status projections and recovery paths.
+// HasTerminalFailure reports whether the active run carries a stored
+// canonical failure record. The record is run-scoped, so a feature in a
+// successful terminal status with a record is inconsistent and must be
+// treated as failed by status projections and recovery paths.
 func (f *Feature) HasTerminalFailure() bool {
+	return f.FailureRecord() != nil
+}
+
+// FailureRecord returns the active run's stored canonical failure record, or
+// nil when the run has none.
+func (f *Feature) FailureRecord() *errcat.FailureRecord {
 	if f == nil {
-		return false
+		return nil
 	}
-	return strings.TrimSpace(f.FailureType) != "" || strings.TrimSpace(f.LastError) != ""
+	return f.Run().Failure
+}
+
+// FailureCode returns the active run's failure code; empty when the run has
+// no failure record. Predicates that used to compare the removed failure
+// type string key on this value instead.
+func (f *Feature) FailureCode() errcat.Code {
+	if rec := f.FailureRecord(); rec != nil {
+		return rec.Code
+	}
+	return ""
+}
+
+// FailedSetupTask returns the setup task that owns the run's stored setup
+// failure — the task named by the run record's setup_task block — or nil
+// when the run carries no such record or names no known task.
+func (f *Feature) FailedSetupTask() *SetupTask {
+	if f == nil {
+		return nil
+	}
+	rec := f.FailureRecord()
+	if rec == nil || rec.Context == nil || rec.Context.SetupTask == nil {
+		return nil
+	}
+	setup := f.Run().Setup
+	if setup == nil {
+		return nil
+	}
+	task, ok := setup.Tasks[rec.Context.SetupTask.Key]
+	if !ok {
+		return nil
+	}
+	return &task
 }
 
 func (f *Feature) reconcileTerminalRunFailure() {
@@ -850,15 +883,17 @@ func (f *Feature) reconcileTerminalRunFailure() {
 	switch f.Status {
 	case StatusCodeReady, StatusPublished, StatusDone:
 		f.Status = StatusFailed
-		if f.CurrentPhase == PhasePublish && looksLikeFinalReviewFailure(f.LastError) {
+		if f.CurrentPhase == PhasePublish && failureRecordNamesFinalReview(f.FailureRecord()) {
 			f.CurrentPhase = PhaseFinalReview
 		}
 	}
 }
 
-func looksLikeFinalReviewFailure(msg string) bool {
-	msg = strings.ToLower(msg)
-	return strings.Contains(msg, "final_review") || strings.Contains(msg, "final review")
+// failureRecordNamesFinalReview reports whether a stored record's phase
+// block names the deferred end-of-feature final review pass.
+func failureRecordNamesFinalReview(rec *errcat.FailureRecord) bool {
+	return rec != nil && rec.Context != nil && rec.Context.Phase != nil &&
+		rec.Context.Phase.Name == PhaseFinalReview.FailureName()
 }
 
 // validTransitions maps each status to the set of statuses it can transition to.

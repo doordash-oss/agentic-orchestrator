@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -184,7 +185,7 @@ func TestStartFeature_ImplementPhase_Failed_MarksFeatureFailed(t *testing.T) {
 		return nil
 	}
 	lc.InitRepoImplFn = func(id string) error { return nil }
-	lc.MarkFailedFn = func(id, failureType, errMsg string) error {
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
 		f.Status = feature.StatusFailed
 		return nil
 	}
@@ -204,7 +205,7 @@ func TestStartFeature_ImplementPhase_Failed_MarksFeatureFailed(t *testing.T) {
 	o := orchestrator.New(
 		orchestrator.Deps{Lifecycle: lc, Store: store},
 		orchestrator.Hooks{
-			OnFeatureFailed: func(featureID, failureType, errorMsg string) {
+			OnFeatureFailed: func(featureID string, code errcat.Code, class errcat.Class, errorMsg string) {
 				select {
 				case hookCh <- errorMsg:
 				default:

@@ -17,7 +17,7 @@ limitations under the License.
 import { Notification } from 'electron';
 import { redactText } from '../shared/errors';
 import type { AttentionItem, AttentionSnapshot } from '../shared/ipc';
-import { attentionOwnerFeatureId, isSyntheticHelpItem } from '../shared/ipc';
+import { attentionOwnerFeatureId, ERROR_CLASS_LABELS, isSyntheticHelpItem } from '../shared/ipc';
 
 type ActionableAttentionItem = Exclude<AttentionItem, { kind: 'recovery' }>;
 
@@ -119,6 +119,8 @@ function previewSummary(item: ActionableAttentionItem): string {
       return ' · Help request';
     case 'review':
       return ` · ${item.reviewKind} review`;
+    case 'error':
+      return ` · ${item.title}`;
     default: {
       const exhaustive: never = item;
       return exhaustive;
@@ -138,6 +140,10 @@ function attentionTypeLabel(item: ActionableAttentionItem): string {
       return 'Help';
     case 'review':
       return 'Review';
+    // The error item's type label is its class label, shared with every
+    // other presence surface.
+    case 'error':
+      return ERROR_CLASS_LABELS[item.class];
     default: {
       const exhaustive: never = item;
       return exhaustive;

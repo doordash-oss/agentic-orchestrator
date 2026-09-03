@@ -16,12 +16,13 @@ limitations under the License.
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { parseIpcError } from '../../wizard/ipcError';
-import type { CompletionPreflightResult } from '../../../../shared/ipc';
+import type { CanonicalError, CompletionPreflightResult } from '../../../../shared/ipc';
 
 export interface CompletionPreflightHandle {
   preflight: CompletionPreflightResult | null;
   loading: boolean;
-  error: string | null;
+  /** The parsed canonical error, rendered by the changes surface as a compact ErrorSurface. */
+  error: CanonicalError | null;
   refresh: () => Promise<void>;
 }
 
@@ -32,7 +33,7 @@ export function useCompletionPreflight(
 ): CompletionPreflightHandle {
   const [preflight, setPreflight] = useState<CompletionPreflightResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<CanonicalError | null>(null);
   const requestRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -45,7 +46,7 @@ export function useCompletionPreflight(
       setPreflight(result);
     } catch (err) {
       if (request !== requestRef.current) return;
-      setError(parseIpcError(err).message);
+      setError(parseIpcError(err));
     } finally {
       if (request === requestRef.current) setLoading(false);
     }

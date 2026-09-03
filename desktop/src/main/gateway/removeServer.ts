@@ -30,7 +30,7 @@ limitations under the License.
  * store deletes by key. Nothing about the removed server (URL, token,
  * runtime dir) lands in logs beyond its kind and a key prefix.
  */
-import { SafeErrorException, safeError } from '../../shared/errors';
+import { buildCanonicalError, CanonicalErrorException } from '../../shared/errors';
 import type {
   ConnectionState,
   ServerRemoveRequest,
@@ -64,13 +64,7 @@ export async function removeKnownServer(
 ): Promise<ConnectionState> {
   const entry = deps.knownServers().known.find((item) => item.serverKey === request.serverKey);
   if (entry === undefined) {
-    throw new SafeErrorException(
-      safeError(
-        E_SERVER_UNKNOWN,
-        'The server is not in the servers list.',
-        'Refresh Settings and try again; the server may already have been removed.',
-      ),
-    );
+    throw new CanonicalErrorException(buildCanonicalError(E_SERVER_UNKNOWN));
   }
   if (entry.kind === 'remote') {
     deps.removeRemoteToken(entry.serverKey);
@@ -99,9 +93,7 @@ export function serverTokenStatus(
 ): ServerTokenStatusResult {
   const entry = deps.knownServers().known.find((item) => item.serverKey === request.serverKey);
   if (entry === undefined) {
-    throw new SafeErrorException(
-      safeError(E_SERVER_UNKNOWN, 'The server is not in the servers list.'),
-    );
+    throw new CanonicalErrorException(buildCanonicalError(E_SERVER_UNKNOWN));
   }
   if (entry.kind === 'local') {
     return { status: 'local' };

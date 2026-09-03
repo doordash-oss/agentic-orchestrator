@@ -15,8 +15,12 @@ limitations under the License.
 */
 
 import { describe, expect, it, vi } from 'vitest';
-import { SafeErrorException, requestTimeoutError } from '../../shared/errors';
-import { FeatureSnapshotSchema, type ReadinessSnapshot } from '../../shared/ipc';
+import { CanonicalErrorException, requestTimeoutError } from '../../shared/errors';
+import {
+  FeatureSnapshotSchema,
+  FeaturesListResultSchema,
+  type ReadinessSnapshot,
+} from '../../shared/ipc';
 import { FeatureService, type FeatureServiceDeps } from '../features';
 import type { ApiRequestInit, HttpResult } from '../gateway/runtimeGateway';
 
@@ -38,7 +42,12 @@ function readiness(): ReadinessSnapshot {
         name: 'repo-b',
         path: '/work/space/repo-b',
         valid: false,
-        issue: { code: 'invalid_repository', message: 'Not a git repository.' },
+        issue: {
+          code: 'invalid_repository',
+          class: 'blocking',
+          title: 'Invalid repository',
+          summary: 'A configured repository path is not a git repository.',
+        },
       },
     ],
     issues: [],
@@ -183,7 +192,7 @@ describe('FeatureService remote-connection submit boundary', () => {
         attachments: [],
         repositoryFiles: [],
       }),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     await expect(
       service.createFeature({
         name: 'Staged before the switch',
@@ -194,7 +203,7 @@ describe('FeatureService remote-connection submit boundary', () => {
         attachments: ['/staged/spec.pdf'],
         repositoryFiles: [],
       }),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     await expect(
       service.createFeature({
         name: 'Staged before the switch',
@@ -205,7 +214,7 @@ describe('FeatureService remote-connection submit boundary', () => {
         attachments: [],
         repositoryFiles: [{ repoKey: 'repo-a', path: 'src/query.ts' }],
       }),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     expect(resolveRepositoryFiles).not.toHaveBeenCalled();
     expect(calls).toHaveLength(0);
   });
@@ -282,14 +291,14 @@ describe('FeatureService remote-connection submit boundary', () => {
         name: 'Extract search core',
         images: ['/staged/shot.png'],
       }),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     await expect(
       service.launchRefactorChild({
         parentId: 'abcd1234ef567890',
         name: 'Extract search core',
         repositoryFiles: [{ repoKey: 'repo-a', path: 'src/query.ts' }],
       }),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     await service.launchRefactorChild({
       parentId: 'abcd1234ef567890',
       name: 'Extract search core',
@@ -321,7 +330,7 @@ describe('FeatureService remote-connection submit boundary', () => {
         images: ['/staged/shot.png'],
         kind: 'local',
       } as never),
-    ).rejects.toMatchObject({ safe: { code: 'E_SCHEMA_MISMATCH' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_SCHEMA_MISMATCH' } });
     expect(calls).toHaveLength(0);
   });
 });
@@ -403,38 +412,56 @@ describe('FeatureService.createFeature', () => {
         api_version: 'v1',
         error: {
           code: 'not_ready',
-          message: 'runtime is not ready to create features',
-          status: 409,
-          target: {
-            issues: [
-              { code: 'unauthenticated', message: 'claude is not signed in at /Users/x/secret' },
-            ],
-          },
+          class: 'needs_action',
+          title: 'Runtime not ready',
+          summary:
+            'The runtime is not ready to create features: Unauthenticated; Missing executable.',
+          remediation: { hint: 'Complete the outstanding setup steps, then try again.' },
+          diagnostics: 'claude is not signed in at /Users/x/secret; claude CLI was not found',
         },
       },
     }));
     const err = await service.createFeature(input).catch((e: unknown) => e);
-    expect(err).toMatchObject({ safe: { code: 'not_ready' } });
-    const safe = (err as { safe: { message: string; remediation?: string } }).safe;
-    expect(safe.remediation).toContain('claude is not signed in');
-    expect(safe.remediation).not.toContain('/Users/x');
+    expect(err).toBeInstanceOf(CanonicalErrorException);
+    const canonical = (err as CanonicalErrorException).canonical;
+    expect(canonical.code).toBe('not_ready');
+    expect(canonical.class).toBe('needs_action');
+    expect(canonical.summary).toBe(
+      'The runtime is not ready to create features: Unauthenticated; Missing executable.',
+    );
+    expect(canonical.remediation?.hint).toBe(
+      'Complete the outstanding setup steps, then try again.',
+    );
+    expect(canonical.diagnostics).toContain('[path]');
+    expect(canonical.diagnostics).not.toContain('/Users/x');
   });
 
   it('maps plain 400 validation errors to their server code', async () => {
     const { service } = makeService(() => ({
       status: 400,
-      body: { api_version: 'v1', error: { code: 'bad_request', message: 'name is required' } },
+      body: {
+        api_version: 'v1',
+        error: {
+          code: 'bad_request',
+          class: 'blocking',
+          title: 'Bad request',
+          summary: 'The request was not valid.',
+          remediation: { hint: 'Check the request details and try again.' },
+          diagnostics: 'name is required',
+        },
+      },
     }));
     await expect(service.createFeature({ ...input, name: 'x' })).rejects.toMatchObject({
-      safe: { code: 'bad_request' },
+      canonical: { code: 'bad_request', diagnostics: 'name is required' },
     });
   });
 
   it('fails closed on an unstructured error body without echoing it', async () => {
     const { service } = makeService(() => ({ status: 500, body: 'Bearer tok-leak-1 exploded' }));
     const err = await service.createFeature(input).catch((e: unknown) => e);
-    expect(err).toMatchObject({ safe: { code: 'E_HTTP_500' } });
-    expect(JSON.stringify((err as { safe: unknown }).safe)).not.toContain('tok-leak-1');
+    expect(err).toMatchObject({ canonical: { code: 'E_HTTP_REJECTED' } });
+    expect((err as { canonical?: { summary?: string } }).canonical?.summary).toContain('500');
+    expect(JSON.stringify((err as { canonical: unknown }).canonical)).not.toContain('tok-leak-1');
   });
 
   it('rejects malformed input before any request reaches the transport', async () => {
@@ -446,10 +473,10 @@ describe('FeatureService.createFeature', () => {
         repoKeys: ['r'],
         useCurrentBranch: false,
       }),
-    ).rejects.toMatchObject({ safe: { code: 'E_SCHEMA_MISMATCH' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_SCHEMA_MISMATCH' } });
     await expect(
       service.createFeature({ name: 'ok', description: '', repoKeys: [], useCurrentBranch: false }),
-    ).rejects.toMatchObject({ safe: { code: 'E_SCHEMA_MISMATCH' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_SCHEMA_MISMATCH' } });
     expect(calls).toHaveLength(0);
   });
 });
@@ -470,7 +497,7 @@ describe('FeatureService.dispatchSetup', () => {
     const { service, calls } = makeService(() => ({ status: 200, body: {} }));
     for (const bad of ['../other', 'id/with/slash', 'id?x=1', '']) {
       await expect(service.dispatchSetup(bad)).rejects.toMatchObject({
-        safe: { code: 'E_SCHEMA_MISMATCH' },
+        canonical: { code: 'E_SCHEMA_MISMATCH' },
       });
     }
     expect(calls).toHaveLength(0);
@@ -577,27 +604,49 @@ describe('FeatureService.dispatchAction', () => {
   });
 
   it.each([
-    [
-      'publish_remote_diverged',
-      'Review and reconcile the pull-request branch on GitHub, then refresh and retry.',
-    ],
-    [
-      'publish_remote_changed',
-      'Refresh the publish state and retry; Agentico did not overwrite the newer branch.',
-    ],
-  ])('provides a publish remedy for %s', async (code, remediation) => {
+    {
+      code: 'publish_remote_diverged',
+      title: 'Pull-request branch diverged',
+      summary: 'The pull-request branch contains remote work that is not in this workspace.',
+      hint: 'Review and reconcile the pull-request branch on the remote, then refresh and retry.',
+    },
+    {
+      code: 'publish_remote_changed',
+      title: 'Pull-request branch changed',
+      summary: 'The pull-request branch for "repo-a" changed while Agentico was publishing.',
+      hint: 'Refresh the publish state and retry; nothing was overwritten.',
+    },
+  ])('provides the catalog publish remedy for $code', async ({ code, title, summary, hint }) => {
     const { service } = makeService(() => ({
       status: 409,
-      body: { error: { code, message: 'publish rejected' } },
+      body: {
+        api_version: 'v1',
+        error: {
+          code,
+          class: 'blocking',
+          title,
+          summary,
+          remediation: { hint },
+          context: { repositories: [{ name: 'repo-a', branch: 'agentico/publish-rev-1' }] },
+        },
+      },
     }));
 
-    await expect(
-      service.dispatchAction({
+    const err = await service
+      .dispatchAction({
         featureId: 'abcd1234ef567890',
         action: 'publish',
         body: { source_revision: 'rev-1', repos: ['repo-a'] },
-      }),
-    ).rejects.toMatchObject({ safe: { code, remediation } });
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CanonicalErrorException);
+    const canonical = (err as CanonicalErrorException).canonical;
+    expect(canonical.code).toBe(code);
+    expect(canonical.remediation?.hint).toBe(hint);
+    expect(canonical.context?.repositories?.[0]).toEqual({
+      name: 'repo-a',
+      branch: 'agentico/publish-rev-1',
+    });
   });
 
   it('gives merge the same long request bound publish gets', async () => {
@@ -629,7 +678,7 @@ describe('FeatureService.dispatchAction', () => {
   it('retains the single-flight entry after a request timeout so no duplicate publish is issued', async () => {
     const request = vi.fn((path: string) => {
       if (path.endsWith('/actions/publish')) {
-        return Promise.reject(new SafeErrorException(requestTimeoutError()));
+        return Promise.reject(new CanonicalErrorException(requestTimeoutError()));
       }
       return Promise.resolve({ status: 200, body: detailBody() });
     });
@@ -641,12 +690,12 @@ describe('FeatureService.dispatchAction', () => {
     };
 
     await expect(service.dispatchAction(input)).rejects.toMatchObject({
-      safe: { code: 'E_REQUEST_TIMEOUT' },
+      canonical: { code: 'E_REQUEST_TIMEOUT' },
     });
     // A second click must not reach the server: the first publish is still
     // running there.
     await expect(service.dispatchAction(input)).rejects.toMatchObject({
-      safe: { code: 'E_REQUEST_TIMEOUT' },
+      canonical: { code: 'E_REQUEST_TIMEOUT' },
     });
     expect(request.mock.calls.filter(([path]) => path.endsWith('/actions/publish'))).toHaveLength(
       1,
@@ -656,7 +705,18 @@ describe('FeatureService.dispatchAction', () => {
   it('drops the single-flight entry after an ordinary rejection so a retry is possible', async () => {
     const request = vi.fn((path: string) =>
       path.endsWith('/actions/publish')
-        ? Promise.resolve({ status: 409, body: { error: { code: 'conflict', message: 'no' } } })
+        ? Promise.resolve({
+            status: 409,
+            body: {
+              api_version: 'v1',
+              error: {
+                code: 'conflict',
+                class: 'blocking',
+                title: 'Conflict',
+                summary: 'The request conflicts with the current state of the feature.',
+              },
+            },
+          })
         : Promise.resolve({ status: 200, body: detailBody() }),
     );
     const { service } = makeService(request as never);
@@ -741,7 +801,7 @@ describe('FeatureService.dispatchAction', () => {
     const { service, calls } = makeService(() => ({ status: 200, body: {} }));
     await expect(
       service.dispatchAction({ featureId: 'abcd1234ef567890', action: '../start' as never }),
-    ).rejects.toMatchObject({ safe: { code: 'E_SCHEMA_MISMATCH' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_SCHEMA_MISMATCH' } });
     expect(calls).toHaveLength(0);
   });
 });
@@ -773,6 +833,54 @@ describe('FeatureService.getFeature', () => {
       },
       { id: 'start', enabled: true, disabledReasons: [], inputs: [] },
     ]);
+  });
+
+  it('crosses a repository publish-failure record as the canonical error with redacted diagnostics', async () => {
+    const body = detailBody({
+      repo_status: [
+        {
+          name: 'repo-a',
+          publishable: true,
+          touched: true,
+          error: {
+            code: 'publish_pull_request_failed',
+            class: 'needs_action',
+            title: 'Pull-request creation failed',
+            summary: 'Creating the pull request for repository "repo-a" failed.',
+            remediation: { hint: 'Check GitHub access, then retry.', actions: ['publish'] },
+            context: {
+              repositories: [
+                { name: 'repo-a', branch: 'feature/search-revamp', remote_only_commits: 3 },
+              ],
+            },
+            diagnostics: 'POST /repos/org/repo-a/pulls: 502 (token=abc123) at /Users/dev/tmp',
+          },
+        },
+      ],
+    });
+    const { service } = makeService(() => ({ status: 200, body }));
+    const snapshot = await service.getFeature('abcd1234ef567890');
+    expect(FeatureSnapshotSchema.parse(snapshot)).toEqual(snapshot);
+    const repo = snapshot.repoStatus?.[0];
+    expect(repo).toBeDefined();
+    if (repo == null) return;
+    expect(Reflect.get(repo, 'lastError')).toBeUndefined();
+    expect(repo.error).toMatchObject({
+      code: 'publish_pull_request_failed',
+      class: 'needs_action',
+      title: 'Pull-request creation failed',
+      summary: 'Creating the pull request for repository "repo-a" failed.',
+      remediation: { hint: 'Check GitHub access, then retry.', actions: ['publish'] },
+    });
+    expect(repo.error?.context?.repositories?.[0]).toEqual({
+      name: 'repo-a',
+      branch: 'feature/search-revamp',
+      remote_only_commits: 3,
+    });
+    // Raw diagnostics cross IPC only through the same redaction as every
+    // other raw text the renderer receives.
+    expect(repo.error?.diagnostics).not.toContain('/Users/dev/tmp');
+    expect(repo.error?.diagnostics).toContain('[path]');
   });
 
   it('maps roadmap phase, total, iteration, and phase status from the active run detail', async () => {
@@ -884,19 +992,65 @@ describe('FeatureService.getFeature', () => {
     expect(snapshot.setup?.tasks[1]).toMatchObject({ label: 'kb:repo-a', attempt: 0 });
   });
 
-  it('redacts failure and task error text before it crosses the boundary', async () => {
-    const body = detailBody({
-      failure: { type: 'worktree_setup', message: 'Bearer tok-x failed' },
-    });
+  it('passes the canonical failure across IPC with only diagnostics redacted', async () => {
+    const canonical = {
+      code: 'worktree_setup_failed',
+      class: 'blocking',
+      title: 'Worktree setup failed',
+      summary: 'Setting up the worktree for repository "repo-a" failed.',
+      remediation: {
+        hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+        actions: ['setup'],
+      },
+      context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+      diagnostics: 'Bearer tok-x failed',
+    };
+    const body = detailBody({ failure: { ...canonical } });
     const feature = (body['feature'] ?? {}) as Record<string, unknown>;
     const run = (feature['active_run_detail'] ?? {}) as Record<string, unknown>;
     const setup = (run['setup'] ?? {}) as Record<string, unknown>;
     setup['status'] = 'failed';
-    setup['last_error'] = 'clone failed at /Users/someone/repo';
+    setup['tasks'] = {
+      'worktree:repo-a': {
+        key: 'worktree:repo-a',
+        kind: 'worktree',
+        label: 'Worktree: repo-a',
+        repo: 'repo-a',
+        status: 'failed',
+        branch: 'feature/search-revamp',
+        attempt: 1,
+        error: { ...canonical, diagnostics: 'clone failed at /Users/someone/repo' },
+      },
+    };
+    setup['task_order'] = ['worktree:repo-a'];
     const { service } = makeService(() => ({ status: 200, body }));
     const snapshot = await service.getFeature('abcd1234ef567890');
-    expect(snapshot.failure?.message).not.toContain('tok-x');
-    expect(snapshot.setup?.lastError).not.toContain('/Users/someone');
+    expect(snapshot.failure).toMatchObject({
+      code: 'worktree_setup_failed',
+      class: 'blocking',
+      title: 'Worktree setup failed',
+      summary: 'Setting up the worktree for repository "repo-a" failed.',
+      remediation: {
+        hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+        actions: ['setup'],
+      },
+      context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+    });
+    expect(snapshot.failure?.diagnostics).toBeDefined();
+    expect(snapshot.failure?.diagnostics).not.toContain('tok-x');
+    // The owning task's canonical object crosses IPC intact except
+    // diagnostics, which are redacted like every other raw text.
+    const taskError = snapshot.setup?.tasks[0]?.error;
+    expect(taskError).toMatchObject({
+      code: 'worktree_setup_failed',
+      class: 'blocking',
+      title: 'Worktree setup failed',
+      summary: 'Setting up the worktree for repository "repo-a" failed.',
+      remediation: { actions: ['setup'] },
+      context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+    });
+    expect(taskError?.diagnostics).toBeDefined();
+    expect(taskError?.diagnostics).not.toContain('/Users/someone');
   });
 
   it('omits the setup section rather than mislabel an unknown lifecycle value', async () => {
@@ -912,10 +1066,19 @@ describe('FeatureService.getFeature', () => {
   it('maps a 404 to the stable not_found code', async () => {
     const { service } = makeService(() => ({
       status: 404,
-      body: { api_version: 'v1', error: { code: 'not_found', message: 'feature not found' } },
+      body: {
+        api_version: 'v1',
+        error: {
+          code: 'not_found',
+          class: 'blocking',
+          title: 'Not found',
+          summary: 'Feature "abcd1234ef567890" was not found.',
+          remediation: { hint: 'Refresh the view to see the current state, then try again.' },
+        },
+      },
     }));
     await expect(service.getFeature('abcd1234ef567890')).rejects.toMatchObject({
-      safe: { code: 'not_found' },
+      canonical: { code: 'not_found' },
     });
   });
 });
@@ -943,8 +1106,9 @@ describe('FeatureService.listFeatures', () => {
         ],
       },
     }));
-    const features = await service.listFeatures();
-    expect(features).toEqual([
+    const list = await service.listFeatures();
+    expect(list.warnings).toEqual([]);
+    expect(list.features).toEqual([
       {
         id: 'abcd1234ef567890',
         name: 'Search revamp',
@@ -955,8 +1119,121 @@ describe('FeatureService.listFeatures', () => {
         activeRun: 1,
         runCount: 1,
         warnings: [],
+        errors: [],
       },
     ]);
+  });
+
+  it('maps owned errors into the strict renderer view with camelCase reference keys', async () => {
+    const { service } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        features: [
+          {
+            id: 'abcd1234ef567890',
+            name: 'Search revamp',
+            slug: 'search-revamp',
+            status: 'Failed',
+            current_phase: 'Implement',
+            active_run: 1,
+            run_count: 1,
+            repos: ['repo-a'],
+            created_at: '2026-07-14T10:00:00Z',
+            checkpoints: {},
+            progress: {},
+            errors: [
+              {
+                ref: {
+                  scope: 'run',
+                  code: 'iteration_budget_exhausted',
+                  feature_id: 'abcd1234ef567890',
+                },
+                error: {
+                  code: 'iteration_budget_exhausted',
+                  class: 'blocking',
+                  title: 'Iteration budget exhausted',
+                  summary: 'The Implement phase exhausted its iteration budget.',
+                },
+              },
+              {
+                ref: {
+                  scope: 'repository',
+                  code: 'publish_rebase_conflict',
+                  feature_id: 'abcd1234ef567890',
+                  repository: 'repo-a',
+                },
+                error: {
+                  code: 'publish_rebase_conflict',
+                  class: 'needs_action',
+                  title: 'Pull-rebase conflict',
+                  summary:
+                    'The pull rebase for repository "repo-a" conflicted with its target branch.',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    }));
+    const list = await service.listFeatures();
+    expect(list.features[0]?.errors).toHaveLength(2);
+    expect(list.features[0]?.errors[0]).toEqual({
+      ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'abcd1234ef567890' },
+      error: {
+        code: 'iteration_budget_exhausted',
+        class: 'blocking',
+        title: 'Iteration budget exhausted',
+        summary: 'The Implement phase exhausted its iteration budget.',
+      },
+    });
+    expect(list.features[0]?.errors[1]?.ref.repository).toBe('repo-a');
+    expect(() => FeaturesListResultSchema.parse(list)).not.toThrow();
+  });
+
+  it('maps canonical list-level and per-feature warnings with redaction', async () => {
+    const canonicalWarning = (diagnostics: string) => ({
+      code: 'effort_capability_drift',
+      class: 'warning',
+      title: 'Effort exceeds model capability',
+      summary: 'The configured effort level exceeds what the selected model supports.',
+      diagnostics,
+    });
+    const { service } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        features: [
+          {
+            id: 'abcd1234ef567890',
+            name: 'Search revamp',
+            slug: 'search-revamp',
+            status: 'Created',
+            current_phase: 'Plan',
+            active_run: 1,
+            run_count: 1,
+            repos: ['repo-a'],
+            created_at: '2026-07-14T10:00:00Z',
+            checkpoints: {},
+            progress: {},
+            warnings: [canonicalWarning('drift detected in /Users/alice/secret/worktree')],
+          },
+        ],
+        warnings: [canonicalWarning('feature file unreadable: bearer tok-live-secret123 rejected')],
+      },
+    }));
+    const list = await service.listFeatures();
+    expect(list.features[0]?.warnings).toHaveLength(1);
+    expect(list.features[0]?.warnings[0]).toMatchObject({
+      code: 'effort_capability_drift',
+      class: 'warning',
+      title: 'Effort exceeds model capability',
+      diagnostics: 'drift detected in [path]',
+    });
+    expect(list.warnings).toHaveLength(1);
+    expect(list.warnings[0]?.diagnostics).not.toContain('tok-live-secret123');
+    expect(list.warnings[0]?.diagnostics).toContain('[redacted]');
+    expect(() => FeaturesListResultSchema.parse(list)).not.toThrow();
   });
 
   it('carries the bounded history counters and the body-less diff flag', async () => {
@@ -991,8 +1268,7 @@ describe('FeatureService.listFeatures', () => {
                 closed_at: '2026-07-31T10:00:00Z',
                 cost: { total_usd: 1, by_phase: {} },
                 integration_state: 'merged',
-                attention: [],
-                cleanup_warnings: [],
+                warnings: [],
                 has_diff_summary: true,
               },
             ],
@@ -1002,7 +1278,7 @@ describe('FeatureService.listFeatures', () => {
         ],
       },
     }));
-    const [summary] = await service.listFeatures();
+    const [summary] = (await service.listFeatures()).features;
     expect(summary?.childHistoryTotal).toBe(12);
     expect(summary?.childHistoryTruncated).toBe(true);
     expect(summary?.childHistory?.[0]).toMatchObject({ hasDiffSummary: true });
@@ -1155,12 +1431,42 @@ describe('FeatureService relationship operations', () => {
       started_at: '2026-07-30T10:00:00Z',
       cost: { total_usd: 2.5, by_phase: { review: 2.5 } },
       integration_state: 'attention',
-      attention: [{ code: 'conflict', message: 'Resolve conflict', repo: 'repo-a' }],
-      cleanup_warnings: [],
+      attention: {
+        code: 'integration_merge_conflict',
+        class: 'needs_action',
+        title: 'Integration merge conflict',
+        summary: 'The merge candidate for repository "repo-a" conflicted on 1 file.',
+        remediation: {
+          hint: 'Resolve the conflict in the pass worktree and retry.',
+          actions: ['retry'],
+        },
+        context: {
+          repositories: [{ name: 'repo-a', branch: 'main', conflict_files: ['query.ts'] }],
+        },
+        diagnostics: 'repo-a: merge candidate conflict: [query.ts]',
+      },
+      warnings: [
+        {
+          code: 'cleanup_worktree_reset_failed',
+          class: 'warning',
+          title: 'Worktree reset failed',
+          summary: 'Resetting the disposable worktree for repository "repo-a" failed.',
+          diagnostics: 'reset failed under /Users/dev/repo-a/worktree',
+        },
+      ],
     };
     const { service } = makeService(() => ({
       status: 200,
       body: detailBody({
+        warnings: [
+          {
+            code: 'effort_capability_drift',
+            class: 'warning',
+            title: 'Effort exceeds model capability',
+            summary: 'The configured effort level exceeds what the selected model supports.',
+            diagnostics: 'drift detected in /Users/alice/secret/worktree',
+          },
+        ],
         active_child: relationship,
         child_history: [
           {
@@ -1188,14 +1494,26 @@ describe('FeatureService relationship operations', () => {
         ],
         transaction: {
           phase: 'attention',
-          attention: 'Integration needs recovery',
+          attention: {
+            code: 'integration_merge_conflict',
+            class: 'needs_action',
+            title: 'Integration merge conflict',
+            summary: 'The merge candidate for repository "repo-a" conflicted on 1 file.',
+            remediation: {
+              hint: 'Resolve the conflict in the pass worktree and retry.',
+              actions: ['retry'],
+            },
+            context: {
+              repositories: [{ name: 'repo-a', branch: 'main', conflict_files: ['query.ts'] }],
+            },
+            diagnostics: 'conflict in /Users/dev/repo-a while merging',
+          },
           entries: [
             {
               repo: 'repo-a',
               prep_state: 'prepared',
-              apply_state: 'conflict',
-              conflict_files: ['query.ts'],
-              dirty: [{ path: '/safe/repo-a', staged_total: 1 }],
+              apply_state: 'attention',
+              pending_sync: true,
             },
           ],
         },
@@ -1216,11 +1534,85 @@ describe('FeatureService relationship operations', () => {
       'Extract search core',
     ]);
     expect(snapshot.transaction?.entries?.[0]).toMatchObject({
-      applyState: 'conflict',
-      conflictFiles: ['query.ts'],
-      dirty: [{ path: '/safe/repo-a', stagedTotal: 1 }],
+      applyState: 'attention',
+      pendingSync: true,
+    });
+    // The canonical attention object crosses IPC on both the child
+    // transaction and the parent's active child, with diagnostics redacted.
+    expect(snapshot.transaction?.attention).toMatchObject({
+      code: 'integration_merge_conflict',
+      class: 'needs_action',
+      title: 'Integration merge conflict',
+      remediation: { actions: ['retry'] },
+      diagnostics: 'conflict in [path] while merging',
+    });
+    expect(snapshot.activeChild?.attention).toMatchObject({
+      code: 'integration_merge_conflict',
+      title: 'Integration merge conflict',
+      diagnostics: 'repo-a: merge candidate conflict: [query.ts]',
+    });
+    // The child's canonical warnings cross IPC with redacted diagnostics.
+    expect(snapshot.activeChild?.warnings[0]).toMatchObject({
+      code: 'cleanup_worktree_reset_failed',
+      class: 'warning',
+      diagnostics: 'reset failed under [path]',
+    });
+    expect(snapshot.childHistory?.[0]?.warnings[0]?.diagnostics).toBe('reset failed under [path]');
+    // The detail's canonical warnings cross IPC with redacted diagnostics.
+    expect(snapshot.warnings[0]).toMatchObject({
+      code: 'effort_capability_drift',
+      class: 'warning',
+      diagnostics: 'drift detected in [path]',
     });
     expect(() => FeatureSnapshotSchema.parse(snapshot)).not.toThrow();
+  });
+
+  it('maps owned errors on the detail snapshot with camelCase reference keys, defaulting to empty', async () => {
+    const errorsService = makeService(() => ({
+      status: 200,
+      body: detailBody({
+        errors: [
+          {
+            ref: {
+              scope: 'setup',
+              code: 'worktree_setup_failed',
+              feature_id: 'abcd1234ef567890',
+              task_key: 'worktree:repo-a',
+            },
+            error: {
+              code: 'worktree_setup_failed',
+              class: 'blocking',
+              title: 'Worktree setup failed',
+              summary: 'The worktree for repository "repo-a" could not be created.',
+            },
+          },
+        ],
+      }),
+    }));
+    const snapshot = await errorsService.service.getFeature('abcd1234ef567890');
+    expect(snapshot.errors).toHaveLength(1);
+    expect(snapshot.errors[0]).toEqual({
+      ref: {
+        scope: 'setup',
+        code: 'worktree_setup_failed',
+        featureId: 'abcd1234ef567890',
+        taskKey: 'worktree:repo-a',
+      },
+      error: {
+        code: 'worktree_setup_failed',
+        class: 'blocking',
+        title: 'Worktree setup failed',
+        summary: 'The worktree for repository "repo-a" could not be created.',
+      },
+    });
+    expect(() => FeatureSnapshotSchema.parse(snapshot)).not.toThrow();
+
+    // Absent on the wire, the field still crosses IPC as an empty list.
+    const bare = await makeService(() => ({ status: 200, body: detailBody() })).service.getFeature(
+      'abcd1234ef567890',
+    );
+    expect(bare.errors).toEqual([]);
+    expect(() => FeatureSnapshotSchema.parse(bare)).not.toThrow();
   });
 });
 

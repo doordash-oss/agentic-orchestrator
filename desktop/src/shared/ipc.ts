@@ -20,6 +20,9 @@ limitations under the License.
  * deliberately no generic invoke passthrough anywhere in the app.
  */
 import { z } from 'zod';
+import { CanonicalErrorSchema, type CanonicalError } from './api/parse';
+
+export type { CanonicalError, CanonicalErrorResponse } from './api/parse';
 
 export const ATTENTION_ALREADY_RESOLVED_NOTICE =
   'This item was already resolved. The inbox has been refreshed.';
@@ -162,37 +165,17 @@ export const IPC_EVENTS = {
   routeRequested: 'agentico:route:requested',
 } as const;
 
-// --- Safe error shape crossing the boundary --------------------------------
+// --- Error shapes crossing the boundary -------------------------------------
 
-export const SafeErrorSchema = z.strictObject({
-  code: z.string(),
-  message: z.string(),
-  remediation: z.string().optional(),
-  details: z
-    .strictObject({
-      dirtyWorktrees: z
-        .array(
-          z.strictObject({
-            repo: z.string().optional(),
-            path: z.string().optional(),
-            staged: z.array(z.string()).max(200).optional(),
-            unstaged: z.array(z.string()).max(200).optional(),
-            untracked: z.array(z.string()).max(200).optional(),
-            stagedTotal: z.number().int().nonnegative().optional(),
-            unstagedTotal: z.number().int().nonnegative().optional(),
-            untrackedTotal: z.number().int().nonnegative().optional(),
-          }),
-        )
-        .max(100)
-        .optional(),
-    })
-    .optional(),
-});
-
-/** Every invoke resolves to this envelope so failures stay typed. */
+/**
+ * Every invoke resolves to this envelope so failures stay typed. The error
+ * branch carries exactly one shape: the canonical error. Server-emitted
+ * canonical errors cross unchanged (the server catalog owns their text);
+ * main-process failures are built from the desktop-local E_ catalog.
+ */
 export const IpcEnvelopeSchema = z.discriminatedUnion('ok', [
   z.strictObject({ ok: z.literal(true), value: z.unknown() }),
-  z.strictObject({ ok: z.literal(false), error: SafeErrorSchema }),
+  z.strictObject({ ok: z.literal(false), error: CanonicalErrorSchema }),
 ]);
 
 export type IpcEnvelope = z.output<typeof IpcEnvelopeSchema>;
@@ -290,18 +273,6 @@ const connectionStateBase = {
 } as const;
 
 const connectionStage = <T extends ConnectionStage>(stage: T) => z.literal(stage);
-
-/** Renderer-safe, bounded diagnostics for failures of the app-owned child only. */
-export const ConnectionDiagnosticsSchema = z.strictObject({
-  commandContext: z.string().max(256),
-  logTail: z.array(z.string().max(512)).max(20),
-});
-export type ConnectionDiagnostics = z.output<typeof ConnectionDiagnosticsSchema>;
-
-const connectionFailureContext = {
-  ...connectionStateBase,
-  diagnostics: ConnectionDiagnosticsSchema.optional(),
-} as const;
 
 /** Startup progress before any server exists to own or attach to. */
 const ConnectionIdleStateSchema = z.strictObject({
@@ -426,41 +397,46 @@ export const ConnectionAwaitingServerChoiceStateSchema = z.strictObject({
   candidates: z.array(ServerChoiceCandidateSchema).min(2).max(MAX_SERVER_CHOICE_CANDIDATES),
 });
 
-/** Terminal failures always carry redacted diagnostics for the shell. */
+/**
+ * Terminal failures always carry a canonical error. For failures of the
+ * app-owned child, the canonical error's `diagnostics` string folds the
+ * bounded, redacted launch command context and log tail (last 20 lines,
+ * 512 chars per line) — assembled by the gateway where it scrubs them today.
+ */
 const ConnectionIncompatibleStateSchema = z.strictObject({
   status: z.literal('incompatible'),
   stage: connectionStage('connect'),
   ...connectionStateBase,
   ownership: ServerOwnershipSchema,
-  error: SafeErrorSchema,
+  error: CanonicalErrorSchema,
 });
 const ConnectionResourcesMissingStateSchema = z.strictObject({
   status: z.literal('resources-missing'),
   stage: connectionStage('connect'),
   ...connectionStateBase,
   ownership: ServerOwnershipSchema,
-  error: SafeErrorSchema,
+  error: CanonicalErrorSchema,
 });
 const ConnectionLaunchFailedStateSchema = z.strictObject({
   status: z.literal('launch-failed'),
   stage: z.enum(['connect', 'wait-health', 'authenticate']),
-  ...connectionFailureContext,
+  ...connectionStateBase,
   ownership: ServerOwnershipSchema,
-  error: SafeErrorSchema,
+  error: CanonicalErrorSchema,
 });
 const ConnectionCrashedStateSchema = z.strictObject({
   status: z.literal('crashed'),
   stage: connectionStage('connect'),
-  ...connectionFailureContext,
+  ...connectionStateBase,
   ownership: ServerOwnershipSchema,
-  error: SafeErrorSchema,
+  error: CanonicalErrorSchema,
 });
 const ConnectionUnexpectedErrorStateSchema = z.strictObject({
   status: z.literal('error'),
   stage: z.enum(['resolve-runtime', 'discover', 'connect', 'wait-health', 'authenticate']),
   ...connectionStateBase,
   ownership: ServerOwnershipSchema,
-  error: SafeErrorSchema,
+  error: CanonicalErrorSchema,
   /** Present when this failure interrupted a server switch. */
   switchContext: SwitchContextSchema.optional(),
 });
@@ -570,9 +546,9 @@ const RemoteServerAddKeySchema = z.string().regex(/^[0-9a-f]{32}$/);
 
 /**
  * Success outcomes of the add-server flow. All failures travel the standard
- * { ok: false, error: SafeError } envelope instead, so no failure variant
- * exists here. `duplicate-local` means the probed server IS a known local
- * server (matched on runtime identity); the UI can offer to switch to
+ * { ok: false, error: CanonicalError } envelope instead, so no failure
+ * variant exists here. `duplicate-local` means the probed server IS a known
+ * local server (matched on runtime identity); the UI can offer to switch to
  * `serverKey`. `session-only` means the OS keystore was unavailable: the
  * server connected but nothing was persisted and it will require a re-paste
  * next launch.
@@ -583,18 +559,6 @@ export const RemoteServerAddResultSchema = z.discriminatedUnion('status', [
   z.strictObject({ status: z.literal('session-only'), serverKey: RemoteServerAddKeySchema }),
 ]);
 export type RemoteServerAddResult = z.output<typeof RemoteServerAddResultSchema>;
-
-/**
- * Distinct lead-ins per failure class of the add-server flow, shared by the
- * Servers pane's inline error and the deep-link add's notification.
- */
-export function addServerErrorTitle(code: string): string {
-  if (code.startsWith('E_CONNECTION_STRING_')) return 'The connection string could not be parsed.';
-  if (code === 'E_REMOTE_UNREACHABLE') return 'The server could not be reached.';
-  if (code === 'E_REMOTE_INCOMPATIBLE') return 'The server is not compatible with this app.';
-  if (code === 'E_REMOTE_AUTH_REJECTED') return 'The token was rejected.';
-  return 'The server could not be added.';
-}
 
 // --- Remove-server flow / stored-token status --------------------------------
 // Removal is main-side orchestrated: the dedicated channel deletes the token
@@ -636,8 +600,12 @@ export function isConnectionErrorState(state: ConnectionState): state is Connect
 // --- Readiness (renderer-facing view of the authoritative server snapshot) ---
 // Strict by design: any foreign field — in particular anything token-shaped —
 // fails validation at the IPC boundary. The renderer never receives raw
-// server payloads; the main process maps them into this shape.
+// server payloads; the main process maps them into this shape. Readiness
+// issues are the canonical catalog-rendered error for their code: the strict
+// canonical schema accepts them and rejects the pre-canonical
+// `{code, message, remedy}` shape.
 
+/** The readiness issue codes the server catalog defines, for step mapping. */
 export const READINESS_ISSUE_CODES = [
   'missing_executable',
   'unsupported_version',
@@ -648,18 +616,11 @@ export const READINESS_ISSUE_CODES = [
   'invalid_repository',
 ] as const;
 
-export const ReadinessIssueCodeSchema = z.enum(READINESS_ISSUE_CODES);
-export type ReadinessIssueCode = z.output<typeof ReadinessIssueCodeSchema>;
+export type ReadinessIssueCode = (typeof READINESS_ISSUE_CODES)[number];
 
-export const ReadinessIssueSchema = z.strictObject({
-  code: ReadinessIssueCodeSchema,
-  /** Server-provided safe summary; never carries credentials. */
-  message: z.string(),
-  /** Safe remediation metadata, e.g. the provider CLI auth command. */
-  remedy: z.string().optional(),
-});
-
-export type ReadinessIssue = z.output<typeof ReadinessIssueSchema>;
+/** Canonical catalog-rendered readiness issue — the one error shape. */
+export const ReadinessIssueSchema = CanonicalErrorSchema;
+export type ReadinessIssue = CanonicalError;
 
 export const ProviderReadinessSchema = z.strictObject({
   name: z.string(),
@@ -798,34 +759,149 @@ export const SETTINGS_FOCUS = ['add-server'] as const;
 export const SettingsFocusSchema = z.enum(SETTINGS_FOCUS);
 export type SettingsFocus = z.output<typeof SettingsFocusSchema>;
 
-export const AppRouteEventSchema = z.strictObject({
-  target: z.enum([
-    'palette',
-    'help',
-    'home',
-    'settings',
-    'attention',
-    'ama',
-    'bulk',
-    'new-feature',
-    'toggle-sidebar',
-    'toggle-inspector',
-    // Carries a feature command's identity — never a feature id, so a menu
-    // click that raced a selection change cannot act on a stale target.
-    'feature-command',
-    // Selects the feature named by `featureId` in the sidebar.
-    'select-feature',
-    // Focuses and opens the footer server switcher (the single switcher UI).
-    'switch-server',
-  ]),
-  attentionId: z.string().min(1).max(500).optional(),
-  featureId: z.string().min(1).max(200).optional(),
-  settingsSection: SettingsSectionSchema.optional(),
-  /** Within-pane focus intent (e.g. the Servers pane's add-server form). */
-  settingsFocus: SettingsFocusSchema.optional(),
-  /** The `feature.*` command id a 'feature-command' route asks the renderer to run. */
-  command: z.string().min(1).max(64).optional(),
-});
+// --- Error references ---------------------------------------------------------
+// Mirrors the server's ErrorReference wire schema (camelCase here; the
+// main-process client re-serializes to snake_case): the durable home of an
+// error, picked by `scope` — the home an explain-in-chat question is about
+// and the owner reference an owned-error entry carries. The refine enforces
+// the same scope-key discipline the server handler enforces, so a reference
+// whose keys are missing for or foreign to its scope never reaches the wire.
+
+/** The keys each scope requires; `transaction` additionally allows repository. */
+const ERROR_REFERENCE_REQUIRED_KEYS = {
+  run: ['featureId'],
+  transaction: ['featureId'],
+  repository: ['featureId', 'repository'],
+  setup: ['featureId', 'taskKey'],
+  recovery: ['snapshotId', 'key'],
+} as const;
+
+/** The keys each scope rejects even when present and well-formed. */
+const ERROR_REFERENCE_FORBIDDEN_KEYS = {
+  run: ['repository', 'taskKey', 'snapshotId', 'key'],
+  transaction: ['taskKey', 'snapshotId', 'key'],
+  repository: ['taskKey', 'snapshotId', 'key'],
+  setup: ['repository', 'snapshotId', 'key'],
+  recovery: ['featureId', 'repository', 'taskKey'],
+} as const;
+
+export const ErrorReferenceSchema = z
+  .strictObject({
+    scope: z.enum(['run', 'transaction', 'repository', 'setup', 'recovery']),
+    code: z.string().min(1).max(128),
+    featureId: z.string().min(1).max(200).optional(),
+    repository: z.string().min(1).max(200).optional(),
+    taskKey: z.string().min(1).max(200).optional(),
+    snapshotId: z.string().min(1).max(128).optional(),
+    key: z.string().min(1).max(500).optional(),
+  })
+  .superRefine((reference, ctx) => {
+    for (const field of ERROR_REFERENCE_REQUIRED_KEYS[reference.scope]) {
+      if (reference[field] === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `A "${reference.scope}" error reference requires "${field}".`,
+        });
+      }
+    }
+    for (const field of ERROR_REFERENCE_FORBIDDEN_KEYS[reference.scope]) {
+      if (reference[field] !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `"${field}" does not belong to a "${reference.scope}" error reference.`,
+        });
+      }
+    }
+  });
+export type ErrorReference = z.output<typeof ErrorReferenceSchema>;
+
+/**
+ * One current non-warning error a feature (or its active child) owns, as
+ * projected on the feature summary: the catalog-rendered canonical error —
+ * which never carries diagnostics on this surface — plus the reference to
+ * its durable home. Warning-class entries fail validation: warnings never
+ * own a presence surface.
+ */
+export const OwnedErrorSchema = z
+  .strictObject({
+    ref: ErrorReferenceSchema,
+    error: CanonicalErrorSchema,
+  })
+  .superRefine((entry, ctx) => {
+    if (entry.error.class === 'warning') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['error', 'class'],
+        message: 'An owned error never carries the warning class.',
+      });
+    }
+  });
+export type OwnedError = z.output<typeof OwnedErrorSchema>;
+
+/**
+ * The single shared class-label constant: the label every surface renders
+ * for an error class — the ErrorSurface header, the lane and dashboard state
+ * labels, the cockpit status chip, the attention inbox's kind label, and the
+ * notification type label all read from here so one class always reads as
+ * one word.
+ */
+export const ERROR_CLASS_LABELS: Readonly<Record<CanonicalError['class'], string>> = {
+  blocking: 'Failed',
+  needs_action: 'Needs your action',
+  warning: 'Warning',
+};
+
+export const AppRouteEventSchema = z
+  .strictObject({
+    target: z.enum([
+      'palette',
+      'help',
+      'home',
+      'settings',
+      'attention',
+      'ama',
+      'bulk',
+      'new-feature',
+      'toggle-sidebar',
+      'toggle-inspector',
+      // Carries a feature command's identity — never a feature id, so a menu
+      // click that raced a selection change cannot act on a stale target.
+      'feature-command',
+      // Selects the feature named by `featureId` in the sidebar.
+      'select-feature',
+      // Focuses and opens the footer server switcher (the single switcher UI).
+      'switch-server',
+    ]),
+    attentionId: z.string().min(1).max(500).optional(),
+    featureId: z.string().min(1).max(200).optional(),
+    settingsSection: SettingsSectionSchema.optional(),
+    /** Within-pane focus intent (e.g. the Servers pane's add-server form). */
+    settingsFocus: SettingsFocusSchema.optional(),
+    /** The `feature.*` command id a 'feature-command' route asks the renderer to run. */
+    command: z.string().min(1).max(64).optional(),
+    /** Pre-filled AMA composer text; accepted only on an 'ama' route. */
+    draft: z.string().min(1).max(2000).optional(),
+    /** Submits `draft` directly with its own optimistic bubble; 'ama' routes only. */
+    autoSubmit: z.boolean().optional(),
+    /** Error-home reference the routed draft's turn carries; 'ama' routes only. */
+    chatContext: ErrorReferenceSchema.optional(),
+  })
+  .superRefine((event, ctx) => {
+    // The chat-draft fields are ama-target-only: any other route smuggling one
+    // fails closed at the preload boundary, exactly like a foreign field.
+    if (event.target === 'ama') return;
+    for (const field of ['draft', 'autoSubmit', 'chatContext'] as const) {
+      if (event[field] !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: 'Chat draft fields are only valid on an ama route.',
+        });
+      }
+    }
+  });
 
 export type AppRouteEvent = z.output<typeof AppRouteEventSchema>;
 
@@ -864,20 +940,42 @@ export const UpdateProgressSchema = z.strictObject({
 });
 export type UpdateProgress = z.output<typeof UpdateProgressSchema>;
 
-export const UpdateStateSchema = z.strictObject({
-  status: UpdateStatusSchema,
-  currentVersion: z.string().min(1).max(80),
-  targetVersion: z.string().min(1).max(80).optional(),
-  packageFormat: UpdatePackageFormatSchema,
-  signatureStatus: UpdateSignatureStatusSchema,
-  checkedAt: z.string().datetime().optional(),
-  nextCheckAt: z.string().datetime().optional(),
-  releaseNotesUrl: z.string().url().optional(),
-  message: z.string().max(500),
-  guidance: z.array(z.string().max(240)).max(6).optional(),
-  progress: UpdateProgressSchema.optional(),
-  activeWorkSummary: z.string().max(240).optional(),
-});
+export const UpdateStateSchema = z
+  .strictObject({
+    status: UpdateStatusSchema,
+    currentVersion: z.string().min(1).max(80),
+    targetVersion: z.string().min(1).max(80).optional(),
+    packageFormat: UpdatePackageFormatSchema,
+    signatureStatus: UpdateSignatureStatusSchema,
+    checkedAt: z.string().datetime().optional(),
+    nextCheckAt: z.string().datetime().optional(),
+    releaseNotesUrl: z.string().url().optional(),
+    message: z.string().max(500),
+    guidance: z.array(z.string().max(240)).max(6).optional(),
+    progress: UpdateProgressSchema.optional(),
+    activeWorkSummary: z.string().max(240).optional(),
+    // Present exactly when status is 'failed': the canonical error the
+    // coordinator authored from the desktop catalog for that failure.
+    error: CanonicalErrorSchema.optional(),
+  })
+  .superRefine((state, ctx) => {
+    const failed = state.status === 'failed';
+    const carriesError = state.error !== undefined;
+    if (failed && !carriesError) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['error'],
+        message: "a 'failed' update state must carry a canonical error",
+      });
+    }
+    if (!failed && carriesError) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['error'],
+        message: "only a 'failed' update state may carry a canonical error",
+      });
+    }
+  });
 export type UpdateState = z.output<typeof UpdateStateSchema>;
 
 export const UpdateInstallNowRequestSchema = z.strictObject({
@@ -1002,8 +1100,8 @@ export const SetupTaskViewSchema = z.strictObject({
   status: FeatureSetupStatusSchema,
   branch: z.string().optional(),
   attempt: z.number().int().nonnegative(),
-  /** Server-redacted safe failure summary. */
-  error: z.string().optional(),
+  /** Canonical error rendering the task's stored failure record, diagnostics redacted. */
+  error: CanonicalErrorSchema.optional(),
 });
 
 export type SetupTaskView = z.output<typeof SetupTaskViewSchema>;
@@ -1013,7 +1111,6 @@ export const FeatureSetupViewSchema = z.strictObject({
   attempt: z.number().int().nonnegative(),
   /** Tasks in the server-owned execution order. */
   tasks: z.array(SetupTaskViewSchema),
-  lastError: z.string().optional(),
 });
 
 export type FeatureSetupView = z.output<typeof FeatureSetupViewSchema>;
@@ -1060,41 +1157,27 @@ export const RelationshipChildViewSchema = z.strictObject({
   closedAt: z.string().optional(),
   cost: z.strictObject({ totalUsd: z.number(), byPhase: z.record(z.string(), z.number()) }),
   integrationState: z.string(),
-  attention: z.array(
-    z.strictObject({ code: z.string(), message: z.string(), repo: z.string().optional() }),
-  ),
-  cleanupWarnings: z.array(z.strictObject({ message: z.string(), repo: z.string().optional() })),
-  lastError: z.string().optional(),
+  /** Canonical integration-attention error; absent when integration is not parked. */
+  attention: CanonicalErrorSchema.optional(),
+  /** Canonical warning-class errors for this child's cleanup and review-feedback tails. */
+  warnings: z.array(CanonicalErrorSchema).max(100),
   diffSummary: z.string().optional(),
   /** A preserved diff exists even when `diffSummary` is absent from a list projection. */
   hasDiffSummary: z.boolean().optional(),
 });
 export type RelationshipChildView = z.output<typeof RelationshipChildViewSchema>;
 
-export const DirtyWorktreeViewSchema = z.strictObject({
-  repo: z.string().optional(),
-  path: z.string().optional(),
-  staged: z.array(z.string()).max(200).optional(),
-  unstaged: z.array(z.string()).max(200).optional(),
-  untracked: z.array(z.string()).max(200).optional(),
-  stagedTotal: z.number().int().nonnegative().optional(),
-  unstagedTotal: z.number().int().nonnegative().optional(),
-  untrackedTotal: z.number().int().nonnegative().optional(),
-});
-
 export const RelationshipTransactionViewSchema = z.strictObject({
   phase: z.string().optional(),
-  attention: z.string().optional(),
+  /** Canonical error rendering the journal's single stored attention record. */
+  attention: CanonicalErrorSchema.optional(),
   entries: z
     .array(
       z.strictObject({
         repo: z.string().optional(),
         prepState: z.string().optional(),
         applyState: z.string().optional(),
-        conflictFiles: z.array(z.string()).max(200).optional(),
-        dirty: z.array(DirtyWorktreeViewSchema).max(100).optional(),
-        cleanupWarning: z.string().optional(),
-        diagnostics: z.string().optional(),
+        pendingSync: z.boolean().optional(),
       }),
     )
     .max(100)
@@ -1112,7 +1195,10 @@ export const FeatureSummaryViewSchema = z.strictObject({
   activeRun: z.number().int().nonnegative(),
   runCount: z.number().int().nonnegative(),
   phaseStatus: z.string().optional(),
-  warnings: z.array(z.strictObject({ code: z.string(), message: z.string() })).max(100),
+  /** Canonical warning-class errors for this feature, diagnostics redacted. */
+  warnings: z.array(CanonicalErrorSchema).max(100),
+  /** Current non-warning errors this feature or its active child owns; each entry carries its durable-home reference and never diagnostics. */
+  errors: z.array(OwnedErrorSchema).max(100),
   activeChild: RelationshipChildViewSchema.optional(),
   childHistory: z.array(RelationshipChildViewSchema).max(1000).optional(),
   /** Closed-child count before the list projection's cap. */
@@ -1122,6 +1208,16 @@ export const FeatureSummaryViewSchema = z.strictObject({
 
 export type FeatureSummaryView = z.output<typeof FeatureSummaryViewSchema>;
 
+/**
+ * The featuresList channel result: per-feature summaries plus list-level
+ * canonical warnings for feature files the server could not load.
+ */
+export const FeaturesListResultSchema = z.strictObject({
+  features: z.array(FeatureSummaryViewSchema).max(500),
+  warnings: z.array(CanonicalErrorSchema).max(100),
+});
+export type FeaturesListResult = z.output<typeof FeaturesListResultSchema>;
+
 /** Per-repository operational status from the server feature detail. */
 export const RepoStatusViewSchema = z.strictObject({
   name: z.string(),
@@ -1129,7 +1225,8 @@ export const RepoStatusViewSchema = z.strictObject({
   touched: z.boolean().optional(),
   prUrl: z.string().optional(),
   freshness: z.string().optional(),
-  lastError: z.string().optional(),
+  /** Canonical error rendering the repository's stored publish-failure record; absent when it has not failed. */
+  error: CanonicalErrorSchema.optional(),
   rebaseStatus: z.string().optional(),
   rebaseTarget: z.string().optional(),
   conflictFiles: z.array(z.string()).max(200).optional(),
@@ -1206,6 +1303,10 @@ export const FeatureSnapshotSchema = z.strictObject({
   /** Mid-flight phase status from the server ("implementing" | "reviewing"). */
   phaseStatus: z.string().optional(),
   setup: FeatureSetupViewSchema.optional(),
+  /** Canonical warning-class errors for this feature, diagnostics redacted. */
+  warnings: z.array(CanonicalErrorSchema).max(100),
+  /** Current non-warning errors this feature or its active child owns; each entry carries its durable-home reference and never diagnostics. */
+  errors: z.array(OwnedErrorSchema).max(100),
   /** The authoritative server action catalogue (setup/start/…). */
   actions: z.array(FeatureActionViewSchema),
   activeChild: RelationshipChildViewSchema.optional(),
@@ -1233,9 +1334,8 @@ export const FeatureSnapshotSchema = z.strictObject({
   verificationItems: z.array(VerificationItemViewSchema).optional(),
   /** Aggregate run time across the feature's runs, for the queue readout. */
   timing: z.strictObject({ totalSeconds: z.number().int().nonnegative() }).optional(),
-  failure: z
-    .strictObject({ type: z.string().optional(), message: z.string().optional() })
-    .optional(),
+  /** The durable run failure: the canonical catalog-rendered error object, diagnostics redacted. */
+  failure: CanonicalErrorSchema.optional(),
 });
 
 export type FeatureSnapshot = z.output<typeof FeatureSnapshotSchema>;
@@ -1248,6 +1348,7 @@ export const FeatureOperationalActionSchema = z.enum([
   'resume',
   'retry',
   'restart',
+  'setup',
   'publish',
   'merge',
   'mark-done',
@@ -1262,7 +1363,7 @@ const CompletionRepoNameSchema = z.string().min(1).max(128);
 export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
   z.strictObject({
     featureId: FeatureIdSchema,
-    action: z.enum(['start', 'pause-stop', 'rewind', 'resume', 'retry']),
+    action: z.enum(['start', 'pause-stop', 'rewind', 'resume', 'retry', 'setup']),
   }),
   z.strictObject({
     featureId: FeatureIdSchema,
@@ -1325,6 +1426,7 @@ const _featureActionCatalogueSubset: {
   resume: z.never(),
   retry: z.never(),
   restart: z.never(),
+  setup: z.never(),
   publish: z.never(),
   merge: z.never(),
   'mark-done': z.never(),
@@ -1341,7 +1443,8 @@ export const FeatureActionResultSchema = z.strictObject({
   sessionIds: z.array(z.string().min(1).max(200)).max(100),
   sourceRunNumber: z.number().int().nonnegative().optional(),
   newRunNumber: z.number().int().nonnegative().optional(),
-  warnings: z.array(z.string().max(500)).max(100).optional(),
+  /** Canonical warning-class errors from the action, diagnostics redacted. */
+  warnings: z.array(CanonicalErrorSchema).max(100).optional(),
 });
 export type FeatureActionResult = z.output<typeof FeatureActionResultSchema>;
 
@@ -1373,7 +1476,8 @@ export const CompletionPreflightRepoSchema = z.strictObject({
   prUrl: z.string().max(2000).optional(),
   blocker: z.string().max(500).optional(),
   freshness: z.string().max(50).optional(),
-  lastError: z.string().max(500).optional(),
+  /** Canonical error rendering the repository's stored publish-failure record; absent when it has not failed. */
+  error: CanonicalErrorSchema.optional(),
   baseBranch: z.string().max(128).optional(),
   branch: z.string().max(128).optional(),
   pendingCommits: z.number().int().min(0).max(100000).optional(),
@@ -1421,7 +1525,8 @@ export const RepositoryDiffResultSchema = z.strictObject({
   fileTruncated: z.boolean().optional(),
   fileBinary: z.boolean().optional(),
   fileUnavailable: z.boolean().optional(),
-  partialFailure: z.string().max(500).optional(),
+  /** Canonical warning-class error for the typed partial inspection failure; absent when fully inspected. */
+  error: CanonicalErrorSchema.optional(),
 });
 export type RepositoryDiffResult = z.output<typeof RepositoryDiffResultSchema>;
 
@@ -1603,6 +1708,8 @@ export const RecoveryItemViewSchema = z.strictObject({
   iteration: z.number().int().nonnegative().optional(),
   pid: z.number().int().optional(),
   processAlive: z.boolean(),
+  /** Canonical needs_action error classifying this orphan session by liveness. */
+  error: CanonicalErrorSchema,
   logAvailable: z.boolean().optional(),
   allowedActions: z.array(z.string().max(50)).max(20),
   defaultAction: z.string().max(50),
@@ -1982,6 +2089,27 @@ export const AttentionRecoverySchema = z.strictObject({
   liveCount: z.number().int().nonnegative(),
   deadCount: z.number().int().nonnegative(),
 });
+/**
+ * One owned error from the feature summary's projection, as an attention
+ * item: the reference resolves back to the durable home, the class drives
+ * the row's kind label, and the title is the catalog title. Warning-class
+ * errors never become items.
+ */
+export const AttentionErrorSchema = z.strictObject({
+  kind: z.literal('error'),
+  id: z.string().min(1).max(1000),
+  /** The referenced feature — the child for child-scoped entries. */
+  featureId: FeatureIdSchema,
+  /** Set when the referenced feature is the listed parent's active child: the parent tab owns the row. */
+  parentFeatureId: FeatureIdSchema.optional(),
+  waitingSince: z.string().max(100),
+  /** The owner reference resolving back to the durable home. */
+  ref: ErrorReferenceSchema,
+  class: z.enum(['blocking', 'needs_action']),
+  code: z.string().min(1).max(128),
+  title: AttentionTextSchema,
+});
+export type AttentionError = z.output<typeof AttentionErrorSchema>;
 export const AttentionItemSchema = z.discriminatedUnion('kind', [
   AttentionPermissionSchema,
   AttentionQuestionBundleSchema,
@@ -1989,6 +2117,7 @@ export const AttentionItemSchema = z.discriminatedUnion('kind', [
   AttentionGateSchema,
   AttentionReviewSchema,
   AttentionRecoverySchema,
+  AttentionErrorSchema,
 ]);
 export type AttentionItem = z.output<typeof AttentionItemSchema>;
 
@@ -2090,6 +2219,8 @@ export const ChatStartRequestSchema = z.strictObject({
   images: z.array(AbsolutePathSchema).max(12).optional(),
   /** Server-staged image upload references (remote connections; images only). */
   imageUploads: z.array(UploadReferenceSchema).max(12).optional(),
+  /** Error-home reference the server resolves into hidden turn context. */
+  context: ErrorReferenceSchema.optional(),
 });
 export type ChatStartRequest = z.output<typeof ChatStartRequestSchema>;
 
@@ -2263,7 +2394,6 @@ export const SessionDetailSchema = SessionSummarySchema.extend({
   initialPrompt: OptionalBoundedTextSchema,
   canAttach: z.boolean(),
   logAvailable: z.boolean(),
-  safeError: OptionalBoundedTextSchema,
 });
 export type SessionDetail = z.output<typeof SessionDetailSchema>;
 
@@ -2321,7 +2451,7 @@ export const SessionOutputEventSchema = z.discriminatedUnion('type', [
     subscriptionId: SubscriptionIdSchema,
     type: z.literal('error'),
     sessionId: SessionIdSchema,
-    error: SafeErrorSchema,
+    error: CanonicalErrorSchema,
   }),
 ]);
 export type SessionOutputEvent = z.output<typeof SessionOutputEventSchema>;
@@ -2518,7 +2648,7 @@ export const UploadedCreationFileSchema = z.strictObject({
 export const FailedCreationFileUploadSchema = z.strictObject({
   ok: z.literal(false),
   name: z.string().max(255),
-  error: SafeErrorSchema,
+  error: CanonicalErrorSchema,
 });
 export const CreationFileUploadResultSchema = z.union([
   UploadedCreationFileSchema,
@@ -3197,8 +3327,6 @@ export const ReviewValidationSchema = z.strictObject({
 export type ReviewValidation = z.output<typeof ReviewValidationSchema>;
 export const ReviewConflictSchema = z.strictObject({
   type: z.literal('conflict'),
-  expectedRevision: DraftRevisionSchema,
-  currentRevision: DraftRevisionSchema,
 });
 export const ReviewSaveResultSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('saved'), session: ReviewSessionSchema }),
@@ -3433,7 +3561,7 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   },
   [IPC_CHANNELS.featuresList]: {
     request: z.tuple([]),
-    response: z.array(FeatureSummaryViewSchema),
+    response: FeaturesListResultSchema,
   },
   [IPC_CHANNELS.featuresGet]: {
     request: z.tuple([FeatureIdSchema]),
@@ -3767,7 +3895,7 @@ export interface AgenticoApi {
   /**
    * Adds a remote server from a pasted connection string: parses, probes,
    * guards against local duplicates, verifies the token, and persists. All
-   * failures arrive as thrown SafeError envelopes; the pasted string is never
+   * failures arrive as thrown canonical errors; the pasted string is never
    * echoed back.
    */
   addRemoteServer(request: RemoteServerAddRequest): Promise<RemoteServerAddResult>;
@@ -3796,7 +3924,7 @@ export interface AgenticoApi {
   reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot>;
   initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
   listRepositories(): Promise<RepositoryState[]>;
-  listFeatures(): Promise<FeatureSummaryView[]>;
+  listFeatures(): Promise<FeaturesListResult>;
   getFeature(featureId: string): Promise<FeatureSnapshot>;
   createFeature(input: CreateFeatureInput): Promise<CreateFeatureResult>;
   dispatchFeatureSetup(featureId: string): Promise<SetupDispatchResult>;

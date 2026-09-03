@@ -17,6 +17,7 @@ package orchestrator
 import (
 	"path/filepath"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
@@ -207,7 +208,7 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 			sc := observe.SpanContextForFeature(featureID, f.TraceID, f.Name, f.FeatureSpanID).WithRun(f.ActiveRun)
 			obs.FeatureCompleted(sc, f.TotalCost(), f.TotalRuntime())
 		},
-		OnFeatureFailed: func(featureID string, failureType, errorMsg string) {
+		OnFeatureFailed: func(featureID string, code errcat.Code, class errcat.Class, diagnostics string) {
 			if obs == nil {
 				return
 			}
@@ -215,7 +216,7 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 			if !ok {
 				return
 			}
-			obs.FeatureFailed(sc, failureType, errorMsg)
+			obs.FeatureFailed(sc, string(code), string(class), diagnostics)
 		},
 		OnReviewRequired: func(featureID string, phase feature.Phase) {
 			if obs == nil {
@@ -245,7 +246,23 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 			if !ok {
 				return
 			}
-			obs.PhaseCompleted(sc, feature.PhasePublish.String(), 0, err)
+			if err == nil {
+				obs.PhaseCompleted(sc, feature.PhasePublish.String(), 0, nil)
+				return
+			}
+			// A repository publish failure carries its canonical identity: the
+			// first failed repository's stored record renders through the catalog
+			// and its code and class travel as plain strings in the event data.
+			errorCode, errorClass := "", ""
+			if fs != nil {
+				if f, loadErr := fs.Load(featureID); loadErr == nil {
+					if rendered, failed := firstFailedRepoError(f); failed {
+						errorCode = string(rendered.Code)
+						errorClass = string(rendered.Class)
+					}
+				}
+			}
+			obs.PhaseCompleted(sc, feature.PhasePublish.String(), 0, err, errorCode, errorClass)
 		},
 		OnFeatureSummaryNeeded: func(featureID string, f *feature.Feature) {
 			if obs == nil || summaryBaseDir == "" {
@@ -271,7 +288,7 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 				// unified flow, not per-repo.
 				status := "untouched"
 				switch {
-				case rs.LastError != "":
+				case rs.Error != nil:
 					status = "failed"
 				case rs.PRURL != "":
 					status = "published"
@@ -282,16 +299,21 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 					Status:    status,
 					Iteration: 0,
 					PRURL:     rs.PRURL,
-					LastError: rs.LastError,
 				}
+			}
+			errorCode, errorClass := "", ""
+			if rec := f.FailureRecord(); rec != nil {
+				rendered := errcat.RenderRecord(*rec)
+				errorCode = string(rendered.Code)
+				errorClass = string(rendered.Class)
 			}
 			input := observe.BuildFeatureSummaryInput(
 				f.ID,
 				filepath.Join(summaryBaseDir, f.ID),
 				f.Name,
 				f.Status.String(),
-				f.FailureType,
-				f.LastError,
+				errorCode,
+				errorClass,
 				f.CurrentRoadmapPhase,
 				f.TotalRoadmapPhases,
 				f.PhaseTimings,

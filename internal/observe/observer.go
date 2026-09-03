@@ -171,16 +171,27 @@ func (o *Observer) PhaseStarted(sc SpanContext, phase string) {
 	o.otel.StartSpan(sc, "phase."+phase, addRunNumber(sc, map[string]string{"phase": phase}))
 }
 
-// PhaseCompleted emits a phase.completed event.
-func (o *Observer) PhaseCompleted(sc SpanContext, phase string, duration time.Duration, err error) {
+// PhaseCompleted emits a phase.completed event, or a phase.failed event
+// when err is non-nil. errorCode and errorClass optionally carry the failing
+// phase's canonical identity as plain strings in the event's data map,
+// alongside the raw error text.
+func (o *Observer) PhaseCompleted(sc SpanContext, phase string, duration time.Duration, err error, errorIdentity ...string) {
 	if o == nil || !o.enabled {
 		return
 	}
 	status := "completed"
 	errStr := ""
+	var data map[string]any
 	if err != nil {
 		status = "failed"
 		errStr = err.Error()
+		data = map[string]any{}
+		if len(errorIdentity) > 0 && errorIdentity[0] != "" {
+			data["error_code"] = errorIdentity[0]
+		}
+		if len(errorIdentity) > 1 && errorIdentity[1] != "" {
+			data["error_class"] = errorIdentity[1]
+		}
 	}
 	evt := Event{
 		Timestamp:    time.Now(),
@@ -193,6 +204,7 @@ func (o *Observer) PhaseCompleted(sc SpanContext, phase string, duration time.Du
 		FeatureID:    sc.FeatureID,
 		DurationMs:   duration.Milliseconds(),
 		Error:        errStr,
+		Data:         data,
 	}
 	o.emit(sc, evt)
 	o.activePhaseSpans.Delete(sc.FeatureID)
@@ -500,8 +512,10 @@ func (o *Observer) FeatureCompleted(sc SpanContext, totalCost float64, totalDura
 	})
 }
 
-// FeatureFailed emits a feature.failed event.
-func (o *Observer) FeatureFailed(sc SpanContext, failureType, errorMsg string) {
+// FeatureFailed emits a feature.failed event. errorCode and errorClass are
+// the run's canonical failure code and class; diagnostics stay in the event's
+// error field.
+func (o *Observer) FeatureFailed(sc SpanContext, errorCode, errorClass, diagnostics string) {
 	if o == nil || !o.enabled {
 		return
 	}
@@ -512,14 +526,16 @@ func (o *Observer) FeatureFailed(sc SpanContext, failureType, errorMsg string) {
 		ParentSpanID: sc.ParentSpanID,
 		EventType:    "feature.failed",
 		FeatureID:    sc.FeatureID,
-		Error:        errorMsg,
+		Error:        diagnostics,
 		Data: map[string]any{
-			"failure_type": failureType,
+			"error_code":  errorCode,
+			"error_class": errorClass,
 		},
 	})
 	o.otel.EndSpan(sc.SpanID, "failed", map[string]string{
-		"failure_type": failureType,
-		"error":        errorMsg,
+		"error_code":  errorCode,
+		"error_class": errorClass,
+		"error":       diagnostics,
 	})
 }
 
@@ -563,6 +579,15 @@ func (o *Observer) SetupLifecycle(sc SpanContext, ev feature.SetupEvent) {
 	}
 	if ev.Error != "" {
 		data["error"] = ev.Error
+	}
+	// A failed setup event carries the owning task's stored record; its
+	// catalog code and class travel as plain strings in the data map,
+	// alongside the raw error text, exactly as feature.failed does.
+	if ev.Failure != nil {
+		data["error_code"] = string(ev.Failure.Code)
+		if class := ev.FailureClass(); class != "" {
+			data["error_class"] = class
+		}
 	}
 	o.emit(sc, Event{
 		Timestamp:    time.Now(),

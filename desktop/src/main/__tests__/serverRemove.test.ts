@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 import { describe, expect, it, vi } from 'vitest';
-import { SafeErrorException } from '../../shared/errors';
+import { CanonicalErrorException } from '../../shared/errors';
 import {
   applyServersPatch,
   type ConnectionState,
@@ -146,8 +146,8 @@ describe('removeKnownServer', () => {
 
     const error = await harness.run('e'.repeat(32)).catch((err: unknown) => err);
 
-    expect(error).toBeInstanceOf(SafeErrorException);
-    expect((error as SafeErrorException).safe.code).toBe(E_SERVER_UNKNOWN);
+    expect(error).toBeInstanceOf(CanonicalErrorException);
+    expect((error as CanonicalErrorException).canonical.code).toBe(E_SERVER_UNKNOWN);
     expect(harness.removedTokens).toEqual([]);
     expect(harness.disconnectCalls).toEqual([]);
     expect(harness.prefs.known).toHaveLength(1);
@@ -200,7 +200,7 @@ describe('serverTokenStatus', () => {
 
   it('an unknown key throws E_SERVER_UNKNOWN', () => {
     expect(() => tokenStatusHarness({ status: 'absent' }, null).run(REMOTE_KEY)).toThrowError(
-      SafeErrorException,
+      CanonicalErrorException,
     );
   });
 });

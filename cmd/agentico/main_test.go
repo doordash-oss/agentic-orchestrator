@@ -31,11 +31,20 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	opencode "github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
+
+// warningText renders one structured startup warning exactly as stderr sees
+// it, for substring assertions.
+func warningText(w startupWarning) string {
+	var buf bytes.Buffer
+	w.render(&buf)
+	return buf.String()
+}
 
 // Test-fixture literals reused across several cases in this file.
 const (
@@ -168,8 +177,12 @@ func TestDiscoverProviderCatalogsSetsCatalogAndWarnsOnFailure(t *testing.T) {
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %v, want one warning", warnings)
 	}
-	if !strings.Contains(warnings[0], "failure") || !strings.Contains(warnings[0], "catalog unavailable") {
-		t.Fatalf("warning = %q, want provider name and error", warnings[0])
+	if warnings[0].code != errcat.ModelCatalogDegraded {
+		t.Fatalf("warning code = %q, want model_catalog_degraded", warnings[0].code)
+	}
+	text := warningText(warnings[0])
+	if !strings.Contains(text, "failure") || !strings.Contains(text, "catalog unavailable") {
+		t.Fatalf("warning = %q, want provider name and error", text)
 	}
 }
 
@@ -224,7 +237,7 @@ func TestDiscoverProviderCatalogsRunsProvidersConcurrently(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	done := make(chan []string, 1)
+	done := make(chan []startupWarning, 1)
 	go func() {
 		done <- discoverProviderCatalogs(ctx, []llm.LLMProvider{first, second}, "", nil, false)
 	}()
@@ -353,7 +366,7 @@ func TestDiscoverProviderCatalogsRefreshesCorruptVersionedCache(t *testing.T) {
 	}
 
 	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil, false)
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "ignoring cached corrupt model catalog") {
+	if len(warnings) != 1 || !strings.Contains(warningText(warnings[0]), "ignoring cached model catalog") {
 		t.Fatalf("warnings = %v, want corrupt cache warning", warnings)
 	}
 	if p.discoveries != 1 {
@@ -420,10 +433,11 @@ func TestDiscoverProviderCatalogsRefreshModelsUsesStaleCacheOnFailure(t *testing
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %v, want one stale-cache warning", warnings)
 	}
-	if !strings.Contains(warnings[0], "could not refresh stale model catalog") ||
-		!strings.Contains(warnings[0], "using stale cache") ||
-		!strings.Contains(warnings[0], "network down") {
-		t.Fatalf("warning = %q, want refresh failure + stale cache detail", warnings[0])
+	staleText := warningText(warnings[0])
+	if !strings.Contains(staleText, "could not refresh model catalog") ||
+		!strings.Contains(staleText, "using stale cache") ||
+		!strings.Contains(staleText, "network down") {
+		t.Fatalf("warning = %q, want refresh failure + stale cache detail", staleText)
 	}
 	if p.discoveries != 1 {
 		t.Fatalf("discovery calls = %d, want 1", p.discoveries)
@@ -450,10 +464,11 @@ func TestDiscoverProviderCatalogsRefreshModelsUsesStaleCacheOnEmptyCatalog(t *te
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %v, want one stale-cache warning", warnings)
 	}
-	if !strings.Contains(warnings[0], "could not refresh empty model catalog") ||
-		!strings.Contains(warnings[0], "discovered empty catalog") ||
-		!strings.Contains(warnings[0], "using stale cache") {
-		t.Fatalf("warning = %q, want empty refresh + stale cache detail", warnings[0])
+	emptyText := warningText(warnings[0])
+	if !strings.Contains(emptyText, "could not refresh model catalog") ||
+		!strings.Contains(emptyText, "discovered empty catalog") ||
+		!strings.Contains(emptyText, "using stale cache") {
+		t.Fatalf("warning = %q, want empty refresh + stale cache detail", emptyText)
 	}
 	if p.discoveries != 1 {
 		t.Fatalf("discovery calls = %d, want 1", p.discoveries)
@@ -475,10 +490,11 @@ func TestDiscoverProviderCatalogsRefreshModelsUsesBuiltinFallbackOnFailureWithou
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %v, want one built-in fallback warning", warnings)
 	}
-	if !strings.Contains(warnings[0], "could not discover uncached model catalog") ||
-		!strings.Contains(warnings[0], "using built-in fallback") ||
-		!strings.Contains(warnings[0], "network down") {
-		t.Fatalf("warning = %q, want refresh failure + built-in fallback detail", warnings[0])
+	fallbackText := warningText(warnings[0])
+	if !strings.Contains(fallbackText, "could not discover model catalog") ||
+		!strings.Contains(fallbackText, "using built-in fallback") ||
+		!strings.Contains(fallbackText, "network down") {
+		t.Fatalf("warning = %q, want refresh failure + built-in fallback detail", fallbackText)
 	}
 	if p.discoveries != 1 {
 		t.Fatalf("discovery calls = %d, want 1", p.discoveries)
@@ -628,7 +644,7 @@ func TestDiscoverProviderCatalogs_RejectsUnparseableVersionWithoutLeak(t *testin
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %v, want exactly one unrecognized-version warning", warnings)
 	}
-	assertDiagnosticClean(t, "startup warning", warnings[0])
+	assertDiagnosticClean(t, "startup warning", warnings[0].diagnostics)
 	assertNoCacheLeak(t, cacheRoot)
 }
 
@@ -806,8 +822,12 @@ func TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure(t *testing
 
 	p := opencode.NewWithRunner(runner)
 	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, t.TempDir(), nil, false)
-	if len(warnings) != 1 || !strings.Contains(warnings[0], providerNameOpencode) || !strings.Contains(warnings[0], "built-in fallback") {
+	if len(warnings) != 1 {
 		t.Fatalf("warnings = %v, want one opencode built-in-fallback warning", warnings)
+	}
+	fallbackText := warningText(warnings[0])
+	if !strings.Contains(fallbackText, providerNameOpencode) || !strings.Contains(fallbackText, "built-in fallback") {
+		t.Fatalf("warning = %q, want one opencode built-in-fallback warning", fallbackText)
 	}
 
 	// Despite the discovery failure, the provider degrades to its curated
@@ -903,7 +923,7 @@ func TestRunArgsLaunchesDesktopByDefault(t *testing.T) {
 	}
 }
 
-func TestRunArgsDesktopFailurePrintsInstallAndHeadlessGuidance(t *testing.T) {
+func TestRunArgsDesktopFailureRendersDesktopLaunchFailed(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runArgsWithDesktop(
 		nil,
@@ -916,9 +936,16 @@ func TestRunArgsDesktopFailurePrintsInstallAndHeadlessGuidance(t *testing.T) {
 	if code != 1 {
 		t.Errorf("runArgs() code = %d, want 1", code)
 	}
-	for _, want := range []string{"application is not registered", "signed Agentico desktop package", "agentico server"} {
+	lines := strings.Split(strings.TrimSuffix(stderr.String(), "\n"), "\n")
+	if len(lines) == 0 || lines[0] != "error[desktop_launch_failed]: Desktop launch failed" {
+		t.Fatalf("stderr first line = %q, want the desktop launch failure heading:\n%s", lines, stderr.String())
+	}
+	for _, want := range []string{
+		"  hint: Install the signed Agentico desktop package from GitHub Releases, or run 'agentico server' for headless automation.",
+		"  detail: application is not registered",
+	} {
 		if !strings.Contains(stderr.String(), want) {
-			t.Errorf("stderr = %q, want %q", stderr.String(), want)
+			t.Errorf("stderr missing %q\nfull:\n%s", want, stderr.String())
 		}
 	}
 	if stdout.Len() != 0 {
@@ -956,8 +983,11 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 	if !gotDangerouslySkipPerms {
 		t.Error("dangerouslySkipPerms = false, want true")
 	}
-	if !slices.Equal(gotProviders, []string{providerNameCodex, " claude"}) {
-		t.Errorf("enabledProviders = %v, want raw CSV split", gotProviders)
+	// Provider names are validated and trimmed ahead of runtime construction
+	// (unknown names render warnings there), so the launcher receives the
+	// normalized list.
+	if !slices.Equal(gotProviders, []string{providerNameCodex, providerNameClaude}) {
+		t.Errorf("enabledProviders = %v, want trimmed [codex claude]", gotProviders)
 	}
 	if stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("stdout = %q stderr = %q, want both empty", stdout.String(), stderr.String())
@@ -1024,8 +1054,19 @@ func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 	if launchedServer || updateCalled {
 		t.Fatalf("validate-artifacts launched unrelated path: server=%v update=%v", launchedServer, updateCalled)
 	}
-	if got := stderr.String(); !strings.Contains(got, "review-feedback.md") || !strings.Contains(got, "LGTM") {
-		t.Fatalf("stderr = %q, want review-feedback.md malformed verdict violation", got)
+	got := stderr.String()
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	if len(lines) == 0 || lines[0] != "error[protocol_violation]: Protocol violation" {
+		t.Fatalf("stderr first line = %q, want the protocol violation heading:\n%s", lines, got)
+	}
+	if !strings.Contains(got, "The artifact contract check found") {
+		t.Fatalf("stderr = %q, want a summary naming the check and count", got)
+	}
+	if !strings.Contains(got, "  - review-feedback.md:") || !strings.Contains(got, "LGTM") {
+		t.Fatalf("stderr = %q, want a review-feedback.md violation line with the offending content", got)
+	}
+	if !strings.Contains(got, "  hint: Review the listed violations, fix the affected artifacts, and restart the phase.") {
+		t.Fatalf("stderr = %q, want the remediation hint", got)
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty on validation failure", stdout.String())
@@ -1084,8 +1125,11 @@ func TestRunArgsVerifyEvidencePassesAndFails(t *testing.T) {
 		if stdout != "" {
 			t.Fatalf("stdout = %q, want empty on failure", stdout)
 		}
-		if strings.TrimSpace(stderr) == "" {
-			t.Fatal("stderr should name the missing evidence")
+		if !strings.HasPrefix(stderr, "error[protocol_violation]: Protocol violation\n") {
+			t.Fatalf("stderr = %q, want the protocol violation heading", stderr)
+		}
+		if !strings.Contains(stderr, "The evidence contract check found") {
+			t.Fatalf("stderr = %q, want a summary naming the check and count", stderr)
 		}
 	})
 
@@ -1282,6 +1326,9 @@ func TestServerBootstrapStartsSetupCapableWithoutUsableProvider(t *testing.T) {
 	if models := boot.registry.AvailableModels(); len(models) != 0 {
 		t.Fatalf("AvailableModels() = %v; want none while no provider is usable", models)
 	}
+	if !strings.HasPrefix(stderr.String(), "warning[provider_unavailable]: Provider unavailable\n") {
+		t.Fatalf("stderr = %q; want the setup-capable warning heading", stderr.String())
+	}
 	if !strings.Contains(stderr.String(), "setup-capable") {
 		t.Fatalf("stderr = %q; want setup-capable mode warning", stderr.String())
 	}
@@ -1312,7 +1359,10 @@ func TestParseLaunchArgsRejectsRemovedSurface(t *testing.T) {
 }
 
 func TestProviderFxModules_NilReturnsDefaultSet(t *testing.T) {
-	modules := providerFxModules(nil)
+	modules, err := providerFxModules(nil)
+	if err != nil {
+		t.Fatalf("providerFxModules(nil) error = %v", err)
+	}
 	if len(modules) != 3 {
 		t.Errorf("expected 3 modules for nil input (claude+codex+opencode), got %d", len(modules))
 	}
@@ -1321,7 +1371,10 @@ func TestProviderFxModules_NilReturnsDefaultSet(t *testing.T) {
 func TestProviderFxModules_SingleProvider(t *testing.T) {
 	for _, name := range []string{providerNameClaude, providerNameCodex, providerNameOpencode} {
 		t.Run(name, func(t *testing.T) {
-			modules := providerFxModules([]string{name})
+			modules, err := providerFxModules([]string{name})
+			if err != nil {
+				t.Fatalf("providerFxModules([%s]) error = %v", name, err)
+			}
 			if len(modules) != 1 {
 				t.Errorf("expected 1 module for %q, got %d", name, len(modules))
 			}
@@ -1330,23 +1383,42 @@ func TestProviderFxModules_SingleProvider(t *testing.T) {
 }
 
 func TestProviderFxModules_BothProviders(t *testing.T) {
-	modules := providerFxModules([]string{providerNameClaude, providerNameCodex})
+	modules, err := providerFxModules([]string{providerNameClaude, providerNameCodex})
+	if err != nil {
+		t.Fatalf("providerFxModules() error = %v", err)
+	}
 	if len(modules) != 2 {
 		t.Errorf("expected 2 modules, got %d", len(modules))
 	}
 }
 
 func TestProviderFxModules_TrimsWhitespace(t *testing.T) {
-	modules := providerFxModules([]string{" claude ", " codex "})
+	modules, err := providerFxModules([]string{" claude ", " codex "})
+	if err != nil {
+		t.Fatalf("providerFxModules() error = %v", err)
+	}
 	if len(modules) != 2 {
 		t.Errorf("expected 2 modules after trimming, got %d", len(modules))
 	}
 }
 
-func TestProviderFxModules_UnknownSkipped(t *testing.T) {
-	modules := providerFxModules([]string{providerNameClaude, "bogus"})
+func TestProviderFxModules_UnknownSkippedSilently(t *testing.T) {
+	// The CLI path warns about unknown names ahead of runtime construction;
+	// by the time the fx modules are selected the list is already valid, so
+	// unknown leftovers are skipped without printing or exiting.
+	modules, err := providerFxModules([]string{providerNameClaude, "bogus"})
+	if err != nil {
+		t.Fatalf("providerFxModules() error = %v, want bogus skipped silently", err)
+	}
 	if len(modules) != 1 {
 		t.Errorf("expected 1 module (bogus skipped), got %d", len(modules))
+	}
+}
+
+func TestProviderFxModules_EmptyValidSetErrorsInsteadOfExiting(t *testing.T) {
+	_, err := providerFxModules([]string{"bogus", "also-bogus"})
+	if err == nil {
+		t.Fatal("providerFxModules() error = nil, want an error for an empty valid set")
 	}
 }
 
@@ -1670,8 +1742,9 @@ func TestCheckRequiredProviders_OneDetected(t *testing.T) {
 	if len(notices) != 1 {
 		t.Fatalf("expected 1 startup notice, got %d: %v", len(notices), notices)
 	}
-	if !strings.Contains(notices[0], "Provider codex CLI was not found") || !strings.Contains(notices[0], "Starting with claude only") {
-		t.Fatalf("startup notice = %q, want missing codex/start claude", notices[0])
+	noticeText := warningText(notices[0])
+	if !strings.Contains(noticeText, "Provider codex CLI was not found") || !strings.Contains(noticeText, "Starting with claude only") {
+		t.Fatalf("startup notice = %q, want missing codex/start claude", noticeText)
 	}
 	if len(detected) != 1 {
 		t.Errorf("expected 1 detected provider, got %d", len(detected))
@@ -1782,8 +1855,12 @@ func TestCheckRequiredProviders_UnreadyProviderWarnsAndFiltersRegistry(t *testin
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %v, want no immediate warnings", warnings)
 	}
-	if len(notices) != 1 || !strings.Contains(notices[0], "Provider codex is not configured") || !strings.Contains(notices[0], "codex login") || !strings.Contains(notices[0], "Starting with claude only") {
+	if len(notices) != 1 {
 		t.Fatalf("notices = %v, want codex startup notice", notices)
+	}
+	noticeText := warningText(notices[0])
+	if !strings.Contains(noticeText, "Provider codex is not configured") || !strings.Contains(noticeText, "codex login") || !strings.Contains(noticeText, "Starting with claude only") {
+		t.Fatalf("notice = %q, want codex startup notice", noticeText)
 	}
 	if _, _, err := r.ResolveModel("codex:gpt-5.4"); err == nil {
 		t.Fatal("ResolveModel(codex:gpt-5.4) succeeded after codex was filtered")
@@ -1832,11 +1909,22 @@ func providerNames(providers []llm.LLMProvider) []string {
 	return names
 }
 
-func TestShowProviderStartupNoticesWritesWithoutForcedDelayInTests(t *testing.T) {
+func TestShowProviderStartupNoticesRendersStructuredWarnings(t *testing.T) {
 	var out bytes.Buffer
-	showProviderStartupNotices(&out, []string{"Provider codex is not configured: not logged in. Starting with claude only."}, 0)
-	if got := out.String(); got != "Provider codex is not configured: not logged in. Starting with claude only.\n" {
-		t.Fatalf("startup notice output = %q", got)
+	showProviderStartupNotices(&out, []startupWarning{{
+		code:        errcat.ProviderUnavailable,
+		params:      errcat.ProviderUnavailableParams{Provider: providerNameCodex},
+		diagnostics: "Provider codex is not configured: not logged in. Starting with claude only.",
+	}}, 0)
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("startup notice output = %q, want a full warning block", out.String())
+	}
+	if lines[0] != "warning[provider_unavailable]: Provider unavailable" {
+		t.Fatalf("first line = %q, want the provider warning heading", lines[0])
+	}
+	if !strings.Contains(out.String(), "Provider codex is not configured: not logged in. Starting with claude only.") {
+		t.Fatalf("startup notice output = %q, want the original notice as diagnostics", out.String())
 	}
 }
 

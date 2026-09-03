@@ -14,7 +14,10 @@
 
 package ports
 
-import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
+import (
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+)
 
 // EventType enumerates domain events emitted by the orchestrator.
 type EventType int
@@ -91,6 +94,10 @@ type Event struct {
 	Phase    feature.Phase    // set for phase-related events
 	Error    error            // set for failure events
 	Message  string           // human-readable detail
+	// CanonicalError carries the rendered canonical error object for
+	// failure-carrying events (FeatureFailed). Consumers project it directly
+	// without re-rendering the stored record.
+	CanonicalError *errcat.Error
 
 	RunNumber   int
 	Attempt     int

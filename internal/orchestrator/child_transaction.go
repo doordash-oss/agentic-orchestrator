@@ -18,8 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -41,9 +41,9 @@ import (
 // The parent is locked while a pass runs, so a parent tip that moved away
 // from its creation-time base — other than to a commit this transaction
 // itself produced — is external drift: preparation parks at attention with
-// GateCodeParentDrift before any staging. A dirty repository, conflict, or
-// preparation failure likewise leaves every parent ref unchanged and records
-// all affected repositories as attention.
+// the integration_parent_ref_drift record before any staging. A dirty
+// repository, conflict, or preparation failure likewise leaves every parent
+// ref unchanged and parks with its catalog code.
 func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Feature) (*feature.TransactionJournal, error) {
 	if o.deps.Worktrees == nil {
 		return nil, fmt.Errorf("transaction: worktree operations are not configured")
@@ -53,9 +53,9 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 	// step. For a rebase child, re-verify the git-level exit criteria for
 	// every behind repo against the creation-time persisted targets before
 	// any candidate or ref is touched. Any violation parks the transaction
-	// at attention with typed per-repo diagnostics and leaves every parent
-	// ref byte-identical. Refactor and review-feedback children flow through
-	// unchanged.
+	// at attention with a stored record built from every violation and
+	// leaves every parent ref byte-identical. Refactor and review-feedback
+	// children flow through unchanged.
 	if child.Parent != nil && child.Parent.Kind == feature.ChildKindRebase {
 		if gate := o.rebaseIntegrationGate(child); gate != nil {
 			if err := o.persistTransaction(child.ID, gate); err != nil {
@@ -70,8 +70,8 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 	}
 
 	// Validate every parent repo and capture per-repo entries.
-	var allDirty []feature.RepoDirtyDiagnostics
-	var driftedRepos []string
+	var driftFindings []integrationFinding
+	var dirtyFindings []integrationFinding
 	for _, childRepo := range child.Repos {
 		parentRepo := featureRepoByName(parent, childRepo.Name)
 		if parentRepo == nil {
@@ -126,35 +126,30 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 			!transactionProducedSHA(child.Parent.Transaction, parentTip) &&
 			!transactionAcknowledgedDrift(child.Parent.Transaction, childRepo.Name, parentTip) {
 			entry.PrepState = feature.RepoPrepFailed
-			entry.GateCode = feature.GateCodeParentDrift
-			entry.Diagnostics = fmt.Sprintf("parent branch tip moved from %s to %s while the pass was running; the parent is locked during a pass, so this usually means something wrote to the parent's checkout outside the integration transaction; parent refs were left untouched — retry integration to accept the moved tip, or reset the parent branch before retrying", base, parentTip)
-			driftedRepos = append(driftedRepos, childRepo.Name)
+			finding := entryFinding(&entry, errcat.IntegrationParentRefDrift,
+				fmt.Sprintf("parent branch tip moved from %s to %s while the pass was running; the parent is locked during a pass, so this usually means something wrote to the parent's checkout outside the integration transaction; parent refs were left untouched — retry integration to accept the moved tip, or reset the parent branch before retrying", base, parentTip))
+			finding.ctx.ParentAnchorSHA = base
+			finding.ctx.ObservedSHA = parentTip
+			driftFindings = append(driftFindings, finding)
 		}
 
 		if report.Dirty() {
 			entry.PrepState = feature.RepoPrepFailed
-			entry.Dirty = []feature.RepoDirtyDiagnostics{{
-				Repo:           childRepo.Name,
-				Path:           parentWorktree,
-				Staged:         report.Staged,
-				Unstaged:       report.Unstaged,
-				Untracked:      report.Untracked,
-				StagedTotal:    report.StagedTotal,
-				UnstagedTotal:  report.UnstagedTotal,
-				UntrackedTotal: report.UntrackedTotal,
-			}}
-			allDirty = append(allDirty, entry.Dirty[0])
+			files := dirtyFileList(report.Staged, report.Unstaged, report.Untracked)
+			finding := entryFinding(&entry, errcat.IntegrationParentDirty,
+				fmt.Sprintf("parent worktree has uncommitted changes: %s", joinFileList(files)))
+			finding.ctx.DirtyFiles = files
+			dirtyFindings = append(dirtyFindings, finding)
 		}
 
 		journal.Entries = append(journal.Entries, entry)
 	}
 
-	// If any parent tip drifted, park the transaction with aggregated drift
-	// diagnostics before any staging. All parent refs are unchanged. Carry
-	// candidate provenance from the prior journal across the overwrite so a
-	// ref this transaction already moved is not reclassified as drift on
-	// retry.
-	if len(driftedRepos) > 0 {
+	// If any parent tip drifted, park the transaction with the drift record
+	// before any staging. All parent refs are unchanged. Carry candidate
+	// provenance from the prior journal across the overwrite so a ref this
+	// transaction already moved is not reclassified as drift on retry.
+	if len(driftFindings) > 0 {
 		if prior := child.Parent.Transaction; prior != nil {
 			for i := range journal.Entries {
 				if pe := prior.EntryByRepo(journal.Entries[i].Repo); pe != nil && journal.Entries[i].CandidateSHA == "" {
@@ -164,22 +159,14 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 			}
 		}
 		journal.Phase = feature.TransactionPhaseAttention
-		journal.Attention = "parent branch tips moved outside the integration transaction: " + strings.Join(driftedRepos, ", ")
-		if err := o.persistTransaction(child.ID, journal); err != nil {
-			return nil, fmt.Errorf("recording parent drift attention: %w", err)
-		}
-		return nil, o.emitTransactionAttention(child, journal.Attention)
+		return nil, o.parkIntegrationAttention(child, journal, driftFindings)
 	}
 
-	// If any parent is dirty, park the transaction with aggregated dirty
-	// diagnostics. All parent refs are unchanged.
-	if len(allDirty) > 0 {
+	// If any parent is dirty, park the transaction with the dirty-parent
+	// record. All parent refs are unchanged.
+	if len(dirtyFindings) > 0 {
 		journal.Phase = feature.TransactionPhaseAttention
-		journal.Attention = "parent worktrees have uncommitted changes"
-		if err := o.persistTransaction(child.ID, journal); err != nil {
-			return nil, fmt.Errorf("recording dirty attention: %w", err)
-		}
-		return nil, o.emitTransactionAttention(child, "parent worktrees have uncommitted changes")
+		return nil, o.parkIntegrationAttention(child, journal, dirtyFindings)
 	}
 
 	// Stage candidates for every repository without advancing any parent ref.
@@ -191,24 +178,18 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 		parentRepo := featureRepoByName(parent, entry.Repo)
 		if parentRepo == nil {
 			entry.PrepState = feature.RepoPrepFailed
-			entry.Diagnostics = fmt.Sprintf("parent no longer has repository %s", entry.Repo)
 			journal.Phase = feature.TransactionPhaseAttention
-			journal.Attention = entry.Diagnostics
-			if err := o.persistTransaction(child.ID, journal); err != nil {
-				return nil, fmt.Errorf("recording missing repo during staging: %w", err)
-			}
-			return nil, o.emitTransactionAttention(child, entry.Diagnostics)
+			finding := entryFinding(entry, errcat.IntegrationRepositoryMissing,
+				fmt.Sprintf("parent no longer has repository %s", entry.Repo))
+			return nil, o.parkIntegrationAttention(child, journal, []integrationFinding{finding})
 		}
 		if rebasePassThroughRepo(child, entry.Repo) {
 			if !git.IsAncestor(parentRepo.Path, entry.ChildHeadSHA, entry.ParentAnchorSHA) {
 				entry.PrepState = feature.RepoPrepFailed
-				entry.Diagnostics = fmt.Sprintf("rebase child modified up-to-date repo %s; only repos behind at launch may change", entry.Repo)
 				journal.Phase = feature.TransactionPhaseAttention
-				journal.Attention = entry.Diagnostics
-				if err := o.persistTransaction(child.ID, journal); err != nil {
-					return nil, fmt.Errorf("recording pass-through prep failure: %w", err)
-				}
-				return nil, o.emitTransactionAttention(child, entry.Diagnostics)
+				finding := entryFinding(entry, errcat.RebaseGatePassthroughModified,
+					fmt.Sprintf("rebase child modified up-to-date repo %s; only repos behind at launch may change", entry.Repo))
+				return nil, o.parkIntegrationAttention(child, journal, []integrationFinding{finding})
 			}
 			entry.CandidateSHA = entry.ParentAnchorSHA
 			entry.PrepState = feature.RepoPrepPrepared
@@ -221,26 +202,21 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 		message := fmt.Sprintf("Merge %s child %s into %s (%s)", child.Parent.Kind, child.ID, entry.ParentBranch, entry.Repo)
 		result, err := o.deps.Worktrees.CreateMergeCandidate(parentRepo.Path, entry.ParentAnchorSHA, entry.ChildHeadSHA, message)
 		if err != nil {
-			var conflictErr *git.MergeCandidateConflictError
-			if errors.As(err, &conflictErr) {
-				entry.PrepState = feature.RepoPrepFailed
-				entry.ConflictFiles = conflictErr.ConflictFiles
-				entry.Diagnostics = fmt.Sprintf("merge conflict in repo %s: %v", entry.Repo, conflictErr.ConflictFiles)
-				journal.Phase = feature.TransactionPhaseAttention
-				journal.Attention = entry.Diagnostics
-				if err := o.persistTransaction(child.ID, journal); err != nil {
-					return nil, fmt.Errorf("recording conflict attention: %w", err)
-				}
-				return nil, o.emitTransactionAttention(child, entry.Diagnostics)
-			}
 			entry.PrepState = feature.RepoPrepFailed
-			entry.Diagnostics = fmt.Sprintf("merge candidate failed for repo %s: %v", entry.Repo, err)
-			journal.Phase = feature.TransactionPhaseAttention
-			journal.Attention = entry.Diagnostics
-			if err := o.persistTransaction(child.ID, journal); err != nil {
-				return nil, fmt.Errorf("recording prep failure: %w", err)
+			var conflictErr *git.MergeCandidateConflictError
+			var finding integrationFinding
+			if errors.As(err, &conflictErr) {
+				ctx := repoContextFromEntry(entry)
+				ctx.ConflictFiles = conflictErr.ConflictFiles
+				finding = entryFinding(entry, errcat.IntegrationMergeConflict,
+					fmt.Sprintf("merge conflict: %v", conflictErr.ConflictFiles))
+				finding.ctx = ctx
+			} else {
+				finding = entryFinding(entry, errcat.IntegrationCandidateFailed,
+					fmt.Sprintf("merge candidate failed: %v", err))
 			}
-			return nil, o.emitTransactionAttention(child, entry.Diagnostics)
+			journal.Phase = feature.TransactionPhaseAttention
+			return nil, o.parkIntegrationAttention(child, journal, []integrationFinding{finding})
 		}
 		entry.CandidateSHA = result.CandidateSHA
 		entry.PrepState = feature.RepoPrepPrepared
@@ -291,13 +267,12 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 
 		parentRepo := featureRepoByName(parent, entry.Repo)
 		if parentRepo == nil {
-			diag := fmt.Sprintf("parent no longer has repository %s", entry.Repo)
+			code, diag := errcat.IntegrationRepositoryMissing, fmt.Sprintf("parent no longer has repository %s", entry.Repo)
 			if journal.AnyApplied() {
-				entry.Diagnostics = diag
 				entry.ApplyState = feature.RepoApplyAttention
-				return o.rollbackTransaction(child, parent, journal, i)
+				return o.rollbackTransaction(child, parent, journal, i, entryFinding(entry, code, diag))
 			}
-			return o.parkApplyAttention(child, journal, entry, diag)
+			return o.parkApplyAttention(child, journal, entry, code, diag)
 		}
 
 		// Verify the parent worktree has the recorded branch checked out.
@@ -306,49 +281,46 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 			parentWorktree = parentRepo.Path
 		}
 		if current := o.deps.Worktrees.CurrentBranch(parentWorktree); current != entry.ParentBranch {
+			code := errcat.IntegrationParentBranchMismatch
 			diag := fmt.Sprintf("parent worktree %s has branch %q checked out; integration requires the recorded parent branch %q", parentWorktree, current, entry.ParentBranch)
 			if journal.AnyApplied() {
-				entry.Diagnostics = diag
 				entry.ApplyState = feature.RepoApplyAttention
-				return o.rollbackTransaction(child, parent, journal, i)
+				return o.rollbackTransaction(child, parent, journal, i, entryFinding(entry, code, diag))
 			}
-			return o.parkApplyAttention(child, journal, entry, diag)
+			return o.parkApplyAttention(child, journal, entry, code, diag)
 		}
 
 		ref := "refs/heads/" + entry.ParentBranch
 		// Read the current ref to detect external movement.
 		currentSHA, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 		if err != nil {
-			diag := fmt.Sprintf("reading ref %s: %v", ref, err)
+			code, diag := errcat.IntegrationCandidateFailed, fmt.Sprintf("reading ref %s: %v", ref, err)
 			if journal.AnyApplied() {
-				entry.Diagnostics = diag
 				entry.ApplyState = feature.RepoApplyAttention
-				return o.rollbackTransaction(child, parent, journal, i)
+				return o.rollbackTransaction(child, parent, journal, i, entryFinding(entry, code, diag))
 			}
-			return o.parkApplyAttention(child, journal, entry, diag)
+			return o.parkApplyAttention(child, journal, entry, code, diag)
 		}
 		entry.ObservedSHA = currentSHA
 
 		// If the ref has been externally moved, do not overwrite it.
 		if currentSHA != entry.ExpectedRefSHA {
-			diag := fmt.Sprintf("external race before apply: ref %s expected %s observed %s", ref, entry.ExpectedRefSHA, currentSHA)
+			code, diag := errcat.IntegrationRefRace, fmt.Sprintf("external race before apply: ref %s expected %s observed %s", ref, entry.ExpectedRefSHA, currentSHA)
 			if journal.AnyApplied() {
-				entry.Diagnostics = diag
 				entry.ApplyState = feature.RepoApplyAttention
-				return o.rollbackTransaction(child, parent, journal, i)
+				return o.rollbackTransaction(child, parent, journal, i, entryFinding(entry, code, diag))
 			}
-			return o.parkApplyAttention(child, journal, entry, diag)
+			return o.parkApplyAttention(child, journal, entry, code, diag)
 		}
 
 		if passThroughCandidate(entry) {
 			if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.CandidateSHA); err != nil {
-				diag := fmt.Sprintf("syncing parent worktree for pass-through repo %s: %v", entry.Repo, err)
+				code, diag := errcat.IntegrationWorktreeSyncFailed, fmt.Sprintf("syncing parent worktree for pass-through repo %s: %v", entry.Repo, err)
 				if journal.AnyApplied() {
-					entry.Diagnostics = diag
 					entry.ApplyState = feature.RepoApplyAttention
-					return o.rollbackTransaction(child, parent, journal, i)
+					return o.rollbackTransaction(child, parent, journal, i, entryFinding(entry, code, diag))
 				}
-				return o.parkApplyAttention(child, journal, entry, diag)
+				return o.parkApplyAttention(child, journal, entry, code, diag)
 			}
 			entry.ApplyState = feature.RepoApplyApplied
 			entry.MergeHEAD = entry.CandidateSHA
@@ -363,17 +335,12 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 		if err := o.deps.Worktrees.UpdateRef(parentRepo.Path, ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
 			observed, _ := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 			entry.ObservedSHA = observed
-			var casErr *git.RefCASMismatchError
-			if errors.As(err, &casErr) {
-				entry.Diagnostics = fmt.Sprintf("CAS mismatch on apply: ref %s expected %s observed %s", ref, casErr.Expected, casErr.Observed)
-			} else {
-				entry.Diagnostics = fmt.Sprintf("apply ref update failed for repo %s: %v", entry.Repo, err)
-			}
+			finding := refUpdateFinding(entry, ref, err)
 			if journal.AnyApplied() {
 				entry.ApplyState = feature.RepoApplyAttention
-				return o.rollbackTransaction(child, parent, journal, i)
+				return o.rollbackTransaction(child, parent, journal, i, finding)
 			}
-			return o.parkApplyAttention(child, journal, entry, entry.Diagnostics)
+			return o.parkApplyAttention(child, journal, entry, finding.code, finding.diagnostics)
 		}
 
 		// Mark the entry as applied immediately after the CAS succeeds so a
@@ -390,13 +357,14 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 		// visible in the working directory. The worktree was verified clean
 		// during preparation, so a hard reset is safe. If this fails, the
 		// ref is already durably at the candidate: preserve the successful
-		// CAS and let the idempotent closure sync retry the worktree.
+		// CAS, set the typed pending-sync flag closure retries automatically,
+		// and carry on without an attention record.
 		parentWorktree = parentRepo.WorktreePath
 		if parentWorktree == "" {
 			parentWorktree = parentRepo.Path
 		}
 		if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.CandidateSHA); err != nil {
-			entry.Diagnostics = fmt.Sprintf("worktree sync pending after apply for repo %s: %v", entry.Repo, err)
+			entry.PendingSync = true
 			pendingWorktreeSync = true
 			if err := o.persistTransaction(child.ID, journal); err != nil {
 				return fmt.Errorf("recording pending worktree sync for repo %s: %w", entry.Repo, err)
@@ -425,10 +393,12 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 // rollbackTransaction conditionally restores each earlier applied ref from
 // its candidate to its recorded old SHA without deleting or rewriting commits.
 // It only rolls back refs that still equal the transaction's candidate
-// commits. A CAS mismatch preserves the externally moved ref and produces
-// attention diagnostics. The failedIndex is the index of the repo that failed
-// (and is not itself rolled back).
-func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journal *feature.TransactionJournal, failedIndex int) error {
+// commits. A CAS mismatch preserves the externally moved ref and produces an
+// attention record. The failedIndex is the index of the repo that failed
+// (and is not itself rolled back); failed is its classification when the
+// rollback was triggered by an apply failure, nil when resuming a durable
+// rollback.
+func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journal *feature.TransactionJournal, failedIndex int, failed integrationFinding) error {
 	if o.deps.Worktrees == nil {
 		return fmt.Errorf("transaction: ref CAS operations are not configured")
 	}
@@ -436,6 +406,13 @@ func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journ
 	journal.Phase = feature.TransactionPhaseRollingBack
 	if err := o.persistTransaction(child.ID, journal); err != nil {
 		return fmt.Errorf("recording rollback start: %w", err)
+	}
+
+	// The repo that failed apply classifies the aggregate record; every
+	// other failing repository joins the block after it.
+	findings := make([]integrationFinding, 0, len(journal.Entries))
+	if failed.code != "" {
+		findings = append(findings, failed)
 	}
 
 	rollbackFailed := false
@@ -455,9 +432,10 @@ func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journ
 					parentWorktree = parentRepo.Path
 				}
 				if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.ParentAnchorSHA); err != nil {
-					entry.Diagnostics = fmt.Sprintf("syncing parent worktree after rolled-back recovery for repo %s: %v", entry.Repo, err)
 					entry.ApplyState = feature.RepoApplyAttention
 					rollbackFailed = true
+					findings = append(findings, entryFinding(entry, errcat.IntegrationWorktreeSyncFailed,
+						fmt.Sprintf("syncing parent worktree after rolled-back recovery for repo %s: %v", entry.Repo, err)))
 				}
 			}
 			continue
@@ -477,9 +455,10 @@ func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journ
 
 		parentRepo := featureRepoByName(parent, entry.Repo)
 		if parentRepo == nil {
-			entry.Diagnostics = fmt.Sprintf("parent no longer has repository %s during rollback", entry.Repo)
 			entry.ApplyState = feature.RepoApplyAttention
 			rollbackFailed = true
+			findings = append(findings, entryFinding(entry, errcat.IntegrationRepositoryMissing,
+				fmt.Sprintf("parent no longer has repository %s during rollback", entry.Repo)))
 			continue
 		}
 
@@ -487,9 +466,10 @@ func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journ
 		// Read the current ref to check if it still equals the candidate.
 		currentSHA, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 		if err != nil {
-			entry.Diagnostics = fmt.Sprintf("reading ref %s during rollback: %v", ref, err)
 			entry.ApplyState = feature.RepoApplyAttention
 			rollbackFailed = true
+			findings = append(findings, entryFinding(entry, errcat.IntegrationCandidateFailed,
+				fmt.Sprintf("reading ref %s during rollback: %v", ref, err)))
 			continue
 		}
 		entry.ObservedSHA = currentSHA
@@ -497,10 +477,11 @@ func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journ
 		// Only roll back if the ref still equals the candidate commit.
 		if currentSHA != entry.CandidateSHA {
 			// External process moved the ref; preserve it and record
-			// attention diagnostics.
-			entry.Diagnostics = fmt.Sprintf("external race before rollback: ref %s candidate %s observed %s", ref, entry.CandidateSHA, currentSHA)
+			// attention.
 			entry.ApplyState = feature.RepoApplyAttention
 			rollbackFailed = true
+			findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
+				fmt.Sprintf("external race before rollback: ref %s candidate %s observed %s", ref, entry.CandidateSHA, currentSHA)))
 			continue
 		}
 
@@ -508,14 +489,10 @@ func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journ
 		if err := o.deps.Worktrees.UpdateRef(parentRepo.Path, ref, entry.CandidateSHA, entry.ParentAnchorSHA); err != nil {
 			observed, _ := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 			entry.ObservedSHA = observed
-			var casErr *git.RefCASMismatchError
-			if errors.As(err, &casErr) {
-				entry.Diagnostics = fmt.Sprintf("CAS mismatch on rollback: ref %s candidate %s observed %s", ref, casErr.Expected, casErr.Observed)
-			} else {
-				entry.Diagnostics = fmt.Sprintf("rollback ref update failed for repo %s: %v", entry.Repo, err)
-			}
+			finding := refUpdateFinding(entry, ref, err)
 			entry.ApplyState = feature.RepoApplyAttention
 			rollbackFailed = true
+			findings = append(findings, finding)
 			continue
 		}
 
@@ -525,9 +502,10 @@ func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journ
 			parentWorktree = parentRepo.Path
 		}
 		if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.ParentAnchorSHA); err != nil {
-			entry.Diagnostics = fmt.Sprintf("syncing parent worktree after rollback for repo %s: %v", entry.Repo, err)
 			entry.ApplyState = feature.RepoApplyAttention
 			rollbackFailed = true
+			findings = append(findings, entryFinding(entry, errcat.IntegrationWorktreeSyncFailed,
+				fmt.Sprintf("syncing parent worktree after rollback for repo %s: %v", entry.Repo, err)))
 			continue
 		}
 
@@ -541,7 +519,7 @@ func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journ
 	// If the failed entry (skipped during rollback) or any other entry is
 	// in attention state, the aggregate must be attention — not rolled_back —
 	// so the externally moved ref is preserved as a precise, durable attention
-	// state rather than being cleared and re-prepared from scratch.
+	// record rather than being cleared and re-prepared from scratch.
 	anyAttention := rollbackFailed
 	if !anyAttention {
 		for i := range journal.Entries {
@@ -554,21 +532,63 @@ func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journ
 
 	if anyAttention {
 		journal.Phase = feature.TransactionPhaseAttention
-		journal.Attention = transactionAttentionSummary(journal)
-		if journal.Attention == "" {
-			journal.Attention = "rollback completed with external races; some refs preserved"
-		}
-		if err := o.persistTransaction(child.ID, journal); err != nil {
+		findings = appendResidualAttentionFindings(findings, journal)
+		if err := o.parkIntegrationAttention(child, journal, findings); err != nil {
 			return fmt.Errorf("recording rollback attention: %w", err)
 		}
-		return o.emitTransactionAttention(child, journal.Attention)
+		return nil
 	}
 
+	// The clean rolled-back outcome records integration_rolled_back with the
+	// repository that failed apply when it is known.
 	journal.Phase = feature.TransactionPhaseRolledBack
+	journal.Attention = rolledBackRecord(failed, journal)
 	if err := o.persistTransaction(child.ID, journal); err != nil {
 		return fmt.Errorf("recording rolled-back transaction: %w", err)
 	}
-	return o.emitTransactionAttention(child, "transaction rolled back after apply failure")
+	return o.emitTransactionAttention(child, journal.Attention)
+}
+
+// appendResidualAttentionFindings adds one finding for every entry that
+// carries apply attention into the record without a re-derived
+// classification (a resumed rollback interrupted before this process), so
+// the repositories block lists every affected repository.
+func appendResidualAttentionFindings(findings []integrationFinding, journal *feature.TransactionJournal) []integrationFinding {
+	represented := make(map[string]bool, len(findings))
+	for _, finding := range findings {
+		represented[finding.ctx.Name] = true
+	}
+	for i := range journal.Entries {
+		entry := &journal.Entries[i]
+		if entry.ApplyState == feature.RepoApplyAttention && !represented[entry.Repo] {
+			findings = append(findings, entryFinding(entry, errcat.IntegrationCandidateFailed,
+				"apply attention resumed from an interrupted rollback"))
+		}
+	}
+	return findings
+}
+
+// rolledBackRecord builds the integration_rolled_back record for the clean
+// rolled-back outcome: the repository that failed apply when known, else the
+// entries that carried apply attention into a resumed rollback, else no
+// repositories (the static summary applies).
+func rolledBackRecord(failed integrationFinding, journal *feature.TransactionJournal) *errcat.FailureRecord {
+	if failed.code != "" {
+		failed.code = errcat.IntegrationRolledBack
+		failed.diagnostics = "apply failed; earlier applied refs were rolled back"
+		return findingsRecord([]integrationFinding{failed})
+	}
+	var findings []integrationFinding
+	for i := range journal.Entries {
+		if journal.Entries[i].ApplyState == feature.RepoApplyAttention {
+			findings = append(findings, entryFinding(&journal.Entries[i], errcat.IntegrationRolledBack,
+				"apply failed; earlier applied refs were rolled back"))
+		}
+	}
+	if record := findingsRecord(findings); record != nil {
+		return record
+	}
+	return &errcat.FailureRecord{Code: errcat.IntegrationRolledBack}
 }
 
 func rebasePassThroughRepo(child *feature.Feature, repoName string) bool {
@@ -584,19 +604,14 @@ func passThroughCandidate(entry *feature.RepoTransactionEntry) bool {
 		entry.CandidateSHA == entry.ParentAnchorSHA
 }
 
-// parkApplyAttention records a no-rollback apply failure: sets the per-repo
-// diagnostic, entry attention state, aggregate attention phase, persists the
-// journal, and emits the attention event. Used for every apply failure that
-// does not require compensation of earlier applied refs.
-func (o *Orchestrator) parkApplyAttention(child *feature.Feature, journal *feature.TransactionJournal, entry *feature.RepoTransactionEntry, diagnostics string) error {
-	entry.Diagnostics = diagnostics
+// parkApplyAttention records a no-rollback apply failure: sets the entry
+// attention state, aggregate attention phase, and the stored record, persists
+// the journal, and emits the attention event. Used for every apply failure
+// that does not require compensation of earlier applied refs.
+func (o *Orchestrator) parkApplyAttention(child *feature.Feature, journal *feature.TransactionJournal, entry *feature.RepoTransactionEntry, code errcat.Code, diagnostics string) error {
 	entry.ApplyState = feature.RepoApplyAttention
 	journal.Phase = feature.TransactionPhaseAttention
-	journal.Attention = diagnostics
-	if err := o.persistTransaction(child.ID, journal); err != nil {
-		return fmt.Errorf("recording apply attention: %w", err)
-	}
-	return o.emitTransactionAttention(child, diagnostics)
+	return o.parkIntegrationAttention(child, journal, []integrationFinding{entryFinding(entry, code, diagnostics)})
 }
 
 // persistTransaction durably records the transaction journal on the child
@@ -608,12 +623,6 @@ func (o *Orchestrator) persistTransaction(childID string, journal *feature.Trans
 		parentID = f.Parent.ParentID
 		changed = !reflect.DeepEqual(f.Parent.Transaction, journal)
 		f.Parent.Transaction = journal
-		if f.LastError != "" && journal.Phase != feature.TransactionPhaseAttention {
-			f.LastError = ""
-		}
-		if journal.Phase == feature.TransactionPhaseAttention && journal.Attention != "" {
-			f.LastError = journal.Attention
-		}
 		return nil
 	})
 	if err != nil || !changed {
@@ -625,19 +634,6 @@ func (o *Orchestrator) persistTransaction(childID string, journal *feature.Trans
 		ParentID:  parentID,
 		ChildID:   childID,
 		Message:   "relationship integration state changed",
-	})
-	return nil
-}
-
-// emitTransactionAttention notifies consumers that the child's transaction
-// is parked at a retryable attention boundary.
-func (o *Orchestrator) emitTransactionAttention(child *feature.Feature, attention string) error {
-	o.emitEvent(ports.Event{
-		Type:      ports.RelationshipIntegrationChanged,
-		FeatureID: child.ID,
-		ParentID:  child.Parent.ParentID,
-		ChildID:   child.ID,
-		Message:   "child integration needs attention: " + attention,
 	})
 	return nil
 }
@@ -698,15 +694,18 @@ func transactionProducedSHA(journal *feature.TransactionJournal, sha string) boo
 }
 
 // transactionAcknowledgedDrift reports whether a prior drift attention
-// already recorded sha as the repo's moved tip: drift parks integration
-// exactly once, and a retry at the unchanged tip absorbs it. Any further
-// movement parks again.
+// record already recorded sha as the repo's moved tip: drift parks
+// integration exactly once, and a retry at the unchanged tip absorbs it. Any
+// further movement parks again.
 func transactionAcknowledgedDrift(journal *feature.TransactionJournal, repo, sha string) bool {
 	if journal == nil || sha == "" {
 		return false
 	}
+	if journal.Attention == nil || journal.Attention.Code != errcat.IntegrationParentRefDrift {
+		return false
+	}
 	entry := journal.EntryByRepo(repo)
-	return entry != nil && entry.GateCode == feature.GateCodeParentDrift && entry.ParentAnchorSHA == sha
+	return entry != nil && entry.ParentAnchorSHA == sha
 }
 
 // transactionNeedsRebuild checks whether the parent-tip vector has changed
@@ -721,20 +720,4 @@ func transactionNeedsRebuild(journal *feature.TransactionJournal, currentTips []
 		}
 	}
 	return false
-}
-
-// transactionAttentionSummary builds a human-readable summary of all
-// per-repo attention conditions in the journal.
-func transactionAttentionSummary(journal *feature.TransactionJournal) string {
-	if journal == nil {
-		return ""
-	}
-	var parts []string
-	for i := range journal.Entries {
-		e := &journal.Entries[i]
-		if e.Diagnostics != "" {
-			parts = append(parts, fmt.Sprintf("%s: %s", e.Repo, e.Diagnostics))
-		}
-	}
-	return strings.Join(parts, "; ")
 }

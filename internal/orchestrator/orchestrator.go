@@ -25,6 +25,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -57,7 +58,7 @@ type Hooks struct {
 
 	// Terminal and publish hooks. All nil-safe.
 	OnFeatureCompleted func(featureID string, f *feature.Feature)
-	OnFeatureFailed    func(featureID string, failureType, errorMsg string)
+	OnFeatureFailed    func(featureID string, code errcat.Code, class errcat.Class, diagnostics string)
 	OnReviewRequired   func(featureID string, phase feature.Phase)
 	OnPublishStarted   func(featureID string)
 	OnPublishCompleted func(featureID string, prURLs map[string]string, err error)
@@ -82,14 +83,15 @@ type Hooks struct {
 // PhaseCompletionInput is a sum-type describing a phase completion. Exactly
 // one of the pointer result fields is non-nil for loop-driven phases; for
 // session-parser-driven phases (KB/Inquire/Research/Design) all pointer
-// fields are nil and the handler uses Success + ErrorDetail + FailureType +
-// SessionID. FailureType is optional and defaults to a session crash.
+// fields are nil and the handler uses Success + ErrorDetail + FailureCode +
+// SessionID. FailureCode is an optional catalog code and defaults to
+// session_crashed.
 type PhaseCompletionInput struct {
 	Phase       feature.Phase
 	SessionID   string
 	Success     bool
 	ErrorDetail string
-	FailureType string
+	FailureCode errcat.Code
 
 	PlanResult      *agent.PlanLoopResult
 	ImplementResult *agent.LoopResult
@@ -780,7 +782,7 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 					return PhaseStartResult{Outcome: PhaseStarted}, nil
 				}
 				errMsg := fmt.Sprintf("run KB for repo %s: %v", repo.Name, err)
-				if markErr := o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg); markErr != nil {
+				if markErr := o.markFailedWithEvent(featureID, failureRecordWithRepos(errcat.InfrastructureFailure, feature.PhaseKnowledgeBase, []string{repo.Name}, errMsg)); markErr != nil {
 					return PhaseStartResult{}, fmt.Errorf("%s (also failed to mark feature failed: %w)", errMsg, markErr)
 				}
 				return PhaseStartResult{}, errors.New(errMsg)
@@ -1908,7 +1910,7 @@ func (o *Orchestrator) advanceToNextPhase(featureID string, completedPhase featu
 	startedPhase, started, err := o.startPhase(featureID, next)
 	if err != nil {
 		errMsg := fmt.Sprintf("start phase %s: %v", next, err)
-		if markErr := o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg); markErr != nil {
+		if markErr := o.markFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, next, errMsg)); markErr != nil {
 			return fmt.Errorf("%w; additionally: %v", err, markErr)
 		}
 		return err
@@ -2081,11 +2083,22 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 		finalErr = firstErr
 	}
 
-	o.emitEventBlocking(ports.Event{
+	publishCompleted := ports.Event{
 		Type:      ports.PublishCompleted,
 		FeatureID: featureID,
 		Error:     finalErr,
-	})
+	}
+	// A repository failure owns the condition through its stored record; the
+	// event carries the first failed repository's rendered canonical error
+	// so its SSE projection matches the feature-failure shape.
+	if finalErr != nil {
+		if freshF, getErr := o.deps.Lifecycle.Get(featureID); getErr == nil {
+			if rendered, ok := firstFailedRepoError(freshF); ok {
+				publishCompleted.CanonicalError = &rendered
+			}
+		}
+	}
+	o.emitEventBlocking(publishCompleted)
 	if o.hooks.OnPublishCompleted != nil {
 		o.hooks.OnPublishCompleted(featureID, prURLs, finalErr)
 	}

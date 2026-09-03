@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
@@ -53,6 +54,22 @@ type SetupEvent struct {
 	Path       string
 	Branch     string
 	Error      string
+	// Failure is the owning task's stored canonical failure record. Only
+	// the failed event carries it; the raw error text stays in Error.
+	Failure *errcat.FailureRecord
+}
+
+// FailureClass returns the catalog class of the event's stored failure
+// record as a plain string, or "" when the event carries no record, so the
+// observer can project it without importing the catalog package.
+func (ev SetupEvent) FailureClass() string {
+	if ev.Failure == nil {
+		return ""
+	}
+	if entry, ok := errcat.Lookup(ev.Failure.Code); ok {
+		return string(entry.Class)
+	}
+	return ""
 }
 
 type SetupRunnerOptions struct {
@@ -113,8 +130,8 @@ func (m *Manager) runSetup(featureID string, retry bool, opts ...SetupRunnerOpti
 		return nil
 	}
 	if retry {
-		if f.Status != StatusFailed || f.FailureType != FailureWorktreeSetup || setup.Status != SetupStatusFailed {
-			return fmt.Errorf("setup retry requires Failed (%s) feature with failed setup state", FailureWorktreeSetup)
+		if f.Status != StatusFailed || !errcat.IsSetupFailure(f.FailureCode()) || setup.Status != SetupStatusFailed {
+			return fmt.Errorf("setup retry requires Failed feature with a setup failure (%s, %s, or %s) and failed setup state", errcat.WorktreeSetupFailed, errcat.SetupAssetCopyFailed, errcat.SetupInterrupted)
 		}
 	} else if f.Status != StatusSettingUpWorktrees || setup.Status != SetupStatusRunning {
 		return fmt.Errorf("setup can only run from active setup state")
@@ -137,11 +154,11 @@ func (m *Manager) runSetup(featureID string, retry bool, opts ...SetupRunnerOpti
 	setup = f.Run().Setup
 	logPath := setupAttemptLogPath(m.Store, f, attempt)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		_ = m.failSetupTask(featureID, "", err.Error())
+		_, _, _ = m.failSetupTask(featureID, "", err.Error())
 		return fmt.Errorf("creating setup log directory: %w", err)
 	}
 	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
-		_ = m.failSetupTask(featureID, "", err.Error())
+		_, _, _ = m.failSetupTask(featureID, "", err.Error())
 		return fmt.Errorf("creating setup log: %w", err)
 	}
 	if err := m.Store.Modify(featureID, func(ff *Feature) error {
@@ -155,10 +172,15 @@ func (m *Manager) runSetup(featureID string, retry bool, opts ...SetupRunnerOpti
 		s.StartedAt = &now
 		s.CompletedAt = nil
 		s.LatestLogPath = logPath
-		s.LastError = ""
+		for key, task := range s.Tasks {
+			if task.Status == SetupStatusDone {
+				continue
+			}
+			task.Error = nil
+			s.Tasks[key] = task
+		}
 		ff.Status = StatusSettingUpWorktrees
-		ff.FailureType = ""
-		ff.LastError = ""
+		ff.Run().Failure = nil
 		return nil
 	}); err != nil {
 		return err
@@ -188,13 +210,15 @@ func (m *Manager) runSetup(featureID string, retry bool, opts ...SetupRunnerOpti
 		completed, err := m.executeSetupTask(current, task, logPath)
 		if err != nil {
 			msg := err.Error()
-			if markErr := m.failSetupTask(featureID, task.Key, msg); markErr != nil {
+			taskRecord, _, markErr := m.failSetupTask(featureID, task.Key, msg)
+			if markErr != nil {
 				return errors.Join(err, markErr)
 			}
 			completed.Status = SetupStatusFailed
-			completed.LastError = msg
 			appendSetupLog(logPath, "setup failed on %s: %s", task.Key, msg)
-			emit(setupTaskEvent(SetupEventFailed, featureID, current.ActiveRun, attempt, logPath, completed, msg))
+			ev := setupTaskEvent(SetupEventFailed, featureID, current.ActiveRun, attempt, logPath, completed, msg)
+			ev.Failure = &taskRecord
+			emit(ev)
 			return err
 		}
 		if err := m.completeSetupTask(featureID, completed); err != nil {
@@ -223,7 +247,6 @@ func (m *Manager) prepareSetupRetry(featureID string, attempt int) error {
 		setup.Attempt = attempt
 		setup.StartedAt = &now
 		setup.CompletedAt = nil
-		setup.LastError = ""
 		for _, key := range setupTaskOrder(setup) {
 			task := setup.Tasks[key]
 			if task.Status == SetupStatusDone {
@@ -233,12 +256,11 @@ func (m *Manager) prepareSetupRetry(featureID string, attempt int) error {
 			task.Attempt = attempt
 			task.StartedAt = nil
 			task.EndedAt = nil
-			task.LastError = ""
+			task.Error = nil
 			setup.Tasks[key] = task
 		}
 		f.Status = StatusSettingUpWorktrees
-		f.FailureType = ""
-		f.LastError = ""
+		f.Run().Failure = nil
 		return nil
 	})
 }
@@ -253,7 +275,7 @@ func (m *Manager) markSetupTaskRunning(featureID string, task SetupTask, logPath
 		task.Status = SetupStatusRunning
 		task.StartedAt = &now
 		task.EndedAt = nil
-		task.LastError = ""
+		task.Error = nil
 		setup.LatestLogPath = logPath
 		setup.Tasks[task.Key] = task
 		return nil
@@ -428,7 +450,7 @@ func (m *Manager) completeSetupTask(featureID string, task SetupTask) error {
 		now := time.Now()
 		task.Status = SetupStatusDone
 		task.EndedAt = &now
-		task.LastError = ""
+		task.Error = nil
 		setup.Tasks[task.Key] = task
 		switch task.Kind {
 		case SetupTaskWorktree:
@@ -448,8 +470,87 @@ func (m *Manager) completeSetupTask(featureID string, task SetupTask) error {
 	})
 }
 
-func (m *Manager) failSetupTask(featureID, taskKey, errMsg string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
+// setupFailureOwner resolves the task that owns a setup failure: the task
+// named by taskKey when one is given, else the running task, else the first
+// unfinished task in task order. The zero SetupTask reports an ownerless
+// failure (a setup with no tasks at all).
+func setupFailureOwner(setup *SetupState, taskKey string) SetupTask {
+	if taskKey != "" {
+		if task, ok := setup.Tasks[taskKey]; ok {
+			return task
+		}
+	}
+	for _, key := range setupTaskOrder(setup) {
+		if task := setup.Tasks[key]; task.Status == SetupStatusRunning {
+			return task
+		}
+	}
+	for _, key := range setupTaskOrder(setup) {
+		if task := setup.Tasks[key]; task.Status != SetupStatusDone {
+			return task
+		}
+	}
+	return SetupTask{}
+}
+
+// setupFailureCode classifies one setup failure by its owning task's kind:
+// worktree and merge tasks fail as worktree_setup_failed, image and
+// attachment tasks as setup_asset_copy_failed, and the abandoned-setup path
+// (reconciliation, async runner errors that recorded no task failure,
+// pre-task failures) as setup_interrupted.
+func setupFailureCode(owner SetupTask, interrupted bool) errcat.Code {
+	if interrupted || owner.Key == "" {
+		return errcat.SetupInterrupted
+	}
+	switch owner.Kind {
+	case SetupTaskWorktree, SetupTaskMerge:
+		return errcat.WorktreeSetupFailed
+	case SetupTaskImage, SetupTaskAttachment:
+		return errcat.SetupAssetCopyFailed
+	default:
+		return errcat.SetupInterrupted
+	}
+}
+
+// setupFailureRecords builds the two records one setup failure stores: the
+// owning task's full record (repositories block with name and branch for
+// repository tasks, command block with the setup log path when one exists,
+// raw error as diagnostics) and the run's thin record (the same code, a
+// setup_task block naming the owning task, no diagnostics).
+func setupFailureRecords(setup *SetupState, owner SetupTask, interrupted bool, rawErr string) (taskRecord, runRecord errcat.FailureRecord) {
+	code := setupFailureCode(owner, interrupted)
+	taskRecord = errcat.FailureRecord{Code: code, Diagnostics: rawErr}
+	var taskCtx errcat.RecordContext
+	switch owner.Kind {
+	case SetupTaskWorktree, SetupTaskMerge:
+		if owner.Repo != "" {
+			taskCtx.Repositories = []errcat.CodeRepository{{Name: owner.Repo, Branch: owner.Branch}}
+		}
+	}
+	if setup != nil && setup.LatestLogPath != "" {
+		taskCtx.Command = &errcat.CodeCommand{LogPaths: []string{setup.LatestLogPath}}
+	}
+	if taskCtx.Repositories != nil || taskCtx.Command != nil {
+		taskRecord.Context = &taskCtx
+	}
+	runRecord = errcat.FailureRecord{Code: code}
+	if owner.Key != "" {
+		runRecord.Context = &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{
+			Key:   owner.Key,
+			Kind:  string(owner.Kind),
+			Label: owner.Label,
+		}}
+	}
+	return taskRecord, runRecord
+}
+
+// failSetupTask durably fails the setup: the owning task is marked failed
+// with its stored record, and the run carries the thin record pointing at
+// it. It returns both records so the caller can emit them. A taskKey of ""
+// resolves the owner from the setup state (first unfinished task) and
+// classifies as an interrupted setup.
+func (m *Manager) failSetupTask(featureID, taskKey, errMsg string) (taskRecord, runRecord errcat.FailureRecord, err error) {
+	err = m.Store.Modify(featureID, func(f *Feature) error {
 		setup := f.Run().Setup
 		if setup == nil {
 			return fmt.Errorf("feature %s has no setup state", featureID)
@@ -457,18 +558,21 @@ func (m *Manager) failSetupTask(featureID, taskKey, errMsg string) error {
 		now := time.Now()
 		setup.Status = SetupStatusFailed
 		setup.CompletedAt = &now
-		setup.LastError = errMsg
-		if task, ok := setup.Tasks[taskKey]; ok {
-			task.Status = SetupStatusFailed
-			task.EndedAt = &now
-			task.LastError = errMsg
-			setup.Tasks[taskKey] = task
+		owner := setupFailureOwner(setup, taskKey)
+		taskRecord, runRecord = setupFailureRecords(setup, owner, taskKey == "", errMsg)
+		if owner.Key != "" {
+			if task, ok := setup.Tasks[owner.Key]; ok {
+				task.Status = SetupStatusFailed
+				task.EndedAt = &now
+				task.Error = &taskRecord
+				setup.Tasks[owner.Key] = task
+			}
 		}
 		f.Status = StatusFailed
-		f.FailureType = FailureWorktreeSetup
-		f.LastError = errMsg
+		f.Run().Failure = &runRecord
 		return nil
 	})
+	return taskRecord, runRecord, err
 }
 
 func (m *Manager) completeSetup(featureID string) error {
@@ -480,7 +584,6 @@ func (m *Manager) completeSetup(featureID string) error {
 		now := time.Now()
 		setup.Status = SetupStatusDone
 		setup.CompletedAt = &now
-		setup.LastError = ""
 		for _, key := range setupTaskOrder(setup) {
 			task := setup.Tasks[key]
 			if task.Status != SetupStatusDone {
@@ -490,8 +593,7 @@ func (m *Manager) completeSetup(featureID string) error {
 		if err := f.Transition(StatusCreated); err != nil {
 			return err
 		}
-		f.FailureType = ""
-		f.LastError = ""
+		f.Run().Failure = nil
 		return nil
 	})
 }
@@ -521,39 +623,51 @@ func (m *Manager) failAbandonedSetup(featureID, msg string) error {
 	return err
 }
 
-// FailActiveSetup durably fails a still-running setup, parking the feature in
-// Failed/FailureWorktreeSetup so it is retryable through RetrySetup. It is a
-// no-op (marked=false) once setup has reached a terminal state, so callers
-// that clean up after a setup runner error never clobber a failure the
-// runner already recorded — the runner owns task-level diagnostics whenever
-// it got far enough to persist them.
-func (m *Manager) FailActiveSetup(featureID, msg string) (marked bool, err error) {
-	err = m.Store.Modify(featureID, func(f *Feature) error {
+// SetupFailureOutcome reports what FailActiveSetup durably recorded: the
+// owning task and both stored records when it marked a still-running setup
+// failed.
+type SetupFailureOutcome struct {
+	Marked     bool
+	Owner      SetupTask
+	TaskRecord *errcat.FailureRecord
+	RunRecord  *errcat.FailureRecord
+}
+
+// FailActiveSetup durably fails a still-running setup, parking the feature
+// in Failed with a setup_interrupted record so it is retryable through
+// RetrySetup. It is a no-op (Marked=false) once setup has reached a terminal
+// state, so callers that clean up after a setup runner error never clobber
+// a failure the runner already recorded — the runner owns task-level
+// diagnostics whenever it got far enough to persist them.
+func (m *Manager) FailActiveSetup(featureID, msg string) (SetupFailureOutcome, error) {
+	var outcome SetupFailureOutcome
+	err := m.Store.Modify(featureID, func(f *Feature) error {
 		setup := f.Run().Setup
 		if setup == nil || setup.Status != SetupStatusRunning {
 			return nil
 		}
-		marked = true
+		outcome.Marked = true
 		now := time.Now()
 		setup.Status = SetupStatusFailed
 		setup.CompletedAt = &now
-		setup.LastError = msg
-		for _, key := range setupTaskOrder(setup) {
-			task := setup.Tasks[key]
-			if task.Status == SetupStatusRunning {
+		owner := setupFailureOwner(setup, "")
+		taskRecord, runRecord := setupFailureRecords(setup, owner, true, msg)
+		if owner.Key != "" {
+			if task, ok := setup.Tasks[owner.Key]; ok {
 				task.Status = SetupStatusFailed
 				task.EndedAt = &now
-				task.LastError = msg
-				setup.Tasks[key] = task
-				break
+				task.Error = &taskRecord
+				setup.Tasks[owner.Key] = task
 			}
 		}
 		f.Status = StatusFailed
-		f.FailureType = FailureWorktreeSetup
-		f.LastError = msg
+		f.Run().Failure = &runRecord
+		outcome.Owner = owner
+		outcome.TaskRecord = &taskRecord
+		outcome.RunRecord = &runRecord
 		return nil
 	})
-	return marked, err
+	return outcome, err
 }
 
 func setupAttemptLogPath(store *Store, f *Feature, attempt int) string {

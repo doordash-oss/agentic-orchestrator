@@ -172,7 +172,7 @@ func TestPhaseImplementUnified_NeedUserInputMidPhaseResume(t *testing.T) {
 	}
 	for _, name := range []string{"repo-a", "repo-b"} {
 		st := got.RepoStates[name]
-		if st != nil && (st.Touched || st.LastError != "") {
+		if st != nil && (st.Touched || st.Error != nil) {
 			t.Errorf("repo %q after pause = %+v, want untouched (per-repo state untouched on need_user_input)", name, st)
 		}
 	}

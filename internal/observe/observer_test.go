@@ -26,6 +26,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -203,6 +204,54 @@ func TestObserverPhaseLifecycle(t *testing.T) {
 		}
 		if events[1].Error != "build failed" {
 			t.Errorf("event[1] error = %q, want 'build failed'", events[1].Error)
+		}
+		if events[1].Data != nil {
+			t.Errorf("event[1] data = %#v, want none without canonical identity", events[1].Data)
+		}
+	})
+
+	t.Run("phase_failed_carries_canonical_identity", func(t *testing.T) {
+		stateDir := t.TempDir()
+		featureID := "fail_publish_feature"
+		os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
+
+		obs := New(true, stateDir, false, "", false, "agentic")
+		sc := SpanContextForFeature(featureID, "", "", "").Child()
+
+		obs.PhaseStarted(sc, "publish")
+		obs.PhaseCompleted(sc, "publish", 0, errors.New("PR creation failed: 502 Bad Gateway"),
+			"publish_pull_request_failed", "needs_action")
+
+		eventsPath := filepath.Join(stateDir, featureID, "events.jsonl")
+		f, err := os.Open(eventsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+
+		var events []Event
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			var evt Event
+			json.Unmarshal(scanner.Bytes(), &evt)
+			events = append(events, evt)
+		}
+
+		if len(events) != 2 {
+			t.Fatalf("expected 2 events, got %d", len(events))
+		}
+		failed := events[1]
+		if failed.EventType != "phase.failed" {
+			t.Fatalf("event[1] type = %q, want phase.failed", failed.EventType)
+		}
+		if failed.Error != "PR creation failed: 502 Bad Gateway" {
+			t.Errorf("event[1] error = %q, want the raw failure text", failed.Error)
+		}
+		if code, ok := failed.Data["error_code"].(string); !ok || code != "publish_pull_request_failed" {
+			t.Errorf("event[1] data[error_code] = %#v, want publish_pull_request_failed", failed.Data["error_code"])
+		}
+		if class, ok := failed.Data["error_class"].(string); !ok || class != "needs_action" {
+			t.Errorf("event[1] data[error_class] = %#v, want needs_action", failed.Data["error_class"])
 		}
 	})
 }
@@ -1148,6 +1197,52 @@ func TestSetupLifecycleEmitsPrePhaseEventWithDocumentedFields(t *testing.T) {
 	}
 }
 
+// TestSetupFailedLifecycleCarriesCanonicalCodeAndClass pins the setup.failed
+// observer event: the data map carries the owning task record's catalog code
+// and class alongside the raw error text.
+func TestSetupFailedLifecycleCarriesCanonicalCodeAndClass(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "setup_failed_feat"
+	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	obs := New(true, stateDir, false, "", false, "agentic")
+	sc := SpanContextForFeature(featureID, "", "", "").WithRun(1)
+
+	obs.SetupLifecycle(sc, feature.SetupEvent{
+		Kind:       feature.SetupEventFailed,
+		FeatureID:  featureID,
+		RunNumber:  1,
+		Attempt:    1,
+		TaskKey:    "worktree:api",
+		TaskKind:   feature.SetupTaskWorktree,
+		TaskStatus: feature.SetupStatusFailed,
+		Error:      "creating worktree for api: no commits yet",
+		Failure: &errcat.FailureRecord{
+			Code:        errcat.WorktreeSetupFailed,
+			Diagnostics: "creating worktree for api: no commits yet",
+		},
+	})
+
+	events := readEvents(t, stateDir, featureID)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	evt := events[0]
+	if evt.EventType != "setup.failed" {
+		t.Fatalf("EventType = %q, want setup.failed", evt.EventType)
+	}
+	if evt.Data["error_code"] != string(errcat.WorktreeSetupFailed) {
+		t.Fatalf("Data[error_code] = %#v, want %q", evt.Data["error_code"], errcat.WorktreeSetupFailed)
+	}
+	if evt.Data["error_class"] != "blocking" {
+		t.Fatalf("Data[error_class] = %#v, want blocking", evt.Data["error_class"])
+	}
+	if evt.Data["error"] != "creating worktree for api: no commits yet" {
+		t.Fatalf("Data[error] = %#v, want the raw error text", evt.Data["error"])
+	}
+}
+
 func TestFeatureCompletedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "feat_completed_feat"
@@ -1180,7 +1275,7 @@ func TestFeatureFailedEmitsEvent(t *testing.T) {
 	obs := New(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "")
-	obs.FeatureFailed(sc, "timeout", "session timed out after 30m")
+	obs.FeatureFailed(sc, "infrastructure_failure", "blocking", "session timed out after 30m")
 
 	events := readEvents(t, stateDir, featureID)
 	if len(events) != 1 {
@@ -1193,8 +1288,14 @@ func TestFeatureFailedEmitsEvent(t *testing.T) {
 	if evt.Error != "session timed out after 30m" {
 		t.Errorf("Error = %q, want %q", evt.Error, "session timed out after 30m")
 	}
-	if ft, ok := evt.Data["failure_type"].(string); !ok || ft != "timeout" {
-		t.Errorf("Data[failure_type] = %v, want %q", evt.Data["failure_type"], "timeout")
+	if code, ok := evt.Data["error_code"].(string); !ok || code != "infrastructure_failure" {
+		t.Errorf("Data[error_code] = %v, want %q", evt.Data["error_code"], "infrastructure_failure")
+	}
+	if class, ok := evt.Data["error_class"].(string); !ok || class != "blocking" {
+		t.Errorf("Data[error_class] = %v, want %q", evt.Data["error_class"], "blocking")
+	}
+	if _, ok := evt.Data["failure_type"]; ok {
+		t.Errorf("Data[failure_type] = %v, want no failure_type key", evt.Data["failure_type"])
 	}
 }
 
@@ -1556,7 +1657,7 @@ func TestNilObserverPermissionMethodsAreNoOps(t *testing.T) {
 	// None of these should panic
 	obs.FeatureStarted(sc, "feat", []string{"repo"}, "full")
 	obs.FeatureCompleted(sc, 1.0, time.Minute)
-	obs.FeatureFailed(sc, "timeout", "error msg")
+	obs.FeatureFailed(sc, "session_crashed", "blocking", "error msg")
 	obs.FeatureInterrupted(sc, "implement")
 	obs.PermissionRequested(sc, "sess1", "repo", 1, "Bash", "input")
 	obs.PermissionResolved(sc, "sess1", "repo", 1, "Bash", "allow")
@@ -1574,7 +1675,7 @@ func TestDisabledObserverPermissionMethodsAreNoOps(t *testing.T) {
 
 	obs.FeatureStarted(sc, "feat", []string{"repo"}, "full")
 	obs.FeatureCompleted(sc, 1.0, time.Minute)
-	obs.FeatureFailed(sc, "timeout", "error msg")
+	obs.FeatureFailed(sc, "session_crashed", "blocking", "error msg")
 	obs.FeatureInterrupted(sc, "implement")
 	obs.PermissionRequested(sc, "sess1", "repo", 1, "Bash", "input")
 	obs.PermissionResolved(sc, "sess1", "repo", 1, "Bash", "allow")
@@ -1769,7 +1870,7 @@ func TestFeatureFailedEndsOTelSpan(t *testing.T) {
 
 	sc := SpanContextForFeature(featureID, "", "", "")
 	obs.FeatureStarted(sc, "failing feature", []string{"repo-a"}, "large")
-	obs.FeatureFailed(sc, "infrastructure", "something broke")
+	obs.FeatureFailed(sc, "infrastructure_failure", "blocking", "something broke")
 
 	obs.otel.mu.Lock()
 	spanCount := len(obs.otel.spans)
@@ -1870,7 +1971,7 @@ func TestEmit_IncludesRunNumber(t *testing.T) {
 	obs.ValidatorCompleted(sc, "critic-architecture", "APPROVED", time.Second)
 	obs.FeatureStarted(sc, "my-feature", []string{"repo-a"}, "large")
 	obs.FeatureCompleted(sc, 0.5, time.Second)
-	obs.FeatureFailed(sc, "infrastructure", "boom")
+	obs.FeatureFailed(sc, "infrastructure_failure", "blocking", "boom")
 	obs.SetupLifecycle(sc, feature.SetupEvent{Kind: feature.SetupEventStarted, FeatureID: featureID, Attempt: 1})
 	obs.FeatureInterrupted(sc, "implement")
 	obs.PermissionRequested(sc, "s1", "repo-a", 1, "Edit", "preview")

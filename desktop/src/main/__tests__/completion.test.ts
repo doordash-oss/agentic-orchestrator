@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 import { describe, expect, it } from 'vitest';
+import { RepositoryDiffResultSchema } from '../../shared/ipc';
 import { CompletionService } from '../completion';
 import type { ServerTransport } from '../serverClient';
 
@@ -122,5 +123,113 @@ describe('CompletionService.preflightCompletion', () => {
       pendingDirtyFiles: ['a.go', 'b.go'],
       pendingDirtyFileTotal: 5,
     });
+  });
+
+  it('crosses a repository publish-failure record as the canonical error with redacted diagnostics', async () => {
+    const service = new CompletionService({
+      transport: {
+        apiRequest: () =>
+          Promise.resolve({
+            status: 200,
+            body: {
+              api_version: 'v1',
+              feature_id: 'abcd1234ef567890',
+              source_revision: 'rev-1',
+              repos: [
+                {
+                  repo: 'repo-a',
+                  publishable: true,
+                  touched: true,
+                  status: 'unpublished_changes',
+                  error: {
+                    code: 'publish_rebase_conflict',
+                    class: 'needs_action',
+                    title: 'Pull-rebase conflict',
+                    summary:
+                      'The pull rebase for repository "repo-a" (branch "feature/f") onto "main" conflicted.',
+                    remediation: {
+                      hint: 'Resolve the conflict in the worktree or run a rebase pass, then retry.',
+                      actions: ['publish'],
+                    },
+                    context: {
+                      repositories: [
+                        {
+                          name: 'repo-a',
+                          branch: 'feature/f',
+                          rebase_target: 'main',
+                        },
+                      ],
+                    },
+                    diagnostics: 'git rebase: CONFLICT at /Users/dev/worktrees/repo-a',
+                  },
+                },
+              ],
+            },
+          }),
+      },
+    });
+
+    const result = await service.preflightCompletion({ featureId: 'abcd1234ef567890' });
+
+    const repo = result.repos[0];
+    expect(repo).toBeDefined();
+    if (repo == null) return;
+    expect(repo.error).toMatchObject({
+      code: 'publish_rebase_conflict',
+      class: 'needs_action',
+      title: 'Pull-rebase conflict',
+    });
+    expect(repo.error?.context?.repositories?.[0]).toEqual({
+      name: 'repo-a',
+      branch: 'feature/f',
+      rebase_target: 'main',
+    });
+    // Raw diagnostics cross IPC only through the same redaction as every
+    // other raw text the renderer receives.
+    expect(repo.error?.diagnostics).not.toContain('/Users/dev/worktrees/repo-a');
+    expect(repo.error?.diagnostics).toContain('[path]');
+    expect(Reflect.get(repo, 'lastError')).toBeUndefined();
+  });
+});
+
+describe('CompletionService.getRepositoryDiff', () => {
+  it('maps the canonical partial-inspection error with redacted diagnostics', async () => {
+    const service = new CompletionService({
+      transport: pathTransport({
+        status: 200,
+        body: {
+          api_version: 'v1',
+          feature_id: 'abcd1234ef567890',
+          repo: 'repo-a',
+          source_revision: 'rev-1',
+          files: [],
+          error: {
+            code: 'repository_inspection_partial',
+            class: 'warning',
+            title: 'Repository inspection incomplete',
+            summary: 'One repository could not be fully inspected for changes.',
+            diagnostics: 'git status failed under /Users/dev/repo-a: bearer tok-live-secret',
+          },
+        },
+      }),
+    });
+
+    const result = await service.getRepositoryDiff({
+      featureId: 'abcd1234ef567890',
+      repo: 'repo-a',
+    });
+
+    expect(result.files).toEqual([]);
+    expect(result.error).toMatchObject({
+      code: 'repository_inspection_partial',
+      class: 'warning',
+      title: 'Repository inspection incomplete',
+    });
+    expect(result.error?.diagnostics).not.toContain('/Users/dev/repo-a');
+    expect(result.error?.diagnostics).not.toContain('tok-live-secret');
+    expect(result.error?.diagnostics).toContain('[path]');
+    expect(result.error?.diagnostics).toContain('[redacted]');
+    expect(Reflect.get(result, 'partialFailure')).toBeUndefined();
+    expect(() => RepositoryDiffResultSchema.parse(result)).not.toThrow();
   });
 });

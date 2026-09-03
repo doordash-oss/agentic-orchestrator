@@ -24,11 +24,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -315,15 +317,22 @@ func TestTransactionDirtyAggregation(t *testing.T) {
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
-	// Both dirty repos should have diagnostics.
-	dirtyCount := 0
-	for i := range tx.Entries {
-		if len(tx.Entries[i].Dirty) > 0 {
-			dirtyCount++
+	// The record classifies the dirty-parent park and lists every dirty
+	// repository with its flattened dirty files.
+	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationParentDirty {
+		t.Fatalf("attention record = %+v, want integration_parent_dirty", tx.Attention)
+	}
+	if tx.Attention.Context == nil || len(tx.Attention.Context.Repositories) < 2 {
+		t.Fatalf("attention repositories = %+v, want both dirty repositories", tx.Attention.Context)
+	}
+	foundUntracked := false
+	for _, repo := range tx.Attention.Context.Repositories {
+		if repo.Name == child.Repos[0].Name && slices.Contains(repo.DirtyFiles, "stray.txt") {
+			foundUntracked = true
 		}
 	}
-	if dirtyCount < 2 {
-		t.Fatalf("dirty diagnostics count = %d, want at least 2 (aggregated)", dirtyCount)
+	if !foundUntracked {
+		t.Fatalf("attention repositories = %+v, want repoA dirty_files to list stray.txt", tx.Attention.Context.Repositories)
 	}
 }
 
@@ -367,10 +376,15 @@ func TestTransactionPreparationFailureLeavesRefsUnchanged(t *testing.T) {
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
-	// The second repo should have conflict files.
-	entry := tx.EntryByRepo(child.Repos[1].Name)
-	if entry == nil || len(entry.ConflictFiles) == 0 {
-		t.Fatalf("repo 1: conflict files missing, entry = %+v", entry)
+	// The record classifies the conflict park and carries the conflict file
+	// in the repository block.
+	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationMergeConflict {
+		t.Fatalf("attention record = %+v, want integration_merge_conflict", tx.Attention)
+	}
+	if tx.Attention.Context == nil || len(tx.Attention.Context.Repositories) != 1 ||
+		tx.Attention.Context.Repositories[0].Name != child.Repos[1].Name ||
+		len(tx.Attention.Context.Repositories[0].ConflictFiles) == 0 {
+		t.Fatalf("attention repositories = %+v, want repo 1 with conflict files", tx.Attention.Context)
 	}
 }
 
@@ -414,8 +428,15 @@ func TestTransactionExternalParentAdvancementParksDrift(t *testing.T) {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
 	entry := tx.EntryByRepo(child.Repos[0].Name)
-	if entry == nil || entry.GateCode != feature.GateCodeParentDrift {
-		t.Fatalf("repo 0: gate code = %+v, want %s", entry, feature.GateCodeParentDrift)
+	if entry == nil {
+		t.Fatalf("repo 0: entry missing, journal = %+v", tx)
+	}
+	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationParentRefDrift {
+		t.Fatalf("attention record = %+v, want integration_parent_ref_drift", tx.Attention)
+	}
+	if tx.Attention.Context == nil || len(tx.Attention.Context.Repositories) != 1 ||
+		tx.Attention.Context.Repositories[0].Name != child.Repos[0].Name {
+		t.Fatalf("attention repositories = %+v, want repo 0", tx.Attention.Context)
 	}
 	if entry.PrepState != feature.RepoPrepFailed {
 		t.Fatalf("repo 0: prep state = %s, want failed", entry.PrepState)
@@ -458,8 +479,8 @@ func TestTransactionParentDriftRetryAcknowledges(t *testing.T) {
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention after renewed drift", tx)
 	}
-	if entry := tx.EntryByRepo(child.Repos[0].Name); entry == nil || entry.GateCode != feature.GateCodeParentDrift {
-		t.Fatalf("repo 0: gate code = %+v, want %s", entry, feature.GateCodeParentDrift)
+	if tx := child.Parent.Transaction; tx == nil || tx.Attention == nil || tx.Attention.Code != errcat.IntegrationParentRefDrift {
+		t.Fatalf("attention record = %+v, want integration_parent_ref_drift after renewed drift", child.Parent.Transaction.Attention)
 	}
 
 	// Retry at the unchanged tip acknowledges the drift and completes.
@@ -508,15 +529,21 @@ func TestTransactionParentDriftMultiRepoAggregation(t *testing.T) {
 	}
 	for i := range tx.Entries {
 		entry := &tx.Entries[i]
-		drifted := i == 0 || i == 2
-		if drifted && entry.GateCode != feature.GateCodeParentDrift {
-			t.Fatalf("repo %d: gate code = %q, want %s", i, entry.GateCode, feature.GateCodeParentDrift)
-		}
-		if !drifted && entry.GateCode != "" {
-			t.Fatalf("repo %d: gate code = %q, want empty for clean repo", i, entry.GateCode)
-		}
 		if entry.CandidateSHA != "" {
 			t.Fatalf("repo %d: candidate %s staged despite drift", i, entry.CandidateSHA)
+		}
+	}
+	// Both drifted repos join the record's repositories block; the clean
+	// middle repo does not.
+	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationParentRefDrift {
+		t.Fatalf("attention record = %+v, want integration_parent_ref_drift", tx.Attention)
+	}
+	if tx.Attention.Context == nil || len(tx.Attention.Context.Repositories) != 2 {
+		t.Fatalf("attention repositories = %+v, want exactly the two drifted repos", tx.Attention.Context)
+	}
+	for _, repo := range tx.Attention.Context.Repositories {
+		if repo.Name == child.Repos[1].Name {
+			t.Fatalf("clean repo %s listed in the drift record", repo.Name)
 		}
 	}
 }
@@ -562,10 +589,8 @@ func TestTransactionParentDriftExemptsPriorCandidate(t *testing.T) {
 	if child.Parent.Transaction.Phase != feature.TransactionPhaseMerged {
 		t.Fatalf("transaction phase = %s, want merged", child.Parent.Transaction.Phase)
 	}
-	for i := range child.Parent.Transaction.Entries {
-		if got := child.Parent.Transaction.Entries[i].GateCode; got == feature.GateCodeParentDrift {
-			t.Fatalf("repo %d: resume tripped the drift gate", i)
-		}
+	if child.Parent.Transaction.Attention != nil {
+		t.Fatalf("merged journal still carries an attention record: %+v", child.Parent.Transaction.Attention)
 	}
 }
 
@@ -843,6 +868,20 @@ func TestTransactionStartupReconciliationExternalMovement(t *testing.T) {
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention for external movement", tx)
 	}
+	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationRefRace {
+		t.Fatalf("attention record = %+v, want integration_ref_race", tx.Attention)
+	}
+	if tx.Attention.Context == nil || len(tx.Attention.Context.Repositories) != 1 {
+		t.Fatalf("attention repositories = %+v, want the externally moved repo", tx.Attention.Context)
+	}
+	repo := tx.Attention.Context.Repositories[0]
+	if repo.Name != child.Repos[0].Name ||
+		repo.ParentAnchorSHA != journal.Entries[0].ParentAnchorSHA ||
+		repo.CandidateSHA != journal.Entries[0].CandidateSHA ||
+		repo.ObservedSHA != externalSHA {
+		t.Fatalf("attention repository = %+v, want old %s candidate %s observed %s",
+			repo, journal.Entries[0].ParentAnchorSHA, journal.Entries[0].CandidateSHA, externalSHA)
+	}
 }
 
 // failingCASWorktrees wraps the real worktree manager but makes the Nth
@@ -944,7 +983,7 @@ func TestTransactionApplySyncFailureContinuesForward(t *testing.T) {
 
 	// Apply with a worktree manager that fails ResetToCommit for repo 1
 	// (the second repo). The failure persists through the immediate closure
-	// attempt so its durable LastError can be asserted.
+	// attempt so the journal's pending-sync diagnostic can be asserted.
 	resetWT := &failingResetWorktrees{
 		WorktreeManager: fx.wm,
 		failRepoDir:     fx.repoDirs[1],
@@ -972,16 +1011,34 @@ func TestTransactionApplySyncFailureContinuesForward(t *testing.T) {
 		t.Fatalf("phase = %s, want applied", stored.Parent.Transaction.Phase)
 	}
 	failedEntry := stored.Parent.Transaction.EntryByRepo(journal.Entries[1].Repo)
-	if failedEntry.ApplyState != feature.RepoApplyApplied || !strings.Contains(failedEntry.Diagnostics, "worktree sync pending after apply") {
-		t.Fatalf("failed entry = %+v, want applied with pending-sync diagnostics", failedEntry)
+	if failedEntry.ApplyState != feature.RepoApplyApplied || !failedEntry.PendingSync {
+		t.Fatalf("failed entry = %+v, want applied with the typed pending-sync flag", failedEntry)
+	}
+	if stored.Parent.Transaction.Attention != nil {
+		t.Fatalf("attention record = %+v, want none for a pending sync", stored.Parent.Transaction.Attention)
 	}
 
 	if err := applyO.closeTransactionAfterApply(fx.child.ID, fx.parent.ID); err == nil {
 		t.Fatal("closeTransactionAfterApply() error = nil, want persistent sync failure")
 	}
 	stored, _ = fx.store.Load(fx.child.ID)
-	if !strings.Contains(stored.LastError, "syncing parent worktree for repo") {
-		t.Fatalf("LastError = %q, want closure sync diagnostic", stored.LastError)
+	// The transaction journal and the relationship event own the closure
+	// worktree-sync failure: the child's run carries no failure record, the
+	// journal stays in the applied phase with its pending-sync entry, and
+	// the closure failure parks as the stored attention record.
+	if rec := stored.FailureRecord(); rec != nil {
+		t.Fatalf("child failure record = %+v, want none (journal owns the closure sync failure)", rec)
+	}
+	if stored.Parent.Transaction.Phase != feature.TransactionPhaseApplied {
+		t.Fatalf("phase after failed closure = %s, want applied", stored.Parent.Transaction.Phase)
+	}
+	if rec := stored.Parent.Transaction.Attention; rec == nil || rec.Code != errcat.IntegrationWorktreeSyncFailed {
+		t.Fatalf("attention record after failed closure = %+v, want integration_worktree_sync_failed", rec)
+	} else if rec.Context == nil || len(rec.Context.Repositories) != 1 || rec.Context.Repositories[0].Name != journal.Entries[1].Repo {
+		t.Fatalf("attention repositories after failed closure = %+v, want repo 1", rec.Context)
+	}
+	if pending := stored.Parent.Transaction.EntryByRepo(journal.Entries[1].Repo); pending == nil || !pending.PendingSync {
+		t.Fatalf("pending entry after failed closure = %+v, want the typed flag still set", pending)
 	}
 
 	// Swap in the healthy manager and re-enter through the public integration
@@ -993,8 +1050,8 @@ func TestTransactionApplySyncFailureContinuesForward(t *testing.T) {
 	if stored.Parent.Transaction.Phase != feature.TransactionPhaseMerged {
 		t.Fatalf("phase after resume = %s, want merged", stored.Parent.Transaction.Phase)
 	}
-	if stored.LastError != "" {
-		t.Fatalf("LastError after resume = %q, want cleared", stored.LastError)
+	if rec := stored.FailureRecord(); rec != nil {
+		t.Fatalf("child failure record after resume = %+v, want none", rec)
 	}
 	for i := range fx.repoDirs {
 		if got := txGit(t, fx.repoDirs[i], "rev-parse", "HEAD"); got != journal.Entries[i].CandidateSHA {

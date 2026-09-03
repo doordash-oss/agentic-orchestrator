@@ -24,8 +24,9 @@ limitations under the License.
  * backoff restart budget silently instead of hijacking the connection
  * surface. External servers are never adopted, signalled, or stopped.
  */
-import { toSafeError } from '../../shared/errors';
-import type { ConnectionDiagnostics, ConnectionState } from '../../shared/ipc';
+import { CanonicalErrorException, redactText, toCanonicalError } from '../../shared/errors';
+import type { CanonicalError } from '../../shared/api/parse';
+import type { ConnectionState } from '../../shared/ipc';
 import type { ResolveResult } from './resources';
 import type { ChildExit } from './serverProcess';
 import type { SelectedRuntime, ServerChildLike } from './runtimeGateway';
@@ -51,9 +52,29 @@ export interface ChildSupervisorHost {
   spawnServer(binaryPath: string, args: readonly string[]): ServerChildLike;
   /** Clears the bearer/base-URL fields after a connected child dies. */
   clearConnectionCredentials(): void;
-  ownedDiagnosticsField(): { diagnostics?: ConnectionDiagnostics };
+  /**
+   * Canonical crash error (outcome interpolated into the catalog summary),
+   * folding the bounded, redacted owned launch diagnostics.
+   */
+  ownedCrashError(outcome: string): CanonicalError;
+  /** Canonical crash-loop error, folding the owned launch diagnostics. */
+  ownedCrashLoopError(): CanonicalError;
   /** Re-enters the connect cycle after a recovery delay. */
   startFromRecovery(): Promise<boolean>;
+}
+
+/**
+ * The terse, redacted reason a recovery delay failed, for the local
+ * diagnostics log: a canonical exception logs its authored summary; a plain
+ * error logs its redacted message; anything else never reaches the log.
+ */
+function recoveryDelayReason(err: unknown): string {
+  if (err instanceof CanonicalErrorException) {
+    return err.canonical.summary;
+  }
+  return err instanceof Error && err.message !== ''
+    ? redactText(err.message)
+    : 'the recovery step failed';
 }
 
 export class ChildSupervisor {
@@ -157,7 +178,6 @@ export class ChildSupervisor {
       // Startup-phase exits are reported by the launch loop with more context.
       return;
     }
-    const diagnostics = this.host.ownedDiagnosticsField();
     this.host.clearConnectionCredentials();
     const now = this.host.clock();
     if (this.readySince !== null && now - this.readySince >= this.timeouts.crashWindowMs) {
@@ -169,13 +189,7 @@ export class ChildSupervisor {
       stage: 'connect',
       detail: 'The app-managed runtime exited unexpectedly.',
       ownership: 'none',
-      error: {
-        code: 'E_SERVER_CRASHED',
-        message: 'The app-managed Agentico runtime exited unexpectedly.',
-        remediation:
-          'Agentico will try to restart it automatically. Local diagnostics were recorded.',
-      },
-      ...diagnostics,
+      error: this.host.ownedCrashError('exited unexpectedly'),
     });
     this.scheduleAutomaticRecovery();
   }
@@ -195,13 +209,7 @@ export class ChildSupervisor {
         stage: 'connect',
         detail: 'The app-managed runtime stopped repeatedly.',
         ownership: 'none',
-        error: {
-          code: 'E_SERVER_CRASH_LOOP',
-          message: 'Three automatic restart attempts failed within one minute.',
-          remediation:
-            'Inspect the redacted local diagnostics, then use Retry to start a fresh cycle.',
-        },
-        ...this.host.ownedDiagnosticsField(),
+        error: this.host.ownedCrashLoopError(),
       });
       return;
     }
@@ -228,12 +236,9 @@ export class ChildSupervisor {
             stage: 'connect',
             detail: 'The app-managed runtime could not be recovered.',
             ownership: 'none',
-            error: {
-              code: 'E_SERVER_CRASHED',
-              message: 'The automatic runtime restart did not reach a healthy state.',
-              remediation: 'Agentico will retry within the bounded crash budget.',
-            },
-            ...this.host.ownedDiagnosticsField(),
+            error: this.host.ownedCrashError(
+              'was restarted automatically but did not reach a healthy state',
+            ),
           });
           this.scheduleAutomaticRecovery();
         }
@@ -241,20 +246,14 @@ export class ChildSupervisor {
       .catch((err: unknown) => {
         this.recoveryPending = false;
         this.crashAttempts.pop();
-        const safe = toSafeError(err, 'E_RECOVERY_DELAY');
-        this.host.log(`automatic recovery delay failed: ${safe.message}`);
+        this.host.log(`automatic recovery delay failed: ${recoveryDelayReason(err)}`);
         if (this.host.isShuttingDown()) return;
         this.host.setState({
           status: 'crashed',
           stage: 'connect',
           detail: 'Automatic recovery could not be scheduled.',
           ownership: 'none',
-          error: {
-            code: 'E_SERVER_CRASHED',
-            message: 'The automatic runtime restart could not be scheduled.',
-            remediation: 'Use Retry to start a fresh supervised cycle.',
-          },
-          ...this.host.ownedDiagnosticsField(),
+          error: this.host.ownedCrashError('could not be restarted automatically'),
         });
       });
   }
@@ -305,14 +304,13 @@ export class ChildSupervisor {
           this.adopt(child);
           this.host.log('detached app-owned server relaunched silently');
         } catch (err) {
-          const safe = toSafeError(err, 'E_LAUNCH_FAILED');
-          this.host.log(`background server relaunch failed: ${safe.message}`);
+          const safe = toCanonicalError(err, 'E_LAUNCH_FAILED');
+          this.host.log(`background server relaunch failed: ${safe.summary}`);
         }
       })
       .catch((err: unknown) => {
         this.recoveryPending = false;
-        const safe = toSafeError(err, 'E_RECOVERY_DELAY');
-        this.host.log(`background recovery delay failed: ${safe.message}`);
+        this.host.log(`background recovery delay failed: ${recoveryDelayReason(err)}`);
       });
   }
 }

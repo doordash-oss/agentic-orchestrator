@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -591,5 +592,238 @@ func TestSessionStartedPublishesSnapshotRequiredSessionUpdate(t *testing.T) {
 	}
 	if evt.Resource.Phase != feature.PhaseKnowledgeBase.String() {
 		t.Fatalf("event phase = %q, want %q", evt.Resource.Phase, feature.PhaseKnowledgeBase.String())
+	}
+}
+
+// TestFeatureFailedDomainEventCarriesCanonicalError pins the SSE mapping for
+// failure-carrying lifecycle events: a feature-failed domain event becomes a
+// lifecycle.updated whose summary is the catalog title for its code, whose
+// error object carries the canonical code and class, and which requires a
+// snapshot; other lifecycle events carry no error object.
+func TestFeatureFailedDomainEventCarriesCanonicalError(t *testing.T) {
+	t.Parallel()
+
+	rendered := errcat.RenderRecord(errcat.FailureRecord{
+		Code: errcat.IterationBudgetExhausted,
+		Context: &errcat.RecordContext{
+			Phase:        &errcat.CodePhase{Name: "implement", Iteration: 12},
+			Repositories: []errcat.CodeRepository{{Name: "repo-a"}},
+		},
+		Diagnostics: "implement failed for repo-a",
+	})
+	failed := eventDTOFromDomain(ports.Event{
+		Type:           ports.FeatureFailed,
+		FeatureID:      testFeatureID,
+		CanonicalError: &rendered,
+	})
+	if failed.Kind != sseEventLifecycleUpdated {
+		t.Fatalf("feature-failed event kind = %q, want %q", failed.Kind, sseEventLifecycleUpdated)
+	}
+	if failed.Summary != "Iteration budget exhausted" {
+		t.Fatalf("feature-failed event summary = %q, want the catalog title %q", failed.Summary, "Iteration budget exhausted")
+	}
+	if failed.Error == nil {
+		t.Fatal("feature-failed event error = nil, want canonical error object")
+	}
+	if failed.Error.Code != string(errcat.IterationBudgetExhausted) {
+		t.Fatalf("feature-failed event error.code = %q, want %q", failed.Error.Code, errcat.IterationBudgetExhausted)
+	}
+	if failed.Error.Class != SSEEventErrorClassBlocking {
+		t.Fatalf("feature-failed event error.class = %q, want %q", failed.Error.Class, SSEEventErrorClassBlocking)
+	}
+	if !failed.SnapshotRequired {
+		t.Fatal("feature-failed lifecycle event must require a snapshot")
+	}
+
+	started := eventDTOFromDomain(ports.Event{Type: ports.FeatureStarted, FeatureID: testFeatureID})
+	if started.Kind != sseEventLifecycleUpdated {
+		t.Fatalf("feature-started event kind = %q, want %q", started.Kind, sseEventLifecycleUpdated)
+	}
+	if started.Error != nil {
+		t.Fatalf("feature-started event error = %+v, want none", *started.Error)
+	}
+	if !started.SnapshotRequired {
+		t.Fatal("feature-started lifecycle event must require a snapshot")
+	}
+}
+
+// TestSetupFailedDomainEventCarriesCanonicalError pins the SSE mapping for
+// failed setup events: a setup-failed domain event carrying a canonical error
+// becomes a lifecycle.updated whose summary is the catalog title for its code
+// and whose error object carries the canonical code and class, exactly as a
+// feature-failed event does; other setup events carry no error object.
+func TestSetupFailedDomainEventCarriesCanonicalError(t *testing.T) {
+	t.Parallel()
+
+	rendered := errcat.RenderRecord(errcat.FailureRecord{
+		Code: errcat.WorktreeSetupFailed,
+		Context: &errcat.RecordContext{
+			Repositories: []errcat.CodeRepository{{Name: "repo-a", Branch: "feature/repo-a"}},
+		},
+		Diagnostics: "git worktree add failed: no commits yet",
+	})
+	failed := eventDTOFromDomain(ports.Event{
+		Type:           ports.SetupFailed,
+		FeatureID:      testFeatureID,
+		CanonicalError: &rendered,
+	})
+	if failed.Kind != sseEventLifecycleUpdated {
+		t.Fatalf("setup-failed event kind = %q, want %q", failed.Kind, sseEventLifecycleUpdated)
+	}
+	if failed.Summary != "Worktree setup failed" {
+		t.Fatalf("setup-failed event summary = %q, want the catalog title %q", failed.Summary, "Worktree setup failed")
+	}
+	if failed.Error == nil {
+		t.Fatal("setup-failed event error = nil, want canonical error object")
+	}
+	if failed.Error.Code != string(errcat.WorktreeSetupFailed) {
+		t.Fatalf("setup-failed event error.code = %q, want %q", failed.Error.Code, errcat.WorktreeSetupFailed)
+	}
+	if failed.Error.Class != SSEEventErrorClassBlocking {
+		t.Fatalf("setup-failed event error.class = %q, want %q", failed.Error.Class, SSEEventErrorClassBlocking)
+	}
+	if !failed.SnapshotRequired {
+		t.Fatal("setup-failed lifecycle event must require a snapshot")
+	}
+
+	started := eventDTOFromDomain(ports.Event{Type: ports.SetupStarted, FeatureID: testFeatureID})
+	if started.Error != nil {
+		t.Fatalf("setup-started event error = %+v, want none", *started.Error)
+	}
+	if !started.SnapshotRequired {
+		t.Fatal("setup-started lifecycle event must require a snapshot")
+	}
+}
+
+// TestRelationshipIntegrationChangedCarriesCanonicalError pins the SSE
+// mapping for relationship integration events: an integration-changed domain
+// event carrying a canonical error (a parked transaction) becomes a
+// lifecycle.updated event whose summary is the catalog title for its code,
+// whose error object carries the canonical code and class, and which requires
+// a snapshot; the same event without a canonical error carries no error
+// object.
+func TestRelationshipIntegrationChangedCarriesCanonicalError(t *testing.T) {
+	t.Parallel()
+
+	rendered := errcat.RenderRecord(errcat.FailureRecord{
+		Code: errcat.IntegrationMergeConflict,
+		Context: &errcat.RecordContext{
+			Repositories: []errcat.CodeRepository{{
+				Name:          "repo-a",
+				ConflictFiles: []string{"internal/api.go"},
+			}},
+		},
+		Diagnostics: "repo-a: merge candidate conflict",
+	})
+	parked := eventDTOFromDomain(ports.Event{
+		Type:           ports.RelationshipIntegrationChanged,
+		ParentID:       "parent-1",
+		ChildID:        "child-1",
+		CanonicalError: &rendered,
+	})
+	if parked.Kind != sseEventLifecycleUpdated {
+		t.Fatalf("relationship integration event kind = %q, want %q", parked.Kind, sseEventLifecycleUpdated)
+	}
+	if parked.Resource.Type != resourceTypeRelationship {
+		t.Fatalf("relationship integration event resource type = %q, want %q", parked.Resource.Type, resourceTypeRelationship)
+	}
+	if parked.Summary != "Integration merge conflict" {
+		t.Fatalf("relationship integration event summary = %q, want the catalog title %q", parked.Summary, "Integration merge conflict")
+	}
+	if parked.Error == nil {
+		t.Fatal("relationship integration event error = nil, want canonical error object")
+	}
+	if parked.Error.Code != string(errcat.IntegrationMergeConflict) {
+		t.Fatalf("relationship integration event error.code = %q, want %q", parked.Error.Code, errcat.IntegrationMergeConflict)
+	}
+	if parked.Error.Class != SSEEventErrorClassNeedsAction {
+		t.Fatalf("relationship integration event error.class = %q, want %q", parked.Error.Class, SSEEventErrorClassNeedsAction)
+	}
+	if !parked.SnapshotRequired {
+		t.Fatal("relationship integration event must require a snapshot")
+	}
+
+	plain := eventDTOFromDomain(ports.Event{
+		Type:     ports.RelationshipIntegrationChanged,
+		ParentID: "parent-1",
+		ChildID:  "child-1",
+	})
+	if plain.Error != nil {
+		t.Fatalf("error-free relationship integration event error = %+v, want none", *plain.Error)
+	}
+	if !plain.SnapshotRequired {
+		t.Fatal("error-free relationship integration event must require a snapshot")
+	}
+}
+
+// TestPublishFailureDomainEventsCarryCanonicalError pins the SSE mapping for
+// repository publish failures: publish-completed and repository-status-
+// changed domain events carrying a canonical error (the first failed
+// repository's rendered record) become lifecycle.updated events whose summary
+// is the catalog title for the code and whose error object carries the
+// canonical code and class, with snapshot-required semantics unchanged; the
+// same event kinds without a canonical error carry no error object.
+func TestPublishFailureDomainEventsCarryCanonicalError(t *testing.T) {
+	t.Parallel()
+
+	rendered := errcat.RenderRecord(errcat.FailureRecord{
+		Code: errcat.PublishPullRequestFailed,
+		Context: &errcat.RecordContext{
+			Repositories: []errcat.CodeRepository{{Name: "repo-a", Branch: "agentico/my-feature"}},
+		},
+		Diagnostics: "creating pull request: POST /repos/org/repo-a/pulls: 502 Bad Gateway",
+	})
+	for _, tc := range []struct {
+		name string
+		ev   ports.Event
+	}{
+		{
+			name: "publish completed",
+			ev: ports.Event{
+				Type:           ports.PublishCompleted,
+				FeatureID:      testFeatureID,
+				CanonicalError: &rendered,
+			},
+		},
+		{
+			name: "repository status changed",
+			ev: ports.Event{
+				Type:           ports.RepoStatusChanged,
+				FeatureID:      testFeatureID,
+				RepoName:       "repo-a",
+				CanonicalError: &rendered,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dto := eventDTOFromDomain(tc.ev)
+			if dto.Kind != sseEventLifecycleUpdated {
+				t.Fatalf("event kind = %q, want %q", dto.Kind, sseEventLifecycleUpdated)
+			}
+			if dto.Summary != "Pull-request creation failed" {
+				t.Fatalf("event summary = %q, want the catalog title %q", dto.Summary, "Pull-request creation failed")
+			}
+			if dto.Error == nil {
+				t.Fatal("event error = nil, want canonical error object")
+			}
+			if dto.Error.Code != string(errcat.PublishPullRequestFailed) {
+				t.Fatalf("event error.code = %q, want %q", dto.Error.Code, errcat.PublishPullRequestFailed)
+			}
+			if dto.Error.Class != SSEEventErrorClassNeedsAction {
+				t.Fatalf("event error.class = %q, want %q", dto.Error.Class, SSEEventErrorClassNeedsAction)
+			}
+			if !dto.SnapshotRequired {
+				t.Fatal("publish-failure lifecycle event must require a snapshot")
+			}
+		})
+	}
+
+	plain := eventDTOFromDomain(ports.Event{Type: ports.PublishCompleted, FeatureID: testFeatureID})
+	if plain.Error != nil {
+		t.Fatalf("error-free publish-completed event error = %+v, want none", *plain.Error)
+	}
+	if !plain.SnapshotRequired {
+		t.Fatal("error-free publish-completed event must require a snapshot")
 	}
 }

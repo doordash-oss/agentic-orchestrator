@@ -41,11 +41,11 @@ type SealedRunSummary struct {
 }
 
 type FeatureSummaryBlock struct {
-	ID          string `yaml:"id"`
-	Name        string `yaml:"name"`
-	Status      string `yaml:"status"`
-	FailureType string `yaml:"failure_type,omitempty"`
-	LastError   string `yaml:"last_error,omitempty"`
+	ID         string `yaml:"id"`
+	Name       string `yaml:"name"`
+	Status     string `yaml:"status"`
+	ErrorCode  string `yaml:"error_code,omitempty"`
+	ErrorClass string `yaml:"error_class,omitempty"`
 }
 
 type SummaryTotals struct {

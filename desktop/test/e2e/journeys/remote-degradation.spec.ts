@@ -408,9 +408,9 @@ test('remote degradation: gated affordances, copy-path completion, server-valida
     const cockpit = handle.page.getByLabel(`Feature ${FEATURE_NAME}`);
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
     await expect(cockpit.getByText('Ready to start')).toBeVisible({ timeout: 90_000 });
-    const feature = (await handle.page.evaluate(() => window.agentico.listFeatures())).find(
-      (candidate) => candidate.name === FEATURE_NAME,
-    );
+    const feature = (
+      await handle.page.evaluate(() => window.agentico.listFeatures())
+    ).features.find((candidate) => candidate.name === FEATURE_NAME);
     expect(feature).toBeDefined();
     transcript.step('feature created and set up entirely on the remote server');
 
@@ -422,7 +422,9 @@ test('remote degradation: gated affordances, copy-path completion, server-valida
     await expect(settings.getByRole('button', { name: 'Add workspace root' })).toHaveCount(0);
     await rootField.fill('/definitely/not/a/real/root');
     await settings.getByRole('button', { name: 'Add root' }).click();
-    await expect(settings.getByRole('alert')).toContainText('/definitely/not/a/real/root', {
+    // The add-root rejection is a FieldError beside the input (no live-region
+    // role), naming the rejected path.
+    await expect(settings.locator('.field-error')).toContainText('/definitely/not/a/real/root', {
       timeout: 30_000,
     });
     await evidenceShot(handle, 'remote-degradation-root-rejected', settings);

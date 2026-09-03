@@ -17,8 +17,9 @@ limitations under the License.
 /**
  * Repository instrument panel: compact per-repository operational status
  * rendered from the server-authored feature detail. Shows publishability,
- * PR, freshness, rebase status, target branch, conflicts, and safe failure
- * details. Used as the cockpit inspector's operational context.
+ * PR, freshness, rebase status, target branch, conflicts, and a publish
+ * failure indication that links into the publish modal. Used as the cockpit
+ * inspector's operational context.
  */
 import type { RepoStatusView } from '../../../shared/ipc';
 
@@ -44,9 +45,19 @@ const REBASE_STATUS_LABELS: Record<string, string> = {
 export interface RepositoryInstrumentProps {
   repos: RepoStatusView[];
   onOpenPullRequest(url: string): void;
+  /**
+   * Opens the publish modal, whose repository row owns the full error card.
+   * Absent on surfaces that host no publish modal; the indication then
+   * renders the title without the link.
+   */
+  onOpenPublish?(): void;
 }
 
-export function RepositoryInstrument({ repos, onOpenPullRequest }: RepositoryInstrumentProps) {
+export function RepositoryInstrument({
+  repos,
+  onOpenPullRequest,
+  onOpenPublish,
+}: RepositoryInstrumentProps) {
   if (repos.length === 0) return null;
 
   return (
@@ -112,13 +123,21 @@ export function RepositoryInstrument({ repos, onOpenPullRequest }: RepositoryIns
                   </dd>
                 </div>
               ) : null}
-              {repo.lastError !== undefined ? (
-                <div className="repo-instrument__fact repo-instrument__error" role="alert">
-                  <dt>Error</dt>
-                  <dd>{repo.lastError}</dd>
-                </div>
-              ) : null}
             </dl>
+            {repo.error !== undefined ? (
+              <div className="repo-instrument__publish-attention" data-repo={repo.name}>
+                <span className="repo-instrument__publish-attention-title">{repo.error.title}</span>
+                {onOpenPublish !== undefined ? (
+                  <button
+                    type="button"
+                    className="repo-instrument__open-publish"
+                    onClick={onOpenPublish}
+                  >
+                    Open publish
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
           </li>
         ))}
       </ul>

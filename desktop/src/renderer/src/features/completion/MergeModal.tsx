@@ -24,6 +24,13 @@ import {
 } from './completionShared';
 import { UNMERGED_CHANGES } from './pendingDelivery';
 
+/**
+ * The rebase handoff rides as the failure card's remediation hint: a conflict
+ * or behind-base merge is resolved by a rebase pass, not by retrying in place.
+ */
+const REBASE_HANDOFF_HINT =
+  "A conflict or behind-base outcome can be resolved with a rebase pass. Use Start rebase pass in the feature's aftercare workspace, then return here to retry the merge.";
+
 export interface MergeModalProps {
   featureId: string;
   preflight: CompletionPreflightResult;
@@ -143,13 +150,7 @@ export function MergeModalBody({
           No local repositories to merge. All touched repositories are publishable.
         </div>
       )}
-      <ResultBox result={mergeAction.result} />
-      {mergeAction.result !== null && !mergeAction.result.ok && !mergeAction.reconciling ? (
-        <p className="completion-workspace__merge-handoff-hint">
-          A conflict or behind-base outcome can be resolved with a rebase pass. Use Start rebase
-          pass in the feature's aftercare workspace, then return here to retry the merge.
-        </p>
-      ) : null}
+      <ResultBox result={mergeAction.result} remediationHint={REBASE_HANDOFF_HINT} />
     </div>
   );
 }

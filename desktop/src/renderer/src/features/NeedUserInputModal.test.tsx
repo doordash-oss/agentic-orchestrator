@@ -14,13 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttentionItem } from '../../../shared/ipc';
 import { emptyAttentionDrafts } from './AttentionInbox';
 import { gateSheetTitle, gateStoppedSentence, NeedUserInputModal } from './NeedUserInputModal';
-import { installAgenticoMock } from '../test/agenticoMock';
+import { installAgenticoMock, ipcError } from '../test/agenticoMock';
 import { useState } from 'react';
 
 afterEach(cleanup);
@@ -231,6 +231,28 @@ describe('NeedUserInputModal', () => {
       }),
     );
     expect(onResolved).toHaveBeenCalledOnce();
+  });
+
+  it('renders a rejected resume as a compact ErrorSurface', async () => {
+    const mock = installAgenticoMock();
+    mock.api.saveGateDraft.mockResolvedValue({ result: 'saved' });
+    mock.api.resolveGate.mockRejectedValueOnce(
+      ipcError('E_NOT_CONNECTED', 'The app is not connected to an Agentico runtime.', {
+        title: 'Not connected',
+      }),
+    );
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    await user.type(screen.getByLabelText(/Deployment window/), 'Tomorrow morning.');
+    await user.click(screen.getByRole('button', { name: 'Resume agent' }));
+
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_NOT_CONNECTED')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Not connected')).toBeVisible();
+    // The resume control stays armed for another attempt.
+    expect(screen.getByRole('button', { name: 'Resume agent' })).toBeEnabled();
   });
 
   it('persists the newly selected retry action and resumes the exact need-user-input gate', async () => {

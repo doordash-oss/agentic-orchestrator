@@ -25,14 +25,19 @@ limitations under the License.
  * — the token and anything derived from it must never cross
  * desktop/src/shared/ IPC schemas.
  *
- * Parsing is strict and each rejection carries a distinct SafeError code with
+ * Parsing is strict and each rejection carries a distinct catalog code with
  * an actionable remediation. Messages never echo the raw input: it may carry
  * the bearer token.
  */
 
 import { createHash } from 'node:crypto';
 
-import { SafeErrorException, safeError } from '../shared/errors';
+import {
+  buildCanonicalError,
+  CanonicalErrorException,
+  type CatalogCode,
+  type CatalogParams,
+} from '../shared/errors';
 
 export const E_CONNECTION_STRING_SCHEME = 'E_CONNECTION_STRING_SCHEME';
 export const E_CONNECTION_STRING_TOKEN = 'E_CONNECTION_STRING_TOKEN';
@@ -41,8 +46,6 @@ export const E_CONNECTION_STRING_HOST_INVALID = 'E_CONNECTION_STRING_HOST_INVALI
 export const E_CONNECTION_STRING_WILDCARD = 'E_CONNECTION_STRING_WILDCARD';
 export const E_CONNECTION_STRING_PORT = 'E_CONNECTION_STRING_PORT';
 export const E_CONNECTION_STRING_PORT_RANGE = 'E_CONNECTION_STRING_PORT_RANGE';
-
-const GRAMMAR = 'agentico://<token>@<host>:<port>[?name=<name>]';
 
 export interface ParsedConnectionString {
   /** Canonical dialable base URL, e.g. http://10.1.2.3:8080 or http://[fe80::1]:8080. */
@@ -55,8 +58,8 @@ export interface ParsedConnectionString {
 
 const SCHEME_RE = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//;
 
-function fail(code: string, message: string, remediation: string): never {
-  throw new SafeErrorException(safeError(code, message, remediation));
+function fail<C extends CatalogCode>(code: C, params: CatalogParams<C>): never {
+  throw new CanonicalErrorException(buildCanonicalError(code, { params }));
 }
 
 /** Mirrors Go's net.JoinHostPort: bracket-wrap the host when it is an IPv6 literal. */
@@ -74,19 +77,15 @@ function isWildcardHost(host: string): boolean {
 const INVALID_HOST_CHARS_RE = /[\s@/?#]/;
 
 /**
- * Parses and validates a connection string, throwing a SafeErrorException with
- * a distinct code per failure mode.
+ * Parses and validates a connection string, throwing a CanonicalErrorException
+ * with a distinct catalog code per failure mode.
  */
 export function parseConnectionString(raw: string): ParsedConnectionString {
   const schemeMatch = SCHEME_RE.exec(raw);
   const scheme = schemeMatch?.[1];
   if (scheme === undefined || scheme.toLowerCase() !== 'agentico') {
     const got = scheme === undefined ? 'no recognizable scheme' : `${scheme}://`;
-    fail(
-      E_CONNECTION_STRING_SCHEME,
-      `Connection string must use the agentico:// scheme, got ${got}.`,
-      `Paste the full attach string exactly as the server printed it (${GRAMMAR}).`,
-    );
+    fail(E_CONNECTION_STRING_SCHEME, { got });
   }
 
   // Scheme matched; parse the remainder manually (Node's URL does not parse
@@ -111,11 +110,7 @@ export function parseConnectionString(raw: string): ParsedConnectionString {
   // The token is the userinfo username (base64url, so no escaping needed).
   const token = userinfo.split(':')[0] ?? '';
   if (token === '') {
-    fail(
-      E_CONNECTION_STRING_TOKEN,
-      'Connection string is missing the bearer token before the @ sign.',
-      `Expected ${GRAMMAR} — copy the full string; the token is the part before the @.`,
-    );
+    fail(E_CONNECTION_STRING_TOKEN, {});
   }
 
   let host: string;
@@ -142,47 +137,23 @@ export function parseConnectionString(raw: string): ParsedConnectionString {
   }
 
   if (host === '') {
-    fail(
-      E_CONNECTION_STRING_HOST,
-      'Connection string is missing a host.',
-      `Expected ${GRAMMAR} with the server's advertised address between @ and the port.`,
-    );
+    fail(E_CONNECTION_STRING_HOST, {});
   }
   if (isWildcardHost(host)) {
-    fail(
-      E_CONNECTION_STRING_WILDCARD,
-      `Connection string host ${host} is a wildcard bind address, not a dialable address.`,
-      'Ask the server to advertise its primary interface address (or use 127.0.0.1 for same-machine servers).',
-    );
+    fail(E_CONNECTION_STRING_WILDCARD, { host });
   }
   if (INVALID_HOST_CHARS_RE.test(host)) {
-    fail(
-      E_CONNECTION_STRING_HOST_INVALID,
-      'Connection string host contains characters that cannot form a valid http:// base URL.',
-      `Expected ${GRAMMAR} — check the host portion for stray spaces or punctuation.`,
-    );
+    fail(E_CONNECTION_STRING_HOST_INVALID, {});
   }
   if (portText === undefined || portText === '') {
-    fail(
-      E_CONNECTION_STRING_PORT,
-      'Connection string is missing an explicit port.',
-      'The server always prints host:port — recopy the string including the port after the colon.',
-    );
+    fail(E_CONNECTION_STRING_PORT, {});
   }
   if (!/^\d+$/.test(portText)) {
-    fail(
-      E_CONNECTION_STRING_PORT_RANGE,
-      `Connection string port "${portText}" is not a number in the range 1-65535.`,
-      'Recopy the string; the port is the digits after the final colon.',
-    );
+    fail(E_CONNECTION_STRING_PORT_RANGE, { port: portText });
   }
   const port = Number.parseInt(portText, 10);
   if (port < 1 || port > 65535) {
-    fail(
-      E_CONNECTION_STRING_PORT_RANGE,
-      `Connection string port ${String(port)} is out of range 1-65535.`,
-      'Recopy the string; the server listens on a port between 1 and 65535.',
-    );
+    fail(E_CONNECTION_STRING_PORT_RANGE, { port: String(port) });
   }
 
   const nameValue = new URLSearchParams(query).get('name');

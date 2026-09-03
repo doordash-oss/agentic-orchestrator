@@ -20,7 +20,7 @@ limitations under the License.
  * returns strict renderer-facing views; nothing here caches server-domain
  * data, reads runtime files, or lets the renderer compose REST paths.
  */
-import { redactText } from '../shared/errors';
+import { redactText, redactedCanonicalError } from '../shared/errors';
 import {
   ArtifactListResponseSchema,
   RunLogListResponseSchema,
@@ -65,22 +65,6 @@ import {
 } from './serverClient';
 
 export type RunHistoryTransport = ServerTransport;
-
-const REMEDY_BY_CODE: Record<string, string> = {
-  not_found: 'This run no longer exists on the server.',
-  bad_request: 'The request was malformed; refresh and try again.',
-};
-
-const CONTENT_REMEDY_BY_KIND: Record<'artifacts' | 'logs', Record<string, string>> = {
-  artifacts: {
-    not_found: 'This artifact is no longer available. Refresh the run files and try again.',
-    bad_request: 'The request was malformed; refresh and try again.',
-  },
-  logs: {
-    not_found: 'This log is no longer available. Refresh the run files and choose another log.',
-    bad_request: 'The request was malformed; refresh and try again.',
-  },
-};
 
 export class RunHistoryService {
   constructor(private readonly transport: RunHistoryTransport) {}
@@ -183,8 +167,6 @@ export class RunHistoryService {
     const suffix = params.toString() ? `?${params}` : '';
     const body = await this.api(
       `/api/v1/features/${id}/runs/${input.runNumber}/${kind}/${encodeURIComponent(contentID)}${suffix}`,
-      undefined,
-      CONTENT_REMEDY_BY_KIND[kind],
     );
     const response = validateWithSchema(body, TextContentResponseSchema);
     return {
@@ -291,18 +273,16 @@ export class RunHistoryService {
         ? { sourceRunNumber: result.source_run_number }
         : {}),
       ...(result.new_run_number !== undefined ? { newRunNumber: result.new_run_number } : {}),
-      ...(result.warnings !== undefined ? { warnings: result.warnings } : {}),
+      // Canonical warning objects cross IPC intact except diagnostics,
+      // which pass through the same redaction as every other raw text.
+      ...(result.warnings === undefined
+        ? {}
+        : { warnings: result.warnings.map(redactedCanonicalError) }),
     };
   }
 
-  private api(
-    path: string,
-    init?: ApiRequestInit,
-    remedyByCode: Record<string, string> = REMEDY_BY_CODE,
-  ): Promise<unknown> {
-    return serverRequest(this.transport, path, init, {
-      remedyByCode,
-    });
+  private api(path: string, init?: ApiRequestInit): Promise<unknown> {
+    return serverRequest(this.transport, path, init);
   }
 }
 

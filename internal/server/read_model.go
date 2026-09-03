@@ -30,6 +30,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -37,10 +38,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-const (
-	maxFeatureDetailHistoricalRuns = 5
-	promptSnapshotTooLargeCode     = "prompt_snapshot_too_large"
-)
+const maxFeatureDetailHistoricalRuns = 5
 
 var errNeedUserInputGateCollectionTooLarge = errors.New("pending prompt snapshot exceeds the safe response limit")
 
@@ -145,11 +143,14 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 				ParentBranch: base.ParentBranch,
 			})
 		}
-		// Project the transaction journal for child integration.
+		// Project the transaction journal for child integration. The
+		// journal's stored attention record renders through the catalog at
+		// projection time; entries carry progress state only — the two
+		// stored warning records render on the relationship's warnings.
 		if tx := f.Parent.Transaction; tx != nil {
 			detail.Transaction = TransactionJournal{
 				Phase:     string(tx.Phase),
-				Attention: tx.Attention,
+				Attention: wireIntegrationAttention(tx.Attention),
 			}
 			for _, e := range tx.Entries {
 				entry := RepoTransactionEntry{
@@ -163,21 +164,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 					PrepState:       string(e.PrepState),
 					ApplyState:      string(e.ApplyState),
 					ObservedSha:     e.ObservedSHA,
-					ConflictFiles:   e.ConflictFiles,
-					CleanupWarning:  e.CleanupWarning,
-					Diagnostics:     e.Diagnostics,
-				}
-				for _, d := range e.Dirty {
-					entry.Dirty = append(entry.Dirty, ChildDirtyDiagnostics{
-						Repo:           d.Repo,
-						Path:           d.Path,
-						Staged:         d.Staged,
-						Unstaged:       d.Unstaged,
-						Untracked:      d.Untracked,
-						StagedTotal:    d.StagedTotal,
-						UnstagedTotal:  d.UnstagedTotal,
-						UntrackedTotal: d.UntrackedTotal,
-					})
+					PendingSync:     e.PendingSync,
 				}
 				detail.Transaction.Entries = append(detail.Transaction.Entries, entry)
 			}
@@ -198,6 +185,10 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		detail.ChildHistoryTotal = len(detail.ChildHistory)
 		activeRelationshipChild = children.Active
 	}
+	// The owned-error projection is shared with the list summary: a parent
+	// projects its active child's records keyed by the child id, and a child
+	// projects its own attention record against itself.
+	detail.Errors = ownedErrorsDTO(f, activeRelationshipChild)
 	detail.Description = SafeDisplayText(f.Description, 500)
 	detail.Summary = SafeDisplayText(f.Summary, 500)
 	detail.WaitReason = SafeDisplayText(f.KBWaitMessage, 240)
@@ -251,11 +242,8 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 			disableAction(detail.Actions, actionRebase, reason)
 		}
 	}
-	if f.HasTerminalFailure() {
-		detail.Failure = &Failure{
-			Type:    f.FailureType,
-			Message: SafeDisplayText(f.LastError, 240),
-		}
+	if rec := f.FailureRecord(); rec != nil {
+		detail.Failure = wireStoredError(rec)
 	}
 	if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
 		gate := needUserInputGateDTO(f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
@@ -266,11 +254,10 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 }
 
 func childHasIntegrationAttention(child *feature.Feature) bool {
-	if child == nil || child.Parent == nil || child.Parent.Transaction == nil {
+	if child == nil {
 		return false
 	}
-	tx := child.Parent.Transaction
-	return tx.Phase == feature.TransactionPhaseAttention || tx.Attention != "" || tx.AnyApplyAttention()
+	return child.HasIntegrationAttention()
 }
 
 func appendDisabledReason(actions []Action, reason ActionDisabledReason, excludedActionID string) {
@@ -413,6 +400,27 @@ func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) ([]map[st
 	return dirtyDiagnosticsPayload(dirty), indeterminate
 }
 
+// dirtyDiagnosticsPayload projects the bounded dirty-worktree findings onto
+// the read-model disabled-reason payload. The 2xx disabled-reason surface
+// keeps this shape; the canonical error envelope carries the typed
+// repositories context block instead (dirtyRepoContext).
+func dirtyDiagnosticsPayload(repos []feature.RepoDirtyDiagnostics) []map[string]any {
+	payload := make([]map[string]any, 0, len(repos))
+	for _, repo := range repos {
+		payload = append(payload, map[string]any{
+			"repo":            repo.Repo,
+			"path":            repo.Path,
+			"staged":          repo.Staged,
+			"unstaged":        repo.Unstaged,
+			"untracked":       repo.Untracked,
+			"staged_total":    repo.StagedTotal,
+			"unstaged_total":  repo.UnstagedTotal,
+			"untracked_total": repo.UntrackedTotal,
+		})
+	}
+	return payload
+}
+
 func disableAction(actions []Action, actionID string, reason ActionDisabledReason) {
 	for i := range actions {
 		if actions[i].ID != actionID || !actions[i].Enabled {
@@ -540,21 +548,13 @@ func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSumma
 		StartedAt:         startedAt,
 		Cost:              costDTO(child),
 		IntegrationState:  "pending",
-		Attention:         []RelationshipAttention{},
-		CleanupWarnings:   []RelationshipCleanupWarning{},
+		Warnings:          []Error{},
 	}
 	if setup := child.Run().Setup; setup != nil {
 		dto.SetupStatus = string(setup.Status)
-		if setup.Status == feature.SetupStatusFailed {
-			dto.LastError = SafeDisplayText(setup.LastError, 240)
-			if dto.LastError == "" {
-				dto.LastError = SafeDisplayText(child.LastError, 240)
-			}
-		}
 	}
 	if childSetupComplete(child) {
 		dto.RelationshipState = "active"
-		dto.LastError = ""
 	}
 	if child.Parent.CloseOutcome != "" {
 		dto.Outcome = RelationshipChildOutcome(child.Parent.CloseOutcome)
@@ -572,49 +572,48 @@ func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSumma
 		if tx.Phase != "" {
 			dto.IntegrationState = string(tx.Phase)
 		}
-		if tx.Attention != "" {
-			dto.Attention = append(dto.Attention, RelationshipAttention{
-				Code:    "integration_attention",
-				Message: SafeDisplayText(tx.Attention, 240),
-			})
-		}
+		// The stored attention record renders through the catalog at
+		// projection time; per-repository attention items are never
+		// synthesized. The two stored warning records render through the
+		// catalog onto the child's canonical warnings array.
+		dto.Attention = wireIntegrationAttention(tx.Attention)
 		for _, entry := range tx.Entries {
-			if len(entry.Dirty) > 0 {
-				dto.Attention = append(dto.Attention, RelationshipAttention{
-					Code:    "dirty_parent",
-					Message: "parent repository has uncommitted changes",
-					Repo:    entry.Repo,
-				})
+			if warning := wireIntegrationAttention(entry.Cleanup); warning != nil {
+				dto.Warnings = append(dto.Warnings, *warning)
 			}
-			if len(entry.ConflictFiles) > 0 {
-				dto.Attention = append(dto.Attention, RelationshipAttention{
-					Code:    "integration_conflict",
-					Message: "integration has unresolved conflicts",
-					Repo:    entry.Repo,
-				})
-			}
-			if entry.Diagnostics != "" {
-				dto.Attention = append(dto.Attention, RelationshipAttention{
-					Code:    "integration_attention",
-					Message: SafeDisplayText(entry.Diagnostics, 240),
-					Repo:    entry.Repo,
-				})
-			}
-			if entry.CleanupWarning != "" {
-				dto.CleanupWarnings = append(dto.CleanupWarnings, RelationshipCleanupWarning{
-					Message: SafeDisplayText(entry.CleanupWarning, 240),
-					Repo:    entry.Repo,
-				})
-			}
-			if entry.TailWarning != "" {
-				dto.CleanupWarnings = append(dto.CleanupWarnings, RelationshipCleanupWarning{
-					Message: SafeDisplayText("review-feedback tail: "+entry.TailWarning, 240),
-					Repo:    entry.Repo,
-				})
+			if warning := wireIntegrationAttention(entry.Tail); warning != nil {
+				dto.Warnings = append(dto.Warnings, *warning)
 			}
 		}
 	}
 	return dto
+}
+
+// wireStoredError renders a stored failure record through the catalog onto
+// the canonical wire error, bounding raw diagnostics with the safe-display
+// helper. A nil record yields nil; every adapter that projects a stored
+// record — run failures, integration attention, repository publish
+// failures, setup tasks — shares this single rendering.
+func wireStoredError(record *errcat.FailureRecord) *Error {
+	if record == nil {
+		return nil
+	}
+	rendered := errcat.RenderRecord(*record)
+	wire := wireError(rendered)
+	wire.Diagnostics = SafeDisplayText(rendered.Diagnostics, 240)
+	return &wire
+}
+
+// wireIntegrationAttention renders a stored integration attention record
+// through the shared stored-record projection.
+func wireIntegrationAttention(record *errcat.FailureRecord) *Error {
+	return wireStoredError(record)
+}
+
+// WireRepoError renders a stored repository publish-failure record through
+// the shared stored-record projection.
+func WireRepoError(record *errcat.FailureRecord) *Error {
+	return wireStoredError(record)
 }
 
 // relationshipChildDTO builds the detail projection: the summary plus the
@@ -640,8 +639,7 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 		Cost:              summary.Cost,
 		IntegrationState:  summary.IntegrationState,
 		Attention:         summary.Attention,
-		CleanupWarnings:   summary.CleanupWarnings,
-		LastError:         summary.LastError,
+		Warnings:          summary.Warnings,
 		HasDiffSummary:    summary.HasDiffSummary,
 	}
 	// Re-bound at read time: records persisted before the write-time bound
@@ -728,7 +726,11 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		status == feature.StatusNeedUserInput ||
 		f.PendingNeedUserInputPath != ""
 	canRestart := !running
-	canPublish := f.IsPublishable() && status == feature.StatusCodeReady && f.Checkpoints.AutoPublish()
+	// The publish action is enabled whenever the completion preflight would
+	// allow a publish: a publishable feature at CodeReady or Published,
+	// regardless of the manual-publish checkpoint — a repository publish
+	// failure never ends the flow, so retry stays available.
+	canPublish := f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
 	canRewind := !running && (len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f))
 	canPostPublishPass := publishedOrManualReady
@@ -795,15 +797,15 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 }
 
 // childSetupFailed reports whether the child feature carries a failed
-// worktree setup that the setup retry action can rerun. Mirrors the
-// isFailedSetupFeature predicate used by the retry mutation.
+// setup that the setup action can rerun. Mirrors the isFailedSetupFeature
+// predicate used by the retry mutation.
 func childSetupFailed(f *feature.Feature) bool {
 	if f == nil {
 		return false
 	}
 	setup := f.Run().Setup
 	return f.Status == feature.StatusFailed &&
-		f.FailureType == feature.FailureWorktreeSetup &&
+		errcat.IsSetupFailure(f.FailureCode()) &&
 		setup != nil &&
 		setup.Status == feature.SetupStatusFailed
 }
@@ -849,12 +851,12 @@ func childCapabilityDisabledReason(err error) ActionDisabledReason {
 
 // childActionCatalogDTOs builds the restricted child catalog: ordinary
 // start/resume/restart execution entries gated by the same capability check
-// the mutations enforce, plus setup-retry and discard. Child delivery actions
-// (publish, merge, rewind, refactor, mark-done, post-publish passes) are never
-// offered: a child's work reaches the parent only through integration. Child
-// cleanup and single-record delete are also unavailable while the relationship
-// is active; the authoritative RelationshipGuard enforces the same policy at
-// the mutation layer.
+// the mutations enforce, plus setup, setup-retry, and discard. Child delivery
+// actions (publish, merge, rewind, refactor, mark-done, post-publish passes)
+// are never offered: a child's work reaches the parent only through
+// integration. Child cleanup and single-record delete are also unavailable
+// while the relationship is active; the authoritative RelationshipGuard
+// enforces the same policy at the mutation layer.
 func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running bool,
 	action func(string, bool, ActionScope, []ActionInput, ...ActionDisabledReason) Action,
 	disabledStatusReason func(feature.Status) ActionDisabledReason) []Action {
@@ -870,6 +872,7 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running b
 			action(actionPauseStop, false, featureScope, nil, closed),
 			action(actionResume, false, featureScope, nil, closed),
 			action(actionRestart, false, featureScope, nil, closed),
+			action(actionSetup, false, featureScope, nil, closed),
 			action(actionRetry, false, featureScope, nil, closed),
 			action(actionDiscard, false, featureScope, nil, closed),
 		}
@@ -898,9 +901,17 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running b
 	return []Action{
 		action(actionStart, canStart, featureScope, nil, blockedReason(disabledStatusReason(status))),
 		action(actionPauseStop, canStop, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_running", Message: "child has no active work to pause or stop"})),
-		action(actionResume, canResume, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_paused", Message: "feature has no paused session or input gate"})),
+		action(actionResume, canResume, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_paused", Message: "child has no paused session or input gate"})),
 		action(actionRestart, canRestart, featureScope, nil, restartReason),
-		action(actionRetry, childSetupFailed(f), featureScope, nil, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features"}),
+		// Setup reruns only the unfinished tasks of a failed child setup and
+		// leaves the child parked at Created; the card resolves the action
+		// from this catalog with no client-side alias.
+		action(actionSetup, childSetupFailed(f), featureScope, nil, ActionDisabledReason{Code: "no_pending_setup", Message: "feature has no pending or failed setup work"}),
+		// Retry serves two child conditions: a failed setup the setup retry
+		// reruns, and a parked integration transaction (attention record,
+		// attention phase, or apply attention) whose retry re-enters
+		// integration through the restart path.
+		action(actionRetry, childSetupFailed(f) || childHasIntegrationAttention(f), featureScope, nil, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features or parked integration"}),
 		// Discard must be available for every active child — running,
 		// paused, failed, interrupted, review-gated, input-blocked, and
 		// already-discarding — because the durable discard state machine
@@ -927,7 +938,7 @@ func setupActionEligible(f *feature.Feature) bool {
 		return setup.Status == feature.SetupStatusQueued || setup.Status == feature.SetupStatusRunning
 	}
 	return f.Status == feature.StatusFailed &&
-		f.FailureType == feature.FailureWorktreeSetup &&
+		errcat.IsSetupFailure(f.FailureCode()) &&
 		setup.Status == feature.SetupStatusFailed
 }
 
@@ -945,12 +956,9 @@ func publishDisabledReason(f *feature.Feature) ActionDisabledReason {
 	if !f.IsPublishable() {
 		return ActionDisabledReason{Code: "local_only", Message: "feature has at least one local-only repo"}
 	}
-	if f.Status == feature.StatusPublished || f.Status == feature.StatusDone {
-		return ActionDisabledReason{Code: "already_published", Message: "feature already has a published terminal state"}
-	}
-	if f.Checkpoints.ManualPublish && f.Status == feature.StatusCodeReady {
-		return ActionDisabledReason{Code: "manual_publish_required", Message: "feature is waiting for manual publish confirmation"}
-	}
+	// CodeReady and Published features keep the publish action enabled (a
+	// repository publish failure is retried through it); every other status
+	// carries the status-based reason, including Done.
 	return disabledStatusReason(f.Status)
 }
 
@@ -1094,7 +1102,6 @@ func setupDTO(setup *feature.SetupState) *Setup {
 		LatestLogPath: SafeDisplayText(setup.LatestLogPath, 1000),
 		Tasks:         tasks,
 		TaskOrder:     append([]string(nil), setup.TaskOrder...),
-		LastError:     SafeDisplayText(setup.LastError, 500),
 	}
 }
 
@@ -1113,8 +1120,14 @@ func setupTaskDTO(task feature.SetupTask) SetupTask {
 		Attempt:          task.Attempt,
 		StartedAt:        task.StartedAt,
 		EndedAt:          task.EndedAt,
-		LastError:        SafeDisplayText(task.LastError, 500),
+		Error:            wireSetupTaskError(task.Error),
 	}
+}
+
+// wireSetupTaskError renders a setup task's stored failure record through
+// the shared stored-record projection.
+func wireSetupTaskError(record *errcat.FailureRecord) *Error {
+	return wireStoredError(record)
 }
 
 // probeRepoFreshness collects freshness for every repo concurrently. Each
@@ -1156,7 +1169,7 @@ func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatus {
 		if state != nil {
 			dto.Touched = state.Touched
 			dto.PRURL = state.PRURL
-			dto.LastError = SafeDisplayText(state.LastError, 200)
+			dto.Error = WireRepoError(state.Error)
 		}
 		if freshness != nil {
 			dto.Freshness = string(freshness[repo.Name])
@@ -1299,11 +1312,11 @@ func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *h
 		return
 	}
 	if len(req.Provider) > 100 || !validEntityID(req.Provider) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid provider name", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("invalid provider name"))
 		return
 	}
 	if h.registry == nil || h.registry.ByName(req.Provider) == nil {
-		writeAPIError(w, http.StatusNotFound, "provider_not_found", "provider is not registered", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.ProviderNotFound)
 		return
 	}
 
@@ -1318,23 +1331,23 @@ func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *h
 		discoverer, canDiscover := provider.(llm.CatalogDiscoverer)
 		enricher, canEnrich := provider.(llm.CatalogEnricher)
 		if !canDiscover || !canEnrich {
-			writeAPIError(w, http.StatusConflict, "provider_model_refresh_unsupported", "provider does not support model refresh", nil)
+			writeAPIError(w, http.StatusConflict, errcat.ProviderModelRefreshUnsupported)
 			return
 		}
 		discoveryCtx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		models, err := discoverer.DiscoverModelCatalog(discoveryCtx)
 		cancel()
 		if err != nil {
-			writeAPIError(w, http.StatusBadGateway, "provider_model_refresh_failed", "provider model refresh failed", nil)
+			writeAPIError(w, http.StatusBadGateway, errcat.ProviderModelRefreshFailed, errcat.WithDiagnostics("provider model refresh failed"))
 			return
 		}
 		if len(models) == 0 {
-			writeAPIError(w, http.StatusBadGateway, "provider_model_refresh_failed", "provider returned no models", nil)
+			writeAPIError(w, http.StatusBadGateway, errcat.ProviderModelRefreshFailed, errcat.WithDiagnostics("provider returned no models"))
 			return
 		}
 		if h.persistProviderModels != nil {
 			if err := h.persistProviderModels(provider, models); err != nil {
-				writeAPIError(w, http.StatusBadGateway, "provider_model_refresh_failed", "provider model catalog could not be persisted", nil)
+				writeAPIError(w, http.StatusBadGateway, errcat.ProviderModelRefreshFailed, errcat.WithDiagnostics("provider model catalog could not be persisted"))
 				return
 			}
 		}
@@ -1365,9 +1378,8 @@ func (h *apiHandler) handlePrompts(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(
 			w,
 			http.StatusInternalServerError,
-			promptSnapshotTooLargeCode,
-			errNeedUserInputGateCollectionTooLarge.Error(),
-			nil,
+			errcat.PromptSnapshotTooLarge,
+			errcat.WithDiagnostics(errNeedUserInputGateCollectionTooLarge.Error()),
 		)
 		return
 	}

@@ -42,13 +42,19 @@ type Client struct {
 	token   string
 }
 
+// APIError is the typed client's decoded canonical error value. Code, class,
+// title, and summary always come from the server's catalog rendering.
 type APIError struct {
-	Status  int
-	Code    string
-	Message string
-	Target  map[string]any
-	Method  string
-	Path    string
+	Status      int
+	Code        string
+	Class       string
+	Title       string
+	Summary     string
+	Remediation *ErrorRemediation
+	Context     *ErrorContext
+	Diagnostics string
+	Method      string
+	Path        string
 }
 
 func (e *APIError) Error() string {
@@ -59,11 +65,11 @@ func (e *APIError) Error() string {
 	if code == "" {
 		code = strings.ToLower(strings.ReplaceAll(http.StatusText(e.Status), " ", "_"))
 	}
-	message := e.Message
-	if message == "" {
-		message = http.StatusText(e.Status)
+	title := e.Title
+	if title == "" {
+		title = http.StatusText(e.Status)
 	}
-	return fmt.Sprintf("api %s %s: %s (%d): %s", e.Method, e.Path, code, e.Status, message)
+	return fmt.Sprintf("api %s %s: %s (%d): %s", e.Method, e.Path, code, e.Status, title)
 }
 
 type CursorQuery struct {
@@ -200,13 +206,18 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 func decodeAPIError(resp *http.Response, method, path string) error {
 	apiErr := &APIError{Status: resp.StatusCode, Method: method, Path: path}
 	var errResp ErrorResponse
-	if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil {
-		apiErr.Code = errResp.Error.Code
-		apiErr.Message = errResp.Error.Message
-		apiErr.Target = errResp.Error.Target
+	if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil && errResp.Error.Code != "" {
+		body := errResp.Error
+		apiErr.Code = body.Code
+		apiErr.Class = string(body.Class)
+		apiErr.Title = body.Title
+		apiErr.Summary = body.Summary
+		apiErr.Remediation = body.Remediation
+		apiErr.Context = body.Context
+		apiErr.Diagnostics = body.Diagnostics
 	}
-	if apiErr.Message == "" {
-		apiErr.Message = http.StatusText(resp.StatusCode)
+	if apiErr.Title == "" {
+		apiErr.Title = http.StatusText(resp.StatusCode)
 	}
 	return apiErr
 }

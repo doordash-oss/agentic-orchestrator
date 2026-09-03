@@ -18,6 +18,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { useCompletionPreflight } from './useCompletionPreflight';
 import type { CompletionPreflightResult } from '../../../../shared/ipc';
+import { ipcError } from '../../test/agenticoMock';
 
 const pf: CompletionPreflightResult = {
   featureId: 'f1',
@@ -41,10 +42,14 @@ describe('useCompletionPreflight', () => {
     expect(result.current.error).toBeNull();
   });
 
-  it('captures a parsed error message', async () => {
-    const fetchPf = vi.fn(() => Promise.reject(new Error('boom')));
+  it('captures the parsed canonical error', async () => {
+    const fetchPf = vi.fn(() => Promise.reject(ipcError('E_INTERNAL', 'boom')));
     const { result } = renderHook(() => useCompletionPreflight('f1', true, fetchPf));
-    await waitFor(() => expect(result.current.error).toBe('boom'));
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    // The whole canonical rides in state: the surface renders code, title, and summary.
+    expect(result.current.error?.code).toBe('E_INTERNAL');
+    expect(result.current.error?.class).toBe('blocking');
+    expect(result.current.error?.summary).toBe('boom');
   });
 
   it('refresh re-fetches', async () => {

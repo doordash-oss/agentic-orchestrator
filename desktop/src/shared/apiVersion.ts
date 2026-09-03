@@ -18,7 +18,7 @@ limitations under the License.
  * API schema-version compatibility gate. Every server response envelope
  * declares `api_version`; anything outside the supported major fails closed.
  */
-import { SafeErrorException, safeError } from './errors';
+import { buildCanonicalError, CanonicalErrorException } from './errors';
 
 /** The API major version this build of the desktop app speaks. */
 export const SUPPORTED_API_VERSION = 'v1';
@@ -29,12 +29,10 @@ export function isCompatibleApiVersion(version: string): boolean {
 
 export function assertCompatibleApiVersion(version: string): void {
   if (!isCompatibleApiVersion(version)) {
-    throw new SafeErrorException(
-      safeError(
-        'E_API_VERSION_INCOMPATIBLE',
-        `The server speaks an unsupported API version; this app requires ${SUPPORTED_API_VERSION}.`,
-        'Update the Agentico desktop app and the agentico server to matching releases.',
-      ),
+    throw new CanonicalErrorException(
+      buildCanonicalError('E_API_VERSION_INCOMPATIBLE', {
+        params: { supported: SUPPORTED_API_VERSION },
+      }),
     );
   }
 }

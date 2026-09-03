@@ -14,6 +14,8 @@
 
 package feature
 
+import "github.com/doordash-oss/agentic-orchestrator/internal/errcat"
+
 // ErrChildExecutionClosed rejects execution of a child whose relationship
 // has settled. It aliases the relationship mutation sentinel so execution
 // and serialized direct mutations expose the same stable closed error.
@@ -30,7 +32,7 @@ func (f *Feature) ChildSetupComplete() bool {
 	if f.Status == StatusSettingUpWorktrees {
 		return false
 	}
-	if f.Status == StatusFailed && f.FailureType == FailureWorktreeSetup {
+	if f.Status == StatusFailed && errcat.IsSetupFailure(f.FailureCode()) {
 		return false
 	}
 	return true

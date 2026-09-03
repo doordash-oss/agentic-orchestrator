@@ -434,7 +434,7 @@ async function nativeCommandState(handle: AppHandle): Promise<{
 async function currentFeatureId(handle: AppHandle, name: string): Promise<string> {
   const feature = await handle.page.evaluate(
     async (featureName) =>
-      (await window.agentico.listFeatures()).find((entry) => entry.name === featureName),
+      (await window.agentico.listFeatures()).features.find((entry) => entry.name === featureName),
     name,
   );
   expect(feature).toBeDefined();

@@ -15,9 +15,11 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -37,19 +39,19 @@ func (h *apiHandler) handleRewindPreview(w http.ResponseWriter, r *http.Request,
 	}
 	targetRaw := strings.TrimSpace(r.URL.Query().Get("target_phase"))
 	if targetRaw == "" {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "target_phase is required", map[string]any{"feature_id": featureID})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("target_phase is required for feature %q", featureID)))
 		return
 	}
 	targetPhase, ok := parsePhaseDirName(targetRaw)
 	if !ok {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid target_phase", map[string]any{"feature_id": featureID, "target_phase": targetRaw})
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("invalid target_phase %q for feature %q", targetRaw, featureID)))
 		return
 	}
 	request := feature.RewindRequest{TargetPhase: targetPhase}
 	if raw := r.URL.Query().Get("roadmap_phase"); raw != "" {
 		rp, ok := parseIntQuery(r, "roadmap_phase", 0)
 		if !ok || rp < 1 {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid roadmap_phase", map[string]any{"feature_id": featureID})
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("invalid roadmap_phase for feature %q", featureID)))
 			return
 		}
 		request.RoadmapPhase = rp

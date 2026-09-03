@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -107,7 +108,7 @@ func (s *phaseSupervisor) runSingleShotSession(featureID, sessionID string, phas
 	}
 
 	detail := singleShotErrorDetail(phase, sess)
-	failureType := ""
+	failureCode := errcat.SessionCrashed
 	if result.Err != nil {
 		detail = result.Err.Error()
 	} else if len(result.ProtocolViolations) > 0 {
@@ -116,14 +117,14 @@ func (s *phaseSupervisor) runSingleShotSession(featureID, sessionID string, phas
 			artifactDir = filepath.Dir(logPath)
 		}
 		detail = formatSingleShotProtocolViolationError(singleShotPhaseRole(phase), artifactDir, result.ProtocolViolations)
-		failureType = feature.FailureProtocolViolation
+		failureCode = errcat.ProtocolViolation
 	}
 	s.complete(featureID, PhaseCompletionInput{
 		Phase:       phase,
 		SessionID:   sessionID,
 		Success:     false,
 		ErrorDetail: detail,
-		FailureType: failureType,
+		FailureCode: failureCode,
 	})
 }
 

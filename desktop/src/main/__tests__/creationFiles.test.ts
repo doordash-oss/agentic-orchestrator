@@ -61,7 +61,7 @@ describe('CreationFilesService remote-connection guards', () => {
     const { service } = makeService({ locality: remote, readReadiness });
     await expect(
       service.search({ requestId: crypto.randomUUID(), repoKeys: ['repo-a'], query: 'query' }),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     expect(readReadiness).not.toHaveBeenCalled();
   });
 
@@ -72,7 +72,7 @@ describe('CreationFilesService remote-connection guards', () => {
     const { service } = makeService({ locality: remote, readReadiness });
     await expect(
       service.resolve([{ repoKey: 'repo-a', path: 'src/query.ts' }]),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     expect(readReadiness).not.toHaveBeenCalled();
   });
 });

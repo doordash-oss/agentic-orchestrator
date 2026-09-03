@@ -29,7 +29,7 @@ import {
   defaultSettingsWindowPrefs,
   type KnownServer,
 } from '../../shared/ipc';
-import { SafeErrorException } from '../../shared/errors';
+import { CanonicalErrorException } from '../../shared/errors';
 
 let dir: string;
 let warnings: string[];
@@ -128,9 +128,20 @@ describe('SettingsStore', () => {
     expect(warnings[0]).not.toMatch(/\/(Users|home)\//);
   });
 
-  it('rejects invalid patches with a typed error and persists nothing', () => {
+  it('rejects invalid patches with the E_INVALID_SETTINGS_PATCH canonical and persists nothing', () => {
     const store = makeStore();
-    expect(() => store.update({ theme: 'neon' } as never)).toThrow(SafeErrorException);
+    let thrown: unknown;
+    try {
+      store.update({ theme: 'neon' } as never);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(CanonicalErrorException);
+    const canonical = (thrown as CanonicalErrorException).canonical;
+    expect(canonical.code).toBe('E_INVALID_SETTINGS_PATCH');
+    expect(canonical.class).toBe('blocking');
+    expect(canonical.title).toBe('Invalid settings update');
+    expect(canonical.summary).toContain('settings schema');
     expect(fs.existsSync(settingsPath())).toBe(false);
   });
 
@@ -253,11 +264,11 @@ describe('SettingsStore', () => {
   it('rejects a Settings window patch with an unknown pane or extra fields', () => {
     const store = makeStore();
     expect(() => store.update({ settingsWindow: { pane: 'nope' } as never })).toThrow(
-      SafeErrorException,
+      CanonicalErrorException,
     );
     expect(() =>
       store.update({ settingsWindow: { pane: 'appearance', maximized: true } as never }),
-    ).toThrow(SafeErrorException);
+    ).toThrow(CanonicalErrorException);
     expect(fs.existsSync(settingsPath())).toBe(false);
   });
 
@@ -267,7 +278,7 @@ describe('SettingsStore', () => {
       store.update({
         ama: { drawer: 'expanded', geometry: defaultAmaGeometry(), docked: true } as never,
       }),
-    ).toThrow(SafeErrorException);
+    ).toThrow(CanonicalErrorException);
   });
 
   it('persists shell presentation prefs and restores them on reload', () => {
@@ -345,12 +356,12 @@ describe('SettingsStore', () => {
           status: 'Created',
         } as never,
       }),
-    ).toThrow(SafeErrorException);
+    ).toThrow(CanonicalErrorException);
   });
 
   it('rejects an empty shell patch section', () => {
     const store = makeStore();
-    expect(() => store.update({ shell: {} as never })).toThrow(SafeErrorException);
+    expect(() => store.update({ shell: {} as never })).toThrow(CanonicalErrorException);
     expect(fs.existsSync(settingsPath())).toBe(false);
   });
 
@@ -808,7 +819,7 @@ describe('SettingsStore', () => {
       for (const baseUrl of ['https://127.0.0.1:9001', 'ftp://localhost:9001', 'not a url', '']) {
         expect(() =>
           store.update({ servers: { upsertKnown: knownServer(1, { baseUrl }) } }),
-        ).toThrow(SafeErrorException);
+        ).toThrow(CanonicalErrorException);
       }
       expect(store.get()).toEqual(before);
       expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8')).servers.known).toEqual([
@@ -838,7 +849,7 @@ describe('SettingsStore', () => {
           store.update({
             servers: { upsertKnown: { ...knownServer(1), ...rogue } as never },
           }),
-        ).toThrow(SafeErrorException);
+        ).toThrow(CanonicalErrorException);
       }
       expect(store.get().servers).toEqual(defaultServersPrefs());
       expect(fs.existsSync(settingsPath())).toBe(false);
@@ -846,7 +857,7 @@ describe('SettingsStore', () => {
 
     it('rejects an empty servers patch section', () => {
       const store = makeStore();
-      expect(() => store.update({ servers: {} as never })).toThrow(SafeErrorException);
+      expect(() => store.update({ servers: {} as never })).toThrow(CanonicalErrorException);
       expect(fs.existsSync(settingsPath())).toBe(false);
     });
 
@@ -889,12 +900,12 @@ describe('SettingsStore', () => {
             upsertKnown: { ...remoteServer(1), runtimeDir: '/rt/nope' } as never,
           },
         }),
-      ).toThrow(SafeErrorException);
+      ).toThrow(CanonicalErrorException);
       expect(() =>
         store.update({
           servers: { upsertKnown: { ...knownServer(1), runtimeDir: undefined } as never },
         }),
-      ).toThrow(SafeErrorException);
+      ).toThrow(CanonicalErrorException);
       expect(fs.existsSync(settingsPath())).toBe(false);
     });
 

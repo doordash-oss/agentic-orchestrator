@@ -33,6 +33,8 @@ limitations under the License.
  *    diagnostics and a manual retry path.
  */
 import { z } from 'zod';
+import { buildCanonicalError } from '../../shared/errors';
+import type { CanonicalError } from '../../shared/api/parse';
 import type { ConnectionState, KnownServer, ServersPrefs, SwitchContext } from '../../shared/ipc';
 import {
   evaluateCompatibility,
@@ -65,14 +67,6 @@ export type ProbeHealth = z.infer<typeof ProbeHealthSchema>;
 export function trimBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
-
-export const REMOTE_REPASTE_REMEDIATION =
-  'Re-enter the remote server token in Settings (paste its connection string again), then use Retry.';
-
-const INCOMPATIBLE_REMEDIATION =
-  'Update the Agentico desktop app and the agentico runtime to matching releases, then retry. ' +
-  'This app never shuts down a runtime it does not own — close that runtime from wherever it ' +
-  'was started if you want this app to manage its own.';
 
 /**
  * What a local attach does when the candidate server turns out unreachable
@@ -169,17 +163,14 @@ function evaluateAttachCompatibility(
   if (verdict.compatible) {
     return verdict;
   }
-  host.log(`${logPrefix}: ${verdict.reason}`);
+  const error = buildCanonicalError('E_INCOMPATIBLE_SERVER', { params: verdict });
+  host.log(`${logPrefix}: ${error.summary}`);
   host.setState({
     status: 'incompatible',
     stage: 'connect',
     detail,
     ownership: 'external',
-    error: {
-      code: 'E_INCOMPATIBLE_SERVER',
-      message: verdict.reason,
-      remediation: INCOMPATIBLE_REMEDIATION,
-    },
+    error,
   });
   return null;
 }
@@ -203,7 +194,7 @@ async function authenticateWithReadiness(
   },
   failure: {
     detail: string;
-    error: { code: string; message: string; remediation: string };
+    error: CanonicalError;
   },
   switchContext?: SwitchContext,
 ): Promise<AuthOutcome> {
@@ -259,11 +250,7 @@ export async function runLocalAttach(
         stage: 'connect',
         detail: 'The selected server stopped responding.',
         ownership: 'none',
-        error: {
-          code: 'E_ATTACH_UNREACHABLE',
-          message: 'The selected Agentico server is no longer reachable.',
-          remediation: 'Use Retry to rescan the running servers.',
-        },
+        error: buildCanonicalError('E_ATTACH_UNREACHABLE'),
         ...(switchContext !== undefined ? { switchContext } : {}),
       });
       return 'blocked';
@@ -327,11 +314,7 @@ export async function runLocalAttach(
       ownership: 'external',
       serverBuild: verdict.serverBuild,
       serverName: rawServerName,
-      error: {
-        code: 'E_ATTACH_NO_TOKEN',
-        message: 'The discovery record for the running runtime carries no auth token.',
-        remediation: 'Restart that runtime from where it was started, then retry.',
-      },
+      error: buildCanonicalError('E_ATTACH_NO_TOKEN'),
     });
     return 'blocked';
   }
@@ -355,11 +338,7 @@ export async function runLocalAttach(
     },
     {
       detail: 'Could not authenticate with the running runtime.',
-      error: {
-        code: 'E_ATTACH_AUTH',
-        message: 'The running runtime rejected the stored credentials.',
-        remediation: 'Restart that runtime from where it was started, then retry.',
-      },
+      error: buildCanonicalError('E_ATTACH_AUTH'),
     },
   );
   if (authenticated === 'cancelled') {
@@ -433,14 +412,11 @@ export async function runRemoteAttach(
       stage: 'authenticate',
       detail: 'The stored credentials for the remote server must be re-entered.',
       ownership: 'none',
-      error: {
-        code: 'E_REMOTE_TOKEN_REPASTE',
-        message:
-          loaded.status === 're-paste-required'
-            ? 'The stored token for this remote server could not be decrypted.'
-            : 'There is no stored token for this remote server.',
-        remediation: REMOTE_REPASTE_REMEDIATION,
-      },
+      error: buildCanonicalError(
+        loaded.status === 're-paste-required'
+          ? 'E_REMOTE_TOKEN_UNREADABLE'
+          : 'E_REMOTE_TOKEN_MISSING',
+      ),
       ...(switchContext !== undefined ? { switchContext } : {}),
     });
     return 'blocked';
@@ -463,11 +439,7 @@ export async function runRemoteAttach(
             stage: 'connect',
             detail: 'The remote Agentico server is not reachable.',
             ownership: 'none',
-            error: {
-              code: 'E_EXTERNAL_SERVER_LOST',
-              message: 'The remote Agentico server did not answer its health probe.',
-              remediation: 'Check that the remote server is running and reachable, then use Retry.',
-            },
+            error: buildCanonicalError('E_REMOTE_HEALTH_UNANSWERED'),
             ...(switchContext !== undefined ? { switchContext } : {}),
           }
         : {
@@ -475,11 +447,7 @@ export async function runRemoteAttach(
             stage: 'connect',
             detail: 'The remote Agentico server is not healthy.',
             ownership: 'none',
-            error: {
-              code: 'E_EXTERNAL_SERVER_LOST',
-              message: 'The remote Agentico server answered with an unhealthy status.',
-              remediation: 'Check that the remote server is running and reachable, then use Retry.',
-            },
+            error: buildCanonicalError('E_REMOTE_HEALTH_UNHEALTHY'),
             ...(switchContext !== undefined ? { switchContext } : {}),
           },
     );
@@ -522,11 +490,7 @@ export async function runRemoteAttach(
     },
     {
       detail: 'The remote Agentico server rejected the stored credentials.',
-      error: {
-        code: 'E_REMOTE_TOKEN_REPASTE',
-        message: 'The remote Agentico server rejected the stored token.',
-        remediation: REMOTE_REPASTE_REMEDIATION,
-      },
+      error: buildCanonicalError('E_REMOTE_STORED_TOKEN_REJECTED'),
     },
     switchContext,
   );

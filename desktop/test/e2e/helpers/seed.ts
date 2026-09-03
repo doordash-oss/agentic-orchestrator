@@ -25,15 +25,17 @@ limitations under the License.
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { replaceTopLevelBlock } from './yaml';
+
 // Re-export the canonical evidence helpers from ./app so journey specs that
 // import them from ./seed keep working without a second copy of the logic.
 export { persistAppLogs, evidenceDir } from './app';
 
 /**
  * Sets a feature's status in feature.yaml. When the target status is not
- * "Failed", also clears run-level failure_type and last_error from the
- * active run's run.yaml so reconcileTerminalRunFailure does not overwrite
- * the seeded status back to Failed on the next server load.
+ * "Failed", also clears the run-level failure record from the active run's
+ * run.yaml so reconcileTerminalRunFailure does not overwrite the seeded
+ * status back to Failed on the next server load.
  */
 export function setFeatureStatus(stateDir: string, featureId: string, status: string): void {
   const featurePath = path.join(stateDir, featureId, 'feature.yaml');
@@ -51,7 +53,7 @@ export function setFeatureStatus(stateDir: string, featureId: string, status: st
 }
 
 /**
- * Removes failure_type and last_error from the active run's run.yaml so
+ * Removes the failure record block from the active run's run.yaml so
  * Feature.reconcileTerminalRunFailure does not revert a non-failed status
  * to StatusFailed on load.
  */
@@ -68,8 +70,6 @@ function clearRunFailures(stateDir: string, featureId: string): void {
     'run.yaml',
   );
   if (!fs.existsSync(runPath)) return;
-  let runYaml = fs.readFileSync(runPath, 'utf8');
-  runYaml = runYaml.replace(/^failure_type:.*$\n?/m, '');
-  runYaml = runYaml.replace(/^last_error:.*$\n?/m, '');
-  fs.writeFileSync(runPath, runYaml);
+  const runYaml = fs.readFileSync(runPath, 'utf8');
+  fs.writeFileSync(runPath, replaceTopLevelBlock(runYaml, 'failure', []));
 }

@@ -31,9 +31,15 @@ import {
   type RelationshipChildView,
   type ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
+import { ErrorSurface, type ErrorSurfaceAction } from '../../components/ErrorSurface';
+import { useRegisteredErrorCard } from '../../components/errorCardRegistry';
+import { retryAction, type LoadState } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
+import { buildCanonicalError } from '../../../../shared/errors';
+import type { CanonicalError } from '../../../../shared/ipc';
 import {
   AttentionDetail,
+  OwnerAwareAttention,
   attentionActionNotice,
   attentionErrorMessage,
   runAttentionSubmit,
@@ -53,21 +59,26 @@ import { InspectorContent } from '../CockpitInspector';
 import { InspectorDrawer } from '../InspectorDrawer';
 import { classifyHold, railSegments, railTrio } from '../phaseRail';
 import { PhaseRail } from '../PhaseRailRow';
-import { featureBranch, showsRun } from '../featureView';
+import { catalogErrorAction, featureBranch, showsRun } from '../featureView';
 import {
   custodyStations,
   passActions,
   passKindLabel,
   passState,
+  relationshipWarningExplain,
   COMMENT_TYPE_LABEL,
   commentKey,
   type PassAction,
 } from './refactorPassModel';
 
-type ChildState =
-  | { phase: 'loading' }
-  | { phase: 'error'; message: string }
-  | { phase: 'loaded'; child: FeatureSnapshot };
+type ChildState = LoadState<{ phase: 'loaded'; child: FeatureSnapshot }>;
+
+/**
+ * The pass's post-action notice: an informational receipt (discard outcome,
+ * attention result) or a rejected server action carried as the parsed error
+ * for the canonical error surface.
+ */
+export type PassNotice = { kind: 'info'; text: string } | { kind: 'error'; error: CanonicalError };
 
 export interface RefactorPassController {
   view: RelationshipChildView | undefined;
@@ -77,9 +88,10 @@ export interface RefactorPassController {
   actions: PassAction[];
   discardAction: FeatureActionView | undefined;
   busy: boolean;
-  notice: string | null;
+  notice: PassNotice | null;
   discardOpen: boolean;
-  dispatch(action: PassAction['id']): Promise<void>;
+  /** Dispatches a catalogue verb (or setup) through the shared action route. */
+  dispatch(action: PassAction['id'] | 'setup'): Promise<void>;
   /** Launch-time auto-start: dispatch start once this child becomes startable. */
   armAutoStart(childId: string): void;
   openDiscard(): void;
@@ -104,7 +116,7 @@ export function useRefactorPass(
   const childId = view?.id;
   const [childState, setChildState] = useState<ChildState>({ phase: 'loading' });
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<PassNotice | null>(null);
   const [discardOpen, setDiscardOpen] = useState(false);
   const loadRequestRef = useRef(0);
   const childIdRef = useRef<string | undefined>(undefined);
@@ -120,7 +132,7 @@ export function useRefactorPass(
       })
       .catch((err: unknown) => {
         if (request !== loadRequestRef.current) return;
-        setChildState({ phase: 'error', message: parseIpcError(err).message });
+        setChildState({ phase: 'error', error: parseIpcError(err) });
       });
   }, [childId]);
 
@@ -164,7 +176,7 @@ export function useRefactorPass(
   const discardAction = child?.actions.find((action) => action.id === 'discard');
 
   const dispatch = useCallback(
-    async (action: PassAction['id']) => {
+    async (action: PassAction['id'] | 'setup') => {
       if (child === null || busy) return;
       setBusy(true);
       setNotice(null);
@@ -172,7 +184,7 @@ export function useRefactorPass(
         await window.agentico.dispatchFeatureAction({ featureId: child.id, action });
         refreshBoth();
       } catch (err) {
-        setNotice(parseIpcError(err).message);
+        setNotice({ kind: 'error', error: parseIpcError(err) });
       } finally {
         setBusy(false);
       }
@@ -209,11 +221,11 @@ export function useRefactorPass(
     setNotice(null);
     try {
       const result = await window.agentico.discardRefactorChild({ childId: child.id });
-      setNotice(result.result);
+      setNotice({ kind: 'info', text: result.result });
       if (result.status === 'completed' || result.status === 'draining') setDiscardOpen(false);
       refreshBoth();
     } catch (err) {
-      setNotice(parseIpcError(err).message);
+      setNotice({ kind: 'error', error: parseIpcError(err) });
     } finally {
       setBusy(false);
     }
@@ -311,6 +323,12 @@ export function RefactorPassWorkspace({
   }, [attentionPreviewRequest]);
 
   const view = pass.view;
+  const registeredInlineError = attentionItems.find(
+    (item) => item.kind === 'error' && item.featureId === view?.id,
+  );
+  const inlineAttentionOwnerIsVisible = useRegisteredErrorCard(
+    registeredInlineError?.kind === 'error' ? registeredInlineError.ref : undefined,
+  );
   if (view === undefined) return null;
   const { child, childState } = pass;
   const state = child === null ? null : passState(child);
@@ -377,7 +395,44 @@ export function RefactorPassWorkspace({
     }
   };
 
-  const notice = pass.notice ?? attentionNotice;
+  // A rejected server action renders through the canonical error surface;
+  // informational receipts (discard outcome, attention result) stay quiet text.
+  const actionErrorNotice =
+    pass.notice !== null && pass.notice.kind === 'error' ? pass.notice.error : null;
+  const infoNotice =
+    (pass.notice !== null && pass.notice.kind === 'info' ? pass.notice.text : null) ??
+    attentionNotice;
+
+  // The parked integration condition renders exactly once, as one full
+  // ErrorSurface fed by the child snapshot's canonical transaction attention.
+  // The card's retry action resolves against the child's action catalog and
+  // dispatches through the pass dispatch.
+  const integrationAttention = child?.transaction?.attention ?? null;
+  const resolveIntegrationAction = (actionId: string): ErrorSurfaceAction | undefined => {
+    if (child === null) return undefined;
+    return catalogErrorAction(child, actionId, 'Retry integration');
+  };
+
+  // A failed child setup renders exactly once, as one full ErrorSurface fed
+  // by the owning setup task's canonical error: the run's thin record names
+  // the task, and the task carries the full canonical object. The card's
+  // setup action resolves against the child's action catalog and dispatches
+  // through the pass dispatch.
+  const failedSetupTask = (() => {
+    if (child?.setup?.status !== 'failed') return null;
+    const tasks = child.setup?.tasks ?? [];
+    const owningKey = child.failure?.context?.setup_task?.key;
+    const task =
+      owningKey === undefined
+        ? tasks.find((candidate) => candidate.error !== undefined)
+        : tasks.find((candidate) => candidate.key === owningKey && candidate.error !== undefined);
+    return task ?? null;
+  })();
+  const failedSetupTaskError = failedSetupTask?.error ?? null;
+  const resolveSetupAction = (actionId: string): ErrorSurfaceAction | undefined => {
+    if (child === null) return undefined;
+    return catalogErrorAction(child, actionId, 'Retry setup');
+  };
 
   const submitQuestionAnswers = () => {
     if (questionsAttention === undefined) return;
@@ -484,72 +539,101 @@ export function RefactorPassWorkspace({
               Loading the pass from the runtime…
             </p>
           ) : childState.phase === 'error' ? (
-            <p className="refactor-pass__state" role="alert">
-              The pass could not be loaded — {childState.message}{' '}
-              <button type="button" className="refactor-pass__retry-load" onClick={pass.reload}>
-                Try again
-              </button>
-            </p>
-          ) : state !== null && state.id !== 'working' ? (
-            <>
-              <p className="refactor-pass__state" role="status" data-tone={state.tone}>
-                {state.sentence}
-                {gate !== undefined && activeGate === undefined ? (
-                  <>
-                    {' '}
-                    <button
-                      type="button"
-                      className="refactor-pass__answer-now"
-                      onClick={() => setDismissedGateId(undefined)}
-                    >
-                      Answer now
-                    </button>
-                  </>
-                ) : null}
-              </p>
-              {state.problems !== undefined && state.problems.length > 0 ? (
-                <ul className="refactor-pass__warnings" aria-label="Integration diagnostics">
-                  {state.problems.map((problem) => (
-                    <li key={problem}>{problem}</li>
-                  ))}
-                </ul>
+            <ErrorSurface
+              error={childState.error}
+              variant="compact"
+              localAction={retryAction(pass.reload)}
+            />
+          ) : state !== null && state.id !== 'working' && state.sentence !== '' ? (
+            <p className="refactor-pass__state" role="status" data-tone={state.tone}>
+              {state.sentence}
+              {gate !== undefined && activeGate === undefined ? (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    className="refactor-pass__answer-now"
+                    onClick={() => setDismissedGateId(undefined)}
+                  >
+                    Answer now
+                  </button>
+                </>
               ) : null}
-            </>
-          ) : null}
-
-          {notice !== null ? (
-            <p className="refactor-pass__notice" role="status">
-              {notice}
             </p>
           ) : null}
 
-          {view.attention.map((item) => (
-            <p
-              key={`${item.code}:${item.repo ?? ''}`}
-              className="refactor-pass__alert"
-              role="alert"
-            >
-              {item.repo === undefined ? '' : `${item.repo}: `}
-              {item.message}
+          {failedSetupTaskError !== null && failedSetupTask !== null ? (
+            <ErrorSurface
+              error={failedSetupTaskError}
+              variant="full"
+              resolveAction={resolveSetupAction}
+              onAction={(actionId) => {
+                if (actionId === 'setup') void pass.dispatch('setup');
+              }}
+              explain={{
+                reference: {
+                  scope: 'setup',
+                  code: failedSetupTaskError.code,
+                  featureId: view.id,
+                  taskKey: failedSetupTask.key,
+                },
+                featureName: view.name,
+              }}
+            />
+          ) : null}
+
+          {integrationAttention !== null ? (
+            <ErrorSurface
+              error={integrationAttention}
+              variant="full"
+              caption="Integration is parked"
+              resolveAction={resolveIntegrationAction}
+              onAction={(actionId) => {
+                if (actionId === 'retry') void pass.dispatch('retry');
+              }}
+              explain={{
+                reference: {
+                  scope: 'transaction',
+                  code: integrationAttention.code,
+                  featureId: view.id,
+                },
+                featureName: view.name,
+              }}
+            />
+          ) : null}
+
+          {actionErrorNotice !== null ? (
+            <ErrorSurface
+              error={actionErrorNotice}
+              variant="compact"
+              caption="The pass action was rejected"
+            />
+          ) : infoNotice !== null ? (
+            <p className="refactor-pass__state" role="status" data-tone="quiet">
+              {infoNotice}
             </p>
-          ))}
+          ) : null}
 
           {/* The question joins the live conversation instead of stacking a
            * form above it; standalone only when there is no live surface. */}
           {inlineAttention !== undefined && !showsLiveSurface && childState.phase !== 'loading' ? (
-            <section className="live-preview__attention" aria-label="Agent request">
-              <AttentionDetail
-                key={`${inlineAttention.kind}:${inlineAttention.id}`}
-                item={inlineAttention}
-                busy={attentionBusy === inlineAttention.id}
-                drafts={attentionDrafts}
-                setDrafts={setAttentionDrafts}
-                saveDraft={(action, options) =>
-                  saveAttentionDraft(inlineAttention.id, action, options)
-                }
-                submit={(action, options) => void submitAttention(inlineAttention, action, options)}
-              />
-            </section>
+            <OwnerAwareAttention item={inlineAttention}>
+              <section className="live-preview__attention" aria-label="Agent request">
+                <AttentionDetail
+                  key={`${inlineAttention.kind}:${inlineAttention.id}`}
+                  item={inlineAttention}
+                  busy={attentionBusy === inlineAttention.id}
+                  drafts={attentionDrafts}
+                  setDrafts={setAttentionDrafts}
+                  saveDraft={(action, options) =>
+                    saveAttentionDraft(inlineAttention.id, action, options)
+                  }
+                  submit={(action, options) =>
+                    void submitAttention(inlineAttention, action, options)
+                  }
+                />
+              </section>
+            </OwnerAwareAttention>
           ) : null}
 
           {/* The live surface's Conversation/Signal-trace toggle, refresh, and
@@ -605,7 +689,8 @@ export function RefactorPassWorkspace({
                   )
                 }
                 attentionFooter={
-                  inlineAttention === undefined ? undefined : questionsAttention !== undefined ? (
+                  inlineAttention === undefined ||
+                  inlineAttentionOwnerIsVisible ? undefined : questionsAttention !== undefined ? (
                     <QuestionComposer
                       item={questionsAttention}
                       busy={attentionBusy === questionsAttention.id}
@@ -614,19 +699,21 @@ export function RefactorPassWorkspace({
                       onSubmit={submitQuestionAnswers}
                     />
                   ) : (
-                    <AttentionDetail
-                      key={`${inlineAttention.kind}:${inlineAttention.id}`}
-                      item={inlineAttention}
-                      busy={attentionBusy === inlineAttention.id}
-                      drafts={attentionDrafts}
-                      setDrafts={setAttentionDrafts}
-                      saveDraft={(action, options) =>
-                        saveAttentionDraft(inlineAttention.id, action, options)
-                      }
-                      submit={(action, options) =>
-                        void submitAttention(inlineAttention, action, options)
-                      }
-                    />
+                    <OwnerAwareAttention item={inlineAttention}>
+                      <AttentionDetail
+                        key={`${inlineAttention.kind}:${inlineAttention.id}`}
+                        item={inlineAttention}
+                        busy={attentionBusy === inlineAttention.id}
+                        drafts={attentionDrafts}
+                        setDrafts={setAttentionDrafts}
+                        saveDraft={(action, options) =>
+                          saveAttentionDraft(inlineAttention.id, action, options)
+                        }
+                        submit={(action, options) =>
+                          void submitAttention(inlineAttention, action, options)
+                        }
+                      />
+                    </OwnerAwareAttention>
                   )
                 }
               />
@@ -638,13 +725,14 @@ export function RefactorPassWorkspace({
             </div>
           ) : null}
 
-          {view.cleanupWarnings.length > 0 ? (
-            <ul className="refactor-pass__warnings">
-              {view.cleanupWarnings.map((item) => (
-                <li key={`${item.repo ?? ''}:${item.message}`}>{item.message}</li>
-              ))}
-            </ul>
-          ) : null}
+          {view.warnings.map((warning, index) => (
+            <ErrorSurface
+              key={`${warning.code}:${index}`}
+              error={warning}
+              variant="compact"
+              explain={relationshipWarningExplain(view, warning)}
+            />
+          ))}
         </main>
 
         {!isNarrow && inspectorOpen ? (
@@ -723,7 +811,13 @@ function DiscardPassDialog({
         <span className="impact-dialog__eyebrow">Operational impact</span>
         <h3 id="discard-pass-title">Discard {passName}?</h3>
         {preview === undefined ? (
-          <p role="alert">Impact projection is unavailable. Refresh before continuing.</p>
+          // Fail closed: the discard confirm stays disarmed until a fresh
+          // projection arrives; the missing projection is a warning, not a
+          // hard failure of the pass itself.
+          <ErrorSurface
+            error={buildCanonicalError('E_IMPACT_PROJECTION_STALE')}
+            variant="compact"
+          />
         ) : (
           <ImpactPreviewList preview={preview} />
         )}

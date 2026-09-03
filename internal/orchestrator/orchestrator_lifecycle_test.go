@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -145,13 +146,24 @@ func TestOrchestrator_StartFeaturePersistsSetupFailureWithoutPhaseStart(t *testi
 		Setup:     feature.NewActiveSetupState(f.Repos, nil, nil, now),
 	})
 	lc := lifecycleForFeature(f)
+	worktreeKey := "worktree:" + repoName
 	lc.RunSetupFn = func(featureID string, opts ...feature.SetupRunnerOptions) error {
 		f.Status = feature.StatusFailed
-		f.FailureType = feature.FailureWorktreeSetup
-		f.LastError = "git worktree add failed"
+		f.Run().Failure = &errcat.FailureRecord{
+			Code: errcat.WorktreeSetupFailed,
+			Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{
+				Key: worktreeKey, Kind: "worktree", Label: "Worktree: " + repoName,
+			}},
+		}
 		f.Run().Setup.Status = feature.SetupStatusFailed
-		f.Run().Setup.LastError = f.LastError
-		return errors.New(f.LastError)
+		task := f.Run().Setup.Tasks[worktreeKey]
+		task.Status = feature.SetupStatusFailed
+		task.Error = &errcat.FailureRecord{
+			Code:        errcat.WorktreeSetupFailed,
+			Diagnostics: "git worktree add failed",
+		}
+		f.Run().Setup.Tasks[worktreeKey] = task
+		return errors.New("git worktree add failed")
 	}
 	fs := newFeatureStore(f)
 	o := orchestrator.New(orchestrator.Deps{
@@ -166,11 +178,17 @@ func TestOrchestrator_StartFeaturePersistsSetupFailureWithoutPhaseStart(t *testi
 
 	assertLifecycleCall(t, lc, "RunSetup")
 	refuteLifecycleCall(t, lc, "StartPlanning")
-	if f.Status != feature.StatusFailed || f.FailureType != feature.FailureWorktreeSetup || !strings.Contains(f.LastError, "git worktree add failed") {
-		t.Fatalf("feature status/failure/error = %s/%s/%q, want persisted setup failure", f.Status, f.FailureType, f.LastError)
+	setupRec := f.FailureRecord()
+	if f.Status != feature.StatusFailed || setupRec == nil || setupRec.Code != errcat.WorktreeSetupFailed ||
+		setupRec.Context == nil || setupRec.Context.SetupTask == nil || setupRec.Context.SetupTask.Key != worktreeKey {
+		t.Fatalf("feature status/failure = %s/%+v, want persisted thin setup failure pointing at the task", f.Status, setupRec)
 	}
-	if f.Run().Setup == nil || f.Run().Setup.Status != feature.SetupStatusFailed || !strings.Contains(f.Run().Setup.LastError, "git worktree add failed") {
-		t.Fatalf("setup = %+v, want failed setup diagnostic", f.Run().Setup)
+	owner := f.FailedSetupTask()
+	if owner == nil || owner.Error == nil || !strings.Contains(owner.Error.Diagnostics, "git worktree add failed") {
+		t.Fatalf("owning task = %+v, want failed worktree task carrying the raw diagnostics", owner)
+	}
+	if f.Run().Setup == nil || f.Run().Setup.Status != feature.SetupStatusFailed {
+		t.Fatalf("setup = %+v, want failed setup state", f.Run().Setup)
 	}
 }
 

@@ -16,6 +16,7 @@ package mocks
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -39,7 +40,7 @@ type MockFeatureLifecycle struct {
 	RunSetupFn                 func(featureID string, opts ...feature.SetupRunnerOptions) error
 	RetrySetupFn               func(featureID string, opts ...feature.SetupRunnerOptions) error
 	ReconcileAbandonedSetupsFn func() ([]string, error)
-	FailActiveSetupFn          func(featureID, message string) (bool, error)
+	FailActiveSetupFn          func(featureID, message string) (feature.SetupFailureOutcome, error)
 
 	// Phase-start hooks — tests that need to mimic real lifecycle behavior
 	// (status transitions) can install these. Called after the mock records
@@ -78,24 +79,19 @@ type MockFeatureLifecycle struct {
 	MarkCodeReadyFn        func(featureID string) error
 	MarkFinalReviewReadyFn func(featureID string) error
 	MarkPublishedFn        func(featureID, prURL string) error
-	MarkFailedFn           func(featureID, failureType, lastError string) error
+	MarkFailedFn           func(featureID string, failure errcat.FailureRecord) error
 	SetRepoPublishedFn     func(featureID, repoName, prURL string) error
-	SetRepoPublishErrorFn  func(featureID, repoName, errMsg string) error
+	SetRepoPublishErrorFn  func(featureID, repoName string, record errcat.FailureRecord) error
 	TryCompletePublishFn   func(featureID string) (bool, error)
 	InitRepoImplFn         func(featureID string) error
-
-	// FailRepoImplementationFn lets tests intercept the per-repo
-	// implementation failure path. The plan parameter was dropped in
-	// SchemaVersionCurrent = 4.
-	FailRepoImplementationFn func(featureID, repoName, errMsg string) error
 
 	// RetryPhaseFn lets tests intercept the unified phase-retry path that
 	// replaces the old per-repo RetryRepo (deleted in SchemaVersionCurrent = 4).
 	RetryPhaseFn func(featureID string, repoNames []string) error
 
 	// Rewind hook.
-	RewindToPhaseFn     func(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error)
-	RewindWithRequestFn func(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error)
+	RewindToPhaseFn     func(featureID string, targetPhase feature.Phase) ([]feature.RewindWarning, feature.Phase, error)
+	RewindWithRequestFn func(featureID string, request feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error)
 
 	DefaultError error
 	Calls        []MockCall
@@ -172,12 +168,12 @@ func (m *MockFeatureLifecycle) RetrySetup(featureID string, opts ...feature.Setu
 	return m.DefaultError
 }
 
-func (m *MockFeatureLifecycle) FailActiveSetup(featureID, message string) (bool, error) {
+func (m *MockFeatureLifecycle) FailActiveSetup(featureID, message string) (feature.SetupFailureOutcome, error) {
 	m.record("FailActiveSetup", featureID, message)
 	if m.FailActiveSetupFn != nil {
 		return m.FailActiveSetupFn(featureID, message)
 	}
-	return false, m.DefaultError
+	return feature.SetupFailureOutcome{}, m.DefaultError
 }
 
 func (m *MockFeatureLifecycle) ReconcileAbandonedSetups() ([]string, error) {
@@ -374,15 +370,6 @@ func (m *MockFeatureLifecycle) MarkDone(featureID string) error {
 }
 
 // ---------------------------------------------------------------------------
-func (m *MockFeatureLifecycle) FailRepoImplementation(featureID, repoName, errMsg string) error {
-	m.record("FailRepoImplementation", featureID, repoName, errMsg)
-	if m.FailRepoImplementationFn != nil {
-		return m.FailRepoImplementationFn(featureID, repoName, errMsg)
-	}
-	return m.DefaultError
-}
-
-// ---------------------------------------------------------------------------
 // Roadmap phases
 // ---------------------------------------------------------------------------
 
@@ -423,10 +410,10 @@ func (m *MockFeatureLifecycle) CleanWorktree(featureID string) error {
 // Failure / restart
 // ---------------------------------------------------------------------------
 
-func (m *MockFeatureLifecycle) MarkFailed(featureID, failureType, lastError string) error {
-	m.record("MarkFailed", featureID, failureType, lastError)
+func (m *MockFeatureLifecycle) MarkFailed(featureID string, failure errcat.FailureRecord) error {
+	m.record("MarkFailed", featureID, failure)
 	if m.MarkFailedFn != nil {
-		return m.MarkFailedFn(featureID, failureType, lastError)
+		return m.MarkFailedFn(featureID, failure)
 	}
 	return m.DefaultError
 }
@@ -435,7 +422,7 @@ func (m *MockFeatureLifecycle) MarkFailed(featureID, failureType, lastError stri
 // Rewind / pipeline
 // ---------------------------------------------------------------------------
 
-func (m *MockFeatureLifecycle) RewindToPhase(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error) {
+func (m *MockFeatureLifecycle) RewindToPhase(featureID string, targetPhase feature.Phase) ([]feature.RewindWarning, feature.Phase, error) {
 	m.record("RewindToPhase", featureID, targetPhase)
 	if m.RewindToPhaseFn != nil {
 		return m.RewindToPhaseFn(featureID, targetPhase)
@@ -443,7 +430,7 @@ func (m *MockFeatureLifecycle) RewindToPhase(featureID string, targetPhase featu
 	return nil, 0, m.DefaultError
 }
 
-func (m *MockFeatureLifecycle) RewindWithRequest(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
+func (m *MockFeatureLifecycle) RewindWithRequest(featureID string, request feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error) {
 	m.record("RewindWithRequest", featureID, request)
 	if m.RewindWithRequestFn != nil {
 		return m.RewindWithRequestFn(featureID, request)
@@ -476,10 +463,10 @@ func (m *MockFeatureLifecycle) SetRepoPublished(featureID, repoName, prURL strin
 	return m.DefaultError
 }
 
-func (m *MockFeatureLifecycle) SetRepoPublishError(featureID, repoName, errMsg string) error {
-	m.record("SetRepoPublishError", featureID, repoName, errMsg)
+func (m *MockFeatureLifecycle) SetRepoPublishError(featureID, repoName string, record errcat.FailureRecord) error {
+	m.record("SetRepoPublishError", featureID, repoName, record)
 	if m.SetRepoPublishErrorFn != nil {
-		return m.SetRepoPublishErrorFn(featureID, repoName, errMsg)
+		return m.SetRepoPublishErrorFn(featureID, repoName, record)
 	}
 	return m.DefaultError
 }

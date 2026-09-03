@@ -10,10 +10,11 @@
  * use. Class drives the whole treatment at once — left rule, icon, label
  * word — so the surface never signals by color alone.
  */
-import type { Ref } from 'react';
+import { useEffect, useRef, type Ref } from 'react';
 import type { CanonicalError } from '../../../shared/api/parse';
-import type { ChatContextReference } from '../../../shared/ipc';
+import { ERROR_CLASS_LABELS, type ErrorReference } from '../../../shared/ipc';
 import { useExplainChat } from '../explainChat';
+import { registerErrorCard } from './errorCardRegistry';
 import { CircleAlertIcon, TriangleAlertIcon, WrenchIcon } from './icons';
 
 export interface ErrorSurfaceAction {
@@ -45,21 +46,17 @@ export interface ErrorSurfaceProps {
    * Explain-in-chat wiring: the durable home of the error (as a chat context
    * reference the server resolves) and the feature name the question names.
    * Both are optional — response-only cards pass neither and the question
-   * stands on the card's own title and code.
+   * stands on the card's own title and code. A card that carries a reference
+   * is a durable error: its root registers in the owner-card registry and
+   * stays programmatically focusable, so presence surfaces can link to it.
    */
   explain?: {
-    reference?: ChatContextReference;
+    reference?: ErrorReference;
     featureName?: string;
   };
 }
 
 type ErrorClass = CanonicalError['class'];
-
-const CLASS_LABEL: Record<ErrorClass, string> = {
-  blocking: 'Failed',
-  needs_action: 'Needs your action',
-  warning: 'Warning',
-};
 
 const CLASS_ROLE: Record<ErrorClass, 'alert' | 'status'> = {
   blocking: 'alert',
@@ -205,6 +202,29 @@ export function ErrorSurface({
 }: ErrorSurfaceProps) {
   const compact = variant === 'compact';
   const explainRequest = useExplainChat();
+  const cardReference = explain?.reference;
+  const rootElementRef = useRef<HTMLDivElement | null>(null);
+  // A durable error registers its root under the reference so the chip and
+  // the inbox can resolve it; registration is provider-independent (the
+  // explain button is what the provider gates).
+  useEffect(() => {
+    const element = rootElementRef.current;
+    if (cardReference === undefined || element === null) return;
+    registerErrorCard(cardReference, element);
+    return () => {
+      registerErrorCard(cardReference, null);
+    };
+  }, [cardReference]);
+  const mergedRootRef = (node: HTMLDivElement | null): void => {
+    rootElementRef.current = node;
+    if (typeof rootRef === 'function') {
+      rootRef(node);
+      return;
+    }
+    if (rootRef != null && typeof rootRef === 'object') {
+      (rootRef as { current: HTMLDivElement | null }).current = node;
+    }
+  };
   const ClassIcon = CLASS_ICON[error.class];
   const remediation = error.remediation;
   const remediationHint = remediation?.hint;
@@ -232,16 +252,16 @@ export function ErrorSurface({
 
   return (
     <div
-      ref={rootRef}
+      ref={mergedRootRef}
       role={CLASS_ROLE[error.class]}
-      tabIndex={rootTabIndex}
+      tabIndex={rootTabIndex ?? (cardReference !== undefined ? -1 : undefined)}
       className={`error-surface error-surface--${variant} ${CLASS_MODIFIER[error.class]}`}
     >
       <div className="error-surface__header">
         <span className="error-surface__icon" data-icon={error.class}>
           <ClassIcon />
         </span>
-        <span className="error-surface__label">{CLASS_LABEL[error.class]}</span>
+        <span className="error-surface__label">{ERROR_CLASS_LABELS[error.class]}</span>
         <code className="error-surface__code">{error.code}</code>
       </div>
       {caption != null && <p className="error-surface__caption">{caption}</p>}

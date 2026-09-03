@@ -22,7 +22,7 @@ limitations under the License.
  */
 import {
   isPendingReviewStatus,
-  type ChatContextReference,
+  type ErrorReference,
   type FeatureSnapshot,
   type RelationshipChildView,
   type ReviewFeedbackCommentView,
@@ -332,21 +332,10 @@ export function passKindLabel(kind: string): string {
 }
 
 /**
- * The active-pass status chip label, switching on the child kind. Unknown kinds
- * fall back to a neutral "Working" rather than impersonating "Refactoring".
+ * The active-pass verb, switching on the child kind. Unknown kinds fall
+ * back to a neutral "Working" rather than impersonating "Refactoring".
  */
-export function refactoringStatusChip(view: RelationshipChildView): {
-  label: string;
-  tone: 'info' | 'attention';
-} {
-  const attention = view.attention != null || view.integrationState === 'attention';
-  const active = passActiveVerb(view.kind);
-  return attention
-    ? { label: `${active} — needs attention`, tone: 'attention' }
-    : { label: active, tone: 'info' };
-}
-
-function passActiveVerb(kind: string): string {
+export function passActiveVerb(kind: string): string {
   if (kind === 'review-feedback') return 'Addressing review feedback';
   if (kind === 'rebase') return 'Rebasing';
   if (kind === 'refactor') return 'Refactoring';
@@ -385,7 +374,7 @@ export function commentKey(comment: ReviewFeedbackCommentView): string {
 export function relationshipWarningExplain(
   child: Pick<RelationshipChildView, 'id' | 'name'>,
   warning: CanonicalError,
-): { reference: ChatContextReference; featureName: string } {
+): { reference: ErrorReference; featureName: string } {
   const repository = warning.context?.repositories?.[0]?.name;
   return {
     reference: {

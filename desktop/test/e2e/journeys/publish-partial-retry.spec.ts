@@ -246,10 +246,12 @@ test('packaged publish partial retry: repository-owned failure card, inspector l
     await expect(card.locator('.error-surface__repo-name')).toHaveText('publish-web');
     await card.getByText('Diagnostics').click();
     await expect(card.locator('.error-surface__diagnostics-pre')).toContainText('502');
-    // The card's title appears exactly once, and no bespoke failure notice or
-    // whole-sheet rejection remains: the row card owns the condition.
+    // The card's title appears exactly once inside the modal, and no bespoke
+    // failure notice or whole-sheet rejection remains: the row card owns the
+    // condition. Outside the modal the title rides the presence surfaces
+    // (sidebar sub-line, attention detail).
     await expect(
-      handle.page.getByText('Pull-request creation failed', { exact: true }),
+      publishModal.getByText('Pull-request creation failed', { exact: true }),
     ).toHaveCount(1);
     await expect(publishModal.locator('.completion-publish-sheet__failure')).toHaveCount(0);
     await expect(publishModal.getByText('Publish was rejected')).toHaveCount(0);

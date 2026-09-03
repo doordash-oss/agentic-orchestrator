@@ -74,6 +74,7 @@ import { Toolbar } from './Toolbar';
 import {
   childStatusSpineIndex,
   displayStatusLabel,
+  highestSeverityError,
   isRunAtRest,
   orderDashboardFeatures,
   runningPhaseSubline,
@@ -142,6 +143,9 @@ function snapshotFromSummary(summary: FeatureSummaryView): FeatureSnapshot {
     },
     automaticReview: { mode: 'default', enabled: false, source: 'global' },
     warnings: summary.warnings,
+    // The owned-error projection rides the summary, so lanes classify from
+    // the same list the detail route will refine.
+    errors: summary.errors,
     ...(summary.phaseStatus === undefined ? {} : { phaseStatus: summary.phaseStatus }),
     ...(summary.activeChild === undefined ? {} : { activeChild: summary.activeChild }),
     ...(summary.childHistory === undefined ? {} : { childHistory: summary.childHistory }),
@@ -168,7 +172,7 @@ function detailFetchIds(
   }
   for (const row of rows) {
     const lane = classifyLane(row);
-    if (lane === 'waiting' || lane === 'running') add(row.id);
+    if (lane === 'waiting' || lane === 'failed' || lane === 'running') add(row.id);
   }
   return ids;
 }
@@ -296,6 +300,7 @@ export function WorkspaceShell({
   const [bulkPreviewRequest, setBulkPreviewRequest] = useState<number | null>(null);
   const [selectedRuns, setSelectedRuns] = useState<Record<string, number | null>>({});
   const [expandedLanes, setExpandedLanes] = useState<Record<Lane, boolean>>({
+    failed: true,
     waiting: true,
     running: true,
     published: true,
@@ -556,10 +561,15 @@ export function WorkspaceShell({
       if (owner === undefined) continue;
       const entry =
         kinds.get(owner) ??
-        ({ permission: 0, questions: 0, help: 0, gate: 0, review: 0, recovery: 0 } as Record<
-          AttentionItem['kind'],
-          number
-        >);
+        ({
+          permission: 0,
+          questions: 0,
+          help: 0,
+          gate: 0,
+          review: 0,
+          recovery: 0,
+          error: 0,
+        } as Record<AttentionItem['kind'], number>);
       entry[item.kind] += 1;
       kinds.set(owner, entry);
     }
@@ -1114,6 +1124,7 @@ function SidebarRow({
 }
 
 const LANE_GLYPH_TONE: Readonly<Record<Lane, 'attention' | 'progress' | 'ok' | 'quiet'>> = {
+  failed: 'attention',
   waiting: 'attention',
   running: 'progress',
   published: 'ok',
@@ -1136,7 +1147,8 @@ function SidebarFeatureRow({
   onSelect(): void;
 }) {
   const subline = laneSubline(lane, feature, attentionKinds);
-  const pipInfo = lane === 'waiting' || lane === 'running' ? pipRailFor(feature) : null;
+  const pipInfo =
+    lane === 'waiting' || lane === 'failed' || lane === 'running' ? pipRailFor(feature) : null;
   return (
     <SidebarRow
       id={`sidebar-row-${feature.id}`}
@@ -1150,7 +1162,7 @@ function SidebarFeatureRow({
           ? undefined
           : {
               ...pipInfo,
-              tone: lane === 'waiting' ? 'attention' : 'progress',
+              tone: lane === 'running' ? 'progress' : 'attention',
             }
       }
     />
@@ -1194,9 +1206,10 @@ function attentionSummary(
 }
 
 /**
- * The row sub-line, entirely lane-scoped: waiting rows summarize what needs a
- * person (falling back to the status text when nothing raised a discrete
- * attention item yet), running rows name the active pass or the phase and
+ * The row sub-line, entirely lane-scoped: failed rows carry the blocking
+ * error's catalog title, waiting rows summarize what needs a person (the
+ * prompt cascade first, then the highest-severity error's catalog title,
+ * then the status text), running rows name the active pass or the phase and
  * iteration, at-rest rows show the plain status text, and published/done
  * rows carry no sub-line at all — only the name and the status glyph, per
  * the mock. Any part the snapshot has no data for is omitted rather than
@@ -1207,8 +1220,15 @@ function laneSubline(
   feature: FeatureSnapshot,
   attentionKinds: Record<AttentionItem['kind'], number> | undefined,
 ): string | undefined {
+  if (lane === 'failed') {
+    return highestSeverityError(feature.errors)?.error.title;
+  }
   if (lane === 'waiting') {
-    return attentionSummary(attentionKinds) ?? displayStatusLabel(feature.status);
+    return (
+      attentionSummary(attentionKinds) ??
+      highestSeverityError(feature.errors)?.error.title ??
+      displayStatusLabel(feature.status)
+    );
   }
   if (lane === 'running') {
     if (feature.activeChild !== undefined) return feature.activeChild.name;
@@ -1259,6 +1279,7 @@ function overviewRowSubline(feature: FeatureSnapshot): string {
  * (`laneSubline`) has nothing to report — e.g. a running row with no
  * active child and no current phase. */
 const OVERVIEW_ROW_STATE_FALLBACK: Readonly<Record<Lane, string>> = {
+  failed: 'Failed',
   waiting: '',
   running: 'Running',
   'at-rest': '',
@@ -1279,9 +1300,9 @@ function overviewRowStateText(
   return laneSubline(lane, feature, attentionKinds) ?? OVERVIEW_ROW_STATE_FALLBACK[lane];
 }
 
-/** The row-scale pip rail: sidebar's `pipRailFor` for waiting/running rows,
- * an all-done rail for the resting lanes (at-rest/published/done). Returns
- * null for a waiting/running row whose status names no phase the rail can
+/** The row-scale pip rail: sidebar's `pipRailFor` for waiting/failed/running
+ * rows, an all-done rail for the resting lanes (at-rest/published/done). Returns
+ * null for a waiting/failed/running row whose status names no phase the rail can
  * place a needle on — mirroring the sidebar's `SidebarFeatureRow`, which
  * renders no pip at all in that case rather than inventing a fully-filled,
  * done-looking rail for a row that hasn't finished anything. */
@@ -1294,9 +1315,9 @@ function overviewRowPip(
   atRest: boolean;
   tone: 'progress' | 'attention';
 } | null {
-  if (lane === 'waiting' || lane === 'running') {
+  if (lane === 'waiting' || lane === 'failed' || lane === 'running') {
     const info = pipRailFor(feature);
-    return info === null ? null : { ...info, tone: lane === 'waiting' ? 'attention' : 'progress' };
+    return info === null ? null : { ...info, tone: lane === 'running' ? 'progress' : 'attention' };
   }
   const stages = spineStages(feature.activeChild?.pipeline ?? feature.pipeline);
   return {

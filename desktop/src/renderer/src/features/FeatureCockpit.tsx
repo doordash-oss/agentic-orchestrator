@@ -38,6 +38,7 @@ import {
   attentionOwnerFeatureId,
   isPendingReviewStatus,
   isSyntheticHelpItem,
+  type AttentionError,
   type FeatureSnapshot,
   type RunDetailView,
   type RunSummaryView,
@@ -73,7 +74,8 @@ import {
 import { RefactorLauncher } from './refactor/RefactorLauncher';
 import { ReviewFeedbackWorkspace } from './reviewFeedback/ReviewFeedbackWorkspace';
 import { RefactorPassWorkspace, useRefactorPass } from './refactor/RefactorPassWorkspace';
-import { refactoringStatusChip } from './refactor/refactorPassModel';
+import { errorStatusChip } from './statusChip';
+import { focusErrorCardWhenRegistered } from '../components/errorCardRegistry';
 import { useCompletionPreflight } from './completion/useCompletionPreflight';
 import { pendingDeliveryFact, pendingDeliverySummary } from './completion/pendingDelivery';
 import {
@@ -304,12 +306,13 @@ function CockpitActionBar({
   overflowMenuHost,
 }: {
   status: FeatureSnapshot['status'];
-  /** Replaces the raw status label (e.g. "Refactoring" while a pass runs). */
-  statusOverride?: { label: string; tone: 'info' | 'attention' };
+  /** Replaces the raw status label (e.g. an owned-error chip while one is present). */
+  statusOverride?: { label: string; tone: 'info' | 'attention' | 'danger'; title?: string };
   /**
-   * When the override shows attention, the chip becomes a button that fires
-   * this handler — the pass workspace owns what it focuses (the
-   * integration-attention card). The chip itself renders no error text.
+   * When the override reflects an owned error, the chip becomes a button that
+   * fires this handler — the handler resolves the entry's reference through
+   * the error-card registry and focuses the owning card. The chip itself
+   * renders no error text beyond its label.
    */
   onStatusClick?: () => void;
   primaryActions: CockpitPrimaryAction[];
@@ -334,12 +337,18 @@ function CockpitActionBar({
 
   useDetailsDismiss(menuRef, '.cockpit__overflow-summary');
 
-  const statusIsAttention = statusOverride?.tone === 'attention' && onStatusClick !== undefined;
-  const statusChip = statusIsAttention ? (
+  const statusIsChip =
+    statusOverride !== undefined && onStatusClick !== undefined && statusOverride.tone !== 'info';
+  const statusChip = statusIsChip ? (
     <button
       type="button"
       className="cockpit__phase-status cockpit__phase-status--button"
-      aria-label={`${statusOverride?.label}. Focus the pass attention card.`}
+      aria-label={
+        statusOverride?.title !== undefined
+          ? `${statusOverride?.label}. ${statusOverride.title}. Focus the error card.`
+          : `${statusOverride?.label}. Focus the error card.`
+      }
+      title={statusOverride?.title}
       onClick={onStatusClick}
     >
       <code
@@ -1506,6 +1515,38 @@ export function FeatureCockpit({
     commandTargetRef.current = { actions: null, run: () => {} };
   }
 
+  // The funnel's completion-modal opener lives above the early returns so
+  // the error-chip and attention-jump hooks below can call it unconditionally.
+  const openCompletionModal = (verb: CompletionVerb): void => {
+    setCompletionModal(null);
+    void completion.refresh().then(() => setCompletionModal(verb));
+  };
+
+  // An attention jump carrying an error item id resolves the item's
+  // reference through the owner-card registry, exactly like the chip: a
+  // repository entry opens the publish modal first, since that is where its
+  // card lives. Guarded by request id so one jump focuses once; the
+  // registry retry keeps trying briefly while the cockpit loads.
+  const handledErrorJumpRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (attentionPreviewRequest === null || attentionPreviewRequest.attentionId === undefined) {
+      return;
+    }
+    const item = attentionItems.find(
+      (candidate): candidate is AttentionError =>
+        candidate.kind === 'error' &&
+        candidate.id === attentionPreviewRequest.attentionId &&
+        attentionOwnerFeatureId(candidate) === featureId,
+    );
+    if (item === undefined) return;
+    if (handledErrorJumpRef.current === attentionPreviewRequest.requestId) return;
+    handledErrorJumpRef.current = attentionPreviewRequest.requestId;
+    if (item.ref.scope === 'repository') {
+      openCompletionModal('publish');
+    }
+    focusErrorCardWhenRegistered(item.ref);
+  });
+
   if (state.phase === 'loading') {
     return (
       <section className="cockpit" aria-label={`Feature ${titleHint}`}>
@@ -1972,9 +2013,20 @@ export function FeatureCockpit({
     completion.preflight !== null
       ? completionBarModel(completion.preflight, completionCandidates)
       : [];
-  const openCompletionModal = (verb: CompletionVerb): void => {
-    setCompletionModal(null);
-    void completion.refresh().then(() => setCompletionModal(verb));
+
+  // The single error chip: derived from the snapshot's highest-severity
+  // owned error, present exactly when one exists. Clicking resolves the
+  // entry's reference through the owner-card registry — a repository entry
+  // opens the publish modal first, since that is where its card lives.
+  const chip = errorStatusChip(snapshot);
+  const chipOverride =
+    chip === undefined ? undefined : { label: chip.label, tone: chip.tone, title: chip.title };
+  const focusChipTarget = (): void => {
+    if (chip === undefined) return;
+    if (chip.entry.ref.scope === 'repository') {
+      openCompletionModal('publish');
+    }
+    focusErrorCardWhenRegistered(chip.entry.ref);
   };
 
   /**
@@ -2142,8 +2194,8 @@ export function FeatureCockpit({
             <>
               <CockpitActionBar
                 status={snapshot.status}
-                statusOverride={refactoringStatusChip(snapshot.activeChild)}
-                onStatusClick={refactorPass.focusAttentionCard}
+                statusOverride={chipOverride}
+                onStatusClick={chip === undefined ? undefined : focusChipTarget}
                 primaryActions={refactorPass.actions.map((action) => ({
                   key: `pass-${action.id}`,
                   label: action.label,
@@ -2214,6 +2266,8 @@ export function FeatureCockpit({
             <>
               <CockpitActionBar
                 status={snapshot.status}
+                statusOverride={chipOverride}
+                onStatusClick={chip === undefined ? undefined : focusChipTarget}
                 primaryActions={[]}
                 menuActions={postMenuActions}
                 extraControls={aftercareCompletionControls}
@@ -2556,6 +2610,8 @@ export function FeatureCockpit({
         <>
           <CockpitActionBar
             status={snapshot.status}
+            statusOverride={chipOverride}
+            onStatusClick={chip === undefined ? undefined : focusChipTarget}
             primaryActions={primaryActions}
             menuActions={menuActions}
             extraControls={completionControls}

@@ -113,6 +113,7 @@ function runningClause(runningFeatures: readonly FeatureSnapshot[]): string {
 
 const RESTING_LANES: readonly Lane[] = ['at-rest', 'published', 'done'];
 const RESTING_LANE_LABEL: Readonly<Record<Lane, string>> = {
+  failed: 'failed',
   waiting: 'waiting on you',
   running: 'running',
   'at-rest': 'at rest',

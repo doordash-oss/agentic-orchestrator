@@ -158,6 +158,7 @@ describe('App readiness gating', () => {
           activeRun: 1,
           runCount: 1,
           warnings: [],
+          errors: [],
         },
       ],
       attention: { items: [attention] },

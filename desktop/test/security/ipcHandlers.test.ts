@@ -156,6 +156,7 @@ function makeServices(): IpcServices {
         createdAt: '2026-07-14T10:00:00Z',
         activeRun: 1,
         warnings: [],
+        errors: [],
         automaticReview: {
           mode: 'default' as const,
           enabled: true,

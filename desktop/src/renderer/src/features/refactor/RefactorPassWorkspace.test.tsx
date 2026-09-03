@@ -117,8 +117,6 @@ function controllerFor(
     busy: false,
     notice: null,
     discardOpen: false,
-    attentionCardRef: { current: null },
-    focusAttentionCard: vi.fn(),
     dispatch: vi.fn(() => Promise.resolve()),
     armAutoStart: vi.fn(),
     openDiscard: vi.fn(),

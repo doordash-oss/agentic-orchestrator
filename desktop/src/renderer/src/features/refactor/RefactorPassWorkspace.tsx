@@ -20,7 +20,6 @@ import {
   useRef,
   useState,
   type Dispatch,
-  type RefObject,
   type SetStateAction,
 } from 'react';
 import {
@@ -89,13 +88,6 @@ export interface RefactorPassController {
   busy: boolean;
   notice: PassNotice | null;
   discardOpen: boolean;
-  /**
-   * Hosts the integration-attention card's root so an external surface (the
-   * cockpit status chip) can scroll to and focus the card.
-   */
-  attentionCardRef: RefObject<HTMLDivElement | null>;
-  /** Scrolls to and focuses the integration-attention card, if present. */
-  focusAttentionCard(): void;
   /** Dispatches a catalogue verb (or setup) through the shared action route. */
   dispatch(action: PassAction['id'] | 'setup'): Promise<void>;
   /** Launch-time auto-start: dispatch start once this child becomes startable. */
@@ -203,13 +195,6 @@ export function useRefactorPass(
   // enables the verb (setup completion arrives through the event stream).
   const [autoStartChildId, setAutoStartChildId] = useState<string | null>(null);
   const armAutoStart = useCallback((id: string) => setAutoStartChildId(id), []);
-  // Hosts the integration-attention card's root; the cockpit status chip
-  // focuses it through focusAttentionCard.
-  const attentionCardRef = useRef<HTMLDivElement | null>(null);
-  const focusAttentionCard = useCallback(() => {
-    attentionCardRef.current?.scrollIntoView({ block: 'center' });
-    attentionCardRef.current?.focus();
-  }, []);
   useEffect(() => {
     if (
       !active ||
@@ -253,8 +238,6 @@ export function useRefactorPass(
     busy,
     notice,
     discardOpen,
-    attentionCardRef,
-    focusAttentionCard,
     dispatch,
     armAutoStart,
     openDiscard: useCallback(() => setDiscardOpen(true), []),
@@ -613,8 +596,6 @@ export function RefactorPassWorkspace({
               error={integrationAttention}
               variant="full"
               caption="Integration is parked"
-              rootRef={pass.attentionCardRef}
-              rootTabIndex={-1}
               resolveAction={resolveIntegrationAction}
               onAction={(actionId) => {
                 if (actionId === 'retry') void pass.dispatch('retry');

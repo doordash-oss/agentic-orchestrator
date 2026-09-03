@@ -24,21 +24,23 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// Chat context scopes: the durable homes an explain-in-chat reference can
-// point at. The zero value means the request carries no reference.
+// Error reference scopes: the durable homes an error reference can point
+// at, shared by chat start's explain-in-chat context and the feature
+// summary's owned-error projection. The zero value means the request carries
+// no reference.
 const (
-	chatContextScopeRun         = ChatContextScope("run")
-	chatContextScopeTransaction = ChatContextScope("transaction")
-	chatContextScopeRepository  = ChatContextScope("repository")
-	chatContextScopeSetup       = ChatContextScope("setup")
-	chatContextScopeRecovery    = ChatContextScope("recovery")
+	errorScopeRun         = ErrorScope("run")
+	errorScopeTransaction = ErrorScope("transaction")
+	errorScopeRepository  = ErrorScope("repository")
+	errorScopeSetup       = ErrorScope("setup")
+	errorScopeRecovery    = ErrorScope("recovery")
 )
 
 // chatContextAbsent reports whether a decoded request context reference
 // carries nothing at all: the request behaves exactly as one without
 // `context`.
-func chatContextAbsent(ref ChatContextReference) bool {
-	return ref == ChatContextReference{}
+func chatContextAbsent(ref ErrorReference) bool {
+	return ref == ErrorReference{}
 }
 
 // validateChatContextReference checks a non-absent reference's shape and
@@ -46,7 +48,7 @@ func chatContextAbsent(ref ChatContextReference) bool {
 // well-formed for its scope. Every scope requires the code; each scope then
 // requires its own keys and rejects keys foreign to it, so a reference can
 // never address two homes at once.
-func validateChatContextReference(ref ChatContextReference) string {
+func validateChatContextReference(ref ErrorReference) string {
 	if chatContextAbsent(ref) {
 		return ""
 	}
@@ -54,7 +56,7 @@ func validateChatContextReference(ref ChatContextReference) string {
 		return "code"
 	}
 	switch ref.Scope {
-	case chatContextScopeRun:
+	case errorScopeRun:
 		if ref.FeatureID == "" {
 			return "feature_id"
 		}
@@ -67,7 +69,7 @@ func validateChatContextReference(ref ChatContextReference) string {
 		if ref.SnapshotID != "" || ref.Key != "" {
 			return "snapshot_id"
 		}
-	case chatContextScopeTransaction:
+	case errorScopeTransaction:
 		if ref.FeatureID == "" {
 			return "feature_id"
 		}
@@ -77,7 +79,7 @@ func validateChatContextReference(ref ChatContextReference) string {
 		if ref.SnapshotID != "" || ref.Key != "" {
 			return "snapshot_id"
 		}
-	case chatContextScopeRepository:
+	case errorScopeRepository:
 		if ref.FeatureID == "" {
 			return "feature_id"
 		}
@@ -90,7 +92,7 @@ func validateChatContextReference(ref ChatContextReference) string {
 		if ref.SnapshotID != "" || ref.Key != "" {
 			return "snapshot_id"
 		}
-	case chatContextScopeSetup:
+	case errorScopeSetup:
 		if ref.FeatureID == "" {
 			return "feature_id"
 		}
@@ -103,7 +105,7 @@ func validateChatContextReference(ref ChatContextReference) string {
 		if ref.SnapshotID != "" || ref.Key != "" {
 			return "snapshot_id"
 		}
-	case chatContextScopeRecovery:
+	case errorScopeRecovery:
 		if ref.SnapshotID == "" {
 			return "snapshot_id"
 		}
@@ -125,7 +127,7 @@ func validateChatContextReference(ref ChatContextReference) string {
 // writeChatContextInvalid rejects a malformed chat context reference with
 // the cataloged blocking envelope, naming the offending field in
 // diagnostics. Called before uploads are consumed, so nothing is staged.
-func writeChatContextInvalid(w http.ResponseWriter, ref ChatContextReference, field string) {
+func writeChatContextInvalid(w http.ResponseWriter, ref ErrorReference, field string) {
 	writeAPIError(
 		w,
 		http.StatusBadRequest,
@@ -143,7 +145,7 @@ type chatContextRejection struct {
 	diagnostics string
 }
 
-func (r *chatContextRejection) write(w http.ResponseWriter, ref ChatContextReference) {
+func (r *chatContextRejection) write(w http.ResponseWriter, ref ErrorReference) {
 	writeAPIError(
 		w,
 		r.status,
@@ -177,24 +179,24 @@ func chatContextHomeNotFound(home string) *chatContextRejection {
 // repository state's error; setup reads the named task's error; recovery
 // looks up the stored snapshot and item and classifies it exactly as the
 // recovery projection does. The bundle never enters an HTTP response body.
-func (h *apiHandler) resolveChatContext(ref ChatContextReference) (string, *chatContextRejection) {
+func (h *apiHandler) resolveChatContext(ref ErrorReference) (string, *chatContextRejection) {
 	switch ref.Scope {
-	case chatContextScopeRun:
+	case errorScopeRun:
 		return h.resolveChatContextRun(ref)
-	case chatContextScopeTransaction:
+	case errorScopeTransaction:
 		return h.resolveChatContextTransaction(ref)
-	case chatContextScopeRepository:
+	case errorScopeRepository:
 		return h.resolveChatContextRepository(ref)
-	case chatContextScopeSetup:
+	case errorScopeSetup:
 		return h.resolveChatContextSetup(ref)
-	case chatContextScopeRecovery:
+	case errorScopeRecovery:
 		return h.resolveChatContextRecovery(ref)
 	default:
 		return "", chatContextFeatureInvalid(ref.FeatureID)
 	}
 }
 
-func (h *apiHandler) resolveChatContextRun(ref ChatContextReference) (string, *chatContextRejection) {
+func (h *apiHandler) resolveChatContextRun(ref ErrorReference) (string, *chatContextRejection) {
 	f, rejection := h.chatContextFeature(ref.FeatureID)
 	if rejection != nil {
 		return "", rejection
@@ -206,7 +208,7 @@ func (h *apiHandler) resolveChatContextRun(ref ChatContextReference) (string, *c
 	return buildChatContextBundle(ref, f.ID, f.Name, errcat.RenderRecord(*rec), chatContextRecordLogPaths(rec)), nil
 }
 
-func (h *apiHandler) resolveChatContextTransaction(ref ChatContextReference) (string, *chatContextRejection) {
+func (h *apiHandler) resolveChatContextTransaction(ref ErrorReference) (string, *chatContextRejection) {
 	f, rejection := h.chatContextFeature(ref.FeatureID)
 	if rejection != nil {
 		return "", rejection
@@ -233,7 +235,7 @@ func (h *apiHandler) resolveChatContextTransaction(ref ChatContextReference) (st
 	return buildChatContextBundle(ref, f.ID, f.Name, errcat.RenderRecord(*rec), chatContextRecordLogPaths(rec)), nil
 }
 
-func (h *apiHandler) resolveChatContextRepository(ref ChatContextReference) (string, *chatContextRejection) {
+func (h *apiHandler) resolveChatContextRepository(ref ErrorReference) (string, *chatContextRejection) {
 	f, rejection := h.chatContextFeature(ref.FeatureID)
 	if rejection != nil {
 		return "", rejection
@@ -246,7 +248,7 @@ func (h *apiHandler) resolveChatContextRepository(ref ChatContextReference) (str
 	return buildChatContextBundle(ref, f.ID, f.Name, errcat.RenderRecord(rec), chatContextRecordLogPaths(&rec)), nil
 }
 
-func (h *apiHandler) resolveChatContextSetup(ref ChatContextReference) (string, *chatContextRejection) {
+func (h *apiHandler) resolveChatContextSetup(ref ErrorReference) (string, *chatContextRejection) {
 	f, rejection := h.chatContextFeature(ref.FeatureID)
 	if rejection != nil {
 		return "", rejection
@@ -266,7 +268,7 @@ func (h *apiHandler) resolveChatContextSetup(ref ChatContextReference) (string, 
 	return buildChatContextBundle(ref, f.ID, f.Name, errcat.RenderRecord(*task.Error), logPaths), nil
 }
 
-func (h *apiHandler) resolveChatContextRecovery(ref ChatContextReference) (string, *chatContextRejection) {
+func (h *apiHandler) resolveChatContextRecovery(ref ErrorReference) (string, *chatContextRejection) {
 	items, ok := h.lookupRecoverySnapshot(ref.SnapshotID)
 	if !ok {
 		return "", chatContextHomeNotFound("recovery snapshot")
@@ -342,7 +344,7 @@ func appendChatContextLogPath(paths []string, path string) []string {
 // context lines, and the full stored diagnostics — and the absolute log
 // locations known for the home, omitted when empty. No log content is
 // inlined.
-func buildChatContextBundle(ref ChatContextReference, featureID, featureName string, rendered errcat.Error, logPaths []string) string {
+func buildChatContextBundle(ref ErrorReference, featureID, featureName string, rendered errcat.Error, logPaths []string) string {
 	var b strings.Builder
 	if featureName = strings.TrimSpace(featureName); featureName != "" {
 		fmt.Fprintf(&b, "Chat context — %s error on feature %q (%s)\n\n", ref.Scope, featureName, featureID)

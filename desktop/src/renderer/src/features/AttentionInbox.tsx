@@ -30,6 +30,7 @@ import {
   ATTENTION_SUBMITTED_NOTICE,
   attentionOwnerFeatureId,
   CHAT_SESSION_ID,
+  ERROR_CLASS_LABELS,
   isSyntheticHelpItem,
   type AttentionActionResult,
   type AttentionItem,
@@ -37,6 +38,7 @@ import {
   type VerificationGateAction,
 } from '../../../shared/ipc';
 import { BellIcon, ChevronDownIcon } from '../components/icons';
+import { parseIpcError } from '../wizard/ipcError';
 import { ToolbarPopover, ToolbarPopoverAnchor } from '../components/ToolbarPopover';
 import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import {
@@ -113,7 +115,11 @@ export function attentionActionNotice(
 }
 
 export function attentionErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Could not submit this response.';
+  // The catalog owns the text: a canonical rejection is named by its title,
+  // never the sentinel-prefixed wire message; anything else falls back to
+  // the recovered message.
+  const parsed = parseIpcError(error);
+  return parsed.canonical?.title ?? parsed.message;
 }
 
 /**
@@ -351,10 +357,10 @@ export function AttentionInbox({
                     busy={busy === item.id}
                     submit={(action, options) => submit(item.id, action, options)}
                     saveDraft={(action, options) => saveDraft(item.id, action, options)}
-                    onJump={(featureId) => {
+                    onJump={(featureId, attentionId) => {
                       setExpanded(null);
                       setOpen(false);
-                      onJump?.(featureId);
+                      onJump?.(featureId, attentionId);
                     }}
                     drafts={drafts}
                     setDrafts={setDrafts}
@@ -461,7 +467,8 @@ export function AttentionDetail({
   busy: boolean;
   submit(action: AttentionAction, options?: AttentionSubmitOptions): void;
   saveDraft?(action: AttentionAction, options?: AttentionSubmitOptions): Promise<void>;
-  onJump?: (featureId: string) => void;
+  /** Jumps to the feature, optionally carrying the attention item id. */
+  onJump?: (featureId: string, attentionId?: string) => void;
   drafts: AttentionDrafts;
   setDrafts: Dispatch<SetStateAction<AttentionDrafts>>;
 }) {
@@ -913,6 +920,26 @@ export function AttentionDetail({
       </div>
     );
 
+  if (item.kind === 'error')
+    return (
+      <div className="attention-detail">
+        {/* The class label as eyebrow, the catalog title, and one way to the
+         * owning card — never summary, remediation, diagnostics, or actions,
+         * which belong to the card alone. */}
+        <AttentionContextMeta item={item} />
+        <p className="attention-detail__summary">{item.title}</p>
+        <div className="attention-detail__actions">
+          <button
+            type="button"
+            className="attention-button attention-button--primary"
+            onClick={() => onJump?.(item.featureId, item.id)}
+          >
+            Open
+          </button>
+        </div>
+      </div>
+    );
+
   const exhaustive: never = item;
   throw new Error(`Unhandled attention item: ${JSON.stringify(exhaustive)}`);
 }
@@ -955,6 +982,8 @@ function attentionAskLabel(item: Exclude<AttentionItem, { kind: 'recovery' }>): 
       return 'Input needed';
     case 'review':
       return 'Review waiting';
+    case 'error':
+      return ERROR_CLASS_LABELS[item.class];
     default: {
       const exhaustive: never = item;
       return exhaustive;
@@ -1011,6 +1040,10 @@ function attentionKindLabel(item: AttentionItem): string {
       return 'Review';
     case 'recovery':
       return 'Recovery';
+    // An error row is labeled by its class, the same word every other
+    // presence surface renders.
+    case 'error':
+      return ERROR_CLASS_LABELS[item.class];
     default: {
       const exhaustive: never = item;
       return exhaustive;

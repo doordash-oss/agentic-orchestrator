@@ -86,33 +86,6 @@ func (e AutomaticReviewStateSource) Valid() bool {
 	}
 }
 
-// Defines values for ChatContextScope.
-const (
-	ChatContextScopeRecovery    ChatContextScope = "recovery"
-	ChatContextScopeRepository  ChatContextScope = "repository"
-	ChatContextScopeRun         ChatContextScope = "run"
-	ChatContextScopeSetup       ChatContextScope = "setup"
-	ChatContextScopeTransaction ChatContextScope = "transaction"
-)
-
-// Valid indicates whether the value is a known member of the ChatContextScope enum.
-func (e ChatContextScope) Valid() bool {
-	switch e {
-	case ChatContextScopeRecovery:
-		return true
-	case ChatContextScopeRepository:
-		return true
-	case ChatContextScopeRun:
-		return true
-	case ChatContextScopeSetup:
-		return true
-	case ChatContextScopeTransaction:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for CreateFeatureMutationRequestInquireness.
 const (
 	CreateFeatureMutationRequestInquirenessHigh   CreateFeatureMutationRequestInquireness = "high"
@@ -191,6 +164,33 @@ func (e ErrorClass) Valid() bool {
 	case ErrorClassNeedsAction:
 		return true
 	case ErrorClassWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ErrorScope.
+const (
+	ErrorScopeRecovery    ErrorScope = "recovery"
+	ErrorScopeRepository  ErrorScope = "repository"
+	ErrorScopeRun         ErrorScope = "run"
+	ErrorScopeSetup       ErrorScope = "setup"
+	ErrorScopeTransaction ErrorScope = "transaction"
+)
+
+// Valid indicates whether the value is a known member of the ErrorScope enum.
+func (e ErrorScope) Valid() bool {
+	switch e {
+	case ErrorScopeRecovery:
+		return true
+	case ErrorScopeRepository:
+		return true
+	case ErrorScopeRun:
+		return true
+	case ErrorScopeSetup:
+		return true
+	case ErrorScopeTransaction:
 		return true
 	default:
 		return false
@@ -1122,20 +1122,6 @@ type BuildIdentity struct {
 // CascadeDiagnostic defines model for CascadeDiagnostic.
 type CascadeDiagnostic = feature.CascadeDiagnostic
 
-// ChatContextReference defines model for ChatContextReference.
-type ChatContextReference struct {
-	Code       string           `json:"code"`
-	FeatureID  string           `json:"feature_id,omitempty"`
-	Key        string           `json:"key,omitempty"`
-	Repository string           `json:"repository,omitempty"`
-	Scope      ChatContextScope `json:"scope"`
-	SnapshotID string           `json:"snapshot_id,omitempty"`
-	TaskKey    string           `json:"task_key,omitempty"`
-}
-
-// ChatContextScope defines model for ChatContextScope.
-type ChatContextScope string
-
 // ChatEndResponse defines model for ChatEndResponse.
 type ChatEndResponse struct {
 	APIVersion string       `json:"api_version"`
@@ -1146,10 +1132,10 @@ type ChatEndResponse struct {
 
 // ChatStartRequest defines model for ChatStartRequest.
 type ChatStartRequest struct {
-	Context      ChatContextReference `json:"context,omitempty"`
-	ImageUploads []string             `json:"image_uploads,omitempty"`
-	Images       []string             `json:"images,omitempty"`
-	Message      string               `json:"message"`
+	Context      ErrorReference `json:"context,omitempty"`
+	ImageUploads []string       `json:"image_uploads,omitempty"`
+	Images       []string       `json:"images,omitempty"`
+	Message      string         `json:"message"`
 }
 
 // ChatStartResponse defines model for ChatStartResponse.
@@ -1430,6 +1416,17 @@ type ErrorPhaseContext struct {
 	Name      string `json:"name"`
 }
 
+// ErrorReference defines model for ErrorReference.
+type ErrorReference struct {
+	Code       string     `json:"code"`
+	FeatureID  string     `json:"feature_id,omitempty"`
+	Key        string     `json:"key,omitempty"`
+	Repository string     `json:"repository,omitempty"`
+	Scope      ErrorScope `json:"scope"`
+	SnapshotID string     `json:"snapshot_id,omitempty"`
+	TaskKey    string     `json:"task_key,omitempty"`
+}
+
 // ErrorRemediation Catalog-authored next step for an error code.
 type ErrorRemediation struct {
 	// Actions Referenced feature actions the user can run next.
@@ -1464,6 +1461,9 @@ type ErrorResponse struct {
 	// Error Canonical catalog-rendered error.
 	Error Error `json:"error"`
 }
+
+// ErrorScope defines model for ErrorScope.
+type ErrorScope string
 
 // ErrorSetupTaskContext Setup task that owns a setup failure.
 type ErrorSetupTaskContext struct {
@@ -1566,6 +1566,9 @@ type FeatureDetail struct {
 	CurrentPhase string       `json:"current_phase"`
 	Description  string       `json:"description,omitempty"`
 	Effort       EffortConfig `json:"effort,omitempty"`
+
+	// Errors Current non-warning errors this feature or its active child owns, each pairing the catalog-rendered error (without diagnostics) with the reference to its durable home. Entries are ordered blocking first, then needs_action, stable by scope and key; absent when there are none. Warning-class records never appear here.
+	Errors       []OwnedError `json:"errors,omitempty"`
 	ExitCriteria string       `json:"exit_criteria,omitempty"`
 
 	// Failure Canonical catalog-rendered error.
@@ -1687,16 +1690,19 @@ type FeatureSummary struct {
 	ChildHistoryTotal int `json:"child_history_total,omitempty"`
 
 	// ChildHistoryTruncated True when child_history omits older closed children.
-	ChildHistoryTruncated bool            `json:"child_history_truncated,omitempty"`
-	CreatedAt             time.Time       `json:"created_at"`
-	CurrentPhase          string          `json:"current_phase"`
-	ID                    string          `json:"id"`
-	Name                  string          `json:"name"`
-	Progress              FeatureProgress `json:"progress"`
-	Repos                 []string        `json:"repos"`
-	RunCount              int             `json:"run_count"`
-	Slug                  string          `json:"slug"`
-	Status                string          `json:"status"`
+	ChildHistoryTruncated bool      `json:"child_history_truncated,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
+	CurrentPhase          string    `json:"current_phase"`
+
+	// Errors Current non-warning errors this feature or its active child owns, each pairing the catalog-rendered error (without diagnostics) with the reference to its durable home. Entries are ordered blocking first, then needs_action, stable by scope and key; absent when there are none. Warning-class records never appear here.
+	Errors   []OwnedError    `json:"errors,omitempty"`
+	ID       string          `json:"id"`
+	Name     string          `json:"name"`
+	Progress FeatureProgress `json:"progress"`
+	Repos    []string        `json:"repos"`
+	RunCount int             `json:"run_count"`
+	Slug     string          `json:"slug"`
+	Status   string          `json:"status"`
 
 	// Warnings Canonical warning-class errors for this feature, such as effort-capability drift; absent when there is nothing to warn about.
 	Warnings []Error `json:"warnings,omitempty"`
@@ -1887,6 +1893,13 @@ type Observability struct {
 	Events          bool   `json:"events"`
 	OTelEnabled     bool   `json:"otel_enabled"`
 	OTelServiceName string `json:"otel_service_name,omitempty"`
+}
+
+// OwnedError defines model for OwnedError.
+type OwnedError struct {
+	// Error Canonical catalog-rendered error.
+	Error Error          `json:"error"`
+	Ref   ErrorReference `json:"ref"`
 }
 
 // Owner defines model for Owner.

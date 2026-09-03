@@ -185,6 +185,10 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		detail.ChildHistoryTotal = len(detail.ChildHistory)
 		activeRelationshipChild = children.Active
 	}
+	// The owned-error projection is shared with the list summary: a parent
+	// projects its active child's records keyed by the child id, and a child
+	// projects its own attention record against itself.
+	detail.Errors = ownedErrorsDTO(f, activeRelationshipChild)
 	detail.Description = SafeDisplayText(f.Description, 500)
 	detail.Summary = SafeDisplayText(f.Summary, 500)
 	detail.WaitReason = SafeDisplayText(f.KBWaitMessage, 240)

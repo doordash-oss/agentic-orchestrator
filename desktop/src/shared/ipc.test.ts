@@ -19,11 +19,13 @@ import {
   CompletionPreflightRepoSchema,
   ConnectionStateSchema,
   FeatureSetupViewSchema,
+  FeatureSummaryViewSchema,
   IPC_CHANNELS,
   IPC_EVENTS,
   InitRepositoryRequestSchema,
   IpcEnvelopeSchema,
   AbsolutePathSchema,
+  OwnedErrorSchema,
   ReadinessSnapshotSchema,
   RelationshipChildViewSchema,
   RelationshipTransactionViewSchema,
@@ -33,6 +35,9 @@ import {
   SettingsPatchSchema,
   SettingsSchema,
   FeatureActionRequestSchema,
+  AttentionItemSchema,
+  actionableAttentionCount,
+  type AttentionItem,
   FeatureSnapshotSchema,
   GateResumeRequestSchema,
   ChatStartRequestSchema,
@@ -1284,5 +1289,126 @@ describe('repository publish-failure error views', () => {
     expect(
       CompletionPreflightRepoSchema.safeParse({ ...preflightRepoView, lastError: 'boom' }).success,
     ).toBe(false);
+  });
+});
+
+describe('owned errors on the feature summary and snapshot views', () => {
+  const ownedRunError = {
+    ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'abcd1234ef567890' },
+    error: {
+      code: 'iteration_budget_exhausted',
+      class: 'blocking',
+      title: 'Iteration budget exhausted',
+      summary: 'The Implement phase exhausted its iteration budget.',
+    },
+  };
+  const ownedRepoError = {
+    ref: {
+      scope: 'repository',
+      code: 'publish_rebase_conflict',
+      featureId: 'abcd1234ef567890',
+      repository: 'repo-a',
+    },
+    error: {
+      code: 'publish_rebase_conflict',
+      class: 'needs_action',
+      title: 'Pull-rebase conflict',
+      summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
+    },
+  };
+  const summaryView = {
+    id: 'abcd1234ef567890',
+    name: 'Search revamp',
+    status: 'Failed',
+    currentPhase: 'Implement',
+    repos: ['repo-a'],
+    createdAt: '2026-07-14T10:00:00Z',
+    activeRun: 1,
+    runCount: 1,
+    warnings: [],
+    errors: [ownedRunError, ownedRepoError],
+  };
+
+  it('accepts a summary carrying two owned-error entries', () => {
+    const parsed = FeatureSummaryViewSchema.parse(summaryView);
+    expect(parsed.errors).toHaveLength(2);
+    expect(parsed.errors?.[0]?.ref.scope).toBe('run');
+    expect(parsed.errors?.[1]?.ref.repository).toBe('repo-a');
+  });
+
+  it('rejects an entry whose error carries the warning class', () => {
+    const warningEntry = {
+      ref: { scope: 'run', code: 'rewind_worktree_reset', featureId: 'abcd1234ef567890' },
+      error: {
+        code: 'rewind_worktree_reset',
+        class: 'warning',
+        title: 'Worktree reset to anchor',
+        summary: 'The worktree was reset.',
+      },
+    };
+    expect(OwnedErrorSchema.safeParse(warningEntry).success).toBe(false);
+    expect(
+      FeatureSummaryViewSchema.safeParse({ ...summaryView, errors: [warningEntry] }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an entry whose setup reference lacks the task key', () => {
+    const undisciplined = {
+      ...ownedRunError,
+      ref: { scope: 'setup', code: 'worktree_setup_failed', featureId: 'abcd1234ef567890' },
+    };
+    expect(OwnedErrorSchema.safeParse(undisciplined).success).toBe(false);
+    expect(
+      FeatureSummaryViewSchema.safeParse({ ...summaryView, errors: [undisciplined] }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an entry carrying unknown keys', () => {
+    expect(OwnedErrorSchema.safeParse({ ...ownedRunError, diagnostics: 'raw' }).success).toBe(
+      false,
+    );
+    expect(OwnedErrorSchema.safeParse({ ...ownedRunError, owner: 'feature' }).success).toBe(false);
+  });
+
+  it('carries the same list on the feature snapshot view', () => {
+    const { runCount: _summaryOnly, ...snapshotSummary } = summaryView;
+    void _summaryOnly;
+    const snapshotView = {
+      ...snapshotSummary,
+      slug: 'search-revamp',
+      actions: [],
+      reviewGate: {
+        reviewingGate: false,
+        reviewFixing: false,
+        validatingPlan: false,
+        validatorStatuses: {},
+      },
+      automaticReview: { mode: 'default', enabled: false, source: 'global' },
+    };
+    const parsed = FeatureSnapshotSchema.parse(snapshotView);
+    expect(parsed.errors).toHaveLength(2);
+    expect(parsed.errors?.[0]?.error.title).toBe('Iteration budget exhausted');
+  });
+});
+
+describe('error attention items', () => {
+  const errorItem: AttentionItem = {
+    kind: 'error',
+    id: 'error:feature-1:run::iteration_budget_exhausted',
+    featureId: 'abcd1234ef567890',
+    waitingSince: '2026-08-05T12:00:00Z',
+    ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'abcd1234ef567890' },
+    class: 'blocking',
+    code: 'iteration_budget_exhausted',
+    title: 'Iteration budget exhausted',
+  };
+
+  it('counts error items as actionable attention', () => {
+    expect(actionableAttentionCount([errorItem])).toBe(1);
+  });
+
+  it('rejects an error item whose class is warning', () => {
+    expect(AttentionItemSchema.safeParse({ ...errorItem, class: 'warning' }).success).toBe(false);
+    expect(AttentionItemSchema.safeParse(errorItem).success).toBe(true);
   });
 });

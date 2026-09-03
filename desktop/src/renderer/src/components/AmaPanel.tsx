@@ -35,7 +35,7 @@ import {
   isTerminalChatStatus,
   type AmaGeometry,
   type AttentionItem,
-  type ChatContextReference,
+  type ErrorReference,
   type RoutedRequest,
   type SessionDetail,
   type TranscriptMessage,
@@ -95,7 +95,7 @@ interface Gesture {
 /** A routed auto-submit draft waiting for the in-flight turn to end. */
 interface PendingRoutedDraft {
   draft: string;
-  context: ChatContextReference | undefined;
+  context: ErrorReference | undefined;
 }
 
 const EMPTY_CURSOR: TranscriptCursor = { total: 0, start: 0, end: 0 };
@@ -333,7 +333,7 @@ export function AmaPanel({
    * post-send chain mirrors a typed submission.
    */
   const submitRoutedDraft = useCallback(
-    async (draft: string, context: ChatContextReference | undefined): Promise<void> => {
+    async (draft: string, context: ErrorReference | undefined): Promise<void> => {
       setOptimisticMessage(draft);
       setPinToBottom((value) => value + 1);
       setBusy(true);

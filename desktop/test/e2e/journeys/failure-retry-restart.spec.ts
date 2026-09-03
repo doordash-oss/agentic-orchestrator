@@ -102,7 +102,9 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     await expect(failureCard.locator('.error-surface__caption')).toHaveText('Worktree: beta');
     await expect(failureCard.locator('.error-surface__code')).toHaveText('worktree_setup_failed');
     await expect(failureCard.locator('.error-surface__title')).toHaveText('Worktree setup failed');
-    await expect(handle.page.getByText('Worktree setup failed')).toHaveCount(1);
+    // The owning card is the page's one alert; the catalog title also rides
+    // the presence surfaces (the sidebar sub-line, the attention detail).
+    await expect(handle.page.getByRole('alert')).toHaveCount(1);
     // The owning repository sits under the Details disclosure.
     const details = failureCard.locator('details.error-surface__details');
     await details.locator('summary').click();

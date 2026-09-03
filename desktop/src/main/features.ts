@@ -47,6 +47,7 @@ import {
   ReviewFeedbackFeatureResponseSchema,
   validateWithSchema,
   type ServerFeatureDetail,
+  type ServerOwnedError,
   type ServerRelationshipChild,
   type ServerReviewFeedbackComment,
   type ServerReviewFeedbackDraftComment,
@@ -73,6 +74,7 @@ import {
   type FeaturesListResult,
   type FeatureActionRequest,
   type FeatureActionResult,
+  type OwnedError,
   type PublishDescriptionResult,
   type ReadinessSnapshot,
   type RepositoryFileRef,
@@ -317,6 +319,7 @@ export class FeatureService {
         // Canonical warning objects cross IPC intact except diagnostics,
         // which pass through the same redaction as every other raw text.
         warnings: (feature.warnings ?? []).map(redactedCanonicalError),
+        errors: (feature.errors ?? []).map(toOwnedErrorView),
         ...(feature.active_child === undefined
           ? {}
           : { activeChild: toRelationshipChildView(feature.active_child) }),
@@ -693,6 +696,7 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
     // Canonical warning objects cross IPC intact except diagnostics, which
     // pass through the same redaction as every other raw text.
     warnings: (feature.warnings ?? []).map(redactedCanonicalError),
+    errors: (feature.errors ?? []).map(toOwnedErrorView),
     automaticReview: {
       mode: feature.automatic_review.mode,
       enabled: feature.automatic_review.enabled,
@@ -857,6 +861,27 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
                 : redactText(feature.failure.diagnostics),
           },
         }),
+  };
+}
+
+/**
+ * Maps a validated server owned-error entry (snake_case) to the
+ * renderer-facing view (camelCase). Entries never carry diagnostics, so no
+ * redaction applies; the class and reference discipline were validated at
+ * the parse boundary.
+ */
+function toOwnedErrorView(entry: ServerOwnedError): OwnedError {
+  return {
+    ref: {
+      scope: entry.ref.scope,
+      code: entry.ref.code,
+      ...(entry.ref.feature_id === undefined ? {} : { featureId: entry.ref.feature_id }),
+      ...(entry.ref.repository === undefined ? {} : { repository: entry.ref.repository }),
+      ...(entry.ref.task_key === undefined ? {} : { taskKey: entry.ref.task_key }),
+      ...(entry.ref.snapshot_id === undefined ? {} : { snapshotId: entry.ref.snapshot_id }),
+      ...(entry.ref.key === undefined ? {} : { key: entry.ref.key }),
+    },
+    error: entry.error,
   };
 }
 

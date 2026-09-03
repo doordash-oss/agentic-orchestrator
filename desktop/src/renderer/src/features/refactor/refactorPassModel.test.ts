@@ -20,9 +20,9 @@ import type { FeatureSnapshot, RelationshipChildView } from '../../../../shared/
 import {
   custodyStations,
   passActions,
+  passActiveVerb,
   passKindLabel,
   passState,
-  refactoringStatusChip,
 } from './refactorPassModel';
 
 function childView(overrides: Partial<RelationshipChildView> = {}): RelationshipChildView {
@@ -341,50 +341,12 @@ describe('passActions', () => {
   });
 });
 
-describe('refactoringStatusChip', () => {
-  it('returns the parent action bar labels', () => {
-    expect(refactoringStatusChip(childView())).toEqual({ label: 'Refactoring', tone: 'info' });
-    expect(refactoringStatusChip(childView({ attention: integrationAttention }))).toEqual({
-      label: 'Refactoring — needs attention',
-      tone: 'attention',
-    });
-    expect(refactoringStatusChip(childView({ integrationState: 'attention' }))).toEqual({
-      label: 'Refactoring — needs attention',
-      tone: 'attention',
-    });
-  });
-
-  it('switches to review-feedback copy for a review-feedback child', () => {
-    const rf = childView({ kind: 'review-feedback' });
-    expect(refactoringStatusChip(rf)).toEqual({
-      label: 'Addressing review feedback',
-      tone: 'info',
-    });
-    expect(
-      refactoringStatusChip(
-        childView({ kind: 'review-feedback', attention: integrationAttention }),
-      ),
-    ).toEqual({
-      label: 'Addressing review feedback — needs attention',
-      tone: 'attention',
-    });
-  });
-
-  it('switches to rebase copy for a rebase child', () => {
-    expect(refactoringStatusChip(childView({ kind: 'rebase' }))).toEqual({
-      label: 'Rebasing',
-      tone: 'info',
-    });
-    expect(
-      refactoringStatusChip(childView({ kind: 'rebase', attention: integrationAttention })),
-    ).toEqual({ label: 'Rebasing — needs attention', tone: 'attention' });
-  });
-
-  it('falls back to a neutral verb for an unknown kind', () => {
-    expect(refactoringStatusChip(childView({ kind: 'mystery' }))).toEqual({
-      label: 'Working',
-      tone: 'info',
-    });
+describe('passActiveVerb', () => {
+  it('returns the active-pass verb per child kind, neutral for unknown kinds', () => {
+    expect(passActiveVerb('refactor')).toBe('Refactoring');
+    expect(passActiveVerb('rebase')).toBe('Rebasing');
+    expect(passActiveVerb('review-feedback')).toBe('Addressing review feedback');
+    expect(passActiveVerb('mystery')).toBe('Working');
   });
 });
 

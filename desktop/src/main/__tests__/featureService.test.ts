@@ -1117,8 +1117,76 @@ describe('FeatureService.listFeatures', () => {
         activeRun: 1,
         runCount: 1,
         warnings: [],
+        errors: [],
       },
     ]);
+  });
+
+  it('maps owned errors into the strict renderer view with camelCase reference keys', async () => {
+    const { service } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        features: [
+          {
+            id: 'abcd1234ef567890',
+            name: 'Search revamp',
+            slug: 'search-revamp',
+            status: 'Failed',
+            current_phase: 'Implement',
+            active_run: 1,
+            run_count: 1,
+            repos: ['repo-a'],
+            created_at: '2026-07-14T10:00:00Z',
+            checkpoints: {},
+            progress: {},
+            errors: [
+              {
+                ref: {
+                  scope: 'run',
+                  code: 'iteration_budget_exhausted',
+                  feature_id: 'abcd1234ef567890',
+                },
+                error: {
+                  code: 'iteration_budget_exhausted',
+                  class: 'blocking',
+                  title: 'Iteration budget exhausted',
+                  summary: 'The Implement phase exhausted its iteration budget.',
+                },
+              },
+              {
+                ref: {
+                  scope: 'repository',
+                  code: 'publish_rebase_conflict',
+                  feature_id: 'abcd1234ef567890',
+                  repository: 'repo-a',
+                },
+                error: {
+                  code: 'publish_rebase_conflict',
+                  class: 'needs_action',
+                  title: 'Pull-rebase conflict',
+                  summary:
+                    'The pull rebase for repository "repo-a" conflicted with its target branch.',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    }));
+    const list = await service.listFeatures();
+    expect(list.features[0]?.errors).toHaveLength(2);
+    expect(list.features[0]?.errors[0]).toEqual({
+      ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'abcd1234ef567890' },
+      error: {
+        code: 'iteration_budget_exhausted',
+        class: 'blocking',
+        title: 'Iteration budget exhausted',
+        summary: 'The Implement phase exhausted its iteration budget.',
+      },
+    });
+    expect(list.features[0]?.errors[1]?.ref.repository).toBe('repo-a');
+    expect(() => FeaturesListResultSchema.parse(list)).not.toThrow();
   });
 
   it('maps canonical list-level and per-feature warnings with redaction', async () => {
@@ -1495,6 +1563,54 @@ describe('FeatureService relationship operations', () => {
       diagnostics: 'drift detected in [path]',
     });
     expect(() => FeatureSnapshotSchema.parse(snapshot)).not.toThrow();
+  });
+
+  it('maps owned errors on the detail snapshot with camelCase reference keys, defaulting to empty', async () => {
+    const errorsService = makeService(() => ({
+      status: 200,
+      body: detailBody({
+        errors: [
+          {
+            ref: {
+              scope: 'setup',
+              code: 'worktree_setup_failed',
+              feature_id: 'abcd1234ef567890',
+              task_key: 'worktree:repo-a',
+            },
+            error: {
+              code: 'worktree_setup_failed',
+              class: 'blocking',
+              title: 'Worktree setup failed',
+              summary: 'The worktree for repository "repo-a" could not be created.',
+            },
+          },
+        ],
+      }),
+    }));
+    const snapshot = await errorsService.service.getFeature('abcd1234ef567890');
+    expect(snapshot.errors).toHaveLength(1);
+    expect(snapshot.errors[0]).toEqual({
+      ref: {
+        scope: 'setup',
+        code: 'worktree_setup_failed',
+        featureId: 'abcd1234ef567890',
+        taskKey: 'worktree:repo-a',
+      },
+      error: {
+        code: 'worktree_setup_failed',
+        class: 'blocking',
+        title: 'Worktree setup failed',
+        summary: 'The worktree for repository "repo-a" could not be created.',
+      },
+    });
+    expect(() => FeatureSnapshotSchema.parse(snapshot)).not.toThrow();
+
+    // Absent on the wire, the field still crosses IPC as an empty list.
+    const bare = await makeService(() => ({ status: 200, body: detailBody() })).service.getFeature(
+      'abcd1234ef567890',
+    );
+    expect(bare.errors).toEqual([]);
+    expect(() => FeatureSnapshotSchema.parse(bare)).not.toThrow();
   });
 });
 

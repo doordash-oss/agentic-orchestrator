@@ -23,6 +23,7 @@ import {
   type AttentionItem,
   type ConnectionState,
   type MainWindowUiState,
+  type OwnedError,
   type Settings,
   type UpdateState,
 } from '../../../shared/ipc';
@@ -73,6 +74,51 @@ function summaryOf(feature: ReturnType<typeof featureSnapshot>) {
     activeRun: feature.activeRun,
     runCount: 1,
     warnings: [],
+    errors: feature.errors,
+  };
+}
+
+/** A blocking run-failure entry as the summary projection carries it. */
+function blockingRunError(featureId: string): OwnedError {
+  return {
+    ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId },
+    error: {
+      code: 'iteration_budget_exhausted',
+      class: 'blocking',
+      title: 'Iteration budget exhausted',
+      summary: 'The Implement phase exhausted its iteration budget.',
+    },
+  };
+}
+
+/** A needs_action entry (repository publish failure) on the owning feature. */
+function needsActionRepositoryError(featureId: string): OwnedError {
+  return {
+    ref: {
+      scope: 'repository',
+      code: 'publish_rebase_conflict',
+      featureId,
+      repository: 'repo-a',
+    },
+    error: {
+      code: 'publish_rebase_conflict',
+      class: 'needs_action',
+      title: 'Pull-rebase conflict',
+      summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
+    },
+  };
+}
+
+/** A needs_action transaction entry keyed by the active child. */
+function needsActionTransactionError(childId: string): OwnedError {
+  return {
+    ref: { scope: 'transaction', code: 'integration_parent_dirty', featureId: childId },
+    error: {
+      code: 'integration_parent_dirty',
+      class: 'needs_action',
+      title: 'Parent worktree is dirty',
+      summary: 'The parent worktree for repository "repo-a" has 1 uncommitted change.',
+    },
   };
 }
 
@@ -126,10 +172,18 @@ describe('WorkspaceShell sidebar', () => {
   });
 
   it('groups features into lane sections with correct counts and hides empty lanes', async () => {
+    const blocked = featureSnapshot({
+      id: 'blocked1ef567890ab',
+      name: 'Broken feature',
+      status: 'Implementing',
+      errors: [blockingRunError('blocked1ef567890ab')],
+      actions: [],
+    });
     const waiting = featureSnapshot({
       id: 'waiting1ef567890a',
       name: 'Needs a decision',
-      status: 'Failed',
+      status: 'Published',
+      errors: [needsActionRepositoryError('waiting1ef567890a')],
       actions: [],
     });
     const running = featureSnapshot({
@@ -146,7 +200,7 @@ describe('WorkspaceShell sidebar', () => {
       setup: { status: 'done', attempt: 1, tasks: [] },
       actions: [],
     });
-    const snapshots = [waiting, running, published];
+    const snapshots = [blocked, waiting, running, published];
     const mock = installAgenticoMock({ features: snapshots.map(summaryOf) });
     mock.api.getFeature.mockImplementation((featureId: string) =>
       Promise.resolve(snapshots.find((snapshot) => snapshot.id === featureId) ?? snapshots[0]!),
@@ -155,7 +209,9 @@ describe('WorkspaceShell sidebar', () => {
 
     await screen.findByRole('option', { name: 'Overview' });
     // Populated lanes render with their count and members.
-    const waitingGroup = await screen.findByRole('group', { name: 'Waiting on you' });
+    const failedGroup = await screen.findByRole('group', { name: 'Failed' });
+    expect(within(failedGroup).getByText('Broken feature')).toBeInTheDocument();
+    const waitingGroup = screen.getByRole('group', { name: 'Waiting on you' });
     expect(within(waitingGroup).getByText('Needs a decision')).toBeInTheDocument();
     const runningGroup = screen.getByRole('group', { name: 'Running' });
     expect(within(runningGroup).getByText('Mid-flight feature')).toBeInTheDocument();
@@ -228,7 +284,8 @@ describe('WorkspaceShell sidebar', () => {
     const waiting = featureSnapshot({
       id: 'waiting1ef567890a',
       name: 'Needs a decision',
-      status: 'Failed',
+      status: 'Published',
+      errors: [needsActionRepositoryError('waiting1ef567890a')],
       actions: [],
     });
     const running = featureSnapshot({
@@ -251,6 +308,118 @@ describe('WorkspaceShell sidebar', () => {
 
     const runningRow = within(lanes).getByText('Mid-flight feature').closest('li')!;
     expect(within(runningRow).getByRole('button', { name: 'Open' })).toBeInTheDocument();
+  });
+
+  it('renders a blocking-error feature under the Failed group with the catalog title as its sub-line in both surfaces', async () => {
+    const broken = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Broken feature',
+      status: 'Implementing',
+      errors: [blockingRunError(FEATURE_ID)],
+      actions: [],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(broken)] });
+    mock.api.getFeature.mockResolvedValue(broken);
+    render(<WorkspaceShell />);
+
+    const sidebarRow = (await screen.findByRole('option', { name: /Broken feature/ })).closest(
+      '[role="option"]',
+    )!;
+    expect(sidebarRow.closest('details')?.querySelector('summary')?.textContent).toContain(
+      'Failed',
+    );
+    expect(sidebarRow.querySelector('.sidebar__row-subline')?.textContent).toBe(
+      'Iteration budget exhausted',
+    );
+
+    const lanes = await screen.findByRole('region', { name: 'Existing features' });
+    const overviewRow = within(lanes).getByText('Broken feature').closest('li')!;
+    expect(overviewRow.querySelector('.overview-row__state')?.textContent).toBe(
+      'Iteration budget exhausted',
+    );
+    // No presence surface carries the legacy hand-written labels.
+    for (const legacy of ['needs attention', 'pass failed']) {
+      expect(document.body.textContent?.toLowerCase()).not.toContain(legacy);
+    }
+  });
+
+  it('renders a parked child pass under Waiting on you with the attention record title', async () => {
+    const parent = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Parent feature',
+      status: 'Published',
+      activeChild: {
+        id: 'child1234ef567890',
+        name: 'Rework auth',
+        kind: 'refactor',
+        displayToken: 'refactor:child1234ef567890',
+        displayState: 'Active — Implementing',
+        pipeline: 'large',
+        status: 'Implementing',
+        startedAt: '2026-07-30T10:00:00Z',
+        cost: { totalUsd: 0, byPhase: {} },
+        integrationState: 'attention',
+        attention: {
+          code: 'integration_parent_dirty',
+          class: 'needs_action',
+          title: 'Parent worktree is dirty',
+          summary: 'The parent worktree for repository "repo-a" has 1 uncommitted change.',
+        },
+        warnings: [],
+      },
+      errors: [needsActionTransactionError('child1234ef567890')],
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(parent)] });
+    mock.api.getFeature.mockResolvedValue(parent);
+    render(<WorkspaceShell />);
+
+    const sidebarRow = (await screen.findByRole('option', { name: /Parent feature/ })).closest(
+      '[role="option"]',
+    )!;
+    expect(sidebarRow.closest('details')?.querySelector('summary')?.textContent).toContain(
+      'Waiting on you',
+    );
+    expect(sidebarRow.querySelector('.sidebar__row-subline')?.textContent).toBe(
+      'Parent worktree is dirty',
+    );
+
+    const lanes = await screen.findByRole('region', { name: 'Existing features' });
+    const overviewRow = within(lanes).getByText('Parent feature').closest('li')!;
+    expect(overviewRow.querySelector('.overview-row__state')?.textContent).toBe(
+      'Parent worktree is dirty',
+    );
+  });
+
+  it('prefers the pending-question sub-line over the needs_action error title', async () => {
+    const questioned = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Questioned feature',
+      status: 'Published',
+      errors: [needsActionRepositoryError(FEATURE_ID)],
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(questioned)] });
+    mock.api.getFeature.mockResolvedValue(questioned);
+    const attentionItems: AttentionItem[] = [
+      {
+        kind: 'questions',
+        id: 'q-1',
+        featureId: FEATURE_ID,
+        waitingSince: '2026-08-05T10:00:00Z',
+        questions: [{ key: 'Which?', header: 'Direction', multiSelect: false, options: [] }],
+      },
+    ];
+    render(<WorkspaceShell attentionItems={attentionItems} />);
+
+    const sidebarRow = (await screen.findByRole('option', { name: /Questioned feature/ })).closest(
+      '[role="option"]',
+    )!;
+    expect(sidebarRow.querySelector('.sidebar__row-subline')?.textContent).toBe(
+      'Answer 1 question',
+    );
   });
 
   it('opens the feature when clicking an Open row, and jumps via onAttentionJump when Answer has a pending item', async () => {
@@ -424,7 +593,8 @@ describe('WorkspaceShell sidebar', () => {
     const waiting = featureSnapshot({
       id: SECOND_FEATURE_ID,
       name: 'Blocked feature',
-      status: 'Failed',
+      status: 'Published',
+      errors: [needsActionRepositoryError(SECOND_FEATURE_ID)],
       setup: { status: 'done', attempt: 1, tasks: [] },
       actions: [],
     });
@@ -742,7 +912,8 @@ describe('WorkspaceShell Overview loading', () => {
     const failing = featureSnapshot({
       id: FEATURE_ID,
       name: 'Oversized feature',
-      status: 'Failed',
+      status: 'Implementing',
+      errors: [blockingRunError(FEATURE_ID)],
       actions: [],
     });
     const healthy = featureSnapshot({
@@ -1873,5 +2044,115 @@ describe('WorkspaceShell routed server switcher', () => {
     );
     expect(document.querySelector('.server-switcher-dock')).not.toBeNull();
     expect(screen.queryByRole('listbox', { name: 'Servers' })).not.toBeInTheDocument();
+  });
+});
+
+describe('WorkspaceShell error-item attention jumps', () => {
+  it('focuses the registered failure card for a run failure', async () => {
+    const broken = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Broken feature',
+      status: 'Failed',
+      errors: [blockingRunError(FEATURE_ID)],
+      failure: {
+        code: 'iteration_budget_exhausted',
+        class: 'blocking' as const,
+        title: 'Iteration budget exhausted',
+        summary: 'The Implement phase exhausted its iteration budget.',
+        remediation: { hint: 'Restart the phase.', actions: ['restart'] },
+        context: { phase: { name: 'implement', iteration: 3 } },
+      },
+      actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(broken)] });
+    mock.api.getFeature.mockResolvedValue(broken);
+    const errorItem: AttentionItem = {
+      kind: 'error',
+      id: `error:${FEATURE_ID}:run::iteration_budget_exhausted`,
+      featureId: FEATURE_ID,
+      waitingSince: '2026-08-05T12:00:00.000Z',
+      ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: FEATURE_ID },
+      class: 'blocking',
+      code: 'iteration_budget_exhausted',
+      title: 'Iteration budget exhausted',
+    };
+    render(
+      <WorkspaceShell
+        attentionItems={[errorItem]}
+        attentionJump={{
+          requestId: 1,
+          featureId: FEATURE_ID,
+          attentionId: errorItem.id,
+        }}
+      />,
+    );
+
+    const alert = await screen.findByRole('alert');
+    await waitFor(() => expect(alert).toHaveFocus());
+  });
+
+  it('opens the publish modal and focuses its repository card for a repository entry', async () => {
+    const repoError = {
+      code: 'publish_rebase_conflict',
+      class: 'needs_action' as const,
+      title: 'Pull-rebase conflict',
+      summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
+    };
+    const feature = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Ready feature',
+      status: 'CodeReady',
+      errors: [
+        {
+          ref: {
+            scope: 'repository',
+            code: 'publish_rebase_conflict',
+            featureId: FEATURE_ID,
+            repository: 'repo-a',
+          },
+          error: repoError,
+        },
+      ],
+      actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(feature)] });
+    mock.api.getFeature.mockResolvedValue(feature);
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-complete',
+      canMarkDone: true,
+      repos: [
+        { repo: 'repo-a', publishable: true, touched: true, status: 'eligible', error: repoError },
+      ],
+    });
+    const errorItem: AttentionItem = {
+      kind: 'error',
+      id: `error:${FEATURE_ID}:repository:repo-a:publish_rebase_conflict`,
+      featureId: FEATURE_ID,
+      waitingSince: '2026-08-05T12:00:00.000Z',
+      ref: {
+        scope: 'repository',
+        code: 'publish_rebase_conflict',
+        featureId: FEATURE_ID,
+        repository: 'repo-a',
+      },
+      class: 'needs_action',
+      code: 'publish_rebase_conflict',
+      title: 'Pull-rebase conflict',
+    };
+    render(
+      <WorkspaceShell
+        attentionItems={[errorItem]}
+        attentionJump={{
+          requestId: 1,
+          featureId: FEATURE_ID,
+          attentionId: errorItem.id,
+        }}
+      />,
+    );
+
+    const dialog = await screen.findByRole('dialog', { name: 'Publish reviewed changes' });
+    const card = await within(dialog).findByRole('alert');
+    await waitFor(() => expect(card).toHaveFocus());
   });
 });

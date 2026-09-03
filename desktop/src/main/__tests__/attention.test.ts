@@ -14,11 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AttentionService } from '../attention';
 import type { ServerTransport } from '../serverClient';
 import { CanonicalErrorException } from '../../shared/errors';
-import { CHAT_SESSION_ID } from '../../shared/ipc';
+import { attentionOwnerFeatureId, CHAT_SESSION_ID } from '../../shared/ipc';
 
 /** One canonical catalog-rendered rejection body, as the server now emits. */
 function canonicalBody(code: string): Record<string, unknown> {
@@ -561,7 +561,7 @@ describe('AttentionService review items', () => {
     });
   });
 
-  it('propagates the canonical bad_request for a missing pending request', async () => {
+  it('maps the canonical bad_request for a missing pending request to already resolved', async () => {
     const service = new AttentionService({
       apiRequest: () =>
         Promise.resolve({
@@ -580,14 +580,16 @@ describe('AttentionService review items', () => {
         }),
     } satisfies ServerTransport);
 
-    const err = await service
-      .answerPermission({ requestId: 'perm-stale', decision: 'allow_once' })
-      .catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(CanonicalErrorException);
-    expect((err as CanonicalErrorException).canonical.code).toBe('bad_request');
-    expect((err as CanonicalErrorException).canonical.diagnostics).toBe(
-      'pending request perm-stale not found',
-    );
+    // The canonical era moved the stale marker from the plain-text body into
+    // diagnostics; a submission that raced the item's resolution still reads
+    // as already resolved rather than surfacing the raw rejection.
+    await expect(
+      service.answerPermission({ requestId: 'perm-stale', decision: 'allow_once' }),
+    ).resolves.toEqual({
+      result: 'Already resolved.',
+      alreadyResolved: true,
+      notice: 'This item was already resolved. The inbox has been refreshed.',
+    });
   });
 
   it('derives one stable inbox item from each authoritative pending review', async () => {
@@ -643,5 +645,163 @@ describe('AttentionService review items', () => {
         },
       ],
     });
+  });
+});
+
+describe('AttentionService error items', () => {
+  const parentFeature = {
+    id: 'parent1234ef567890',
+    name: 'Parent feature',
+    slug: 'parent-feature',
+    status: 'Failed',
+    current_phase: 'implement',
+    repos: ['repo-a'],
+    created_at: '2026-07-16T10:00:00Z',
+    active_run: 1,
+    run_count: 1,
+    progress: {},
+  };
+  const activeChild = {
+    id: 'child1234ef567890',
+    name: 'Rework auth',
+    kind: 'refactor',
+    display_token: 'refactor:child1234ef567890',
+    display_state: 'Active — Implementing',
+    pipeline: 'large',
+    status: 'Implementing',
+    started_at: '2026-07-16T10:05:00Z',
+    cost: { total_usd: 0, by_phase: {} },
+    integration_state: 'attention',
+    warnings: [],
+  };
+  const runEntry = {
+    ref: { scope: 'run', code: 'iteration_budget_exhausted', feature_id: 'parent1234ef567890' },
+    error: {
+      code: 'iteration_budget_exhausted',
+      class: 'blocking',
+      title: 'Iteration budget exhausted',
+      summary: 'The Implement phase exhausted its iteration budget.',
+    },
+  };
+  const transactionEntry = {
+    ref: {
+      scope: 'transaction',
+      code: 'integration_parent_dirty',
+      feature_id: 'child1234ef567890',
+    },
+    error: {
+      code: 'integration_parent_dirty',
+      class: 'needs_action',
+      title: 'Parent worktree is dirty',
+      summary: 'The parent worktree for repository "repo-a" has 1 uncommitted change.',
+    },
+  };
+
+  function errorTransport(errors: unknown[] | undefined): ServerTransport {
+    return {
+      apiRequest: (path) => {
+        const body =
+          path === '/api/v1/prompts'
+            ? { api_version: 'v1', ask_user_questions: [], help_queue: [], need_user_inputs: [] }
+            : path === '/api/v1/permissions'
+              ? { api_version: 'v1', requests: [] }
+              : path === '/api/v1/sessions'
+                ? { api_version: 'v1', sessions: [] }
+                : {
+                    api_version: 'v1',
+                    features: [
+                      {
+                        ...parentFeature,
+                        active_child: activeChild,
+                        ...(errors === undefined ? {} : { errors }),
+                      },
+                    ],
+                  };
+        return Promise.resolve({ status: 200, body });
+      },
+    } satisfies ServerTransport;
+  }
+
+  it('builds one item per owned error, parent-owned for child-scoped entries', async () => {
+    const service = new AttentionService(errorTransport([runEntry, transactionEntry]));
+
+    const snapshot = await service.getSnapshot();
+    const errorItems = snapshot.items.filter((item) => item.kind === 'error');
+    expect(errorItems).toHaveLength(2);
+
+    const runItem = errorItems.find((item) => item.kind === 'error' && item.ref.scope === 'run');
+    expect(runItem).toMatchObject({
+      kind: 'error',
+      id: 'error:parent1234ef567890:run::iteration_budget_exhausted',
+      featureId: 'parent1234ef567890',
+      class: 'blocking',
+      code: 'iteration_budget_exhausted',
+      title: 'Iteration budget exhausted',
+      ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'parent1234ef567890' },
+    });
+    expect(runItem).not.toHaveProperty('parentFeatureId');
+
+    // The child-keyed transaction entry routes to the listed parent.
+    const transactionItem = errorItems.find(
+      (item) => item.kind === 'error' && item.ref.scope === 'transaction',
+    );
+    expect(transactionItem).toMatchObject({
+      id: 'error:child1234ef567890:transaction::integration_parent_dirty',
+      featureId: 'child1234ef567890',
+      parentFeatureId: 'parent1234ef567890',
+      class: 'needs_action',
+      title: 'Parent worktree is dirty',
+    });
+    if (transactionItem?.kind !== 'error') throw new Error('expected error item');
+    expect(attentionOwnerFeatureId(transactionItem)).toBe('parent1234ef567890');
+  });
+
+  it('keeps waitingSince stable across polls and refreshes it after the entry disappears', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-05T12:00:00Z'));
+    try {
+      const withErrors = errorTransport([runEntry]);
+      const withoutErrors = errorTransport(undefined);
+      let transport = withErrors;
+      const service = new AttentionService({
+        apiRequest: (path) => transport.apiRequest(path),
+      } satisfies ServerTransport);
+
+      const first = await service.getSnapshot();
+      const firstSince = first.items.find((item) => item.kind === 'error')?.waitingSince;
+
+      vi.setSystemTime(new Date('2026-08-05T12:05:00Z'));
+      const second = await service.getSnapshot();
+      expect(second.items.find((item) => item.kind === 'error')?.waitingSince).toBe(firstSince);
+
+      // The entry disappears: the id is pruned from the first-observed map.
+      transport = withoutErrors;
+      const cleared = await service.getSnapshot();
+      expect(cleared.items.filter((item) => item.kind === 'error')).toHaveLength(0);
+
+      // It returns later and reads as freshly waiting.
+      transport = withErrors;
+      vi.setSystemTime(new Date('2026-08-05T12:10:00Z'));
+      const returned = await service.getSnapshot();
+      const returnedSince = returned.items.find((item) => item.kind === 'error')?.waitingSince;
+      expect(returnedSince).not.toBe(firstSince);
+      expect(returnedSince).toBe('2026-08-05T12:10:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never produces items from warning-class entries: the boundary rejects them', async () => {
+    const warningEntry = {
+      ref: { scope: 'run', code: 'rewind_worktree_reset', feature_id: 'parent1234ef567890' },
+      error: {
+        code: 'rewind_worktree_reset',
+        class: 'warning',
+        title: 'Worktree reset to anchor',
+        summary: 'The worktree was reset.',
+      },
+    };
+    const service = new AttentionService(errorTransport([warningEntry]));
+    await expect(service.getSnapshot()).rejects.toThrow();
   });
 });

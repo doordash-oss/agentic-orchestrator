@@ -1406,9 +1406,9 @@ export interface components {
             result: string;
         };
         /** @enum {string} */
-        ChatContextScope: "run" | "transaction" | "repository" | "setup" | "recovery";
-        ChatContextReference: {
-            scope: components["schemas"]["ChatContextScope"];
+        ErrorScope: "run" | "transaction" | "repository" | "setup" | "recovery";
+        ErrorReference: {
+            scope: components["schemas"]["ErrorScope"];
             code: string;
             feature_id?: string;
             repository?: string;
@@ -1416,11 +1416,15 @@ export interface components {
             snapshot_id?: string;
             key?: string;
         };
+        OwnedError: {
+            ref: components["schemas"]["ErrorReference"];
+            error: components["schemas"]["Error"];
+        };
         ChatStartRequest: {
             message: string;
             images?: string[];
             image_uploads?: string[];
-            context?: components["schemas"]["ChatContextReference"];
+            context?: components["schemas"]["ErrorReference"];
         };
         ChatStartResponse: components["schemas"]["ActionBaseResponse"] & {
             session_id: string;
@@ -1971,6 +1975,8 @@ export interface components {
             progress: components["schemas"]["FeatureProgress"];
             /** @description Canonical warning-class errors for this feature, such as effort-capability drift; absent when there is nothing to warn about. */
             warnings?: components["schemas"]["Error"][];
+            /** @description Current non-warning errors this feature or its active child owns, each pairing the catalog-rendered error (without diagnostics) with the reference to its durable home. Entries are ordered blocking first, then needs_action, stable by scope and key; absent when there are none. Warning-class records never appear here. */
+            errors?: components["schemas"]["OwnedError"][];
             active_child?: components["schemas"]["RelationshipChildSummary"];
             /** @description Newest closed children in authoritative store order, capped at a fixed server-side limit. Consult child_history_total and child_history_truncated for the full extent, and the feature detail route for the complete history. */
             child_history?: components["schemas"]["RelationshipChildSummary"][];

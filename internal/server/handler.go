@@ -301,6 +301,7 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 		}
 		summary.ActiveChild = relationshipChildSummaryDTO(children.Active)
 		summary.ChildHistory, summary.ChildHistoryTotal, summary.ChildHistoryTruncated = listChildHistory(children.Closed)
+		summary.Errors = ownedErrorsDTO(f, children.Active)
 		summary.Warnings = append(summary.Warnings, effortDriftWarnings(f, h.registry)...)
 		summaries = append(summaries, summary)
 	}

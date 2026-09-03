@@ -324,6 +324,7 @@ const FEATURE_SUMMARY: FeatureSummaryView[] = [
     runCount: 8,
     phaseStatus: 'implementing',
     warnings: [],
+    errors: [],
   },
 ];
 
@@ -341,6 +342,7 @@ const FEATURE_SNAPSHOT: FeatureSnapshot = {
   activeRun: 8,
   automaticReview: AUTOMATIC_REVIEW,
   warnings: [],
+  errors: [],
   reviewGate: {
     reviewingGate: true,
     reviewFixing: false,
@@ -387,6 +389,7 @@ function overviewLaneSnapshot(
     activeRun: 1,
     automaticReview: AUTOMATIC_REVIEW,
     warnings: [],
+    errors: [],
     reviewGate: {
       reviewingGate: false,
       reviewFixing: false,
@@ -588,6 +591,7 @@ const OVERVIEW_LANE_SUMMARY: FeatureSummaryView[] = OVERVIEW_LANE_FEATURES.map((
   activeRun: feature.activeRun,
   runCount: 1,
   warnings: [],
+  errors: [],
 }));
 
 const OVERVIEW_LANE_SNAPSHOTS: Record<string, FeatureSnapshot> = Object.fromEntries(
@@ -607,6 +611,7 @@ const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
   activeRun: 8,
   automaticReview: AUTOMATIC_REVIEW,
   warnings: [],
+  errors: [],
   reviewGate: {
     reviewingGate: false,
     reviewFixing: false,

@@ -21,7 +21,7 @@ import { CANONICAL_ERROR_MESSAGE_PREFIX } from '../../../shared/errors';
 import {
   defaultSettings,
   type AttentionItem,
-  type ChatContextReference,
+  type ErrorReference,
   type ConnectionState,
   type Settings,
 } from '../../../shared/ipc';
@@ -617,7 +617,7 @@ describe('AmaPanel on a remote server', () => {
 });
 
 describe('AmaPanel routed drafts', () => {
-  const reference: ChatContextReference = {
+  const reference: ErrorReference = {
     scope: 'run',
     code: 'iteration_budget_exhausted',
     featureId: 'abcd1234ef567890',

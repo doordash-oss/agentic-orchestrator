@@ -820,3 +820,105 @@ describe('AttentionInbox question detail', () => {
     expect(screen.queryByText(/Recommended/)).not.toBeInTheDocument();
   });
 });
+
+describe('error items', () => {
+  const blockingErrorItem: Extract<AttentionItem, { kind: 'error' }> = {
+    kind: 'error',
+    id: 'error:feature-1:run::iteration_budget_exhausted',
+    featureId: 'feature-1',
+    waitingSince: '2026-08-05T12:00:00.000Z',
+    ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'feature-1' },
+    class: 'blocking',
+    code: 'iteration_budget_exhausted',
+    title: 'Iteration budget exhausted',
+  };
+  const needsActionErrorItem: Extract<AttentionItem, { kind: 'error' }> = {
+    ...blockingErrorItem,
+    id: 'error:feature-1:repository:repo-a:publish_rebase_conflict',
+    ref: {
+      scope: 'repository',
+      code: 'publish_rebase_conflict',
+      featureId: 'feature-1',
+      repository: 'repo-a',
+    },
+    class: 'needs_action',
+    code: 'publish_rebase_conflict',
+    title: 'Pull-rebase conflict',
+  };
+
+  it('renders rows named by the class label and counts them on the bell', async () => {
+    render(<Harness items={[blockingErrorItem, needsActionErrorItem]} onJump={vi.fn()} />);
+    const user = userEvent.setup();
+
+    expect(bell()).toHaveAttribute('aria-label', 'Attention inbox, 2 pending');
+    await user.click(bell());
+    const failedRow = screen.getByRole('button', { name: /Failed/ });
+    expect(failedRow).toHaveTextContent('Failed');
+    expect(failedRow).toHaveTextContent('Search revamp');
+    const needsActionRow = screen.getByRole('button', { name: /Needs your action/ });
+    expect(needsActionRow).toHaveTextContent('Search revamp');
+  });
+
+  it('shows the catalog title in the detail with no remediation, and jumps with the item id', async () => {
+    const onJump = vi.fn();
+    render(<Harness items={[blockingErrorItem]} onJump={onJump} />);
+    const user = userEvent.setup();
+
+    await user.click(bell());
+    const row = screen.getByRole('button', { name: /Failed/ });
+    await user.click(row);
+    // The row click closes the popover and jumps with owner and item id.
+    expect(onJump).toHaveBeenCalledWith('feature-1', blockingErrorItem.id);
+    expect(popover()).not.toBeInTheDocument();
+  });
+
+  it('jumps from the detail Open control with the item id', async () => {
+    const onJump = vi.fn();
+    const [drafts, setDrafts] = [
+      { questions: {}, help: {}, gates: {} } as AttentionDrafts,
+      undefined,
+    ];
+    void drafts;
+    void setDrafts;
+    render(
+      <AttentionDetail
+        item={needsActionErrorItem}
+        busy={false}
+        submit={() => undefined}
+        drafts={emptyAttentionDrafts()}
+        setDrafts={() => undefined}
+        onJump={onJump}
+      />,
+    );
+
+    expect(screen.getByText('Pull-rebase conflict')).toBeVisible();
+    expect(screen.queryByText(/retry/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Try/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Open' }));
+    expect(onJump).toHaveBeenCalledWith('feature-1', needsActionErrorItem.id);
+  });
+
+  it('names a rejected inbox action by the catalog title, not the sentinel wire text', async () => {
+    const mock = installAgenticoMock();
+    // A canonical rejection as the preload rethrows it: the sentinel-prefixed
+    // message carrying the serialized canonical object.
+    mock.api.sendHelp.mockRejectedValue(
+      new Error(
+        'E_CANONICAL_ERROR {"code":"send_help_failed","class":"blocking","title":"Help could not be sent","summary":"The help message could not be delivered."}',
+      ),
+    );
+    const ownerless: AttentionItem = { ...helpQuestionItem, featureId: undefined };
+    render(<Harness items={[ownerless]} onJump={vi.fn()} />);
+    const user = userEvent.setup();
+
+    await user.click(bell());
+    await user.click(screen.getByRole('button', { name: /Help request/ }));
+    await user.type(screen.getByLabelText('Help reply'), 'carry on');
+    await user.click(screen.getByRole('button', { name: 'Send reply' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Help could not be sent'),
+    );
+    expect(screen.getByRole('status')).not.toHaveTextContent('agentico-canonical');
+  });
+});

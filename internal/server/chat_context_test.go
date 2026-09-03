@@ -79,7 +79,7 @@ func TestChatStartAcceptsWellFormedRunReference(t *testing.T) {
 		t.Fatal("StartChat was not called")
 	}
 	got := target.chatReq.Context
-	if got.Scope != chatContextScopeRun || got.Code != "iteration_budget_exhausted" || got.FeatureID != "feat-run-failed" {
+	if got.Scope != errorScopeRun || got.Code != "iteration_budget_exhausted" || got.FeatureID != "feat-run-failed" {
 		t.Fatalf("context = %#v; want the run reference unchanged", got)
 	}
 	if !strings.Contains(target.chatHiddenContext, "error[iteration_budget_exhausted]") {

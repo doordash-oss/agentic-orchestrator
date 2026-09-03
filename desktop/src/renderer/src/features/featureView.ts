@@ -19,7 +19,8 @@ limitations under the License.
  * inputs are the strict renderer-facing views; nothing here talks to the
  * preload API or stores state.
  */
-import type { FeatureSnapshot, FeatureSetupView } from '../../../shared/ipc';
+import type { FeatureSnapshot, FeatureSetupView, OwnedError } from '../../../shared/ipc';
+import { ERROR_CLASS_LABELS } from '../../../shared/ipc';
 
 export type DashboardBucket = 'intervention' | 'active' | 'startable' | 'inactive';
 export type DashboardTone = 'danger' | 'attention' | 'active' | 'ready' | 'quiet';
@@ -76,27 +77,48 @@ const BUCKET_ORDER: Record<DashboardBucket, number> = {
   inactive: 3,
 };
 
-/** Human state and priority derived from server status and catalogue only. */
+/**
+ * The highest-severity owned error on a snapshot: a blocking entry wins over
+ * every needs_action entry regardless of list order. Warnings never ride the
+ * owned-error list, so the return value is always a presence-class error or
+ * undefined.
+ */
+export function highestSeverityError(errors: readonly OwnedError[]): OwnedError | undefined {
+  let needsAction: OwnedError | undefined;
+  for (const entry of errors) {
+    if (entry.error.class === 'blocking') return entry;
+    if (entry.error.class === 'needs_action' && needsAction === undefined) {
+      needsAction = entry;
+    }
+  }
+  return needsAction;
+}
+
+/** The intervention state derived from a snapshot's highest-severity owned error. */
+function errorIntervention(entry: OwnedError): DashboardState {
+  if (entry.error.class === 'blocking') {
+    return { bucket: 'intervention', label: ERROR_CLASS_LABELS.blocking, tone: 'danger' };
+  }
+  return { bucket: 'intervention', label: ERROR_CLASS_LABELS.needs_action, tone: 'attention' };
+}
+
+/** Human state and priority derived from the owned-error projection and catalogue only. */
 export function dashboardState(snapshot: FeatureSnapshot): DashboardState {
   const child = snapshot.activeChild;
+  const entry = highestSeverityError(snapshot.errors);
+  if (entry !== undefined) {
+    // Presence comes from the owned-error projection, never from status
+    // strings: a blocking error (the feature's or the active child's) reads
+    // "Failed", a needs_action one reads "Needs your action".
+    return errorIntervention(entry);
+  }
   if (child !== undefined) {
-    // A parent with an active refactor pass is in progress even though its
-    // stored status stays Published/CodeReady while the pass is labeled "Refactoring".
-    if (child.attention != null || child.integrationState === 'attention') {
-      return { bucket: 'intervention', label: 'Refactoring — needs attention', tone: 'attention' };
-    }
-    if (child.status === 'Failed') {
-      return { bucket: 'intervention', label: 'Refactoring — pass failed', tone: 'danger' };
-    }
     // A pass launched without auto-start hasn't run anything yet; a live
     // "Refactoring" badge would claim work that never began.
     if (child.status === 'Created') {
       return { bucket: 'startable', label: 'Pass ready to start', tone: 'ready' };
     }
     return { bucket: 'active', label: 'Refactoring', tone: 'active' };
-  }
-  if (snapshot.status === 'Failed') {
-    return { bucket: 'intervention', label: 'Failed', tone: 'danger' };
   }
   if (snapshot.status === 'Interrupted') {
     return { bucket: 'intervention', label: 'Interrupted', tone: 'attention' };

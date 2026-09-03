@@ -215,6 +215,7 @@ const FEATURE_ROWS = [
     activeRun: 1,
     runCount: 1,
     warnings: [],
+    errors: [],
   },
   {
     id: 'search1234abcd5678',
@@ -226,6 +227,7 @@ const FEATURE_ROWS = [
     activeRun: 0,
     runCount: 0,
     warnings: [],
+    errors: [],
   },
 ];
 

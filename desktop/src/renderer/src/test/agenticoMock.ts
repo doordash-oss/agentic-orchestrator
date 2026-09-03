@@ -214,6 +214,7 @@ export function featureSnapshot(overrides: Partial<FeatureSnapshot> = {}): Featu
       source: 'global',
     },
     warnings: [],
+    errors: [],
     reviewGate: {
       reviewingGate: false,
       reviewFixing: false,

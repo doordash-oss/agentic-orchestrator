@@ -20,7 +20,7 @@ limitations under the License.
  * deliberately no generic invoke passthrough anywhere in the app.
  */
 import { z } from 'zod';
-import { CanonicalErrorSchema } from './api/parse';
+import { CanonicalErrorSchema, type CanonicalError } from './api/parse';
 
 export type { CanonicalError, CanonicalErrorResponse } from './api/parse';
 
@@ -787,16 +787,16 @@ export const SETTINGS_FOCUS = ['add-server'] as const;
 export const SettingsFocusSchema = z.enum(SETTINGS_FOCUS);
 export type SettingsFocus = z.output<typeof SettingsFocusSchema>;
 
-// --- Chat context references -------------------------------------------------
-// Mirrors the server's ChatContextReference wire schema (camelCase here;
-// the main-process client re-serializes to snake_case): the durable home of
-// an error an explain-in-chat question is about, picked by `scope`. The
-// refine enforces the same scope-key discipline the server handler enforces,
-// so a reference whose keys are missing for or foreign to its scope never
-// reaches the wire.
+// --- Error references ---------------------------------------------------------
+// Mirrors the server's ErrorReference wire schema (camelCase here; the
+// main-process client re-serializes to snake_case): the durable home of an
+// error, picked by `scope` — the home an explain-in-chat question is about
+// and the owner reference an owned-error entry carries. The refine enforces
+// the same scope-key discipline the server handler enforces, so a reference
+// whose keys are missing for or foreign to its scope never reaches the wire.
 
 /** The keys each scope requires; `transaction` additionally allows repository. */
-const CHAT_CONTEXT_REQUIRED_KEYS = {
+const ERROR_REFERENCE_REQUIRED_KEYS = {
   run: ['featureId'],
   transaction: ['featureId'],
   repository: ['featureId', 'repository'],
@@ -805,7 +805,7 @@ const CHAT_CONTEXT_REQUIRED_KEYS = {
 } as const;
 
 /** The keys each scope rejects even when present and well-formed. */
-const CHAT_CONTEXT_FORBIDDEN_KEYS = {
+const ERROR_REFERENCE_FORBIDDEN_KEYS = {
   run: ['repository', 'taskKey', 'snapshotId', 'key'],
   transaction: ['taskKey', 'snapshotId', 'key'],
   repository: ['taskKey', 'snapshotId', 'key'],
@@ -813,7 +813,7 @@ const CHAT_CONTEXT_FORBIDDEN_KEYS = {
   recovery: ['featureId', 'repository', 'taskKey'],
 } as const;
 
-export const ChatContextReferenceSchema = z
+export const ErrorReferenceSchema = z
   .strictObject({
     scope: z.enum(['run', 'transaction', 'repository', 'setup', 'recovery']),
     code: z.string().min(1).max(128),
@@ -824,26 +824,62 @@ export const ChatContextReferenceSchema = z
     key: z.string().min(1).max(500).optional(),
   })
   .superRefine((reference, ctx) => {
-    for (const field of CHAT_CONTEXT_REQUIRED_KEYS[reference.scope]) {
+    for (const field of ERROR_REFERENCE_REQUIRED_KEYS[reference.scope]) {
       if (reference[field] === undefined) {
         ctx.addIssue({
           code: 'custom',
           path: [field],
-          message: `A "${reference.scope}" chat context reference requires "${field}".`,
+          message: `A "${reference.scope}" error reference requires "${field}".`,
         });
       }
     }
-    for (const field of CHAT_CONTEXT_FORBIDDEN_KEYS[reference.scope]) {
+    for (const field of ERROR_REFERENCE_FORBIDDEN_KEYS[reference.scope]) {
       if (reference[field] !== undefined) {
         ctx.addIssue({
           code: 'custom',
           path: [field],
-          message: `"${field}" does not belong to a "${reference.scope}" chat context reference.`,
+          message: `"${field}" does not belong to a "${reference.scope}" error reference.`,
         });
       }
     }
   });
-export type ChatContextReference = z.output<typeof ChatContextReferenceSchema>;
+export type ErrorReference = z.output<typeof ErrorReferenceSchema>;
+
+/**
+ * One current non-warning error a feature (or its active child) owns, as
+ * projected on the feature summary: the catalog-rendered canonical error —
+ * which never carries diagnostics on this surface — plus the reference to
+ * its durable home. Warning-class entries fail validation: warnings never
+ * own a presence surface.
+ */
+export const OwnedErrorSchema = z
+  .strictObject({
+    ref: ErrorReferenceSchema,
+    error: CanonicalErrorSchema,
+  })
+  .superRefine((entry, ctx) => {
+    if (entry.error.class === 'warning') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['error', 'class'],
+        message: 'An owned error never carries the warning class.',
+      });
+    }
+  });
+export type OwnedError = z.output<typeof OwnedErrorSchema>;
+
+/**
+ * The single shared class-label constant: the label every surface renders
+ * for an error class — the ErrorSurface header, the lane and dashboard state
+ * labels, the cockpit status chip, the attention inbox's kind label, and the
+ * notification type label all read from here so one class always reads as
+ * one word.
+ */
+export const ERROR_CLASS_LABELS: Readonly<Record<CanonicalError['class'], string>> = {
+  blocking: 'Failed',
+  needs_action: 'Needs your action',
+  warning: 'Warning',
+};
 
 export const AppRouteEventSchema = z
   .strictObject({
@@ -878,7 +914,7 @@ export const AppRouteEventSchema = z
     /** Submits `draft` directly with its own optimistic bubble; 'ama' routes only. */
     autoSubmit: z.boolean().optional(),
     /** Error-home reference the routed draft's turn carries; 'ama' routes only. */
-    chatContext: ChatContextReferenceSchema.optional(),
+    chatContext: ErrorReferenceSchema.optional(),
   })
   .superRefine((event, ctx) => {
     // The chat-draft fields are ama-target-only: any other route smuggling one
@@ -1167,6 +1203,8 @@ export const FeatureSummaryViewSchema = z.strictObject({
   phaseStatus: z.string().optional(),
   /** Canonical warning-class errors for this feature, diagnostics redacted. */
   warnings: z.array(CanonicalErrorSchema).max(100),
+  /** Current non-warning errors this feature or its active child owns; each entry carries its durable-home reference and never diagnostics. */
+  errors: z.array(OwnedErrorSchema).max(100),
   activeChild: RelationshipChildViewSchema.optional(),
   childHistory: z.array(RelationshipChildViewSchema).max(1000).optional(),
   /** Closed-child count before the list projection's cap. */
@@ -1273,6 +1311,8 @@ export const FeatureSnapshotSchema = z.strictObject({
   setup: FeatureSetupViewSchema.optional(),
   /** Canonical warning-class errors for this feature, diagnostics redacted. */
   warnings: z.array(CanonicalErrorSchema).max(100),
+  /** Current non-warning errors this feature or its active child owns; each entry carries its durable-home reference and never diagnostics. */
+  errors: z.array(OwnedErrorSchema).max(100),
   /** The authoritative server action catalogue (setup/start/…). */
   actions: z.array(FeatureActionViewSchema),
   activeChild: RelationshipChildViewSchema.optional(),
@@ -2055,6 +2095,27 @@ export const AttentionRecoverySchema = z.strictObject({
   liveCount: z.number().int().nonnegative(),
   deadCount: z.number().int().nonnegative(),
 });
+/**
+ * One owned error from the feature summary's projection, as an attention
+ * item: the reference resolves back to the durable home, the class drives
+ * the row's kind label, and the title is the catalog title. Warning-class
+ * errors never become items.
+ */
+export const AttentionErrorSchema = z.strictObject({
+  kind: z.literal('error'),
+  id: z.string().min(1).max(1000),
+  /** The referenced feature — the child for child-scoped entries. */
+  featureId: FeatureIdSchema,
+  /** Set when the referenced feature is the listed parent's active child: the parent tab owns the row. */
+  parentFeatureId: FeatureIdSchema.optional(),
+  waitingSince: z.string().max(100),
+  /** The owner reference resolving back to the durable home. */
+  ref: ErrorReferenceSchema,
+  class: z.enum(['blocking', 'needs_action']),
+  code: z.string().min(1).max(128),
+  title: AttentionTextSchema,
+});
+export type AttentionError = z.output<typeof AttentionErrorSchema>;
 export const AttentionItemSchema = z.discriminatedUnion('kind', [
   AttentionPermissionSchema,
   AttentionQuestionBundleSchema,
@@ -2062,6 +2123,7 @@ export const AttentionItemSchema = z.discriminatedUnion('kind', [
   AttentionGateSchema,
   AttentionReviewSchema,
   AttentionRecoverySchema,
+  AttentionErrorSchema,
 ]);
 export type AttentionItem = z.output<typeof AttentionItemSchema>;
 
@@ -2164,7 +2226,7 @@ export const ChatStartRequestSchema = z.strictObject({
   /** Server-staged image upload references (remote connections; images only). */
   imageUploads: z.array(UploadReferenceSchema).max(12).optional(),
   /** Error-home reference the server resolves into hidden turn context. */
-  context: ChatContextReferenceSchema.optional(),
+  context: ErrorReferenceSchema.optional(),
 });
 export type ChatStartRequest = z.output<typeof ChatStartRequestSchema>;
 

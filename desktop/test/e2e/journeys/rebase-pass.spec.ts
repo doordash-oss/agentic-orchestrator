@@ -194,8 +194,11 @@ test('rebase pass: behind feature → card click → pass workspace → completi
     await expect(pass).toBeVisible({ timeout: 60_000 });
     transcript.step('rebase pass workspace visible with kind-aware labeling, no modal');
 
-    await expect(handle.page.getByText('Rebasing')).toBeVisible({ timeout: 30_000 });
-    transcript.step('status chip reads "Rebasing" while the pass is active');
+    // A pass with no owned errors renders no error chip: the plain status
+    // label stays while the pass runs.
+    const statusChip = handle.page.getByRole('status', { name: 'Current feature status' });
+    await expect(statusChip).toContainText('Published', { timeout: 30_000 });
+    transcript.step('the plain status label stays while the pass owns no errors');
 
     transcript.section('Wait for the rebase pass to reach a terminal state');
     await waitFor(
@@ -341,12 +344,20 @@ test('rebase pass dirty parent: one attention card, chip focuses it, retry compl
     // The repository and the untracked file sit under the Details disclosure.
     await expect(card).toContainText('alpha');
     await expect(card).toContainText('stray-parent.txt');
-    // No other element on the page carries the card's title.
-    await expect(handle.page.getByText('Parent worktree is dirty', { exact: true })).toHaveCount(1);
-    transcript.step('one full ErrorSurface carries the parked condition with structured details');
+    // The catalog title is the one presence wording: the card, the parent's
+    // waiting-lane sub-line, and the pass's inline attention detail — nothing
+    // else carries it.
+    await expect(handle.page.getByText('Parent worktree is dirty', { exact: true })).toHaveCount(3);
+    const parentRow = handle.page
+      .getByRole('navigation', { name: 'Feature sidebar' })
+      .getByRole('option', { name: new RegExp(featureName) });
+    await expect(parentRow.locator('.sidebar__row-subline')).toHaveText('Parent worktree is dirty');
+    transcript.step(
+      'one full ErrorSurface carries the parked condition; the sidebar sub-line names it too',
+    );
 
     const chip = handle.page.getByRole('button', {
-      name: 'Rebasing — needs attention. Focus the pass attention card.',
+      name: 'Rebasing — Needs your action. Parent worktree is dirty. Focus the error card.',
     });
     await expect(chip).toBeVisible({ timeout: 30_000 });
     await chip.click();

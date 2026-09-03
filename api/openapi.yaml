@@ -2699,23 +2699,24 @@ components:
               type: string
             result:
               type: string
-    ChatContextScope:
+    ErrorScope:
       type: string
       enum: [run, transaction, repository, setup, recovery]
-    ChatContextReference:
-      # Points at the durable home of an error an explain-in-chat question is
-      # about. `scope` picks the home; the keys each scope requires are
-      # validated server-side: run needs feature_id; transaction needs
-      # feature_id (the child) and optionally repository to address a journal
-      # entry's warning instead of the attention record; repository needs
-      # feature_id and repository; setup needs feature_id and task_key;
-      # recovery needs snapshot_id and key.
+    ErrorReference:
+      # Points at the durable home of an error. `scope` picks the home; the
+      # keys each scope requires are validated server-side: run needs
+      # feature_id; transaction needs feature_id (the child) and optionally
+      # repository to address a journal entry's warning instead of the
+      # attention record; repository needs feature_id and repository; setup
+      # needs feature_id and task_key; recovery needs snapshot_id and key.
+      # Shared by chat start's `context` (explain-in-chat questions) and the
+      # feature summary's owned-error entries (presence surfaces).
       type: object
       additionalProperties: false
       required: [scope, code]
       properties:
         scope:
-          $ref: "#/components/schemas/ChatContextScope"
+          $ref: "#/components/schemas/ErrorScope"
         code:
           type: string
           minLength: 1
@@ -2725,6 +2726,20 @@ components:
         task_key: { type: string, minLength: 1, maxLength: 200 }
         snapshot_id: { type: string, minLength: 1, maxLength: 128 }
         key: { type: string, minLength: 1, maxLength: 500 }
+    OwnedError:
+      # One current non-warning error a feature (or its active child) owns,
+      # projected on the feature summary so every presence surface can
+      # indicate it and link to its owning card. The error is the
+      # catalog-rendered canonical object without diagnostics; `ref` is the
+      # owner reference resolving back to the durable home.
+      type: object
+      additionalProperties: false
+      required: [ref, error]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ErrorReference"
+        error:
+          $ref: "#/components/schemas/Error"
     ChatStartRequest:
       # Bound by the startChatPrompt operation at
       # /api/v1/prompts/chat/start; oapi-codegen emits the Go binding
@@ -2743,7 +2758,7 @@ components:
           maxItems: 12
           items: { type: string }
         context:
-          $ref: "#/components/schemas/ChatContextReference"
+          $ref: "#/components/schemas/ErrorReference"
     ChatStartResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -4031,6 +4046,16 @@ components:
             Canonical warning-class errors for this feature, such as
             effort-capability drift; absent when there is nothing to warn
             about.
+        errors:
+          type: array
+          description: >-
+            Current non-warning errors this feature or its active child owns,
+            each pairing the catalog-rendered error (without diagnostics) with
+            the reference to its durable home. Entries are ordered blocking
+            first, then needs_action, stable by scope and key; absent when
+            there are none. Warning-class records never appear here.
+          items:
+            $ref: "#/components/schemas/OwnedError"
         active_child:
           $ref: "#/components/schemas/RelationshipChildSummary"
           x-go-type-skip-optional-pointer: false

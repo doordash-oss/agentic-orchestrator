@@ -41,13 +41,13 @@ describe('overviewHeadline', () => {
     const counts = laneCounts([
       snapshot('Implementing'),
       snapshot('Implementing'),
-      snapshot('Failed'),
+      snapshot('NeedUserInput'),
     ]);
     expect(overviewHeadline(counts, 3)).toBe('Two runs in flight, one waiting on you');
   });
 
   it('waiting only, singular', () => {
-    const counts = laneCounts([snapshot('Failed')]);
+    const counts = laneCounts([snapshot('NeedUserInput')]);
     expect(overviewHeadline(counts, 1)).toBe('One feature waiting on you');
   });
 
@@ -74,7 +74,7 @@ describe('overviewSubline', () => {
     try {
       vi.setSystemTime(new Date('2026-08-05T12:00:00Z'));
       const now = Date.now();
-      const failing = snapshot('Failed', { id: 'waiting-1' });
+      const failing = snapshot('NeedUserInput', { id: 'waiting-1' });
       const lanes = classifyFeaturesByLane([failing]);
       const items: AttentionItem[] = [
         {
@@ -99,7 +99,7 @@ describe('overviewSubline', () => {
   });
 
   it('waiting with no usable timestamp falls through to the resting-lane tier', () => {
-    const failing = snapshot('Failed', { id: 'waiting-1' });
+    const failing = snapshot('NeedUserInput', { id: 'waiting-1' });
     const rested = snapshot('CodeReady', { id: 'rest-1' });
     const lanes = classifyFeaturesByLane([failing, rested]);
     expect(overviewSubline(lanes, [], 2)).toBe('One feature at rest.');

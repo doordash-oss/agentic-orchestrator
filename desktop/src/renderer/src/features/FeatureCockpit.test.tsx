@@ -709,8 +709,10 @@ describe('FeatureCockpit snapshot rendering', () => {
     // The contradictory "choose what comes next" hero never renders next to a live pass.
     expect(screen.queryByRole('region', { name: 'Feature aftercare' })).not.toBeInTheDocument();
     expect(screen.queryByText(/Choose what comes next/)).not.toBeInTheDocument();
+    // A pass with no owned errors renders no error chip: the plain status
+    // label stays and no button appears.
     const status = screen.getByRole('status', { name: 'Current feature status' });
-    expect(status).toHaveTextContent('Refactoring');
+    expect(status).toHaveTextContent('Published');
 
     // The pass verbs live in the action bar like any feature tab.
     const bar = screen.getByRole('group', { name: 'Feature actions' });
@@ -759,6 +761,12 @@ describe('FeatureCockpit snapshot rendering', () => {
       id: FEATURE_ID,
       status: 'Published',
       actions: [],
+      errors: [
+        {
+          ref: { scope: 'transaction', code: 'integration_merge_conflict', featureId: childId },
+          error: parkedAttention,
+        },
+      ],
       activeChild: {
         id: childId,
         name: 'Slop removal pass',
@@ -801,10 +809,13 @@ describe('FeatureCockpit snapshot rendering', () => {
       const user = userEvent.setup();
 
       expect(await screen.findByRole('region', { name: 'Refactor pass' })).toBeVisible();
-      // The chip is a button carrying only the status label — no error text.
-      const chip = screen.getByRole('button', { name: /needs attention/ });
-      expect(chip).toHaveTextContent('Refactoring — needs attention');
-      expect(chip.textContent).not.toContain('Integration merge conflict');
+      // The chip is a button carrying only the owner verb and class label;
+      // the catalog title rides the accessible name and tooltip.
+      const chip = screen.getByRole('button', {
+        name: 'Refactoring — Needs your action. Integration merge conflict. Focus the error card.',
+      });
+      expect(chip).toHaveTextContent('Refactoring — Needs your action');
+      expect(chip).toHaveAttribute('title', 'Integration merge conflict');
 
       // The card owns the condition: exactly one element carries the catalog
       // title, and the summary appears only inside the card.
@@ -823,6 +834,187 @@ describe('FeatureCockpit snapshot rendering', () => {
     } finally {
       (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = original;
     }
+  });
+
+  it('focuses the registered failure card from the chip for a run failure, reflecting the blocking entry', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(
+      featureSnapshot({
+        status: 'Failed',
+        failure: {
+          code: 'iteration_budget_exhausted',
+          class: 'blocking' as const,
+          title: 'Iteration budget exhausted',
+          summary: 'The Implement phase exhausted its iteration budget at iteration 3.',
+          remediation: { hint: 'Restart the phase.', actions: ['restart'] },
+          context: { phase: { name: 'implement', iteration: 3 } },
+        },
+        errors: [
+          {
+            ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: FEATURE_ID },
+            error: {
+              code: 'iteration_budget_exhausted',
+              class: 'blocking' as const,
+              title: 'Iteration budget exhausted',
+              summary: 'The Implement phase exhausted its iteration budget.',
+            },
+          },
+          {
+            ref: {
+              scope: 'repository',
+              code: 'publish_rebase_conflict',
+              featureId: FEATURE_ID,
+              repository: 'repo-a',
+            },
+            error: {
+              code: 'publish_rebase_conflict',
+              class: 'needs_action' as const,
+              title: 'Pull-rebase conflict',
+              summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
+            },
+          },
+        ],
+        actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+      }),
+    );
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    // Two entries exist; the chip reflects the blocking one.
+    const chip = screen.getByRole('button', {
+      name: 'Failed. Iteration budget exhausted. Focus the error card.',
+    });
+    expect(chip).toHaveTextContent('Failed');
+
+    const alert = screen.getByRole('alert');
+    await user.click(chip);
+    await waitFor(() => expect(alert).toHaveFocus());
+  });
+
+  it('focuses the registered setup task card from the chip', async () => {
+    const snapshot = featureSnapshot({
+      status: 'Failed',
+      // The run carries the thin record naming the owning task; the task's
+      // own record is what the card (and the projection) render.
+      failure: {
+        code: 'worktree_setup_failed',
+        class: 'blocking' as const,
+        title: 'Worktree setup failed',
+        summary: 'Setup task "Worktree: repo-a" failed.',
+        remediation: {
+          hint: 'Resolve the reported problem, then retry setup.',
+          actions: ['setup'],
+        },
+        context: {
+          setup_task: { key: 'worktree:repo-a', kind: 'worktree', label: 'Worktree: repo-a' },
+        },
+      },
+      setup: {
+        status: 'failed',
+        attempt: 1,
+        tasks: [
+          {
+            key: 'worktree:repo-a',
+            kind: 'worktree',
+            label: 'Worktree: repo-a',
+            repo: 'repo-a',
+            status: 'failed',
+            attempt: 1,
+            error: {
+              code: 'worktree_setup_failed',
+              class: 'blocking' as const,
+              title: 'Worktree setup failed',
+              summary: 'Setting up the worktree for repository "repo-a" failed.',
+              remediation: {
+                hint: 'Resolve the reported problem, then retry setup.',
+                actions: ['setup'],
+              },
+              context: { repositories: [{ name: 'repo-a' }] },
+            },
+          },
+        ],
+      },
+      errors: [
+        {
+          ref: {
+            scope: 'setup',
+            code: 'worktree_setup_failed',
+            featureId: FEATURE_ID,
+            taskKey: 'worktree:repo-a',
+          },
+          error: {
+            code: 'worktree_setup_failed',
+            class: 'blocking' as const,
+            title: 'Worktree setup failed',
+            summary: 'Setting up the worktree for repository "repo-a" failed.',
+          },
+        },
+      ],
+      actions: [{ id: 'setup', enabled: true, disabledReasons: [] }],
+    });
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(snapshot);
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const chip = screen.getByRole('button', {
+      name: 'Setup — Failed. Worktree setup failed. Focus the error card.',
+    });
+    expect(chip).toHaveTextContent('Setup — Failed');
+
+    const alert = screen.getByRole('alert');
+    await user.click(chip);
+    await waitFor(() => expect(alert).toHaveFocus());
+  });
+
+  it('opens the publish modal and focuses its repository card for a repository entry', async () => {
+    const repoError = {
+      code: 'publish_rebase_conflict',
+      class: 'needs_action' as const,
+      title: 'Pull-rebase conflict',
+      summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
+    };
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'CodeReady',
+        errors: [
+          {
+            ref: {
+              scope: 'repository',
+              code: 'publish_rebase_conflict',
+              featureId: FEATURE_ID,
+              repository: 'repo-a',
+            },
+            error: repoError,
+          },
+        ],
+        actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-complete',
+      canMarkDone: true,
+      repos: [
+        { repo: 'repo-a', publishable: true, touched: true, status: 'eligible', error: repoError },
+      ],
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const chip = screen.getByRole('button', {
+      name: 'Publishing — Needs your action. Pull-rebase conflict. Focus the error card.',
+    });
+    await user.click(chip);
+
+    // The modal opens first; its repository row's card then receives focus.
+    const dialog = await screen.findByRole('dialog', { name: 'Publish reviewed changes' });
+    expect(dialog).toBeInTheDocument();
+    const card = await within(dialog).findByRole('alert');
+    await waitFor(() => expect(card).toHaveFocus());
   });
 
   it('opens the completed transcript from Run record', async () => {

@@ -511,6 +511,83 @@ export const ServerRelationshipChildSchema = z.object({
 });
 export type ServerRelationshipChild = z.output<typeof ServerRelationshipChildSchema>;
 
+// --- Owned errors --------------------------------------------------------------
+// Strict on purpose: the entry is a real contract between the server's
+// projection and every presence surface, so an unknown key, a warning-class
+// error, or a reference whose keys are missing for or foreign to its scope
+// fails parsing at the trust boundary instead of reaching the renderer.
+
+/** The keys each scope requires; `transaction` additionally allows repository. */
+const SERVER_ERROR_REFERENCE_REQUIRED_KEYS = {
+  run: ['feature_id'],
+  transaction: ['feature_id'],
+  repository: ['feature_id', 'repository'],
+  setup: ['feature_id', 'task_key'],
+  recovery: ['snapshot_id', 'key'],
+} as const;
+
+/** The keys each scope rejects even when present and well-formed. */
+const SERVER_ERROR_REFERENCE_FORBIDDEN_KEYS = {
+  run: ['repository', 'task_key', 'snapshot_id', 'key'],
+  transaction: ['task_key', 'snapshot_id', 'key'],
+  repository: ['task_key', 'snapshot_id', 'key'],
+  setup: ['repository', 'snapshot_id', 'key'],
+  recovery: ['feature_id', 'repository', 'task_key'],
+} as const;
+
+/** Owner reference mirroring the generated ErrorReference component (snake_case). */
+export const ServerErrorReferenceSchema = z
+  .strictObject({
+    scope: z.enum(['run', 'transaction', 'repository', 'setup', 'recovery']),
+    code: z.string().min(1).max(128),
+    feature_id: z.string().min(1).max(200).optional(),
+    repository: z.string().min(1).max(200).optional(),
+    task_key: z.string().min(1).max(200).optional(),
+    snapshot_id: z.string().min(1).max(128).optional(),
+    key: z.string().min(1).max(500).optional(),
+  })
+  .superRefine((reference, ctx) => {
+    for (const field of SERVER_ERROR_REFERENCE_REQUIRED_KEYS[reference.scope]) {
+      if (reference[field] === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `A "${reference.scope}" error reference requires "${field}".`,
+        });
+      }
+    }
+    for (const field of SERVER_ERROR_REFERENCE_FORBIDDEN_KEYS[reference.scope]) {
+      if (reference[field] !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `"${field}" does not belong to a "${reference.scope}" error reference.`,
+        });
+      }
+    }
+  });
+export type ServerErrorReference = z.output<typeof ServerErrorReferenceSchema>;
+
+/** One owned-error entry on the feature summary, mirroring the generated OwnedError component. */
+export const ServerOwnedErrorSchema = z
+  .strictObject({
+    ref: ServerErrorReferenceSchema,
+    error: CanonicalErrorSchema,
+  })
+  .superRefine((entry, ctx) => {
+    // Warnings never own a presence surface; the entry's type stays as wide
+    // as the generated component so the compile-time drift guard holds, and
+    // a warning-class entry is rejected here at the boundary instead.
+    if (entry.error.class === 'warning') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['error', 'class'],
+        message: 'An owned error never carries the warning class.',
+      });
+    }
+  });
+export type ServerOwnedError = z.output<typeof ServerOwnedErrorSchema>;
+
 export const ServerFeatureSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -530,6 +607,9 @@ export const ServerFeatureSummarySchema = z.object({
   // Canonical warning-class errors for this feature; absent when there is
   // nothing to warn about.
   warnings: z.array(CanonicalErrorSchema).max(100).optional(),
+  // Current non-warning errors this feature or its active child owns; absent
+  // when there are none.
+  errors: z.array(ServerOwnedErrorSchema).max(100).optional(),
   active_child: ServerRelationshipChildSchema.optional(),
   child_history: z.array(ServerRelationshipChildSchema).optional(),
   child_history_total: z.number().int().nonnegative().optional(),

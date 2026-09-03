@@ -765,3 +765,101 @@ describe('canonical warning wire shapes', () => {
     expect(parsed.data?.warnings?.[0]?.code).toBe('rewind_worktree_reset');
   });
 });
+
+describe('owned error wire shapes on the feature summary', () => {
+  const summaryBase = {
+    id: 'abcd1234ef567890',
+    name: 'Search revamp',
+    slug: 'search-revamp',
+    status: 'Failed',
+    current_phase: 'Implement',
+    repos: ['repo-a'],
+    created_at: '2026-07-14T10:00:00Z',
+    active_run: 1,
+    run_count: 1,
+    progress: {},
+  };
+  const runEntry = {
+    ref: { scope: 'run', code: 'iteration_budget_exhausted', feature_id: 'abcd1234ef567890' },
+    error: {
+      code: 'iteration_budget_exhausted',
+      class: 'blocking',
+      title: 'Iteration budget exhausted',
+      summary: 'The Implement phase exhausted its iteration budget.',
+    },
+  };
+  const repoEntry = {
+    ref: {
+      scope: 'repository',
+      code: 'publish_rebase_conflict',
+      feature_id: 'abcd1234ef567890',
+      repository: 'repo-a',
+    },
+    error: {
+      code: 'publish_rebase_conflict',
+      class: 'needs_action',
+      title: 'Pull-rebase conflict',
+      summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
+    },
+  };
+
+  it('parses a summary carrying two owned-error entries', () => {
+    const parsed = ServerFeatureSummarySchema.parse({
+      ...summaryBase,
+      errors: [runEntry, repoEntry],
+    });
+    expect(parsed.errors).toHaveLength(2);
+    expect(parsed.errors?.[0]?.ref.feature_id).toBe('abcd1234ef567890');
+    expect(parsed.errors?.[1]?.ref.repository).toBe('repo-a');
+    const list = FeatureListResponseSchema.safeParse({
+      api_version: 'v1',
+      features: [{ ...summaryBase, errors: [runEntry, repoEntry] }],
+    });
+    expect(list.success).toBe(true);
+  });
+
+  it('defaults to no errors when the server omits the field', () => {
+    const parsed = ServerFeatureSummarySchema.parse(summaryBase);
+    expect(parsed.errors).toBeUndefined();
+  });
+
+  it('rejects an entry whose error carries the warning class', () => {
+    const warningEntry = {
+      ref: { scope: 'run', code: 'rewind_worktree_reset', feature_id: 'abcd1234ef567890' },
+      error: {
+        code: 'rewind_worktree_reset',
+        class: 'warning',
+        title: 'Worktree reset to anchor',
+        summary: 'The worktree was reset.',
+      },
+    };
+    expect(
+      ServerFeatureSummarySchema.safeParse({ ...summaryBase, errors: [warningEntry] }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an entry whose setup reference lacks the task key', () => {
+    const undisciplined = {
+      ref: { scope: 'setup', code: 'worktree_setup_failed', feature_id: 'abcd1234ef567890' },
+      error: { ...runEntry.error, code: 'worktree_setup_failed' },
+    };
+    expect(
+      ServerFeatureSummarySchema.safeParse({ ...summaryBase, errors: [undisciplined] }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an entry carrying unknown keys', () => {
+    expect(
+      ServerFeatureSummarySchema.safeParse({
+        ...summaryBase,
+        errors: [{ ...runEntry, extra: 'x' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      ServerFeatureSummarySchema.safeParse({
+        ...summaryBase,
+        errors: [{ ...runEntry, error: { ...runEntry.error, diagnostics: 'raw' } }],
+      }).success,
+    ).toBe(true);
+  });
+});

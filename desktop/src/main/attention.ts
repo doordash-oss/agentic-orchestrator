@@ -44,7 +44,7 @@ import {
   type PermissionDecisionRequest,
   type VerificationGateAction,
 } from '../shared/ipc';
-import { SafeErrorException } from '../shared/errors';
+import { CanonicalErrorException, SafeErrorException } from '../shared/errors';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
 
@@ -105,6 +105,14 @@ function supportedVerificationActions(actions: string[]): VerificationGateAction
 
 /** Server-owned blocking prompts, translated once in the main process. */
 export class AttentionService {
+  /**
+   * The time this service first observed each error item id. The server's
+   * projection carries no timestamps, so the inbox's wait duration starts
+   * at first observation; ids that disappear are pruned so a returning
+   * entry reads as freshly waiting.
+   */
+  private readonly errorFirstSeen = new Map<string, string>();
+
   constructor(private readonly transport: ServerTransport) {}
 
   async getSnapshot(): Promise<AttentionSnapshot> {
@@ -133,6 +141,43 @@ export class AttentionService {
       const parent = featureID === undefined ? undefined : parentByChild.get(featureID);
       return parent === undefined ? {} : { parentFeatureId: parent };
     };
+    // One attention item per owned error on every listed feature's summary
+    // projection. Child-scoped entries route to the parent tab; the wait
+    // clock is this service's first observation of the item id.
+    const errorItems = featuresRaw.features.flatMap((feature) =>
+      (feature.errors ?? []).flatMap((entry) => {
+        // The parse boundary already rejects warning-class entries; this
+        // check keeps the item's class type honest without trusting it.
+        if (entry.error.class === 'warning') return [];
+        const refFeatureId = entry.ref.feature_id ?? feature.id;
+        const id = `error:${refFeatureId}:${entry.ref.scope}:${entry.ref.repository ?? entry.ref.task_key ?? ''}:${entry.error.code}`;
+        return [
+          {
+            kind: 'error' as const,
+            id,
+            featureId: refFeatureId,
+            ...(refFeatureId === feature.id ? {} : parentOf(refFeatureId)),
+            waitingSince: this.observeErrorItem(id),
+            ref: {
+              scope: entry.ref.scope,
+              code: entry.ref.code,
+              ...(entry.ref.feature_id === undefined ? {} : { featureId: entry.ref.feature_id }),
+              ...(entry.ref.repository === undefined ? {} : { repository: entry.ref.repository }),
+              ...(entry.ref.task_key === undefined ? {} : { taskKey: entry.ref.task_key }),
+              ...(entry.ref.snapshot_id === undefined ? {} : { snapshotId: entry.ref.snapshot_id }),
+              ...(entry.ref.key === undefined ? {} : { key: entry.ref.key }),
+            },
+            class: entry.error.class,
+            code: entry.error.code,
+            title: entry.error.title,
+          },
+        ];
+      }),
+    );
+    const errorIds = new Set(errorItems.map((item) => item.id));
+    for (const id of this.errorFirstSeen.keys()) {
+      if (!errorIds.has(id)) this.errorFirstSeen.delete(id);
+    }
     const items: AttentionItem[] = [
       ...permissionsRaw.requests
         .filter((request) => request.status === 'pending' && hasListedFeature(request.feature_id))
@@ -263,6 +308,7 @@ export class AttentionService {
           reviewKind: reviewKindLabel(feature.status),
           phase: feature.current_phase,
         })),
+      ...errorItems,
     ];
     const unique = new Map(items.map((item) => [item.id, item]));
     const classRank: Record<AttentionItem['kind'], number> = {
@@ -271,7 +317,8 @@ export class AttentionService {
       questions: 2,
       gate: 3,
       review: 4,
-      help: 5,
+      error: 5,
+      help: 6,
     };
     return validateWithSchema(
       {
@@ -337,6 +384,15 @@ export class AttentionService {
     const body = await serverRequest(this.transport, path, undefined);
     return schema.parse(body);
   }
+
+  /** Records (or returns) this service's first observation of an error item id. */
+  private observeErrorItem(id: string): string {
+    const seen = this.errorFirstSeen.get(id);
+    if (seen !== undefined) return seen;
+    const now = new Date().toISOString();
+    this.errorFirstSeen.set(id, now);
+    return now;
+  }
   private async mutate(
     path: string,
     body: Record<string, unknown>,
@@ -361,18 +417,24 @@ export class AttentionService {
           : {}),
       };
     } catch (error) {
-      if (
-        error instanceof SafeErrorException &&
-        (error.safe.code === 'conflict' ||
-          error.safe.code === 'not_found' ||
-          (error.safe.code === 'bad_request' &&
-            /^pending request \S+ not found$/i.test(error.safe.message)))
-      )
+      // A submission racing the item's resolution reads as already resolved:
+      // the server answers conflict/not_found, or the canonical-era
+      // bad_request whose diagnostics name the missing pending request (the
+      // pre-canonical plain-text message lived in the body; the marker moved
+      // into diagnostics, so both spellings are honored).
+      const canonical = error instanceof CanonicalErrorException ? error.canonical : undefined;
+      const safe = error instanceof SafeErrorException ? error.safe : undefined;
+      const stalePendingRequest =
+        (canonical?.code === 'bad_request' &&
+          /^pending request \S+ not found$/i.test(canonical.diagnostics ?? '')) ||
+        (safe?.code === 'bad_request' && /^pending request \S+ not found$/i.test(safe.message));
+      if (safe?.code === 'conflict' || safe?.code === 'not_found' || stalePendingRequest === true) {
         return {
           result: 'Already resolved.',
           alreadyResolved: true,
           notice: ATTENTION_ALREADY_RESOLVED_NOTICE,
         };
+      }
       throw error;
     }
   }

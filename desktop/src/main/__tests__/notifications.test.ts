@@ -104,3 +104,77 @@ describe('AttentionNotificationCoordinator', () => {
     expect(create.mock.calls[0]?.[0].body).toContain('Help request');
   });
 });
+
+describe('AttentionNotificationCoordinator error items', () => {
+  function errorItem() {
+    return {
+      kind: 'error' as const,
+      id: 'error:feature-1:run::iteration_budget_exhausted',
+      featureId: 'feature-1',
+      waitingSince: '2026-08-05T12:00:00.000Z',
+      ref: { scope: 'run' as const, code: 'iteration_budget_exhausted', featureId: 'feature-1' },
+      class: 'blocking' as const,
+      code: 'iteration_budget_exhausted',
+      title: 'Iteration budget exhausted',
+    };
+  }
+
+  it('notifies once while pending and again after the item clears and returns', () => {
+    const notification: NotificationHandle = { show: vi.fn(), on: vi.fn() };
+    const create = vi.fn((_options: { title: string; body: string }) => notification);
+    const coordinator = new AttentionNotificationCoordinator({
+      sink: { isSupported: () => true, create },
+      shouldNotify: () => true,
+      show: vi.fn(),
+    });
+    const options = { previewEnabled: true, featureLabel: () => 'Search revamp' };
+
+    coordinator.update({ items: [errorItem()] }, options);
+    expect(create).toHaveBeenCalledOnce();
+    // The same pending item never re-notifies.
+    coordinator.update({ items: [errorItem()] }, options);
+    expect(create).toHaveBeenCalledOnce();
+    // Clearing the item makes it eligible again.
+    coordinator.update({ items: [] }, options);
+    coordinator.update({ items: [errorItem()] }, options);
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('composes the preview body from the class label, feature label, and catalog title', () => {
+    const notification: NotificationHandle = { show: vi.fn(), on: vi.fn() };
+    const create = vi.fn((_options: { title: string; body: string }) => notification);
+    const coordinator = new AttentionNotificationCoordinator({
+      sink: { isSupported: () => true, create },
+      shouldNotify: () => true,
+      show: vi.fn(),
+    });
+
+    coordinator.update(
+      { items: [errorItem()] },
+      { previewEnabled: true, featureLabel: () => 'Search revamp' },
+    );
+
+    const body = create.mock.calls[0]?.[0]?.body ?? '';
+    expect(body).toContain('Failed');
+    expect(body).toContain('Search revamp');
+    expect(body).toContain('Iteration budget exhausted');
+    expect(body.length).toBeLessThanOrEqual(180);
+  });
+
+  it('keeps the no-preview body unchanged for error items', () => {
+    const notification: NotificationHandle = { show: vi.fn(), on: vi.fn() };
+    const create = vi.fn((_options: { title: string; body: string }) => notification);
+    const coordinator = new AttentionNotificationCoordinator({
+      sink: { isSupported: () => true, create },
+      shouldNotify: () => true,
+      show: vi.fn(),
+    });
+
+    coordinator.update(
+      { items: [errorItem()] },
+      { previewEnabled: false, featureLabel: () => 'Search revamp' },
+    );
+
+    expect(create.mock.calls[0]?.[0].body).toBe('Agentico needs attention.');
+  });
+});

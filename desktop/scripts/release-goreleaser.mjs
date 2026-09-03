@@ -22,8 +22,11 @@ import { isMainModule } from './lib/main-entry.mjs';
 import { verifyReleaseProvenance } from './release-preflight.mjs';
 import { goreleaserEnvironment, readPublicationSnapshot } from './release-workspace.mjs';
 
+// Desktop assets total ~800 MB; slow operator uplinks need far more than the default timeout.
+const RELEASE_TIMEOUT = '6h';
+
 export function goreleaserArguments(notesFile) {
-  const args = ['release', '--clean'];
+  const args = ['release', '--clean', '--timeout', RELEASE_TIMEOUT];
   if (notesFile !== undefined && notesFile !== '') args.push('--release-notes', notesFile);
   return args;
 }

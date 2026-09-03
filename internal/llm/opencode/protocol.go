@@ -745,8 +745,16 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		return p.childSessionUpdate(su)
 	}
 	// Terminal provider errors map onto FailureMetadata so retry classification
-	// sees structured failure data; child-session routing happens above.
+	// sees structured failure data; child-session routing happens above. A
+	// retryable error is NOT turn-terminal: OpenCode retries it internally and
+	// the turn's real terminal result still arrives on the prompt response.
+	// Sealing here would latch markTerminal and suppress that result, killing a
+	// session that was still succeeding.
 	if su.Update.Error != nil {
+		if su.Update.Error.Data.IsRetryable != nil && *su.Update.Error.Data.IsRetryable {
+			p.logDebug("[opencode] ignoring retryable session/update error %s: %s", su.Update.Error.Name, su.Update.Error.Data.Message)
+			return nil
+		}
 		msg, ok := p.terminalError(su.Update.Error.Data.Message)
 		if !ok {
 			return nil

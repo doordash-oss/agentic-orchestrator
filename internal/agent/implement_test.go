@@ -2121,6 +2121,94 @@ func TestImplementLoop_AutoResumeRejectionFallsBackFreshThenResumesNewSession(t 
 	}
 }
 
+// TestImplementLoop_ManualResumeRejectedFallbackKeepsOriginalPrompt proves the
+// fresh fallback after a rejected resume launches with the ORIGINAL iteration
+// prompt: the engine's fallback once received the mutated build opts, whose
+// prompt claimed to resume a conversation the fresh session never had, and
+// dropped the original iteration instructions.
+func TestImplementLoop_ManualResumeRejectedFallbackKeepsOriginalPrompt(t *testing.T) {
+	featureID := "manual-resume-rejected-fresh-prompt"
+	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
+	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+
+	iterDir := filepath.Join(artifactDir, "iteration-01")
+	if err := os.MkdirAll(iterDir, 0o755); err != nil {
+		t.Fatalf("mkdir iteration dir: %v", err)
+	}
+	if err := WriteResumeRecord(iterDir, ResumeRecord{
+		ProviderSessionID: "native-old",
+		Provider:          "codex",
+		ResolvedModel:     "gpt-5.6-codex",
+		PhaseKey:          "implement",
+		Iteration:         1,
+		RunNumber:         1,
+		PendingResume:     true,
+		ResumeCount:       1,
+	}); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+
+	var buildOpts []BuildSessionOpts
+	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		buildOpts = append(buildOpts, opts)
+		return []string{"mock-agent"}, nil, &session.SessionOpts{
+			SupportsSessionResume: true,
+			ProviderName:          "codex",
+			Model:                 "gpt-5.6-codex",
+		}, nil
+	}
+	startCalls := 0
+	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		startCalls++
+		switch startCalls {
+		case 1:
+			// The manual resume establishes, then dies mid-turn.
+			dead := &crashResumeTestSession{
+				utilityTestSession: newUtilityTestSession(),
+				providerSessionID:  "native-old",
+				providerName:       "codex",
+			}
+			dead.statusCh <- agentStatusFailed
+			return dead, nil
+		case 2:
+			// The crash-resume continuation is rejected by the provider.
+			return nil, errors.New("thread/resume JSON-RPC error: thread not found")
+		default:
+			testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
+			fresh := &crashResumeTestSession{
+				utilityTestSession: newUtilityTestSession(),
+				providerSessionID:  "native-new",
+				providerName:       "codex",
+			}
+			fresh.setRootIntent(validSuccessCompletionIntent())
+			fresh.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
+			fresh.statusCh <- agentStatusSuccess
+			return fresh, nil
+		}
+	}
+
+	result, err := RunImplementationLoop(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("FinalStatus = %q, want %q", result.FinalStatus, finalStatusReviewPassed)
+	}
+	if len(buildOpts) != 3 {
+		t.Fatalf("BuildSession calls = %d, want manual resume, rejected crash resume, fresh fallback (opts: %+v)", len(buildOpts), buildOpts)
+	}
+	if !strings.Contains(buildOpts[0].Prompt, "resumes that conversation") {
+		t.Fatalf("manual resume prompt = %q, want the resume-continuation prompt", buildOpts[0].Prompt)
+	}
+	fresh := buildOpts[2]
+	if fresh.ResumeSessionID != "" {
+		t.Errorf("fresh fallback ResumeSessionID = %q, want empty", fresh.ResumeSessionID)
+	}
+	if strings.Contains(fresh.Prompt, "resumes that conversation") || strings.TrimSpace(fresh.Prompt) == "" {
+		t.Errorf("fresh fallback prompt = %q, want the original iteration prompt (not the resume-continuation prompt)", fresh.Prompt)
+	}
+}
+
 func TestImplementLoop_CrashResumeNotAttemptedWithoutProviderSessionID(t *testing.T) {
 	featureID := "crash-resume-empty-provider-session"
 	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)

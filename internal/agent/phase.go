@@ -443,12 +443,15 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 				if freshErr != nil {
 					return "", freshErr
 				}
-				freshSession, ok := freshResult.Session.(ports.SessionHandle)
-				if !ok {
+				if _, ok := freshResult.Session.(ports.SessionHandle); !ok {
 					return "", fmt.Errorf("starting %s fresh fallback: replacement session is not mutable", cfg.SkillName)
 				}
-				sessionID, sess, sessOpts = freshResult.SessionID, freshSession, freshResult.Options
-				manualResume = false
+				// The fresh fallback owns its full session setup — SessionStarted,
+				// trackers, cost accounting, cleanup, and its append-mode output
+				// log. Falling through into the normal setup tail here would
+				// double-register all of it and truncate output.txt out from
+				// under the fallback's open append handle.
+				return freshResult.SessionID, nil
 			} else {
 				if persistErr := resumeCoordinator.ClearPending(time.Now()); persistErr != nil {
 					return "", fmt.Errorf("clearing pending %s resume: %w", cfg.SkillName, persistErr)
@@ -1503,6 +1506,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		Config:                     pr.Config,
 		Model:                      model,
 		ReviewModel:                reviewModel,
+		Registry:                   pr.Registry,
 		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		MaxIterations:              maxIter,
 		MaxConsecFails:             maxFails,
@@ -1568,6 +1572,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		Config:                     pr.Config,
 		Model:                      model,
 		ReviewModel:                reviewModel,
+		Registry:                   pr.Registry,
 		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		MaxIterations:              maxIter,
 		MaxConsecFails:             maxFails,
@@ -1589,6 +1594,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		GuidelinesDir:              pr.GuidelinesDir,
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
+		OnFeatureResumed:           pr.OnFeatureResumed,
 		RoundCommitHook:            pr.RoundCommitHook,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}

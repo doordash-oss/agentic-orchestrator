@@ -412,6 +412,82 @@ func TestResumeFeatureInterruptedImplementationPreservesIteration(t *testing.T) 
 	})
 }
 
+func TestResumeFeatureInterruptedImplementationDispatchFailureRollsBackTransition(t *testing.T) {
+	stateDir := t.TempDir()
+	store := feature.NewStore(stateDir)
+	manager := feature.NewManager(store, config.NewDefault())
+	registry := llm.NewRegistry()
+	registry.Register(&codex.Provider{})
+	planPath := filepath.Join(stateDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\n\n## Tasks\n\n### Task 1\n\n**Repo:** repo\n\nDo it.\n"), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+	f := &feature.Feature{
+		ID:                  "manual-interrupted-rollback",
+		Name:                "Manual interrupted rollback",
+		Slug:                "manual-interrupted-rollback",
+		Status:              feature.StatusInterrupted,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentIteration:    2,
+		CurrentRoadmapPhase: 1,
+		ActiveTimingKey:     "phase-1-impl",
+		ActiveRun:           1,
+		RunCount:            1,
+		SchemaVersion:       feature.SchemaVersionCurrent,
+		Pipeline:            feature.PipelineLarge,
+		Models:              config.ModelConfig{Implementation: "codex:model-a"},
+		Artifacts:           map[string]string{"plan": planPath},
+		Repos:               []feature.FeatureRepo{{Name: "repo", Path: stateDir}},
+		RepoStates:          map[string]*feature.RepoState{"repo": {}},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	resumeDir, ok := agent.ResumeUnitDir(stateDir, f)
+	if !ok {
+		t.Fatal("ResumeUnitDir() did not resolve implementation iteration")
+	}
+	now := time.Now()
+	if err := agent.WriteResumeRecord(resumeDir, agent.ResumeRecord{
+		ProviderSessionID:     "thread-rollback",
+		Provider:              "codex",
+		ResolvedModel:         "model-a",
+		PhaseKey:              "phase-1-impl",
+		Iteration:             2,
+		RunNumber:             1,
+		OrchestratorSessionID: f.ID + "-phase-01-impl-02",
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+	runner := &agent.PhaseRunner{StateDir: stateDir, Registry: registry}
+	o := New(Deps{Lifecycle: manager, Store: store, PhaseRunner: runner}, Hooks{})
+	dispatchErr := errors.New("injected dispatch failure")
+	o.SetRunMultiRepoImplFn(func(*feature.Feature, string, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		return nil, dispatchErr
+	})
+
+	if err := o.ResumeFeature(f.ID); !errors.Is(err, dispatchErr) {
+		t.Fatalf("ResumeFeature() error = %v, want injected dispatch failure", err)
+	}
+	reloaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if reloaded.Status == feature.StatusImplementing {
+		t.Fatalf("feature status after failed dispatch = %s, want rolled back (a phantom Implementing feature 409s every later resume)", reloaded.Status)
+	}
+	if reloaded.Status != feature.StatusInterrupted {
+		t.Fatalf("feature status after failed dispatch = %s, want Interrupted restored", reloaded.Status)
+	}
+	// The retry affordance must survive: a second resume re-attempts dispatch
+	// instead of returning ErrResumeConflict forever.
+	if err := o.ResumeFeature(f.ID); !errors.Is(err, dispatchErr) {
+		t.Fatalf("second ResumeFeature() error = %v, want the injected dispatch failure again (not a permanent conflict)", err)
+	}
+}
+
 func TestResumeFeatureInterruptedImplementationReviewPreservesIteration(t *testing.T) {
 	stateDir := t.TempDir()
 	store := feature.NewStore(stateDir)

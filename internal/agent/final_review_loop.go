@@ -808,6 +808,10 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		},
 		ResumeChildKey:     string(RoleFinalReviewFixer),
 		ResumePhaseContext: fmt.Sprintf("You were mid the final-review fixer for iteration %d.", iteration),
+		// The fixer replaced an interactive pipeline: user questions and
+		// unhandled permission requests must pause for the desktop to answer,
+		// not hard-fail the fix round.
+		RouteUserInput: true,
 	})
 	// RunBoundedHelper owns the fix session's commit validation; a protocol
 	// violation error carries the structured violations the loop needs to

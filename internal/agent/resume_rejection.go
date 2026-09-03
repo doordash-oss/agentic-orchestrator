@@ -80,9 +80,12 @@ func detectResumeRejectionDetail(provider, detail string) ResumeRejectionVerdict
 			"thread/resume") && containsAny(detail, "error", "not found", "expired", "invalid")
 		rejected = rejected || containsAny(detail, "failed to resume thread", "thread not found")
 	case "opencode":
-		rejected = containsAny(detail,
-			"session/load failed",
-			"session/load") && containsAny(detail, "not found", "expired", "non-ok", "error")
+		// The provider handshake failure is "opencode session/load failed for
+		// session %q: <rpc detail>" and the rpc detail carries no guaranteed
+		// keyword, so session/load alone must establish the rejection. An
+		// undetected rejection would hard-fail the phase instead of
+		// dispatching the fresh-session fallback.
+		rejected = containsAny(detail, "session/load")
 	}
 	if !rejected {
 		return ResumeRejectionVerdict{}

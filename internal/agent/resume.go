@@ -105,13 +105,6 @@ func (s *AutoResumeState) Dispatched() {
 	s.totalAttempts++
 }
 
-// Rejected removes an establishment rejection from the attempt budget.
-func (s *AutoResumeState) Rejected() {
-	if s.totalAttempts > 0 {
-		s.totalAttempts--
-	}
-}
-
 // Observe records whether a failed continuation made enough progress to reset
 // the consecutive-idle cap.
 func (s *AutoResumeState) Observe(sess ports.SessionView, resumed bool) {
@@ -169,7 +162,9 @@ func (AutoResumeEngine) Run(initial AutoResumeProcess, callbacks AutoResumeCallb
 			return AutoResumeResult{Process: current}, err
 		}
 		if attempt.Rejected {
-			state.Rejected()
+			// A rejected continuation stays charged against the absolute
+			// cap: refunding it would let a persistent reject-then-fresh
+			// cycle retry forever without either cap ever tripping.
 			freshOrdinal++
 			fallbackFrom := current
 			if attempt.Process.Session != nil {
@@ -179,6 +174,9 @@ func (AutoResumeEngine) Run(initial AutoResumeProcess, callbacks AutoResumeCallb
 			if err != nil {
 				return AutoResumeResult{Process: current}, err
 			}
+			// The fallback dispatch is a new provider process and is
+			// charged like any other continuation.
+			state.Dispatched()
 		}
 		current = attempt.Process
 		if callbacks.Interrupted != nil && callbacks.Interrupted(current) {

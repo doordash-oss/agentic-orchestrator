@@ -26,8 +26,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -1829,6 +1831,91 @@ func TestRunMultiRepoFinalReview_RunFinalReviewFnSeam(t *testing.T) {
 	if result.FinalStatus != "all_passed" {
 		t.Errorf("FinalStatus = %q, want all_passed", result.FinalStatus)
 	}
+}
+
+// TestPhaseRunnerMultiRepoConfigsWireRegistryAndResumeHooks guards the
+// production OrchestratorConfig wiring in the PhaseRunner multi-repo entry
+// points: without the Registry, every review-child resume claim fails the
+// nil-registry ineligibility and runs fresh even though the UI advertises
+// resume; without OnFeatureResumed, resumed children emit no audit event.
+func TestPhaseRunnerMultiRepoConfigsWireRegistryAndResumeHooks(t *testing.T) {
+	env := newFRLoopEnv(t)
+	registry := llm.NewRegistry()
+	registry.Register(&codex.Provider{})
+	resumedHook := func(ports.FeatureResumedData) {}
+
+	t.Run("final review", func(t *testing.T) {
+		store, f, _ := newFRTestFeature(t, env.stateDir, "fr-registry-wiring", []string{testRepoNameAPI})
+		f.Models = config.ModelConfig{Implementation: "codex:model-a", Review: "codex:model-a"}
+		if err := store.Save(f); err != nil {
+			t.Fatalf("save feature: %v", err)
+		}
+		var gotCfg OrchestratorConfig
+		pr := &PhaseRunner{
+			StateDir:         env.stateDir,
+			FeatureStore:     store,
+			Registry:         registry,
+			OnFeatureResumed: resumedHook,
+			RunFinalReviewFn: func(cfg OrchestratorConfig, _ ports.SessionManager) (*FeatureFinalReviewResult, error) {
+				gotCfg = cfg
+				return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed, Repos: []string{testRepoNameAPI}}, nil
+			},
+		}
+		ch, err := pr.RunMultiRepoFinalReview(f)
+		if err != nil {
+			t.Fatalf("RunMultiRepoFinalReview() error = %v", err)
+		}
+		result := <-ch
+		if result.FinalStatus != "all_passed" {
+			t.Fatalf("FinalStatus = %q, want all_passed (seam result)", result.FinalStatus)
+		}
+		if gotCfg.Registry != registry {
+			t.Errorf("OrchestratorConfig.Registry = %v, want the runner's registry (nil-registry makes every child resume claim ineligible)", gotCfg.Registry)
+		}
+		if gotCfg.OnFeatureResumed == nil {
+			t.Error("OrchestratorConfig.OnFeatureResumed = nil, want the runner's hook forwarded")
+		}
+	})
+
+	t.Run("implementation", func(t *testing.T) {
+		store, f, _ := newLoopTestFeature(t, env.stateDir, "impl-registry-wiring", []string{testRepoNameAPI}, loopTestFeatureOptions{
+			Name:                "Implementation Registry Wiring",
+			Slug:                "impl-registry-wiring",
+			Status:              feature.StatusImplementing,
+			CurrentPhase:        feature.PhaseImplement,
+			CurrentRoadmapPhase: 1,
+			OmitPRURL:           true,
+		})
+		f.Models = config.ModelConfig{Implementation: "codex:model-a", Review: "codex:model-a"}
+		if err := store.Save(f); err != nil {
+			t.Fatalf("save feature: %v", err)
+		}
+		planPath := filepath.Join(env.stateDir, "plan.md")
+		if err := os.WriteFile(planPath, []byte("# Plan\n\n## Tasks\n\n### Task 1\n\nDo it.\n"), 0o644); err != nil {
+			t.Fatalf("write plan: %v", err)
+		}
+		var gotRegistry *llm.Registry
+		pr := &PhaseRunner{
+			StateDir:     env.stateDir,
+			FeatureStore: store,
+			Registry:     registry,
+			RunImplementFn: func(cfg ImplementConfig, _ ports.SessionManager) (*LoopResult, error) {
+				gotRegistry = cfg.Registry
+				return &LoopResult{FinalStatus: finalStatusReviewPassed}, nil
+			},
+		}
+		ch, err := pr.RunMultiRepoImplementation(f, planPath)
+		if err != nil {
+			t.Fatalf("RunMultiRepoImplementation() error = %v", err)
+		}
+		result := <-ch
+		if result.FinalStatus != "awaiting_final_review" {
+			t.Fatalf("FinalStatus = %q, want awaiting_final_review (seam result)", result.FinalStatus)
+		}
+		if gotRegistry != registry {
+			t.Errorf("ImplementConfig.Registry = %v, want the runner's registry (nil-registry makes every review-child resume claim ineligible)", gotRegistry)
+		}
+	})
 }
 
 func TestRunMultiRepoFinalReview_ProtocolViolationStatusPreserved(t *testing.T) {

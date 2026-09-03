@@ -69,12 +69,16 @@ func (o *Orchestrator) ResumeFeature(featureID string) error {
 			resumeImplementation = o.implementationReviewResumeEligibility(f).Eligible
 		}
 		if f.CurrentPhase == feature.PhaseImplement && resumeImplementation {
-			if err := o.transitionImplementationResume(featureID); err != nil {
+			if err := o.startFeatureForImplementationResume(featureID, feature.StatusInterrupted); err != nil {
 				if claim != nil {
 					return errors.Join(err, claim.Release(time.Now()))
 				}
 				return err
 			}
+			if claim != nil {
+				claim.DispatchStarted()
+			}
+			return nil
 		}
 		if err := o.StartFeature(featureID); err != nil {
 			if claim != nil {
@@ -260,10 +264,31 @@ func (o *Orchestrator) resumeEligibleFailedFeature(featureID string, phase featu
 	if err := o.TransitionTo(featureID, feature.StatusImplementReady); err != nil {
 		return fmt.Errorf("prepare failed phase for resume: %w", err)
 	}
+	return o.startFeatureForImplementationResume(featureID, feature.StatusFailed)
+}
+
+// startFeatureForImplementationResume transitions the feature to implementing
+// for a provider continuation and dispatches it, reverting the transition when
+// dispatch fails. Without the revert, a failed StartFeature strands the
+// feature in StatusImplementing — a status ResumeFeature refuses — so every
+// subsequent resume attempt would return ErrResumeConflict with no recovery
+// path. Mirrors the rollback contract of the need-user-input dispatch path.
+func (o *Orchestrator) startFeatureForImplementationResume(featureID string, revertTo feature.Status) error {
 	if err := o.transitionImplementationResume(featureID); err != nil {
 		return err
 	}
-	return o.StartFeature(featureID)
+	if err := o.StartFeature(featureID); err != nil {
+		if rbErr := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+			if f.Status != feature.StatusImplementing {
+				return nil
+			}
+			return f.Transition(revertTo)
+		}); rbErr != nil {
+			return errors.Join(err, fmt.Errorf("reverting provider-resume transition to %s: %w", revertTo, rbErr))
+		}
+		return err
+	}
+	return nil
 }
 
 func (o *Orchestrator) transitionImplementationResume(featureID string) error {

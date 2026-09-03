@@ -26,6 +26,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1040,6 +1041,124 @@ func (s *phaseTestSessionHandle) CloseStdin()                                   
 func (s *phaseTestSessionHandle) SetOnToolAllowed(func(string, json.RawMessage)) {}
 func (s *phaseTestSessionHandle) SetOnFileRead(func(llm.FileReadEvent))          {}
 func (s *phaseTestSessionHandle) SetOnSubagentEvent(func(llm.SDKMessage))        {}
+
+// countingSessionHandle records AddCleanupFunc registrations so tests can
+// assert a session's lifecycle bookkeeping was registered exactly once.
+type countingSessionHandle struct {
+	*phaseTestSessionHandle
+	cleanups atomic.Int32
+}
+
+func (s *countingSessionHandle) AddCleanupFunc(func()) {
+	s.cleanups.Add(1)
+}
+
+// TestRunInteractivePhaseFreshFallbackOwlsSingleSessionSetup proves the
+// fresh fallback after a rejected manual resume owns its session setup
+// exactly once: falling through into the normal setup tail used to
+// double-register SessionStarted, trackers, and cost cleanup, and truncate
+// the fallback's append-mode output.txt log.
+func TestRunInteractivePhaseFreshFallbackOwlsSingleSessionSetup(t *testing.T) {
+	stateDir := t.TempDir()
+	f := &feature.Feature{
+		ID:           "feat-fallback",
+		ActiveRun:    1,
+		CurrentPhase: feature.PhaseInquire,
+		Repos:        []feature.FeatureRepo{{Path: t.TempDir()}},
+	}
+	artifactDir := filepath.Join(ActiveRunDir(stateDir, f), "inquire")
+	if err := WriteResumeRecord(artifactDir, ResumeRecord{
+		ProviderSessionID: "provider-prior",
+		Provider:          "opencode",
+		ResolvedModel:     "model-a",
+		PhaseKey:          "inquire",
+		RunNumber:         1,
+		PendingResume:     true,
+		ResumeCount:       1,
+	}); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+
+	observer := observe.New(true, stateDir, false, "", false, "")
+	starts := 0
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		starts++
+		if strings.Contains(id, "-resume-") {
+			// The rejected provider continuation: an opencode session/load
+			// failure whose rpc detail carries no second keyword.
+			return nil, fmt.Errorf(`opencode session/load failed for session "provider-prior": Unknown session`)
+		}
+		return &countingSessionHandle{
+			phaseTestSessionHandle: &phaseTestSessionHandle{
+				MockSessionView: mocks.NewMockSessionView(id, featureID),
+			},
+		}, nil
+	}
+	pr := &PhaseRunner{
+		SessionManager: sm,
+		Observer:       observer,
+		StateDir:       stateDir,
+		BuildSessionFn: func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			return []string{"true"}, nil, &ports.SessionOpts{
+				ProviderName:          "opencode",
+				Model:                 "model-a",
+				SupportsSessionResume: true,
+			}, nil
+		},
+	}
+
+	sessionID, err := pr.RunInquire(f)
+	if err != nil {
+		t.Fatalf("RunInquire() error = %v, want fresh fallback to absorb the resume rejection", err)
+	}
+	if !strings.Contains(sessionID, "-fresh-") {
+		t.Fatalf("sessionID = %q, want a fresh fallback session", sessionID)
+	}
+	if starts != 2 {
+		t.Fatalf("StartSession calls = %d, want 2 (rejected resume + fresh fallback)", starts)
+	}
+
+	record, err := ReadResumeRecord(artifactDir)
+	if err != nil {
+		t.Fatalf("ReadResumeRecord() error = %v", err)
+	}
+	if record == nil || record.Rejected || record.FreshFallbackCount != 1 {
+		t.Fatalf("resume record = %+v, want rejection superseded by one fresh fallback", record)
+	}
+
+	eventsPath := filepath.Join(stateDir, f.ID, "events.jsonl")
+	data, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	started := 0
+	ended := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var evt observe.Event
+		if err := json.Unmarshal([]byte(line), &evt); err != nil {
+			t.Fatalf("parse event %q: %v", line, err)
+		}
+		if evt.SessionID != sessionID {
+			continue
+		}
+		switch evt.EventType {
+		case "session.started":
+			started++
+		case "session.ended":
+			ended++
+		}
+	}
+	if started != 1 {
+		t.Errorf("session.started events for %s = %d, want exactly 1 (the fallback owns its setup)", sessionID, started)
+	}
+	if ended != 0 {
+		t.Errorf("session.ended events for %s = %d, want 0 (no double cleanup registration)", sessionID, ended)
+	}
+}
 
 // TestRunInteractivePhase_EmptyConfiguredModel_UsesDefaultAskingClause verifies
 // that when f.Models.Research is empty and the registry provides a catalog

@@ -524,7 +524,9 @@ func (r *planResumeAttemptRunner) resumeLaunch(record *ResumeRecord, phaseKey st
 }
 
 func (r *planResumeAttemptRunner) rejected(sessionAttempt *int) {
-	r.state.Rejected()
+	// The rejected continuation stays charged against the shared attempt
+	// budget (no refund): a persistent reject-then-fresh cycle must still
+	// trip the absolute cap.
 	*sessionAttempt++
 }
 

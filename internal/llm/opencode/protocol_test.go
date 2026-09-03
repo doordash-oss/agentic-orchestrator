@@ -998,9 +998,9 @@ func TestParseLine_AssistantErrorSurfacesRetryMetadata(t *testing.T) {
 			"error": map[string]any{
 				"name": "APIError",
 				"data": map[string]any{
-					"message":     "backend overloaded",
+					"message":     "backend unavailable",
 					"statusCode":  503,
-					"isRetryable": true,
+					"isRetryable": false,
 				},
 			},
 		},
@@ -1009,11 +1009,43 @@ func TestParseLine_AssistantErrorSurfacesRetryMetadata(t *testing.T) {
 		t.Fatalf("assistant error produced %+v, want one structured terminal error", msgs)
 	}
 	got := msgs[0].Result
-	if got.Result != "backend overloaded" ||
+	if got.Result != "backend unavailable" ||
 		got.Failure.StatusCode != 503 ||
 		got.Failure.Retryable == nil ||
-		!*got.Failure.Retryable {
+		*got.Failure.Retryable {
 		t.Errorf("assistant error result = %+v, want surfaced retry metadata", got)
+	}
+}
+
+// TestParseLine_RetryableAssistantErrorIsNotTurnTerminal proves a retryable
+// session/update error must not seal the turn: OpenCode retries it internally,
+// and latching markTerminal on the error would suppress the turn's real
+// terminal result — killing a session that was still succeeding.
+func TestParseLine_RetryableAssistantErrorIsNotTurnTerminal(t *testing.T) {
+	p, _, promptID := newPostHandshakeProtocol(t)
+	msgs := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "assistant_message",
+			"error": map[string]any{
+				"name": "APIError",
+				"data": map[string]any{
+					"message":     "backend overloaded",
+					"statusCode":  503,
+					"isRetryable": true,
+				},
+			},
+		},
+	}))
+	if len(msgs) != 0 {
+		t.Fatalf("retryable assistant error produced %+v, want no messages (turn continues)", msgs)
+	}
+
+	// OpenCode recovers and the prompt completes: the real terminal result
+	// must still be emitted, not suppressed by an error latch.
+	later := mustParse(t, p, responseLine(t, promptID, map[string]any{"stopReason": "end_turn"}))
+	if len(later) != 1 || later[0].Result == nil || !later[0].Result.IsSuccess() {
+		t.Fatalf("end_turn after retryable error produced %+v, want one success result", later)
 	}
 }
 

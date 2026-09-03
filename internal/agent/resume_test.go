@@ -260,6 +260,64 @@ func TestAutoResumeEngineOwnsAccountingRejectionAndFreshFallback(t *testing.T) {
 	}
 }
 
+// TestAutoResumeEngineRejectThenFreshCycleTripsAbsoluteCap proves a persistent
+// reject-then-fresh cycle is bounded: the rejected resume and the fresh
+// fallback are both charged against the absolute attempt cap, so the engine
+// stops after 10 dispatches instead of retrying forever.
+func TestAutoResumeEngineRejectThenFreshCycleTripsAbsoluteCap(t *testing.T) {
+	resumes := 0
+	fallbacks := 0
+	result, err := (AutoResumeEngine{}).Run(
+		AutoResumeProcess{Session: newUtilityTestSession(), Status: agentStatusFailed, ID: "initial"},
+		AutoResumeCallbacks{
+			Failed:         func(process AutoResumeProcess) bool { return process.Status == agentStatusFailed },
+			SupportsResume: func(AutoResumeProcess) bool { return true },
+			HasCompleted:   func(AutoResumeProcess) bool { return false },
+			ResumeID:       func(AutoResumeProcess) string { return "provider-thread" },
+			WaitBackoff:    func(AutoResumeProcess, time.Duration) bool { return true },
+			Resume: func(AutoResumeProcess, string, int) (AutoResumeAttempt, error) {
+				resumes++
+				return AutoResumeAttempt{Rejected: true, Reason: "expired"}, nil
+			},
+			FreshFallback: func(_ AutoResumeProcess, _ string, ordinal int) (AutoResumeAttempt, error) {
+				fallbacks++
+				if fallbacks > autoResumeAbsoluteCap {
+					// Safety valve for a regressed engine that never stops:
+					// return a successful process so the loop terminates and
+					// the assertions below fail instead of the test hanging.
+					return AutoResumeAttempt{Process: AutoResumeProcess{Status: agentStatusSuccess, ID: "runaway"}}, nil
+				}
+				sess := newUtilityTestSession()
+				// Observable progress keeps the consecutive-idle cap reset so
+				// the absolute cap is the one that must trip.
+				sess.msgLog.Append(llm.SDKMessage{
+					Type: "assistant",
+					Assistant: &llm.AssistantMessage{
+						Message: llm.ConversationMsg{
+							Role:    "assistant",
+							Content: []llm.ContentBlock{{Type: "text", Text: "worked then died"}},
+						},
+					},
+				})
+				return AutoResumeAttempt{
+					Process: AutoResumeProcess{Session: sess, Status: agentStatusFailed, ID: fmt.Sprintf("fresh-%02d", ordinal)},
+				}, nil
+			},
+			Interrupted: func(AutoResumeProcess) bool { return false },
+		},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if resumes != autoResumeAbsoluteCap/2 || fallbacks != autoResumeAbsoluteCap/2 {
+		t.Fatalf("reject-then-fresh cycle counts = resume:%d fresh:%d, want %d/%d (both dispatches charged)",
+			resumes, fallbacks, autoResumeAbsoluteCap/2, autoResumeAbsoluteCap/2)
+	}
+	if result.Failure == "" || !strings.Contains(result.Failure, "absolute ceiling") {
+		t.Fatalf("Run() failure = %q, want the absolute-cap stop reason", result.Failure)
+	}
+}
+
 func TestReadResumeSidecarMissingAndMalformedIsNoRecord(t *testing.T) {
 	dir := t.TempDir()
 

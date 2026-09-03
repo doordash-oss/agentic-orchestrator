@@ -31,6 +31,10 @@ func TestDetectResumeRejectionProviderPatterns(t *testing.T) {
 		{name: "claude", provider: "claude", detail: "Error: No conversation found for session abc"},
 		{name: "codex", provider: "codex", detail: `thread/resume JSON-RPC error: thread not found`},
 		{name: "opencode", provider: "opencode", detail: "opencode session/load failed: session not found"},
+		// The repo's own generated failure string carries no guaranteed
+		// second keyword: "session/load" alone must establish the rejection
+		// so the fresh-session fallback still dispatches.
+		{name: "opencode keywordless rpc detail", provider: "opencode", detail: `opencode session/load failed for session "ses_x": Unknown session`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -109,6 +113,13 @@ func TestDetectResumeStartRejection(t *testing.T) {
 			name:     "opencode handshake rejection",
 			provider: "opencode",
 			err:      errors.New("session/load failed: session expired"),
+			elapsed:  time.Second,
+			want:     true,
+		},
+		{
+			name:     "opencode handshake rejection without keyword",
+			provider: "opencode",
+			err:      errors.New(`opencode session/load failed for session "ses_x": Unknown session`),
 			elapsed:  time.Second,
 			want:     true,
 		},

@@ -78,6 +78,12 @@ type BoundedHelperConfig struct {
 	ContractPhase feature.Phase
 	ContractRole  Role
 	ParentSpanCtx observe.SpanContext
+	// RouteUserInput pauses the helper instead of failing when the session
+	// asks the user a question or surfaces an unhandled permission request:
+	// the live session keeps waiting while the desktop answers the pending
+	// control request through the session's control surface. Helpers without
+	// a user surface keep the fail-fast default.
+	RouteUserInput bool
 	// Child-resume fields pair with the completion-receipt commit path: a
 	// bounded helper can resume a child session and still commit its outcome
 	// receipt through CompletionDir.
@@ -222,6 +228,7 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		resumeCoordinator: resumeLaunch.coordinator,
 		resumeClaim:       resumeLaunch.claim,
 		resumed:           resumeLaunch.resumed,
+		routeUserInput:    cfg.RouteUserInput,
 	})
 	var rejection *resumeRejectionError
 	if errors.As(runErr, &rejection) && resumeLaunch.resumed && cfg.freshFallbackNumber == 0 {
@@ -259,6 +266,10 @@ type boundedHelperRunConfig struct {
 	resumeCoordinator *ResumeCoordinator
 	resumeClaim       *ResumeClaim
 	resumed           bool
+	// routeUserInput keeps the session alive on user questions and unhandled
+	// permission requests so the desktop can answer them, instead of failing
+	// the helper run.
+	routeUserInput bool
 }
 
 func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedHelperRunConfig) (*BoundedHelperResult, error) {
@@ -478,6 +489,14 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			if msg.ControlRequest == nil {
 				continue
 			}
+			if cfg.routeUserInput {
+				// Pause: the live session waits on the pending control request
+				// (question or permission) while the desktop answers it through
+				// the session's control surface. The statusCh arm below picks
+				// the turn back up once the CLI resumes; if the process dies
+				// instead, the Done arm finalizes.
+				continue
+			}
 			if msg.ControlRequest.Request.ToolName == "AskUserQuestion" {
 				result := boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusAskedUser)
 				return finish(result, fmt.Errorf("running %s: helper asked for user input", label))
@@ -492,6 +511,13 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 				continue
 			}
 			awaitingBackgroundTasks = false
+			if cfg.routeUserInput && disposition == llm.TurnAwaitingUser {
+				// The helper's turn ended on a pending user question: keep the
+				// session alive and keep waiting rather than failing the run.
+				// A process exit while the question is pending is caught by
+				// the Done arm below.
+				continue
+			}
 			if cfg.completionDir != "" && disposition == llm.TurnTruncated && autoResumeAttempts < maxAutoResumeAttempts {
 				autoResumeAttempts++
 				if err := sess.SendUserMessage(autoResumeMessage); err == nil {

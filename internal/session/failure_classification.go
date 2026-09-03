@@ -48,26 +48,30 @@ type FailureClassification struct {
 }
 
 // ClassifyFailure maps a failed session's normalized provider signals to a
-// recovery tier. Unknown provider text is permanent; a death without provider
-// error text is transient.
+// recovery tier. A death without provider error text — and text that matches
+// no recognized vocabulary — is transient: the pre-classification crash-resume
+// path guaranteed a continuation, and false permanence costs a full phase
+// restart where a cheap retry would have recovered. Only recognized
+// authentication/refusal signals and provider-structured budget/limit errors
+// are permanent or budget-exhausted.
 func ClassifyFailure(sess ports.SessionView) FailureClassification {
 	if sess == nil {
 		return permanentFailure("missing failed session")
 	}
 	result := sess.Cost()
+	text := failureProviderText(sess, result)
 	hint := failureRetryHint(sess)
-	if hint > maxProviderRetryHint {
-		return FailureClassification{
-			Tier:   BudgetExhausted,
-			Reason: "provider retry hint exceeds the automatic recovery ceiling",
-		}
+	if hint > maxProviderRetryHint && !textConfirmsRateLimit(text) {
+		// A long hint the failure text does not corroborate (e.g. a tail-end
+		// quota snapshot) is not a wait instruction; drop it so the failure
+		// falls back to the normal backoff instead of parking for hours.
+		hint = 0
 	}
 	if result != nil && result.Failure != nil && result.Failure.Watchdog {
 		return transientFailure(hint, "provider session watchdog detected a stall")
 	}
 
 	provider := strings.ToLower(strings.TrimSpace(sess.ProviderName()))
-	text := failureProviderText(sess, result)
 	metadata := failureMetadata(result)
 	if result != nil {
 		switch provider {
@@ -108,12 +112,15 @@ func ClassifyFailure(sess ports.SessionView) FailureClassification {
 		return transientFailure(hint, "provider process ended without error text")
 	}
 	if textIsTransient(text) {
+		if hint > maxProviderRetryHint && textConfirmsRateLimit(text) {
+			return budgetFailure("provider rate/quota window will not reset soon enough for automatic recovery")
+		}
 		return transientFailure(hint, "provider reported a transient service failure")
 	}
 	if textIsPermanent(text) {
 		return permanentFailure("provider reported a permanent authentication or refusal failure")
 	}
-	return permanentFailure("provider reported an unrecognized error")
+	return transientFailure(hint, "provider reported an unrecognized error")
 }
 
 func failureMetadata(result *llm.ResultMessage) llm.FailureMetadata {
@@ -135,21 +142,52 @@ func failureProviderText(sess ports.SessionView, result *llm.ResultMessage) stri
 	return strings.ToLower(strings.TrimSpace(strings.Join(parts, "\n")))
 }
 
+// failureRetryHint derives the provider's retry hint from the failed turn's
+// tail. A rate-limit entry only counts while nothing productive happened
+// after it: the session kept working past the message, the limit was not
+// actually blocking. Routine quota snapshots (e.g. Codex account/rateLimits
+// updates whose RetryMS is the time until the quota window resets — often
+// hours) are thereby excluded once any later activity supersedes them, so a
+// stale snapshot cannot reclassify an unrelated crash as budget exhaustion.
 func failureRetryHint(sess ports.SessionView) time.Duration {
 	if sess == nil || sess.MessageLog() == nil {
 		return 0
 	}
 	var hint time.Duration
-	for _, msg := range sess.MessageLog().Messages() {
-		if msg.RateLimit == nil || msg.RateLimit.RetryMS <= 0 {
+	superseded := false
+	messages := sess.MessageLog().Messages()
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.RateLimit != nil && msg.RateLimit.RetryMS > 0 {
+			if !superseded {
+				if candidate := time.Duration(msg.RateLimit.RetryMS * float64(time.Millisecond)); candidate > hint {
+					hint = candidate
+				}
+			}
 			continue
 		}
-		candidate := time.Duration(msg.RateLimit.RetryMS * float64(time.Millisecond))
-		if candidate > hint {
-			hint = candidate
+		if messageShowsProductiveActivity(msg) {
+			superseded = true
 		}
 	}
 	return hint
+}
+
+// messageShowsProductiveActivity reports whether a log entry demonstrates the
+// session was still working (and therefore not blocked on a rate limit).
+// Terminal failure results are excluded: they are the crash being classified,
+// not evidence the limit was stale.
+func messageShowsProductiveActivity(msg llm.SDKMessage) bool {
+	if msg.Result != nil && !msg.Result.IsSuccess() {
+		return false
+	}
+	return msg.Assistant != nil ||
+		msg.Result != nil ||
+		msg.ToolProgress != nil ||
+		msg.TaskStarted != nil ||
+		msg.TaskProgress != nil ||
+		len(msg.FileReads) > 0 ||
+		len(msg.FileChanges) > 0
 }
 
 func textIsTransient(text string) bool {
@@ -157,7 +195,21 @@ func textIsTransient(text string) bool {
 		"rate limit", "overloaded", "temporarily unavailable", "timeout",
 		"timed out", "network", "connection reset", "connection refused",
 		"gateway", "service unavailable",
+		// errno-style transport failures as providers spell them
+		// (e.g. "read ECONNRESET"), kept in sync with the bounded-helper
+		// retry vocabulary in internal/agent.
+		"econnreset", "econnrefused", "econnaborted", "epipe",
+		"enotfound", "eai_again", "etimedout",
+		"unable to connect to api", "socket hang up",
 	) || transientHTTPStatus.MatchString(text)
+}
+
+// textConfirmsRateLimit reports whether the failure text itself describes a
+// rate/quota limit. Only then may a long retry hint upgrade a transient
+// failure to BudgetExhausted; a hint alone — which may come from a routine
+// quota snapshot — never can.
+func textConfirmsRateLimit(text string) bool {
+	return containsFragment(text, "rate limit", "quota", "usage limit", "rate_limit")
 }
 
 func textIsPermanent(text string) bool {

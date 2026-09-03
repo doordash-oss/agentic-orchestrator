@@ -882,7 +882,11 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						},
 						FreshFallback: func(_ AutoResumeProcess, _ string, ordinal int) (AutoResumeAttempt, error) {
 							freshSessionID := fmt.Sprintf("%s-fresh-%02d", baseSessionID, ordinal)
-							freshSess, freshOpts, err := resumeCoordinator.DispatchFreshAfterRejection(cfg, sm, implBuildOpts, freshSessionID, i, permRepoName)
+							// freshBuildOpts is the pre-resume snapshot: implBuildOpts
+							// carries the resume-continuation prompt (and possibly the
+							// stale ResumeSessionID), which would launch the fresh
+							// session claiming to continue a conversation it never had.
+							freshSess, freshOpts, err := resumeCoordinator.DispatchFreshAfterRejection(cfg, sm, freshBuildOpts, freshSessionID, i, permRepoName)
 							if err != nil {
 								return AutoResumeAttempt{}, err
 							}

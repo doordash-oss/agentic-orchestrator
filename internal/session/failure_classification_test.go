@@ -73,6 +73,31 @@ func TestClassifyFailureProviderSignals(t *testing.T) {
 			wantTier: BudgetExhausted,
 		},
 		{
+			name:     "stale rate limit snapshot ignored when work followed it",
+			provider: "codex",
+			result:   failureResult("error", "an unfamiliar provider failure"),
+			messages: []llm.SDKMessage{
+				rateLimitMessage(6 * time.Hour),
+				assistantTextMessage("still working on the refactor"),
+			},
+			wantTier: TransientRetryable,
+			wantHint: 0,
+		},
+		{
+			name:     "uncorroborated tail rate limit hint dropped",
+			provider: "codex",
+			result:   failureResult("error", "an unfamiliar provider failure"),
+			messages: []llm.SDKMessage{rateLimitMessage(6 * time.Hour)},
+			wantTier: TransientRetryable,
+			wantHint: 0,
+		},
+		{
+			name:     "codex econnreset errno text",
+			provider: "codex",
+			result:   failureResult("error", "read ECONNRESET"),
+			wantTier: TransientRetryable,
+		},
+		{
 			name:     "opencode retryable",
 			provider: "opencode",
 			result:   failureResultWithMetadata("error", "backend unavailable", &llm.FailureMetadata{Retryable: &retryable}),
@@ -102,7 +127,11 @@ func TestClassifyFailureProviderSignals(t *testing.T) {
 			result:   failureResultWithMetadata("error", "opaque watchdog text", &llm.FailureMetadata{Watchdog: true}),
 			wantTier: TransientRetryable,
 		},
-		{name: "unknown provider text", provider: "claude", result: failureResult("error", "an unfamiliar provider failure"), wantTier: Permanent},
+		// Unrecognized non-empty provider text must stay transient: the
+		// pre-classification crash-resume path guaranteed one continuation,
+		// and defaulting to permanent starved common mid-turn crashes of any
+		// resume attempt.
+		{name: "unknown provider text", provider: "claude", result: failureResult("error", "an unfamiliar provider failure"), wantTier: TransientRetryable},
 		{name: "absence of provider text", provider: "codex", wantTier: TransientRetryable},
 	}
 
@@ -146,6 +175,19 @@ func rateLimitMessage(hint time.Duration) llm.SDKMessage {
 		RateLimit: &llm.RateLimitMessage{
 			Type:    "rate_limit",
 			RetryMS: float64(hint.Milliseconds()),
+		},
+	}
+}
+
+func assistantTextMessage(text string) llm.SDKMessage {
+	return llm.SDKMessage{
+		Type: "assistant",
+		Assistant: &llm.AssistantMessage{
+			Type: "assistant",
+			Message: llm.ConversationMsg{
+				Role:    "assistant",
+				Content: []llm.ContentBlock{{Type: "text", Text: text}},
+			},
 		},
 	}
 }

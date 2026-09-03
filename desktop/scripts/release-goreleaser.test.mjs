@@ -24,13 +24,15 @@ import { goreleaserArguments, runGoreleaserRelease } from './release-goreleaser.
 
 describe('GoReleaser release wrapper', () => {
   it('uses only the fixed release command when no notes file is supplied', () => {
-    expect(goreleaserArguments()).toEqual(['release', '--clean']);
+    expect(goreleaserArguments()).toEqual(['release', '--clean', '--timeout', '6h']);
   });
 
   it('passes a notes file as one argument rather than accepting arbitrary flags', () => {
     expect(goreleaserArguments('/tmp/release notes.md')).toEqual([
       'release',
       '--clean',
+      '--timeout',
+      '6h',
       '--release-notes',
       '/tmp/release notes.md',
     ]);
@@ -61,7 +63,7 @@ describe('GoReleaser release wrapper', () => {
     expect(calls).toEqual([
       {
         command: 'goreleaser',
-        args: ['release', '--clean', '--release-notes', '/tmp/notes.md'],
+        args: ['release', '--clean', '--timeout', '6h', '--release-notes', '/tmp/notes.md'],
         options: expect.objectContaining({
           cwd: '/release/workspace',
           env: expect.objectContaining({ GOWORK: 'off', GOFLAGS: '-mod=readonly' }),
@@ -162,7 +164,12 @@ writeFileSync(process.argv[2], JSON.stringify(args));
         cwd: root,
         env: { ...process.env, AGENTICO_RELEASE_NOTES_FILE: '/ambient/poison.md' },
       });
-      expect(JSON.parse(readFileSync(output, 'utf8'))).toEqual(['release', '--clean']);
+      expect(JSON.parse(readFileSync(output, 'utf8'))).toEqual([
+        'release',
+        '--clean',
+        '--timeout',
+        '6h',
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

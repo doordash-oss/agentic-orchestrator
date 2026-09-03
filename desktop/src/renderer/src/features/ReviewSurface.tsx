@@ -1,12 +1,46 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { useEffect, useState } from 'react';
 import { DEFAULT_RUNTIME_ID } from '../../../shared/ipc';
-import type { ReviewDraftKey, ReviewSession, ReviewValidation } from '../../../shared/ipc';
+import type {
+  CanonicalError,
+  ReviewDraftKey,
+  ReviewSession,
+  ReviewValidation,
+} from '../../../shared/ipc';
 import { MonacoBuffer, MonacoDiff, useResolvedTheme } from '../components/monaco';
+import { ErrorSurface } from '../components/ErrorSurface';
+import { FieldError } from '../components/FieldError';
 import { useConnectionState, useMediaQuery } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import { renderSanitizedMarkdown } from './sanitizedMarkdown';
 
 type View = 'edit' | 'preview' | 'split';
+
+/**
+ * The single notice slot's two branches: plain progress/success text, or a
+ * failure rendered as a compact ErrorSurface fed by a canonical error (with
+ * an optional caption naming which operation failed). One slot, one visible
+ * message at a time.
+ */
+interface NoticeFailure {
+  error: CanonicalError;
+  caption?: string;
+}
 
 interface ReconcileState {
   current: ReviewSession;
@@ -48,6 +82,7 @@ export function ReviewSurface({
   const [view, setView] = useState<View>('edit');
   const [validation, setValidation] = useState<ReviewValidation | null>(null);
   const [notice, setNotice] = useState('Loading review…');
+  const [noticeError, setNoticeError] = useState<NoticeFailure | null>(null);
   const [busy, setBusy] = useState(false);
   const [recovered, setRecovered] = useState(false);
   const [recoveredKey, setRecoveredKey] = useState<ReviewDraftKey | null>(null);
@@ -56,6 +91,25 @@ export function ReviewSurface({
   const connection = useConnectionState();
   const theme = useResolvedTheme();
   const [editorKey, setEditorKey] = useState(0);
+
+  const setStatus = (text: string): void => {
+    setNoticeError(null);
+    setNotice(text);
+  };
+  const setFailure = (error: CanonicalError, caption?: string): void => {
+    setNotice('');
+    setNoticeError(caption === undefined ? { error } : { error, caption });
+  };
+  const noticeSlot =
+    noticeError !== null ? (
+      <ErrorSurface
+        error={noticeError.error}
+        variant="compact"
+        {...(noticeError.caption === undefined ? {} : { caption: noticeError.caption })}
+      />
+    ) : (
+      <p role="status">{notice}</p>
+    );
 
   useEffect(() => {
     if (isNarrow && view === 'split') setView('edit');
@@ -82,7 +136,7 @@ export function ReviewSurface({
         setBaseText(next.text);
         if (local === null) {
           setText(next.text);
-          setNotice('Server draft loaded.');
+          setStatus('Server draft loaded.');
           return;
         }
         const recoveredDraftKey = {
@@ -95,7 +149,7 @@ export function ReviewSurface({
           setText(local.text);
           setRecovered(true);
           setRecoveredKey(recoveredDraftKey);
-          setNotice('Recovered draft needs reconciliation with a newer server draft.');
+          setStatus('Recovered draft needs reconciliation with a newer server draft.');
           setReconcile({
             current: next,
             localText: local.text,
@@ -107,9 +161,11 @@ export function ReviewSurface({
         setText(local.text);
         setRecovered(true);
         setRecoveredKey(recoveredDraftKey);
-        setNotice('Recovered unsaved draft loaded.');
+        setStatus('Recovered unsaved draft loaded.');
       })
-      .catch((error: unknown) => alive && setNotice(parseIpcError(error).message));
+      .catch((error: unknown) => {
+        if (alive) setFailure(parseIpcError(error));
+      });
     return () => {
       alive = false;
     };
@@ -139,9 +195,11 @@ export function ReviewSurface({
     if (session === null || !dirty || reconcile !== null) return;
     const key = reviewKey(runtimeId, session);
     const timer = window.setTimeout(() => {
-      void window.agentico
-        .saveLocalReviewDraft({ ...key, text })
-        .catch(() => setNotice('Local recovery copy could not be saved.'));
+      void window.agentico.saveLocalReviewDraft({ ...key, text }).catch((error: unknown) =>
+        // A local recovery-copy failure: a desktop-local canonical, with the
+        // old lead as the caption naming what was lost.
+        setFailure(parseIpcError(error), 'Local recovery copy could not be saved.'),
+      );
     }, 350);
     return () => window.clearTimeout(timer);
   }, [dirty, reconcile, runtimeId, session, text]);
@@ -153,7 +211,7 @@ export function ReviewSurface({
   ) => {
     if (session === null) return;
     setBusy(true);
-    setNotice('Loading the current server draft…');
+    setStatus('Loading the current server draft…');
     try {
       const current = await window.agentico.readReview({ featureId });
       setReconcile({
@@ -162,9 +220,9 @@ export function ReviewSurface({
         baseText: baseOverride !== undefined ? baseOverride : baseText,
         localKey,
       });
-      setNotice('Choose how to reconcile the two drafts. Nothing has been written.');
+      setStatus('Choose how to reconcile the two drafts. Nothing has been written.');
     } catch (error) {
-      setNotice(`Could not load the current draft — ${parseIpcError(error).message}`);
+      setFailure(parseIpcError(error), 'Could not load the current draft');
     } finally {
       setBusy(false);
     }
@@ -179,7 +237,7 @@ export function ReviewSurface({
   const save = async () => {
     if (session === null || busy) return;
     setBusy(true);
-    setNotice('Saving draft…');
+    setStatus('Saving draft…');
     try {
       const result = await window.agentico.saveReview({
         featureId,
@@ -195,14 +253,17 @@ export function ReviewSurface({
       setBaseText(result.session.text);
       setText(result.session.text);
       setEditorKey((k) => k + 1);
-      setNotice('Saved to the server.');
+      setStatus('Saved to the server.');
       try {
         await discardLocal(reviewKey(runtimeId, session));
-      } catch {
-        setNotice('Saved, but the local recovery copy could not be removed.');
+      } catch (error) {
+        setFailure(
+          parseIpcError(error),
+          'Saved, but the local recovery copy could not be removed.',
+        );
       }
     } catch (error) {
-      setNotice(`Save failed — ${parseIpcError(error).message}`);
+      setFailure(parseIpcError(error), 'Save failed');
     } finally {
       setBusy(false);
     }
@@ -223,7 +284,7 @@ export function ReviewSurface({
   if (session === null)
     return (
       <section className="review-surface" aria-label="Review editor">
-        <p role="status">{notice}</p>
+        {noticeSlot}
       </section>
     );
   const proceedBlocked =
@@ -246,7 +307,7 @@ export function ReviewSurface({
   const decide = async (decision: 'proceed' | 'iterate') => {
     if (busy) return;
     setBusy(true);
-    setNotice(decision === 'proceed' ? 'Approving review…' : 'Sending back for iteration…');
+    setStatus(decision === 'proceed' ? 'Approving review…' : 'Sending back for iteration…');
     try {
       const result = await window.agentico.decideReview({
         featureId,
@@ -258,7 +319,7 @@ export function ReviewSurface({
         await startReconcile(text, reviewKey(runtimeId, session));
         return;
       }
-      setNotice(result.result);
+      setStatus(result.result);
       try {
         await discardLocal(reviewKey(runtimeId, session));
       } catch {
@@ -266,7 +327,7 @@ export function ReviewSurface({
       }
       await onResolved();
     } catch (error) {
-      setNotice(`Decision failed — ${parseIpcError(error).message}`);
+      setFailure(parseIpcError(error), 'Decision failed');
     } finally {
       setBusy(false);
     }
@@ -277,7 +338,7 @@ export function ReviewSurface({
       try {
         await window.agentico.discardLocalReviewDraft(reconcile.localKey);
       } catch (error) {
-        setNotice(`Could not discard the local draft — ${parseIpcError(error).message}`);
+        setFailure(parseIpcError(error), 'Could not discard the local draft');
         return;
       }
       setRecovered(false);
@@ -286,13 +347,13 @@ export function ReviewSurface({
       setText(reconcile.current.text);
       setBaseText(reconcile.current.text);
       setReconcile(null);
-      setNotice('Using the current server draft.');
+      setStatus('Using the current server draft.');
     };
     const continueEditing = async () => {
       try {
         await window.agentico.discardLocalReviewDraft(reconcile.localKey);
       } catch (error) {
-        setNotice(`Could not discard the old draft — ${parseIpcError(error).message}`);
+        setFailure(parseIpcError(error), 'Could not discard the old draft');
         return;
       }
       setRecovered(true);
@@ -301,7 +362,7 @@ export function ReviewSurface({
       setBaseText(reconcile.current.text);
       setText(reconcile.localText);
       setReconcile(null);
-      setNotice('Your local text is ready to edit against the current server revision.');
+      setStatus('Your local text is ready to edit against the current server revision.');
     };
     const replaceServer = async () => {
       setBusy(true);
@@ -320,14 +381,17 @@ export function ReviewSurface({
         setBaseText(result.session.text);
         setText(result.session.text);
         setReconcile(null);
-        setNotice('Your local draft replaced the server draft.');
+        setStatus('Your local draft replaced the server draft.');
         try {
           await discardLocal(reconcile.localKey);
-        } catch {
-          setNotice('Replaced the server draft, but the local recovery copy could not be removed.');
+        } catch (error) {
+          setFailure(
+            parseIpcError(error),
+            'Replaced the server draft, but the local recovery copy could not be removed.',
+          );
         }
       } catch (error) {
-        setNotice(`Could not replace the server draft — ${parseIpcError(error).message}`);
+        setFailure(parseIpcError(error), 'Could not replace the server draft');
       } finally {
         setBusy(false);
       }
@@ -367,7 +431,7 @@ export function ReviewSurface({
           </p>
         )}
         <footer className="review-surface__footer">
-          <p role="status">{notice}</p>
+          {noticeSlot}
           <div>
             <button
               type="button"
@@ -376,11 +440,14 @@ export function ReviewSurface({
                   reconcile.baseText === null &&
                   reconcile.localKey.baseDraftRevision !== reconcile.current.draftRevision
                 ) {
-                  void window.agentico.discardLocalReviewDraft(reconcile.localKey).catch(() => {
-                    setNotice(
-                      'Could not remove the orphaned local draft — it may reappear on reopen.',
+                  void window.agentico
+                    .discardLocalReviewDraft(reconcile.localKey)
+                    .catch((error: unknown) =>
+                      setFailure(
+                        parseIpcError(error),
+                        'Could not remove the orphaned local draft — it may reappear on reopen.',
+                      ),
                     );
-                  });
                   setRecoveredKey(reviewKey(runtimeId, reconcile.current));
                 }
                 setReconcile(null);
@@ -457,7 +524,7 @@ export function ReviewSurface({
                 void discardLocal(recoveredKey ?? reviewKey(runtimeId, session)).then(() => {
                   setText(baseText);
                   setEditorKey((k) => k + 1);
-                  setNotice('Recovered local draft discarded.');
+                  setStatus('Recovered local draft discarded.');
                 })
               }
             >
@@ -493,14 +560,18 @@ export function ReviewSurface({
         </div>
       )}
       {validation?.applicable && !validation.valid ? (
-        <ul className="review-surface__findings" aria-label="Validation findings">
+        // Per-finding FieldError elements; the editor is the finding's host
+        // surface (Monaco owns focus, so no live-region role here).
+        <ul aria-label="Validation findings">
           {validation.findings.map((finding) => (
-            <li key={finding.code}>{finding.message}</li>
+            <li key={finding.code}>
+              <FieldError id={`review-finding-${finding.code}`} message={finding.message} />
+            </li>
           ))}
         </ul>
       ) : null}
       <footer className="review-surface__footer">
-        <p role="status">{notice}</p>
+        {noticeSlot}
         <div className="review-surface__decisions">
           <div className="review-surface__decision">
             <button

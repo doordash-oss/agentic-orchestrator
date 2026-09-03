@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { describe, expect, it } from 'vitest';
 import {
   DESKTOP_SCHEMA_VERSION,
@@ -33,7 +49,7 @@ describe('evaluateCompatibility', () => {
       const verdict = evaluateCompatibility(missing);
       expect(verdict.compatible).toBe(false);
       if (!verdict.compatible) {
-        expect(verdict.reason).toMatch(/declare/i);
+        expect(verdict.code).toBe('missing_contract');
       }
     }
   });
@@ -47,7 +63,7 @@ describe('evaluateCompatibility', () => {
     const verdict = evaluateCompatibility(declaration({ schema_version: 999 }));
     expect(verdict.compatible).toBe(false);
     if (!verdict.compatible) {
-      expect(verdict.reason).toMatch(/schema/i);
+      expect(verdict).toMatchObject({ code: 'unsupported_schema', schemaVersion: '999' });
     }
   });
 
@@ -62,7 +78,11 @@ describe('evaluateCompatibility', () => {
     );
     expect(verdict.compatible).toBe(false);
     if (!verdict.compatible) {
-      expect(verdict.reason).toMatch(/desktop/i);
+      expect(verdict).toMatchObject({
+        code: 'newer_client_schema_required',
+        schemaVersion: String(DESKTOP_SCHEMA_VERSION + 1),
+        clientSchemaVersion: String(DESKTOP_SCHEMA_VERSION),
+      });
     }
   });
 
@@ -79,7 +99,7 @@ describe('evaluateCompatibility', () => {
       const verdict = evaluateCompatibility(declaration({ runtime_policy: policy }));
       expect(verdict.compatible).toBe(false);
       if (!verdict.compatible) {
-        expect(verdict.reason).toMatch(/polic/i);
+        expect(verdict.code).toBe('unsupported_runtime_policy');
       }
     }
   });

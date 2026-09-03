@@ -1,23 +1,37 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Shared narrow client for the authoritative server's authenticated REST
  * surface. Main-process services route every request through here so the
  * success check, structured-error parsing, redaction, and fail-closed
  * fallback stay identical across services instead of drifting per call site.
- * Services stay in charge of their own domain vocabulary: each supplies its
- * remedy-by-code table (and whether 409 `not_ready` target issues fold into
- * the remediation).
+ * A canonical server error crosses unchanged (the catalog owns its human
+ * text); anything else degrades to the desktop catalog's transport error.
  */
 import { randomUUID } from 'node:crypto';
 import {
+  buildCanonicalError,
+  CanonicalErrorException,
   redactText,
   requiresLocalServerError,
-  SafeErrorException,
-  safeError,
-  toSafeError,
+  toCanonicalError,
 } from '../shared/errors';
 import {
-  ServerErrorResponseSchema,
-  ServerErrorWithIssuesSchema,
+  CanonicalErrorResponseSchema,
   SessionDetailResponseSchema,
   SessionListResponseSchema,
   SessionOutputChunkSchema,
@@ -60,36 +74,24 @@ export interface ServerTransport {
   openSessionOutputStream?(sessionId: string, options?: { from?: number }): Promise<SseStream>;
 }
 
-/** How a service maps structured server rejections to safe errors. */
-export interface ServerErrorMapping {
-  /** Concrete, safe next steps per structured server error code. */
-  remedyByCode: Readonly<Record<string, string>>;
-  /**
-   * When true, error bodies are parsed with the `target.issues` extension
-   * (409 `not_ready` rejections) and the redacted issue messages are folded
-   * into the remediation so the caller can show why. When false, `target`
-   * payloads are ignored entirely.
-   */
-  foldTargetIssues?: boolean;
-}
-
 /**
  * Performs one authenticated request and returns the raw success body for
- * the caller to schema-validate. Non-2xx responses throw the mapped
- * SafeErrorException; nothing from the wire crosses unredacted.
+ * the caller to schema-validate. Non-2xx responses throw a
+ * CanonicalErrorException — either the server's catalog-rendered error
+ * (passed through unchanged) or the desktop catalog's transport error;
+ * nothing from the wire crosses unredacted.
  */
 export async function serverRequest(
   transport: ServerTransport,
   path: string,
   init: ApiRequestInit | undefined,
-  mapping: ServerErrorMapping,
 ): Promise<unknown> {
   const result = await transport.apiRequest(path, init);
   if (result.status >= 200 && result.status < 300) {
     assertSafeParsedPayload(result.body);
     return result.body;
   }
-  throw mapServerError(result, mapping);
+  throw mapServerError(result);
 }
 
 /** Applies byte, pollution, and API-version gates to already-decoded JSON. */
@@ -102,17 +104,6 @@ function assertSafeParsedPayload(body: unknown): void {
     assertCompatibleApiVersion(typeof version === 'string' ? version : '');
   }
 }
-
-const SESSION_REMEDIES: Readonly<Record<string, string>> = {
-  not_found: 'The session no longer exists. Refresh the feature to find its current session.',
-  conflict: 'Refresh the feature and session snapshots, then retry.',
-};
-
-const CHAT_REMEDIES: Readonly<Record<string, string>> = {
-  bad_request: 'Enter a bounded message and retry.',
-  conflict: 'Refresh the AMA transcript, then retry.',
-  not_found: 'The AMA session is no longer active. Refresh before retrying.',
-};
 
 export class SessionService {
   private readonly subscriptions = new Map<
@@ -173,23 +164,34 @@ export class SessionService {
     const remote = this.locality() === 'remote';
     if (remote && (input.images?.length ?? 0) > 0) {
       // A locally shaped path remotely is a stale draft: fail, never leak.
-      throw new SafeErrorException(requiresLocalServerError());
+      throw new CanonicalErrorException(requiresLocalServerError());
     }
-    const response = await serverRequest(
-      this.transport,
-      '/api/v1/prompts/chat/start',
-      {
-        method: 'POST',
-        body: {
-          message: input.message,
-          images: input.images ?? [],
-          ...(remote && (input.imageUploads?.length ?? 0) > 0
-            ? { image_uploads: input.imageUploads }
-            : {}),
-        },
-      } as ApiRequestInit,
-      { remedyByCode: CHAT_REMEDIES },
-    );
+    const { context } = input;
+    const response = await serverRequest(this.transport, '/api/v1/prompts/chat/start', {
+      method: 'POST',
+      body: {
+        message: input.message,
+        images: input.images ?? [],
+        ...(remote && (input.imageUploads?.length ?? 0) > 0
+          ? { image_uploads: input.imageUploads }
+          : {}),
+        // The server rejects unknown fields and empty-string keys, so only
+        // the fields the reference actually carries cross the wire.
+        ...(context === undefined
+          ? {}
+          : {
+              context: {
+                scope: context.scope,
+                code: context.code,
+                ...(context.featureId === undefined ? {} : { feature_id: context.featureId }),
+                ...(context.repository === undefined ? {} : { repository: context.repository }),
+                ...(context.taskKey === undefined ? {} : { task_key: context.taskKey }),
+                ...(context.snapshotId === undefined ? {} : { snapshot_id: context.snapshotId }),
+                ...(context.key === undefined ? {} : { key: context.key }),
+              },
+            }),
+      },
+    } as ApiRequestInit);
     const raw = response as { session_id?: unknown; result?: unknown };
     return validateWithSchema(
       {
@@ -201,12 +203,10 @@ export class SessionService {
   }
 
   async endChat(): Promise<ChatActionResult> {
-    const response = await serverRequest(
-      this.transport,
-      '/api/v1/prompts/chat/end',
-      { method: 'POST', body: {} } as ApiRequestInit,
-      { remedyByCode: CHAT_REMEDIES },
-    );
+    const response = await serverRequest(this.transport, '/api/v1/prompts/chat/end', {
+      method: 'POST',
+      body: {},
+    } as ApiRequestInit);
     const raw = response as { session_id?: unknown; result?: unknown };
     return validateWithSchema(
       {
@@ -252,9 +252,7 @@ export class SessionService {
     try {
       const openStream = this.transport.openSessionOutputStream;
       if (openStream === undefined) {
-        throw new SafeErrorException(
-          safeError('E_SSE_UNAVAILABLE', 'This build has no session output transport wired.'),
-        );
+        throw new CanonicalErrorException(buildCanonicalError('E_SSE_UNAVAILABLE'));
       }
       const stream = await openStream.call(this.transport, input.sessionId, {
         ...(input.from === undefined ? {} : { from: input.from }),
@@ -262,8 +260,10 @@ export class SessionService {
       state.stream = stream;
       if (state.cancelled) return;
       if (stream.status !== 200) {
-        throw new SafeErrorException(
-          safeError(`E_HTTP_${stream.status}`, 'The runtime rejected the session output stream.'),
+        throw new CanonicalErrorException(
+          buildCanonicalError('E_SESSION_STREAM_REJECTED', {
+            params: { status: String(stream.status) },
+          }),
         );
       }
       const assembler = new SseBlockAssembler();
@@ -299,7 +299,7 @@ export class SessionService {
                 subscriptionId,
                 type: 'error',
                 sessionId: input.sessionId,
-                error: toSafeError(error, 'E_SESSION_STREAM'),
+                error: toCanonicalError(error, 'E_SESSION_STREAM'),
               },
               SessionOutputEventSchema,
             ),
@@ -323,7 +323,7 @@ export class SessionService {
   }
 
   private api(path: string): Promise<unknown> {
-    return serverRequest(this.transport, path, undefined, { remedyByCode: SESSION_REMEDIES });
+    return serverRequest(this.transport, path, undefined);
   }
 }
 
@@ -334,21 +334,17 @@ export type ParsedSessionOutput =
 /** Parses one bounded, versioned session-output SSE block. */
 export function parseSessionOutputBlock(block: SseBlock): ParsedSessionOutput {
   if (!['session.output', 'session.output.done'].includes(block.event)) {
-    throw new SafeErrorException(safeError('E_STREAM_PROTOCOL', 'Unknown session output event.'));
+    throw new CanonicalErrorException(buildCanonicalError('E_STREAM_PROTOCOL_UNKNOWN_EVENT'));
   }
   const chunk = parseServerJson(block.data, SessionOutputChunkSchema, 2 * 1024 * 1024);
   if (chunk.session_id === undefined || chunk.session_id === '') {
-    throw new SafeErrorException(
-      safeError('E_STREAM_PROTOCOL', 'Session output omitted its session ID.'),
-    );
+    throw new CanonicalErrorException(buildCanonicalError('E_STREAM_PROTOCOL_MISSING_SESSION_ID'));
   }
   if (block.event === 'session.output.done' || chunk.done === true) {
     return { type: 'done', sessionId: chunk.session_id, nextIndex: chunk.index };
   }
   if (chunk.message === undefined || chunk.message.index !== chunk.index) {
-    throw new SafeErrorException(
-      safeError('E_STREAM_PROTOCOL', 'Session output row cursor did not match its message.'),
-    );
+    throw new CanonicalErrorException(buildCanonicalError('E_STREAM_PROTOCOL_CURSOR_MISMATCH'));
   }
   return {
     type: 'record',
@@ -419,7 +415,6 @@ function toSessionDetail(session: ServerSessionDetail): SessionDetail {
       ...(session.initial_prompt === undefined ? {} : { initialPrompt: session.initial_prompt }),
       canAttach: session.can_attach,
       logAvailable: session.log_available,
-      ...(session.safe_error === undefined ? {} : { safeError: redactText(session.safe_error) }),
     },
     SessionDetailSchema,
   );
@@ -506,54 +501,27 @@ export function toTranscriptMessage(message: ServerTranscriptMessage): Transcrip
   };
 }
 
-/** Maps a structured server error body into a SafeError, failing closed. */
-export function mapServerError(
-  result: HttpResult,
-  mapping: ServerErrorMapping,
-): SafeErrorException {
-  if (mapping.foldTargetIssues === true) {
-    const parsed = ServerErrorWithIssuesSchema.safeParse(result.body);
-    if (parsed.success) {
-      const { code, message, target } = parsed.data.error;
-      const issues = target?.issues ?? [];
-      const issueText = issues.map((issue) => redactText(issue.message)).join(' ');
-      const remedy =
-        issueText !== ''
-          ? `${issueText} ${mapping.remedyByCode[code] ?? ''}`.trim()
-          : mapping.remedyByCode[code];
-      const dirtyWorktrees = target?.repos?.map((repo) => ({
-        ...(repo.repo === undefined ? {} : { repo: repo.repo }),
-        ...(repo.path === undefined ? {} : { path: redactText(repo.path) }),
-        ...(repo.staged === undefined ? {} : { staged: repo.staged }),
-        ...(repo.unstaged === undefined ? {} : { unstaged: repo.unstaged }),
-        ...(repo.untracked === undefined ? {} : { untracked: repo.untracked }),
-        ...(repo.staged_total === undefined ? {} : { stagedTotal: repo.staged_total }),
-        ...(repo.unstaged_total === undefined ? {} : { unstagedTotal: repo.unstaged_total }),
-        ...(repo.untracked_total === undefined ? {} : { untrackedTotal: repo.untracked_total }),
-      }));
-      return new SafeErrorException(
-        safeError(
-          code,
-          redactText(message),
-          remedy,
-          dirtyWorktrees === undefined ? undefined : { dirtyWorktrees },
-        ),
-      );
-    }
-  } else {
-    const parsed = ServerErrorResponseSchema.safeParse(result.body);
-    if (parsed.success) {
-      const { code, message } = parsed.data.error;
-      return new SafeErrorException(
-        safeError(code, redactText(message), mapping.remedyByCode[code]),
-      );
-    }
+/**
+ * Maps a non-2xx server response. A body that parses as the canonical error
+ * envelope crosses unchanged as a CanonicalErrorException — the catalog owns
+ * its title, summary, remediation, and typed context. Anything else (or a
+ * body that fails canonical parsing) fails closed to the desktop catalog's
+ * fixed HTTP-rejection code with the status in the summary.
+ */
+export function mapServerError(result: HttpResult): CanonicalErrorException {
+  const parsed = CanonicalErrorResponseSchema.safeParse(result.body);
+  if (parsed.success) {
+    // The catalog owns every authored field, so the object crosses intact;
+    // only the raw diagnostics text is free-form server output, and it alone
+    // is redacted before crossing the IPC boundary.
+    const error = parsed.data.error;
+    const canonical =
+      error.diagnostics === undefined
+        ? error
+        : { ...error, diagnostics: redactText(error.diagnostics) };
+    return new CanonicalErrorException(canonical);
   }
-  return new SafeErrorException(
-    safeError(
-      `E_HTTP_${result.status}`,
-      'The runtime rejected the request.',
-      'Retry; if this persists, restart the runtime and check its log.',
-    ),
+  return new CanonicalErrorException(
+    buildCanonicalError('E_HTTP_REJECTED', { params: { status: String(result.status) } }),
   );
 }

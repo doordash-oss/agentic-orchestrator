@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * The renderer-side model for files staged for submission while connected to
  * a remote server. Local connections keep submitting plain paths (the
@@ -9,7 +25,12 @@
  * staged elsewhere stay visible with a "staged on another server" badge, are
  * excluded from the submission, and block it until removed.
  */
-import type { CreationFileKind, StagedUpload } from '../../../shared/ipc';
+import type {
+  CanonicalError,
+  CreationFileKind,
+  CreationFileUploadResult,
+  StagedUpload,
+} from '../../../shared/ipc';
 
 export type UploadItemState = 'uploading' | 'ready' | 'failed';
 
@@ -61,10 +82,7 @@ export function pendingUploadItems(
 export function reconcileUploadResults(
   items: readonly ComposerUploadItem[],
   pending: readonly ComposerUploadItem[],
-  results: ReadonlyArray<
-    | { ok: true; name: string; upload: StagedUpload }
-    | { ok: false; name: string; error: { message: string; remediation?: string } }
-  >,
+  results: ReadonlyArray<CreationFileUploadResult>,
 ): ComposerUploadItem[] {
   const outcomeById = new Map<string, ComposerUploadItem>();
   pending.forEach((item, index) => {
@@ -77,14 +95,17 @@ export function reconcileUploadResults(
         : {
             ...item,
             state: 'failed',
-            message:
-              result.error.remediation === undefined || result.error.remediation === ''
-                ? result.error.message
-                : `${result.error.message} ${result.error.remediation}`,
+            message: uploadFailureText(result.error),
           },
     );
   });
   return items.map((item) => outcomeById.get(item.id) ?? item);
+}
+
+/** The failed chip's text: the canonical summary, with the remediation hint appended when authored. */
+function uploadFailureText(error: CanonicalError): string {
+  const hint = error.remediation?.hint;
+  return hint === undefined || hint === '' ? error.summary : `${error.summary} ${hint}`;
 }
 
 /** Marks every pending item failed after a wholesale transport failure. */

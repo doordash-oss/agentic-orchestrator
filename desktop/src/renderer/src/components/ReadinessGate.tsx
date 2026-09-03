@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Decides what a ready connection shows: nothing but a loading state until
  * the first authoritative readiness snapshot arrives (so an already-ready
@@ -5,23 +21,14 @@
  * gate is unsatisfied, and the main view once everything passes. Mounted
  * fresh on every reconnect, so resume always starts from the server truth.
  */
-import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
-import type {
-  AttentionItem,
-  ReadinessSnapshot,
-  RoutedRequest,
-  UpdateState,
-} from '../../../shared/ipc';
+import { useCallback, type Dispatch, type SetStateAction } from 'react';
+import type { AttentionItem, RoutedRequest, UpdateState } from '../../../shared/ipc';
 import { WorkspaceShell } from '../features/WorkspaceShell';
 import type { AttentionDrafts } from '../features/AttentionInbox';
 import { deriveWizardState } from '../wizard/deriveWizardState';
-import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { retryAction, useIpcLoad } from '../hooks';
 import { SetupWizard } from './wizard/SetupWizard';
-
-type GateState =
-  | { phase: 'loading' }
-  | { phase: 'error'; error: WizardError }
-  | { phase: 'loaded'; snapshot: ReadinessSnapshot };
+import { ErrorSurface } from './ErrorSurface';
 
 export function ReadinessGate({
   attentionDrafts,
@@ -66,19 +73,8 @@ export function ReadinessGate({
   onOpenPalette?(): void;
   amaUnread?: boolean;
 }) {
-  const [state, setState] = useState<GateState>({ phase: 'loading' });
-
-  const load = useCallback(() => {
-    setState({ phase: 'loading' });
-    window.agentico
-      .getReadiness()
-      .then((snapshot) => setState({ phase: 'loaded', snapshot }))
-      .catch((err: unknown) => setState({ phase: 'error', error: parseIpcError(err) }));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const load = useCallback(() => window.agentico.getReadiness(), []);
+  const { state, reload, replace } = useIpcLoad(load, []);
 
   if (state.phase === 'loading') {
     return (
@@ -93,23 +89,16 @@ export function ReadinessGate({
   if (state.phase === 'error') {
     return (
       <section className="shell-card setup-gate" aria-label="Runtime readiness">
-        <div className="shell-card__error">
-          <div className="shell-card__error-head">
-            <span className="shell-card__error-code">{state.error.code}</span>
-          </div>
-          <p className="shell-card__error-message">{state.error.message}</p>
-          <p className="shell-card__error-remediation">
-            The readiness check could not be completed. Retry once the runtime is reachable.
-          </p>
-          <button type="button" className="shell-card__retry" onClick={load}>
-            Try again
-          </button>
-        </div>
+        {/* The parsed canonical error owns the presentation — code, title,
+         * summary, remediation — so no hand-written remediation sentence
+         * rides along; Retry simply re-runs the fetch. */}
+        <ErrorSurface error={state.error} variant="compact" localAction={retryAction(reload)} />
       </section>
     );
   }
 
-  const derived = deriveWizardState(state.snapshot);
+  const snapshot = state.data;
+  const derived = deriveWizardState(snapshot);
   if (derived.complete) {
     return (
       <WorkspaceShell
@@ -134,10 +123,5 @@ export function ReadinessGate({
     );
   }
 
-  return (
-    <SetupWizard
-      snapshot={state.snapshot}
-      onSnapshot={(snapshot) => setState({ phase: 'loaded', snapshot })}
-    />
-  );
+  return <SetupWizard snapshot={snapshot} onSnapshot={replace} />;
 }

@@ -15,9 +15,12 @@
 package server
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
@@ -85,7 +88,7 @@ func TestEffortDriftWarnings(t *testing.T) {
 			},
 			reg:      testRegistryWithCaps("sonnet", []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh}),
 			wantLen:  1,
-			wantCode: effortDriftWarningCode,
+			wantCode: string(errcat.EffortCapabilityDrift),
 		},
 		{
 			name: "drifted effort yields warning",
@@ -96,7 +99,7 @@ func TestEffortDriftWarnings(t *testing.T) {
 			},
 			reg:      testRegistryWithCaps("sonnet", []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh}),
 			wantLen:  1,
-			wantCode: effortDriftWarningCode,
+			wantCode: string(errcat.EffortCapabilityDrift),
 		},
 		{
 			name: "multiple drifted roles yield multiple warnings",
@@ -117,7 +120,7 @@ func TestEffortDriftWarnings(t *testing.T) {
 				return reg
 			}(),
 			wantLen:  2,
-			wantCode: effortDriftWarningCode,
+			wantCode: string(errcat.EffortCapabilityDrift),
 		},
 	}
 	for _, tc := range cases {
@@ -131,8 +134,14 @@ func TestEffortDriftWarnings(t *testing.T) {
 					if w.Code != tc.wantCode {
 						t.Errorf("warning code = %q, want %q", w.Code, tc.wantCode)
 					}
-					if w.FeatureID != tc.f.ID {
-						t.Errorf("warning feature_id = %q, want %q", w.FeatureID, tc.f.ID)
+					if w.Class != ErrorClass(errcat.ClassWarning) {
+						t.Errorf("warning class = %q, want warning", w.Class)
+					}
+					if w.Remediation != nil && len(w.Remediation.Actions) != 0 {
+						t.Errorf("warning remediation carries actions: %+v", w.Remediation)
+					}
+					if !strings.Contains(w.Summary, tc.f.Effort.Implementation) && !strings.Contains(w.Summary, tc.f.Effort.Review) {
+						t.Errorf("warning summary does not name the effort: %q", w.Summary)
 					}
 				}
 			}
@@ -167,4 +176,74 @@ func testRegistryWithCaps(model string, caps []llm.EffortLevel) *llm.Registry {
 	}
 	reg.Register(prov)
 	return reg
+}
+
+// TestEffortDriftWarningsRenderCanonicallyOnListAndDetailRoutes pins the
+// wire contract: a drifted effort renders as one canonical warning-class
+// effort_capability_drift error whose summary names the role, effort, and
+// model, on both the feature list summary and the feature detail route.
+func TestEffortDriftWarningsRenderCanonicallyOnListAndDetailRoutes(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Models.Implementation = "sonnet"
+		ff.Effort.Implementation = "max"
+		return nil
+	}); err != nil {
+		t.Fatalf("drift the implementation effort: %v", err)
+	}
+	opts := baseReadHandlerOptions(store)
+	opts.Registry = testRegistryWithCaps("sonnet", []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh})
+	handler := NewHandler(opts)
+
+	assertDriftWarning := func(t *testing.T, warning Error) {
+		t.Helper()
+		if warning.Code != string(errcat.EffortCapabilityDrift) {
+			t.Fatalf("warning code = %q; want %q", warning.Code, errcat.EffortCapabilityDrift)
+		}
+		if warning.Class != ErrorClass(errcat.ClassWarning) {
+			t.Fatalf("warning class = %q; want warning", warning.Class)
+		}
+		if warning.Remediation != nil && len(warning.Remediation.Actions) != 0 {
+			t.Fatalf("warning remediation carries actions: %+v", warning.Remediation)
+		}
+		for _, want := range []string{"implementation", "max", "sonnet"} {
+			if !strings.Contains(warning.Summary, want) {
+				t.Fatalf("warning summary = %q; want it to name %q", warning.Summary, want)
+			}
+		}
+	}
+
+	list := getJSONMap(t, handler, apiPathFeatures)
+	features := list["features"].([]any)
+	var summary map[string]any
+	for _, entry := range features {
+		if candidate := entry.(map[string]any); candidate["id"] == f.ID {
+			summary = candidate
+			break
+		}
+	}
+	if summary == nil {
+		t.Fatalf("list does not carry feature %q: %#v", f.ID, list)
+	}
+	warnings := summary["warnings"].([]any)
+	if len(warnings) != 1 {
+		t.Fatalf("summary warnings = %#v; want exactly one drift warning", warnings)
+	}
+	var listWarning Error
+	if err := json.Unmarshal([]byte(mustMarshalJSON(t, warnings[0])), &listWarning); err != nil {
+		t.Fatalf("decode list warning: %v", err)
+	}
+	assertDriftWarning(t, listWarning)
+
+	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)[entityFeature].(map[string]any)
+	detailWarnings := detail["warnings"].([]any)
+	if len(detailWarnings) != 1 {
+		t.Fatalf("detail warnings = %#v; want exactly one drift warning", detailWarnings)
+	}
+	var detailWarning Error
+	if err := json.Unmarshal([]byte(mustMarshalJSON(t, detailWarnings[0])), &detailWarning); err != nil {
+		t.Fatalf("decode detail warning: %v", err)
+	}
+	assertDriftWarning(t, detailWarning)
 }

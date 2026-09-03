@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Global settings/readiness surface: workspace-root management, provider
  * remediation, appearance, advanced runtime-path selection with restart-
@@ -13,12 +29,14 @@
  * them.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { useConnectionState, useTheme } from '../hooks';
+import { retryAction, useConnectionState, useTheme } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import { WorkspaceDefaultsPanel } from './ConfigEditor';
+import { ErrorSurface } from '../components/ErrorSurface';
+import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../components/FieldError';
 import type { PaneFocusIntent } from './settingsPanes';
-import { addServerErrorTitle } from '../../../shared/ipc';
 import type {
+  CanonicalError,
   KnownServer,
   ReadinessSnapshot,
   RepositoryState,
@@ -34,6 +52,9 @@ import type {
 import { canInstallInApp, hasActiveWork, installWhenIdleLabel } from '../../../shared/updateState';
 
 const TERMINAL_SESSION_STATUSES = new Set(['Done', 'Failed']);
+
+/** The id the typed-root input references while its validation message shows. */
+const SETTINGS_ROOT_ADD_ERROR_ID = 'settings-root-add-error';
 
 function isRuntimeIdle(sessions: SessionSummary[]): boolean {
   return sessions.every((s) => TERMINAL_SESSION_STATUSES.has(s.status));
@@ -57,7 +78,7 @@ export function SettingsPanel({
   const [readiness, setReadiness] = useState<ReadinessSnapshot | null>(null);
   const [repos, setRepos] = useState<RepositoryState[]>([]);
   const { preference: themePref, setPreference: setThemePref } = useTheme();
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<CanonicalError | null>(null);
   const [addingRoot, setAddingRoot] = useState(false);
   /** Typed-path entry for remote servers; the server's PATCH validates it. */
   const [rootDraft, setRootDraft] = useState('');
@@ -100,7 +121,7 @@ export function SettingsPanel({
         setError(null);
       })
       .catch((e: unknown) => {
-        setError(parseIpcError(e).message);
+        setError(parseIpcError(e));
       });
   }, []);
 
@@ -109,7 +130,7 @@ export function SettingsPanel({
       .getUpdates()
       .then(setUpdateState)
       .catch((e: unknown) => {
-        setError(parseIpcError(e).message);
+        setError(parseIpcError(e));
       });
   }, []);
 
@@ -118,7 +139,7 @@ export function SettingsPanel({
       .getDiagnostics()
       .then(setDiagnostics)
       .catch((e: unknown) => {
-        setError(parseIpcError(e).message);
+        setError(parseIpcError(e));
       });
   }, []);
 
@@ -130,7 +151,7 @@ export function SettingsPanel({
       .getSettings()
       .then(setSettings)
       .catch((e: unknown) => {
-        setError(parseIpcError(e).message);
+        setError(parseIpcError(e));
       });
     const unsub = window.agentico.onAppEvent((event) => {
       if (event.type === 'invalidated') {
@@ -185,7 +206,7 @@ export function SettingsPanel({
       await window.agentico.addWorkspaceRoot(picked.path);
       refresh();
     } catch (e: unknown) {
-      setError(parseIpcError(e).message);
+      setError(parseIpcError(e));
     } finally {
       setAddingRoot(false);
     }
@@ -210,7 +231,7 @@ export function SettingsPanel({
       setRootDraft('');
       refresh();
     } catch (e: unknown) {
-      setRootAddError(parseIpcError(e).message);
+      setRootAddError(parseIpcError(e).summary);
     } finally {
       setAddingRoot(false);
     }
@@ -223,7 +244,7 @@ export function SettingsPanel({
         await window.agentico.removeWorkspaceRoot(rootPath);
         refresh();
       } catch (e: unknown) {
-        setError(parseIpcError(e).message);
+        setError(parseIpcError(e));
       } finally {
         setRemovingRoot(null);
       }
@@ -249,7 +270,7 @@ export function SettingsPanel({
         await window.agentico.reorderWorkspaceRoots(reordered);
         refresh();
       } catch (e: unknown) {
-        setError(parseIpcError(e).message);
+        setError(parseIpcError(e));
       } finally {
         setReordering(false);
       }
@@ -271,7 +292,7 @@ export function SettingsPanel({
       });
       setSettings(updated);
     } catch (e: unknown) {
-      setError(parseIpcError(e).message);
+      setError(parseIpcError(e));
     }
   }, []);
 
@@ -283,7 +304,7 @@ export function SettingsPanel({
       setModelCatalogue(result.catalogue);
       setError(null);
     } catch (e: unknown) {
-      setError(parseIpcError(e).message);
+      setError(parseIpcError(e));
     } finally {
       setRefreshingProviders((current) => {
         const next = new Set(current);
@@ -305,7 +326,7 @@ export function SettingsPanel({
       setDismissedPath(null);
       setShowPrompt(false);
     } catch (e: unknown) {
-      setError(parseIpcError(e).message);
+      setError(parseIpcError(e));
     } finally {
       setPickingPath(false);
     }
@@ -317,7 +338,7 @@ export function SettingsPanel({
       setShowPrompt(false);
       await window.agentico.restartConnection();
     } catch (e: unknown) {
-      setError(parseIpcError(e).message);
+      setError(parseIpcError(e));
     } finally {
       setRestarting(false);
     }
@@ -343,7 +364,7 @@ export function SettingsPanel({
       setCheckingUpdates(true);
       setUpdateState(await window.agentico.checkForUpdates());
     } catch (e: unknown) {
-      setError(parseIpcError(e).message);
+      setError(parseIpcError(e));
     } finally {
       setCheckingUpdates(false);
     }
@@ -354,7 +375,7 @@ export function SettingsPanel({
       setSchedulingUpdate(true);
       setUpdateState(await window.agentico.installUpdateWhenIdle());
     } catch (e: unknown) {
-      setError(parseIpcError(e).message);
+      setError(parseIpcError(e));
     } finally {
       setSchedulingUpdate(false);
     }
@@ -365,7 +386,7 @@ export function SettingsPanel({
       setInstallingUpdate(true);
       setUpdateState(await window.agentico.restartToUpdate());
     } catch (e: unknown) {
-      setError(parseIpcError(e).message);
+      setError(parseIpcError(e));
     } finally {
       setInstallingUpdate(false);
     }
@@ -379,7 +400,7 @@ export function SettingsPanel({
         await window.agentico.installUpdateNow({ consent: true, stopActiveWork: true }),
       );
     } catch (e: unknown) {
-      setError(parseIpcError(e).message);
+      setError(parseIpcError(e));
     } finally {
       setInstallingUpdate(false);
     }
@@ -391,7 +412,7 @@ export function SettingsPanel({
     try {
       await window.agentico.openExternal({ url });
     } catch (e: unknown) {
-      setError(parseIpcError(e).message);
+      setError(parseIpcError(e));
     }
   }, [updateState?.releaseNotesUrl]);
 
@@ -412,7 +433,7 @@ export function SettingsPanel({
       await window.agentico.revealDiagnostics();
       refreshDiagnostics();
     } catch (e: unknown) {
-      setError(parseIpcError(e).message);
+      setError(parseIpcError(e));
     }
   }, [refreshDiagnostics]);
 
@@ -422,7 +443,7 @@ export function SettingsPanel({
       setShowClearDiagnosticsPrompt(false);
       setDiagnostics(await window.agentico.clearDiagnostics());
     } catch (e: unknown) {
-      setError(parseIpcError(e).message);
+      setError(parseIpcError(e));
     } finally {
       setClearingDiagnostics(false);
     }
@@ -430,14 +451,11 @@ export function SettingsPanel({
 
   return (
     <section className="settings-panel" aria-label="Settings and readiness">
-      {error && (
-        <div className="settings-panel__error" role="alert">
-          <p className="form-field__error">{error}</p>
-          <button type="button" className="setup-wizard__action" onClick={refresh}>
-            Try again
-          </button>
-        </div>
-      )}
+      {error !== null ? (
+        // The panel-level failure is the canonical error; Retry re-runs the
+        // readiness/repository load exactly as the legacy button did.
+        <ErrorSurface error={error} variant="compact" localAction={retryAction(refresh)} />
+      ) : null}
 
       {pane === 'workspace-roots' && (
         <section className="settings-panel__section" aria-label="Workspace roots">
@@ -461,7 +479,10 @@ export function SettingsPanel({
                   >
                     <code>{root.path}</code>
                     {!root.valid && root.issue && (
-                      <span className="settings-panel__root-issue">{root.issue.message}</span>
+                      <FieldError
+                        id={`settings-root-issue-${index}`}
+                        message={root.issue.summary}
+                      />
                     )}
                     <span className="settings-panel__root-count">
                       {count} {count === 1 ? 'repo' : 'repos'}
@@ -513,7 +534,11 @@ export function SettingsPanel({
                   spellCheck={false}
                   autoComplete="off"
                   disabled={addingRoot}
-                  aria-invalid={rootAddError !== null}
+                  aria-describedby={fieldAriaDescribedBy(
+                    SETTINGS_ROOT_ADD_ERROR_ID,
+                    rootAddError !== null,
+                  )}
+                  aria-invalid={fieldAriaInvalid(rootAddError !== null)}
                   onChange={(event) => {
                     setRootDraft(event.currentTarget.value);
                     setRootAddError(null);
@@ -526,11 +551,7 @@ export function SettingsPanel({
                   }}
                 />
               </label>
-              {rootAddError !== null ? (
-                <p className="form-field__error" role="alert">
-                  {rootAddError}
-                </p>
-              ) : null}
+              <FieldError id={SETTINGS_ROOT_ADD_ERROR_ID} message={rootAddError} />
               <button
                 type="button"
                 className="setup-wizard__action"
@@ -583,24 +604,36 @@ export function SettingsPanel({
                     </span>
                   </div>
                   {!p.ready && p.issue && (
-                    <p className="settings-panel__provider-cause">
-                      {p.issue.message}
-                      {p.issue.remedy && (
-                        <span className="settings-panel__provider-remedy"> — {p.issue.remedy}</span>
-                      )}
-                    </p>
+                    // The degraded provider's issue renders through the same
+                    // compact surface as the wizard's provider rows, with
+                    // Recheck as the surface's local action. Ready rows (no
+                    // surface) keep the standalone row button.
+                    <ErrorSurface
+                      error={p.issue}
+                      variant="compact"
+                      localAction={
+                        refreshingProviders.has(p.name)
+                          ? {
+                              label: 'Recheck',
+                              disabledReason: 'Rechecking…',
+                            }
+                          : { label: 'Recheck', onAction: () => void handleRecheckProvider(p.name) }
+                      }
+                    />
                   )}
                   {p.installed && p.version && (
                     <p className="settings-panel__provider-version">v{p.version}</p>
                   )}
-                  <button
-                    type="button"
-                    className="setup-wizard__action"
-                    onClick={() => void handleRecheckProvider(p.name)}
-                    disabled={refreshingProviders.has(p.name)}
-                  >
-                    {refreshingProviders.has(p.name) ? 'Rechecking…' : 'Recheck'}
-                  </button>
+                  {(p.ready || !p.issue) && (
+                    <button
+                      type="button"
+                      className="setup-wizard__action"
+                      onClick={() => void handleRecheckProvider(p.name)}
+                      disabled={refreshingProviders.has(p.name)}
+                    >
+                      {refreshingProviders.has(p.name) ? 'Rechecking…' : 'Recheck'}
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -659,38 +692,62 @@ export function SettingsPanel({
             <span>Signature</span>
             <strong>{updateState?.signatureStatus ?? 'unknown'}</strong>
           </div>
-          <p className="settings-panel__section-desc">
-            {updateState?.message ?? 'Update state has not loaded yet.'}
-          </p>
-          {updateState?.activeWorkSummary && (
-            <p className="settings-panel__update-work">{updateState.activeWorkSummary}</p>
-          )}
-          {updateState?.guidance && (
-            <ul className="settings-panel__guidance">
-              {updateState.guidance.map((line) => {
-                const command = packageManagerCommandFromGuidance(line);
-                return (
-                  <li key={line}>
-                    {command === null ? (
-                      line
-                    ) : (
-                      <span className="settings-panel__copyable-command">
-                        <span>{command.label}</span>
-                        <code>{command.value}</code>
-                        <button
-                          type="button"
-                          className="settings-panel__copy-command"
-                          aria-label="Copy the package-manager command"
-                          onClick={() => handleCopyUpdateCommand(command.value)}
-                        >
-                          Copy
-                        </button>
-                      </span>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
+          {updateState?.status === 'failed' && updateState.error !== undefined ? (
+            // The failed status renders through the canonical error surface —
+            // authored title and summary, guidance folded into the remediation
+            // hint — with the check as its direct action; the message and
+            // guidance markup below serve every non-failed status only.
+            <ErrorSurface
+              error={updateState.error}
+              variant="compact"
+              localAction={
+                checkingUpdates
+                  ? {
+                      label: 'Check for updates',
+                      disabledReason: 'Checking…',
+                    }
+                  : {
+                      label: 'Check for updates',
+                      onAction: () => void handleCheckUpdates(),
+                    }
+              }
+            />
+          ) : (
+            <>
+              <p className="settings-panel__section-desc">
+                {updateState?.message ?? 'Update state has not loaded yet.'}
+              </p>
+              {updateState?.activeWorkSummary && (
+                <p className="settings-panel__update-work">{updateState.activeWorkSummary}</p>
+              )}
+              {updateState?.guidance && (
+                <ul className="settings-panel__guidance">
+                  {updateState.guidance.map((line) => {
+                    const command = packageManagerCommandFromGuidance(line);
+                    return (
+                      <li key={line}>
+                        {command === null ? (
+                          line
+                        ) : (
+                          <span className="settings-panel__copyable-command">
+                            <span>{command.label}</span>
+                            <code>{command.value}</code>
+                            <button
+                              type="button"
+                              className="settings-panel__copy-command"
+                              aria-label="Copy the package-manager command"
+                              onClick={() => handleCopyUpdateCommand(command.value)}
+                            >
+                              Copy
+                            </button>
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </>
           )}
           {updateCopyNotice && (
             <p className="settings-panel__copy-notice" role="status">
@@ -1013,7 +1070,7 @@ function ServersPane({
   focusIntent?: PaneFocusIntent | null;
 }) {
   const [rows, setRows] = useState<readonly ServerListRow[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<CanonicalError | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [nicknameDraft, setNicknameDraft] = useState('');
   const [savingNickname, setSavingNickname] = useState(false);
@@ -1026,7 +1083,7 @@ function ServersPane({
   const [paste, setPaste] = useState('');
   const [adding, setAdding] = useState(false);
   const [addFeedback, setAddFeedback] = useState<
-    | { kind: 'error'; title: string; message: string }
+    | { kind: 'error'; error: CanonicalError }
     | { kind: 'added' }
     | { kind: 'session-only' }
     | { kind: 'duplicate-local'; serverKey: string }
@@ -1065,7 +1122,7 @@ function ServersPane({
     try {
       onSettingsChange(await window.agentico.getSettings());
     } catch (e: unknown) {
-      setError(parseIpcError(e).message);
+      setError(parseIpcError(e));
     }
   }, [onSettingsChange]);
 
@@ -1092,7 +1149,7 @@ function ServersPane({
         setEditingKey(null);
         setError(null);
       } catch (e: unknown) {
-        setError(parseIpcError(e).message);
+        setError(parseIpcError(e));
       } finally {
         setSavingNickname(false);
       }
@@ -1112,7 +1169,7 @@ function ServersPane({
         await reloadSettings();
         setError(null);
       } catch (e: unknown) {
-        setError(parseIpcError(e).message);
+        setError(parseIpcError(e));
       } finally {
         setRemovingKey(null);
       }
@@ -1164,12 +1221,7 @@ function ServersPane({
       await reloadSettings();
     } catch (e: unknown) {
       setPaste('');
-      const parsed = parseIpcError(e);
-      setAddFeedback({
-        kind: 'error',
-        title: addServerErrorTitle(parsed.code),
-        message: parsed.message,
-      });
+      setAddFeedback({ kind: 'error', error: parseIpcError(e) });
     } finally {
       setAdding(false);
     }
@@ -1182,11 +1234,11 @@ function ServersPane({
         The servers Agentico knows — the ones it runs on this machine and the remote ones you add. A
         nickname is shown everywhere the server appears.
       </p>
-      {error && (
-        <p className="form-field__error" role="alert">
-          {error}
-        </p>
-      )}
+      {error !== null ? (
+        // The pane-level failure is the parsed canonical error; its title
+        // and summary come from the desktop catalog payload.
+        <ErrorSurface error={error} variant="compact" />
+      ) : null}
 
       <div className="settings-panel__server-add">
         <label className="form-field__label" htmlFor="servers-add-string">
@@ -1219,11 +1271,11 @@ function ServersPane({
             {adding ? 'Probing…' : 'Probe and connect'}
           </button>
         </div>
-        {addFeedback?.kind === 'error' && (
-          <p className="form-field__error" role="alert">
-            <strong>{addFeedback.title}</strong> {addFeedback.message}
-          </p>
-        )}
+        {addFeedback?.kind === 'error' ? (
+          // The add failure renders the canonical rejection; the pasted
+          // string was already cleared and never rides along.
+          <ErrorSurface error={addFeedback.error} variant="compact" />
+        ) : null}
         {addFeedback?.kind === 'added' && (
           <p className="settings-panel__copy-notice" role="status">
             Server added; switching to it now.

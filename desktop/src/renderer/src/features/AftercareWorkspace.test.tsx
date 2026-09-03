@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -33,8 +49,7 @@ const closedPass: RelationshipChildView = {
   outcome: 'completed',
   cost: { totalUsd: 1.25, byPhase: {} },
   integrationState: 'merged',
-  attention: [],
-  cleanupWarnings: [],
+  warnings: [],
 };
 
 const diffEvidence: AftercareEvidence = {
@@ -207,15 +222,32 @@ describe('AftercareWorkspace runway', () => {
     expect(row).toHaveTextContent('Starting rebase pass…');
   });
 
-  it('keeps the action-error alert and the empty state', () => {
+  it('renders the action-error mirror as a warning surface and the empty state', () => {
     renderWorkspace({
       snapshot: featureSnapshot({ status: 'Published', actions: [] }),
       actionError: {
         action: 'Rebase',
-        error: { code: 'rebase_already_up_to_date', message: 'Nothing to merge.' },
+        error: {
+          code: 'rebase_already_up_to_date',
+          class: 'warning',
+          title: 'Already up to date',
+          summary: 'Every repository is already up to date with its target branch.',
+        },
       },
     });
-    expect(screen.getByRole('alert')).toHaveTextContent('Already up to date: Nothing to merge.');
+    // The catalog's own warning title/summary replace the hand-rolled prefix,
+    // and the warning class reads as a status, not an alert.
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    const surface = document.querySelector('.error-surface');
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveAttribute('role', 'status');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('Rebase was rejected')).toBeVisible();
+    expect(screen.getByText('Already up to date')).toBeVisible();
+    expect(
+      screen.getByText('Every repository is already up to date with its target branch.'),
+    ).toBeVisible();
+    expect(screen.getByText('rebase_already_up_to_date')).toHaveClass('error-surface__code');
     expect(screen.getByText('No action is needed right now.')).toBeVisible();
   });
 
@@ -317,10 +349,12 @@ describe('AftercareWorkspace pass history', () => {
           {
             ...closedPass,
             kind: 'review-feedback',
-            cleanupWarnings: [
+            warnings: [
               {
-                message: 'review-feedback tail: no PR URL for review-feedback tail',
-                repo: 'org/repo-a',
+                code: 'review_feedback_tail_missing_pr',
+                class: 'warning',
+                title: 'Review-feedback tail not delivered',
+                summary: 'review-feedback tail: no PR URL for review-feedback tail',
               },
             ],
           },
@@ -330,6 +364,14 @@ describe('AftercareWorkspace pass history', () => {
 
     await user.click(screen.getByText('Pass history'));
     expect(screen.getByText(/review-feedback tail: no PR URL/)).toBeVisible();
+    const surface = screen.getByText(/review-feedback tail: no PR URL/).closest('.error-surface');
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveAttribute('role', 'status');
+    expect(within(surface as HTMLElement).getByText('Warning')).toBeVisible();
+    expect(screen.getByText('review_feedback_tail_missing_pr')).toHaveClass('error-surface__code');
+    expect(surface?.querySelector('.error-surface__action')).toBeNull();
+    // The bespoke per-entry warning list is gone.
+    expect(document.querySelector('.refactor-history__warnings')).toBeNull();
   });
 
   it('loads a list-projected diff body on demand', async () => {

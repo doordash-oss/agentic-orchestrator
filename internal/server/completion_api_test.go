@@ -16,10 +16,14 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -220,39 +224,39 @@ func TestCompletionActionsPassThroughSourceRevision(t *testing.T) {
 func TestPublishActionReturnsCodedRemoteSafetyConflicts(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name       string
-		code       string
-		message    string
-		target     map[string]any
-		wantTarget map[string]any
+		name        string
+		code        errcat.Code
+		detail      string
+		options     []errcat.Option
+		wantSummary string
+		wantRepo    string
+		wantBranch  string
 	}{
 		{
-			name:    "remote diverged",
-			code:    ErrorCodePublishRemoteDiverged,
-			message: "pull-request branch contains remote work that is not in this workspace",
-			target: map[string]any{
-				"repo":                "repo-a",
-				"branch":              "feature/remote-diverged",
-				"remote_only_commits": 2,
+			name:   "remote diverged",
+			code:   errcat.PublishRemoteDiverged,
+			detail: "pull-request branch contains remote work that is not in this workspace",
+			options: []errcat.Option{
+				errcat.WithParams(errcat.PublishRepoParams{
+					Repo: "repo-a", Branch: "feature/remote-diverged", RemoteOnlyCommits: 2,
+				}),
+				errcat.WithRepositories(errcat.CodeRepository{Name: "repo-a", Branch: "feature/remote-diverged"}),
 			},
-			wantTarget: map[string]any{
-				"repo":                "repo-a",
-				"branch":              "feature/remote-diverged",
-				"remote_only_commits": float64(2),
-			},
+			wantSummary: `The pull-request branch for "repo-a" contains 2 remote commits that are not in this workspace.`,
+			wantRepo:    "repo-a",
+			wantBranch:  "feature/remote-diverged",
 		},
 		{
-			name:    "remote changed",
-			code:    ErrorCodePublishRemoteChanged,
-			message: "pull-request branch changed while Agentico was publishing",
-			target: map[string]any{
-				"repo":   "repo-a",
-				"branch": "feature/remote-changed",
+			name:   "remote changed",
+			code:   errcat.PublishRemoteChanged,
+			detail: "pull-request branch changed while Agentico was publishing",
+			options: []errcat.Option{
+				errcat.WithParams(errcat.PublishRepoParams{Repo: "repo-a", Branch: "feature/remote-changed"}),
+				errcat.WithRepositories(errcat.CodeRepository{Name: "repo-a", Branch: "feature/remote-changed"}),
 			},
-			wantTarget: map[string]any{
-				"repo":   "repo-a",
-				"branch": "feature/remote-changed",
-			},
+			wantSummary: `The pull-request branch for "repo-a" changed while Agentico was publishing.`,
+			wantRepo:    "repo-a",
+			wantBranch:  "feature/remote-changed",
 		},
 	} {
 		tc := tc
@@ -262,8 +266,8 @@ func TestPublishActionReturnsCodedRemoteSafetyConflicts(t *testing.T) {
 				preflightMutationTarget: &preflightMutationTarget{},
 				err: &ActionConflictError{
 					Code:    tc.code,
-					Message: tc.message,
-					Target:  tc.target,
+					Detail:  tc.detail,
+					Options: tc.options,
 				},
 			}
 			handler := NewHandler(HandlerOptions{
@@ -279,19 +283,27 @@ func TestPublishActionReturnsCodedRemoteSafetyConflicts(t *testing.T) {
 			if err := json.NewDecoder(recorder.Result().Body).Decode(&body); err != nil {
 				t.Fatalf("decode response: %v", err)
 			}
-			if got := body.Error.Code; got != tc.code {
+			if got := body.Error.Code; got != string(tc.code) {
 				t.Fatalf("error code = %q; want %q", got, tc.code)
 			}
 			if got := recorder.Code; got != http.StatusConflict {
 				t.Fatalf("status = %d; want %d", got, http.StatusConflict)
 			}
-			if body.Error.Message != tc.message {
-				t.Fatalf("error message = %q; want %q", body.Error.Message, tc.message)
+			if body.Error.Class != ErrorClass(errcat.ClassNeedsAction) {
+				t.Fatalf("error class = %q; want %q", body.Error.Class, errcat.ClassNeedsAction)
 			}
-			for key, want := range tc.wantTarget {
-				if got := body.Error.Target[key]; got != want {
-					t.Fatalf("error target[%q] = %#v; want %#v", key, got, want)
-				}
+			if body.Error.Summary != tc.wantSummary {
+				t.Fatalf("error summary = %q; want %q", body.Error.Summary, tc.wantSummary)
+			}
+			if body.Error.Diagnostics != tc.detail {
+				t.Fatalf("error diagnostics = %q; want %q", body.Error.Diagnostics, tc.detail)
+			}
+			if body.Error.Context == nil || len(body.Error.Context.Repositories) != 1 {
+				t.Fatalf("error context = %+v; want one repository", body.Error.Context)
+			}
+			repo := body.Error.Context.Repositories[0]
+			if repo.Name != tc.wantRepo || repo.Branch != tc.wantBranch {
+				t.Fatalf("error context repository = %+v; want %s@%s", repo, tc.wantRepo, tc.wantBranch)
 			}
 		})
 	}
@@ -319,7 +331,7 @@ func TestCleanupActionRejectsCycleTarget(t *testing.T) {
 	if err := json.NewDecoder(w.Result().Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
-	if resp.Error.Code != "bad_request" || resp.Error.Message != "cleanup target is invalid" {
+	if resp.Error.Code != string(errcat.BadRequest) || resp.Error.Diagnostics != "cleanup target is invalid" {
 		t.Fatalf("error = %+v; want bad_request cleanup target is invalid", resp.Error)
 	}
 }
@@ -496,11 +508,18 @@ func TestRepositoryDiffRejectsWrongMethod(t *testing.T) {
 
 func TestRepositoryDiffReportsPartialFailure(t *testing.T) {
 	t.Parallel()
+	rendered := wireError(errcat.New(
+		errcat.RepositoryWorktreeUnavailable,
+		errcat.WithRepositories(errcat.CodeRepository{Name: "repo-x"}),
+		errcat.WithParams(errcat.WarningRepoParams{
+			Repositories: []errcat.CodeRepository{{Name: "repo-x"}},
+		}),
+	))
 	target := &preflightMutationTarget{
 		repoDiff: RepositoryDiffResponse{
-			FeatureID:      fixtureFeatureID,
-			Repo:           "repo-x",
-			PartialFailure: "worktree not available",
+			FeatureID: fixtureFeatureID,
+			Repo:      "repo-x",
+			Error:     &rendered,
 		},
 	}
 	handler := NewHandler(HandlerOptions{
@@ -513,11 +532,52 @@ func TestRepositoryDiffReportsPartialFailure(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d; want 200 for partial failure", w.Code)
 	}
+	body, err := io.ReadAll(w.Result().Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if strings.Contains(string(body), "partial_failure") {
+		t.Fatalf("body still carries a partial_failure field: %s", body)
+	}
 	var resp RepositoryDiffResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != string(errcat.RepositoryWorktreeUnavailable) {
+		t.Fatalf("error = %+v; want repository_worktree_unavailable", resp.Error)
+	}
+	if resp.Error.Class != ErrorClass(errcat.ClassWarning) {
+		t.Fatalf("error class = %q; want warning", resp.Error.Class)
+	}
+	if resp.Error.Context == nil || len(resp.Error.Context.Repositories) != 1 ||
+		resp.Error.Context.Repositories[0].Name != "repo-x" {
+		t.Fatalf("error repositories block = %+v; want repo-x", resp.Error.Context)
+	}
+}
+
+func TestRepositoryDiffUnknownRepoReturnsNotFoundEnvelope(t *testing.T) {
+	t.Parallel()
+	target := &preflightMutationTarget{
+		repoDiffErr: fmt.Errorf("repository %q: %w", "repo-x", feature.ErrRepositoryNotFound),
+	}
+	handler := NewHandler(HandlerOptions{
+		Mutations:             target,
+		AuthToken:             testAuthToken,
+		DisableHostValidation: true,
+	})
+
+	w := authedGet(handler, "/api/v1/features/"+fixtureFeatureID+"/repositories/repo-x/diff")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d; want 404 for unknown repository", w.Code)
+	}
+	var resp ErrorResponse
 	if err := json.NewDecoder(w.Result().Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.PartialFailure != "worktree not available" {
-		t.Fatalf("partial_failure = %q; want 'worktree not available'", resp.PartialFailure)
+	if resp.Error.Code != string(errcat.NotFound) {
+		t.Fatalf("error code = %q; want not_found", resp.Error.Code)
+	}
+	if !strings.Contains(resp.Error.Summary, "repo-x") {
+		t.Fatalf("summary = %q; want it to name the repository", resp.Error.Summary)
 	}
 }

@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -7,10 +23,16 @@ import {
   type AttentionItem,
   type ConnectionState,
   type MainWindowUiState,
+  type OwnedError,
   type Settings,
   type UpdateState,
 } from '../../../shared/ipc';
-import { featureSnapshot, installAgenticoMock } from '../test/agenticoMock';
+import {
+  canonicalWarning,
+  featureSnapshot,
+  installAgenticoMock,
+  ipcError,
+} from '../test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from '../test/setup';
 import { WorkspaceShell } from './WorkspaceShell';
 
@@ -57,8 +79,85 @@ function summaryOf(feature: ReturnType<typeof featureSnapshot>) {
     activeRun: feature.activeRun,
     runCount: 1,
     warnings: [],
+    errors: feature.errors,
   };
 }
+
+/** A blocking run-failure entry as the summary projection carries it. */
+function blockingRunError(featureId: string): OwnedError {
+  return {
+    ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId },
+    error: {
+      code: 'iteration_budget_exhausted',
+      class: 'blocking',
+      title: 'Iteration budget exhausted',
+      summary: 'The Implement phase exhausted its iteration budget.',
+    },
+  };
+}
+
+/** A needs_action entry (repository publish failure) on the owning feature. */
+function needsActionRepositoryError(featureId: string): OwnedError {
+  return {
+    ref: {
+      scope: 'repository',
+      code: 'publish_rebase_conflict',
+      featureId,
+      repository: 'repo-a',
+    },
+    error: {
+      code: 'publish_rebase_conflict',
+      class: 'needs_action',
+      title: 'Pull-rebase conflict',
+      summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
+    },
+  };
+}
+
+/** A needs_action transaction entry keyed by the active child. */
+function needsActionTransactionError(childId: string): OwnedError {
+  return {
+    ref: { scope: 'transaction', code: 'integration_parent_dirty', featureId: childId },
+    error: {
+      code: 'integration_parent_dirty',
+      class: 'needs_action',
+      title: 'Parent worktree is dirty',
+      summary: 'The parent worktree for repository "repo-a" has 1 uncommitted change.',
+    },
+  };
+}
+
+describe('WorkspaceShell overview list warnings', () => {
+  it('renders one compact status surface per list-level load warning above the feature list', async () => {
+    const feature = featureSnapshot({ id: FEATURE_ID, name: 'Search revamp', status: 'Created' });
+    installAgenticoMock({
+      features: [summaryOf(feature)],
+      listWarnings: [
+        canonicalWarning({
+          code: 'feature_load_failed',
+          title: 'Feature could not be loaded',
+          summary: 'The feature file for "broken-feature" could not be read.',
+          diagnostics: 'yaml: unknown field " retired"',
+        }),
+      ],
+    });
+    render(<WorkspaceShell />);
+
+    const codeTag = await screen.findByText('feature_load_failed');
+    expect(codeTag).toHaveClass('error-surface__code');
+    const surface = codeTag.closest('.error-surface');
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveAttribute('role', 'status');
+    expect(surface?.querySelector('.error-surface__action')).toBeNull();
+    expect(screen.getByText('Feature could not be loaded')).toBeVisible();
+
+    // The surface sits above the overview lanes region, not inside it.
+    const listRegion = screen.getByRole('region', { name: 'Existing features' });
+    expect(listRegion.compareDocumentPosition(surface as Node)).toBe(
+      Node.DOCUMENT_POSITION_PRECEDING,
+    );
+  });
+});
 
 describe('WorkspaceShell sidebar', () => {
   it('keeps Overview selected on first render and enters creation deliberately', async () => {
@@ -78,10 +177,18 @@ describe('WorkspaceShell sidebar', () => {
   });
 
   it('groups features into lane sections with correct counts and hides empty lanes', async () => {
+    const blocked = featureSnapshot({
+      id: 'blocked1ef567890ab',
+      name: 'Broken feature',
+      status: 'Implementing',
+      errors: [blockingRunError('blocked1ef567890ab')],
+      actions: [],
+    });
     const waiting = featureSnapshot({
       id: 'waiting1ef567890a',
       name: 'Needs a decision',
-      status: 'Failed',
+      status: 'Published',
+      errors: [needsActionRepositoryError('waiting1ef567890a')],
       actions: [],
     });
     const running = featureSnapshot({
@@ -98,7 +205,7 @@ describe('WorkspaceShell sidebar', () => {
       setup: { status: 'done', attempt: 1, tasks: [] },
       actions: [],
     });
-    const snapshots = [waiting, running, published];
+    const snapshots = [blocked, waiting, running, published];
     const mock = installAgenticoMock({ features: snapshots.map(summaryOf) });
     mock.api.getFeature.mockImplementation((featureId: string) =>
       Promise.resolve(snapshots.find((snapshot) => snapshot.id === featureId) ?? snapshots[0]!),
@@ -107,7 +214,9 @@ describe('WorkspaceShell sidebar', () => {
 
     await screen.findByRole('option', { name: 'Overview' });
     // Populated lanes render with their count and members.
-    const waitingGroup = await screen.findByRole('group', { name: 'Waiting on you' });
+    const failedGroup = await screen.findByRole('group', { name: 'Failed' });
+    expect(within(failedGroup).getByText('Broken feature')).toBeInTheDocument();
+    const waitingGroup = screen.getByRole('group', { name: 'Waiting on you' });
     expect(within(waitingGroup).getByText('Needs a decision')).toBeInTheDocument();
     const runningGroup = screen.getByRole('group', { name: 'Running' });
     expect(within(runningGroup).getByText('Mid-flight feature')).toBeInTheDocument();
@@ -180,7 +289,8 @@ describe('WorkspaceShell sidebar', () => {
     const waiting = featureSnapshot({
       id: 'waiting1ef567890a',
       name: 'Needs a decision',
-      status: 'Failed',
+      status: 'Published',
+      errors: [needsActionRepositoryError('waiting1ef567890a')],
       actions: [],
     });
     const running = featureSnapshot({
@@ -203,6 +313,125 @@ describe('WorkspaceShell sidebar', () => {
 
     const runningRow = within(lanes).getByText('Mid-flight feature').closest('li')!;
     expect(within(runningRow).getByRole('button', { name: 'Open' })).toBeInTheDocument();
+  });
+
+  it('renders a blocking-error feature under the Failed group with the catalog title as its sub-line in both surfaces', async () => {
+    const broken = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Broken feature',
+      status: 'Implementing',
+      errors: [blockingRunError(FEATURE_ID)],
+      actions: [],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(broken)] });
+    mock.api.getFeature.mockResolvedValue(broken);
+    render(<WorkspaceShell />);
+
+    const sidebarRow = (await screen.findByRole('option', { name: /Broken feature/ })).closest(
+      '[role="option"]',
+    )!;
+    expect(sidebarRow.closest('details')?.querySelector('summary')?.textContent).toContain(
+      'Failed',
+    );
+    expect(sidebarRow.querySelector('.sidebar__row-subline')?.textContent).toBe(
+      'Iteration budget exhausted',
+    );
+    expect(sidebarRow.querySelector('.sidebar__row-glyph')).toHaveAttribute('data-tone', 'danger');
+    expect(sidebarRow.querySelector('.pip-rail')).toHaveAttribute('data-tone', 'danger');
+
+    const lanes = await screen.findByRole('region', { name: 'Existing features' });
+    const overviewRow = within(lanes).getByText('Broken feature').closest('li')!;
+    expect(overviewRow.querySelector('.overview-row__state')?.textContent).toBe(
+      'Iteration budget exhausted',
+    );
+    expect(overviewRow.querySelector('.overview-row__state')).toHaveAttribute(
+      'data-tone',
+      'danger',
+    );
+    expect(overviewRow.querySelector('.pip-rail')).toHaveAttribute('data-tone', 'danger');
+    // No presence surface carries the legacy hand-written labels.
+    for (const legacy of ['needs attention', 'pass failed']) {
+      expect(document.body.textContent?.toLowerCase()).not.toContain(legacy);
+    }
+  });
+
+  it('renders a parked child pass under Waiting on you with the attention record title', async () => {
+    const parent = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Parent feature',
+      status: 'Published',
+      activeChild: {
+        id: 'child1234ef567890',
+        name: 'Rework auth',
+        kind: 'refactor',
+        displayToken: 'refactor:child1234ef567890',
+        displayState: 'Active — Implementing',
+        pipeline: 'large',
+        status: 'Implementing',
+        startedAt: '2026-07-30T10:00:00Z',
+        cost: { totalUsd: 0, byPhase: {} },
+        integrationState: 'attention',
+        attention: {
+          code: 'integration_parent_dirty',
+          class: 'needs_action',
+          title: 'Parent worktree is dirty',
+          summary: 'The parent worktree for repository "repo-a" has 1 uncommitted change.',
+        },
+        warnings: [],
+      },
+      errors: [needsActionTransactionError('child1234ef567890')],
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(parent)] });
+    mock.api.getFeature.mockResolvedValue(parent);
+    render(<WorkspaceShell />);
+
+    const sidebarRow = (await screen.findByRole('option', { name: /Parent feature/ })).closest(
+      '[role="option"]',
+    )!;
+    expect(sidebarRow.closest('details')?.querySelector('summary')?.textContent).toContain(
+      'Waiting on you',
+    );
+    expect(sidebarRow.querySelector('.sidebar__row-subline')?.textContent).toBe(
+      'Parent worktree is dirty',
+    );
+
+    const lanes = await screen.findByRole('region', { name: 'Existing features' });
+    const overviewRow = within(lanes).getByText('Parent feature').closest('li')!;
+    expect(overviewRow.querySelector('.overview-row__state')?.textContent).toBe(
+      'Parent worktree is dirty',
+    );
+  });
+
+  it('prefers the pending-question sub-line over the needs_action error title', async () => {
+    const questioned = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Questioned feature',
+      status: 'Published',
+      errors: [needsActionRepositoryError(FEATURE_ID)],
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(questioned)] });
+    mock.api.getFeature.mockResolvedValue(questioned);
+    const attentionItems: AttentionItem[] = [
+      {
+        kind: 'questions',
+        id: 'q-1',
+        featureId: FEATURE_ID,
+        waitingSince: '2026-08-05T10:00:00Z',
+        questions: [{ key: 'Which?', header: 'Direction', multiSelect: false, options: [] }],
+      },
+    ];
+    render(<WorkspaceShell attentionItems={attentionItems} />);
+
+    const sidebarRow = (await screen.findByRole('option', { name: /Questioned feature/ })).closest(
+      '[role="option"]',
+    )!;
+    expect(sidebarRow.querySelector('.sidebar__row-subline')?.textContent).toBe(
+      'Answer 1 question',
+    );
   });
 
   it('opens the feature when clicking an Open row, and jumps via onAttentionJump when Answer has a pending item', async () => {
@@ -376,7 +605,8 @@ describe('WorkspaceShell sidebar', () => {
     const waiting = featureSnapshot({
       id: SECOND_FEATURE_ID,
       name: 'Blocked feature',
-      status: 'Failed',
+      status: 'Published',
+      errors: [needsActionRepositoryError(SECOND_FEATURE_ID)],
       setup: { status: 'done', attempt: 1, tasks: [] },
       actions: [],
     });
@@ -433,7 +663,7 @@ describe('WorkspaceShell sidebar', () => {
     expect(
       await screen.findByRole('region', { name: 'Feature Search revamp' }),
     ).toBeInTheDocument();
-    mock.api.listFeatures.mockResolvedValueOnce([]);
+    mock.api.listFeatures.mockResolvedValueOnce({ features: [], warnings: [] });
     await user.click(await screen.findByLabelText('More actions'));
     await user.click(screen.getByRole('menuitem', { name: 'Delete feature' }));
     const dialog = await screen.findByRole('dialog', { name: /Delete Search revamp/ });
@@ -690,43 +920,88 @@ describe('WorkspaceShell sidebar', () => {
 });
 
 describe('WorkspaceShell Overview loading', () => {
-  it('renders every other row when one feature detail rejects', async () => {
+  it('flags both degraded rows with the canonical title and one captioned surface whose Retry refetches only the failed ids', async () => {
     const failing = featureSnapshot({
       id: FEATURE_ID,
       name: 'Oversized feature',
-      status: 'Failed',
+      status: 'Implementing',
+      errors: [blockingRunError(FEATURE_ID)],
+      actions: [],
+    });
+    const second = featureSnapshot({
+      id: SECOND_FEATURE_ID,
+      name: 'Second oversized feature',
+      status: 'Implementing',
       actions: [],
     });
     const healthy = featureSnapshot({
-      id: SECOND_FEATURE_ID,
+      id: 'ffff000011112222',
       name: 'Healthy feature',
-      status: 'Implementing',
+      status: 'Done',
       setup: { status: 'done', attempt: 1, tasks: [] },
       actions: [],
     });
-    const mock = installAgenticoMock({ features: [failing, healthy].map(summaryOf) });
-    mock.api.getFeature.mockImplementation((featureId: string) =>
-      featureId === FEATURE_ID
-        ? Promise.reject(new Error('E_PAYLOAD_TOO_LARGE: payload rejected'))
-        : Promise.resolve(healthy),
-    );
+    const snapshots = [failing, second, healthy];
+    // Only the first detail fetch per failed id rejects; the retry succeeds.
+    const rejected = new Set<string>();
+    const mock = installAgenticoMock({ features: snapshots.map(summaryOf) });
+    mock.api.getFeature.mockImplementation((featureId: string) => {
+      if (
+        (featureId === FEATURE_ID || featureId === SECOND_FEATURE_ID) &&
+        !rejected.has(featureId)
+      ) {
+        rejected.add(featureId);
+        return Promise.reject(
+          ipcError('E_PAYLOAD_TOO_LARGE', 'payload rejected', { title: 'Payload too large' }),
+        );
+      }
+      return Promise.resolve(snapshots.find((snapshot) => snapshot.id === featureId) ?? healthy);
+    });
     render(<WorkspaceShell />);
 
     const lanes = await screen.findByRole('region', { name: 'Existing features' });
-    // The rest of Overview is intact: both rows, both lanes, no fatal surface.
+    // The rest of Overview is intact: all three rows render, no fatal surface.
     expect(within(lanes).getByText('Healthy feature')).toBeInTheDocument();
     expect(within(lanes).getByText('Oversized feature')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
-    // Only the unusable row is flagged.
+    expect(within(lanes).getByText('Second oversized feature')).toBeInTheDocument();
+    // Both degraded rows carry the canonical title as their state text.
     const failingRow = within(lanes).getByText('Oversized feature').closest('li')!;
-    await waitFor(() =>
-      expect(within(failingRow).getByText('Details unavailable')).toBeInTheDocument(),
-    );
+    const secondRow = within(lanes).getByText('Second oversized feature').closest('li')!;
+    await waitFor(() => {
+      expect(within(failingRow).getByText('Payload too large')).toBeInTheDocument();
+      expect(within(secondRow).getByText('Payload too large')).toBeInTheDocument();
+    });
     const healthyRow = within(lanes).getByText('Healthy feature').closest('li')!;
-    expect(within(healthyRow).queryByText('Details unavailable')).not.toBeInTheDocument();
+    expect(within(healthyRow).queryByText('Payload too large')).not.toBeInTheDocument();
+
+    // Exactly one compact degradation surface, captioned for both features,
+    // rendering the first failure's canonical error.
+    const caption = await screen.findByText('Details for 2 features could not be loaded');
+    const surface = caption.closest('.error-surface') as HTMLElement;
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveClass('error-surface--compact');
+    expect(surface.querySelector('.error-surface__code')).toHaveTextContent('E_PAYLOAD_TOO_LARGE');
+    expect(lanes.querySelectorAll('.error-surface')).toHaveLength(1);
+
+    // Retry refetches ONLY the two failed features' details.
+    const callsBefore = mock.api.getFeature.mock.calls.length;
+    await userEvent.click(within(surface).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mock.api.getFeature.mock.calls.length).toBe(callsBefore + 2));
+    const retriedIds = mock.api.getFeature.mock.calls
+      .slice(callsBefore)
+      .map((call) => call[0])
+      .sort();
+    expect(retriedIds).toEqual([FEATURE_ID, SECOND_FEATURE_ID].sort());
+    // The succeeded retry clears the degradation card and both flags.
+    await waitFor(() => {
+      expect(
+        screen.queryByText('Details for 2 features could not be loaded'),
+      ).not.toBeInTheDocument();
+      expect(within(failingRow).queryByText('Payload too large')).not.toBeInTheDocument();
+    });
   });
 
-  it('keeps the fatal error surface and its retry when the list fetch fails', async () => {
+  it('renders a compact ErrorSurface with the parsed code and a Retry that reloads the list', async () => {
     const feature = featureSnapshot({
       id: FEATURE_ID,
       name: 'Search revamp',
@@ -736,18 +1011,21 @@ describe('WorkspaceShell Overview loading', () => {
     });
     const mock = installAgenticoMock({ features: [summaryOf(feature)] });
     mock.api.listFeatures.mockRejectedValueOnce(
-      new Error('E_PAYLOAD_TOO_LARGE: payload rejected as too large'),
+      ipcError('E_PAYLOAD_TOO_LARGE', 'payload rejected as too large', {
+        title: 'Payload too large',
+      }),
     );
     render(<WorkspaceShell />);
 
-    expect(
-      await screen.findByText('E_PAYLOAD_TOO_LARGE: payload rejected as too large'),
-    ).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_PAYLOAD_TOO_LARGE')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Payload too large')).toBeVisible();
+    await userEvent.click(within(surface).getByRole('button', { name: 'Retry' }));
 
     const lanes = await screen.findByRole('region', { name: 'Existing features' });
     expect(within(lanes).getByText('Search revamp')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
 
   it('fetches detail only for the rows that need it, never one per feature', async () => {
@@ -780,6 +1058,8 @@ describe('WorkspaceShell Overview loading', () => {
     expect(within(lanes).getByText('Finished feature 0')).toBeInTheDocument();
     await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID));
     expect(mock.api.getFeature).toHaveBeenCalledTimes(1);
+    // A lane with no failures renders no degradation card.
+    expect(lanes.querySelectorAll('.error-surface')).toHaveLength(0);
   });
 });
 
@@ -878,7 +1158,12 @@ describe('WorkspaceShell toolbar', () => {
         stage: 'connect',
         detail: 'The runtime is unreachable.',
         ownership: 'none',
-        error: { code: 'E_CONNECT', message: 'The runtime is unreachable.' },
+        error: {
+          code: 'E_GATEWAY',
+          class: 'blocking',
+          title: 'Connection failed',
+          summary: 'The runtime is unreachable.',
+        },
       },
     });
     render(<WorkspaceShell />);
@@ -1825,5 +2110,115 @@ describe('WorkspaceShell routed server switcher', () => {
     );
     expect(document.querySelector('.server-switcher-dock')).not.toBeNull();
     expect(screen.queryByRole('listbox', { name: 'Servers' })).not.toBeInTheDocument();
+  });
+});
+
+describe('WorkspaceShell error-item attention jumps', () => {
+  it('focuses the registered failure card for a run failure', async () => {
+    const broken = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Broken feature',
+      status: 'Failed',
+      errors: [blockingRunError(FEATURE_ID)],
+      failure: {
+        code: 'iteration_budget_exhausted',
+        class: 'blocking' as const,
+        title: 'Iteration budget exhausted',
+        summary: 'The Implement phase exhausted its iteration budget.',
+        remediation: { hint: 'Restart the phase.', actions: ['restart'] },
+        context: { phase: { name: 'implement', iteration: 3 } },
+      },
+      actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(broken)] });
+    mock.api.getFeature.mockResolvedValue(broken);
+    const errorItem: AttentionItem = {
+      kind: 'error',
+      id: `error:${FEATURE_ID}:run::iteration_budget_exhausted`,
+      featureId: FEATURE_ID,
+      waitingSince: '2026-08-05T12:00:00.000Z',
+      ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: FEATURE_ID },
+      class: 'blocking',
+      code: 'iteration_budget_exhausted',
+      title: 'Iteration budget exhausted',
+    };
+    render(
+      <WorkspaceShell
+        attentionItems={[errorItem]}
+        attentionJump={{
+          requestId: 1,
+          featureId: FEATURE_ID,
+          attentionId: errorItem.id,
+        }}
+      />,
+    );
+
+    const alert = await screen.findByRole('alert');
+    await waitFor(() => expect(alert).toHaveFocus());
+  });
+
+  it('opens the publish modal and focuses its repository card for a repository entry', async () => {
+    const repoError = {
+      code: 'publish_rebase_conflict',
+      class: 'needs_action' as const,
+      title: 'Pull-rebase conflict',
+      summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
+    };
+    const feature = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Ready feature',
+      status: 'CodeReady',
+      errors: [
+        {
+          ref: {
+            scope: 'repository',
+            code: 'publish_rebase_conflict',
+            featureId: FEATURE_ID,
+            repository: 'repo-a',
+          },
+          error: repoError,
+        },
+      ],
+      actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(feature)] });
+    mock.api.getFeature.mockResolvedValue(feature);
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-complete',
+      canMarkDone: true,
+      repos: [
+        { repo: 'repo-a', publishable: true, touched: true, status: 'eligible', error: repoError },
+      ],
+    });
+    const errorItem: AttentionItem = {
+      kind: 'error',
+      id: `error:${FEATURE_ID}:repository:repo-a:publish_rebase_conflict`,
+      featureId: FEATURE_ID,
+      waitingSince: '2026-08-05T12:00:00.000Z',
+      ref: {
+        scope: 'repository',
+        code: 'publish_rebase_conflict',
+        featureId: FEATURE_ID,
+        repository: 'repo-a',
+      },
+      class: 'needs_action',
+      code: 'publish_rebase_conflict',
+      title: 'Pull-rebase conflict',
+    };
+    render(
+      <WorkspaceShell
+        attentionItems={[errorItem]}
+        attentionJump={{
+          requestId: 1,
+          featureId: FEATURE_ID,
+          attentionId: errorItem.id,
+        }}
+      />,
+    );
+
+    const dialog = await screen.findByRole('dialog', { name: 'Publish reviewed changes' });
+    const card = await within(dialog).findByRole('alert');
+    await waitFor(() => expect(card).toHaveFocus());
   });
 });

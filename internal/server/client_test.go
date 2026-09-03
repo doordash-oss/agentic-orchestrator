@@ -23,6 +23,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -173,10 +174,16 @@ func TestClientRetainedMutationReturnsStructuredAPIError(t *testing.T) {
 		writeJSON(w, http.StatusConflict, ErrorResponse{
 			APIVersion: APIVersion,
 			Error: Error{
-				Code:    errCodeConflict,
-				Message: "feature is busy",
-				Status:  http.StatusConflict,
-				Target:  map[string]any{"feature_id": fixtureFeatureID},
+				Class:       ErrorClass(errcat.ClassBlocking),
+				Code:        string(errcat.Conflict),
+				Title:       "Conflict",
+				Summary:     "The request conflicts with the current state of the feature.",
+				Diagnostics: "feature is busy",
+				Remediation: &ErrorRemediation{Hint: "Refresh the feature and retry."},
+				Context: &ErrorContext{Repositories: []ErrorRepositoryContext{{
+					Name:   "repo-a",
+					Branch: "feature/feat-1",
+				}}},
 			},
 		})
 	}))
@@ -191,11 +198,25 @@ func TestClientRetainedMutationReturnsStructuredAPIError(t *testing.T) {
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("UpdateFeatureConfig() error = %v, want APIError", err)
 	}
-	if apiErr.Code != errCodeConflict || apiErr.Status != http.StatusConflict || apiErr.Method != http.MethodPost || apiErr.Path != testFeatureConfigPath {
-		t.Fatalf("APIError = %+v, want method/path scoped conflict", apiErr)
+	if apiErr.Code != string(errcat.Conflict) || apiErr.Class != string(errcat.ClassBlocking) ||
+		apiErr.Status != http.StatusConflict || apiErr.Method != http.MethodPost || apiErr.Path != testFeatureConfigPath {
+		t.Fatalf("APIError = %+v, want method/path scoped blocking conflict", apiErr)
 	}
-	if apiErr.Target["feature_id"] != fixtureFeatureID {
-		t.Fatalf("APIError target = %+v, want feature_id %q", apiErr.Target, fixtureFeatureID)
+	if apiErr.Title != "Conflict" || apiErr.Summary != "The request conflicts with the current state of the feature." {
+		t.Fatalf("APIError title/summary = %q/%q, want catalog-authored conflict text", apiErr.Title, apiErr.Summary)
+	}
+	if apiErr.Diagnostics != "feature is busy" {
+		t.Fatalf("APIError diagnostics = %q, want feature is busy", apiErr.Diagnostics)
+	}
+	if apiErr.Remediation == nil || apiErr.Remediation.Hint != "Refresh the feature and retry." {
+		t.Fatalf("APIError remediation = %+v, want refresh hint", apiErr.Remediation)
+	}
+	if apiErr.Context == nil || len(apiErr.Context.Repositories) != 1 ||
+		apiErr.Context.Repositories[0].Name != "repo-a" || apiErr.Context.Repositories[0].Branch != "feature/feat-1" {
+		t.Fatalf("APIError context = %+v, want repo-a repository context", apiErr.Context)
+	}
+	if got, want := apiErr.Error(), "api POST "+testFeatureConfigPath+": conflict (409): Conflict"; got != want {
+		t.Fatalf("APIError.Error() = %q, want %q", got, want)
 	}
 }
 

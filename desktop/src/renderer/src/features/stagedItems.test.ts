@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { describe, expect, it } from 'vitest';
 import type { StagedUpload } from '../../../shared/ipc';
 import {
@@ -37,7 +53,17 @@ describe('stagedItems', () => {
     const pending = pendingUploadItems('image', ['/shots/a.png', '/shots/b.png']);
     const items = reconcileUploadResults(['other', ...pending] as ComposerUploadItem[], pending, [
       { ok: true, name: 'a.png', upload: upload('server-1', 'ref-a') },
-      { ok: false, name: 'b.png', error: { message: 'Too large.', remediation: 'Shrink it.' } },
+      {
+        ok: false,
+        name: 'b.png',
+        error: {
+          code: 'request_too_large',
+          class: 'needs_action',
+          title: 'Request too large',
+          summary: 'Too large.',
+          remediation: { hint: 'Shrink it.' },
+        },
+      },
     ]);
     expect(items[0]).toBe('other');
     expect(items[1]).toMatchObject({ state: 'ready', upload: { reference: 'ref-a' } });
@@ -47,6 +73,23 @@ describe('stagedItems', () => {
     });
     // Identities survive the flip so chips do not remount.
     expect(items[1]?.id).toBe(pending[0]?.id);
+  });
+
+  it('renders the failed chip text without the remediation hint when none is authored', () => {
+    const pending = pendingUploadItems('image', ['/shots/a.png']);
+    const items = reconcileUploadResults(pending, pending, [
+      {
+        ok: false,
+        name: 'a.png',
+        error: {
+          code: 'request_too_large',
+          class: 'needs_action',
+          title: 'Request too large',
+          summary: 'Too large.',
+        },
+      },
+    ]);
+    expect(items[0]).toMatchObject({ state: 'failed', message: 'Too large.' });
   });
 
   it('marks pending items failed on a wholesale transport failure', () => {

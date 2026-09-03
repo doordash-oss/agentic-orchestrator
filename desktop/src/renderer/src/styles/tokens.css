@@ -1,4 +1,20 @@
 /*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+/*
  * Neutral layout primitives, shared by every surface. The palette and the
  * type stacks both live in the Bench set below; only the spacing scale, the
  * control radius, the focus ring, and the modal scrim are defined here.
@@ -67,7 +83,7 @@
   --muted: #6b7078;
   --faint: #9aa0a8;
   --accent: #0a63ec;
-  --attention: #a86300;
+  --attention: #8a5200;
   --ok: #1e7a4a;
   --bad: #c0392f;
   --shadow: 0 22px 70px rgb(20 26 40 / 28%), 0 0 0 0.5px rgb(0 0 0 / 10%);

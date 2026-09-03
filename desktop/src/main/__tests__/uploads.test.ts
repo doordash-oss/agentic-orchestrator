@@ -1,6 +1,23 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { describe, expect, it, vi } from 'vitest';
-import { safeError, SafeErrorException } from '../../shared/errors';
+import { buildCanonicalError, CanonicalErrorException } from '../../shared/errors';
 import type { HttpResult } from '../gateway/runtimeGateway';
+import { mapServerError } from '../serverClient';
 import { UploadService, UPLOAD_BYTE_LIMITS, type UploadServiceDeps } from '../uploads';
 
 function stageBody(reference: string, name: string): Record<string, unknown> {
@@ -73,7 +90,7 @@ describe('UploadService.stageFiles', () => {
     const apiUpload = vi.fn((): Promise<HttpResult> => {
       call += 1;
       if (call === 2) {
-        return Promise.reject(new SafeErrorException(safeError('E_NOT_CONNECTED', 'down')));
+        return Promise.reject(new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED')));
       }
       return Promise.resolve({ status: 200, body: stageBody('ref-a', 'a.png') });
     });
@@ -86,30 +103,51 @@ describe('UploadService.stageFiles', () => {
     expect(result.results[1]).toMatchObject({
       ok: false,
       name: 'b.png',
-      error: { code: 'E_NOT_CONNECTED' },
+      error: { code: 'E_NOT_CONNECTED', class: 'blocking', title: 'Not connected' },
     });
   });
 
   it('maps a 413 request_too_large response to an actionable surface', async () => {
-    const apiUpload = vi.fn((): Promise<HttpResult> =>
-      Promise.resolve({
-        status: 413,
-        body: { error: { code: 'request_too_large', message: 'File exceeds limit.' } },
-      }),
-    );
+    const body = {
+      api_version: 'v1',
+      error: {
+        code: 'request_too_large',
+        class: 'blocking',
+        title: 'Request too large',
+        summary: 'The request body exceeds the size limit.',
+        remediation: { hint: 'Choose a smaller payload and retry.' },
+      },
+    };
+    const apiUpload = vi.fn((): Promise<HttpResult> => Promise.resolve({ status: 413, body }));
     const { service } = makeService(
       { apiUpload },
       { statFile: () => Promise.resolve({ size: UPLOAD_BYTE_LIMITS.image }) },
+    );
+
+    // The catalog-rendered rejection crosses as the canonical error with its
+    // own remediation; the per-file result carries its code and title text.
+    const mapped = mapServerError({ status: 413, body });
+    expect(mapped).toBeInstanceOf(CanonicalErrorException);
+    expect((mapped as CanonicalErrorException).canonical.code).toBe('request_too_large');
+    expect((mapped as CanonicalErrorException).canonical.remediation?.hint).toBe(
+      'Choose a smaller payload and retry.',
     );
 
     const result = await service.stageFiles('image', ['/shots/big.png']);
 
     expect(result.results[0]).toMatchObject({
       ok: false,
-      error: { code: 'request_too_large' },
+      name: 'big.png',
+      // The server's catalog-rendered canonical crosses untouched: its code,
+      // title, summary, and remediation ride the per-file entry.
+      error: {
+        code: 'request_too_large',
+        class: 'blocking',
+        title: 'Request too large',
+        summary: 'The request body exceeds the size limit.',
+        remediation: { hint: 'Choose a smaller payload and retry.' },
+      },
     });
-    const failed = result.results[0];
-    expect(failed?.ok === false && failed.error.remediation).toContain('10 MiB');
   });
 
   it('refuses oversized files before any network work', async () => {
@@ -125,7 +163,14 @@ describe('UploadService.stageFiles', () => {
 
     const result = await service.stageFiles('attachment', ['/docs/huge.zip']);
 
-    expect(result.results[0]).toMatchObject({ ok: false, error: { code: 'request_too_large' } });
+    expect(result.results[0]).toMatchObject({
+      ok: false,
+      error: {
+        code: 'E_UPLOAD_TOO_LARGE',
+        class: 'needs_action',
+        summary: expect.stringContaining('25 MiB'),
+      },
+    });
     expect(apiUpload).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
   });
@@ -136,7 +181,10 @@ describe('UploadService.stageFiles', () => {
 
     const result = await service.stageFiles('image', ['/shots/vector.svg']);
 
-    expect(result.results[0]).toMatchObject({ ok: false, error: { code: 'bad_request' } });
+    expect(result.results[0]).toMatchObject({
+      ok: false,
+      error: { code: 'E_UPLOAD_TYPE_UNSUPPORTED', class: 'needs_action' },
+    });
     expect(apiUpload).not.toHaveBeenCalled();
   });
 
@@ -158,7 +206,10 @@ describe('UploadService.stageFiles', () => {
 
     const result = await service.stageFiles('image', ['/shots/a.png']);
 
-    expect(result.results[0]).toMatchObject({ ok: false, error: { code: 'E_NOT_CONNECTED' } });
+    expect(result.results[0]).toMatchObject({
+      ok: false,
+      error: { code: 'E_NOT_CONNECTED', class: 'blocking', title: 'Not connected' },
+    });
   });
 
   it('rejects malformed stage responses via the schema gate', async () => {

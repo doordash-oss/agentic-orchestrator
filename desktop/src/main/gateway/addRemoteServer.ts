@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * The "Add Server" flow: paste a connection string, probe the server,
  * guard against adding a known LOCAL runtime by its remote address, verify
@@ -8,8 +24,8 @@
  *  - NOTHING is persisted on any failure — no settings entry, no token blob.
  *    Persistence happens exactly once, after probe + auth succeed.
  *  - The pasted string and the token never cross into results, log lines, or
- *    events. Every failure is a SafeErrorException with a distinct,
- *    actionable code; messages never echo the raw input.
+ *    events. Every failure is a CanonicalErrorException with a distinct,
+ *    actionable catalog code; messages never echo the raw input.
  *  - The duplicate guard matches on runtime identity (the health payload's
  *    runtime.state_dir), never on host:port — a remote alias for a known
  *    local server steers the user to the existing entry instead of creating
@@ -17,7 +33,8 @@
  */
 import path from 'node:path';
 
-import { SafeErrorException, safeError, stripSecrets } from '../../shared/errors';
+import { buildCanonicalError, CanonicalErrorException, stripSecrets } from '../../shared/errors';
+import type { CanonicalError } from '../../shared/api/parse';
 import type {
   KnownServer,
   RemoteServerAddRequest,
@@ -67,18 +84,13 @@ export interface AddRemoteServerDeps {
   timeouts?: { healthProbeMs?: number };
 }
 
-function fail(code: string, message: string, remediation: string): never {
-  throw new SafeErrorException(safeError(code, message, remediation));
+function fail(code: 'E_REMOTE_UNREACHABLE' | 'E_REMOTE_AUTH_REJECTED'): never {
+  throw new CanonicalErrorException(buildCanonicalError(code));
 }
 
-const UNREACHABLE_REMEDIATION =
-  'Check that the server is running and reachable from this machine (address, port, firewall), then retry.';
-
-const INCOMPATIBLE_REMEDIATION =
-  'Update the Agentico desktop app and the agentico server to matching releases, then retry.';
-
-const AUTH_REMEDIATION =
-  'Re-copy the FULL connection string the server printed — the token is the part before the @ sign — and paste it again.';
+function failIncompatible(error: CanonicalError): never {
+  throw new CanonicalErrorException(error);
+}
 
 /**
  * Finds a known LOCAL server with the same runtime identity as the probed
@@ -133,37 +145,26 @@ export async function addRemoteServer(
     health = await deps.fetchJson(`${baseUrl}/api/v1/health`, { timeoutMs: probeMs });
   } catch {
     deps.log(`add-remote-server failed: ${E_REMOTE_UNREACHABLE} (health probe)`);
-    fail(
-      E_REMOTE_UNREACHABLE,
-      'Could not reach the server at the address in the connection string.',
-      UNREACHABLE_REMEDIATION,
-    );
+    fail(E_REMOTE_UNREACHABLE);
   }
   if (health.status !== 200) {
     deps.log(`add-remote-server failed: ${E_REMOTE_UNREACHABLE} (health status)`);
-    fail(
-      E_REMOTE_UNREACHABLE,
-      'The server did not answer its health probe with a healthy status.',
-      UNREACHABLE_REMEDIATION,
-    );
+    fail(E_REMOTE_UNREACHABLE);
   }
   const probe = ProbeHealthSchema.safeParse(health.body);
   if (!probe.success || probe.data.status !== 'ok') {
     deps.log(`add-remote-server failed: ${E_REMOTE_INCOMPATIBLE} (unusable health payload)`);
-    fail(
-      E_REMOTE_INCOMPATIBLE,
-      'The server answered, but its health payload is not an Agentico server contract.',
-      INCOMPATIBLE_REMEDIATION,
+    failIncompatible(
+      buildCanonicalError('E_REMOTE_INCOMPATIBLE', {
+        params: { compatible: false, code: 'unrecognized_contract' },
+      }),
     );
   }
   const verdict = evaluateCompatibility(probe.data.compatibility);
   if (!verdict.compatible) {
-    deps.log(`add-remote-server failed: ${E_REMOTE_INCOMPATIBLE} (${verdict.reason})`);
-    fail(
-      E_REMOTE_INCOMPATIBLE,
-      `The server is not compatible with this app: ${verdict.reason}`,
-      INCOMPATIBLE_REMEDIATION,
-    );
+    const error = buildCanonicalError('E_REMOTE_INCOMPATIBLE', { params: verdict });
+    deps.log(`add-remote-server failed: ${E_REMOTE_INCOMPATIBLE} (${error.summary})`);
+    failIncompatible(error);
   }
 
   // (c) Paste-duplication guard: a remote alias for a known LOCAL server is
@@ -187,27 +188,15 @@ export async function addRemoteServer(
     });
   } catch {
     deps.log(`add-remote-server failed: ${E_REMOTE_UNREACHABLE} (readiness probe)`);
-    fail(
-      E_REMOTE_UNREACHABLE,
-      'Could not reach the server for the authenticated readiness check.',
-      UNREACHABLE_REMEDIATION,
-    );
+    fail(E_REMOTE_UNREACHABLE);
   }
   if (readiness.status === 401 || readiness.status === 403) {
     deps.log(`add-remote-server failed: ${E_REMOTE_AUTH_REJECTED}`);
-    fail(
-      E_REMOTE_AUTH_REJECTED,
-      'The server rejected the token from the connection string.',
-      AUTH_REMEDIATION,
-    );
+    fail(E_REMOTE_AUTH_REJECTED);
   }
   if (readiness.status !== 200) {
     deps.log(`add-remote-server failed: ${E_REMOTE_UNREACHABLE} (readiness status)`);
-    fail(
-      E_REMOTE_UNREACHABLE,
-      'The server did not answer its readiness check with a healthy status.',
-      UNREACHABLE_REMEDIATION,
-    );
+    fail(E_REMOTE_UNREACHABLE);
   }
 
   // (e) Persist. The token blob is written first: when the OS keystore is

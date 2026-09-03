@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"gopkg.in/yaml.v3"
 )
 
@@ -836,8 +837,6 @@ func TestStoreCloseChildIsIdempotentAndPreservesInspectionState(t *testing.T) {
 		Name:          "inspectable child",
 		Created:       created,
 		Status:        StatusFailed,
-		LastError:     "integration needs attention",
-		FailureType:   FailureInfrastructure,
 		Pipeline:      PipelineMedium,
 		Artifacts:     map[string]string{"plan": "phase-01/plan.md"},
 		PhaseCosts:    map[string]float64{"implement": 12.5},
@@ -848,11 +847,19 @@ func TestStoreCloseChildIsIdempotentAndPreservesInspectionState(t *testing.T) {
 			Transaction: &TransactionJournal{
 				Phase: TransactionPhaseAttention,
 				Entries: []RepoTransactionEntry{{
-					Repo:           "repo",
-					CleanupWarning: "worktree busy",
+					Repo: "repo",
+					Cleanup: &errcat.FailureRecord{
+						Code:        errcat.ChildCleanupIncomplete,
+						Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: "repo"}}},
+						Diagnostics: "worktree busy",
+					},
 				}},
 			},
 		},
+	}
+	child.Run().Failure = &errcat.FailureRecord{
+		Code:        errcat.InfrastructureFailure,
+		Diagnostics: "integration needs attention",
 	}
 	if err := store.Save(child); err != nil {
 		t.Fatalf("Save(%q): %v", child.ID, err)
@@ -878,14 +885,15 @@ func TestStoreCloseChildIsIdempotentAndPreservesInspectionState(t *testing.T) {
 	if got.Parent.ClosedAt == nil || !got.Parent.ClosedAt.Equal(firstClose) {
 		t.Fatalf("ClosedAt = %v, want original %v", got.Parent.ClosedAt, firstClose)
 	}
-	if got.LastError != child.LastError || got.FailureType != child.FailureType {
-		t.Fatalf("failure context = (%q, %q), want (%q, %q)", got.LastError, got.FailureType, child.LastError, child.FailureType)
+	if got.FailureCode() != errcat.InfrastructureFailure || got.FailureRecord() == nil || got.FailureRecord().Diagnostics != "integration needs attention" {
+		t.Fatalf("failure record = %v, want infrastructure failure with recorded diagnostics", got.FailureRecord())
 	}
 	if got.Artifacts["plan"] != child.Artifacts["plan"] || got.TotalCost() != child.TotalCost() {
 		t.Fatalf("inspection state artifacts/cost = (%v, %v), want (%v, %v)", got.Artifacts, got.TotalCost(), child.Artifacts, child.TotalCost())
 	}
-	if got.Parent.Transaction == nil || got.Parent.Transaction.Entries[0].CleanupWarning != "worktree busy" {
-		t.Fatalf("integration diagnostics = %#v, want cleanup warning retained", got.Parent.Transaction)
+	if got.Parent.Transaction == nil || got.Parent.Transaction.Entries[0].Cleanup == nil ||
+		got.Parent.Transaction.Entries[0].Cleanup.Diagnostics != "worktree busy" {
+		t.Fatalf("integration journal = %#v, want cleanup warning record retained", got.Parent.Transaction)
 	}
 }
 
@@ -1121,9 +1129,11 @@ func TestStoreFailureFieldsPersistence(t *testing.T) {
 		Name:          "Failing Feature",
 		Slug:          "failing-feature",
 		Status:        StatusFailed,
-		LastError:     "no progress for 3 consecutive iterations",
-		FailureType:   FailureSafetyRail,
 		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code:        errcat.SafetyRailTripped,
+		Diagnostics: "no progress for 3 consecutive iterations",
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save: %v", err)
@@ -1133,11 +1143,495 @@ func TestStoreFailureFieldsPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if loaded.LastError != f.LastError {
-		t.Errorf("LastError: got %q, want %q", loaded.LastError, f.LastError)
+	if loaded.FailureCode() != errcat.SafetyRailTripped {
+		t.Errorf("FailureCode = %q, want %q", loaded.FailureCode(), errcat.SafetyRailTripped)
 	}
-	if loaded.FailureType != f.FailureType {
-		t.Errorf("FailureType: got %q, want %q", loaded.FailureType, f.FailureType)
+	if got := loaded.FailureRecord(); got == nil || got.Diagnostics != "no progress for 3 consecutive iterations" {
+		t.Errorf("Diagnostics = %v, want %q", got, "no progress for 3 consecutive iterations")
+	}
+}
+
+// TestStoreFailureRecordRoundTripWithBlocks pins the durable shape of the
+// run's canonical failure record: code, phase and repositories context
+// blocks, and raw diagnostics all survive a save/load cycle untouched.
+func TestStoreFailureRecordRoundTripWithBlocks(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "fail-blocks-001",
+		Name:          "Failure Blocks",
+		Slug:          "failure-blocks",
+		Status:        StatusFailed,
+		CurrentPhase:  PhaseImplement,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code: errcat.IterationBudgetExhausted,
+		Context: &errcat.RecordContext{
+			Phase:        &errcat.CodePhase{Name: PhaseImplement.FailureName(), Iteration: 12},
+			Repositories: []errcat.CodeRepository{{Name: "repo-a", Branch: "feature/repo-a"}},
+		},
+		Diagnostics: "multi-repo implementation failed for repos: repo-a",
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got := loaded.FailureRecord()
+	if got == nil {
+		t.Fatal("FailureRecord = nil, want stored record")
+	}
+	if !reflect.DeepEqual(*got, *f.Run().Failure) {
+		t.Fatalf("failure record = %+v, want %+v", *got, *f.Run().Failure)
+	}
+}
+
+// TestStoreLoadIgnoresLegacyFailureKeys pins the no-backward-compatibility
+// contract for the removed run-level failure strings: stale last_error and
+// failure_type keys in a hand-written run.yaml are silently ignored and load
+// as no failure at all.
+func TestStoreLoadIgnoresLegacyFailureKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "legacy-keys-001",
+		Name:          "Legacy Keys",
+		Slug:          "legacy-keys",
+		Status:        StatusFailed,
+		CurrentPhase:  PhaseImplement,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	stale := append([]byte(nil), raw...)
+	stale = append(stale, "last_error: no progress for 3 consecutive iterations\nfailure_type: safety_rail\n"...)
+	if err := os.WriteFile(runPath, stale, 0o644); err != nil {
+		t.Fatalf("rewrite run.yaml with stale keys: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load with stale legacy keys: %v", err)
+	}
+	if loaded.FailureRecord() != nil || loaded.FailureCode() != "" {
+		t.Fatalf("failure record = %+v, want none from legacy last_error/failure_type keys", loaded.FailureRecord())
+	}
+	if loaded.Status != StatusFailed {
+		t.Fatalf("Status = %s, want unchanged Failed", loaded.Status)
+	}
+}
+
+// TestStoreSaveRunOmitsLegacyFailureKeys reads the written run.yaml bytes and
+// asserts the store never persists the removed last_error/failure_type keys.
+func TestStoreSaveRunOmitsLegacyFailureKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "no-legacy-keys-001",
+		Name:          "No Legacy Keys",
+		Slug:          "no-legacy-keys",
+		Status:        StatusFailed,
+		CurrentPhase:  PhaseImplement,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code:        errcat.SafetyRailTripped,
+		Diagnostics: "no progress for 3 consecutive iterations",
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	if bytes.Contains(raw, []byte("last_error")) {
+		t.Errorf("run.yaml contains legacy last_error key:\n%s", raw)
+	}
+	if bytes.Contains(raw, []byte("failure_type")) {
+		t.Errorf("run.yaml contains legacy failure_type key:\n%s", raw)
+	}
+	if !bytes.Contains(raw, []byte("failure:")) {
+		t.Errorf("run.yaml missing failure record block:\n%s", raw)
+	}
+}
+
+// TestStoreLoadIgnoresLegacyJournalWarningKeys pins the no-backward-
+// compatibility contract for the removed journal warning strings: stale
+// cleanup_warning and tail_warning keys in a hand-written feature.yaml are
+// silently ignored and load as no warning records, and a round-trip save
+// never re-emits them.
+func TestStoreLoadIgnoresLegacyJournalWarningKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const featureID = "legacy-journal-warnings-001"
+	featureDir := filepath.Join(dir, featureID)
+	runDir := filepath.Join(featureDir, "runs", "run-001")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	featureYAML := fmt.Sprintf(`id: %s
+name: Legacy Journal Warnings
+slug: legacy-journal-warnings
+description: pre-record journal with string warning keys
+created: 2026-01-01T00:00:00Z
+status: Published
+current_phase: 6
+repos:
+  - name: repo-a
+    path: /tmp/a
+    worktree_path: ""
+    branch: ""
+models: {}
+exit_criteria: ""
+active_run: 1
+run_count: 1
+schema_version: %d
+parent:
+  parent_id: parent-1
+  kind: refactor
+  close_outcome: completed
+  transaction:
+    phase: merged
+    entries:
+      - repo: repo-a
+        parent_branch: feature/parent
+        cleanup_warning: worktree busy
+        tail_warning: push failed
+`, featureID, SchemaVersionCurrent)
+	featurePath := filepath.Join(featureDir, "feature.yaml")
+	if err := os.WriteFile(featurePath, []byte(featureYAML), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runYAML := `run_number: 1
+started_at: 2026-01-01T00:00:00Z
+artifacts: {}
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("Load() error = %v; want nil (legacy warning keys must be ignored)", err)
+	}
+	tx := loaded.Parent.Transaction
+	if tx == nil || len(tx.Entries) != 1 {
+		t.Fatalf("transaction = %+v, want one entry", tx)
+	}
+	entry := tx.Entries[0]
+	if entry.Cleanup != nil || entry.Tail != nil {
+		t.Fatalf("warning records = %+v, want none from legacy cleanup_warning/tail_warning keys", entry)
+	}
+
+	// Saving the loaded feature back must never re-emit the stale keys.
+	tx.Entries[0].Cleanup = &errcat.FailureRecord{
+		Code:        errcat.ChildCleanupIncomplete,
+		Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: "repo-a"}}},
+		Diagnostics: "worktree busy",
+	}
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("save reloaded feature: %v", err)
+	}
+	rewritten, err := os.ReadFile(featurePath)
+	if err != nil {
+		t.Fatalf("reread feature.yaml: %v", err)
+	}
+	if bytes.Contains(rewritten, []byte("cleanup_warning")) || bytes.Contains(rewritten, []byte("tail_warning")) {
+		t.Errorf("feature.yaml contains a legacy warning key:\n%s", rewritten)
+	}
+	if !bytes.Contains(rewritten, []byte("cleanup:")) {
+		t.Errorf("feature.yaml missing the cleanup record block:\n%s", rewritten)
+	}
+}
+
+// TestStoreSetupTaskRecordRoundTrip pins the durable shape of a setup task's
+// stored failure record: code, context blocks, and diagnostics survive a
+// save/load cycle untouched.
+func TestStoreSetupTaskRecordRoundTrip(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	record := &errcat.FailureRecord{
+		Code: errcat.WorktreeSetupFailed,
+		Context: &errcat.RecordContext{
+			Repositories: []errcat.CodeRepository{{Name: "repo-a", Branch: "feature/repo-a"}},
+			Command:      &errcat.CodeCommand{LogPaths: []string{"/tmp/setup/attempt-01-output.txt"}},
+		},
+		Diagnostics: "creating worktree for repo-a: no commits yet",
+	}
+	f := &Feature{
+		ID:            "setup-record-001",
+		Name:          "Setup Record",
+		Slug:          "setup-record",
+		Status:        StatusFailed,
+		CurrentPhase:  PhasePlan,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Setup = &SetupState{
+		Status:    SetupStatusFailed,
+		Attempt:   1,
+		Tasks:     map[string]SetupTask{"worktree:repo-a": {Key: "worktree:repo-a", Kind: SetupTaskWorktree, Label: "Worktree: repo-a", Repo: "repo-a", Status: SetupStatusFailed, Error: record}},
+		TaskOrder: []string{"worktree:repo-a"},
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code:    errcat.WorktreeSetupFailed,
+		Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{Key: "worktree:repo-a", Kind: "worktree", Label: "Worktree: repo-a"}},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	setup := loaded.Run().Setup
+	if setup == nil {
+		t.Fatal("setup = nil, want persisted setup state")
+	}
+	task := setup.Tasks["worktree:repo-a"]
+	if task.Error == nil || !reflect.DeepEqual(*task.Error, *record) {
+		t.Fatalf("task record = %+v, want %+v", task.Error, *record)
+	}
+	if owner := loaded.FailedSetupTask(); owner == nil || owner.Key != "worktree:repo-a" {
+		t.Fatalf("FailedSetupTask = %+v, want the owning task", owner)
+	}
+}
+
+// TestStoreLoadIgnoresLegacySetupLastErrorKeys pins the no-backward-
+// compatibility contract for the removed setup last-error strings: stale
+// last_error keys on the setup aggregate or a task in a hand-written run.yaml
+// load as no text and no record.
+func TestStoreLoadIgnoresLegacySetupLastErrorKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "legacy-setup-001",
+		Name:          "Legacy Setup",
+		Slug:          "legacy-setup",
+		Status:        StatusSettingUpWorktrees,
+		CurrentPhase:  PhasePlan,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Setup = &SetupState{
+		Status:    SetupStatusFailed,
+		Attempt:   1,
+		Tasks:     map[string]SetupTask{"worktree:repo-a": {Key: "worktree:repo-a", Kind: SetupTaskWorktree, Label: "Worktree: repo-a", Status: SetupStatusFailed}},
+		TaskOrder: []string{"worktree:repo-a"},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	stale := strings.Replace(string(raw), "setup:\n",
+		"setup:\n    last_error: git worktree add failed\n", 1)
+	if stale == string(raw) {
+		t.Fatal("run.yaml does not carry the expected setup block header")
+	}
+	withTask := strings.Replace(stale, "worktree:repo-a:\n",
+		"worktree:repo-a:\n            last_error: git worktree add failed\n", 1)
+	if withTask == stale {
+		t.Fatal("run.yaml does not carry the expected setup task header")
+	}
+	if err := os.WriteFile(runPath, []byte(withTask), 0o644); err != nil {
+		t.Fatalf("rewrite run.yaml with stale setup keys: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load with stale setup keys: %v", err)
+	}
+	setup := loaded.Run().Setup
+	if setup == nil || setup.Status != SetupStatusFailed {
+		t.Fatalf("setup = %+v, want failed aggregate preserved", setup)
+	}
+	task := setup.Tasks["worktree:repo-a"]
+	if task.Error != nil {
+		t.Fatalf("task record = %+v, want none from a stale last_error key", task.Error)
+	}
+}
+
+// TestStoreSaveRunOmitsSetupLastError reads the written run.yaml bytes and
+// asserts the store never persists a last_error key under setup.
+func TestStoreSaveRunOmitsSetupLastError(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "setup-no-legacy-001",
+		Name:          "Setup No Legacy",
+		Slug:          "setup-no-legacy",
+		Status:        StatusFailed,
+		CurrentPhase:  PhasePlan,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Setup = &SetupState{
+		Status:  SetupStatusFailed,
+		Attempt: 1,
+		Tasks: map[string]SetupTask{"worktree:repo-a": {Key: "worktree:repo-a", Kind: SetupTaskWorktree, Label: "Worktree: repo-a", Repo: "repo-a", Status: SetupStatusFailed,
+			Error: &errcat.FailureRecord{Code: errcat.WorktreeSetupFailed, Diagnostics: "git worktree add failed"}}},
+		TaskOrder: []string{"worktree:repo-a"},
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code:    errcat.WorktreeSetupFailed,
+		Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{Key: "worktree:repo-a", Kind: "worktree", Label: "Worktree: repo-a"}},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	if bytes.Contains(raw, []byte("last_error")) {
+		t.Errorf("run.yaml contains a last_error key under setup:\n%s", raw)
+	}
+	if !bytes.Contains(raw, []byte("error:")) {
+		t.Errorf("run.yaml missing the task error record block:\n%s", raw)
+	}
+}
+
+// TestStoreLoadIgnoresLegacyRepoLastErrorKeys pins the no-backward-
+// compatibility contract for the removed repository last-error strings: a
+// stale last_error key under repo_states in a hand-written run.yaml loads
+// as no record.
+func TestStoreLoadIgnoresLegacyRepoLastErrorKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "legacy-repo-001",
+		Name:          "Legacy Repo Error",
+		Slug:          "legacy-repo-error",
+		Status:        StatusCodeReady,
+		CurrentPhase:  PhasePublish,
+		SchemaVersion: SchemaVersionCurrent,
+		Repos:         []FeatureRepo{{Name: "repo-a", Path: "/tmp/a"}},
+	}
+	f.RepoStates = map[string]*RepoState{
+		"repo-a": {Touched: true},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	stale := strings.Replace(string(raw), "repo-a:\n",
+		"repo-a:\n        last_error: push failed\n", 1)
+	if stale == string(raw) {
+		t.Fatal("run.yaml does not carry the expected repo_states entry header")
+	}
+	if err := os.WriteFile(runPath, []byte(stale), 0o644); err != nil {
+		t.Fatalf("rewrite run.yaml with stale repo key: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load with stale repo key: %v", err)
+	}
+	state := loaded.RepoStates["repo-a"]
+	if state == nil || !state.Touched {
+		t.Fatalf("repo state = %+v, want the touched entry preserved", state)
+	}
+	if state.Error != nil {
+		t.Fatalf("repo record = %+v, want none from a stale last_error key", state.Error)
+	}
+}
+
+// TestStoreSaveRunOmitsRepoLastError reads the written run.yaml bytes and
+// asserts the store never persists a last_error key under repo_states, and
+// that a stored publish failure record round-trips under the error key.
+func TestStoreSaveRunOmitsRepoLastError(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "repo-record-001",
+		Name:          "Repo Record",
+		Slug:          "repo-record",
+		Status:        StatusCodeReady,
+		CurrentPhase:  PhasePublish,
+		SchemaVersion: SchemaVersionCurrent,
+		Repos:         []FeatureRepo{{Name: "repo-a", Path: "/tmp/a"}},
+	}
+	f.RepoStates = map[string]*RepoState{
+		"repo-a": {Touched: true, Error: &errcat.FailureRecord{
+			Code: errcat.PublishPullRequestFailed,
+			Context: &errcat.RecordContext{
+				Repositories: []errcat.CodeRepository{{Name: "repo-a", Branch: "agentico/my-feature"}},
+			},
+			Diagnostics: "creating pull request: POST /repos/org/repo-a/pulls: 502 Bad Gateway",
+		}},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	if bytes.Contains(raw, []byte("last_error")) {
+		t.Errorf("run.yaml contains a last_error key under repo_states:\n%s", raw)
+	}
+	if !bytes.Contains(raw, []byte("publish_pull_request_failed")) {
+		t.Errorf("run.yaml missing the repository error record block:\n%s", raw)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	stored := loaded.RepoStates["repo-a"].Error
+	if stored == nil || stored.Code != errcat.PublishPullRequestFailed {
+		t.Fatalf("repo record = %+v, want the stored publish failure record", stored)
+	}
+	if stored.Context == nil || len(stored.Context.Repositories) != 1 ||
+		stored.Context.Repositories[0].Name != "repo-a" ||
+		stored.Context.Repositories[0].Branch != "agentico/my-feature" {
+		t.Fatalf("repo record repositories block = %+v, want repo-a on its branch", stored.Context)
 	}
 }
 
@@ -1151,11 +1645,16 @@ func TestStoreLoadReconcilesSuccessfulStatusWithTerminalFinalReviewFailure(t *te
 		ID:            "corrupt-fr-001",
 		Name:          "Corrupt Final Review",
 		Slug:          "corrupt-final-review",
-		Status:        StatusCodeReady,
+		Status:        StatusPublished,
 		CurrentPhase:  PhasePublish,
-		LastError:     "protocol violation: final_review_reviewer @ /tmp/iter: verification-report.yaml is malformed",
-		FailureType:   FailureProtocolViolation,
 		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code: errcat.ProtocolViolation,
+		Context: &errcat.RecordContext{
+			Phase: &errcat.CodePhase{Name: PhaseFinalReview.FailureName()},
+		},
+		Diagnostics: "final review verification report is malformed",
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save: %v", err)
@@ -1171,8 +1670,8 @@ func TestStoreLoadReconcilesSuccessfulStatusWithTerminalFinalReviewFailure(t *te
 	if loaded.CurrentPhase != PhaseFinalReview {
 		t.Fatalf("CurrentPhase = %s, want FinalReview", loaded.CurrentPhase)
 	}
-	if loaded.FailureType != FailureProtocolViolation {
-		t.Fatalf("FailureType = %q, want %q", loaded.FailureType, FailureProtocolViolation)
+	if loaded.FailureCode() != errcat.ProtocolViolation {
+		t.Fatalf("FailureCode = %q, want %q", loaded.FailureCode(), errcat.ProtocolViolation)
 	}
 }
 

@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * In-app server switching (packaged app): two real `agentico server`
  * processes share one HOME; the footer server control switches the workspace
@@ -302,7 +318,7 @@ test('a killed target fails with retry and back-to-previous; back restores the s
 
     transcript.section('The switch fails onto the error surface with both recovery actions');
     await betaRow.click();
-    const errorCode = handle.page.locator('.shell-card__error-code');
+    const errorCode = handle.page.locator('.error-surface__code');
     await expect(errorCode).toBeVisible({ timeout: 60_000 });
     await expect(errorCode).toHaveText('E_SWITCH_UNAVAILABLE');
     const retryButton = handle.page.getByRole('button', { name: 'Retry', exact: true });
@@ -392,7 +408,7 @@ test('the app-owned child survives a switch-away and is still stopped on quit', 
     transcript.section('The left-behind child keeps running and never hijacks the surface');
     expect(pidAlive(ownedPid)).toBe(true);
     // No crashed/error takeover while attached to beta.
-    await expect(handle.page.locator('.shell-card__error-code')).toHaveCount(0);
+    await expect(handle.page.locator('.error-surface__code')).toHaveCount(0);
     expect((await connectionState(handle)).status).toBe('ready');
     transcript.step('app-owned child still alive while attached to the other server');
 

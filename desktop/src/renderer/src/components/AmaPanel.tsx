@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import {
   useCallback,
   useEffect,
@@ -19,6 +35,8 @@ import {
   isTerminalChatStatus,
   type AmaGeometry,
   type AttentionItem,
+  type CanonicalError,
+  type ErrorReference,
   type RoutedRequest,
   type SessionDetail,
   type TranscriptMessage,
@@ -27,7 +45,7 @@ import {
 import {
   AttentionDetail,
   attentionActionNotice,
-  attentionErrorMessage,
+  attentionError,
   emptyAttentionDrafts,
   runAttentionSubmit,
   type AttentionAction,
@@ -50,6 +68,7 @@ import {
 import { parseIpcError } from '../wizard/ipcError';
 import { buildConversation, reconcileMessages } from '../features/transcript/conversation';
 import { ConversationTranscript } from '../features/transcript/ConversationTranscript';
+import { ErrorSurface } from './ErrorSurface';
 import {
   clampAmaGeometry,
   dragAmaGeometry,
@@ -64,7 +83,12 @@ type TranscriptState =
   | { phase: 'idle'; messages: TranscriptMessage[]; cursor: TranscriptCursor }
   | { phase: 'loading'; messages: TranscriptMessage[]; cursor: TranscriptCursor }
   | { phase: 'ready'; messages: TranscriptMessage[]; cursor: TranscriptCursor }
-  | { phase: 'error'; message: string; messages: TranscriptMessage[]; cursor: TranscriptCursor };
+  | {
+      phase: 'error';
+      error: CanonicalError;
+      messages: TranscriptMessage[];
+      cursor: TranscriptCursor;
+    };
 
 /** A live drag or resize: the pointer and geometry the gesture started from. */
 interface Gesture {
@@ -73,6 +97,12 @@ interface Gesture {
   startX: number;
   startY: number;
   start: AmaGeometry;
+}
+
+/** A routed auto-submit draft waiting for the in-flight turn to end. */
+interface PendingRoutedDraft {
+  draft: string;
+  context: ErrorReference | undefined;
 }
 
 const EMPTY_CURSOR: TranscriptCursor = { total: 0, start: 0, end: 0 };
@@ -123,6 +153,9 @@ export function AmaPanel({
   const [optimisticMessage, setOptimisticMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  // The notice slot's failure branch: a canonical error rendered as a compact
+  // ErrorSurface. Success and reconnect text stay the plain status line.
+  const [noticeError, setNoticeError] = useState<CanonicalError | null>(null);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [localDrafts, setLocalDrafts] = useState(emptyAttentionDrafts);
@@ -134,6 +167,12 @@ export function AmaPanel({
   const maximizeRef = useRef<HTMLButtonElement>(null);
   const subscriptionId = useRef<string | null>(null);
   const subscriptionGeneration = useRef(0);
+  // Each routed request is handled once by its ID: a re-render carrying the
+  // same request never replays its draft.
+  const handledRouteRequest = useRef<number | null>(null);
+  // A routed auto-submit that arrived while a turn was in flight, sent once
+  // the turn ends. A queue of one: a newer routed draft replaces it.
+  const pendingDraft = useRef<PendingRoutedDraft | null>(null);
   // The panel always persists both AMA fields together: the settings patch
   // replaces the whole `ama` object, so sending one field would reset the other.
   const openRef = useRef(open);
@@ -150,6 +189,19 @@ export function AmaPanel({
   // In-progress, failed, or foreign-server uploads stay in the composer but
   // block sending until removed (or switched back to).
   const uploadsBlocking = imageUploads.some((item) => isBlockingStagedItem(item, serverKey));
+
+  const announce = useCallback((text: string): void => {
+    setNoticeError(null);
+    setNotice(text);
+  }, []);
+  const clearNotice = useCallback((): void => {
+    setNotice('');
+    setNoticeError(null);
+  }, []);
+  const announceFailure = useCallback((error: CanonicalError): void => {
+    setNotice('');
+    setNoticeError(error);
+  }, []);
 
   // Real asks only (questions, permissions): the chat's idle wait between
   // turns is its resting state, and the composer below is how it continues.
@@ -282,19 +334,70 @@ export function AmaPanel({
     } catch (error) {
       // Before the first question there is no chat session to read, which is
       // the empty state rather than a failure.
-      if (parseIpcError(error).code === 'not_found') {
+      const parsed = parseIpcError(error);
+      if (parsed.code === 'not_found') {
         setTranscript({ phase: 'ready', messages: [], cursor: EMPTY_CURSOR });
         return null;
       }
       setTranscript((current) => ({
         phase: 'error',
-        message: error instanceof Error ? error.message : 'Could not load AMA transcript.',
+        error: parsed,
         messages: current.messages,
         cursor: current.cursor,
       }));
       return null;
     }
   }, []);
+
+  /**
+   * Submits a routed auto-submit draft as its own turn, bypassing the
+   * composer entirely: the draft gets its own optimistic bubble while
+   * unsent composer text and staged attachments stay exactly as they are,
+   * and the routed reference rides the turn as hidden chat context. The
+   * post-send chain mirrors a typed submission.
+   */
+  const submitRoutedDraft = useCallback(
+    async (draft: string, context: ErrorReference | undefined): Promise<void> => {
+      setOptimisticMessage(draft);
+      setPinToBottom((value) => value + 1);
+      setBusy(true);
+      clearNotice();
+      setOpenPersisted(true);
+      try {
+        await window.agentico.startChat({
+          message: draft,
+          ...(context === undefined ? {} : { context }),
+        });
+        await refreshSession();
+        const from = await loadTranscript();
+        if (from !== null) {
+          try {
+            await replaceOutputSubscription(from);
+            await loadTranscript();
+          } catch {
+            announce('Message sent, but live updates could not reconnect. Reopen AMA to retry.');
+          }
+        }
+        setOptimisticMessage(null);
+      } catch (error) {
+        setOptimisticMessage(null);
+        // The catalog owns the text: the canonical object names the failure.
+        // The composer is never touched — nothing was taken from it.
+        announceFailure(parseIpcError(error));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [
+      announce,
+      announceFailure,
+      clearNotice,
+      loadTranscript,
+      refreshSession,
+      replaceOutputSubscription,
+      setOpenPersisted,
+    ],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -337,12 +440,47 @@ export function AmaPanel({
 
   // Every routed `ama` request opens, expands, and focuses the composer; a
   // route never closes an open panel. The composer only exists once the panel
-  // is open, so the focus is a separate effect gated on both.
+  // is open, so the focus is a separate effect gated on both. Each request is
+  // handled once by its ID, so a re-render carrying the same id never
+  // replays its draft.
   useEffect(() => {
-    if (routeRequest?.event.target !== 'ama') return;
+    if (routeRequest === null || routeRequest.event.target !== 'ama') return;
+    if (handledRouteRequest.current === routeRequest.id) return;
+    handledRouteRequest.current = routeRequest.id;
     setOpenPersisted(true);
     setFocusToken((token) => token + 1);
-  }, [routeRequest, setOpenPersisted]);
+    const { draft, autoSubmit, chatContext } = routeRequest.event;
+    if (draft === undefined) return;
+    if (autoSubmit === true) {
+      if (busy) {
+        // While a turn is in flight the draft waits as the queue-of-one
+        // pending draft; a newer routed draft replaces it.
+        pendingDraft.current = { draft, context: chatContext };
+        return;
+      }
+      // Sending now also supersedes any draft queued against the turn that
+      // just ended: the newest routed draft is the one the user meant.
+      pendingDraft.current = null;
+      void submitRoutedDraft(draft, chatContext);
+      return;
+    }
+    // Without autoSubmit the draft only seeds an empty composer: typed text
+    // always wins, and the focus bump above has already focused it either
+    // way.
+    setMessage((current) => (current.trim() === '' ? draft : current));
+  }, [busy, routeRequest, setOpenPersisted, submitRoutedDraft]);
+
+  // A routed draft that arrived mid-turn sends once the turn settles: after
+  // busy drops, exactly once, because the ref is cleared before sending.
+  // Declared after the route effect so a draft routed in the same commit
+  // supersedes the queued one instead of racing it.
+  useEffect(() => {
+    if (busy) return;
+    const pending = pendingDraft.current;
+    if (pending === null) return;
+    pendingDraft.current = null;
+    void submitRoutedDraft(pending.draft, pending.context);
+  }, [busy, submitRoutedDraft]);
 
   useEffect(() => {
     if (focusToken === 0 || !open) return;
@@ -401,7 +539,7 @@ export function AmaPanel({
         } else {
           setTranscript((current) => ({
             phase: 'error',
-            message: event.error.message,
+            error: event.error,
             messages: current.messages,
             cursor: current.cursor,
           }));
@@ -460,7 +598,7 @@ export function AmaPanel({
     setImageUploads([]);
     setPinToBottom((value) => value + 1);
     setBusy(true);
-    setNotice('');
+    clearNotice();
     setOpenPersisted(true);
     try {
       const uploadRefs = submittableReferences(submittedUploads, 'image', serverKey);
@@ -476,7 +614,7 @@ export function AmaPanel({
           await replaceOutputSubscription(from);
           await loadTranscript();
         } catch {
-          setNotice('Message sent, but live updates could not reconnect. Reopen AMA to retry.');
+          announce('Message sent, but live updates could not reconnect. Reopen AMA to retry.');
         }
       }
       setOptimisticMessage(null);
@@ -485,7 +623,7 @@ export function AmaPanel({
       setMessage(text);
       setImages(submittedImages);
       setImageUploads(submittedUploads);
-      setNotice(error instanceof Error ? error.message : 'Could not send AMA message.');
+      announceFailure(parseIpcError(error));
     } finally {
       setBusy(false);
     }
@@ -509,7 +647,7 @@ export function AmaPanel({
         setImageUploads((items) => reconcileUploadResults(items, pending, result.results)),
       )
       .catch((error: unknown) => {
-        const message = parseIpcError(error).message;
+        const message = parseIpcError(error).summary;
         setImageUploads((items) => failPendingUploads(items, pending, message));
       });
   };
@@ -537,9 +675,7 @@ export function AmaPanel({
       void window.agentico
         .readClipboardImage()
         .then((result) => stageImagesRemotely(result.paths))
-        .catch((error: unknown) =>
-          setNotice(error instanceof Error ? error.message : 'Could not paste image.'),
-        );
+        .catch((error: unknown) => announceFailure(parseIpcError(error)));
       return;
     }
     if (imported.paths.length > 0) {
@@ -549,9 +685,7 @@ export function AmaPanel({
     void window.agentico
       .readClipboardImage()
       .then((result) => setImages((current) => uniquePaths(current, result.paths)))
-      .catch((error: unknown) =>
-        setNotice(error instanceof Error ? error.message : 'Could not paste image.'),
-      );
+      .catch((error: unknown) => announceFailure(parseIpcError(error)));
   };
 
   const askToEndChat = (): void => {
@@ -563,15 +697,15 @@ export function AmaPanel({
   const endChat = async (): Promise<void> => {
     if (!sessionActive || busy) return;
     setBusy(true);
-    setNotice('');
+    clearNotice();
     try {
       await window.agentico.endChat();
       await refreshSession();
       await loadTranscript();
       setConfirmingEnd(false);
-      setNotice('AMA ended.');
+      announce('AMA ended.');
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Could not end AMA.');
+      announceFailure(parseIpcError(error));
     } finally {
       setBusy(false);
     }
@@ -584,25 +718,25 @@ export function AmaPanel({
   ): Promise<void> => {
     if (attentionBusy !== null) return;
     setAttentionBusy(id);
-    setNotice('');
+    clearNotice();
     try {
       const { latest, notice: nextNotice } = await runAttentionSubmit(action, refreshAttention, {
         collapseOnSuccess: false,
         ...options,
       });
-      setNotice(
+      announce(
         latest.some((item) => item.id === id) ? nextNotice : ATTENTION_ALREADY_RESOLVED_NOTICE,
       );
     } catch (error) {
-      setNotice(attentionErrorMessage(error));
+      announceFailure(attentionError(error));
     } finally {
       setAttentionBusy(null);
     }
   };
 
   const saveDraft = useAttentionDraftSaves({
-    notify: (result, options) => setNotice(attentionActionNotice(result, options)),
-    notifyError: (error) => setNotice(attentionErrorMessage(error)),
+    notify: (result, options) => announce(attentionActionNotice(result, options)),
+    notifyError: (error) => announceFailure(attentionError(error)),
     onAlreadyResolved: async () => {
       await refreshAttention();
     },
@@ -700,7 +834,9 @@ export function AmaPanel({
             status={
               <>
                 {transcript.phase === 'loading' ? <p role="status">Loading transcript…</p> : null}
-                {transcript.phase === 'error' ? <p role="alert">{transcript.message}</p> : null}
+                {transcript.phase === 'error' ? (
+                  <ErrorSurface error={transcript.error} variant="compact" />
+                ) : null}
               </>
             }
             emptyState={
@@ -714,7 +850,9 @@ export function AmaPanel({
             }
           />
         </div>
-        {notice !== '' ? (
+        {noticeError !== null ? (
+          <ErrorSurface error={noticeError} variant="compact" />
+        ) : notice !== '' ? (
           <p className="ama-panel__notice" role="status" aria-live="polite">
             {notice}
           </p>

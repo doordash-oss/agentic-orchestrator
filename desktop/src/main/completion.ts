@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Main-process completion operations. Proxies the server's completion
  * preflight and repository diff endpoints through the bearer transport,
@@ -9,7 +25,7 @@ import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { clipboard, shell } from 'electron';
 import { z } from 'zod';
-import { redactText } from '../shared/errors';
+import { redactText, redactedCanonicalError } from '../shared/errors';
 import {
   validateWithSchema,
   CompletionPreflightResponseSchema,
@@ -32,12 +48,6 @@ import {
   type RevealPathRequest,
 } from '../shared/ipc';
 import { alwaysLocal, type LocalitySource } from './locality';
-
-const COMPLETION_REMEDIES: Readonly<Record<string, string>> = {
-  not_found: 'The feature no longer exists on the server. Close its tab.',
-  bad_request: 'The server rejected the request. Refresh and retry.',
-  conflict: 'The server state has changed. Refresh the completion preview.',
-};
 
 export interface RevealPathOutcome {
   ok: boolean;
@@ -70,7 +80,6 @@ export class CompletionService {
       this.deps.transport,
       `/api/v1/features/${input.featureId}/completion/preflight`,
       undefined,
-      { remedyByCode: COMPLETION_REMEDIES },
     );
     const response = validateWithSchema(body, CompletionPreflightResponseSchema);
     return {
@@ -86,7 +95,20 @@ export class CompletionService {
         ...(repo.pr_url ? { prUrl: repo.pr_url } : {}),
         ...(repo.blocker ? { blocker: repo.blocker } : {}),
         ...(repo.freshness ? { freshness: repo.freshness } : {}),
-        ...(repo.last_error ? { lastError: repo.last_error } : {}),
+        // The canonical object crosses IPC intact except diagnostics, which
+        // pass through the same redaction as every other raw text the
+        // renderer receives.
+        ...(repo.error === undefined
+          ? {}
+          : {
+              error: {
+                ...repo.error,
+                diagnostics:
+                  repo.error.diagnostics === undefined
+                    ? undefined
+                    : redactText(repo.error.diagnostics),
+              },
+            }),
         ...(repo.base_branch ? { baseBranch: repo.base_branch } : {}),
         ...(repo.branch ? { branch: repo.branch } : {}),
         ...(repo.pending_commits === undefined ? {} : { pendingCommits: repo.pending_commits }),
@@ -111,7 +133,6 @@ export class CompletionService {
       this.deps.transport,
       `/api/v1/features/${input.featureId}/repositories/${encodeURIComponent(input.repo)}/diff${query}`,
       undefined,
-      { remedyByCode: COMPLETION_REMEDIES },
     );
     const response = validateWithSchema(body, RepositoryDiffResponseSchema);
     return {
@@ -132,7 +153,9 @@ export class CompletionService {
       ...(response.file_truncated ? { fileTruncated: response.file_truncated } : {}),
       ...(response.file_binary ? { fileBinary: response.file_binary } : {}),
       ...(response.file_unavailable ? { fileUnavailable: response.file_unavailable } : {}),
-      ...(response.partial_failure ? { partialFailure: response.partial_failure } : {}),
+      // Canonical warning objects cross IPC intact except diagnostics,
+      // which pass through the same redaction as every other raw text.
+      ...(response.error === undefined ? {} : { error: redactedCanonicalError(response.error) }),
     };
   }
 
@@ -175,7 +198,6 @@ export class CompletionService {
       this.deps.transport,
       `/api/v1/features/${id}/repositories/${encodeURIComponent(repo)}/path`,
       undefined,
-      { remedyByCode: COMPLETION_REMEDIES },
     );
     const response = validateWithSchema(body, RepositoryPathResponseSchema);
     if (response.feature_id !== id || response.repo !== repo) {

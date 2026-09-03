@@ -1,22 +1,212 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { describe, expect, it } from 'vitest';
 import {
-  SafeErrorException,
-  safeError,
-  toSafeError,
+  ERROR_CATALOG,
+  buildCanonicalError,
+  CanonicalErrorException,
+  toCanonicalError,
   redactText,
+  redactedCanonicalError,
   isRequestTimeout,
+  isAbortError,
   requestTimeoutError,
+  requiresLocalServerError,
   E_REQUEST_TIMEOUT,
+  type CatalogCode,
+  type CatalogSpec,
 } from './errors';
 
-describe('safeError', () => {
-  it('builds a typed safe error with code, message, and remediation', () => {
-    const err = safeError('E_TEST', 'something broke', 'try again');
-    expect(err).toEqual({ code: 'E_TEST', message: 'something broke', remediation: 'try again' });
+const VALID_CLASSES = new Set(['blocking', 'needs_action', 'warning']);
+
+/** Builds an entry's summary with placeholder values for its typed parameters. */
+function summaryOf(spec: (typeof ERROR_CATALOG)[CatalogCode]): string {
+  const params = new Proxy({} as Record<string, string | boolean>, {
+    get: (_target, key) =>
+      key === 'code' ? 'missing_contract' : key === 'compatible' ? false : 'param',
+  });
+  return (spec as CatalogSpec<Record<string, string | boolean>>).summary(params);
+}
+
+describe('ERROR_CATALOG', () => {
+  it('keys every code with the E_UPPER_SNAKE desktop-local marker', () => {
+    for (const code of Object.keys(ERROR_CATALOG)) {
+      expect(code).toMatch(/^E_[A-Z0-9_]+$/);
+      // Server catalog codes are lowercase snake_case, so the families stay
+      // disjoint by construction.
+      expect(code).not.toMatch(/[a-z]/);
+    }
   });
 
-  it('omits remediation when not provided', () => {
-    expect(safeError('E_TEST', 'msg')).toEqual({ code: 'E_TEST', message: 'msg' });
+  it('gives every entry a valid class and nonempty title and summary', () => {
+    for (const spec of Object.values(ERROR_CATALOG)) {
+      expect(VALID_CLASSES.has(spec.class)).toBe(true);
+      expect(spec.title.length).toBeGreaterThan(0);
+      expect(summaryOf(spec).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('keeps the connection-string codes pairwise distinct in title and summary', () => {
+    const codes = [
+      'E_CONNECTION_STRING_SCHEME',
+      'E_CONNECTION_STRING_TOKEN',
+      'E_CONNECTION_STRING_HOST',
+      'E_CONNECTION_STRING_HOST_INVALID',
+      'E_CONNECTION_STRING_WILDCARD',
+      'E_CONNECTION_STRING_PORT',
+      'E_CONNECTION_STRING_PORT_RANGE',
+    ] as const;
+    const titles = new Set<string>();
+    const summaries = new Set<string>();
+    for (const code of codes) {
+      const spec = ERROR_CATALOG[code];
+      titles.add(spec.title);
+      summaries.add(summaryOf(spec));
+    }
+    expect(titles.size).toBe(codes.length);
+    expect(summaries.size).toBe(codes.length);
+  });
+});
+
+describe('buildCanonicalError', () => {
+  it('builds the catalog-authored canonical shape', () => {
+    const err = buildCanonicalError('E_BAD_API_PATH');
+    expect(err).toEqual({
+      code: 'E_BAD_API_PATH',
+      class: 'blocking',
+      title: 'Disallowed API path',
+      summary: 'The requested API path is not allowed.',
+    });
+  });
+
+  it('interpolates typed parameters into the authored summary', () => {
+    const err = buildCanonicalError('E_CONNECTION_STRING_SCHEME', {
+      params: { got: 'https' },
+    });
+    expect(err.code).toBe('E_CONNECTION_STRING_SCHEME');
+    expect(err.class).toBe('needs_action');
+    expect(err.title).toBe('The connection string could not be parsed');
+    expect(err.summary).toBe('Connection string must use the agentico:// scheme, got https.');
+    expect(err.remediation?.hint).toBeTruthy();
+  });
+
+  it('keeps the internal fallback summary catalog-authored', () => {
+    const err = buildCanonicalError('E_INTERNAL');
+    expect(err.summary).toBe('The request failed unexpectedly.');
+  });
+
+  it('redacts free-form diagnostics', () => {
+    const err = buildCanonicalError('E_LAUNCH_FAILED', {
+      diagnostics: 'read /Users/somebody/secret.txt then Bearer tok123',
+    });
+    expect(err.diagnostics).toContain('[path]');
+    expect(err.diagnostics).toContain('[redacted]');
+    expect(err.diagnostics).not.toContain('/Users/somebody');
+    expect(err.diagnostics).not.toContain('tok123');
+  });
+
+  it('redacts a remediation-hint override', () => {
+    const err = buildCanonicalError('E_INTERNAL', {
+      remediationHint: 're-paste from /Users/somebody/notes with Bearer tok123',
+    });
+    expect(err.remediation?.hint).not.toContain('/Users/somebody');
+    expect(err.remediation?.hint).not.toContain('tok123');
+  });
+});
+
+describe('toCanonicalError', () => {
+  it('passes an existing CanonicalErrorException through untouched', () => {
+    const canonical = buildCanonicalError('E_INTERNAL');
+    const exc = new CanonicalErrorException(canonical);
+    expect(toCanonicalError(exc, 'E_GATEWAY')).toBe(canonical);
+  });
+
+  it('keeps an unknown Error message out of the fallback summary and redacts its diagnostics', () => {
+    const err = toCanonicalError(
+      new Error('boom at /Users/somebody/app with Bearer tok123'),
+      'E_INTERNAL',
+    );
+    expect(err.code).toBe('E_INTERNAL');
+    expect(err.class).toBe('blocking');
+    expect(err.title).toBe('Request failed');
+    expect(err.summary).toBe('The request failed unexpectedly.');
+    expect(err.diagnostics).toContain('[path]');
+    expect(err.diagnostics).toContain('[redacted]');
+    expect(err.diagnostics).not.toContain('/Users/somebody');
+    expect(err.diagnostics).not.toContain('tok123');
+  });
+
+  it('never embeds non-Error payloads (which could hold raw data) in the summary', () => {
+    const err = toCanonicalError({ secret: 'hunter2' }, 'E_INTERNAL');
+    expect(err.code).toBe('E_INTERNAL');
+    expect(JSON.stringify(err)).not.toContain('hunter2');
+    expect(err.summary).toBe('The request failed unexpectedly.');
+    expect(err.diagnostics).toBeUndefined();
+  });
+
+  it('keeps every caught-exception fallback message in diagnostics', () => {
+    const codes = [
+      'E_INTERNAL',
+      'E_GATEWAY',
+      'E_RECOVERY_DELAY',
+      'E_LAUNCH_FAILED',
+      'E_EVENT_STREAM',
+      'E_STOP_FAILED',
+      'E_LINK_ADD_FAILED',
+      'E_SESSION_STREAM',
+      'E_UPLOAD',
+    ] as const;
+    for (const code of codes) {
+      const err = toCanonicalError(new Error('private failure detail'), code);
+      expect(err.summary).toBe(summaryOf(ERROR_CATALOG[code]));
+      expect(err.summary).not.toContain('private failure detail');
+      expect(err.diagnostics).toBe('private failure detail');
+    }
+  });
+
+  it('maps a fetch abort to the typed timeout code instead of its raw DOM message', () => {
+    const abort = new Error('This operation was aborted');
+    abort.name = 'AbortError';
+    const err = toCanonicalError(abort, 'E_INTERNAL');
+    expect(err.code).toBe(E_REQUEST_TIMEOUT);
+    expect(err.class).toBe('warning');
+    expect(err.summary).not.toContain('aborted');
+    expect(err.remediation?.hint).toBeTruthy();
+  });
+});
+
+describe('isRequestTimeout', () => {
+  it('recognizes only the typed timeout exception', () => {
+    expect(isRequestTimeout(new CanonicalErrorException(requestTimeoutError()))).toBe(true);
+    expect(isRequestTimeout(new CanonicalErrorException(requiresLocalServerError()))).toBe(false);
+    expect(isRequestTimeout(new Error('boom'))).toBe(false);
+  });
+});
+
+describe('isAbortError', () => {
+  it('recognizes abort and timeout DOM error names', () => {
+    const abort = new Error('This operation was aborted');
+    abort.name = 'AbortError';
+    expect(isAbortError(abort)).toBe(true);
+    const timeout = new Error('Timed out');
+    timeout.name = 'TimeoutError';
+    expect(isAbortError(timeout)).toBe(true);
+    expect(isAbortError(new Error('boom'))).toBe(false);
+    expect(isAbortError('nope')).toBe(false);
   });
 });
 
@@ -40,45 +230,19 @@ describe('redactText', () => {
   });
 });
 
-describe('toSafeError', () => {
-  it('passes through an existing SafeErrorException payload', () => {
-    const exc = new SafeErrorException(safeError('E_ORIGINAL', 'original', 'fix'));
-    expect(toSafeError(exc, 'E_FALLBACK')).toEqual({
-      code: 'E_ORIGINAL',
-      message: 'original',
-      remediation: 'fix',
+describe('redactedCanonicalError', () => {
+  it('redacts diagnostics while leaving the catalog-authored fields intact', () => {
+    const err = redactedCanonicalError({
+      ...buildCanonicalError('E_INTERNAL'),
+      diagnostics: 'path /Users/somebody/secret.txt and Bearer tok123',
     });
+    expect(err.diagnostics).toContain('[path]');
+    expect(err.diagnostics).toContain('[redacted]');
+    expect(err.summary).toBe('The request failed unexpectedly.');
   });
 
-  it('redacts messages from unknown errors and applies the fallback code', () => {
-    const err = toSafeError(
-      new Error('boom at /Users/somebody/app with Bearer tok123'),
-      'E_FALLBACK',
-    );
-    expect(err.code).toBe('E_FALLBACK');
-    expect(err.message).not.toContain('/Users/somebody');
-    expect(err.message).not.toContain('tok123');
-  });
-
-  it('never embeds non-Error payloads (which could hold raw data) in the message', () => {
-    const err = toSafeError({ secret: 'hunter2' }, 'E_FALLBACK');
-    expect(JSON.stringify(err)).not.toContain('hunter2');
-  });
-
-  it('maps a fetch abort to the typed timeout code instead of its raw DOM message', () => {
-    const abort = new Error('This operation was aborted');
-    abort.name = 'AbortError';
-    const err = toSafeError(abort, 'E_INTERNAL');
-    expect(err.code).toBe(E_REQUEST_TIMEOUT);
-    expect(err.message).not.toContain('aborted');
-    expect(err.remediation).toBeDefined();
-  });
-});
-
-describe('isRequestTimeout', () => {
-  it('recognizes only the typed timeout exception', () => {
-    expect(isRequestTimeout(new SafeErrorException(requestTimeoutError()))).toBe(true);
-    expect(isRequestTimeout(new SafeErrorException(safeError('conflict', 'no')))).toBe(false);
-    expect(isRequestTimeout(new Error('boom'))).toBe(false);
+  it('leaves an error without diagnostics untouched', () => {
+    const err = buildCanonicalError('E_NOT_CONNECTED');
+    expect(redactedCanonicalError(err)).toEqual(err);
   });
 });

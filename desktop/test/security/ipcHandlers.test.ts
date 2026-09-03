@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { describe, expect, it, vi } from 'vitest';
 import { registerIpcHandlers, type IpcServices } from '../../src/main/ipcHandlers';
 import type { TrustedSender } from '../../src/main/security';
@@ -128,7 +144,7 @@ function makeServices(): IpcServices {
     reorderWorkspaceRoots: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     initRepository: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     listRepositories: vi.fn(() => Promise.resolve([])),
-    listFeatures: vi.fn(() => Promise.resolve([])),
+    listFeatures: vi.fn(() => Promise.resolve({ features: [], warnings: [] })),
     getFeature: vi.fn(() =>
       Promise.resolve({
         id: 'abcd1234ef567890',
@@ -139,6 +155,8 @@ function makeServices(): IpcServices {
         repos: [],
         createdAt: '2026-07-14T10:00:00Z',
         activeRun: 1,
+        warnings: [],
+        errors: [],
         automaticReview: {
           mode: 'default' as const,
           enabled: true,
@@ -551,7 +569,7 @@ describe('registerIpcHandlers', () => {
     expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
   });
 
-  it('converts service exceptions into redacted safe errors', async () => {
+  it('converts service exceptions into redacted canonical internal errors', async () => {
     const services = makeServices();
     services.getSettings = vi.fn(() => {
       throw new Error('exploded at /Users/somebody/secret with Bearer tok123');
@@ -559,12 +577,18 @@ describe('registerIpcHandlers', () => {
     const { handlers } = register(services);
     const result = (await handlers.get(IPC_CHANNELS.settingsGet)!(goodEvent)) as {
       ok: boolean;
-      error?: { code: string; message: string };
+      error?: { code: string; summary: string; diagnostics?: string };
     };
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe('E_INTERNAL');
-    expect(result.error?.message).not.toContain('/Users/somebody');
-    expect(result.error?.message).not.toContain('tok123');
+    // The catalog-authored summary never echoes the raw message; the
+    // diagnostics carry it only through the shared redaction.
+    expect(result.error?.summary).not.toContain('/Users/somebody');
+    expect(result.error?.summary).not.toContain('tok123');
+    expect(result.error?.diagnostics).not.toContain('/Users/somebody');
+    expect(result.error?.diagnostics).not.toContain('tok123');
+    expect(result.error?.diagnostics).toContain('[path]');
+    expect(result.error?.diagnostics).toContain('[redacted]');
   });
 
   it('does not send session output after the renderer is destroyed', async () => {

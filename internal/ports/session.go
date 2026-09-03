@@ -202,6 +202,9 @@ type ToolPermissionRequest struct {
 type PermissionDecision struct {
 	Behavior string // "allow" | "deny" | "" (defer)
 	Reason   string
+	// AutoApproveOffer accompanies a deferral ("" behavior) for a Bash
+	// request that automatic review would have handled if enabled.
+	AutoApproveOffer *llm.AutoApproveOffer
 }
 
 // PermissionHandler decides whether a session may invoke a tool. Defined in
@@ -450,6 +453,15 @@ type SessionView interface {
 	Stop() error
 	Interrupt() error
 	Wait()
+}
+
+// HiddenContextSender is the optional capability a session view implements
+// when its user turns can carry hidden context: the provider receives the
+// hidden text, a blank line, then the visible message, while the transcript
+// echo records only the visible message. Turns without hidden context keep
+// using SendUserMessage.
+type HiddenContextSender interface {
+	SendUserMessageWithHiddenContext(visible, hiddenContext string) error
 }
 
 // SessionHandle extends SessionView with the mutable lifecycle methods that

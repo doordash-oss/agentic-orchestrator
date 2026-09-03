@@ -1,8 +1,35 @@
-import { act, cleanup, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttentionItem, FeatureSnapshot, RelationshipChildView } from '../../../../shared/ipc';
+import { buildCanonicalError } from '../../../../shared/errors';
 import { featureSnapshot, installAgenticoMock } from '../../test/agenticoMock';
+import { ExplainChatProvider } from '../../explainChat';
 import { emptyAttentionDrafts } from '../AttentionInbox';
 import {
   RefactorPassWorkspace,
@@ -28,8 +55,7 @@ function childView(overrides: Partial<RelationshipChildView> = {}): Relationship
     startedAt: '2026-07-30T10:00:00Z',
     cost: { totalUsd: 1.25, byPhase: {} },
     integrationState: 'pending',
-    attention: [],
-    cleanupWarnings: [],
+    warnings: [],
     ...overrides,
   };
 }
@@ -102,6 +128,92 @@ function controllerFor(
   };
 }
 
+/** Canonical integration-attention error as the renderer receives it. */
+const parkedAttention = {
+  code: 'integration_merge_conflict',
+  class: 'needs_action' as const,
+  title: 'Integration merge conflict',
+  summary: 'The merge candidate for repository "repo-a" conflicted on 1 file.',
+  remediation: {
+    hint: 'Resolve the conflict in the pass worktree and retry; the pass re-enters final review if its code changed.',
+    actions: ['retry'],
+  },
+  context: {
+    repositories: [{ name: 'repo-a', branch: 'main', conflict_files: ['internal/api.go'] }],
+  },
+  diagnostics: 'repo-a: merge conflict: [internal/api.go]',
+};
+
+function parkedChild(overrides: Partial<FeatureSnapshot> = {}): FeatureSnapshot {
+  return readyChild({
+    status: 'ReviewPassed',
+    actions: [
+      { id: 'retry', enabled: true, disabledReasons: [] },
+      { id: 'discard', enabled: true, disabledReasons: [] },
+    ],
+    transaction: { phase: 'attention', attention: parkedAttention },
+    ...overrides,
+  });
+}
+
+/** Canonical setup-failure error as the renderer receives it on the owning task. */
+const setupTaskError = {
+  code: 'worktree_setup_failed',
+  class: 'blocking' as const,
+  title: 'Worktree setup failed',
+  summary: 'Setting up the worktree for repository "repo-a" failed.',
+  remediation: {
+    hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+    actions: ['setup'],
+  },
+  context: { repositories: [{ name: 'repo-a', branch: 'feature/pass' }] },
+  diagnostics: 'git worktree add failed: no commits yet',
+};
+
+/** A child whose worktree setup failed: the task owns the canonical record. */
+function setupFailedChild(overrides: Partial<FeatureSnapshot> = {}): FeatureSnapshot {
+  return featureSnapshot({
+    id: CHILD_ID,
+    name: 'Slop removal pass',
+    status: 'Failed',
+    setupComplete: false,
+    setup: {
+      status: 'failed',
+      attempt: 1,
+      tasks: [
+        {
+          key: 'worktree:repo-a',
+          kind: 'worktree',
+          label: 'Worktree: repo-a',
+          repo: 'repo-a',
+          status: 'failed',
+          attempt: 1,
+          error: setupTaskError,
+        },
+      ],
+    },
+    failure: {
+      code: 'worktree_setup_failed',
+      class: 'blocking' as const,
+      title: 'Worktree setup failed',
+      summary: 'Setup task "Worktree: repo-a" failed.',
+      remediation: {
+        hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+        actions: ['setup'],
+      },
+      context: {
+        setup_task: { key: 'worktree:repo-a', kind: 'worktree', label: 'Worktree: repo-a' },
+      },
+    },
+    actions: [
+      { id: 'setup', enabled: true, disabledReasons: [] },
+      { id: 'retry', enabled: true, disabledReasons: [] },
+      { id: 'discard', enabled: true, disabledReasons: [] },
+    ],
+    ...overrides,
+  });
+}
+
 function renderWorkspace(
   parent: FeatureSnapshot,
   pass: RefactorPassController,
@@ -155,6 +267,44 @@ function waitingChild(): FeatureSnapshot {
 }
 
 describe('RefactorPassWorkspace', () => {
+  it('renders the owning setup task once with Retry setup dispatching setup', async () => {
+    installAgenticoMock({ feature: setupFailedChild() });
+    const parent = parentWith();
+    const pass = controllerFor(parent, setupFailedChild());
+    const user = userEvent.setup();
+    renderWorkspace(parent, pass);
+
+    // Exactly one alert-role ErrorSurface: the owning task's canonical
+    // object, not the run's thin record.
+    const alert = screen.getByRole('alert');
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    expect(within(alert).getByText('Failed')).toBeInTheDocument();
+    expect(within(alert).getByText('worktree_setup_failed')).toBeInTheDocument();
+    expect(within(alert).getByText('Worktree setup failed')).toBeInTheDocument();
+    expect(
+      within(alert).getByText('Setting up the worktree for repository "repo-a" failed.'),
+    ).toBeInTheDocument();
+    expect(within(alert).getByText('repo-a')).toBeInTheDocument();
+
+    // The deleted state sentence appears nowhere.
+    expect(
+      screen.queryByText('Worktree setup failed. Retry setup to continue.'),
+    ).not.toBeInTheDocument();
+
+    // The card's own Retry setup button dispatches setup for the child.
+    await user.click(within(alert).getByRole('button', { name: 'Retry setup' }));
+    expect(pass.dispatch).toHaveBeenCalledWith('setup');
+  });
+
+  it('renders no setup-failure card for a child without a failed setup', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    renderWorkspace(parent, controllerFor(parent, readyChild()));
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(document.querySelector('.error-surface')).toBeNull();
+  });
+
   it('shows a state-true custody strip and the pass inspector like a feature tab', () => {
     installAgenticoMock({ feature: readyChild() });
     const parent = parentWith();
@@ -302,8 +452,188 @@ describe('RefactorPassWorkspace', () => {
     renderWorkspace(parent, controllerFor(parent, bareChild, { discardOpen: true }));
 
     const dialog = screen.getByRole('dialog', { name: /Discard Slop removal pass/ });
-    expect(within(dialog).getByRole('alert')).toHaveTextContent('Impact projection is unavailable');
+    // The missing projection is a warning-class card from the shared
+    // desktop-local code: the dialog failed closed, and the discard confirm
+    // stays disarmed until a refresh.
+    const notice = within(dialog).getByRole('status');
+    expect(notice).toHaveClass('error-surface', 'error-surface--compact', 'error-surface--warning');
+    expect(notice).toHaveTextContent('Impact projection is missing or stale');
+    expect(within(dialog).getByText('E_IMPACT_PROJECTION_STALE')).toHaveClass(
+      'error-surface__code',
+    );
     expect(within(dialog).getByRole('button', { name: 'Discard pass' })).toBeDisabled();
+  });
+
+  it('renders a rejected pass load as a compact ErrorSurface whose Retry reloads', async () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    const reload = vi.fn();
+    const pass = controllerFor(parent, null, {
+      childState: { phase: 'error', error: buildCanonicalError('E_NOT_CONNECTED') },
+      reload,
+    });
+    const user = userEvent.setup();
+    renderWorkspace(parent, pass);
+
+    const surface = screen.getByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_NOT_CONNECTED')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Not connected')).toBeVisible();
+
+    await user.click(within(surface).getByRole('button', { name: 'Retry' }));
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it('renders the parked condition exactly once through the full ErrorSurface with a working retry', () => {
+    installAgenticoMock({ feature: parkedChild() });
+    const dispatch = vi.fn(() => Promise.resolve());
+    const parent = featureSnapshot({
+      id: 'parent1234ef5678',
+      name: 'Electron app',
+      status: 'Published',
+      activeChild: childView({ integrationState: 'attention', attention: parkedAttention }),
+    });
+    renderWorkspace(parent, controllerFor(parent, parkedChild(), { dispatch }));
+
+    // Exactly one alert-role surface carries the parked condition.
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByText('Needs your action')).toBeInTheDocument();
+    expect(within(alert).getByText('integration_merge_conflict')).toBeInTheDocument();
+    expect(within(alert).getByText('Integration merge conflict')).toBeInTheDocument();
+    expect(
+      within(alert).getByText('The merge candidate for repository "repo-a" conflicted on 1 file.'),
+    ).toBeInTheDocument();
+    expect(
+      within(alert).getByText(/Resolve the conflict in the pass worktree and retry/),
+    ).toBeInTheDocument();
+
+    // The repository and its conflict file sit under the Details disclosure;
+    // raw diagnostics sit behind the second disclosure.
+    const details = alert.querySelector('details.error-surface__details');
+    expect(details?.textContent).toContain('repo-a');
+    expect(details?.textContent).toContain('internal/api.go');
+    const diagnostics = alert.querySelector('details.error-surface__diagnostics');
+    expect(diagnostics?.textContent).toContain('repo-a: merge conflict');
+
+    // The card's retry button dispatches through the pass dispatch.
+    const retry = within(alert).getByRole('button', { name: 'Retry integration' });
+    expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+    expect(dispatch).toHaveBeenCalledWith('retry');
+
+    // No element with the old warnings-list or alert-paragraph classes, and
+    // no attention sentence, remains.
+    expect(document.querySelector('.refactor-pass__warnings')).toBeNull();
+    expect(document.querySelector('.refactor-pass__alert')).toBeNull();
+    expect(screen.queryByText('Integration needs attention.')).not.toBeInTheDocument();
+
+    // The custody strip still marks the integration station.
+    const custody = screen.getByRole('list', { name: 'Custody of the work' });
+    expect(within(custody).getByText('Needs attention')).toBeVisible();
+  });
+
+  it('renders the disabled reason in the card action slot instead of a button', () => {
+    installAgenticoMock({ feature: parkedChild() });
+    const parent = featureSnapshot({
+      id: 'parent1234ef5678',
+      name: 'Electron app',
+      status: 'Published',
+      activeChild: childView({ integrationState: 'attention', attention: parkedAttention }),
+    });
+    const blocked = parkedChild({
+      actions: [
+        {
+          id: 'retry',
+          enabled: false,
+          disabledReasons: [{ code: 'running', message: 'integration is already running' }],
+        },
+        { id: 'discard', enabled: true, disabledReasons: [] },
+      ],
+    });
+    renderWorkspace(parent, controllerFor(parent, blocked));
+
+    const alert = screen.getByRole('alert');
+    expect(
+      within(alert).queryByRole('button', { name: 'Retry integration' }),
+    ).not.toBeInTheDocument();
+    expect(within(alert).getByText('integration is already running')).toBeInTheDocument();
+  });
+
+  it('renders one status-role surface per relationship warning with the repository under the disclosure', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith({
+      warnings: [
+        {
+          code: 'child_cleanup_incomplete',
+          class: 'warning' as const,
+          title: 'Cleanup incomplete',
+          summary: 'The worktree for repository "repo-a" could not be removed.',
+          context: { repositories: [{ name: 'repo-a', branch: 'agentico/pass-3' }] },
+          diagnostics: 'remove worktree: directory busy',
+        },
+      ],
+    });
+    renderWorkspace(parent, controllerFor(parent, readyChild()));
+
+    const surfaces = document.querySelectorAll('.refactor-pass .error-surface');
+    expect(surfaces).toHaveLength(1);
+    surfaces.forEach((surface) => {
+      expect(surface).toHaveAttribute('role', 'status');
+      expect(surface.querySelector('.error-surface__label')).toHaveTextContent('Warning');
+      expect(surface.querySelector('.error-surface__code')).toHaveTextContent(
+        'child_cleanup_incomplete',
+      );
+      expect(surface.querySelector('.error-surface__action')).toBeNull();
+
+      // The repository sits under the surface's compact disclosure.
+      const disclosure = surface.querySelector('details.error-surface__details--compact');
+      expect(disclosure).not.toBeNull();
+      expect(disclosure?.textContent).toContain('repo-a');
+    });
+
+    // The bespoke cleanup-warning list is gone, and no alert renders.
+    expect(document.querySelector('.refactor-pass__cleanup')).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Cleanup warnings' })).toBeNull();
+  });
+
+  it('renders two surfaces with distinct captions when an action is rejected while parked', () => {
+    installAgenticoMock({ feature: parkedChild() });
+    const parent = featureSnapshot({
+      id: 'parent1234ef5678',
+      name: 'Electron app',
+      status: 'Published',
+      activeChild: childView({ integrationState: 'attention', attention: parkedAttention }),
+    });
+    renderWorkspace(
+      parent,
+      controllerFor(parent, parkedChild(), {
+        notice: {
+          kind: 'error',
+          error: {
+            code: 'invalid_transition',
+            class: 'blocking',
+            title: 'Invalid transition',
+            summary: 'The action is not valid in the feature current state.',
+          },
+        },
+      }),
+    );
+
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts).toHaveLength(2);
+    expect(alerts.some((node) => node.textContent?.includes('Integration is parked'))).toBe(true);
+    expect(alerts.some((node) => node.textContent?.includes('The pass action was rejected'))).toBe(
+      true,
+    );
+  });
+
+  it('renders no attention card when the transaction carries no attention record', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    renderWorkspace(parent, controllerFor(parent, readyChild()));
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('Needs your action')).not.toBeInTheDocument();
   });
 
   it('keeps integration state on the custody strip without a panel or history block', () => {
@@ -311,18 +641,7 @@ describe('RefactorPassWorkspace', () => {
     const integratingChild = readyChild({
       status: 'ReviewPassed',
       actions: [{ id: 'discard', enabled: true, disabledReasons: [] }],
-      transaction: {
-        phase: 'attention',
-        attention: 'parent tips moved',
-        entries: [
-          {
-            repo: 'repo-a',
-            prepState: 'prepared',
-            applyState: 'failed',
-            conflictFiles: ['main.go'],
-          },
-        ],
-      },
+      transaction: { phase: 'attention', attention: parkedAttention },
     });
     const parent = featureSnapshot({
       id: 'parent1234ef5678',
@@ -610,5 +929,173 @@ describe('RefactorPassWorkspace', () => {
     const parent = parentWith({ kind: 'refactor' });
     renderWorkspace(parent, controllerFor(parent, readyChild()));
     expect(screen.queryByText(/comments across/)).not.toBeInTheDocument();
+  });
+
+  it('renders a rejected child dispatch as one compact error surface', async () => {
+    const mock = installAgenticoMock({ feature: readyChild() });
+    mock.api.dispatchFeatureAction.mockRejectedValue(
+      Object.assign(new Error('conflict: Start is stale.'), {
+        canonical: {
+          code: 'conflict',
+          class: 'blocking',
+          title: 'Conflict',
+          summary: 'The request conflicts with the current state of the feature.',
+        },
+      }),
+    );
+    const { result } = renderHook(() => useRefactorPass(parentWith(), vi.fn()));
+    await waitFor(() => expect(result.current.child?.id).toBe(CHILD_ID));
+    await act(async () => {
+      await result.current.dispatch('start');
+    });
+    renderWorkspace(parentWith(), result.current);
+
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    expect(screen.getByText('Conflict')).toBeVisible();
+    expect(screen.getByText('conflict')).toHaveClass('error-surface__code');
+    expect(screen.getByText('The pass action was rejected')).toBeVisible();
+    expect(
+      screen.getByText('The request conflicts with the current state of the feature.'),
+    ).toBeVisible();
+    // The plain-text notice markup is gone.
+    expect(document.querySelector('.refactor-pass__notice')).toBeNull();
+  });
+
+  it('renders a rejected discard as one compact error surface', async () => {
+    const mock = installAgenticoMock({ feature: readyChild() });
+    mock.api.discardRefactorChild.mockRejectedValue(
+      Object.assign(new Error('conflict: The pass is still running.'), {
+        canonical: {
+          code: 'conflict',
+          class: 'blocking',
+          title: 'Conflict',
+          summary: 'The request conflicts with the current state of the feature.',
+        },
+      }),
+    );
+    const { result } = renderHook(() => useRefactorPass(parentWith(), vi.fn()));
+    await waitFor(() => expect(result.current.child?.id).toBe(CHILD_ID));
+    act(() => result.current.openDiscard());
+    await act(async () => {
+      await result.current.discard();
+    });
+    renderWorkspace(parentWith(), result.current);
+
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    expect(screen.getByText('Conflict')).toBeVisible();
+    expect(screen.getByText('conflict')).toHaveClass('error-surface__code');
+    expect(screen.getByText('The pass action was rejected')).toBeVisible();
+    expect(document.querySelector('.refactor-pass__notice')).toBeNull();
+  });
+});
+
+describe('RefactorPassWorkspace explain-in-chat', () => {
+  /** Renders the workspace inside a mounted provider with a spy requester. */
+  function renderWorkspaceWithChat(
+    parent: FeatureSnapshot,
+    pass: RefactorPassController,
+    attentionItems: AttentionItem[] = [],
+  ) {
+    const requestRoute = vi.fn();
+    render(
+      <ExplainChatProvider requestRoute={requestRoute}>
+        <RefactorPassWorkspace
+          parent={parent}
+          pass={pass}
+          attentionPreviewRequest={null}
+          attentionItems={attentionItems}
+          refreshAttention={() => Promise.resolve([])}
+          attentionDrafts={emptyAttentionDrafts()}
+          setAttentionDrafts={vi.fn()}
+          isNarrow={false}
+          inspectorOpen={true}
+          onCloseInspector={vi.fn()}
+        />
+      </ExplainChatProvider>,
+    );
+    return requestRoute;
+  }
+
+  it('routes the integration attention card as a transaction reference with the child ID', async () => {
+    installAgenticoMock({ feature: parkedChild() });
+    const parent = featureSnapshot({
+      id: 'parent1234ef5678',
+      name: 'Electron app',
+      status: 'Published',
+      activeChild: childView({ integrationState: 'attention', attention: parkedAttention }),
+    });
+    const requestRoute = renderWorkspaceWithChat(parent, controllerFor(parent, parkedChild()));
+    const user = userEvent.setup();
+
+    const alert = screen.getByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledTimes(1);
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft:
+        'Explain the "Integration merge conflict" error (integration_merge_conflict) on Slop removal pass and what I should do next.',
+      autoSubmit: true,
+      chatContext: {
+        scope: 'transaction',
+        code: 'integration_merge_conflict',
+        featureId: CHILD_ID,
+      },
+    });
+  });
+
+  it('routes the setup card as a setup reference with the owning task key', async () => {
+    installAgenticoMock({ feature: setupFailedChild() });
+    const parent = parentWith();
+    const requestRoute = renderWorkspaceWithChat(parent, controllerFor(parent, setupFailedChild()));
+    const user = userEvent.setup();
+
+    const alert = screen.getByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft:
+        'Explain the "Worktree setup failed" error (worktree_setup_failed) on Slop removal pass and what I should do next.',
+      autoSubmit: true,
+      chatContext: {
+        scope: 'setup',
+        code: 'worktree_setup_failed',
+        featureId: CHILD_ID,
+        taskKey: 'worktree:repo-a',
+      },
+    });
+  });
+
+  it('routes a relationship warning as a transaction reference with its repository', async () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith({
+      warnings: [
+        {
+          code: 'child_cleanup_incomplete',
+          class: 'warning' as const,
+          title: 'Cleanup incomplete',
+          summary: 'The worktree for repository "repo-a" could not be removed.',
+          context: { repositories: [{ name: 'repo-a', branch: 'agentico/pass-3' }] },
+          diagnostics: 'remove worktree: directory busy',
+        },
+      ],
+    });
+    const requestRoute = renderWorkspaceWithChat(parent, controllerFor(parent, readyChild()));
+    const user = userEvent.setup();
+
+    const surface = document.querySelector('.refactor-pass .error-surface') as HTMLElement;
+    expect(surface).not.toBeNull();
+    await user.click(within(surface).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft:
+        'Explain the "Cleanup incomplete" error (child_cleanup_incomplete) on Slop removal pass and what I should do next.',
+      autoSubmit: true,
+      chatContext: {
+        scope: 'transaction',
+        code: 'child_cleanup_incomplete',
+        featureId: CHILD_ID,
+        repository: 'repo-a',
+      },
+    });
   });
 });

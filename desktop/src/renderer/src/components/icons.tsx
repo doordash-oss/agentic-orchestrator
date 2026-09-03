@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import type { SVGProps } from 'react';
 
 /**
@@ -56,6 +72,15 @@ export function MinimizeIcon(props: SVGProps<SVGSVGElement>) {
       <path d="M21 8h-3a2 2 0 0 1-2-2V3" />
       <path d="M3 16h3a2 2 0 0 1 2 2v3" />
       <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
+    </Icon>
+  );
+}
+
+/** Disclosure chevron for split buttons and menus, shaped after SF Symbols' `chevron.down`. */
+export function ChevronDownIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M6 9l6 6 6-6" />
     </Icon>
   );
 }
@@ -162,6 +187,42 @@ export function DefaultsIcon(props: SVGProps<SVGSVGElement>) {
     <Icon {...props}>
       <rect x="3" y="4.5" width="18" height="15" rx="2" />
       <path d="M7.5 9.5h.01M11 9.5h5.5M7.5 14.5h.01M11 14.5h5.5" />
+    </Icon>
+  );
+}
+
+/* --- Canonical error classes ------------------------------------------------
+ * One glyph per error class, in the same 24px/2px vocabulary as the icons
+ * above, so an ErrorSurface header reads as part of the same set.
+ */
+
+/** Blocking errors, shaped after Lucide's `circle-alert`. */
+export function CircleAlertIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="8" x2="12" y2="12" />
+      <line x1="12" y1="16" x2="12.01" y2="16" />
+    </Icon>
+  );
+}
+
+/** Needs-your-action errors, shaped after Lucide's `wrench`. */
+export function WrenchIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="m14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+    </Icon>
+  );
+}
+
+/** Warnings, shaped after Lucide's `triangle-alert`. */
+export function TriangleAlertIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
     </Icon>
   );
 }

@@ -1,8 +1,24 @@
-import { cleanup, render, screen } from '@testing-library/react';
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReviewSession } from '../../../shared/ipc';
-import { installAgenticoMock } from '../test/agenticoMock';
+import { installAgenticoMock, ipcError } from '../test/agenticoMock';
 import { ReviewSurface } from './ReviewSurface';
 
 const mockEditor = {
@@ -209,6 +225,12 @@ describe('ReviewSurface recovery and containment', () => {
     await screen.findByLabelText('Review editor');
     expect(await screen.findByText('Fix validation findings before approving.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
+    // Findings render as FieldError elements in the labelled findings list.
+    const findings = screen.getByLabelText('Validation findings');
+    const fieldError = within(findings).getByText('Phase plans need a top-level Markdown title.');
+    expect(fieldError).toHaveClass('field-error');
+    expect(fieldError).toHaveAttribute('id', 'review-finding-missing_title');
+    expect(document.querySelector('.review-surface__findings')).toBeNull();
   });
 
   it('completes the save and warns when the local draft discard fails', async () => {
@@ -226,7 +248,10 @@ describe('ReviewSurface recovery and containment', () => {
       type: 'saved',
       session: { ...session, text: '# Recovered plan' },
     });
-    api.discardLocalReviewDraft.mockRejectedValue(new Error('disk full'));
+    // The preload rejections the surface decodes: the authored canonical
+    // rides the sentinel-prefixed message, exactly as the context bridge
+    // delivers it.
+    api.discardLocalReviewDraft.mockRejectedValue(ipcError('E_INTERNAL', 'The disk is full.'));
 
     render(<ReviewSurface featureId={FEATURE_ID} onResolved={() => Promise.resolve()} />);
     await screen.findByText('Recovered unsaved draft');
@@ -239,9 +264,49 @@ describe('ReviewSurface recovery and containment', () => {
       baseRevision: session.draftRevision,
       text: '# Recovered plan',
     });
+    // A local recovery-copy failure renders as a compact ErrorSurface with
+    // the old lead as its caption.
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveClass('error-surface', 'error-surface--compact');
     expect(
-      await screen.findByText('Saved, but the local recovery copy could not be removed.'),
-    ).toBeVisible();
+      within(alert).getByText('Saved, but the local recovery copy could not be removed.'),
+    ).toHaveClass('error-surface__caption');
+    expect(within(alert).getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+  });
+
+  it('renders "Saving…" as a status line and a failed save as a compact ErrorSurface', async () => {
+    const api = installMocks({
+      localDraft: {
+        runtimeId: 'default-runtime',
+        featureId: FEATURE_ID,
+        reviewId: session.reviewId,
+        baseDraftRevision: session.draftRevision,
+        text: '# Recovered plan',
+        savedAt: '2026-07-16T00:00:00.000Z',
+      },
+    });
+    let rejectSave!: (reason: Error) => void;
+    api.saveReview.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectSave = reject;
+        }),
+    );
+    render(<ReviewSurface featureId={FEATURE_ID} onResolved={() => Promise.resolve()} />);
+    await screen.findByText('Recovered unsaved draft');
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Save draft' }));
+    // While the request is in flight the notice slot is a plain status line.
+    expect(screen.getByRole('status')).toHaveTextContent('Saving draft…');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    rejectSave(ipcError('E_INTERNAL', 'the server refused the draft'));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(alert).getByText('Save failed')).toHaveClass('error-surface__caption');
+    expect(within(alert).getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+    expect(within(alert).getByText('the server refused the draft')).toBeVisible();
+    expect(screen.queryByText('Saving draft…')).not.toBeInTheDocument();
   });
 
   it('shows a disabled-reason when Iterate is blocked by a dirty draft', async () => {

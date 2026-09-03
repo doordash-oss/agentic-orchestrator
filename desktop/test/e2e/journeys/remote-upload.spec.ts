@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Remote-upload journey (packaged app): attaches to a test-owned loopback
  * server EXACTLY like remote-degradation.spec.ts — own HOME, own state dir,
@@ -406,9 +422,9 @@ test('remote upload: picker/paste staging, server materialization, cleanup, reje
     const cockpit = handle.page.getByLabel(`Feature ${FEATURE_NAME}`);
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
     await expect(cockpit.getByText('Ready to start')).toBeVisible({ timeout: 90_000 });
-    const feature = (await handle.page.evaluate(() => window.agentico.listFeatures())).find(
-      (candidate) => candidate.name === FEATURE_NAME,
-    );
+    const feature = (
+      await handle.page.evaluate(() => window.agentico.listFeatures())
+    ).features.find((candidate) => candidate.name === FEATURE_NAME);
     expect(feature).toBeDefined();
 
     transcript.section('Server-side: feature dirs materialize the uploaded bytes');

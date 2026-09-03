@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -41,50 +42,6 @@ const MaxActionTextBytes = 4000
 const (
 	maxCreationIdempotencyKeyLength = 128
 	maxRememberedCreationResults    = 1000
-)
-
-// errCodeBadRequest is the API error code for malformed requests.
-const errCodeBadRequest = "bad_request"
-
-// errCodeConflict is the API error code for an action rejected because of a
-// conflicting feature state (ActionConflictError).
-const errCodeConflict = "conflict"
-
-// errCodeInvalidWorkspaceRoot is the API error code returned by the runtime
-// config mutation when a submitted workspace root does not resolve to an
-// existing directory on the server's filesystem.
-const errCodeInvalidWorkspaceRoot = "invalid_workspace_root"
-
-const (
-	ErrorCodePublishRemoteDiverged = "publish_remote_diverged"
-	ErrorCodePublishRemoteChanged  = "publish_remote_changed"
-)
-
-// Stable machine codes for the typed refactor-launch failures and the
-// child-feature execution gate. Each maps a feature-package sentinel or
-// typed error (matched with errors.Is/As) to its API code and status.
-const (
-	errCodeRefactorParentNotFound         = "parent_not_found"
-	errCodeRefactorParentIsChild          = "parent_is_child"
-	errCodeRefactorParentStatusIneligible = "parent_status_ineligible"
-	errCodeActiveChildExists              = "active_child_exists"
-	errCodeParentWorktreesDirty           = "parent_worktrees_dirty"
-	errCodeReviewFeedbackEmptySelection   = "review_feedback_empty_selection"
-	errCodeReviewFeedbackUnsupportedType  = "review_feedback_unsupported_comment_type"
-	errCodeReviewFeedbackUnknownRepo      = "review_feedback_unknown_repo"
-	errCodeReviewFeedbackRepoHasNoPR      = "review_feedback_repo_has_no_pull_request"
-	errCodeChildExecutionBlocked          = "child_execution_blocked"
-	errCodeChildRelationshipClosed        = "relationship_closed"
-	errCodeParentMutationLocked           = "parent_mutation_locked"
-	errCodeChildMutationRestricted        = "child_mutation_restricted"
-	errCodeCascadeDeleteNotAvailable      = "cascade_delete_not_available"
-	errCodePipelineMismatch               = "pipeline_mismatch"
-	errCodeRebaseTargetResolution         = "rebase_target_resolution_failed"
-	errCodeRebaseFetchFailed              = "rebase_fetch_failed"
-	errCodeRebaseAlreadyUpToDate          = "rebase_already_up_to_date"
-	errCodeInvalidTransition              = "invalid_transition"
-	errCodeNeedUserInputOpen              = "need_user_input_open"
-	errCodePhaseFinalizing                = "phase_finalizing"
 )
 
 // resultCreated is the ActionResult.Result value for a newly created
@@ -155,7 +112,12 @@ type MutationTarget interface {
 	AnswerPermission(req PermissionAnswerRequest) (PermissionAnswerResponse, error)
 	AnswerAskUser(req AskUserAnswerRequest) (AskUserAnswerResponse, error)
 	SendHelp(req HelpAnswerRequest) (HelpSendResponse, error)
-	StartChat(req ChatStartRequest) (ChatStartResponse, error)
+	// StartChat sends one user turn to the singleton chat session, starting
+	// it when none is live. hiddenContext is the server-resolved bundle for
+	// the request's context reference: it reaches the provider but never
+	// the transcript echo, and is empty when the request carries no
+	// reference.
+	StartChat(req ChatStartRequest, hiddenContext string) (ChatStartResponse, error)
 	EndChat() (ChatEndResponse, error)
 	RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error)
 	GeneratePublishDescription(featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error)
@@ -181,24 +143,28 @@ type resumeFeatureMutationTarget interface {
 	ResumeFeature(featureID string) (FeatureStartResponse, error)
 }
 
+// ActionConflictError reports a mutation rejected by conflicting feature
+// state. Code selects the catalog entry; Detail becomes the raw diagnostics
+// text; Options carry typed summary parameters and context blocks for the
+// catalog rendering.
 type ActionConflictError struct {
 	Err     error
-	Code    string
-	Message string
-	Target  map[string]any
+	Code    errcat.Code
+	Detail  string
+	Options []errcat.Option
 }
 
 func (e *ActionConflictError) Error() string {
 	if e == nil {
 		return ""
 	}
-	if e.Message != "" {
-		return e.Message
+	if e.Detail != "" {
+		return e.Detail
 	}
 	if e.Err != nil {
 		return e.Err.Error()
 	}
-	return errCodeConflict
+	return string(errcat.Conflict)
 }
 
 func (e *ActionConflictError) Unwrap() error {
@@ -264,7 +230,15 @@ type PermissionAnswerRequest struct {
 	Decision        string  `json:"decision"`
 	RememberPattern string  `json:"remember_pattern,omitempty"`
 	RememberScope   *string `json:"remember_scope,omitempty"`
+	// AutoApproveScope turns automatic Bash review on for the request's
+	// feature ("feature") or the workspace ("workspace") before answering.
+	AutoApproveScope string `json:"auto_approve_scope,omitempty"`
 }
+
+const (
+	AutoApproveScopeFeature   = "feature"
+	AutoApproveScopeWorkspace = "workspace"
+)
 
 type AskUserAnswerRequest struct {
 	RequestID string            `json:"request_id"`
@@ -276,15 +250,6 @@ type HelpAnswerRequest struct {
 	FeatureID string `json:"feature_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	Message   string `json:"message"`
-}
-
-type ChatStartRequest struct {
-	Message string   `json:"message"`
-	Images  []string `json:"images,omitempty"`
-	// ImageUploads carries staged upload references (see POST
-	// /api/v1/uploads); chat resolves image references only — attachments
-	// remain unsupported there.
-	ImageUploads []string `json:"image_uploads,omitempty"`
 }
 
 type RuntimeConfigMutationRequest struct {
@@ -475,9 +440,13 @@ func annotateDeleteResponse(r *DeleteFeatureResponse) *deleteActionResponse {
 	return resp
 }
 
+// writeMutationError classifies a mutation failure into a catalog code with
+// typed context in one place. An error matching no sentinel maps to the
+// cataloged generic bad_request with the raw error text in diagnostics; a
+// nil error maps to the fallback internal-error code.
 func writeMutationError(w http.ResponseWriter, err error) {
 	if err == nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "mutation failed", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
 		return
 	}
 	if writeChildLaunchError(w, err) {
@@ -489,47 +458,52 @@ func writeMutationError(w http.ResponseWriter, err error) {
 	var conflict *ActionConflictError
 	if errors.As(err, &conflict) {
 		code := conflict.Code
-		if strings.TrimSpace(code) == "" {
-			code = errCodeConflict
+		if code == "" {
+			code = errcat.Conflict
 		}
-		writeAPIError(w, http.StatusConflict, code, conflict.Error(), conflict.Target)
+		opts := make([]errcat.Option, 0, 1+len(conflict.Options))
+		if detail := conflict.Error(); detail != "" && detail != string(code) {
+			opts = append(opts, errcat.WithDiagnostics(detail))
+		}
+		opts = append(opts, conflict.Options...)
+		writeAPIError(w, http.StatusConflict, code, opts...)
 		return
 	}
 	if errors.Is(err, feature.ErrPipelineMismatch) {
-		writeAPIError(w, http.StatusConflict, errCodePipelineMismatch, err.Error(), nil)
+		writeAPIError(w, http.StatusConflict, errcat.PipelineMismatch)
 		return
 	}
 	// State-based rejections are conflicts, not malformed input: reporting them
 	// as bad_request makes clients ask the user to correct a field they never
 	// typed.
 	if errors.Is(err, feature.ErrNeedUserInputGateOpen) {
-		writeAPIError(w, http.StatusConflict, errCodeNeedUserInputOpen, err.Error(), nil)
+		writeAPIError(w, http.StatusConflict, errcat.NeedUserInputOpen)
 		return
 	}
 	if errors.Is(err, feature.ErrPhaseFinalizing) {
-		writeAPIError(w, http.StatusConflict, errCodePhaseFinalizing, err.Error(), nil)
+		writeAPIError(w, http.StatusConflict, errcat.PhaseFinalizing)
 		return
 	}
 	if errors.Is(err, feature.ErrInvalidTransition) {
-		writeAPIError(w, http.StatusConflict, errCodeInvalidTransition, err.Error(), nil)
+		writeAPIError(w, http.StatusConflict, errcat.InvalidTransition)
 		return
 	}
-	writeAPIError(w, http.StatusBadRequest, "bad_request", err.Error(), nil)
+	writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(err.Error()))
 }
 
-// writeRelationshipGuardError maps the typed relationship-guard rejections to
-// their stable API machine codes. Returns true when err was a recognized
-// guard rejection.
+// writeRelationshipGuardError maps the typed relationship-guard rejections
+// to their catalog codes. Returns true when err was a recognized guard
+// rejection.
 func writeRelationshipGuardError(w http.ResponseWriter, err error) bool {
 	switch {
 	case errors.Is(err, feature.ErrChildRelationshipClosed):
-		writeAPIError(w, http.StatusConflict, errCodeChildRelationshipClosed, err.Error(), nil)
+		writeAPIError(w, http.StatusConflict, errcat.RelationshipClosed)
 	case errors.Is(err, feature.ErrParentMutationLocked):
-		writeAPIError(w, http.StatusConflict, errCodeParentMutationLocked, err.Error(), nil)
+		writeAPIError(w, http.StatusConflict, errcat.ParentMutationLocked)
 	case errors.Is(err, feature.ErrChildMutationRestricted):
-		writeAPIError(w, http.StatusConflict, errCodeChildMutationRestricted, err.Error(), nil)
+		writeAPIError(w, http.StatusConflict, errcat.ChildMutationRestricted)
 	case errors.Is(err, feature.ErrCascadeDeleteNotAvailable):
-		writeAPIError(w, http.StatusConflict, errCodeCascadeDeleteNotAvailable, err.Error(), nil)
+		writeAPIError(w, http.StatusConflict, errcat.CascadeDeleteNotAvailable)
 	default:
 		return false
 	}
@@ -538,105 +512,118 @@ func writeRelationshipGuardError(w http.ResponseWriter, err error) bool {
 
 // writeChildLaunchError maps the typed child-launch failures of
 // feature.CreateRefactorChild and the child-feature execution gate to their
-// stable API machine codes. The dirty-worktree error additionally carries the
-// categorized diagnostics captured at launch. It reports whether err was a
-// recognized typed failure (and a response was written).
+// catalog codes with typed context: dirty parent worktrees and rebase
+// repositories populate the repositories block, and the active-child
+// rejection names the related features in its summary. It reports whether
+// err was a recognized typed failure (and a response was written).
 func writeChildLaunchError(w http.ResponseWriter, err error) bool {
 	var activeChild *feature.ActiveChildExistsError
 	var dirty *feature.ParentWorktreesDirtyError
 	var revisionConflict *feature.ReviewFeedbackRevisionConflictError
 	var zeroLaunchable *feature.ReviewFeedbackZeroLaunchableSelectionError
+	var targetErr *feature.RebaseTargetResolutionError
+	var fetchErr *feature.RebaseFetchError
+	var upToDate *feature.RebaseAlreadyUpToDateError
 	switch {
-	case errors.Is(err, feature.ErrRefactorParentNotFound):
-		writeAPIError(w, http.StatusNotFound, errCodeRefactorParentNotFound, err.Error(), nil)
-	case errors.Is(err, feature.ErrRefactorParentIsChild):
-		writeAPIError(w, http.StatusConflict, errCodeRefactorParentIsChild, err.Error(), nil)
-	case errors.Is(err, feature.ErrRefactorParentStatusIneligible):
-		writeAPIError(w, http.StatusConflict, errCodeRefactorParentStatusIneligible, err.Error(), nil)
-	case errors.Is(err, feature.ErrReviewFeedbackEmptySelection):
-		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackEmptySelection, err.Error(), nil)
-	case errors.Is(err, feature.ErrReviewFeedbackUnsupportedCommentType):
-		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackUnsupportedType, err.Error(), nil)
-	case errors.Is(err, feature.ErrReviewFeedbackUnknownRepo):
-		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackUnknownRepo, err.Error(), nil)
-	case errors.Is(err, feature.ErrReviewFeedbackRepoHasNoPR):
-		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackRepoHasNoPR, err.Error(), nil)
-	case errors.Is(err, feature.ErrReviewFeedbackDraftNotFound):
-		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackDraftNotFound, err.Error(), nil)
-	case errors.Is(err, feature.ErrReviewFeedbackUnknownReference):
-		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackUnknownReference, err.Error(), nil)
-	case errors.As(err, &revisionConflict):
-		writeAPIError(w, http.StatusConflict, errCodeReviewFeedbackRevisionConflict, revisionConflict.Error(), nil)
-	case errors.As(err, &zeroLaunchable):
-		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackZeroLaunchableSelection, zeroLaunchable.Error(), nil)
 	case errors.As(err, &activeChild):
-		writeAPIError(w, http.StatusConflict, errCodeActiveChildExists, err.Error(), map[string]any{
-			"parent_id": activeChild.ParentID,
-			"child_id":  activeChild.ChildID,
-		})
+		writeAPIError(w, http.StatusConflict, errcat.ActiveChildExists,
+			errcat.WithParams(errcat.RelatedFeatureParams{ParentID: activeChild.ParentID, ChildID: activeChild.ChildID}))
 	case errors.As(err, &dirty):
-		writeAPIError(w, http.StatusConflict, errCodeParentWorktreesDirty, err.Error(), map[string]any{
-			"repos": dirtyDiagnosticsPayload(dirty.Repos),
-		})
-	case errors.Is(err, feature.ErrChildExecutionBlocked):
-		writeAPIError(w, http.StatusConflict, errCodeChildExecutionBlocked, err.Error(), nil)
-	case errors.Is(err, feature.ErrChildExecutionClosed):
-		writeAPIError(w, http.StatusConflict, errCodeChildRelationshipClosed, err.Error(), nil)
-	case errors.Is(err, feature.ErrRebaseTargetResolution):
-		var targetErr *feature.RebaseTargetResolutionError
-		repo := ""
-		if errors.As(err, &targetErr) {
-			repo = targetErr.Repo
+		repos, truncation := dirtyRepoContext(dirty.Repos)
+		opts := []errcat.Option{errcat.WithRepositories(repos...)}
+		if truncation != "" {
+			opts = append(opts, errcat.WithDiagnostics(truncation))
 		}
-		writeAPIError(w, http.StatusConflict, errCodeRebaseTargetResolution, err.Error(), map[string]any{
-			"repo": repo,
-		})
-	case errors.Is(err, feature.ErrRebaseFetchFailed):
-		var fetchErr *feature.RebaseFetchError
-		repo := ""
-		if errors.As(err, &fetchErr) {
-			repo = fetchErr.Repo
-		}
-		writeAPIError(w, http.StatusConflict, errCodeRebaseFetchFailed, err.Error(), map[string]any{
-			"repo": repo,
-		})
-	case errors.Is(err, feature.ErrRebaseAlreadyUpToDate):
-		var upToDate *feature.RebaseAlreadyUpToDateError
-		targets := []map[string]any{}
-		if errors.As(err, &upToDate) {
-			for _, t := range upToDate.Targets {
-				targets = append(targets, map[string]any{
-					"repo":        t.Repo,
-					"target":      t.Target,
-					"ref":         t.Ref,
-					"publishable": t.Publishable,
-				})
+		writeAPIError(w, http.StatusConflict, errcat.ParentWorktreesDirty, opts...)
+	case errors.As(err, &revisionConflict):
+		writeAPIError(w, http.StatusConflict, errcat.ReviewFeedbackRevisionConflict,
+			errcat.WithDiagnostics(revisionConflict.Error()))
+	case errors.As(err, &zeroLaunchable):
+		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackZeroLaunchable,
+			errcat.WithDiagnostics(zeroLaunchable.Error()))
+	case errors.As(err, &targetErr):
+		writeAPIError(w, http.StatusConflict, errcat.RebaseTargetResolutionFailed,
+			errcat.WithRepositories(errcat.CodeRepository{Name: targetErr.Repo}),
+			errcat.WithDiagnostics(targetErr.Error()))
+	case errors.As(err, &fetchErr):
+		writeAPIError(w, http.StatusConflict, errcat.RebaseFetchFailed,
+			errcat.WithRepositories(errcat.CodeRepository{Name: fetchErr.Repo}),
+			errcat.WithDiagnostics(fetchErr.Error()))
+	case errors.As(err, &upToDate):
+		repos := make([]errcat.CodeRepository, 0, len(upToDate.Targets))
+		for _, target := range upToDate.Targets {
+			// The target ref is where the rebase would land, not the
+			// repository's own branch: RebaseTarget is its carrier.
+			repo := errcat.CodeRepository{Name: target.Repo, RebaseTarget: target.Target}
+			if target.TargetSHA != "" {
+				repo.ExpectedRefSHA = target.TargetSHA
 			}
+			repos = append(repos, repo)
 		}
-		writeAPIError(w, http.StatusConflict, errCodeRebaseAlreadyUpToDate, err.Error(), map[string]any{
-			"targets": targets,
-		})
+		writeAPIError(w, http.StatusConflict, errcat.RebaseAlreadyUpToDate,
+			errcat.WithRepositories(repos...))
+	case errors.Is(err, feature.ErrRefactorParentNotFound):
+		writeAPIError(w, http.StatusNotFound, errcat.ParentNotFound,
+			errcat.WithDiagnostics(err.Error()))
+	case errors.Is(err, feature.ErrRefactorParentIsChild):
+		writeAPIError(w, http.StatusConflict, errcat.ParentIsChild)
+	case errors.Is(err, feature.ErrRefactorParentStatusIneligible):
+		writeAPIError(w, http.StatusConflict, errcat.ParentStatusIneligible)
+	case errors.Is(err, feature.ErrReviewFeedbackEmptySelection):
+		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackEmptySelection)
+	case errors.Is(err, feature.ErrReviewFeedbackUnsupportedCommentType):
+		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackUnsupportedCommentType)
+	case errors.Is(err, feature.ErrReviewFeedbackUnknownRepo):
+		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackUnknownRepo)
+	case errors.Is(err, feature.ErrReviewFeedbackRepoHasNoPR):
+		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackRepoHasNoPR)
+	case errors.Is(err, feature.ErrReviewFeedbackDraftNotFound):
+		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackDraftNotFound)
+	case errors.Is(err, feature.ErrReviewFeedbackUnknownReference):
+		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackUnknownReference)
+	case errors.Is(err, feature.ErrChildExecutionBlocked):
+		writeAPIError(w, http.StatusConflict, errcat.ChildExecutionBlocked)
+	case errors.Is(err, feature.ErrChildExecutionClosed):
+		writeAPIError(w, http.StatusConflict, errcat.RelationshipClosed)
+	case errors.Is(err, feature.ErrRebaseTargetResolution):
+		writeAPIError(w, http.StatusConflict, errcat.RebaseTargetResolutionFailed,
+			errcat.WithDiagnostics(err.Error()))
+	case errors.Is(err, feature.ErrRebaseFetchFailed):
+		writeAPIError(w, http.StatusConflict, errcat.RebaseFetchFailed,
+			errcat.WithDiagnostics(err.Error()))
 	default:
 		return false
 	}
 	return true
 }
 
-func dirtyDiagnosticsPayload(repos []feature.RepoDirtyDiagnostics) []map[string]any {
-	payload := make([]map[string]any, 0, len(repos))
+// dirtyRepoContext projects the bounded dirty-worktree diagnostics captured
+// at launch onto the canonical repositories context block, and reports a
+// per-repo truncation line for diagnostics. Dirty file names live only in
+// the context block and the truncation diagnostics; titles and summaries
+// never carry them. Each category list is capped at
+// DefaultDirtyPathLimit entries at capture time, so a category whose total
+// exceeds its list must be surfaced as partial — the canonical error
+// otherwise presents a truncated list as complete.
+func dirtyRepoContext(repos []feature.RepoDirtyDiagnostics) ([]errcat.CodeRepository, string) {
+	blocks := make([]errcat.CodeRepository, 0, len(repos))
+	var truncation []string
 	for _, repo := range repos {
-		payload = append(payload, map[string]any{
-			"repo":            repo.Repo,
-			"path":            repo.Path,
-			"staged":          repo.Staged,
-			"unstaged":        repo.Unstaged,
-			"untracked":       repo.Untracked,
-			"staged_total":    repo.StagedTotal,
-			"unstaged_total":  repo.UnstagedTotal,
-			"untracked_total": repo.UntrackedTotal,
-		})
+		dirty := make([]string, 0, len(repo.Staged)+len(repo.Unstaged)+len(repo.Untracked))
+		dirty = append(dirty, repo.Staged...)
+		dirty = append(dirty, repo.Unstaged...)
+		dirty = append(dirty, repo.Untracked...)
+		blocks = append(blocks, errcat.CodeRepository{Name: repo.Repo, DirtyFiles: dirty})
+		if repo.StagedTotal > len(repo.Staged) ||
+			repo.UnstagedTotal > len(repo.Unstaged) ||
+			repo.UntrackedTotal > len(repo.Untracked) {
+			truncation = append(truncation, fmt.Sprintf(
+				"repo %s: %d staged, %d unstaged, %d untracked changes; each category lists at most %d files",
+				repo.Repo, repo.StagedTotal, repo.UnstagedTotal, repo.UntrackedTotal,
+				feature.DefaultDirtyPathLimit))
+		}
 	}
-	return payload
+	return blocks, strings.Join(truncation, "; ")
 }
 
 func (h *apiHandler) handleMutationPreflight(w http.ResponseWriter, r *http.Request) bool {
@@ -648,22 +635,22 @@ func (h *apiHandler) handleMutationPreflight(w http.ResponseWriter, r *http.Requ
 		return false
 	}
 	if h.mutations == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "mutation service unavailable", nil)
+		writeAPIError(w, http.StatusServiceUnavailable, errcat.Unavailable)
 		return true
 	}
 	origin := r.Header.Get("Origin")
 	if origin == "" || !isLoopbackOrigin(origin) {
-		writeAPIError(w, http.StatusForbidden, "forbidden", "browser origin is not trusted", nil)
+		writeAPIError(w, http.StatusForbidden, errcat.Forbidden, errcat.WithDiagnostics("browser origin is not trusted"))
 		return true
 	}
 	requestMethod := strings.ToUpper(strings.TrimSpace(r.Header.Get("Access-Control-Request-Method")))
 	if !containsMethod(methods, requestMethod) {
 		w.Header().Set("Allow", strings.Join(methods, ", "))
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 		return true
 	}
 	if !isAllowedMutationPreflightHeaders(r.Header.Get("Access-Control-Request-Headers")) {
-		writeAPIError(w, http.StatusForbidden, "forbidden", "mutation preflight headers are not trusted", nil)
+		writeAPIError(w, http.StatusForbidden, errcat.Forbidden, errcat.WithDiagnostics("mutation preflight headers are not trusted"))
 		return true
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
@@ -683,7 +670,7 @@ func (h *apiHandler) applyMutationCORS(w http.ResponseWriter, r *http.Request) b
 		return false
 	}
 	if !isLoopbackOrigin(origin) {
-		writeAPIError(w, http.StatusForbidden, "forbidden", "browser origin is not trusted", nil)
+		writeAPIError(w, http.StatusForbidden, errcat.Forbidden, errcat.WithDiagnostics("browser origin is not trusted"))
 		return true
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
@@ -789,7 +776,7 @@ func (h *apiHandler) handleFeaturesRoot(w http.ResponseWriter, r *http.Request) 
 		h.handleCreateFeatureMutation(w, r)
 	default:
 		w.Header().Set("Allow", "GET, POST")
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 	}
 }
 
@@ -800,7 +787,7 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "name is required", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("name is required"))
 		return
 	}
 	if !validatePipelineProfile(w, req.Pipeline) || !validateRiskLevel(w, req.RiskLevel) {
@@ -813,7 +800,8 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 		return
 	}
 	if len(req.IdempotencyKey) > maxCreationIdempotencyKeyLength {
-		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, fmt.Sprintf("idempotency_key exceeds the %d character limit", maxCreationIdempotencyKeyLength), nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics(fmt.Sprintf("idempotency_key exceeds the %d character limit", maxCreationIdempotencyKeyLength)))
 		return
 	}
 	if !validateCombinedUploadCounts(w, len(req.Images), len(req.ImageUploads), len(req.Attachments), len(req.AttachmentUploads)) {
@@ -854,10 +842,8 @@ func (h *apiHandler) validateRequestedModels(w http.ResponseWriter, models confi
 			continue
 		}
 		if _, _, err := h.registry.ResolveModel(candidate.model); err != nil {
-			writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, fmt.Sprintf("model for %s is unavailable: %s", candidate.phase, candidate.model), map[string]any{
-				"phase": candidate.phase,
-				"model": candidate.model,
-			})
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+				errcat.WithDiagnostics(fmt.Sprintf("model for %s is unavailable: %s", candidate.phase, candidate.model)))
 			return false
 		}
 	}
@@ -874,7 +860,7 @@ func (h *apiHandler) createFeatureOnce(req CreateFeatureRequest) (CreateFeatureR
 	defer h.creationMu.Unlock()
 	if prior, ok := h.creationResults[req.IdempotencyKey]; ok {
 		if prior.fingerprint != fingerprint {
-			return CreateFeatureResponse{}, &ActionConflictError{Message: "idempotency key was already used for different creation input"}
+			return CreateFeatureResponse{}, &ActionConflictError{Detail: "idempotency key was already used for different creation input"}
 		}
 		return prior.response, nil
 	}
@@ -1034,7 +1020,7 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			return true
 		}
 		if len(req.Answers) == 0 {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "answers are required", nil)
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("answers are required"))
 			return true
 		}
 		resp, err := h.mutations.DraftNeedUserInputAnswers(featureID, req)
@@ -1234,7 +1220,7 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		w.Header().Set("Allow", "GET, PATCH, PUT")
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 	}
 }
 
@@ -1266,13 +1252,15 @@ func validateWorkspaceRootPaths(w http.ResponseWriter, roots []string) bool {
 	if len(invalid) == 0 {
 		return true
 	}
-	summaries := make([]string, 0, len(invalid))
+	invalidParams := make([]errcat.InvalidPath, 0, len(invalid))
+	reasons := make([]string, 0, len(invalid))
 	for _, entry := range invalid {
-		summaries = append(summaries, fmt.Sprintf("%s (%s)", entry.Path, entry.Reason))
+		invalidParams = append(invalidParams, errcat.InvalidPath{Path: entry.Path, Reason: entry.Reason})
+		reasons = append(reasons, fmt.Sprintf("%s (%s)", entry.Path, entry.Reason))
 	}
-	writeAPIError(w, http.StatusBadRequest, errCodeInvalidWorkspaceRoot,
-		"workspace_roots must resolve to existing directories; rejected: "+strings.Join(summaries, "; "),
-		map[string]any{"invalid_workspace_roots": invalid})
+	writeAPIError(w, http.StatusBadRequest, errcat.InvalidWorkspaceRoot,
+		errcat.WithParams(errcat.WorkspaceRootParams{Paths: invalidParams}),
+		errcat.WithDiagnostics("rejected workspace roots: "+strings.Join(reasons, "; ")))
 	return false
 }
 
@@ -1280,7 +1268,7 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 	parts := splitPath(strings.TrimPrefix(r.URL.Path, "/api/v1/permissions/"))
 	if r.Method != http.MethodPost || len(parts) != 1 || parts[0] != "answer" {
 		w.Header().Set("Allow", "POST")
-		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Endpoint"}))
 		return
 	}
 	if !h.requireTrustedMutation(w, r) {
@@ -1291,17 +1279,27 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 		return
 	}
 	if strings.TrimSpace(req.RequestID) == "" {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "request_id is required", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("request_id is required"))
 		return
 	}
 	switch req.Decision {
 	case decisionAllowOnce, decisionAllowRemember, decisionDeny:
 	default:
-		writeAPIError(w, http.StatusBadRequest, "bad_request", errMessageInvalidDecision, nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(errMessageInvalidDecision))
 		return
 	}
 	if req.Decision == decisionAllowRemember && req.RememberScope == nil {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "remember_scope is required for allow_remember", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("remember_scope is required for allow_remember"))
+		return
+	}
+	switch req.AutoApproveScope {
+	case "", AutoApproveScopeFeature, AutoApproveScopeWorkspace:
+	default:
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("auto_approve_scope must be feature or workspace"))
+		return
+	}
+	if req.AutoApproveScope != "" && req.Decision == decisionDeny {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("auto_approve_scope cannot be combined with deny"))
 		return
 	}
 	resp, err := h.mutations.AnswerPermission(req)
@@ -1317,7 +1315,7 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 	parts := splitPath(strings.TrimPrefix(r.URL.Path, "/api/v1/prompts/"))
 	if r.Method != http.MethodPost || len(parts) != 2 {
 		w.Header().Set("Allow", "POST")
-		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Endpoint"}))
 		return
 	}
 	if !h.requireTrustedMutation(w, r) {
@@ -1330,11 +1328,11 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			return
 		}
 		if strings.TrimSpace(req.RequestID) == "" {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "request_id is required", nil)
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("request_id is required"))
 			return
 		}
 		if len(req.Answers) == 0 {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "answers are required", nil)
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("answers are required"))
 			return
 		}
 		resp, err := h.mutations.AnswerAskUser(req)
@@ -1350,11 +1348,11 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			return
 		}
 		if strings.TrimSpace(req.Message) == "" {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "message is required", nil)
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("message is required"))
 			return
 		}
 		if strings.TrimSpace(req.SessionID) == "" && strings.TrimSpace(req.FeatureID) == "" {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "session_id or feature_id is required", nil)
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("session_id or feature_id is required"))
 			return
 		}
 		resp, err := h.mutations.SendHelp(req)
@@ -1370,8 +1368,27 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			return
 		}
 		if strings.TrimSpace(req.Message) == "" {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "message is required", nil)
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("message is required"))
 			return
+		}
+		// A malformed context reference is rejected before uploads are
+		// consumed, so nothing is staged for a turn that never starts.
+		if field := validateChatContextReference(req.Context); field != "" {
+			writeChatContextInvalid(w, req.Context, field)
+			return
+		}
+		// The reference resolves against durable state before the mutation
+		// target runs; a stale or mismatched home rejects the turn the same
+		// way. The bundle crosses to the target separately from the visible
+		// message and never enters the response body.
+		hiddenContext := ""
+		if !chatContextAbsent(req.Context) {
+			bundle, rejection := h.resolveChatContext(req.Context)
+			if rejection != nil {
+				rejection.write(w, req.Context)
+				return
+			}
+			hiddenContext = bundle
 		}
 		if !validateCombinedUploadCounts(w, len(req.Images), len(req.ImageUploads), 0, 0) {
 			return
@@ -1384,13 +1401,13 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 		}
 		consumed, err := h.consumeUploadRefs(req.ImageUploads, nil, chatDir)
 		if err != nil {
-			writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, err.Error(), nil)
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(err.Error()))
 			return
 		}
 		if consumed != nil {
 			req.Images = append(req.Images, consumed.imagePaths...)
 		}
-		resp, err := h.mutations.StartChat(req)
+		resp, err := h.mutations.StartChat(req, hiddenContext)
 		if err != nil {
 			consumed.rollback() // nil-safe: nothing to roll back without refs
 			writeMutationError(w, err)
@@ -1412,7 +1429,7 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 		defaultActionFields(&resp, "", "ended")
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:
-		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Endpoint"}))
 	}
 }
 
@@ -1469,7 +1486,7 @@ func (h *apiHandler) handleRefactorFeatureMutationTrusted(w http.ResponseWriter,
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "name is required", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("name is required"))
 		return
 	}
 	if !validatePipelineProfile(w, req.Pipeline) || !validateRiskLevel(w, req.RiskLevel) || !validateInquireness(w, req.Inquireness) {
@@ -1483,7 +1500,7 @@ func (h *apiHandler) handleRefactorFeatureMutationTrusted(w http.ResponseWriter,
 	}
 	consumed, err := h.consumeUploadRefs(req.ImageUploads, req.AttachmentUploads, "")
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, err.Error(), nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(err.Error()))
 		return
 	}
 	if consumed != nil {
@@ -1529,7 +1546,7 @@ func validatePipelineProfile(w http.ResponseWriter, profile feature.PipelineProf
 	if profile == "" || profile.IsValid() {
 		return true
 	}
-	writeAPIError(w, http.StatusBadRequest, "bad_request", "pipeline must be medium, large, or moonshot", nil)
+	writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("pipeline must be medium, large, or moonshot"))
 	return false
 }
 
@@ -1538,7 +1555,7 @@ func validateRiskLevel(w http.ResponseWriter, risk feature.RiskLevel) bool {
 	case "", feature.RiskLow, feature.RiskMedium, feature.RiskHigh:
 		return true
 	default:
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "risk_level must be low, medium, or high", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("risk_level must be low, medium, or high"))
 		return false
 	}
 }
@@ -1548,7 +1565,7 @@ func validateInquireness(w http.ResponseWriter, inq feature.Inquireness) bool {
 	case "", feature.InquirenessNone, feature.InquirenessMedium, feature.InquirenessHigh:
 		return true
 	default:
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "inquireness must be none, medium, or high", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("inquireness must be none, medium, or high"))
 		return false
 	}
 }
@@ -1606,7 +1623,7 @@ func validateAutomaticReviewMode(w http.ResponseWriter, raw *string) bool {
 	if _, err := feature.ParseAutomaticReviewMode(*raw); err == nil {
 		return true
 	}
-	writeAPIError(w, http.StatusBadRequest, "bad_request", "automatic_review_mode must be default, enabled, or disabled", nil)
+	writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("automatic_review_mode must be default, enabled, or disabled"))
 	return false
 }
 
@@ -1629,8 +1646,8 @@ func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, mod
 			continue
 		}
 		if !llm.IsValidExplicitEffort(llm.EffortLevel(r.val)) {
-			writeAPIError(w, http.StatusBadRequest, "bad_request",
-				"effort."+r.label+" must be one of: auto, low, medium, high, xhigh, max", nil)
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+				errcat.WithDiagnostics("effort."+r.label+" must be one of: auto, low, medium, high, xhigh, max"))
 			return false
 		}
 		if r.val == "auto" {
@@ -1641,14 +1658,14 @@ func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, mod
 		}
 		prov, resolvedModel, err := reg.ResolveModel(r.model)
 		if err != nil {
-			writeAPIError(w, http.StatusBadRequest, "bad_request",
-				"effort."+r.label+" value "+r.val+" cannot be verified: "+r.label+" model "+r.model+" not found in registry", nil)
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+				errcat.WithDiagnostics("effort."+r.label+" value "+r.val+" cannot be verified: "+r.label+" model "+r.model+" not found in registry"))
 			return false
 		}
 		caps := llm.EffortCapabilitiesForModel(prov, resolvedModel)
 		if len(caps) == 0 || !llm.EffortCapabilitySupported(caps, llm.EffortLevel(r.val)) {
-			writeAPIError(w, http.StatusBadRequest, "bad_request",
-				"effort."+r.label+" value "+r.val+" is not supported by the selected "+r.label+" model", nil)
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+				errcat.WithDiagnostics("effort."+r.label+" value "+r.val+" is not supported by the selected "+r.label+" model"))
 			return false
 		}
 	}
@@ -1657,11 +1674,11 @@ func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, mod
 
 func validateRepoList(w http.ResponseWriter, repos []string, required bool) bool {
 	if required && len(repos) == 0 {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "repos are required", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("repos are required"))
 		return false
 	}
 	if len(repos) > 50 {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "too many repos", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("too many repos"))
 		return false
 	}
 	for _, repo := range repos {
@@ -1676,13 +1693,13 @@ func validateRepoName(w http.ResponseWriter, repo string, required bool) bool {
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
 		if required {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "repo is required", nil)
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("repo is required"))
 			return false
 		}
 		return true
 	}
 	if !safeActionToken(repo, false) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "repo has invalid characters", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("repo has invalid characters"))
 		return false
 	}
 	return true
@@ -1693,7 +1710,7 @@ func validatePhaseName(w http.ResponseWriter, phase string) bool {
 	case "knowledge-base", "knowledgebase", targetPhaseInquire, "research", "design", targetPhasePlan, targetPhaseImplement, "review", "final-review", actionPublish:
 		return true
 	default:
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "target_phase is invalid", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("target_phase is invalid"))
 		return false
 	}
 }
@@ -1702,7 +1719,7 @@ func validatePositiveOptionalInt(w http.ResponseWriter, field string, value int)
 	if value >= 0 {
 		return true
 	}
-	writeAPIError(w, http.StatusBadRequest, "bad_request", field+" must be positive", nil)
+	writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(field+" must be positive"))
 	return false
 }
 
@@ -1711,7 +1728,7 @@ func validateCleanupRequest(w http.ResponseWriter, req CleanupActionRequest) boo
 	case "", "worktrees":
 		return true
 	default:
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "cleanup target is invalid", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("cleanup target is invalid"))
 		return false
 	}
 }
@@ -1742,45 +1759,45 @@ func safeActionToken(value string, allowSlash bool) bool {
 
 func (h *apiHandler) requireTrustedMutation(w http.ResponseWriter, r *http.Request) bool {
 	if h.mutations == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "mutation service unavailable", nil)
+		writeAPIError(w, http.StatusServiceUnavailable, errcat.Unavailable)
 		return false
 	}
 	if r.Header.Get("X-Agentico-Client") != trustedClientHeaderValue {
-		writeAPIError(w, http.StatusForbidden, "forbidden", "trusted local client header is required", nil)
+		writeAPIError(w, http.StatusForbidden, errcat.Forbidden, errcat.WithDiagnostics("trusted local client header is required"))
 		return false
 	}
 	if origin := r.Header.Get("Origin"); origin != "" && !isLoopbackOrigin(origin) {
-		writeAPIError(w, http.StatusForbidden, "forbidden", "browser origin is not trusted", nil)
+		writeAPIError(w, http.StatusForbidden, errcat.Forbidden, errcat.WithDiagnostics("browser origin is not trusted"))
 		return false
 	}
 	ct := strings.ToLower(r.Header.Get("Content-Type"))
 	if !strings.HasPrefix(ct, "application/json") {
-		writeAPIError(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "JSON body is required", nil)
+		writeAPIError(w, http.StatusUnsupportedMediaType, errcat.UnsupportedMediaType, errcat.WithDiagnostics("JSON body is required"))
 		return false
 	}
 	if r.ContentLength > MaxMutationBodyBytes {
-		writeAPIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "mutation body is too large", nil)
+		writeAPIError(w, http.StatusRequestEntityTooLarge, errcat.RequestTooLarge, errcat.WithDiagnostics("mutation body is too large"))
 		return false
 	}
 	return true
 }
 
-// classifyDecodeError maps a JSON decode error to the (status, code,
-// message) triple used by decodeMutationJSON.
-func classifyDecodeError(err error) (status int, code, message string) {
+// classifyDecodeError maps a JSON decode error to the transport status,
+// catalog code, and raw diagnostics used by decodeMutationJSON.
+func classifyDecodeError(err error) (status int, code errcat.Code, diagnostics string) {
 	status = http.StatusBadRequest
-	code = errCodeBadRequest
-	message = "invalid JSON request"
+	code = errcat.BadRequest
+	diagnostics = "invalid JSON request"
 	if errors.Is(err, io.ErrUnexpectedEOF) {
-		message = "truncated JSON request"
+		diagnostics = "truncated JSON request"
 	}
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {
 		status = http.StatusRequestEntityTooLarge
-		code = "request_too_large"
-		message = "mutation body is too large"
+		code = errcat.RequestTooLarge
+		diagnostics = "mutation body is too large"
 	}
-	return status, code, message
+	return status, code, diagnostics
 }
 
 func decodeMutationJSON(w http.ResponseWriter, r *http.Request, out any) bool {
@@ -1789,13 +1806,13 @@ func decodeMutationJSON(w http.ResponseWriter, r *http.Request, out any) bool {
 	dec := json.NewDecoder(limited)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err != nil {
-		status, code, message := classifyDecodeError(err)
-		writeAPIError(w, status, code, message, nil)
+		status, code, diagnostics := classifyDecodeError(err)
+		writeAPIError(w, status, code, errcat.WithDiagnostics(diagnostics))
 		return false
 	}
 	var extra struct{}
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid JSON request", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("invalid JSON request"))
 		return false
 	}
 	return true

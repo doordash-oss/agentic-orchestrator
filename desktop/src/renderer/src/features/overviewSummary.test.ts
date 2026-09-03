@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { describe, expect, it, vi } from 'vitest';
 import type { AttentionItem, FeatureSnapshot } from '../../../shared/ipc';
 import { featureSnapshot } from '../test/agenticoMock';
@@ -25,13 +41,13 @@ describe('overviewHeadline', () => {
     const counts = laneCounts([
       snapshot('Implementing'),
       snapshot('Implementing'),
-      snapshot('Failed'),
+      snapshot('NeedUserInput'),
     ]);
     expect(overviewHeadline(counts, 3)).toBe('Two runs in flight, one waiting on you');
   });
 
   it('waiting only, singular', () => {
-    const counts = laneCounts([snapshot('Failed')]);
+    const counts = laneCounts([snapshot('NeedUserInput')]);
     expect(overviewHeadline(counts, 1)).toBe('One feature waiting on you');
   });
 
@@ -58,7 +74,7 @@ describe('overviewSubline', () => {
     try {
       vi.setSystemTime(new Date('2026-08-05T12:00:00Z'));
       const now = Date.now();
-      const failing = snapshot('Failed', { id: 'waiting-1' });
+      const failing = snapshot('NeedUserInput', { id: 'waiting-1' });
       const lanes = classifyFeaturesByLane([failing]);
       const items: AttentionItem[] = [
         {
@@ -83,7 +99,7 @@ describe('overviewSubline', () => {
   });
 
   it('waiting with no usable timestamp falls through to the resting-lane tier', () => {
-    const failing = snapshot('Failed', { id: 'waiting-1' });
+    const failing = snapshot('NeedUserInput', { id: 'waiting-1' });
     const rested = snapshot('CodeReady', { id: 'rest-1' });
     const lanes = classifyFeaturesByLane([failing, rested]);
     expect(overviewSubline(lanes, [], 2)).toBe('One feature at rest.');
@@ -104,8 +120,7 @@ describe('overviewSubline', () => {
         startedAt: '2026-07-30T10:00:00Z',
         cost: { totalUsd: 3.08, byPhase: {} },
         integrationState: 'pending',
-        attention: [],
-        cleanupWarnings: [],
+        warnings: [],
       },
     });
     const lanes = classifyFeaturesByLane([running]);

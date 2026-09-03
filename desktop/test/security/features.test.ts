@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Security posture of the feature-creation IPC surface: spoofed senders are
  * rejected on every new op, creation input and feature ids are validated at
@@ -39,6 +55,8 @@ function snapshot() {
     repos: ['repo-a'],
     createdAt: '2026-07-14T10:00:00Z',
     activeRun: 1,
+    warnings: [],
+    errors: [],
     automaticReview: {
       mode: 'default' as const,
       enabled: true,
@@ -134,7 +152,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     reorderWorkspaceRoots: vi.fn(() => Promise.reject(new Error('unused'))),
     initRepository: vi.fn(() => Promise.reject(new Error('unused'))),
     listRepositories: vi.fn(() => Promise.resolve([])),
-    listFeatures: vi.fn(() => Promise.resolve([])),
+    listFeatures: vi.fn(() => Promise.resolve({ features: [], warnings: [] })),
     getFeature: vi.fn(() => Promise.resolve(snapshot())),
     createFeature: vi.fn(() => Promise.resolve({ featureId: 'abcd1234ef567890' })),
     dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),
@@ -241,7 +259,7 @@ function register(services = makeServices()) {
 interface Envelope {
   ok: boolean;
   value?: unknown;
-  error?: { code: string; message: string };
+  error?: { code: string };
 }
 
 const validInput = {

@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * agentico:// deep-link routing (main process only).
  *
@@ -9,9 +25,8 @@
  * serialized into diagnostics, or forwarded to a renderer; only the
  * `app-route` variant's event may leave the main process as an IPC event.
  */
-import { toSafeError } from '../shared/errors';
+import { toCanonicalError } from '../shared/errors';
 import {
-  addServerErrorTitle,
   type AppRouteEvent,
   type RemoteServerAddRequest,
   type RemoteServerAddResult,
@@ -96,7 +111,7 @@ export interface AddServerLinkDeps {
  * added server. `duplicate-local` is success here — the server is already
  * known, so the link just switches to it. Failures land on the Servers pane
  * with the add form focused, the error carried by a native notification
- * (SafeError messages never echo the link or its token).
+ * (canonical summaries never echo the link or its token).
  */
 export async function addServerFromLink(
   connectionString: string,
@@ -106,9 +121,9 @@ export async function addServerFromLink(
   try {
     result = await deps.addServer({ connectionString });
   } catch (err) {
-    const safe = toSafeError(err, E_LINK_ADD_FAILED);
+    const safe = toCanonicalError(err, E_LINK_ADD_FAILED);
     deps.log(`add-server link failed: ${safe.code}`);
-    deps.notify(`${addServerErrorTitle(safe.code)} ${safe.message}`);
+    deps.notify(`${safe.title}. ${safe.summary}`);
     deps.route({ target: 'settings', settingsSection: 'servers', settingsFocus: 'add-server' });
     return;
   }

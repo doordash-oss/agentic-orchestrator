@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -70,8 +71,8 @@ func TestAtomicPhaseStamp_AllSuccess(t *testing.T) {
 	}
 	for _, name := range []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra} {
 		ns := got.RepoStates[name]
-		if ns == nil || !ns.Touched || ns.LastError != "" {
-			t.Errorf("repo %s = %+v, want Touched=true LastError=\"\"", name, ns)
+		if ns == nil || !ns.Touched || ns.Error != nil {
+			t.Errorf("repo %s = %+v, want Touched=true with no failure record", name, ns)
 		}
 	}
 }
@@ -84,7 +85,6 @@ func TestAtomicPhaseStamp_AllFailed(t *testing.T) {
 		FeatureID: id,
 		Repos:     []string{testRepoNameAPI, testRepoNameWeb},
 		Outcome:   PhaseOutcomeFailed,
-		LastError: "max iterations reached",
 	})
 	if err != nil {
 		t.Fatalf("stamp: %v", err)
@@ -98,8 +98,8 @@ func TestAtomicPhaseStamp_AllFailed(t *testing.T) {
 		if ns == nil || !ns.Touched {
 			t.Errorf("repo %s = %+v, want Touched=true", name, ns)
 		}
-		if ns != nil && ns.LastError != "max iterations reached" {
-			t.Errorf("repo %s LastError = %q", name, ns.LastError)
+		if ns != nil && ns.Error != nil {
+			t.Errorf("repo %s record = %+v, want none (the failure lives on the run record)", name, ns.Error)
 		}
 	}
 }
@@ -126,7 +126,7 @@ func TestAtomicPhaseStamp_NeedUserInputDoesNotMutateRepoStatus(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
-		if ns := got.RepoStates[name]; ns != nil && (ns.Touched || ns.LastError != "") {
+		if ns := got.RepoStates[name]; ns != nil && (ns.Touched || ns.Error != nil) {
 			t.Errorf("repo %s = %+v, want untouched (NEED_USER_INPUT is feature-level only)", name, ns)
 		}
 	}
@@ -202,14 +202,16 @@ func TestAtomicPhaseStamp_PRURLsApplied(t *testing.T) {
 	}
 }
 
-// TestAtomicPhaseStamp_FinalReviewPassedClearsStaleRepoErrors asserts the FR
-// success outcome clears stale per-repo error text left by earlier failed FR
-// attempts while preserving monotonic repo state and PR URL mirroring.
-func TestAtomicPhaseStamp_FinalReviewPassedClearsStaleRepoErrors(t *testing.T) {
+// TestAtomicPhaseStamp_FinalReviewPassedPreservesPublishRecords asserts the
+// FR success outcome only mirrors PR URLs: the per-repo stored record is
+// publish-scoped — written at the publish boundary and cleared by the
+// published setter or phase retry — so a phase outcome stamp never touches
+// it, while monotonic repo state is preserved.
+func TestAtomicPhaseStamp_FinalReviewPassedPreservesPublishRecords(t *testing.T) {
 	repos := []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}}
 	prior := map[string]*feature.RepoState{
-		testRepoNameAPI: {Touched: true, LastError: "protocol violation"},
-		testRepoNameWeb: {Touched: true, LastError: "final review failed"},
+		testRepoNameAPI: {Touched: true, Error: &errcat.FailureRecord{Code: errcat.PublishPushFailed, Diagnostics: "push failed"}},
+		testRepoNameWeb: {Touched: true},
 	}
 	store, id := newTestStoreWithFeature(t, repos, prior)
 
@@ -231,9 +233,9 @@ func TestAtomicPhaseStamp_FinalReviewPassedClearsStaleRepoErrors(t *testing.T) {
 		if !got.RepoStates[name].Touched {
 			t.Errorf("repo %s lost Touched=true after FR pass", name)
 		}
-		if got.RepoStates[name].LastError != "" {
-			t.Errorf("repo %s LastError = %q, want cleared after FR pass", name, got.RepoStates[name].LastError)
-		}
+	}
+	if got.RepoStates[testRepoNameAPI].Error == nil {
+		t.Errorf("api publish record cleared by the FR pass, want preserved (publish-scoped)")
 	}
 	if got.RepoStates[testRepoNameAPI].PRURL != testPRURLAPI {
 		t.Errorf("api PRURL not mirrored: %q", got.RepoStates[testRepoNameAPI].PRURL)
@@ -257,7 +259,6 @@ func TestAtomicPhaseStamp_TouchedIsMonotonic(t *testing.T) {
 		FeatureID: id,
 		Repos:     []string{testRepoNameAPI},
 		Outcome:   PhaseOutcomeFailed,
-		LastError: "boom",
 	}); err != nil {
 		t.Fatalf("stamp 2: %v", err)
 	}
@@ -269,7 +270,7 @@ func TestAtomicPhaseStamp_TouchedIsMonotonic(t *testing.T) {
 	if ns == nil || !ns.Touched {
 		t.Fatalf("Touched not monotonic: %+v", ns)
 	}
-	if ns.LastError != "boom" {
-		t.Errorf("LastError = %q, want %q", ns.LastError, "boom")
+	if ns.Error != nil {
+		t.Errorf("record = %+v, want none (phase failures live on the run record)", ns.Error)
 	}
 }

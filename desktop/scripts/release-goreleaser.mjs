@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 // Run the fixed GoReleaser publication command with an optional release-notes file.
 import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
@@ -6,8 +22,11 @@ import { isMainModule } from './lib/main-entry.mjs';
 import { verifyReleaseProvenance } from './release-preflight.mjs';
 import { goreleaserEnvironment, readPublicationSnapshot } from './release-workspace.mjs';
 
+// Desktop assets total ~800 MB; slow operator uplinks need far more than the default timeout.
+const RELEASE_TIMEOUT = '6h';
+
 export function goreleaserArguments(notesFile) {
-  const args = ['release', '--clean'];
+  const args = ['release', '--clean', '--timeout', RELEASE_TIMEOUT];
   if (notesFile !== undefined && notesFile !== '') args.push('--release-notes', notesFile);
   return args;
 }

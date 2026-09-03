@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -8,13 +24,15 @@ import { goreleaserArguments, runGoreleaserRelease } from './release-goreleaser.
 
 describe('GoReleaser release wrapper', () => {
   it('uses only the fixed release command when no notes file is supplied', () => {
-    expect(goreleaserArguments()).toEqual(['release', '--clean']);
+    expect(goreleaserArguments()).toEqual(['release', '--clean', '--timeout', '6h']);
   });
 
   it('passes a notes file as one argument rather than accepting arbitrary flags', () => {
     expect(goreleaserArguments('/tmp/release notes.md')).toEqual([
       'release',
       '--clean',
+      '--timeout',
+      '6h',
       '--release-notes',
       '/tmp/release notes.md',
     ]);
@@ -45,7 +63,7 @@ describe('GoReleaser release wrapper', () => {
     expect(calls).toEqual([
       {
         command: 'goreleaser',
-        args: ['release', '--clean', '--release-notes', '/tmp/notes.md'],
+        args: ['release', '--clean', '--timeout', '6h', '--release-notes', '/tmp/notes.md'],
         options: expect.objectContaining({
           cwd: '/release/workspace',
           env: expect.objectContaining({ GOWORK: 'off', GOFLAGS: '-mod=readonly' }),
@@ -146,7 +164,12 @@ writeFileSync(process.argv[2], JSON.stringify(args));
         cwd: root,
         env: { ...process.env, AGENTICO_RELEASE_NOTES_FILE: '/ambient/poison.md' },
       });
-      expect(JSON.parse(readFileSync(output, 'utf8'))).toEqual(['release', '--clean']);
+      expect(JSON.parse(readFileSync(output, 'utf8'))).toEqual([
+        'release',
+        '--clean',
+        '--timeout',
+        '6h',
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

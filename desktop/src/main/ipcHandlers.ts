@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Registers every IPC handler from the central registry. Each handler:
  *   1. validates the sender (main-window webContents + app origin),
@@ -8,7 +24,7 @@
  * and always resolves to a typed { ok } envelope — exceptions never cross
  * the boundary unredacted.
  */
-import { toSafeError } from '../shared/errors';
+import { buildCanonicalError, toCanonicalError, type CanonicalError } from '../shared/errors';
 import { validateWithSchema } from '../shared/api/parse';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sanitize';
 import {
@@ -33,7 +49,7 @@ import {
   type PickedCreationFiles,
   type UploadCreationFilesResult,
   type FeatureSnapshot,
-  type FeatureSummaryView,
+  type FeaturesListResult,
   type FeatureActionRequest,
   type FeatureActionResult,
   type InitRepositoryRequest,
@@ -159,7 +175,7 @@ export interface IpcServices {
   reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot>;
   initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
   listRepositories(): Promise<RepositoryState[]>;
-  listFeatures(): Promise<FeatureSummaryView[]>;
+  listFeatures(): Promise<FeaturesListResult>;
   getFeature(featureId: string): Promise<FeatureSnapshot>;
   createFeature(input: CreateFeatureInput): Promise<CreateFeatureResult>;
   dispatchFeatureSetup(featureId: string): Promise<SetupDispatchResult>;
@@ -255,11 +271,16 @@ export interface IpcMainLike {
 
 const UNTRUSTED: IpcEnvelope = {
   ok: false,
-  error: {
-    code: 'E_UNTRUSTED_SENDER',
-    message: 'The request did not originate from the application window.',
-  },
+  error: buildCanonicalError('E_UNTRUSTED_SENDER'),
 };
+
+/**
+ * The envelope's single error shape delegates canonical pass-through,
+ * timeout classification, and fallback diagnostics to the shared boundary.
+ */
+function envelopeError(err: unknown): CanonicalError {
+  return toCanonicalError(err, 'E_INTERNAL');
+}
 
 function makeHandler(
   channel: IpcChannel,
@@ -281,7 +302,7 @@ function makeHandler(
       );
       return { ok: true, value: validateWithSchema(value, contract.response) };
     } catch (err) {
-      return { ok: false, error: toSafeError(err, 'E_INTERNAL') };
+      return { ok: false, error: envelopeError(err) };
     }
   };
 }

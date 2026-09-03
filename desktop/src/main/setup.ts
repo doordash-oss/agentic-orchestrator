@@ -1,9 +1,25 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Main-process first-launch setup service. Every operation uses the gateway's
  * bearer transport or the native directory picker; creation-file concerns
  * live in CreationFilesService.
  */
-import { SafeErrorException, safeError } from '../shared/errors';
+import { buildCanonicalError, CanonicalErrorException } from '../shared/errors';
 import {
   ReadinessResponseSchema,
   RuntimeConfigWorkspaceSchema,
@@ -33,19 +49,6 @@ export interface SetupServiceDeps {
   dialogs: SetupDialogs;
 }
 
-/** Concrete, safe next steps per structured server error code. */
-const REMEDY_BY_CODE: Record<string, string> = {
-  consent_required: 'Confirm the initialization consent in the dialog, then try again.',
-  invalid_repository_path: 'Choose an absolute folder located inside a configured workspace root.',
-  path_outside_workspace_root:
-    'Choose a folder inside one of the configured workspace roots, or add its parent as a root first.',
-  already_repository:
-    'This folder is already a git repository — select it directly instead of initializing.',
-  directory_not_empty:
-    'Choose an empty folder, a new folder name, or an existing git repository instead.',
-  not_ready: 'Complete the outstanding setup steps shown in the wizard, then retry.',
-};
-
 export class SetupService {
   constructor(private readonly deps: SetupServiceDeps) {}
 
@@ -67,13 +70,7 @@ export class SetupService {
     const parsed = AbsolutePathSchema.safeParse(picked);
     if (!parsed.success) {
       // Never echo the rejected path back across the boundary.
-      throw new SafeErrorException(
-        safeError(
-          'E_INVALID_PATH',
-          'The selected folder could not be used.',
-          'Choose a regular folder with an absolute path.',
-        ),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_INVALID_PATH'));
     }
     return { path: parsed.data };
   }
@@ -128,13 +125,7 @@ export class SetupService {
     const current = (config.workspace_roots ?? []).slice().sort();
     const sorted = validated.slice().sort();
     if (current.length !== sorted.length || current.some((r, i) => r !== sorted[i])) {
-      throw new SafeErrorException(
-        safeError(
-          'E_INVALID_REORDER',
-          'The reordered root set must match the current set of workspace roots.',
-          'Add or remove roots separately before reordering.',
-        ),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_INVALID_REORDER'));
     }
     await this.api('/api/v1/config/runtime', {
       method: 'PATCH',
@@ -150,13 +141,7 @@ export class SetupService {
    */
   async initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot> {
     if (request.consent !== true) {
-      throw new SafeErrorException(
-        safeError(
-          'consent_required',
-          'Repository initialization requires explicit consent.',
-          REMEDY_BY_CODE['consent_required'] ?? '',
-        ),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_CONSENT_REQUIRED'));
     }
     const path = validateWithSchema(request.path, AbsolutePathSchema);
     await this.api('/api/v1/workspace/repositories/init', {
@@ -175,11 +160,13 @@ export class SetupService {
   // --- transport helpers -----------------------------------------------------
 
   private api(path: string, init?: ApiRequestInit): Promise<unknown> {
-    return serverRequest(this.deps.transport, path, init, { remedyByCode: REMEDY_BY_CODE });
+    return serverRequest(this.deps.transport, path, init);
   }
 }
 
-/** Maps the validated server readiness response to the renderer-facing shape. */
+/** Maps the validated server readiness response to the renderer-facing shape.
+ * Readiness issues are already canonical catalog-rendered errors on the wire,
+ * so they pass through untouched — the strict IPC schema revalidates them. */
 export function toReadinessSnapshot(server: ReadinessResponse): ReadinessSnapshot {
   return {
     ready: server.ready,
@@ -189,42 +176,28 @@ export function toReadinessSnapshot(server: ReadinessResponse): ReadinessSnapsho
       installed: provider.installed,
       ...(provider.version === undefined ? {} : { version: provider.version }),
       ready: provider.ready,
-      ...(provider.issue === undefined ? {} : { issue: toIssue(provider.issue) }),
+      ...(provider.issue === undefined ? {} : { issue: provider.issue }),
     })),
     models: {
       available: server.models.available,
       ...(server.models.models === undefined ? {} : { models: server.models.models }),
-      ...(server.models.issue === undefined ? {} : { issue: toIssue(server.models.issue) }),
+      ...(server.models.issue === undefined ? {} : { issue: server.models.issue }),
     },
     configuration: {
       valid: server.configuration.valid,
-      ...(server.configuration.issue === undefined
-        ? {}
-        : { issue: toIssue(server.configuration.issue) }),
+      ...(server.configuration.issue === undefined ? {} : { issue: server.configuration.issue }),
     },
     workspaceRoots: server.workspace.roots.map((root) => ({
       path: root.path,
       valid: root.valid,
-      ...(root.issue === undefined ? {} : { issue: toIssue(root.issue) }),
+      ...(root.issue === undefined ? {} : { issue: root.issue }),
     })),
     repositories: server.workspace.repositories.map((repository) => ({
       name: repository.name,
       path: repository.path,
       valid: repository.valid,
-      ...(repository.issue === undefined ? {} : { issue: toIssue(repository.issue) }),
+      ...(repository.issue === undefined ? {} : { issue: repository.issue }),
     })),
-    issues: (server.issues ?? []).map(toIssue),
-  };
-}
-
-function toIssue(issue: NonNullable<ReadinessResponse['issues']>[number]): {
-  code: (typeof issue)['code'];
-  message: string;
-  remedy?: string;
-} {
-  return {
-    code: issue.code,
-    message: issue.message,
-    ...(issue.remedy === undefined ? {} : { remedy: issue.remedy }),
+    issues: server.issues ?? [],
   };
 }

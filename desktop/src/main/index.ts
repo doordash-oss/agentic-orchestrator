@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Electron main entry point. All privileged state (settings, theme, the
  * runtime gateway with its bearer token and child-server supervision) lives
@@ -79,6 +95,7 @@ import {
   type AppEvent,
   type AppRouteEvent,
   type FeatureSnapshot,
+  type FeaturesListResult,
   type RemoteServerAddRequest,
   type RemoteServerAddResult,
   type SettingsFocus,
@@ -91,7 +108,7 @@ import {
   routeSettingsPane,
   routeWindowPurpose,
 } from './windowRegistry';
-import { redactText, toSafeError } from '../shared/errors';
+import { redactText, toCanonicalError } from '../shared/errors';
 import {
   RENDERER_ENTRY_URL,
   RENDERER_ORIGIN,
@@ -563,6 +580,7 @@ if (!hasSingleInstanceLock) {
     let nativeCommands: NativeCommandController | null = null;
     let featureLabels = new Map<string, string>();
     let mainWindowAttentionFocused = false;
+    let mainWindowAttentionFocusOverride: boolean | undefined;
     let stopStreams = (): void => {};
 
     /**
@@ -785,7 +803,11 @@ if (!hasSingleInstanceLock) {
       sink: electronNotificationSink,
       shouldNotify: () => {
         const window = mainWindowOrNull();
-        return window === null || !window.isVisible() || !mainWindowAttentionFocused;
+        return (
+          window === null ||
+          !window.isVisible() ||
+          !(mainWindowAttentionFocusOverride ?? mainWindowAttentionFocused)
+        );
       },
       show: () => {
         showMainWindow();
@@ -912,10 +934,10 @@ if (!hasSingleInstanceLock) {
       const featureIds: string[] = [];
       let detectionFailed = false;
       try {
-        const summaries = await features.listFeatures();
-        featureLabels = new Map(summaries.map((feature) => [feature.id, feature.name]));
+        const list = await features.listFeatures();
+        featureLabels = new Map(list.features.map((feature) => [feature.id, feature.name]));
         const snapshots = await Promise.allSettled(
-          summaries.map((summary) => features.getFeature(summary.id)),
+          list.features.map((summary) => features.getFeature(summary.id)),
         );
         for (const result of snapshots) {
           if (result.status === 'rejected') {
@@ -1111,12 +1133,14 @@ if (!hasSingleInstanceLock) {
         return;
       }
       try {
-        const [snapshot, summaries, sessionList] = await Promise.all([
+        const [snapshot, list, sessionList] = await Promise.all([
           attention.getSnapshot(),
-          features.listFeatures().catch(() => []),
+          features
+            .listFeatures()
+            .catch(() => ({ features: [], warnings: [] }) as FeaturesListResult),
           sessions.list().catch(() => []),
         ]);
-        featureLabels = new Map(summaries.map((feature) => [feature.id, feature.name]));
+        featureLabels = new Map(list.features.map((feature) => [feature.id, feature.name]));
         notifications.update(snapshot, {
           previewEnabled: settings.get().notifications.previewEnabled,
           featureLabel: (featureId) => featureLabels.get(featureId) ?? 'Untitled feature',
@@ -1135,10 +1159,30 @@ if (!hasSingleInstanceLock) {
     if (testUserData !== null) {
       const global = globalThis as typeof globalThis & {
         __agenticoRefreshBackgroundState?: () => void;
+        __agenticoResetAttentionNotificationDelivery?: () => void;
+        __agenticoSetMainWindowAttentionFocusOverride?: (focused: boolean) => void;
       };
       global.__agenticoRefreshBackgroundState = () => {
         mainWindowAttentionFocused = false;
         void refreshBackgroundState();
+      };
+      // Packaged journeys share one Linux display across workers. Let tests
+      // pin the notification-facing focus signal so another app window's
+      // ambient focus event cannot rewrite the scenario under assertion.
+      global.__agenticoSetMainWindowAttentionFocusOverride = (focused) => {
+        mainWindowAttentionFocusOverride = focused;
+      };
+      // A seeded item may be observed before a journey installs its capture
+      // sink. Clearing the snapshot resets delivery memory without exposing
+      // mutable coordinator internals or affecting production startup.
+      global.__agenticoResetAttentionNotificationDelivery = () => {
+        notifications.update(
+          { items: [] },
+          {
+            previewEnabled: settings.get().notifications.previewEnabled,
+            featureLabel: (featureId) => featureLabels.get(featureId) ?? 'Untitled feature',
+          },
+        );
       };
     }
 
@@ -1195,12 +1239,14 @@ if (!hasSingleInstanceLock) {
         publishNativeCommandTestState(nativeCommands);
       }
       if (state.status === 'launch-failed' || state.status === 'crashed') {
-        diagnostics.record('server', 'error', state.detail, state.diagnostics?.logTail?.join('\n'));
+        // The gateway folds the launch command context and bounded log tail
+        // into the canonical error's diagnostics string.
+        diagnostics.record('server', 'error', state.detail, state.error.diagnostics);
         if (state.status === 'crashed') {
           diagnostics.recordCrash({
             processRole: 'server',
             category: state.detail,
-            context: state.diagnostics?.commandContext,
+            context: state.error.diagnostics,
           });
         }
       }
@@ -1513,8 +1559,9 @@ function forcedActiveWorkForE2E(featureLabels: Map<string, string>): ActiveWorkC
 }
 
 function safeStopReason(error: unknown): string {
-  const safe = toSafeError(error, 'E_STOP_FAILED');
-  return safe.remediation === undefined ? safe.message : `${safe.message} ${safe.remediation}`;
+  const canonical = toCanonicalError(error, 'E_STOP_FAILED');
+  const hint = canonical.remediation?.hint;
+  return hint === undefined ? canonical.summary : `${canonical.summary} ${hint}`;
 }
 
 function activeWorkDecision(response: number): ActiveWorkDecision {

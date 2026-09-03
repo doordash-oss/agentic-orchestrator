@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -943,9 +944,9 @@ func TestReconcilePendingChildCreationsReportsUnreadableRecords(t *testing.T) {
 // TestFailActiveSetupParksRunningSetupRetryable pins the durable recovery
 // contract behind Orchestrator.RunSetupAsync: when a setup run fails before
 // the runner could persist its own failure, marking the still-running setup
-// failed must park the child in Failed/WorktreeSetup with the error recorded
-// so ordinary RetrySetup takes over — and must be an idempotent no-op once
-// setup reaches a terminal state.
+// failed must park the child in Failed with a setup_interrupted record whose
+// owner is the owning setup task, so ordinary RetrySetup takes over — and
+// must be an idempotent no-op once setup reaches a terminal state.
 func TestFailActiveSetupParksRunningSetupRetryable(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp store and fakes isolate state.
@@ -967,11 +968,11 @@ func TestFailActiveSetupParksRunningSetupRetryable(t *testing.T) {
 	}
 
 	const cause = "reloading child after launch failed"
-	marked, err := mgr.FailActiveSetup(child.ID, cause)
+	outcome, err := mgr.FailActiveSetup(child.ID, cause)
 	if err != nil {
 		t.Fatalf("FailActiveSetup() error = %v", err)
 	}
-	if !marked {
+	if !outcome.Marked {
 		t.Fatal("FailActiveSetup marked = false for a running setup, want true")
 	}
 
@@ -979,12 +980,15 @@ func TestFailActiveSetupParksRunningSetupRetryable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	setup := parked.Run().Setup
-	if parked.Status != feature.StatusFailed || parked.FailureType != feature.FailureWorktreeSetup {
-		t.Fatalf("status=%v failureType=%q, want Failed/%s", parked.Status, parked.FailureType, feature.FailureWorktreeSetup)
+	if parked.Status != feature.StatusFailed || parked.FailureCode() != errcat.SetupInterrupted {
+		t.Fatalf("status=%v failureCode=%q, want Failed/%s", parked.Status, parked.FailureCode(), errcat.SetupInterrupted)
 	}
-	if setup == nil || setup.Status != feature.SetupStatusFailed || setup.LastError != cause {
-		t.Fatalf("setup = %+v, want failed state with the recorded cause", setup)
+	owner := parked.FailedSetupTask()
+	if owner == nil || owner.Key != outcome.Owner.Key || owner.Status != feature.SetupStatusFailed {
+		t.Fatalf("owning task = %+v, want the failed task named by the run record", owner)
+	}
+	if owner.Error == nil || owner.Error.Code != errcat.SetupInterrupted || owner.Error.Diagnostics != cause {
+		t.Fatalf("owner record = %+v, want setup_interrupted with the recorded cause", owner.Error)
 	}
 
 	// Durably retryable through the ordinary gate: the retried run skips
@@ -1012,11 +1016,11 @@ func TestFailActiveSetupParksRunningSetupRetryable(t *testing.T) {
 	}
 
 	// Terminal setup is untouched: no clobber, no state change.
-	marked, err = mgr.FailActiveSetup(child.ID, "late failure")
+	outcome, err = mgr.FailActiveSetup(child.ID, "late failure")
 	if err != nil {
 		t.Fatalf("FailActiveSetup() after completion error = %v", err)
 	}
-	if marked {
+	if outcome.Marked {
 		t.Fatal("FailActiveSetup marked = true after setup completed, want false")
 	}
 	final, err := mgr.Store.Load(child.ID)
@@ -1071,9 +1075,13 @@ func TestChildExecutionCapability(t *testing.T) {
 
 // TestChildSetupCompleteMatrix pins the setup-state half of the gate.
 func TestChildSetupCompleteMatrix(t *testing.T) {
-	mk := func(status feature.Status, failureType string) *feature.Feature {
-		return &feature.Feature{ID: "c", Status: status, FailureType: failureType,
+	mk := func(status feature.Status, code errcat.Code) *feature.Feature {
+		f := &feature.Feature{ID: "c", Status: status,
 			Parent: &feature.ChildRelationship{ParentID: "p", Kind: feature.ChildKindRefactor}}
+		if code != "" {
+			f.Run().Failure = &errcat.FailureRecord{Code: code}
+		}
+		return f
 	}
 	for _, tc := range []struct {
 		name string
@@ -1081,10 +1089,10 @@ func TestChildSetupCompleteMatrix(t *testing.T) {
 		want bool
 	}{
 		{"queued/setting-up", mk(feature.StatusSettingUpWorktrees, ""), false},
-		{"failed setup", mk(feature.StatusFailed, feature.FailureWorktreeSetup), false},
+		{"failed setup", mk(feature.StatusFailed, errcat.WorktreeSetupFailed), false},
 		{"setup-complete Created", mk(feature.StatusCreated, ""), true},
 		{"executing child", mk(feature.StatusImplementing, ""), true},
-		{"pipeline-failed child", mk(feature.StatusFailed, feature.FailureSessionCrash), true},
+		{"pipeline-failed child", mk(feature.StatusFailed, errcat.SessionCrashed), true},
 		{"non-child", &feature.Feature{ID: "t", Status: feature.StatusCreated}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1096,7 +1104,8 @@ func TestChildSetupCompleteMatrix(t *testing.T) {
 }
 
 // TestChildIntegrationRecordPersists proves the durable integration record
-// and closure fields survive a store round-trip.
+// and closure fields survive a store round-trip, including the journal's
+// stored canonical attention record and the typed pending-sync flag.
 func TestChildIntegrationRecordPersists(t *testing.T) {
 	store := feature.NewStore(filepath.Join(t.TempDir(), "features"))
 	closed := time.Now().UTC().Truncate(time.Second)
@@ -1116,11 +1125,26 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 					ParentAnchorSHA: "aaaa1111",
 					ChildHeadSHA:    "bbbb2222",
 					MergeHEAD:       "cccc3333",
-					CleanupWarning:  "worktree busy",
-					Dirty: []feature.RepoDirtyDiagnostics{{
-						Repo: "repoA", Path: "/tmp/a", Untracked: []string{"stray.txt"}, UntrackedTotal: 1,
-					}},
+					Cleanup: &errcat.FailureRecord{
+						Code:        errcat.ChildCleanupIncomplete,
+						Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: "repoA"}}},
+						Diagnostics: "worktree busy",
+					},
+					PendingSync: true,
 				}},
+				Attention: &errcat.FailureRecord{
+					Code: errcat.IntegrationMergeConflict,
+					Context: &errcat.RecordContext{
+						Repositories: []errcat.CodeRepository{{
+							Name:            "repoA",
+							Branch:          "feature/parent",
+							ConflictFiles:   []string{"internal/api.go"},
+							ParentAnchorSHA: "aaaa1111",
+							ChildHeadSHA:    "bbbb2222",
+						}},
+					},
+					Diagnostics: "repoA: merge conflict: [internal/api.go]",
+				},
 			},
 		},
 		SchemaVersion: feature.SchemaVersionCurrent,
@@ -1145,11 +1169,22 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 	entry := tx.Entries[0]
 	if entry.ParentBranch != "feature/parent" || entry.ParentAnchorSHA != "aaaa1111" ||
 		entry.ChildHeadSHA != "bbbb2222" || entry.MergeHEAD != "cccc3333" ||
-		entry.CleanupWarning != "worktree busy" {
+		entry.Cleanup == nil || entry.Cleanup.Code != errcat.ChildCleanupIncomplete ||
+		entry.Cleanup.Diagnostics != "worktree busy" || !entry.PendingSync {
 		t.Fatalf("transaction entry = %+v, want full round-trip", entry)
 	}
-	if len(entry.Dirty) != 1 || entry.Dirty[0].UntrackedTotal != 1 || entry.Dirty[0].Untracked[0] != "stray.txt" {
-		t.Fatalf("dirty diagnostics = %+v, want round-trip", entry.Dirty)
+	rec := tx.Attention
+	if rec == nil || rec.Code != errcat.IntegrationMergeConflict || rec.Diagnostics != "repoA: merge conflict: [internal/api.go]" {
+		t.Fatalf("attention record = %+v, want round-trip", rec)
+	}
+	if rec.Context == nil || len(rec.Context.Repositories) != 1 {
+		t.Fatalf("attention repositories block = %+v, want one repository", rec.Context)
+	}
+	repo := rec.Context.Repositories[0]
+	if repo.Name != "repoA" || repo.Branch != "feature/parent" ||
+		len(repo.ConflictFiles) != 1 || repo.ConflictFiles[0] != "internal/api.go" ||
+		repo.ParentAnchorSHA != "aaaa1111" || repo.ChildHeadSHA != "bbbb2222" {
+		t.Fatalf("attention repository = %+v, want round-trip", repo)
 	}
 }
 
@@ -1182,7 +1217,7 @@ func TestIntegrationResumable(t *testing.T) {
 		{"active phase attention", mk("", &feature.TransactionJournal{Phase: feature.TransactionPhaseAttention}, "/tmp/wt"), true},
 		{"active phase merged", mk("", merged, "/tmp/wt"), true},
 		{"closed completed settled", mk(feature.ChildCloseOutcomeCompleted, merged, ""), false},
-		{"closed completed with cleanup warning", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{MergeHEAD: "cccc3333", CleanupWarning: "worktree busy"}}}, ""), false},
+		{"closed completed with cleanup warning", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{MergeHEAD: "cccc3333", Cleanup: &errcat.FailureRecord{Code: errcat.ChildCleanupIncomplete, Diagnostics: "worktree busy"}}}}, ""), false},
 		{"closed completed with pending worktree", mk(feature.ChildCloseOutcomeCompleted, merged, "/tmp/wt"), false},
 		{"closed completed without merge head", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhasePreparing}, ""), false},
 	} {

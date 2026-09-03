@@ -166,6 +166,52 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 		t, spec, "NeedUserInputVerificationBlocker",
 		"item_id", "name", "repo_name", "command", "reason", "capabilities", "remediation",
 	)
+	// The canonical error envelope: ErrorResponse wraps the catalog-rendered
+	// Error, which carries the stable code, severity class, and authored
+	// title/summary plus optional typed context and raw diagnostics.
+	assertSchemaProperties(t, spec, "ErrorResponse", "api_version", "error")
+	assertSchemaProperties(
+		t, spec, "Error",
+		"code", "class", "title", "summary", "diagnostics", "context", "remediation",
+	)
+	assertSchemaProperties(
+		t, spec, "ErrorRepositoryContext",
+		"name", "branch", "conflict_files", "dirty_files", "parent_anchor_sha",
+		"expected_ref_sha", "child_head_sha", "candidate_sha", "merge_head", "observed_sha",
+	)
+	errorProps := schemaProperties(spec.Components.Schemas["Error"])
+	for _, forbidden := range []string{"message", "status", "target"} {
+		if errorProps[forbidden] {
+			t.Fatalf("Error schema must not carry legacy property %q", forbidden)
+		}
+	}
+}
+
+// TestIntegrationAttentionSchemasCollapsedToCanonicalError pins the OpenAPI
+// shape of the integration-attention single owner: the transaction journal's
+// and the relationship child summaries' attention fields reference the
+// canonical Error component, the legacy relationship-attention and
+// dirty-diagnostics schemas and the per-entry attention duplicates are gone,
+// and the typed pending-sync flag is declared.
+func TestIntegrationAttentionSchemasCollapsedToCanonicalError(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	for _, schema := range []string{"RelationshipAttention", "ChildDirtyDiagnostics"} {
+		if _, ok := spec.Components.Schemas[schema]; ok {
+			t.Fatalf("components.schemas.%s must be deleted; attention is the canonical Error", schema)
+		}
+	}
+	assertSchemaProperties(t, spec, "TransactionJournal", "phase", "attention", "entries")
+	assertSchemaProperties(t, spec, "RelationshipChildSummary", "attention")
+	// The detail schema composes the summary through allOf, so its own
+	// property set carries only the diff body.
+	assertSchemaProperties(t, spec, "RelationshipChild", "diff_summary")
+	assertSchemaProperties(t, spec, "RepoTransactionEntry", "pending_sync")
+	entryProps := schemaProperties(spec.Components.Schemas["RepoTransactionEntry"])
+	for _, forbidden := range removedEntryWireKeys {
+		if entryProps[forbidden] {
+			t.Fatalf("RepoTransactionEntry must not carry removed property %q", forbidden)
+		}
+	}
 }
 
 // TestRefactorRequestSchemaOmitsRepoSelection pins the refactor contract:
@@ -317,7 +363,7 @@ func TestReviewFeedbackLaunchOperationBindsTypedSchemas(t *testing.T) {
 // time), the generated action enum includes refactor, and no hand-maintained
 // duplicate redefines the type.
 func TestGeneratedRefactorSurfaceIsTyped(t *testing.T) {
-	if RunFeatureActionParamsActionRefactor != RunFeatureActionParamsAction(actionRefactor) || !RunFeatureActionParamsActionRefactor.Valid() {
+	if FeatureActionRefactor != FeatureAction(actionRefactor) || !FeatureActionRefactor.Valid() {
 		t.Fatalf("generated action enum must include %q", actionRefactor)
 	}
 	req := RefactorFeatureRequest{

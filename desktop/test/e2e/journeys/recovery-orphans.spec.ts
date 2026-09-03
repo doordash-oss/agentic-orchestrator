@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Recovery orphans journey: priority recovery attention, live/dead orphan
  * context, bounded logs, resilient batch actions, stale refresh, and
@@ -72,7 +88,7 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     });
     transcript.step(`created feature \`${featureName}\``);
 
-    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 
@@ -117,9 +133,12 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     await expect(recoveryQueue).toBeVisible({ timeout: 30_000 });
     transcript.step('recovery workspace auto-scanned and rendered the queue');
 
-    const attentionBanner = recoveryPanel.locator('.recovery-attention');
-    await expect(attentionBanner).toBeVisible({ timeout: 5_000 });
-    transcript.step('recovery-priority attention banner visible');
+    // The priority banner was folded into the header summary: the per-item
+    // needs-action cards own the condition itself.
+    const scanSummary = recoveryPanel.locator('.recovery-workspace__summary');
+    await expect(scanSummary).toBeVisible({ timeout: 5_000 });
+    await expect(scanSummary).toContainText(/live/);
+    transcript.step('recovery workspace reports the risk-first scan summary');
 
     const items = recoveryQueue.locator('.recovery-workspace__item');
     const itemCount = await items.count();
@@ -138,6 +157,25 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     await expect(firstItem).toHaveAttribute('data-alive', 'true');
     transcript.step('first item is the live orphan — priority ordering verified');
 
+    transcript.section('Canonical orphan cards');
+    const liveCard = firstItem.locator('.error-surface--needs-action');
+    await expect(liveCard).toBeVisible({ timeout: 15_000 });
+    await expect(liveCard).toHaveAttribute('role', 'alert');
+    await expect(liveCard.getByText('Needs your action')).toBeVisible();
+    await expect(liveCard.locator('.error-surface__code')).toHaveText('orphan_session_live');
+    await expect(liveCard.getByText('Orphaned session running')).toBeVisible();
+    await expect(firstItem.getByRole('button', { name: 'Resume' })).toBeVisible({
+      timeout: 5_000,
+    });
+    transcript.step('live orphan renders one needs-action ErrorSurface with an in-card Resume');
+
+    const deadCard = deadItems.first().locator('.error-surface--needs-action');
+    await expect(deadCard).toBeVisible({ timeout: 5_000 });
+    await expect(deadCard).toHaveAttribute('role', 'alert');
+    await expect(deadCard.locator('.error-surface__code')).toHaveText('orphan_session_stale');
+    await expect(deadCard.getByText('Orphaned session state')).toBeVisible();
+    transcript.step('dead orphan renders the orphan_session_stale card');
+
     transcript.section('Bounded logs');
     const logsToggle = firstItem.locator('.recovery-workspace__logs-toggle');
     if (await logsToggle.isVisible({ timeout: 3_000 }).catch(() => false)) {
@@ -150,7 +188,7 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     }
 
     transcript.section('Kill impact confirmation on live orphan');
-    const killButton = firstItem.locator('.recovery-workspace__action--kill');
+    const killButton = firstItem.getByRole('button', { name: 'Kill' });
     await expect(killButton).toBeVisible({ timeout: 5_000 });
     await killButton.click();
     const killDialog = handle.page.locator('.impact-dialog__backdrop');

@@ -1,7 +1,23 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { z } from 'zod';
 import { assertCompatibleApiVersion } from '../shared/apiVersion';
 import {
-  ReviewConflictResponseSchema,
+  CanonicalErrorResponseSchema,
   ReviewDecisionResponseSchema,
   ReviewDraftValidationResponseSchema,
   ReviewSessionResponseSchema,
@@ -41,16 +57,7 @@ export type ReviewOpenRequest = z.output<typeof ReviewOpenRequestSchema>;
 export type ReviewSaveRequest = z.output<typeof ReviewSaveRequestSchema>;
 export type ReviewValidateRequest = z.output<typeof ReviewValidateRequestSchema>;
 export type ReviewDecisionRequest = z.output<typeof ReviewDecisionRequestSchema>;
-export type ReviewMutationResult<T> =
-  | { type: 'saved'; session: T }
-  | { type: 'conflict'; expectedRevision: string; currentRevision: string };
-
-const REMEDIES = {
-  remedyByCode: {
-    not_found: 'This review is no longer active. Refresh the feature to see its current state.',
-    conflict: 'This review changed elsewhere. Reconcile your draft with the current server copy.',
-  },
-} as const;
+export type ReviewMutationResult<T> = { type: 'saved'; session: T } | { type: 'conflict' };
 
 /** Main-process-only adapter for the revisioned review-session REST contract. */
 export class ReviewService {
@@ -75,7 +82,6 @@ export class ReviewService {
     const result = await this.mutate(
       path,
       { base_revision: input.baseRevision, text: input.text },
-      input.baseRevision,
       'PUT',
     );
     return result.type === 'conflict'
@@ -89,7 +95,6 @@ export class ReviewService {
       this.transport,
       `/api/v1/features/${input.featureId}/reviews/${input.reviewId}/validate`,
       { method: 'POST', body: { text: input.text } },
-      REMEDIES,
     );
     return validateWithSchema(body, ReviewDraftValidationResponseSchema);
   }
@@ -99,30 +104,30 @@ export class ReviewService {
   ): Promise<ReviewMutationResult<ServerReviewDecision>> {
     const input = validateWithSchema(request, ReviewDecisionRequestSchema);
     const path = `/api/v1/features/${input.featureId}/reviews/${input.reviewId}/decision`;
-    const result = await this.mutate(
-      path,
-      { decision: input.decision, base_revision: input.baseRevision },
-      input.baseRevision,
-    );
+    const result = await this.mutate(path, {
+      decision: input.decision,
+      base_revision: input.baseRevision,
+    });
     return result.type === 'conflict'
       ? result
       : { type: 'saved', session: validateWithSchema(result.body, ReviewDecisionResponseSchema) };
   }
 
   private async getSession(path: string, init?: ApiRequestInit): Promise<ServerReviewSession> {
-    const body = await serverRequest(this.transport, path, init, REMEDIES);
+    const body = await serverRequest(this.transport, path, init);
     return validateWithSchema(body, ReviewSessionResponseSchema);
   }
 
+  /**
+   * Runs one review mutation. A 409 is detected by its canonical code alone:
+   * the draft revision no longer travels on the error body, so callers
+   * refetch the session to pick up the current revision.
+   */
   private async mutate(
     path: string,
     body: Record<string, unknown>,
-    expectedRevision: string,
     method: 'POST' | 'PUT' = 'POST',
-  ): Promise<
-    | { type: 'body'; body: unknown }
-    | { type: 'conflict'; expectedRevision: string; currentRevision: string }
-  > {
+  ): Promise<{ type: 'body'; body: unknown } | { type: 'conflict' }> {
     const response = await this.transport.apiRequest(path, {
       method,
       body,
@@ -133,16 +138,12 @@ export class ReviewService {
     if (response.status === 409) {
       assertNoPrototypePollution(response.body);
       assertWithinByteSize(JSON.stringify(response.body) ?? '');
-      const conflict = ReviewConflictResponseSchema.safeParse(response.body);
-      if (conflict.success) {
+      const conflict = CanonicalErrorResponseSchema.safeParse(response.body);
+      if (conflict.success && conflict.data.error.code === 'conflict') {
         assertCompatibleApiVersion(conflict.data.api_version);
-        return {
-          type: 'conflict',
-          expectedRevision,
-          currentRevision: conflict.data.error.target.current_revision,
-        };
+        return { type: 'conflict' };
       }
     }
-    throw mapServerError(response, REMEDIES);
+    throw mapServerError(response);
   }
 }

@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -113,6 +114,14 @@ func (o *Orchestrator) surfaceDispatchCompletionError(featureID string, cause er
 	if errors.Is(cause, errFinalReviewInterrupted) {
 		return
 	}
+	var publishDispatch *PublishDispatchError
+	if errors.As(cause, &publishDispatch) {
+		// A publish failure is owned by the failing repository's stored
+		// record and is never terminal: the feature stays at CodeReady with
+		// no run-level failure, and Publish already emitted PublishCompleted
+		// with the first failed repository's canonical error.
+		return
+	}
 	var publishConflict *PublishConflictError
 	if errors.As(cause, &publishConflict) {
 		// Publish already emitted PublishCompleted with the structured conflict;
@@ -124,7 +133,7 @@ func (o *Orchestrator) surfaceDispatchCompletionError(featureID string, cause er
 		return
 	}
 	errMsg := fmt.Sprintf("handle phase completion: %v", cause)
-	if markErr := o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg); markErr != nil {
+	if markErr := o.markFailedWithEvent(featureID, o.delegateFailureRecord(featureID, errcat.InfrastructureFailure, errMsg)); markErr != nil {
 		o.emitEventBlocking(ports.Event{
 			Type:      ports.FeatureFailed,
 			FeatureID: featureID,

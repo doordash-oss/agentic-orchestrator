@@ -1,4 +1,22 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { vi } from 'vitest';
+import { CANONICAL_ERROR_MESSAGE_PREFIX } from '../../../shared/errors';
+import type { CanonicalError } from '../../../shared/api/parse';
 import type {
   AgenticoApi,
   AppEvent,
@@ -25,8 +43,52 @@ import type {
 } from '../../../shared/ipc';
 import { defaultSettings } from '../../../shared/ipc';
 
+/**
+ * A rejection shaped the way the preload rethrows envelope errors: the
+ * canonical object rides the sentinel-prefixed message (and is attached for
+ * same-world recovery). Pass to `mockRejectedValue` on window.agentico calls.
+ */
+export function ipcError(
+  code: string,
+  summary: string,
+  options: { class?: CanonicalError['class']; title?: string; remediation?: string } = {},
+): Error {
+  const canonical: CanonicalError = {
+    code,
+    class: options.class ?? 'blocking',
+    title: options.title ?? 'Request failed',
+    summary,
+    ...(options.remediation === undefined ? {} : { remediation: { hint: options.remediation } }),
+  };
+  return Object.assign(new Error(CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(canonical)), {
+    code: canonical.code,
+    remediation: canonical.remediation?.hint,
+    canonical,
+  });
+}
+
 /** A snapshot with every mandatory gate unsatisfied (fresh install). */
 export function unreadySnapshot(overrides: Partial<ReadinessSnapshot> = {}): ReadinessSnapshot {
+  const claudeIssue = {
+    code: 'unauthenticated',
+    class: 'blocking',
+    title: 'Unauthenticated',
+    summary: 'A provider CLI is installed but its authentication flow has not been completed.',
+    remediation: { hint: 'claude login' },
+  } as const;
+  const codexIssue = {
+    code: 'missing_executable',
+    class: 'blocking',
+    title: 'Missing executable',
+    summary: 'A provider CLI is not installed.',
+    remediation: { hint: 'npm install -g @openai/codex' },
+  } as const;
+  const modelsIssue = {
+    code: 'models_unavailable',
+    class: 'blocking',
+    title: 'Models unavailable',
+    summary: 'No usable provider exposes any model.',
+  } as const;
   return {
     ready: false,
     providers: [
@@ -35,43 +97,23 @@ export function unreadySnapshot(overrides: Partial<ReadinessSnapshot> = {}): Rea
         installed: true,
         version: '2.1.0',
         ready: false,
-        issue: {
-          code: 'unauthenticated',
-          message: 'The claude CLI is installed but not authenticated.',
-          remedy: 'claude login',
-        },
+        issue: claudeIssue,
       },
       {
         name: 'codex',
         installed: false,
         ready: false,
-        issue: {
-          code: 'missing_executable',
-          message: 'The codex CLI is not installed.',
-          remedy: 'npm install -g @openai/codex',
-        },
+        issue: codexIssue,
       },
     ],
     models: {
       available: false,
-      issue: { code: 'models_unavailable', message: 'No usable provider exposes any model.' },
+      issue: modelsIssue,
     },
     configuration: { valid: true },
     workspaceRoots: [],
     repositories: [],
-    issues: [
-      {
-        code: 'unauthenticated',
-        message: 'The claude CLI is installed but not authenticated.',
-        remedy: 'claude login',
-      },
-      {
-        code: 'missing_executable',
-        message: 'The codex CLI is not installed.',
-        remedy: 'npm install -g @openai/codex',
-      },
-      { code: 'models_unavailable', message: 'No usable provider exposes any model.' },
-    ],
+    issues: [claudeIssue, codexIssue, modelsIssue],
     ...overrides,
   };
 }
@@ -100,7 +142,12 @@ export function creationDefaults(overrides: Partial<CreationDefaults> = {}): Cre
         name: 'repo-b',
         path: '/work/space/repo-b',
         valid: false,
-        issue: { code: 'invalid_repository', message: 'Not a git repository.' },
+        issue: {
+          code: 'invalid_repository',
+          class: 'blocking',
+          title: 'Invalid repository',
+          summary: 'A configured repository path is not a git repository.',
+        },
       },
     ],
     defaults: {
@@ -148,6 +195,36 @@ export function featureConfigSnapshot(
   };
 }
 
+/** A canonical warning-class error as the renderer receives it over IPC. */
+export function canonicalWarning(overrides: Partial<CanonicalError> = {}): CanonicalError {
+  return {
+    code: 'effort_capability_drift',
+    class: 'warning',
+    title: 'Effort exceeds the selected model',
+    summary: 'The Implement effort "high" is beyond what claude-sonnet-4-5 supports.',
+    ...overrides,
+  };
+}
+
+/**
+ * A canonical needs_action orphan-session error as the renderer receives it
+ * over IPC, mirroring the catalog's live-orphan rendering.
+ */
+export function orphanSessionError(overrides: Partial<CanonicalError> = {}): CanonicalError {
+  return {
+    code: 'orphan_session_live',
+    class: 'needs_action',
+    title: 'Orphaned session running',
+    summary: "The Implement phase at iteration 2 is still running outside Agentico's supervision.",
+    remediation: {
+      hint: 'Resume the session to bring it back under supervision, or kill it.',
+      actions: ['resume'],
+    },
+    context: { phase: { name: 'Implement', iteration: 2 } },
+    ...overrides,
+  };
+}
+
 /** A created feature mid-setup, as the cockpit first sees it. */
 export function featureSnapshot(overrides: Partial<FeatureSnapshot> = {}): FeatureSnapshot {
   return {
@@ -166,6 +243,8 @@ export function featureSnapshot(overrides: Partial<FeatureSnapshot> = {}): Featu
       enabled: true,
       source: 'global',
     },
+    warnings: [],
+    errors: [],
     reviewGate: {
       reviewingGate: false,
       reviewFixing: false,
@@ -324,6 +403,7 @@ export function installAgenticoMock(
     theme?: ThemeInfo;
     readiness?: ReadinessSnapshot;
     features?: FeatureSummaryView[];
+    listWarnings?: CanonicalError[];
     feature?: FeatureSnapshot;
     defaults?: CreationDefaults;
     sessions?: SessionSummary[];
@@ -398,7 +478,12 @@ export function installAgenticoMock(
     reorderWorkspaceRoots: vi.fn(() => Promise.resolve(readiness)),
     initRepository: vi.fn(() => Promise.resolve(readiness)),
     listRepositories: vi.fn(() => Promise.resolve(readiness.repositories)),
-    listFeatures: vi.fn(() => Promise.resolve(overrides.features ?? [])),
+    listFeatures: vi.fn(() =>
+      Promise.resolve({
+        features: overrides.features ?? [],
+        warnings: overrides.listWarnings ?? [],
+      }),
+    ),
     getFeature: vi.fn(() => Promise.resolve(feature)),
     createFeature: vi.fn(() => Promise.resolve({ featureId: feature.id })),
     dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),

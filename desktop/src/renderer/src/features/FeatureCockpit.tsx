@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Feature cockpit: always reloads the authoritative feature snapshot from the
  * server, renders server-owned setup/run/action state, and resolves the
@@ -22,16 +38,20 @@ import {
   attentionOwnerFeatureId,
   isPendingReviewStatus,
   isSyntheticHelpItem,
+  type AttentionError,
   type FeatureSnapshot,
   type RunDetailView,
   type RunSummaryView,
   type FeatureActionRequest,
   type FeatureActionView,
 } from '../../../shared/ipc';
+import { ErrorSurface, type ErrorSurfaceAction } from '../components/ErrorSurface';
+import { buildCanonicalError } from '../../../shared/errors';
 import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import { useModalDismiss } from '../components/useModalDismiss';
-import { useMediaQuery } from '../hooks';
-import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { retryAction as retryLoadAction, useMediaQuery, type LoadState } from '../hooks';
+import { parseIpcError } from '../wizard/ipcError';
+import type { CanonicalError } from '../../../shared/ipc';
 import { CurrentRunInspection, type RunMetrics } from './CurrentRunInspection';
 import { classifyHold, railSegments, railTrio } from './phaseRail';
 import { PhaseRail } from './PhaseRailRow';
@@ -43,11 +63,11 @@ import { AftercareWorkspace } from './AftercareWorkspace';
 import { AftercareFacts } from './AftercareFacts';
 import { useAftercareEvidence } from './useAftercareEvidence';
 import { InspectorContent } from './CockpitInspector';
+import { RepositoryInstrument } from './RepositoryInstrument';
 import { InspectorDrawer } from './InspectorDrawer';
 import { ImpactPreviewList } from './ImpactPreviewList';
 import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
 import {
-  disabledReasonCopy,
   resolvePostImplementationMode,
   type AftercareAction,
   type AftercareModalId,
@@ -55,7 +75,11 @@ import {
 import { RefactorLauncher } from './refactor/RefactorLauncher';
 import { ReviewFeedbackWorkspace } from './reviewFeedback/ReviewFeedbackWorkspace';
 import { RefactorPassWorkspace, useRefactorPass } from './refactor/RefactorPassWorkspace';
-import { refactoringStatusChip } from './refactor/refactorPassModel';
+import { errorStatusChip } from './statusChip';
+import {
+  focusErrorCardWhenRegistered,
+  useRegisteredErrorCard,
+} from '../components/errorCardRegistry';
 import { useCompletionPreflight } from './completion/useCompletionPreflight';
 import { pendingDeliveryFact, pendingDeliverySummary } from './completion/pendingDelivery';
 import {
@@ -72,6 +96,7 @@ import type { CompletionAction } from './completion/completionShared';
 import type { FeatureActionResult, PublishFeatureActionRequest } from '../../../shared/ipc';
 import {
   AttentionDetail,
+  OwnerAwareAttention,
   attentionActionNotice,
   attentionErrorMessage,
   runAttentionSubmit,
@@ -82,6 +107,8 @@ import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 import type { AttentionItem } from '../../../shared/ipc';
 import {
   actionById,
+  catalogErrorAction,
+  disabledReasonCopy,
   displayFeatureMessage,
   displayPhaseLabel,
   displayStatusLabel,
@@ -97,11 +124,9 @@ import {
 import { registerFeatureCommandExecutor } from './featureCommands';
 import type { FeatureCommandId } from '../../../shared/commands';
 
-type CockpitState =
-  | { phase: 'loading' }
-  | { phase: 'missing' }
-  | { phase: 'error'; error: WizardError }
-  | { phase: 'loaded'; snapshot: FeatureSnapshot };
+type CockpitState = LoadState<
+  { phase: 'missing'; error: CanonicalError } | { phase: 'loaded'; snapshot: FeatureSnapshot }
+>;
 
 const FOCUSED_COMPLETION_SETTLE_MS = 500;
 
@@ -219,17 +244,9 @@ function RewindLanding({ outcome, run, onOpenSource, onDismiss }: RewindLandingP
           ))}
         </div>
       ) : null}
-      {warnings.length > 0 ? (
-        <div className="cockpit__rewind-warnings" role="alert">
-          <h4>Rewind warnings</h4>
-          <p>Review these non-fatal recovery details before continuing work.</p>
-          <ul>
-            {warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      {warnings.map((warning, index) => (
+        <ErrorSurface key={`${warning.code}:${index}`} error={warning} variant="compact" />
+      ))}
     </section>
   );
 }
@@ -280,6 +297,7 @@ interface CockpitMenuAction {
 function CockpitActionBar({
   status,
   statusOverride,
+  onStatusClick,
   primaryActions,
   menuActions,
   extraControls,
@@ -293,8 +311,15 @@ function CockpitActionBar({
   overflowMenuHost,
 }: {
   status: FeatureSnapshot['status'];
-  /** Replaces the raw status label (e.g. "Refactoring" while a pass runs). */
-  statusOverride?: { label: string; tone: 'info' | 'attention' };
+  /** Replaces the raw status label (e.g. an owned-error chip while one is present). */
+  statusOverride?: { label: string; tone: 'info' | 'attention' | 'danger'; title?: string };
+  /**
+   * When the override reflects an owned error, the chip becomes a button that
+   * fires this handler — the handler resolves the entry's reference through
+   * the error-card registry and focuses the owning card. The chip itself
+   * renders no error text beyond its label.
+   */
+  onStatusClick?: () => void;
   primaryActions: CockpitPrimaryAction[];
   menuActions: CockpitMenuAction[];
   extraControls?: ReactNode;
@@ -304,7 +329,7 @@ function CockpitActionBar({
   onOpenInspector(): void;
   /** Whether the wide-layout trailing split-view pane is currently open. */
   inspectorOpen: boolean;
-  /** Wide-only: flips the trailing split-view pane open/closed. */
+  /** Wide-only: flips the trailing split-view pane open/close. */
   onToggleInspector(): void;
   actionsHost?: HTMLElement | null;
   inspectorToggleHost?: HTMLElement | null;
@@ -317,16 +342,41 @@ function CockpitActionBar({
 
   useDetailsDismiss(menuRef, '.cockpit__overflow-summary');
 
+  const statusIsChip =
+    statusOverride !== undefined && onStatusClick !== undefined && statusOverride.tone !== 'info';
+  const statusChip = statusIsChip ? (
+    <button
+      type="button"
+      className="cockpit__phase-status cockpit__phase-status--button"
+      aria-label={
+        statusOverride?.title !== undefined
+          ? `${statusOverride?.label}. ${statusOverride.title}. Focus the error card.`
+          : `${statusOverride?.label}. Focus the error card.`
+      }
+      title={statusOverride?.title}
+      onClick={onStatusClick}
+    >
+      <code
+        data-status={status}
+        {...(statusOverride === undefined ? {} : { 'data-tone': statusOverride.tone })}
+      >
+        {statusOverride?.label ?? displayStatusLabel(status)}
+      </code>
+    </button>
+  ) : (
+    <p className="cockpit__phase-status" role="status" aria-label="Current feature status">
+      <code
+        data-status={status}
+        {...(statusOverride === undefined ? {} : { 'data-tone': statusOverride.tone })}
+      >
+        {statusOverride?.label ?? displayStatusLabel(status)}
+      </code>
+    </p>
+  );
+
   const actionsInner = (
     <>
-      <p className="cockpit__phase-status" role="status" aria-label="Current feature status">
-        <code
-          data-status={status}
-          {...(statusOverride === undefined ? {} : { 'data-tone': statusOverride.tone })}
-        >
-          {statusOverride?.label ?? displayStatusLabel(status)}
-        </code>
-      </p>
+      {statusChip}
       {primaryActions.map((action) => (
         <button
           key={action.key}
@@ -479,7 +529,9 @@ function RunSwitcherPopup({
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState<WizardError | null>(null);
+  // The failed page rides with the error so Retry re-invokes exactly the
+  // history load that failed — the first page or an older-pages append.
+  const [loadError, setLoadError] = useState<{ error: CanonicalError; page: number } | null>(null);
   const loadRequestRef = useRef(0);
 
   const load = useCallback(
@@ -497,7 +549,7 @@ function RunSwitcherPopup({
         })
         .catch((err: unknown) => {
           if (request !== loadRequestRef.current) return;
-          setLoadError(parseIpcError(err));
+          setLoadError({ error: parseIpcError(err), page: nextPage });
         })
         .finally(() => {
           if (request === loadRequestRef.current) setLoading(false);
@@ -565,9 +617,11 @@ function RunSwitcherPopup({
           </button>
         ) : null}
         {loadError !== null ? (
-          <p className="cockpit__run-switcher-error" role="status">
-            Could not load run history — {loadError.message}
-          </p>
+          <ErrorSurface
+            error={loadError.error}
+            variant="compact"
+            localAction={retryLoadAction(() => load(loadError.page))}
+          />
         ) : null}
       </div>
     </details>
@@ -724,7 +778,7 @@ function RestartConfirmDialog({
   }, [busy, onClose]);
 
   const repos = snapshot.repos.join(', ');
-  const extendsIterationBudget = snapshot.failure?.type === 'max_iterations';
+  const extendsIterationBudget = snapshot.failure?.code === 'iteration_budget_exhausted';
 
   return (
     <div className="impact-dialog__backdrop">
@@ -811,7 +865,12 @@ function DeleteConfirmDialog({
         <span className="impact-dialog__eyebrow">Operational impact</span>
         <h3 id="delete-dialog-title">Delete {snapshot.name}?</h3>
         {projectionMissing ? (
-          <p role="alert">Impact projection is missing or stale. Close this dialog and refresh.</p>
+          // Desktop-authored warning: the dialog fails closed (delete stays
+          // disabled) until a refresh brings the projection back.
+          <ErrorSurface
+            error={buildCanonicalError('E_IMPACT_PROJECTION_STALE')}
+            variant="compact"
+          />
         ) : preview === undefined ? (
           <p>This removes the feature record and any remaining worktrees.</p>
         ) : (
@@ -917,7 +976,7 @@ export function FeatureCockpit({
   const [announcement, setAnnouncement] = useState('');
   const [actionError, setActionError] = useState<{
     action: 'Start' | 'Stop' | 'Resume' | 'Retry' | 'Restart' | 'Delete' | 'Rebase';
-    error: WizardError;
+    error: CanonicalError;
   } | null>(null);
   const [rebaseLaunchBusy, setRebaseLaunchBusy] = useState(false);
   const [stopDialog, setStopDialog] = useState(false);
@@ -1039,7 +1098,7 @@ export function FeatureCockpit({
           const parsed = parseIpcError(err);
           if (parsed.code === 'not_found') {
             setRefreshFailed(false);
-            setState({ phase: 'missing' });
+            setState({ phase: 'missing', error: parsed });
           } else if (options.silent === true) {
             setRefreshFailed(true);
           } else {
@@ -1284,8 +1343,11 @@ export function FeatureCockpit({
         return refreshFeature({ silent: true });
       })
       .catch((err: unknown) => {
-        const parsed = parseIpcError(err);
-        setAnnouncement(`Retry failed — ${parsed.message}`);
+        // A failed retry is a rejected action like any lifecycle verb: the
+        // canonical card owns the failure, and nothing is written to the
+        // announcement region for it.
+        setActionError({ action: 'Retry', error: parseIpcError(err) });
+        setAnnouncement('');
         return refreshFeature({ silent: true });
       })
       .finally(() => {
@@ -1359,7 +1421,7 @@ export function FeatureCockpit({
   );
 
   const restartExtendsIterationBudget =
-    state.phase === 'loaded' && state.snapshot.failure?.type === 'max_iterations';
+    state.phase === 'loaded' && state.snapshot.failure?.code === 'iteration_budget_exhausted';
   const confirmRestart = useCallback(() => {
     setRestartDialog(false);
     const request: FeatureActionRequest = restartExtendsIterationBudget
@@ -1464,11 +1526,69 @@ export function FeatureCockpit({
     aftercareSurface,
   );
 
+  const visibleAttentionItems = attentionItems.filter((item) => item.kind !== 'review');
+  const featureAttentionItems = visibleAttentionItems.filter(
+    (item) => item.kind !== 'recovery' && item.featureId === featureId,
+  );
+  const routedAttentionItem =
+    attentionPreviewRequest === null || attentionPreviewRequest.attentionId === undefined
+      ? undefined
+      : featureAttentionItems.find((item) => item.id === attentionPreviewRequest.attentionId);
+  const activeAttentionItem =
+    routedAttentionItem?.kind === 'gate'
+      ? featureAttentionItems.find((item) => item.kind !== 'gate')
+      : (routedAttentionItem ?? featureAttentionItems.find((item) => item.kind !== 'gate'));
+  const activeAttentionOwnerIsVisible = useRegisteredErrorCard(
+    activeAttentionItem?.kind === 'error' ? activeAttentionItem.ref : undefined,
+  );
+  const questionsAttention =
+    activeAttentionItem?.kind === 'questions' ? activeAttentionItem : undefined;
+  const pendingQuestion = questionsAttention?.questions[0];
+  const suppressQuestion =
+    pendingQuestion === undefined
+      ? undefined
+      : {
+          prompt: pendingQuestion.key,
+          optionLabels: pendingQuestion.options.map((option) => option.label),
+        };
+
   if (state.phase !== 'loaded') {
     // No authoritative catalogue, no funnel target: every feature command
     // resolves to a no-op until the snapshot lands.
     commandTargetRef.current = { actions: null, run: () => {} };
   }
+
+  // The funnel's completion-modal opener lives above the early returns so
+  // the error-chip and attention-jump hooks below can call it unconditionally.
+  const openCompletionModal = (verb: CompletionVerb): void => {
+    setCompletionModal(null);
+    void completion.refresh().then(() => setCompletionModal(verb));
+  };
+
+  // An attention jump carrying an error item id resolves the item's
+  // reference through the owner-card registry, exactly like the chip: a
+  // repository entry opens the publish modal first, since that is where its
+  // card lives. Guarded by request id so one jump focuses once; the
+  // registry retry keeps trying briefly while the cockpit loads.
+  const handledErrorJumpRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (attentionPreviewRequest === null || attentionPreviewRequest.attentionId === undefined) {
+      return;
+    }
+    const item = attentionItems.find(
+      (candidate): candidate is AttentionError =>
+        candidate.kind === 'error' &&
+        candidate.id === attentionPreviewRequest.attentionId &&
+        attentionOwnerFeatureId(candidate) === featureId,
+    );
+    if (item === undefined) return;
+    if (handledErrorJumpRef.current === attentionPreviewRequest.requestId) return;
+    handledErrorJumpRef.current = attentionPreviewRequest.requestId;
+    if (item.ref.scope === 'repository') {
+      openCompletionModal('publish');
+    }
+    focusErrorCardWhenRegistered(item.ref);
+  });
 
   if (state.phase === 'loading') {
     return (
@@ -1483,12 +1603,13 @@ export function FeatureCockpit({
   if (state.phase === 'missing') {
     return (
       <section className="cockpit" aria-label={`Feature ${titleHint}`}>
-        <div role="alert" className="cockpit__missing">
-          <p className="cockpit__missing-message">This feature no longer exists on the server.</p>
-          <button type="button" className="setup-wizard__action" onClick={onClose}>
-            Close tab
-          </button>
-        </div>
+        {/* The server's own not_found canonical, not a hand-rolled message:
+         * the card carries the catalog text and the tab's way out. */}
+        <ErrorSurface
+          error={state.error}
+          variant="compact"
+          localAction={{ label: 'Close tab', onAction: onClose }}
+        />
       </section>
     );
   }
@@ -1496,13 +1617,11 @@ export function FeatureCockpit({
   if (state.phase === 'error') {
     return (
       <section className="cockpit" aria-label={`Feature ${titleHint}`}>
-        <div role="alert" className="create-form__error">
-          <span className="create-form__error-code">{state.error.code}</span>
-          <p className="create-form__error-message">{state.error.message}</p>
-        </div>
-        <button type="button" className="setup-wizard__action" onClick={() => refreshFeature()}>
-          Try again
-        </button>
+        <ErrorSurface
+          error={state.error}
+          variant="compact"
+          localAction={retryLoadAction(() => refreshFeature())}
+        />
       </section>
     );
   }
@@ -1582,28 +1701,6 @@ export function FeatureCockpit({
       });
   };
 
-  const visibleAttentionItems = attentionItems.filter((item) => item.kind !== 'review');
-  const featureAttentionItems = visibleAttentionItems.filter(
-    (item) => item.kind !== 'recovery' && item.featureId === featureId,
-  );
-  const routedAttentionItem =
-    attentionPreviewRequest === null || attentionPreviewRequest.attentionId === undefined
-      ? undefined
-      : featureAttentionItems.find((item) => item.id === attentionPreviewRequest.attentionId);
-  const activeAttentionItem =
-    routedAttentionItem?.kind === 'gate'
-      ? featureAttentionItems.find((item) => item.kind !== 'gate')
-      : (routedAttentionItem ?? featureAttentionItems.find((item) => item.kind !== 'gate'));
-  const questionsAttention =
-    activeAttentionItem?.kind === 'questions' ? activeAttentionItem : undefined;
-  const pendingQuestion = questionsAttention?.questions[0];
-  const suppressQuestion =
-    pendingQuestion === undefined
-      ? undefined
-      : {
-          prompt: pendingQuestion.key,
-          optionLabels: pendingQuestion.options.map((option) => option.label),
-        };
   const preferredGate =
     routedAttentionItem?.kind === 'gate'
       ? routedAttentionItem
@@ -1743,6 +1840,36 @@ export function FeatureCockpit({
   const reasonsOf = (action: ReturnType<typeof actionById>): string[] =>
     action?.disabledReasons.map((reason) => displayFeatureMessage(disabledReasonCopy(reason))) ??
     [];
+
+  // The durable failure surface resolves the error's referenced action
+  // against the feature's action catalog: the card's own primary button and
+  // its disabled-reason text come from the server's enabled state.
+  const resolveFailureAction = (actionId: string): ErrorSurfaceAction | undefined => {
+    const label = actionId === 'setup' ? 'Retry setup' : 'Restart';
+    return catalogErrorAction(snapshot, actionId, label);
+  };
+
+  const handleFailureAction = (actionId: string): void => {
+    if (actionId === 'setup') {
+      retrySetup();
+      return;
+    }
+    if (actionId === 'restart') {
+      restart();
+    }
+  };
+
+  // A setup failure has one owner: the failing setup task. When the run's
+  // thin failure record names a setup task that carries its own canonical
+  // error, the card renders the task's object captioned with the task label;
+  // every other terminal failure renders the run failure as before.
+  const owningSetupTask = (() => {
+    const key = snapshot.failure?.context?.setup_task?.key;
+    if (key === undefined) return undefined;
+    return snapshot.setup?.tasks.find((task) => task.key === key && task.error !== undefined);
+  })();
+  const durableError = owningSetupTask?.error ?? snapshot.failure;
+  const durableErrorCaption = owningSetupTask !== undefined ? owningSetupTask.label : undefined;
   const primaryActions: CockpitPrimaryAction[] = [];
   if (setupAction?.enabled === true) {
     primaryActions.push({
@@ -1900,9 +2027,20 @@ export function FeatureCockpit({
     completion.preflight !== null
       ? completionBarModel(completion.preflight, completionCandidates)
       : [];
-  const openCompletionModal = (verb: CompletionVerb): void => {
-    setCompletionModal(null);
-    void completion.refresh().then(() => setCompletionModal(verb));
+
+  // The single error chip: derived from the snapshot's highest-severity
+  // owned error, present exactly when one exists. Clicking resolves the
+  // entry's reference through the owner-card registry — a repository entry
+  // opens the publish modal first, since that is where its card lives.
+  const chip = errorStatusChip(snapshot);
+  const chipOverride =
+    chip === undefined ? undefined : { label: chip.label, tone: chip.tone, title: chip.title };
+  const focusChipTarget = (): void => {
+    if (chip === undefined) return;
+    if (chip.entry.ref.scope === 'repository') {
+      openCompletionModal('publish');
+    }
+    focusErrorCardWhenRegistered(chip.entry.ref);
   };
 
   /**
@@ -2017,32 +2155,48 @@ export function FeatureCockpit({
   // One facts element for both aftercare inspector presentations: the trailing
   // pane when wide, the drawer when narrow.
   const aftercarePendingFact = pendingDeliveryFact(pendingDelivery);
+  // The aftercare inspector keeps the repository instrument beside the
+  // feature facts: a publish failure leaves the feature in aftercare, and the
+  // instrument's indication is the cockpit's link into the publish modal.
   const aftercareFactsFor = (presentation: 'pane' | 'drawer') => (
-    <AftercareFacts
-      snapshot={snapshot}
-      run={aftercareRun}
-      {...(aftercarePendingFact === null ? {} : { pendingFact: aftercarePendingFact })}
-      {...(presentation === 'pane' ? { title: 'Feature' } : {})}
-      onOpenPullRequest={(url) => {
-        void window.agentico.openExternal({ url });
-      }}
-    />
+    <>
+      <AftercareFacts
+        snapshot={snapshot}
+        run={aftercareRun}
+        {...(aftercarePendingFact === null ? {} : { pendingFact: aftercarePendingFact })}
+        {...(presentation === 'pane' ? { title: 'Feature' } : {})}
+        onOpenPullRequest={(url) => {
+          void window.agentico.openExternal({ url });
+        }}
+      />
+      {snapshot.repoStatus !== undefined && snapshot.repoStatus.length > 0 ? (
+        <RepositoryInstrument
+          repos={snapshot.repoStatus}
+          onOpenPullRequest={(url) => {
+            void window.agentico.openExternal({ url });
+          }}
+          onOpenPublish={() => openCompletionModal('publish')}
+        />
+      ) : null}
+    </>
   );
   const standaloneAttention =
     activeAttentionItem === undefined ? null : (
-      <section className="live-preview__attention" aria-label="Agent request">
-        <AttentionDetail
-          key={`${activeAttentionItem.kind}:${activeAttentionItem.id}`}
-          item={activeAttentionItem}
-          busy={attentionBusy === activeAttentionItem.id}
-          drafts={attentionDrafts}
-          setDrafts={setAttentionDrafts}
-          saveDraft={(action, options) =>
-            saveAttentionDraft(activeAttentionItem.id, action, options)
-          }
-          submit={(action, options) => void submitAttention(activeAttentionItem, action, options)}
-        />
-      </section>
+      <OwnerAwareAttention item={activeAttentionItem}>
+        <section className="live-preview__attention" aria-label="Agent request">
+          <AttentionDetail
+            key={`${activeAttentionItem.kind}:${activeAttentionItem.id}`}
+            item={activeAttentionItem}
+            busy={attentionBusy === activeAttentionItem.id}
+            drafts={attentionDrafts}
+            setDrafts={setAttentionDrafts}
+            saveDraft={(action, options) =>
+              saveAttentionDraft(activeAttentionItem.id, action, options)
+            }
+            submit={(action, options) => void submitAttention(activeAttentionItem, action, options)}
+          />
+        </section>
+      </OwnerAwareAttention>
     );
 
   if (!isArchiveMode && postImplementationMode.kind !== 'regular') {
@@ -2056,7 +2210,8 @@ export function FeatureCockpit({
             <>
               <CockpitActionBar
                 status={snapshot.status}
-                statusOverride={refactoringStatusChip(snapshot.activeChild)}
+                statusOverride={chipOverride}
+                onStatusClick={chip === undefined ? undefined : focusChipTarget}
                 primaryActions={refactorPass.actions.map((action) => ({
                   key: `pass-${action.id}`,
                   label: action.label,
@@ -2127,6 +2282,8 @@ export function FeatureCockpit({
             <>
               <CockpitActionBar
                 status={snapshot.status}
+                statusOverride={chipOverride}
+                onStatusClick={chip === undefined ? undefined : focusChipTarget}
                 primaryActions={[]}
                 menuActions={postMenuActions}
                 extraControls={aftercareCompletionControls}
@@ -2187,12 +2344,12 @@ export function FeatureCockpit({
         ) : null}
 
         {actionError === null || snapshot.activeChild === undefined ? null : (
-          <div role="alert" className="create-form__error">
-            <span className="create-form__error-code">{actionError.error.code}</span>
-            <p className="create-form__error-message">
-              {actionError.action} was rejected — {actionError.error.message}
-            </p>
-          </div>
+          <ErrorSurface
+            error={actionError.error}
+            variant="compact"
+            caption={`${actionError.action} was rejected`}
+            explain={{ featureName: snapshot.name }}
+          />
         )}
         <p className="cockpit__announcement" role="status" aria-live="polite">
           {announcement}
@@ -2379,6 +2536,7 @@ export function FeatureCockpit({
           <PublishModal
             featureId={featureId}
             preflight={completion.preflight}
+            actions={snapshot.actions}
             dispatchAction={dispatchPublish}
             generatePublishDescription={(id, repos) =>
               window.agentico.generatePublishDescription({ featureId: id, repos })
@@ -2468,6 +2626,8 @@ export function FeatureCockpit({
         <>
           <CockpitActionBar
             status={snapshot.status}
+            statusOverride={chipOverride}
+            onStatusClick={chip === undefined ? undefined : focusChipTarget}
             primaryActions={primaryActions}
             menuActions={menuActions}
             extraControls={completionControls}
@@ -2507,6 +2667,7 @@ export function FeatureCockpit({
                 onOpenPullRequest={(url) => {
                   void window.agentico.openExternal({ url });
                 }}
+                onOpenPublish={() => openCompletionModal('publish')}
               />
             </InspectorDrawer>
           ) : null}
@@ -2572,7 +2733,8 @@ export function FeatureCockpit({
                         )
                       }
                       attentionFooter={
-                        activeAttentionItem === undefined ? undefined : questionsAttention !==
+                        activeAttentionItem === undefined ||
+                        activeAttentionOwnerIsVisible ? undefined : questionsAttention !==
                           undefined ? (
                           <QuestionComposer
                             item={questionsAttention}
@@ -2582,19 +2744,21 @@ export function FeatureCockpit({
                             onSubmit={submitQuestionAnswers}
                           />
                         ) : (
-                          <AttentionDetail
-                            key={`${activeAttentionItem.kind}:${activeAttentionItem.id}`}
-                            item={activeAttentionItem}
-                            busy={attentionBusy === activeAttentionItem.id}
-                            drafts={attentionDrafts}
-                            setDrafts={setAttentionDrafts}
-                            saveDraft={(action, options) =>
-                              saveAttentionDraft(activeAttentionItem.id, action, options)
-                            }
-                            submit={(action, options) =>
-                              void submitAttention(activeAttentionItem, action, options)
-                            }
-                          />
+                          <OwnerAwareAttention item={activeAttentionItem}>
+                            <AttentionDetail
+                              key={`${activeAttentionItem.kind}:${activeAttentionItem.id}`}
+                              item={activeAttentionItem}
+                              busy={attentionBusy === activeAttentionItem.id}
+                              drafts={attentionDrafts}
+                              setDrafts={setAttentionDrafts}
+                              saveDraft={(action, options) =>
+                                saveAttentionDraft(activeAttentionItem.id, action, options)
+                              }
+                              submit={(action, options) =>
+                                void submitAttention(activeAttentionItem, action, options)
+                              }
+                            />
+                          </OwnerAwareAttention>
                         )
                       }
                     />
@@ -2652,23 +2816,47 @@ export function FeatureCockpit({
                 ) : null}
 
                 <div className="cockpit__stage-status">
-                  {snapshot.failure?.message !== undefined ? (
-                    <div role="alert" className="create-form__error">
-                      <span className="create-form__error-code">
-                        {snapshot.failure.type ?? 'failure'}
-                      </span>
-                      <p className="create-form__error-message">{snapshot.failure.message}</p>
-                    </div>
+                  {durableError !== undefined ? (
+                    <ErrorSurface
+                      error={durableError}
+                      variant="full"
+                      caption={durableErrorCaption}
+                      resolveAction={resolveFailureAction}
+                      onAction={handleFailureAction}
+                      explain={{
+                        // The reference names the durable home the server
+                        // resolves: the owning setup task when the card is
+                        // fed by it, otherwise the run's failure record.
+                        reference:
+                          owningSetupTask !== undefined
+                            ? {
+                                scope: 'setup',
+                                code: durableError.code,
+                                featureId,
+                                taskKey: owningSetupTask.key,
+                              }
+                            : { scope: 'run', code: durableError.code, featureId },
+                        featureName: snapshot.name,
+                      }}
+                    />
                   ) : null}
 
                   {actionError !== null ? (
-                    <div role="alert" className="create-form__error">
-                      <span className="create-form__error-code">{actionError.error.code}</span>
-                      <p className="create-form__error-message">
-                        {actionError.action} was rejected — {actionError.error.message}
-                      </p>
-                    </div>
+                    <ErrorSurface
+                      error={actionError.error}
+                      variant="compact"
+                      caption={`${actionError.action} was rejected`}
+                      explain={{ featureName: snapshot.name }}
+                    />
                   ) : null}
+
+                  {snapshot.warnings.map((warning, index) => (
+                    <ErrorSurface
+                      key={`${warning.code}:${index}`}
+                      error={warning}
+                      variant="compact"
+                    />
+                  ))}
 
                   <p className="cockpit__announcement" role="status" aria-live="polite">
                     {announcement}
@@ -2686,6 +2874,7 @@ export function FeatureCockpit({
                   onOpenPullRequest={(url) => {
                     void window.agentico.openExternal({ url });
                   }}
+                  onOpenPublish={() => openCompletionModal('publish')}
                 />
               </aside>
             ) : null}
@@ -2825,6 +3014,7 @@ export function FeatureCockpit({
             <PublishModal
               featureId={featureId}
               preflight={completion.preflight}
+              actions={snapshot.actions}
               dispatchAction={dispatchPublish}
               generatePublishDescription={(id, repos) =>
                 window.agentico.generatePublishDescription({ featureId: id, repos })

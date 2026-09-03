@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/buildinfo"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 )
 
 const (
@@ -126,22 +127,28 @@ func runUpdateWith(ctx context.Context, checkOnly bool, stdout, stderr io.Writer
 
 	slug, err := deps.slug()
 	if err != nil {
-		fmt.Fprintf(stderr, "Error: could not determine the release repository: %v\n", err)
+		renderUpdateCheckFailure(stderr, fmt.Sprintf("could not determine the release repository: %v", err))
 		return 1
 	}
 
 	latest, err := deps.fetchLatest(ctx, slug)
 	if err != nil {
 		if errors.Is(err, errNoStableRelease) {
-			fmt.Fprintln(stderr, "Error: no published stable release is available.")
+			renderUpdateCheckFailure(stderr, "no published stable release is available")
 			return 1
 		}
-		fmt.Fprintf(stderr, "Error: could not check for the latest release: %v\n", err)
+		renderUpdateCheckFailure(stderr, fmt.Sprintf("could not check for the latest release: %v", err))
 		return 1
 	}
 
 	printReadOnlyUpdateReport(stdout, deps.currentVersion, latest, method)
 	return 0
+}
+
+// renderUpdateCheckFailure renders one update lookup failure with the
+// failure reason in the summary.
+func renderUpdateCheckFailure(stderr io.Writer, reason string) {
+	renderError(stderr, errcat.UpdateCheckFailed, errcat.WithParams(errcat.UpdateCheckParams{Reason: reason}))
 }
 
 func printReadOnlyUpdateReport(stdout io.Writer, current, latest string, method installMethod) {

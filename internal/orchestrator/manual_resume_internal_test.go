@@ -24,6 +24,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
@@ -69,10 +70,11 @@ func TestResumeFeatureClaimsEligibleRecordAndDispatchesImplementation(t *testing
 		Models:              config.ModelConfig{Implementation: "codex:model-a"},
 		Artifacts:           map[string]string{"plan": planPath},
 		Repos:               []feature.FeatureRepo{{Name: "repo", Path: stateDir}},
-		RepoStates:          map[string]*feature.RepoState{"repo": {LastError: "failed"}},
-		LastError:           "failed",
-		FailureType:         feature.FailureInfrastructure,
+		RepoStates: map[string]*feature.RepoState{
+			"repo": {Error: &errcat.FailureRecord{Code: errcat.InfrastructureFailure, Diagnostics: "failed"}},
+		},
 	}
+	f.Run().Failure = &errcat.FailureRecord{Code: errcat.InfrastructureFailure, Diagnostics: "failed"}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -113,8 +115,9 @@ func TestResumeFeatureClaimsEligibleRecordAndDispatchesImplementation(t *testing
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got.Status != feature.StatusImplementing || got.LastError != "" || got.FailureType != "" {
-		t.Errorf("feature after resume = status %s error %q failure %q, want Implementing with retry bookkeeping cleared", got.Status, got.LastError, got.FailureType)
+	if got.Status != feature.StatusImplementing || got.Run().Failure != nil || got.RepoStates["repo"].Error != nil {
+		t.Errorf("feature after resume = status %s failure %+v repo error %+v, want Implementing with retry bookkeeping cleared",
+			got.Status, got.Run().Failure, got.RepoStates["repo"].Error)
 	}
 	if got.CurrentIteration != 2 || got.ActiveTimingKey != "phase-1-impl" {
 		t.Errorf("feature resume position = iteration %d timing key %q, want preserved iteration 2 phase-1-impl", got.CurrentIteration, got.ActiveTimingKey)
@@ -927,11 +930,10 @@ func TestResumeFeatureDispatchesFailedFinalReviewFromEligibleChild(t *testing.T)
 		},
 		Repos: []feature.FeatureRepo{{Name: "repo", Path: stateDir, Publishable: &publishable}},
 		RepoStates: map[string]*feature.RepoState{
-			"repo": {Touched: true, LastError: "review failed"},
+			"repo": {Touched: true, Error: &errcat.FailureRecord{Code: errcat.InfrastructureFailure, Diagnostics: "review failed"}},
 		},
-		LastError:   "review failed",
-		FailureType: feature.FailureInfrastructure,
 	}
+	f.Run().Failure = &errcat.FailureRecord{Code: errcat.InfrastructureFailure, Diagnostics: "review failed"}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -995,10 +997,10 @@ func TestResumeFeatureDispatchesFailedImplementationReviewFromEligibleChild(t *t
 		Artifacts: map[string]string{"plan": planPath},
 		Repos:     []feature.FeatureRepo{{Name: "repo", Path: stateDir}},
 		RepoStates: map[string]*feature.RepoState{
-			"repo": {Touched: true, LastError: "review failed"},
+			"repo": {Touched: true, Error: &errcat.FailureRecord{Code: errcat.InfrastructureFailure, Diagnostics: "review failed"}},
 		},
-		LastError: "review failed", FailureType: feature.FailureInfrastructure,
 	}
+	f.Run().Failure = &errcat.FailureRecord{Code: errcat.InfrastructureFailure, Diagnostics: "review failed"}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -1073,12 +1075,11 @@ func TestResumeFeatureFailedSequentialPhaseRefusesOpenNeedUserInputGate(t *testi
 		},
 		Repos: []feature.FeatureRepo{{Name: "repo", Path: stateDir, Publishable: &publishable}},
 		RepoStates: map[string]*feature.RepoState{
-			"repo": {Touched: true, LastError: "review failed"},
+			"repo": {Touched: true, Error: &errcat.FailureRecord{Code: errcat.InfrastructureFailure, Diagnostics: "review failed"}},
 		},
-		LastError:                "review failed",
-		FailureType:              feature.FailureInfrastructure,
 		PendingNeedUserInputPath: filepath.Join(stateDir, "need-input.md"),
 	}
+	f.Run().Failure = &errcat.FailureRecord{Code: errcat.InfrastructureFailure, Diagnostics: "review failed"}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}

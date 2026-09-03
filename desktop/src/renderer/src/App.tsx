@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { disabledMainWindowUiState } from '../../shared/ipc';
 import type { AppRouteEvent, AttentionItem, RoutedRequest, UpdateState } from '../../shared/ipc';
 import { ConnectionShell } from './components/ConnectionShell';
@@ -15,6 +31,7 @@ import {
 } from 'react';
 import { emptyAttentionDrafts, type AttentionDrafts } from './features/AttentionInbox';
 import { useConnectionState, useSystemAccentMirror, useTheme } from './hooks';
+import { ExplainChatProvider } from './explainChat';
 
 export default function App() {
   // Called purely for its side effect (mirroring the resolved theme onto
@@ -184,58 +201,63 @@ export default function App() {
   const attentionItems: AttentionItem[] = serverAttentionItems;
 
   return (
-    <div className="app-frame">
-      {runtimeReady ? (
-        <>
-          <ReadinessGate
-            attentionItems={attentionItems}
-            refreshAttention={refreshAttention}
-            attentionDrafts={attentionDrafts}
-            setAttentionDrafts={setAttentionDrafts}
-            attentionJump={attentionJump}
-            onAttentionJumpHandled={() => setAttentionJump(null)}
-            routeRequest={routeRequest}
-            onAttentionJump={(featureId, attentionId) => {
-              routeSequence.current += 1;
-              setAttentionJump({
-                requestId: routeSequence.current,
-                featureId,
-                ...(attentionId === undefined ? {} : { attentionId }),
-              });
-            }}
-            updateState={updateState}
-            updateDismissedVersion={updateDismissedVersion}
-            schedulingUpdate={schedulingUpdate}
-            onDismissUpdate={(version) => setUpdateDismissedVersion(version)}
-            onOpenUpdatesSettings={() =>
-              requestRoute({ target: 'settings', settingsSection: 'updates' })
-            }
-            onOpenAma={() => requestRoute({ target: 'ama' })}
-            onOpenPalette={() => requestRoute({ target: 'palette' })}
-            amaUnread={amaUnread}
-            onInstallUpdateWhenIdle={async () => {
-              try {
-                setSchedulingUpdate(true);
-                setUpdateState(await window.agentico.installUpdateWhenIdle());
-              } finally {
-                setSchedulingUpdate(false);
+    // The explain-in-chat provider rides at the renderer root so every
+    // ErrorSurface — in the shell tree or the AMA panel — can route a
+    // question without prop drilling the root requester through panels.
+    <ExplainChatProvider requestRoute={requestRoute}>
+      <div className="app-frame">
+        {runtimeReady ? (
+          <>
+            <ReadinessGate
+              attentionItems={attentionItems}
+              refreshAttention={refreshAttention}
+              attentionDrafts={attentionDrafts}
+              setAttentionDrafts={setAttentionDrafts}
+              attentionJump={attentionJump}
+              onAttentionJumpHandled={() => setAttentionJump(null)}
+              routeRequest={routeRequest}
+              onAttentionJump={(featureId, attentionId) => {
+                routeSequence.current += 1;
+                setAttentionJump({
+                  requestId: routeSequence.current,
+                  featureId,
+                  ...(attentionId === undefined ? {} : { attentionId }),
+                });
+              }}
+              updateState={updateState}
+              updateDismissedVersion={updateDismissedVersion}
+              schedulingUpdate={schedulingUpdate}
+              onDismissUpdate={(version) => setUpdateDismissedVersion(version)}
+              onOpenUpdatesSettings={() =>
+                requestRoute({ target: 'settings', settingsSection: 'updates' })
               }
-            }}
-          />
-          <AmaPanel
-            attentionItems={attentionItems}
-            refreshAttention={refreshAttention}
-            attentionDrafts={attentionDrafts}
-            setAttentionDrafts={setAttentionDrafts}
-            routeRequest={routeRequest}
-            onUnreadChange={setAmaUnread}
-          />
-        </>
-      ) : (
-        <ConnectionShell />
-      )}
-      <CommandPalette ready={runtimeReady} routeRequest={routeRequest} onRoute={requestRoute} />
-      <HelpOverlay routeRequest={routeRequest} />
-    </div>
+              onOpenAma={() => requestRoute({ target: 'ama' })}
+              onOpenPalette={() => requestRoute({ target: 'palette' })}
+              amaUnread={amaUnread}
+              onInstallUpdateWhenIdle={async () => {
+                try {
+                  setSchedulingUpdate(true);
+                  setUpdateState(await window.agentico.installUpdateWhenIdle());
+                } finally {
+                  setSchedulingUpdate(false);
+                }
+              }}
+            />
+            <AmaPanel
+              attentionItems={attentionItems}
+              refreshAttention={refreshAttention}
+              attentionDrafts={attentionDrafts}
+              setAttentionDrafts={setAttentionDrafts}
+              routeRequest={routeRequest}
+              onUnreadChange={setAmaUnread}
+            />
+          </>
+        ) : (
+          <ConnectionShell />
+        )}
+        <CommandPalette ready={runtimeReady} routeRequest={routeRequest} onRoute={requestRoute} />
+        <HelpOverlay routeRequest={routeRequest} />
+      </div>
+    </ExplainChatProvider>
   );
 }

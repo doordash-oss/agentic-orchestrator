@@ -36,6 +36,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -128,8 +129,8 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 
 	errResp := requestJSONMap(t, handler, "/api/v1/features/../bad", http.StatusBadRequest)
 	errDTO := errResp["error"].(map[string]any)
-	if errDTO["code"] != "bad_request" || errDTO["status"].(float64) != http.StatusBadRequest {
-		t.Fatalf("error DTO = %+v; want stable bad_request", errDTO)
+	if errDTO["code"] != "bad_request" || errDTO["class"] != "blocking" {
+		t.Fatalf("error DTO = %+v, want stable blocking bad_request", errDTO)
 	}
 }
 
@@ -197,8 +198,6 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 		Created:       now,
 		ActiveRun:     1,
 		RunCount:      1,
-		FailureType:   feature.FailureWorktreeSetup,
-		LastError:     gitWorktreeAddFailedMsg,
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Repos:         []feature.FeatureRepo{{Name: "repo-a", Branch: "feature/setup-failed"}},
 	}
@@ -206,13 +205,24 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 	setup.Status = feature.SetupStatusFailed
 	setup.CompletedAt = &now
 	setup.LatestLogPath = "/tmp/agentico/setup.log"
-	setup.LastError = gitWorktreeAddFailedMsg
 	task := setup.Tasks["worktree:repo-a"]
 	task.Status = feature.SetupStatusFailed
 	task.Path = "/tmp/worktrees/setup-failed/repo-a"
-	task.LastError = gitWorktreeAddFailedMsg
+	task.Error = &errcat.FailureRecord{
+		Code: errcat.WorktreeSetupFailed,
+		Context: &errcat.RecordContext{
+			Repositories: []errcat.CodeRepository{{Name: "repo-a", Branch: "feature/setup-failed"}},
+			Command:      &errcat.CodeCommand{LogPaths: []string{"/tmp/agentico/setup.log"}},
+		},
+		Diagnostics: gitWorktreeAddFailedMsg,
+	}
 	setup.Tasks[task.Key] = task
-	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup, FailureType: feature.FailureWorktreeSetup})
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup, Failure: &errcat.FailureRecord{
+		Code: errcat.WorktreeSetupFailed,
+		Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{
+			Key: "worktree:repo-a", Kind: "worktree", Label: "Worktree: repo-a",
+		}},
+	}})
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save feature: %v", err)
 	}
@@ -220,18 +230,130 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
 	featureBody := detail[entityFeature].(map[string]any)
+	if path := findJSONKey(detail, "last_error"); path != "" {
+		t.Fatalf("feature detail carries a last_error key at %s; setup text is gone", path)
+	}
 	active := featureBody["active_run_detail"].(map[string]any)
 	setupBody, ok := active["setup"].(map[string]any)
 	if !ok {
 		t.Fatalf("active_run_detail = %+v, want setup object for durable setup failure", active)
 	}
-	if setupBody["status"] != string(feature.SetupStatusFailed) || setupBody["last_error"] != gitWorktreeAddFailedMsg || setupBody["latest_log_path"] == "" {
-		t.Fatalf("setup = %+v, want failed setup diagnostic", setupBody)
+	if setupBody["status"] != string(feature.SetupStatusFailed) || setupBody["latest_log_path"] == "" {
+		t.Fatalf("setup = %+v, want failed setup with latest log", setupBody)
 	}
 	tasks := setupBody["tasks"].(map[string]any)
 	worktreeTask := tasks["worktree:repo-a"].(map[string]any)
-	if worktreeTask["status"] != string(feature.SetupStatusFailed) || worktreeTask["last_error"] != gitWorktreeAddFailedMsg || worktreeTask["path"] == "" {
-		t.Fatalf("worktree task = %+v, want failed task diagnostic", worktreeTask)
+	if worktreeTask["status"] != string(feature.SetupStatusFailed) || worktreeTask["path"] == "" {
+		t.Fatalf("worktree task = %+v, want failed task with persisted path", worktreeTask)
+	}
+
+	// The failing task's stored record renders through the catalog as the
+	// canonical error object on the task: code, blocking class, catalog
+	// title and summary, the repositories block, the setup log path in the
+	// command block, a setup action reference, and the raw diagnostics.
+	taskError, ok := worktreeTask["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("worktree task error = %#v, want canonical error object", worktreeTask["error"])
+	}
+	if taskError["code"] != string(errcat.WorktreeSetupFailed) {
+		t.Fatalf("task error code = %v, want %q", taskError["code"], errcat.WorktreeSetupFailed)
+	}
+	if taskError["class"] != "blocking" {
+		t.Fatalf("task error class = %v, want blocking", taskError["class"])
+	}
+	if taskError["title"] != "Worktree setup failed" {
+		t.Fatalf("task error title = %v, want catalog title", taskError["title"])
+	}
+	if taskError["summary"] != `Setting up the worktree for repository "repo-a" failed.` {
+		t.Fatalf("task error summary = %v, want catalog summary naming the repository", taskError["summary"])
+	}
+	taskErrorContext, ok := taskError["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("task error context = %#v, want context blocks", taskError["context"])
+	}
+	repos, ok := taskErrorContext["repositories"].([]any)
+	if !ok || len(repos) != 1 || repos[0].(map[string]any)["name"] != "repo-a" {
+		t.Fatalf("task error repositories = %#v, want [repo-a]", taskErrorContext["repositories"])
+	}
+	command, ok := taskErrorContext["command"].(map[string]any)
+	if !ok || command["log_paths"].([]any)[0] != "/tmp/agentico/setup.log" {
+		t.Fatalf("task error command = %#v, want the setup log path", taskErrorContext["command"])
+	}
+	taskRemediation, ok := taskError["remediation"].(map[string]any)
+	if !ok {
+		t.Fatalf("task error remediation = %#v, want remediation block", taskError["remediation"])
+	}
+	taskActions, ok := taskRemediation["actions"].([]any)
+	if !ok || len(taskActions) != 1 || taskActions[0] != "setup" {
+		t.Fatalf("task error remediation actions = %#v, want [setup]", taskRemediation["actions"])
+	}
+	if taskError["diagnostics"] != gitWorktreeAddFailedMsg {
+		t.Fatalf("task error diagnostics = %v, want %q", taskError["diagnostics"], gitWorktreeAddFailedMsg)
+	}
+
+	// The run's thin record carries the same code, a setup_task block naming
+	// the owning task, and no diagnostics.
+	failure, ok := featureBody["failure"].(map[string]any)
+	if !ok {
+		t.Fatalf("feature detail failure = %#v, want canonical failure object", featureBody["failure"])
+	}
+	if failure["code"] != string(errcat.WorktreeSetupFailed) {
+		t.Fatalf("failure.code = %v, want %q", failure["code"], errcat.WorktreeSetupFailed)
+	}
+	if failure["class"] != "blocking" {
+		t.Fatalf("failure.class = %v, want blocking", failure["class"])
+	}
+	failureContext, ok := failure["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("failure.context = %#v, want context block", failure["context"])
+	}
+	setupTaskBlock, ok := failureContext["setup_task"].(map[string]any)
+	if !ok || setupTaskBlock["key"] != "worktree:repo-a" || setupTaskBlock["label"] != "Worktree: repo-a" {
+		t.Fatalf("failure.context.setup_task = %#v, want the owning task block", failureContext["setup_task"])
+	}
+	if _, ok := failure["diagnostics"]; ok {
+		t.Fatalf("failure.diagnostics = %v, want none on the thin run record", failure["diagnostics"])
+	}
+}
+
+// findJSONKey reports the dotted path of the first "last_error"-style key
+// match in a decoded JSON body, or "" when none exists.
+func findJSONKey(body map[string]any, key string) string {
+	var walk func(node any, path string) string
+	walk = func(node any, path string) string {
+		switch value := node.(type) {
+		case map[string]any:
+			if _, ok := value[key]; ok {
+				return path + "." + key
+			}
+			for name, child := range value {
+				if found := walk(child, path+"."+name); found != "" {
+					return found
+				}
+			}
+		case []any:
+			for i, child := range value {
+				if found := walk(child, fmt.Sprintf("%s[%d]", path, i)); found != "" {
+					return found
+				}
+			}
+		}
+		return ""
+	}
+	return walk(body, "$")
+}
+
+// TestFeatureDetailOmitsFailureWithoutRecord asserts a feature whose active
+// run carries no stored failure record decodes without a failure object.
+func TestFeatureDetailOmitsFailureWithoutRecord(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+	featureBody := detail[entityFeature].(map[string]any)
+	if _, ok := featureBody["failure"]; ok {
+		t.Fatalf("feature detail failure = %#v, want none without a stored record", featureBody["failure"])
 	}
 }
 
@@ -1343,6 +1465,43 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 		}
 	})
 
+	t.Run("failed setup child offers setup and retry", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable)
+		f.Pipeline = feature.PipelineMedium
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+		f.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
+		f.Run().Failure = &errcat.FailureRecord{
+			Code: errcat.WorktreeSetupFailed,
+			Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{
+				Key: "worktree:" + repoNameSelf, Kind: "worktree", Label: "Worktree: " + repoNameSelf,
+			}},
+		}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		if setup := actionDTOByID(t, actions, actionSetup); !setup.Enabled {
+			t.Fatalf("child setup action = %+v; want enabled for a failed child setup", setup)
+		}
+		if retry := actionDTOByID(t, actions, actionRetry); !retry.Enabled {
+			t.Fatalf("child retry action = %+v; want unchanged and enabled for a failed child setup", retry)
+		}
+		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), disabledChildSetupIncomplete)
+	})
+
+	t.Run("queued child disables setup", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusSettingUpWorktrees, feature.Checkpoints{}, &publishable)
+		f.Pipeline = feature.PipelineMedium
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+		f.Run().Setup = &feature.SetupState{Status: feature.SetupStatusRunning}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionSetup), "no_pending_setup")
+		assertDisabledCode(t, actionDTOByID(t, actions, actionRetry), "not_failed")
+	})
+
 	t.Run("queued child reports setup_incomplete", func(t *testing.T) {
 		t.Parallel()
 		f := actionCatalogTestFeature(feature.StatusSettingUpWorktrees, feature.Checkpoints{}, &publishable)
@@ -1435,7 +1594,11 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 					ParentAnchorSHA: "aaaa1111",
 					ChildHeadSHA:    "bbbb2222",
 					MergeHEAD:       "cccc3333",
-					CleanupWarning:  "worktree busy",
+					Cleanup: &errcat.FailureRecord{
+						Code:        errcat.ChildCleanupIncomplete,
+						Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: "repo-a"}}},
+						Diagnostics: "worktree busy",
+					},
 				}},
 			},
 		}
@@ -1452,9 +1615,13 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 		f := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable)
 		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
 		// SetRun syncs run->shadows, so install the run before stamping
-		// shadow fields like FailureType.
+		// run-scoped state like the failure record.
 		f.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
-		f.FailureType = feature.FailureWorktreeSetup
+		f.Run().Failure = &errcat.FailureRecord{
+			Code:        errcat.WorktreeSetupFailed,
+			Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: repoNameSelf}}},
+			Diagnostics: gitWorktreeAddFailedMsg,
+		}
 
 		actions := actionCatalogDTOs(f)
 		retry := actionDTOByID(t, actions, actionRetry)
@@ -1496,7 +1663,9 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPublish:  {disabledCode: "manual_publish_required"},
+				// The manual-publish checkpoint no longer gates the action:
+				// a repository publish failure is retried through publish.
+				actionPublish:  {enabled: true},
 				actionRebase:   {enabled: true},
 				actionMarkDone: {enabled: true},
 			},
@@ -1543,10 +1712,22 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPublish: {disabledCode: "already_published"},
+				// Published features keep publish enabled: a repository
+				// publish failure is retried through it.
+				actionPublish: {enabled: true},
 				actionMerge:   {disabledCode: disabledNotLocalOnly},
 				actionRebase:  {enabled: true},
 				actionCleanup: {enabled: true},
+			},
+		},
+		{
+			name: "done",
+			f:    actionCatalogTestFeature(feature.StatusDone, feature.Checkpoints{}, &publishable),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				actionPublish: {disabledCode: disabledStatusNotAllowed},
 			},
 		},
 		{
@@ -1942,6 +2123,62 @@ func TestPermissionSnapshotIncludesRememberPreview(t *testing.T) {
 	}
 	if got, want := remember["scope_display"], "repo: agentic-orchestrator"; got != want {
 		t.Fatalf("remember.scope_display = %v, want %q", got, want)
+	}
+}
+
+func TestPermissionSnapshotIncludesAutoApproveOffer(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	sess := &fakeSessionView{
+		id: "sess-auto-approve", featureID: f.ID, phase: feature.PhaseImplement,
+		status:         ports.SessionWaitingPermission,
+		permCacheScope: repoNameSelf,
+		pending: []*llm.ControlRequestMessage{
+			{
+				Type:      transcriptTypeControlRequest,
+				RequestID: "perm-offer",
+				Request: llm.ControlRequest{
+					Subtype:  controlSubtypeCanUseTool,
+					ToolName: "Bash",
+					Input:    json.RawMessage(`{"command":"go test ./..."}`),
+				},
+				AutoApproveOffer: &llm.AutoApproveOffer{WouldFastPath: true},
+			},
+			{
+				Type:      transcriptTypeControlRequest,
+				RequestID: "perm-no-offer",
+				Request: llm.ControlRequest{
+					Subtype:  controlSubtypeCanUseTool,
+					ToolName: "Bash",
+					Input:    json.RawMessage(`{"command":"go vet ./..."}`),
+				},
+			},
+		},
+	}
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: []ports.SessionView{sess}}
+	handler := NewHandler(opts)
+
+	permissions := getJSONMap(t, handler, "/api/v1/permissions")
+	requests := permissions["requests"].([]any)
+	if len(requests) != 2 {
+		t.Fatalf("permissions requests length = %d, want 2", len(requests))
+	}
+	byID := map[string]map[string]any{}
+	for _, raw := range requests {
+		req := raw.(map[string]any)
+		byID[req["request_id"].(string)] = req
+	}
+	offer, ok := byID["perm-offer"]["auto_approve"].(map[string]any)
+	if !ok {
+		t.Fatalf("perm-offer auto_approve = %v, want object", byID["perm-offer"]["auto_approve"])
+	}
+	if got := offer["would_fast_path"]; got != true {
+		t.Fatalf("auto_approve.would_fast_path = %v, want true", got)
+	}
+	if _, present := byID["perm-no-offer"]["auto_approve"]; present {
+		t.Fatalf("perm-no-offer should omit auto_approve, got %v", byID["perm-no-offer"]["auto_approve"])
 	}
 }
 

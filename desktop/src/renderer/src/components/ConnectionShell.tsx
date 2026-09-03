@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import {
   useCallback,
   useEffect,
@@ -12,10 +28,11 @@ import {
   type ConnectionStage,
   type ConnectionState,
   type ServerChoiceCandidate,
-  type SwitchContext,
 } from '../../../shared/ipc';
+import { parseIpcError } from '../wizard/ipcError';
 import { PhaseRailTrack } from '../features/PhaseRailRow';
 import { stepSegments } from '../features/phaseRail';
+import { ErrorSurface } from './ErrorSurface';
 
 const STAGE_LABELS: Record<ConnectionStage, string> = {
   'resolve-runtime': 'Resolve',
@@ -87,14 +104,14 @@ const INITIAL_STATE: ConnectionState = {
 };
 
 function ipcFailureState(err: unknown): ConnectionState {
-  // Preload error messages are already redacted/safe.
-  const message = err instanceof Error ? err.message : 'The main process is unreachable.';
+  // An unparseable rejection degrades to the catalog's IPC-unreachable
+  // canonical; a recovered canonical payload (preload sentinel message) wins.
   return {
     status: 'error',
     stage: 'resolve-runtime',
     detail: 'Could not reach the application core.',
     ownership: 'none',
-    error: { code: 'E_IPC', message },
+    error: parseIpcError(err),
   };
 }
 
@@ -189,43 +206,6 @@ function ServerChoiceList({
   );
 }
 
-/**
- * A failed switch's recovery affordances: Retry re-attempts the target,
- * Back re-attaches the previous server. Both ride the standard attach path
- * — there is never an automatic rollback.
- */
-function SwitchFailureActions({
-  context,
-  onSwitch,
-}: {
-  context: SwitchContext;
-  onSwitch(serverKey: string): void;
-}): ReactElement {
-  return (
-    <>
-      <button
-        type="button"
-        className="shell-card__retry"
-        onClick={() => onSwitch(context.attempted.serverKey)}
-      >
-        Retry
-      </button>
-      {context.previous !== null ? (
-        <button
-          type="button"
-          className="shell-card__retry shell-card__retry--secondary"
-          onClick={() => {
-            const { previous } = context;
-            if (previous !== null) onSwitch(previous.serverKey);
-          }}
-        >
-          Back to {context.previous.name ?? 'previous server'}
-        </button>
-      ) : null}
-    </>
-  );
-}
-
 export function ConnectionShell() {
   const [state, setState] = useState<ConnectionState>(INITIAL_STATE);
 
@@ -268,6 +248,12 @@ export function ConnectionShell() {
   const meta = STATUS_META[state.status];
   // Narrowing: error detail exists exactly when the status is terminal.
   const failure = isConnectionErrorState(state) ? state : null;
+  // A failed switch's recovery affordances both ride the standard attach
+  // path — Retry re-attempts the target, Back re-attaches the previous
+  // server. There is never an automatic rollback.
+  const switchContext = failure?.status === 'error' ? failure.switchContext : undefined;
+  const retryTarget = switchContext?.attempted.serverKey ?? null;
+  const backTarget = switchContext?.previous ?? null;
   const activeIndex = CONNECTION_STAGES.indexOf(state.stage);
   const ownership = state.ownership === 'none' ? null : OWNERSHIP_META[state.ownership];
 
@@ -318,37 +304,30 @@ export function ConnectionShell() {
       ) : null}
 
       {failure !== null ? (
-        <div className="shell-card__error">
-          <div className="shell-card__error-head">
-            <span className="shell-card__error-code">{failure.error.code}</span>
-          </div>
-          <p className="shell-card__error-message">{failure.error.message}</p>
-          {failure.error.remediation !== undefined ? (
-            <p className="shell-card__error-remediation">{failure.error.remediation}</p>
-          ) : null}
-          {'diagnostics' in failure && failure.diagnostics !== undefined ? (
-            <details className="shell-card__diagnostics">
-              <summary>App runtime diagnostics</summary>
-              <p>
-                <strong>Command:</strong> <code>{failure.diagnostics.commandContext}</code>
-              </p>
-              {failure.diagnostics.logTail.length > 0 ? (
-                <pre aria-label="Redacted runtime log tail">
-                  {failure.diagnostics.logTail.join('\n')}
-                </pre>
-              ) : (
-                <p>No runtime output was captured.</p>
-              )}
-            </details>
-          ) : null}
-          {failure.status === 'error' && failure.switchContext !== undefined ? (
-            <SwitchFailureActions context={failure.switchContext} onSwitch={switchTo} />
-          ) : (
-            <button type="button" className="shell-card__retry" onClick={retry}>
-              Retry
+        <>
+          {/* The terminal failure is one canonical ErrorSurface: the code,
+           * title, summary, remediation, and the folded diagnostics
+           * disclosure all come from the state's canonical error, and Retry
+           * is the surface's own local action. A failed switch keeps the
+           * previous server as a sibling control outside the surface. */}
+          <ErrorSurface
+            error={failure.error}
+            variant="compact"
+            localAction={{
+              label: 'Retry',
+              onAction: retryTarget !== null ? () => switchTo(retryTarget) : retry,
+            }}
+          />
+          {backTarget !== null ? (
+            <button
+              type="button"
+              className="setup-wizard__action"
+              onClick={() => switchTo(backTarget.serverKey)}
+            >
+              Back to {backTarget.name ?? 'previous server'}
             </button>
-          )}
-        </div>
+          ) : null}
+        </>
       ) : null}
     </section>
   );

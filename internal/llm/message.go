@@ -356,6 +356,17 @@ type ControlRequestMessage struct {
 	Request      ControlRequest `json:"request"`
 	WaitingSince time.Time      `json:"-"`
 	Origin       EventOrigin    `json:"-"`
+	// AutoApproveOffer is set when automatic Bash review is off for the
+	// session but would have handled this request had it been on.
+	AutoApproveOffer *AutoApproveOffer `json:"-"`
+}
+
+// AutoApproveOffer describes how automatic Bash review would have treated a
+// deferred request, so the permission UI can offer to turn the feature on.
+type AutoApproveOffer struct {
+	// WouldFastPath is true when the deterministic guardrail alone would
+	// have approved the command without a reviewer model.
+	WouldFastPath bool
 }
 
 // ControlRequest is the inner request payload.

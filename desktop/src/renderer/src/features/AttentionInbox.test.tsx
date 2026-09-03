@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
@@ -6,11 +22,13 @@ import type { AttentionItem } from '../../../shared/ipc';
 import {
   AttentionDetail,
   AttentionInbox,
+  OwnerAwareAttention,
   emptyAttentionDrafts,
   type AttentionAction,
   type AttentionDrafts,
 } from './AttentionInbox';
 import { installAgenticoMock } from '../test/agenticoMock';
+import { ErrorSurface } from '../components/ErrorSurface';
 
 afterEach(cleanup);
 
@@ -85,6 +103,17 @@ const questionsItem: Extract<AttentionItem, { kind: 'questions' }> = {
       ],
     },
   ],
+};
+
+const errorItem: Extract<AttentionItem, { kind: 'error' }> = {
+  kind: 'error',
+  id: 'error:feature-1:run',
+  featureId: 'feature-1',
+  waitingSince: '2026-07-15T10:00:00.000Z',
+  ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'feature-1' },
+  class: 'blocking',
+  code: 'iteration_budget_exhausted',
+  title: 'Iteration budget exhausted',
 };
 
 const helpQuestionItem: Extract<AttentionItem, { kind: 'help' }> = {
@@ -175,6 +204,90 @@ function bell(): HTMLElement {
 function popover(): HTMLElement | null {
   return screen.queryByRole('complementary', { name: 'Attention inbox' });
 }
+
+function PermissionDetailHarness({
+  item,
+}: {
+  item: Extract<AttentionItem, { kind: 'permission' }>;
+}): React.ReactElement {
+  const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
+  return (
+    <AttentionDetail
+      item={item}
+      busy={false}
+      submit={(action) => void action()}
+      drafts={drafts}
+      setDrafts={setDrafts}
+    />
+  );
+}
+
+describe('permission auto mode split button', () => {
+  it('stays hidden when the server made no offer', () => {
+    installAgenticoMock();
+    render(<PermissionDetailHarness item={permissionItem} />);
+    expect(screen.queryByRole('group', { name: 'Enable auto mode' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Allow once' })).toBeVisible();
+  });
+
+  it('allows and turns auto mode on for this feature, with all features behind the chevron', async () => {
+    const mock = installAgenticoMock();
+    const user = userEvent.setup();
+    render(
+      <PermissionDetailHarness
+        item={{ ...permissionItem, autoApprove: { wouldFastPath: true } }}
+      />,
+    );
+    const split = screen.getByRole('group', { name: 'Enable auto mode' });
+    const main = within(split).getByRole('button', {
+      name: 'Enable auto mode (this feature only)',
+    });
+    expect(main).toHaveAttribute('title', expect.stringContaining('safe build and test fast path'));
+    // The split button sits in the same row as the other decisions.
+    expect(main.closest('.attention-detail__actions')).toBe(
+      screen.getByRole('button', { name: 'Deny' }).closest('.attention-detail__actions'),
+    );
+
+    await user.click(main);
+    expect(mock.api.answerPermission).toHaveBeenLastCalledWith({
+      requestId: 'perm-1',
+      sessionId: 'session-1',
+      decision: 'allow_once',
+      autoApproveScope: 'feature',
+    });
+
+    const menu = split.querySelector('details');
+    expect(menu?.open).toBe(false);
+    await user.click(within(split).getByLabelText('More auto mode options'));
+    expect(menu?.open).toBe(true);
+    const all = within(split).getByRole('menuitem', { name: /Enable auto mode \(all features\)/ });
+    await user.click(all);
+    expect(mock.api.answerPermission).toHaveBeenLastCalledWith({
+      requestId: 'perm-1',
+      sessionId: 'session-1',
+      decision: 'allow_once',
+      autoApproveScope: 'workspace',
+    });
+  });
+
+  it('offers only the all-features choice for a request without a feature', () => {
+    installAgenticoMock();
+    const { featureId: _omit, ...ownerless } = permissionItem as Extract<
+      AttentionItem,
+      { kind: 'permission' }
+    >;
+    render(
+      <PermissionDetailHarness item={{ ...ownerless, autoApprove: { wouldFastPath: false } }} />,
+    );
+    const split = screen.getByRole('group', { name: 'Enable auto mode' });
+    const main = within(split).getByRole('button', { name: 'Enable auto mode (all features)' });
+    expect(main).toHaveAttribute(
+      'title',
+      expect.stringContaining('sent this command to a reviewer model'),
+    );
+    expect(within(split).queryByLabelText('More auto mode options')).toBeNull();
+  });
+});
 
 describe('AttentionInbox popover presentation', () => {
   it('toggles from the bell, dismisses on Escape and outside pointer, and never offers a close control', async () => {
@@ -718,5 +831,135 @@ describe('AttentionInbox question detail', () => {
     expect(options[0]).toBeChecked();
     expect(options[1]).toBeChecked();
     expect(screen.queryByText(/Recommended/)).not.toBeInTheDocument();
+  });
+});
+
+describe('error items', () => {
+  it('omits an error projection when its owning card is mounted in the same view', async () => {
+    render(
+      <>
+        <ErrorSurface
+          error={{
+            code: errorItem.code,
+            class: errorItem.class,
+            title: errorItem.title,
+            summary: 'The Implement phase exhausted its iteration budget.',
+          }}
+          explain={{ reference: errorItem.ref }}
+        />
+        <OwnerAwareAttention item={errorItem}>
+          <section aria-label="Duplicate error projection">{errorItem.title}</section>
+        </OwnerAwareAttention>
+      </>,
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'Duplicate error projection' })).toBeNull(),
+    );
+    expect(screen.getAllByText('Iteration budget exhausted')).toHaveLength(1);
+  });
+
+  const blockingErrorItem: Extract<AttentionItem, { kind: 'error' }> = {
+    kind: 'error',
+    id: 'error:feature-1:run::iteration_budget_exhausted',
+    featureId: 'feature-1',
+    waitingSince: '2026-08-05T12:00:00.000Z',
+    ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'feature-1' },
+    class: 'blocking',
+    code: 'iteration_budget_exhausted',
+    title: 'Iteration budget exhausted',
+  };
+  const needsActionErrorItem: Extract<AttentionItem, { kind: 'error' }> = {
+    ...blockingErrorItem,
+    id: 'error:feature-1:repository:repo-a:publish_rebase_conflict',
+    ref: {
+      scope: 'repository',
+      code: 'publish_rebase_conflict',
+      featureId: 'feature-1',
+      repository: 'repo-a',
+    },
+    class: 'needs_action',
+    code: 'publish_rebase_conflict',
+    title: 'Pull-rebase conflict',
+  };
+
+  it('renders rows named by the class label and counts them on the bell', async () => {
+    render(<Harness items={[blockingErrorItem, needsActionErrorItem]} onJump={vi.fn()} />);
+    const user = userEvent.setup();
+
+    expect(bell()).toHaveAttribute('aria-label', 'Attention inbox, 2 pending');
+    await user.click(bell());
+    const failedRow = screen.getByRole('button', { name: /Failed/ });
+    expect(failedRow).toHaveTextContent('Failed');
+    expect(failedRow).toHaveTextContent('Search revamp');
+    const needsActionRow = screen.getByRole('button', { name: /Needs your action/ });
+    expect(needsActionRow).toHaveTextContent('Search revamp');
+  });
+
+  it('shows the catalog title in the detail with no remediation, and jumps with the item id', async () => {
+    const onJump = vi.fn();
+    render(<Harness items={[blockingErrorItem]} onJump={onJump} />);
+    const user = userEvent.setup();
+
+    await user.click(bell());
+    const row = screen.getByRole('button', { name: /Failed/ });
+    await user.click(row);
+    // The row click closes the popover and jumps with owner and item id.
+    expect(onJump).toHaveBeenCalledWith('feature-1', blockingErrorItem.id);
+    expect(popover()).not.toBeInTheDocument();
+  });
+
+  it('jumps from the detail Open control with the item id', async () => {
+    const onJump = vi.fn();
+    const [drafts, setDrafts] = [
+      { questions: {}, help: {}, gates: {} } as AttentionDrafts,
+      undefined,
+    ];
+    void drafts;
+    void setDrafts;
+    render(
+      <AttentionDetail
+        item={needsActionErrorItem}
+        busy={false}
+        submit={() => undefined}
+        drafts={emptyAttentionDrafts()}
+        setDrafts={() => undefined}
+        onJump={onJump}
+      />,
+    );
+
+    expect(screen.getByText('Pull-rebase conflict')).toBeVisible();
+    expect(screen.queryByText(/retry/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Try/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Open' }));
+    expect(onJump).toHaveBeenCalledWith('feature-1', needsActionErrorItem.id);
+  });
+
+  it('renders a rejected inbox action as a compact ErrorSurface with the catalog title', async () => {
+    const mock = installAgenticoMock();
+    // A canonical rejection as the preload rethrows it: the sentinel-prefixed
+    // message carrying the serialized canonical object.
+    mock.api.sendHelp.mockRejectedValue(
+      new Error(
+        'E_CANONICAL_ERROR {"code":"send_help_failed","class":"blocking","title":"Help could not be sent","summary":"The help message could not be delivered."}',
+      ),
+    );
+    const ownerless: AttentionItem = { ...helpQuestionItem, featureId: undefined };
+    render(<Harness items={[ownerless]} onJump={vi.fn()} />);
+    const user = userEvent.setup();
+
+    await user.click(bell());
+    await user.click(screen.getByRole('button', { name: /Help request/ }));
+    await user.type(screen.getByLabelText('Help reply'), 'carry on');
+    await user.click(screen.getByRole('button', { name: 'Send reply' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(alert).getByText('Help could not be sent')).toBeVisible();
+    expect(within(alert).getByText('send_help_failed')).toHaveClass('error-surface__code');
+    expect(within(alert).getByText('The help message could not be delivered.')).toBeVisible();
+    // The sentinel wire text never renders.
+    expect(alert).not.toHaveTextContent('E_CANONICAL_ERROR');
+    expect(document.querySelector('.attention-status')).toBeNull();
   });
 });

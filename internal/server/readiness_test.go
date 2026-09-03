@@ -29,6 +29,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
@@ -195,26 +196,44 @@ func TestReadinessEndpointReportsProviderTaxonomyAndWorkspaceValidity(t *testing
 
 	missingEntry := providerEntry(t, snapshot, "missing")
 	if missingEntry.Installed || missingEntry.Ready || missingEntry.Issue == nil ||
-		missingEntry.Issue.Code != MissingExecutable {
+		missingEntry.Issue.Code != string(errcat.MissingExecutable) {
 		t.Fatalf("missing provider entry = %+v; want missing_executable issue", missingEntry)
 	}
-	if missingEntry.Issue.Remedy == "" {
-		t.Fatalf("missing provider remedy empty; want install hint")
+	if missingEntry.Issue.Class != ErrorClass(errcat.ClassBlocking) {
+		t.Fatalf("missing provider issue class = %q; want blocking", missingEntry.Issue.Class)
+	}
+	if missingEntry.Issue.Title != "Missing executable" || missingEntry.Issue.Summary == "" {
+		t.Fatalf("missing provider issue = %+v; want catalog title and summary", missingEntry.Issue)
+	}
+	if missingEntry.Issue.Remediation == nil ||
+		!strings.Contains(missingEntry.Issue.Remediation.Hint, "npm install -g missing-cli") {
+		t.Fatalf("missing provider remediation = %+v; want install hint", missingEntry.Issue.Remediation)
 	}
 
 	unauthEntry := providerEntry(t, snapshot, "unauth")
 	if !unauthEntry.Installed || unauthEntry.Ready || unauthEntry.Issue == nil ||
-		unauthEntry.Issue.Code != Unauthenticated {
+		unauthEntry.Issue.Code != string(errcat.Unauthenticated) {
 		t.Fatalf("unauth provider entry = %+v; want unauthenticated issue", unauthEntry)
 	}
-	if unauthEntry.Issue.Remedy != "Run: unauth-cli auth login" {
-		t.Fatalf("unauth remedy = %q; want safe CLI remediation command", unauthEntry.Issue.Remedy)
+	if unauthEntry.Issue.Remediation == nil ||
+		unauthEntry.Issue.Remediation.Hint != "Run: unauth-cli auth login" {
+		t.Fatalf("unauth remediation = %+v; want safe CLI remediation command", unauthEntry.Issue.Remediation)
+	}
+	if unauthEntry.Issue.Diagnostics != "unauth CLI is installed but not authenticated" {
+		t.Fatalf("unauth diagnostics = %q; want bounded raw detail", unauthEntry.Issue.Diagnostics)
 	}
 
 	oldverEntry := providerEntry(t, snapshot, "oldver")
 	if !oldverEntry.Installed || oldverEntry.Ready || oldverEntry.Issue == nil ||
-		oldverEntry.Issue.Code != UnsupportedVersion {
+		oldverEntry.Issue.Code != string(errcat.UnsupportedVersion) {
 		t.Fatalf("oldver provider entry = %+v; want unsupported_version issue", oldverEntry)
+	}
+	if oldverEntry.Issue.Remediation == nil ||
+		!strings.Contains(oldverEntry.Issue.Remediation.Hint, "npm install -g oldver-cli") {
+		t.Fatalf("oldver remediation = %+v; want upgrade hint", oldverEntry.Issue.Remediation)
+	}
+	if !strings.Contains(oldverEntry.Issue.Diagnostics, "below the required minimum 1.0.0") {
+		t.Fatalf("oldver diagnostics = %q; want version detail", oldverEntry.Issue.Diagnostics)
 	}
 
 	readyEntry := providerEntry(t, snapshot, "readyprov")
@@ -247,7 +266,8 @@ func TestReadinessEndpointReportsProviderTaxonomyAndWorkspaceValidity(t *testing
 		t.Fatalf("valid workspace root entry = %+v (ok=%v); want valid", rootsByPath[root], ok)
 	}
 	invalidRoot := rootsByPath[filepath.Join(root, "does-not-exist")]
-	if invalidRoot.Valid || invalidRoot.Issue == nil || invalidRoot.Issue.Code != InvalidWorkspaceRoot {
+	if invalidRoot.Valid || invalidRoot.Issue == nil ||
+		invalidRoot.Issue.Code != string(errcat.InvalidWorkspaceRoot) {
 		t.Fatalf("invalid workspace root entry = %+v; want invalid_workspace_root issue", invalidRoot)
 	}
 
@@ -259,7 +279,7 @@ func TestReadinessEndpointReportsProviderTaxonomyAndWorkspaceValidity(t *testing
 		t.Fatalf("discovered repo entry = %+v (ok=%v); want valid git repo", reposByName["good-repo"], ok)
 	}
 	broken := reposByName["broken"]
-	if broken.Valid || broken.Issue == nil || broken.Issue.Code != InvalidRepository {
+	if broken.Valid || broken.Issue == nil || broken.Issue.Code != string(errcat.InvalidRepository) {
 		t.Fatalf("broken repo entry = %+v; want invalid_repository issue", broken)
 	}
 
@@ -269,14 +289,115 @@ func TestReadinessEndpointReportsProviderTaxonomyAndWorkspaceValidity(t *testing
 		t.Fatalf("registry.AvailableModels() = %v; want only the ready provider's models", models)
 	}
 
-	// Flattened issues cover every failing section.
-	codes := map[ReadinessIssueCode]bool{}
+	// Flattened issues cover every failing section with the same canonical
+	// objects the sections carry.
+	codes := map[string]string{}
 	for _, issue := range snapshot.Issues {
-		codes[issue.Code] = true
+		codes[issue.Code] = issue.Title
 	}
-	for _, want := range []ReadinessIssueCode{MissingExecutable, Unauthenticated, UnsupportedVersion, InvalidWorkspaceRoot, InvalidRepository} {
-		if !codes[want] {
+	for _, want := range []string{
+		string(errcat.MissingExecutable),
+		string(errcat.Unauthenticated),
+		string(errcat.UnsupportedVersion),
+		string(errcat.InvalidWorkspaceRoot),
+		string(errcat.InvalidRepository),
+	} {
+		if codes[want] == "" {
 			t.Fatalf("flattened issues missing %s: %+v", want, snapshot.Issues)
+		}
+	}
+	if codes[string(errcat.MissingExecutable)] != missingEntry.Issue.Title {
+		t.Fatalf("flattened missing_executable title = %q; want section title %q",
+			codes[string(errcat.MissingExecutable)], missingEntry.Issue.Title)
+	}
+}
+
+// assertNoLegacyReadinessIssueKeys fails when any object in a decoded
+// readiness payload still carries the pre-canonical issue fields.
+func assertNoLegacyReadinessIssueKeys(t *testing.T, value any) {
+	t.Helper()
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if key == "message" || key == "remedy" {
+				t.Fatalf("readiness payload carries legacy issue key %q", key)
+			}
+			assertNoLegacyReadinessIssueKeys(t, child)
+		}
+	case []any:
+		for _, child := range typed {
+			assertNoLegacyReadinessIssueKeys(t, child)
+		}
+	}
+}
+
+// TestReadinessIssuesAreCanonicalAndCredentialFreeOnTheWire pins the wire
+// contract: every issue is the canonical catalog error (code, class, title,
+// summary, remediation hint), provider-supplied text is redacted and bounded,
+// and no legacy message/remedy field survives anywhere in the payload.
+func TestReadinessIssuesAreCanonicalAndCredentialFreeOnTheWire(t *testing.T) {
+	t.Parallel()
+
+	unauth := &readinessProbeProvider{
+		MockProvider: &mocks.MockProvider{ProviderName: "unauth", CLIDetected: true, Hint: "npm install -g unauth-cli"},
+		status: staticReadiness(llm.ProviderReadiness{
+			Ready:  false,
+			Detail: "private-token " + strings.Repeat("x", 400),
+			Remedy: "Run: unauth-cli private-token auth login",
+		}),
+	}
+	missing := &mocks.MockProvider{ProviderName: "missing", Hint: "npm install -g missing-cli"}
+	handler := NewHandler(HandlerOptions{
+		Config:                config.NewDefault(),
+		Registry:              newReadinessRegistry(missing, unauth),
+		DisableHostValidation: true,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/readiness", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/v1/readiness status = %d body=%s; want 200", resp.StatusCode, w.Body.String())
+	}
+	raw := w.Body.String()
+	if strings.Contains(raw, "private-token") {
+		t.Fatalf("readiness payload leaks credentials: %s", raw)
+	}
+	var payload any
+	if err := json.NewDecoder(strings.NewReader(raw)).Decode(&payload); err != nil {
+		t.Fatalf("decode readiness payload: %v", err)
+	}
+	assertNoLegacyReadinessIssueKeys(t, payload)
+
+	snapshot := getReadinessSnapshot(t, handler)
+	unauthEntry := providerEntry(t, snapshot, "unauth")
+	issue := unauthEntry.Issue
+	if issue == nil || issue.Code != string(errcat.Unauthenticated) {
+		t.Fatalf("unauth issue = %+v; want unauthenticated canonical error", issue)
+	}
+	if issue.Class != ErrorClass(errcat.ClassBlocking) {
+		t.Fatalf("unauth issue class = %q; want blocking", issue.Class)
+	}
+	if issue.Title == "" || issue.Summary == "" {
+		t.Fatalf("unauth issue must carry catalog title and summary: %+v", issue)
+	}
+	if issue.Remediation == nil || issue.Remediation.Hint != "Run: unauth-cli [redacted] auth login" {
+		t.Fatalf("unauth remediation = %+v; want redacted safe command", issue.Remediation)
+	}
+	if !strings.Contains(issue.Diagnostics, "[redacted]") {
+		t.Fatalf("unauth diagnostics = %q; want redacted detail", issue.Diagnostics)
+	}
+	if got := len(issue.Diagnostics); got > maxReadinessTextLen+3 {
+		t.Fatalf("unauth diagnostics length = %d; want bounded to %d", got, maxReadinessTextLen)
+	}
+	for _, flattened := range snapshot.Issues {
+		if flattened.Class != ErrorClass(errcat.ClassBlocking) {
+			t.Fatalf("flattened issue %q class = %q; want blocking", flattened.Code, flattened.Class)
+		}
+		if flattened.Title == "" || flattened.Summary == "" {
+			t.Fatalf("flattened issue must carry catalog title and summary: %+v", flattened)
 		}
 	}
 }
@@ -301,8 +422,16 @@ func TestReadinessInvalidConfigurationReported(t *testing.T) {
 		t.Fatal("snapshot.Ready = true; want false with invalid configuration")
 	}
 	if snapshot.Configuration.Valid || snapshot.Configuration.Issue == nil ||
-		snapshot.Configuration.Issue.Code != InvalidConfiguration {
+		snapshot.Configuration.Issue.Code != string(errcat.InvalidConfiguration) {
 		t.Fatalf("configuration = %+v; want invalid_configuration issue", snapshot.Configuration)
+	}
+	if snapshot.Configuration.Issue.Title != "Invalid configuration" {
+		t.Fatalf("configuration issue title = %q; want catalog title", snapshot.Configuration.Issue.Title)
+	}
+	if snapshot.Configuration.Issue.Remediation == nil ||
+		snapshot.Configuration.Issue.Remediation.Hint != "Fix the configuration and restart the runtime." {
+		t.Fatalf("configuration remediation = %+v; want catalog hint",
+			snapshot.Configuration.Issue.Remediation)
 	}
 }
 
@@ -397,11 +526,11 @@ func TestCreateFeatureRejectsUnresolvableModelOverrides(t *testing.T) {
 		t.Fatalf("create status = %d body=%s; want 400", w.Code, w.Body.String())
 	}
 	body := decodeErrorBody(t, w)
-	if body.Error.Code != errCodeBadRequest {
-		t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeBadRequest)
+	if body.Error.Code != string(errcat.BadRequest) {
+		t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.BadRequest)
 	}
-	if !strings.Contains(body.Error.Message, "model for planning is unavailable") {
-		t.Fatalf("message = %q; want unavailable planning model", body.Error.Message)
+	if !strings.Contains(body.Error.Diagnostics, "model for planning is unavailable") {
+		t.Fatalf("diagnostics = %q; want unavailable planning model", body.Error.Diagnostics)
 	}
 	if got := target.created.Load(); got != 0 {
 		t.Fatalf("CreateFeature called %d times; want 0 for invalid model", got)
@@ -476,26 +605,28 @@ func TestCreateFeatureReturnsStructuredReadinessErrorWhenNoProviderUsable(t *tes
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
-	if body.Error.Code != "not_ready" {
-		t.Fatalf("error code = %q; want not_ready", body.Error.Code)
+	if body.Error.Code != string(errcat.NotReady) {
+		t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.NotReady)
 	}
-	rawIssues, ok := body.Error.Target["issues"]
-	if !ok {
-		t.Fatalf("error target = %+v; want structured issues", body.Error.Target)
+	if body.Error.Class != ErrorClass(errcat.ClassNeedsAction) {
+		t.Fatalf("error class = %q; want %q", body.Error.Class, errcat.ClassNeedsAction)
 	}
-	issuesJSON, _ := json.Marshal(rawIssues)
-	var issues []ReadinessIssue
-	if err := json.Unmarshal(issuesJSON, &issues); err != nil || len(issues) == 0 {
-		t.Fatalf("issues = %s (err=%v); want non-empty readiness issues", issuesJSON, err)
+	if !strings.Contains(body.Error.Summary, "Unauthenticated") {
+		t.Fatalf("error summary = %q; want catalog issue title Unauthenticated", body.Error.Summary)
 	}
+	if !strings.Contains(body.Error.Diagnostics, "not authenticated") {
+		t.Fatalf("error diagnostics = %q; want raw unauthenticated issue message", body.Error.Diagnostics)
+	}
+	// The 200 readiness endpoint still carries the structured issue payloads.
+	snapshot := getReadinessSnapshot(t, handler)
 	sawUnauthenticated := false
-	for _, issue := range issues {
-		if issue.Code == Unauthenticated {
+	for _, issue := range snapshot.Issues {
+		if issue.Code == string(errcat.Unauthenticated) {
 			sawUnauthenticated = true
 		}
 	}
 	if !sawUnauthenticated {
-		t.Fatalf("issues = %+v; want unauthenticated issue", issues)
+		t.Fatalf("readiness issues = %+v; want unauthenticated issue", snapshot.Issues)
 	}
 	if got := target.created.Load(); got != 0 {
 		t.Fatalf("CreateFeature called %d times; want 0 while not ready", got)
@@ -549,6 +680,9 @@ func TestReadinessRefreshReprobesAndUnblocksFeatureCreation(t *testing.T) {
 	}
 	if !refreshed.Ready {
 		t.Fatalf("refreshed.Ready = false; want true after authentication: %+v", refreshed.Issues)
+	}
+	if len(refreshed.Issues) != 0 {
+		t.Fatalf("refreshed.Issues = %+v; want empty list when fully ready", refreshed.Issues)
 	}
 	entry := providerEntry(t, refreshed, "flipper")
 	if !entry.Ready || entry.Issue != nil {

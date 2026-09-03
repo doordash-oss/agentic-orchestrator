@@ -1,6 +1,22 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Pure lane classification for the Bench: every feature maps to exactly one
- * of five lanes so the sidebar and the Overview pane can group and count
+ * of six lanes so the sidebar and the Overview pane can group and count
  * features without re-deriving dashboard rules. Builds strictly on top of
  * featureView.ts's dashboard classification — it never duplicates the
  * intervention/active status logic that already lives there.
@@ -9,15 +25,16 @@ import type { FeatureSnapshot } from '../../../shared/ipc';
 import { ACTIVE_STATUSES, dashboardState, orderDashboardFeatures } from './featureView';
 
 /**
- * The five Bench lanes, in the order they should render: active work above
- * archival lanes. This display order is independent of `classifyLane`'s
- * first-match precedence (waiting, running, published, done, at-rest) —
- * don't conflate the two.
+ * The six Bench lanes, in the order they should render: blocking failures
+ * above active work above archival lanes. This display order is independent
+ * of `classifyLane`'s first-match precedence (failed, waiting, running,
+ * published, done, at-rest) — don't conflate the two.
  */
-export const LANES = ['waiting', 'running', 'at-rest', 'published', 'done'] as const;
+export const LANES = ['failed', 'waiting', 'running', 'at-rest', 'published', 'done'] as const;
 export type Lane = (typeof LANES)[number];
 
 const LANE_LABELS: Readonly<Record<Lane, string>> = {
+  failed: 'Failed',
   waiting: 'Waiting on you',
   running: 'Running',
   'at-rest': 'At rest',
@@ -31,27 +48,16 @@ export function laneLabel(lane: Lane): string {
 }
 
 /**
- * True when the feature's active child pass carries something for the
- * human to resolve: an explicit attention entry, or the integration
- * transaction itself parked in its "attention" phase.
- */
-function childNeedsAttention(snapshot: FeatureSnapshot): boolean {
-  const child = snapshot.activeChild;
-  if (child === undefined) return false;
-  return child.attention.length > 0 || child.integrationState === 'attention';
-}
-
-/**
  * True when the active child pass is itself running work. Mirrors
- * dashboardState's child branch: a pass that failed, needs attention, or
+ * dashboardState's child branch: a pass that owns an error arrives on the
+ * snapshot's owned-error list and classifies through it, and a pass that
  * hasn't started yet (`Created`) is not "running" — only a pass mid-flight
  * is.
  */
 function childIsRunning(snapshot: FeatureSnapshot): boolean {
   const child = snapshot.activeChild;
   if (child === undefined) return false;
-  if (childNeedsAttention(snapshot)) return false;
-  if (child.status === 'Failed' || child.status === 'Created') return false;
+  if (child.status === 'Created') return false;
   return true;
 }
 
@@ -59,24 +65,27 @@ function childIsRunning(snapshot: FeatureSnapshot): boolean {
  * Classifies a single feature into exactly one Bench lane. Precedence
  * (first match wins):
  *
- * 1. `waiting` ("Waiting on you") — dashboardState's intervention bucket
- *    (status Failed/Interrupted/`*NeedsReview`/NeedUserInput, or an active
- *    child pass that itself failed or needs attention), OR the active
- *    child pass carries a pending attention entry / attention integration
- *    state even in combinations dashboardState's bucket wouldn't itself
- *    reach (e.g. a Done parent with an unresolved child pass).
- * 2. `running` — a top-level status in ACTIVE_STATUSES, durable setup
+ * 1. `failed` ("Failed") — the snapshot's owned-error projection carries a
+ *    blocking-class entry: the feature or its active child pass owns an
+ *    error that stopped work. Status strings never classify this lane.
+ * 2. `waiting` ("Waiting on you") — dashboardState's intervention bucket (a
+ *    needs_action owned error, or the status-driven pauses that are not
+ *    errors: Interrupted, `*NeedsReview`, NeedUserInput).
+ * 3. `running` — a top-level status in ACTIVE_STATUSES, durable setup
  *    still running, or an active child pass genuinely in flight. This is
  *    checked before the Published/Done checks below, so a Published
  *    parent with a running refactor/rebase pass classifies as Running, not
  *    Published.
- * 3. `published` — status is exactly `Published` (and nothing above matched).
- * 4. `done` — status is exactly `Done` (and nothing above matched).
- * 5. `at-rest` — everything else (CodeReady, Created, the `*Ready` statuses,
+ * 4. `published` — status is exactly `Published` (and nothing above matched).
+ * 5. `done` — status is exactly `Done` (and nothing above matched).
+ * 6. `at-rest` — everything else (CodeReady, Created, the `*Ready` statuses,
  *    and any other non-active, non-terminal status).
  */
 export function classifyLane(snapshot: FeatureSnapshot): Lane {
-  if (dashboardState(snapshot).bucket === 'intervention' || childNeedsAttention(snapshot)) {
+  if (snapshot.errors.some((entry) => entry.error.class === 'blocking')) {
+    return 'failed';
+  }
+  if (dashboardState(snapshot).bucket === 'intervention') {
     return 'waiting';
   }
   if (
@@ -95,7 +104,7 @@ export function classifyLane(snapshot: FeatureSnapshot): Lane {
 export type LaneGroups = Record<Lane, FeatureSnapshot[]>;
 
 function emptyLaneGroups(): LaneGroups {
-  return { waiting: [], running: [], 'at-rest': [], published: [], done: [] };
+  return { failed: [], waiting: [], running: [], 'at-rest': [], published: [], done: [] };
 }
 
 /**
@@ -124,7 +133,14 @@ export type LaneCounts = Record<Lane, number>;
  * apply that same re-bucketing rather than reading these counts directly.
  */
 export function laneCounts(snapshots: readonly FeatureSnapshot[]): LaneCounts {
-  const counts: LaneCounts = { waiting: 0, running: 0, 'at-rest': 0, published: 0, done: 0 };
+  const counts: LaneCounts = {
+    failed: 0,
+    waiting: 0,
+    running: 0,
+    'at-rest': 0,
+    published: 0,
+    done: 0,
+  };
   for (const snapshot of snapshots) {
     counts[classifyLane(snapshot)] += 1;
   }
@@ -141,7 +157,8 @@ export function laneCounts(snapshots: readonly FeatureSnapshot[]): LaneCounts {
  * argument carries. Any feature with a pending attention count classifies as
  * "Waiting on you" regardless of its status-derived lane, so re-bucket with
  * that list here rather than teach the pure classifier about component-level
- * state it was never given.
+ * state it was never given. A feature in the "Failed" lane stays there: a
+ * blocking error outranks a pending prompt.
  */
 export function classifyFeaturesByLaneWithAttention(
   snapshots: readonly FeatureSnapshot[],
@@ -150,6 +167,7 @@ export function classifyFeaturesByLaneWithAttention(
   const laneGroups = classifyFeaturesByLane(snapshots);
   if (attentionByFeature.size === 0) return laneGroups;
   const next: LaneGroups = {
+    failed: [...laneGroups.failed],
     waiting: [...laneGroups.waiting],
     running: [],
     published: [],
@@ -157,7 +175,7 @@ export function classifyFeaturesByLaneWithAttention(
     'at-rest': [],
   };
   for (const lane of LANES) {
-    if (lane === 'waiting') continue;
+    if (lane === 'waiting' || lane === 'failed') continue;
     for (const feature of laneGroups[lane]) {
       if ((attentionByFeature.get(feature.id) ?? 0) > 0) {
         next.waiting.push(feature);

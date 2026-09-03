@@ -17,6 +17,8 @@ package feature
 import (
 	"fmt"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 )
 
 // SealReason identifies why a run was sealed. Only rewind seals runs today;
@@ -36,6 +38,32 @@ const (
 type RewindRequest struct {
 	TargetPhase  Phase
 	RoadmapPhase int
+}
+
+// RewindWarningKind identifies the non-fatal rewind failure family.
+type RewindWarningKind string
+
+const (
+	// RewindWarningPullRequestClose marks a pull request that could not be
+	// closed during the rewind.
+	RewindWarningPullRequestClose RewindWarningKind = "pull_request_close"
+	// RewindWarningBackupBranch marks a backup branch that could not be
+	// created during the rewind.
+	RewindWarningBackupBranch RewindWarningKind = "backup_branch"
+	// RewindWarningWorktreeReset marks a worktree that could not be reset
+	// during the rewind.
+	RewindWarningWorktreeReset RewindWarningKind = "worktree_reset"
+)
+
+// RewindWarning is one typed non-fatal rewind failure: the cause family, the
+// repository it happened in, its branch when known, and the raw error. The
+// mutation-target boundary classifies it into a canonical rewind warning
+// code with the repositories block; no layer renders it as text first.
+type RewindWarning struct {
+	Kind   RewindWarningKind
+	Repo   string
+	Branch string
+	Err    error
 }
 
 // VerificationItemStatus is one harness-executed testing-contract command's
@@ -145,9 +173,12 @@ type Run struct {
 	// tracks the reset-on-phase-boundary limit that the plan loop consults.
 	MaxPlanIterations int `yaml:"max_plan_iterations,omitempty"`
 
-	// Error state (moved from Feature).
-	LastError   string `yaml:"last_error,omitempty"`
-	FailureType string `yaml:"failure_type,omitempty"`
+	// Failure is the durable canonical failure record for this run: a
+	// catalog code, typed context blocks, and raw diagnostics. No rendered
+	// text is persisted; read models render it through the catalog at
+	// projection time. Legacy `last_error`/`failure_type` YAML keys from
+	// older schemas are ignored on load and never written.
+	Failure *errcat.FailureRecord `yaml:"failure,omitempty"`
 
 	// KB transient flags (moved from Feature — actual KB data lives in a
 	// sibling knowledge-base/ directory outside the feature dir, untouched).

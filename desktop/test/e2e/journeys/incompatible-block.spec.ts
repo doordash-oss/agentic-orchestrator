@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Journey 4 — incompatible external runtime: a live loopback process
  * presents a health response whose compatibility declaration this app does
@@ -96,9 +112,11 @@ test('incompatible external runtime: blocked with guidance, never stopped', asyn
     await expect(shell.locator('[data-ownership="external"]')).toBeVisible();
     await expect(shell).toContainText('E_INCOMPATIBLE_SERVER');
     await expect(shell).toContainText('This app never shuts down a runtime it does not own');
-    // The only affordance is Retry; there is no way to stop the foreign process.
+    // The only recovery affordance is Retry; there is no way to stop the
+    // foreign process. (The ErrorSurface also offers explain-in-chat — the
+    // app-root provider mounts it — which is a question, not a control.)
     const buttons = await shell.getByRole('button').allTextContents();
-    expect(buttons).toEqual(['Retry']);
+    expect(buttons.filter((label) => label !== 'Explain in chat')).toEqual(['Retry']);
     await evidenceShot(handle, 'incompatible-blocked');
     const connection = await handle.page.evaluate(() => window.agentico.getConnectionStatus());
     transcript.json('connection state (via IPC): blocked, external ownership', connection);

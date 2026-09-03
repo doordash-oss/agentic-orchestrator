@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Owner-only, schema-versioned, atomically-replaced local settings.
  *
@@ -15,7 +31,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { redactText, SafeErrorException, safeError } from '../shared/errors';
+import { redactText, buildCanonicalError, CanonicalErrorException } from '../shared/errors';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sanitize';
 import {
   AmaPrefsSchema,
@@ -315,12 +331,7 @@ export class SettingsStore {
   update(patch: SettingsPatch): Settings {
     const parsed = SettingsPatchSchema.safeParse(patch);
     if (!parsed.success) {
-      throw new SafeErrorException(
-        safeError(
-          'E_INVALID_SETTINGS_PATCH',
-          'The settings update was rejected because it did not match the settings schema.',
-        ),
-      );
+      throw new CanonicalErrorException(buildCanonicalError('E_INVALID_SETTINGS_PATCH'));
     }
     const next: Settings = {
       ...this.settings,

@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 * {
   box-sizing: border-box;
 }
@@ -1571,26 +1587,6 @@ body {
   cursor: default;
 }
 
-.refactor-pass__notice {
-  margin: 0;
-  color: var(--muted);
-  font: 13px var(--bench-font-text);
-}
-
-.refactor-pass__alert {
-  margin: 0;
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid color-mix(in srgb, var(--attention) 55%, var(--hairline));
-  color: var(--attention);
-}
-
-.refactor-pass__warnings {
-  margin: 0;
-  padding: 0 0 0 var(--space-4);
-  color: var(--attention);
-  font: 13px var(--bench-font-text);
-}
-
 .refactor-pass__parent-card {
   margin-top: var(--space-5);
   padding-top: var(--space-4);
@@ -1867,14 +1863,6 @@ body {
   font-size: 13px;
 }
 
-.refactor-history__warnings {
-  margin: var(--space-2) 0 0;
-  padding-left: 24px;
-  color: var(--attention);
-  font: 13px var(--bench-font-text);
-  list-style: none;
-}
-
 .refactor-history__diff {
   margin-top: var(--space-2);
   padding-left: 24px;
@@ -2023,15 +2011,6 @@ body {
   font-size: 12px;
 }
 
-.create-form__error-detail {
-  margin-top: var(--space-2);
-  font-size: 13px;
-}
-
-.create-form__error-detail p {
-  margin: 2px 0 0;
-}
-
 @media (max-width: 760px) {
   .refactor-pass__custody {
     grid-template-columns: 1fr;
@@ -2124,10 +2103,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-}
-
-.aftercare-workspace__action-error {
-  margin: 0;
 }
 
 /* The grouped inset list, shared shape with Overview's lanes and the
@@ -2733,12 +2708,6 @@ body {
   border-color: var(--bad);
 }
 
-.creation-sheet__field-error {
-  margin: 0;
-  color: var(--bad);
-  font: 12px var(--bench-font-text);
-}
-
 .creation-sheet__button {
   border: var(--bench-hairline-width) solid var(--hairline);
   border-radius: var(--bench-radius-control);
@@ -3046,40 +3015,6 @@ body {
   font: 13px var(--bench-font-text);
 }
 
-.creation-sheet__retry {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-3);
-}
-
-.creation-sheet__alert {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--space-3);
-  border: var(--bench-hairline-width) solid var(--bad);
-  border-radius: var(--bench-radius-card);
-  background: color-mix(in srgb, var(--bad) 10%, transparent);
-}
-
-.creation-sheet__alert b {
-  color: var(--bad);
-  font: 600 11px var(--bench-font-mono);
-  letter-spacing: 0.02em;
-}
-
-.creation-sheet__alert p {
-  margin: 0;
-  color: var(--text);
-  font: 13px var(--bench-font-text);
-}
-
-.creation-sheet__alert:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
 .creation-sheet__footer-trailing {
   margin-left: auto;
   display: flex;
@@ -3221,10 +3156,6 @@ body {
   margin: var(--space-4) 0 0;
   color: var(--attention);
   font: 12px var(--bench-font-text);
-}
-
-.need-input-sheet .form-field__error {
-  margin: var(--space-3) 0 0;
 }
 
 .need-input-verification {
@@ -3665,6 +3596,117 @@ body {
 
 .attention-detail__hint {
   color: var(--muted);
+}
+
+.attention-split {
+  position: relative;
+  display: inline-flex;
+}
+
+.attention-split__main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.attention-split__toggle {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-width: 30px;
+  padding: 0 var(--space-2);
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  color: var(--muted);
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.attention-split__toggle:hover,
+.attention-split__more[open] > .attention-split__toggle {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.attention-split__toggle::-webkit-details-marker {
+  display: none;
+}
+
+.attention-split__toggle:focus-visible {
+  outline: var(--focus-ring);
+}
+
+.attention-split__chevron {
+  width: 14px;
+  height: 14px;
+  transition: transform 140ms ease;
+}
+
+.attention-split__more[open] .attention-split__chevron {
+  transform: rotate(180deg);
+}
+
+/* Opens upward, spanning the whole control: the actions row is pinned to the
+   bottom of its pane. */
+.attention-split__menu {
+  position: absolute;
+  left: 0;
+  min-width: 100%;
+  bottom: calc(100% + var(--space-1));
+  z-index: 30;
+  padding: var(--space-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--content) 40%, transparent),
+    0 12px 32px color-mix(in srgb, var(--content) 55%, transparent);
+  animation: attention-split-reveal 140ms ease-out;
+}
+
+@keyframes attention-split-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.attention-split__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: var(--space-2) var(--space-3);
+  border-radius: calc(var(--radius) - 2px);
+  color: var(--text);
+  font: 700 13px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.attention-split__item > small {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.attention-split__item:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.attention-split__item:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .attention-detail__tasks {
@@ -4337,77 +4379,6 @@ body {
 
 /* --- Error panel -------------------------------------------------------------- */
 
-.shell-card__error {
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  padding: var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.shell-card__error-code {
-  font-family: var(--bench-font-mono);
-  font-size: 12px;
-  color: var(--bad);
-}
-
-.shell-card__error-message {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.shell-card__error-remediation {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.shell-card__diagnostics {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.shell-card__diagnostics summary {
-  cursor: pointer;
-  color: var(--text);
-  font-weight: 700;
-}
-
-.shell-card__diagnostics p {
-  margin: var(--space-2) 0 0;
-}
-
-.shell-card__diagnostics pre {
-  max-height: 180px;
-  margin: var(--space-2) 0 0;
-  padding: var(--space-2);
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--text);
-  background: var(--content);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-}
-
-.shell-card__retry {
-  align-self: flex-start;
-  font-family: var(--bench-font-text);
-  font-weight: 700;
-  font-size: 13px;
-  color: var(--text);
-  background: transparent;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-4);
-  cursor: pointer;
-}
-
-.shell-card__retry:hover {
-  border-color: var(--accent);
-}
-
 /* --- Server picker (awaiting-server-choice) ------------------------------------
    One quiet registry list: hairline rows, the selected row lifts with the
    accent edge — never color alone, the row carries the "Running" word too. */
@@ -4529,45 +4500,6 @@ body {
   min-height: 1.2em;
   color: var(--muted);
   font-size: 13px;
-}
-
-.setup-wizard__banner,
-.setup-wizard__error {
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.setup-wizard__error:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.setup-wizard__error-code {
-  font-family: var(--bench-font-mono);
-  font-size: 12px;
-  color: var(--bad);
-}
-
-.setup-wizard__banner-message,
-.setup-wizard__error-message {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.setup-wizard__code {
-  display: block;
-  font-family: var(--bench-font-mono);
-  font-size: 12px;
-  background: var(--content);
-  border: 1px solid var(--hairline);
-  border-radius: 3px;
-  padding: var(--space-2) var(--space-3);
-  overflow-wrap: anywhere;
-  user-select: all;
 }
 
 .setup-wizard__action {
@@ -4692,25 +4624,6 @@ body {
   margin: 0;
   font-family: var(--bench-font-mono);
   font-size: 12px;
-}
-
-.provider-row__issue {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.provider-row__issue-message {
-  margin: 0;
-  font-size: 13px;
-}
-
-.provider-row__remedy {
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  align-items: flex-start;
 }
 
 .provider-row__copy {
@@ -4842,32 +4755,6 @@ body {
   gap: var(--space-4);
 }
 
-.create-form__error {
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.create-form__error:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.create-form__error-code {
-  font-family: var(--bench-font-mono);
-  font-size: 11px;
-  letter-spacing: 0.02em;
-  color: var(--bad);
-}
-
-.create-form__error-message {
-  margin: 0;
-  font-size: 13px;
-}
-
 .form-field {
   display: flex;
   flex-direction: column;
@@ -4906,12 +4793,6 @@ body {
 .form-field__input--multiline {
   resize: vertical;
   min-height: 72px;
-}
-
-.form-field__error {
-  margin: 0;
-  color: var(--bad);
-  font-size: 12px;
 }
 
 /* Primary intervention: the one filled signal control in the form. */
@@ -5346,6 +5227,10 @@ body {
   background: var(--attention);
 }
 
+.sidebar__row-glyph[data-tone='danger'] {
+  background: var(--bad);
+}
+
 .sidebar__row-glyph[data-tone='progress'] {
   background: var(--accent);
 }
@@ -5424,6 +5309,10 @@ body {
 
 .pip-rail[data-tone='attention'] .pip-rail__pip[data-state='active'] {
   background: var(--attention);
+}
+
+.pip-rail[data-tone='danger'] .pip-rail__pip[data-state='active'] {
+  background: var(--bad);
 }
 
 .content-pane {
@@ -5741,11 +5630,6 @@ body {
   color: var(--muted);
   font-size: 0.78rem;
 }
-.composer__notice {
-  margin: 0;
-  color: var(--attention);
-  font-size: 0.78rem;
-}
 .composer__chips {
   display: flex;
   flex-wrap: wrap;
@@ -5967,13 +5851,6 @@ body {
   gap: var(--space-5);
 }
 
-.overview-lanes__error {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  align-items: flex-start;
-}
-
 .overview-lane {
   display: flex;
   flex-direction: column;
@@ -6100,6 +5977,10 @@ body {
   color: var(--attention);
 }
 
+.overview-row__state[data-tone='danger'] {
+  color: var(--bad);
+}
+
 .overview-row__state-text {
   min-width: 0;
   overflow: hidden;
@@ -6117,6 +5998,10 @@ body {
 
 .overview-row__state-dot[data-tone='attention'] {
   background: var(--attention);
+}
+
+.overview-row__state-dot[data-tone='danger'] {
+  background: var(--bad);
 }
 
 .overview-row__state-dot[data-tone='progress'] {
@@ -6577,12 +6462,6 @@ body {
   color: var(--muted);
 }
 
-.cockpit__run-switcher-error {
-  margin: var(--space-1) var(--space-3) 0;
-  color: var(--bad);
-  font: 500 12px var(--bench-font-text);
-}
-
 /* The stage bar's fixed four-segment control: a raised track holding a
  * selected "thumb" behind the active label, per the mock. Segments whose
  * surface doesn't exist yet render disabled — the control itself never
@@ -6890,6 +6769,16 @@ body {
   font: inherit;
   color: inherit;
 }
+/* The attention chip is a button that focuses the pass attention card; it
+ * keeps the chip's exact visual treatment and adds only the pointer cursor
+ * and keyboard focus ring. */
+.cockpit__phase-status--button {
+  cursor: pointer;
+}
+.cockpit__phase-status--button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .cockpit__phase-status code::before {
   content: '●';
   margin-right: var(--space-2);
@@ -7085,10 +6974,6 @@ body {
   font-size: 14px;
 }
 
-.cockpit__rewind-landing .cockpit__rewind-warnings {
-  flex-basis: 100%;
-}
-
 .cockpit__carried-material {
   justify-content: flex-start;
 }
@@ -7125,8 +7010,7 @@ body {
   font-size: 11px;
 }
 
-.cockpit__rewind-source,
-.cockpit__rewind-warnings p {
+.cockpit__rewind-source {
   margin: 0;
   font-size: 13px;
 }
@@ -7138,31 +7022,6 @@ body {
   color: var(--text);
   font-family: var(--bench-font-text);
   font-size: 11px;
-}
-
-.cockpit__rewind-warnings {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  border-top: 1px solid var(--bad);
-  margin-top: var(--space-1);
-  padding-top: var(--space-2);
-}
-
-.cockpit__rewind-warnings h4,
-.cockpit__rewind-warnings ul {
-  margin: 0;
-}
-
-.cockpit__rewind-warnings h4 {
-  color: var(--bad);
-  font: 600 13px var(--bench-font-text);
-}
-
-.cockpit__rewind-warnings ul {
-  padding-left: var(--space-4);
-  color: var(--text);
-  font-size: 12px;
 }
 
 /* Primary intervention: the one filled signal control in the cockpit. */
@@ -7541,24 +7400,6 @@ body {
   text-decoration: none;
 }
 
-.recovery-workspace__error-actions {
-  margin-top: var(--space-3);
-}
-
-.cockpit__missing {
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  padding: var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.cockpit__missing-message {
-  margin: 0;
-  font-size: 13px;
-}
-
 /* --- Completion workspace -------------------------------------------------- */
 
 .completion-workspace {
@@ -7591,8 +7432,7 @@ body {
   filter: brightness(1.1);
 }
 .completion-workspace__no-changes,
-.completion-workspace__blocked,
-.completion-workspace__error {
+.completion-workspace__blocked {
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   padding: var(--space-2) var(--space-3);
@@ -7600,6 +7440,13 @@ body {
   font-size: 12px;
 }
 
+.completion-workspace__blocked {
+  border-color: var(--bad);
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+}
+.completion-workspace__no-changes,
+.completion-workspace__blocked,
 .completion-workspace__result {
   display: flex;
   align-items: center;
@@ -7615,12 +7462,6 @@ body {
   border-color: var(--ok);
   background: color-mix(in srgb, var(--ok) 10%, transparent);
   color: var(--ok);
-}
-
-.completion-workspace__result--failure {
-  border-color: var(--bad);
-  background: color-mix(in srgb, var(--bad) 10%, transparent);
-  color: var(--bad);
 }
 
 .completion-workspace__result--reconciling {
@@ -7640,29 +7481,6 @@ body {
   overflow-wrap: anywhere;
 }
 
-.completion-workspace__error,
-.completion-workspace__blocked {
-  border-color: var(--bad);
-  color: var(--bad);
-  background: color-mix(in srgb, var(--bad) 8%, transparent);
-}
-
-.completion-workspace__error {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.completion-workspace__error button {
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  padding: var(--space-1) var(--space-2);
-  background: transparent;
-  color: var(--bad);
-  font: 700 12px var(--bench-font-text);
-  cursor: pointer;
-}
 .completion-workspace__diff,
 .completion-workspace__publish,
 .completion-workspace__merge,
@@ -7711,7 +7529,6 @@ body {
 }
 
 .completion-workspace__repo-status,
-.completion-workspace__partial-failure,
 .completion-workspace__truncated,
 .completion-workspace__file-op,
 .completion-workspace__file-lines,
@@ -8008,13 +7825,12 @@ body {
 }
 
 /* Copy-path confirmation/error lines drop below the reveal/copy control. */
-.changes-manifest__repository-bar > .completion-workspace__notice,
-.changes-manifest__repository-bar > .completion-workspace__error {
+.changes-manifest__repository-bar > .completion-workspace__notice {
   flex-basis: 100%;
   margin: 0;
   overflow-wrap: anywhere;
 }
-
+.changes-manifest__repository-bar > .completion-workspace__notice,
 .completion-workspace__notice {
   color: var(--muted);
   font: 500 12px var(--bench-font-text);
@@ -8360,31 +8176,10 @@ body {
   font-style: normal;
 }
 
-.completion-publish-sheet__failure {
-  border-left: 2px solid var(--bad);
-  padding-left: var(--space-2);
-  color: var(--text);
-  font: 12px var(--bench-font-text);
-}
-
-.completion-publish-sheet__failure p {
-  margin: var(--space-1) 0 0;
-}
-
-.completion-publish-sheet__failure details {
-  margin-top: var(--space-2);
-}
-
 .completion-publish-sheet__status {
   border-left: 2px solid var(--ok);
   padding-left: var(--space-2);
   color: var(--text);
-  font: 12px var(--bench-font-text);
-}
-
-.completion-publish-sheet__field-error {
-  margin: calc(-1 * var(--space-1)) 0 0;
-  color: var(--bad);
   font: 12px var(--bench-font-text);
 }
 
@@ -8489,41 +8284,6 @@ body {
   margin: 0;
   color: var(--muted);
   font-size: 13px;
-}
-
-.completion-workspace__repo-outcome {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-shrink: 0;
-}
-
-.completion-workspace__repo-outcome-label {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 1.35rem;
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
-  padding: 0 var(--space-2);
-  font: 11px var(--bench-font-text);
-  white-space: nowrap;
-}
-
-.completion-workspace__repo-outcome--success .completion-workspace__repo-outcome-label {
-  border-color: var(--ok);
-  color: var(--ok);
-}
-
-.completion-workspace__repo-outcome--failure .completion-workspace__repo-outcome-label {
-  border-color: var(--bad);
-  color: var(--bad);
-}
-
-.completion-workspace__repo-outcome-detail {
-  color: var(--bad);
-  font: 11px var(--bench-font-text);
-  overflow-wrap: anywhere;
 }
 
 .completion-workspace__publish-empty {
@@ -9057,13 +8817,6 @@ body {
   gap: var(--space-4);
 }
 
-.settings-panel__error {
-  padding: var(--space-3);
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--bad) 8%, transparent);
-}
-
 .settings-panel__section {
   display: flex;
   flex-direction: column;
@@ -9311,11 +9064,6 @@ body {
   white-space: nowrap;
 }
 
-.settings-panel__root-issue {
-  color: var(--bad);
-  font: 400 0.75rem/1.3 var(--bench-font-text);
-}
-
 .settings-panel__root-count {
   flex-shrink: 0;
   color: var(--muted);
@@ -9414,15 +9162,6 @@ body {
 .settings-panel__provider-status.is-degraded {
   color: var(--bad);
   background: color-mix(in srgb, var(--bad) 12%, transparent);
-}
-
-.settings-panel__provider-cause {
-  color: var(--muted);
-  font: 400 0.8125rem/1.4 var(--bench-font-text);
-}
-
-.settings-panel__provider-remedy {
-  color: var(--muted);
 }
 
 .settings-panel__provider-version {
@@ -9851,19 +9590,6 @@ body {
   font-size: 13px;
 }
 
-.archive-mode__error {
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.archive-mode__error:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
 /* Return to the live run: the one filled signal control in the archive. */
 .archive-mode__return {
   font-family: var(--bench-font-text);
@@ -10086,21 +9812,6 @@ body {
   word-break: break-all;
 }
 
-.rewind-journey__findings {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  color: var(--bad);
-  font-size: 13px;
-}
-
-.rewind-journey__findings li {
-  overflow-wrap: anywhere;
-}
-
 .rewind-journey__confirm-summary {
   display: flex;
   flex-direction: column;
@@ -10270,33 +9981,6 @@ body {
   padding: var(--space-3) var(--space-4);
 }
 
-/* Persistent warning panel: amber edge, because a rewind can succeed while
- * leaving unsent questions or stranded runs behind. */
-.rewind-journey__warnings {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  border: 1px solid var(--attention);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
-  background: color-mix(in srgb, var(--attention) 10%, transparent);
-}
-
-.rewind-journey__warnings-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.rewind-journey__warning-item {
-  color: var(--attention);
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-
 .rewind-journey__done {
   align-self: flex-start;
   font-family: var(--bench-font-text);
@@ -10312,26 +9996,6 @@ body {
 
 .rewind-journey__done:hover {
   filter: brightness(1.1);
-}
-
-.rewind-journey__error {
-  border: 1px solid var(--bad);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.rewind-journey__error:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.rewind-journey__error-result {
-  margin: 0;
-  font-size: 13px;
-  overflow-wrap: anywhere;
 }
 
 .rewind-journey__recovery {
@@ -10521,8 +10185,43 @@ body {
   color: var(--bad);
 }
 
-.repo-instrument__error dd {
+/* Publish failure indication: the catalog title plus the link into the
+   publish modal, whose repository row owns the full card. */
+.repo-instrument__publish-attention {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--bad);
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+
+.repo-instrument__publish-attention-title {
   color: var(--bad);
+  font-weight: 600;
+}
+
+.repo-instrument__open-publish {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--accent);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.repo-instrument__open-publish:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* The row card sits below the repository's own meta row. */
+.completion-workspace__publish-repo .error-surface {
+  margin-top: var(--space-2);
 }
 
 /* ─── Launcher modal footer (shared by refactor and review-feedback launchers) ─── */
@@ -10929,50 +10628,8 @@ body {
   font: 13px var(--bench-font-text);
 }
 
-.review-feedback-workspace__error {
-  width: min(1120px, 100%);
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
 /* Recovery alert: same error surface as elsewhere, with a plain-language
    headline/message row and the two named recovery actions. */
-.review-feedback-recovery__detail {
-  margin: 0;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.review-feedback-recovery__actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.review-feedback-recovery__actions button {
-  border: 1px solid var(--hairline);
-  border-radius: var(--bench-radius-control);
-  background: var(--raised);
-  color: var(--text);
-  font-size: 12px;
-  padding: var(--space-1) var(--space-2);
-  cursor: pointer;
-}
-
-.review-feedback-recovery__actions button:hover:not(:disabled) {
-  background: var(--hover);
-}
-
-.review-feedback-recovery__actions button:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.review-feedback-recovery__actions button:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
 
 /* ─── Review-feedback safe Markdown ─── */
 
@@ -11149,8 +10806,8 @@ body {
 }
 
 .review-feedback-diff__line[data-kind='remove'] {
-  color: var(--danger, #b03a2e);
-  background: color-mix(in srgb, var(--danger, #b03a2e) 8%, transparent);
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
 }
 
 .review-feedback-diff__line[data-kind='hunk'] {
@@ -11952,19 +11609,6 @@ body {
 
 /* ─── Recovery workspace ─── */
 
-.recovery-attention {
-  border: 1px solid var(--accent);
-  border-radius: var(--bench-radius-control);
-  margin-bottom: var(--space-3);
-  overflow: hidden;
-  padding: var(--space-2) var(--space-3);
-  background: color-mix(in srgb, var(--accent) 10%, var(--raised));
-}
-.recovery-attention__priority {
-  font-size: 12px;
-  color: var(--accent);
-  font-weight: 600;
-}
 .recovery-workspace {
   border: 1px solid var(--hairline);
   border-radius: var(--bench-radius-control);
@@ -12082,72 +11726,11 @@ body {
 }
 
 .recovery-workspace__item-repo,
-.recovery-workspace__item-phase {
+.recovery-workspace__item-phase,
+.recovery-workspace__item-pid {
   font-family: var(--bench-font-mono);
   font-size: 12px;
   color: var(--muted);
-}
-
-.recovery-workspace__item-facts {
-  margin: 0;
-  display: flex;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
-
-.recovery-workspace__item-fact {
-  display: flex;
-  gap: var(--space-1);
-  font-size: 12px;
-}
-
-.recovery-workspace__item-fact dt {
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.recovery-workspace__item-fact dd {
-  margin: 0;
-  font-family: var(--bench-font-mono);
-  color: var(--text);
-}
-
-.recovery-workspace__item-actions {
-  display: flex;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.recovery-workspace__action {
-  font-family: var(--bench-font-text);
-  font-weight: 700;
-  font-size: 12px;
-  border-radius: var(--bench-radius-control);
-  padding: var(--space-1) var(--space-3);
-  cursor: pointer;
-  border: 1px solid var(--hairline);
-  background: transparent;
-  color: var(--text);
-}
-
-.recovery-workspace__action[data-selected='true'] {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--content);
-}
-
-.recovery-workspace__action--kill {
-  border-color: var(--bad);
-  color: var(--bad);
-}
-
-.recovery-workspace__action--kill[data-selected='true'] {
-  background: var(--bad);
-  color: var(--content);
-}
-.recovery-workspace__action:disabled {
-  opacity: 0.55;
-  cursor: default;
 }
 
 .recovery-workspace__item-outcome {
@@ -12774,6 +12357,14 @@ body {
   background: var(--raised);
 }
 
+.live-preview__attention:has(.attention-detail[data-class='blocking']) {
+  border-top-color: var(--bad);
+}
+
+.attention-detail[data-class='blocking'] .attention-ask__eyebrow::before {
+  background: var(--bad);
+}
+
 .live-preview__attention .attention-detail {
   padding: var(--space-3) var(--space-4) 0;
 }
@@ -13285,15 +12876,6 @@ body {
     padding: var(--space-2) var(--space-3);
   }
 
-  .recovery-workspace__item-actions {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .recovery-workspace__action {
-    text-align: center;
-  }
-
   .current-inspection__files-columns {
     grid-template-columns: 1fr;
   }
@@ -13679,18 +13261,6 @@ body {
   color: var(--muted);
 }
 
-.config-editor__notice--error {
-  color: var(--bad);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  align-items: flex-start;
-}
-
-.config-editor__notice--error p {
-  margin: 0;
-}
-
 @media (max-width: 720px) {
   .config-editor__row {
     grid-template-columns: 1fr;
@@ -13713,4 +13283,345 @@ body {
     flex-direction: column;
     gap: var(--space-1);
   }
+}
+
+/* --- Error surface --------------------------------------------------------- */
+/* The canonical error presentation: one component, two densities (full for
+ * reading, compact for inline notices). Class drives the whole treatment at
+ * once — left rule, tint, icon, label word — so the surface never signals by
+ * color alone; the label word carries the meaning, the hue only tunes it. */
+
+.error-surface {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  border: var(--bench-hairline-width) solid var(--hairline);
+  /* Blocking is the catalog default, so the base carries its accent and the
+   * other two classes override it. */
+  border-left: 2px solid var(--bad);
+  border-radius: var(--bench-radius-card);
+  padding: var(--space-3);
+  background: color-mix(in srgb, var(--bad) 6%, var(--content));
+  font-family: var(--bench-font-text);
+}
+
+.error-surface--needs-action {
+  border-left-color: var(--attention);
+  background: color-mix(in srgb, var(--attention) 6%, var(--content));
+}
+
+.error-surface--warning {
+  border-left-color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 6%, var(--content));
+}
+
+.error-surface__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.error-surface__icon {
+  display: inline-flex;
+  color: var(--bad);
+}
+
+.error-surface--needs-action .error-surface__icon {
+  color: var(--attention);
+}
+
+.error-surface--warning .error-surface__icon {
+  color: var(--muted);
+}
+
+.error-surface__label {
+  color: var(--bad);
+  font: 600 11px var(--bench-font-text);
+  letter-spacing: 0.02em;
+}
+
+.error-surface--needs-action .error-surface__label {
+  color: var(--attention);
+}
+
+.error-surface--warning .error-surface__label {
+  color: var(--muted);
+}
+
+/* The stable catalog code rides the header's trailing edge as a quiet mono
+ * tag — support conversations can name it in both variants. */
+.error-surface__code {
+  margin-left: auto;
+  padding: 1px var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+}
+
+.error-surface__caption {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.error-surface__title {
+  margin: 0;
+  color: var(--text);
+  font: 600 13px var(--bench-font-text);
+}
+
+.error-surface__summary {
+  margin: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.error-surface__remediation {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.error-surface__remediation-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.error-surface__action {
+  border: var(--bench-hairline-width) solid transparent;
+  border-radius: var(--bench-radius-control);
+  padding: 4px var(--space-3);
+  background: var(--accent);
+  color: var(--content);
+  font: 600 11.5px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.error-surface__action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.error-surface__secondary-action {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: 4px var(--space-3);
+  background: transparent;
+  color: var(--text);
+  font: 600 11.5px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.error-surface__secondary-action:hover {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.error-surface__secondary-action:focus-visible {
+  outline: var(--focus-ring);
+}
+
+.error-surface__action:hover {
+  filter: brightness(1.1);
+}
+
+.error-surface__action:focus-visible {
+  outline: var(--focus-ring);
+}
+
+/* The explain-in-chat follow-up: the same type treatment as the primary
+ * action but ghosted — transparent ground, hairline frame, muted word — so
+ * the remediation verb stays the card's loudest affordance. */
+.error-surface__explain {
+  align-self: flex-start;
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: 4px var(--space-3);
+  background: transparent;
+  color: var(--muted);
+  font: 600 11.5px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.error-surface__explain:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.error-surface__explain:focus-visible {
+  outline: var(--focus-ring);
+}
+
+.error-surface__action-reason {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.error-surface__details,
+.error-surface__diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-top: var(--bench-hairline-width) solid color-mix(in srgb, var(--hairline) 60%, transparent);
+  padding-top: var(--space-2);
+}
+
+.error-surface__details > summary,
+.error-surface__diagnostics > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font: 600 11px var(--bench-font-text);
+  letter-spacing: 0.02em;
+}
+
+.error-surface__details > summary:focus-visible,
+.error-surface__diagnostics > summary:focus-visible {
+  outline: var(--focus-ring);
+}
+
+.error-surface__diagnostics-pre {
+  margin: 0;
+  padding: var(--space-2);
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  background: var(--raised);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  font: 11px var(--bench-font-mono);
+}
+
+.error-surface__details-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.error-surface__repos {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.error-surface__repo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.error-surface__repo-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.error-surface__repo-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.error-surface__repo-branch {
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+}
+
+.error-surface__repo-rebase-target {
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+}
+
+.error-surface__file-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.error-surface__file-list-label {
+  color: var(--muted);
+  font: 600 11px var(--bench-font-text);
+}
+
+.error-surface__file-list {
+  margin: 0;
+  padding-left: var(--space-3);
+  font: 11px var(--bench-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.error-surface__sha {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.error-surface__sha-label {
+  color: var(--muted);
+}
+
+.error-surface__sha-value {
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.error-surface__phase,
+.error-surface__command {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.error-surface__phase-name,
+.error-surface__phase-iteration,
+.error-surface__command-exit {
+  margin: 0;
+}
+
+/* Compact is the inline density: tighter rhythm for cockpit banners and
+ * launcher notices, one folded disclosure instead of two. */
+.error-surface--compact {
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+}
+
+.error-surface--compact .error-surface__title {
+  font-size: 12.5px;
+}
+
+.error-surface--compact .error-surface__summary {
+  font-size: 12px;
+}
+
+.error-surface--compact .error-surface__remediation,
+.error-surface--compact .error-surface__details,
+.error-surface--compact .error-surface__diagnostics {
+  gap: var(--space-1);
+  padding-top: var(--space-1);
+}
+
+/* The shared per-field validation message: the one error presentation that
+ * is not a card. One element, one class — small quiet text in the bad tone,
+ * tied to its input by aria-describedby rather than a live region (the host
+ * focuses the field when its message appears). */
+.field-error {
+  margin: 0;
+  color: var(--bad);
+  font-size: 12px;
 }

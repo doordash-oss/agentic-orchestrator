@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Servers-pane removal orchestration, kept main-side in full. Order of
  * operations is load-bearing:
@@ -14,7 +30,7 @@
  * store deletes by key. Nothing about the removed server (URL, token,
  * runtime dir) lands in logs beyond its kind and a key prefix.
  */
-import { SafeErrorException, safeError } from '../../shared/errors';
+import { buildCanonicalError, CanonicalErrorException } from '../../shared/errors';
 import type {
   ConnectionState,
   ServerRemoveRequest,
@@ -48,13 +64,7 @@ export async function removeKnownServer(
 ): Promise<ConnectionState> {
   const entry = deps.knownServers().known.find((item) => item.serverKey === request.serverKey);
   if (entry === undefined) {
-    throw new SafeErrorException(
-      safeError(
-        E_SERVER_UNKNOWN,
-        'The server is not in the servers list.',
-        'Refresh Settings and try again; the server may already have been removed.',
-      ),
-    );
+    throw new CanonicalErrorException(buildCanonicalError(E_SERVER_UNKNOWN));
   }
   if (entry.kind === 'remote') {
     deps.removeRemoteToken(entry.serverKey);
@@ -83,9 +93,7 @@ export function serverTokenStatus(
 ): ServerTokenStatusResult {
   const entry = deps.knownServers().known.find((item) => item.serverKey === request.serverKey);
   if (entry === undefined) {
-    throw new SafeErrorException(
-      safeError(E_SERVER_UNKNOWN, 'The server is not in the servers list.'),
-    );
+    throw new CanonicalErrorException(buildCanonicalError(E_SERVER_UNKNOWN));
   }
   if (entry.kind === 'local') {
     return { status: 'local' };

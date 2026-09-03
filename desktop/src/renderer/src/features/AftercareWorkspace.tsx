@@ -1,9 +1,27 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import type {
+  CanonicalError,
   CompletionPreflightResult,
   FeatureSnapshot,
   RelationshipChildView,
   RunDetailView,
 } from '../../../shared/ipc';
+import { ErrorSurface } from '../components/ErrorSurface';
 import { formatDuration } from './featureView';
 import { AftercareShipped } from './AftercareShipped';
 import { AftercareSymbol } from './AftercareSymbol';
@@ -31,12 +49,9 @@ export interface AftercareWorkspaceProps {
   onOpenPullRequest(url: string): void;
 }
 
-interface AftercareActionError {
+export interface AftercareActionError {
   action: string;
-  error: {
-    code: string;
-    message: string;
-  };
+  error: CanonicalError;
 }
 
 export function AftercareWorkspace({
@@ -68,12 +83,11 @@ export function AftercareWorkspace({
 
         <section className="aftercare-workspace__runway" aria-label="Follow-up actions">
           {actionError === null ? null : (
-            <div role="alert" className="create-form__error aftercare-workspace__action-error">
-              <span className="create-form__error-code">{actionError.error.code}</span>
-              <p className="create-form__error-message">
-                {aftercareActionErrorMessage(actionError)}
-              </p>
-            </div>
+            <ErrorSurface
+              error={actionError.error}
+              variant="compact"
+              caption={`${actionError.action} was rejected`}
+            />
           )}
           {actions.length === 0 ? (
             <p className="aftercare-workspace__empty">No action is needed right now.</p>
@@ -144,13 +158,6 @@ export function AftercareWorkspace({
       </div>
     </section>
   );
-}
-
-function aftercareActionErrorMessage(actionError: AftercareActionError): string {
-  if (actionError.error.code === 'rebase_already_up_to_date') {
-    return `Already up to date: ${actionError.error.message}`;
-  }
-  return `${actionError.action} was rejected — ${actionError.error.message}`;
 }
 
 /**

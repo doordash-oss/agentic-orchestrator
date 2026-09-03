@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { useCallback, useMemo } from 'react';
 import type { CompletionPreflightResult } from '../../../../shared/ipc';
 import {
@@ -7,6 +23,13 @@ import {
   type CompletionAction,
 } from './completionShared';
 import { UNMERGED_CHANGES } from './pendingDelivery';
+
+/**
+ * The rebase handoff rides as the failure card's remediation hint: a conflict
+ * or behind-base merge is resolved by a rebase pass, not by retrying in place.
+ */
+const REBASE_HANDOFF_HINT =
+  "A conflict or behind-base outcome can be resolved with a rebase pass. Use Start rebase pass in the feature's aftercare workspace, then return here to retry the merge.";
 
 export interface MergeModalProps {
   featureId: string;
@@ -127,13 +150,7 @@ export function MergeModalBody({
           No local repositories to merge. All touched repositories are publishable.
         </div>
       )}
-      <ResultBox result={mergeAction.result} />
-      {mergeAction.result !== null && !mergeAction.result.ok && !mergeAction.reconciling ? (
-        <p className="completion-workspace__merge-handoff-hint">
-          A conflict or behind-base outcome can be resolved with a rebase pass. Use Start rebase
-          pass in the feature's aftercare workspace, then return here to retry the merge.
-        </p>
-      ) : null}
+      <ResultBox result={mergeAction.result} remediationHint={REBASE_HANDOFF_HINT} />
     </div>
   );
 }

@@ -1,5 +1,22 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { useCallback, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import type { AttentionItem, VerificationGateAction } from '../../../shared/ipc';
+import type { AttentionItem, CanonicalError, VerificationGateAction } from '../../../shared/ipc';
+import { ErrorSurface } from '../components/ErrorSurface';
 import { useModalDismiss } from '../components/useModalDismiss';
 import type { AttentionDrafts } from './AttentionInbox';
 import {
@@ -113,7 +130,7 @@ export function NeedUserInputModal({
 }: NeedUserInputModalProps): React.ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<CanonicalError | null>(null);
   const detailKey = `gate:${item.id}`;
   const draft = useMemo(
     () =>
@@ -188,7 +205,7 @@ export function NeedUserInputModal({
       });
       await onResolved();
     } catch (cause) {
-      setError(parseIpcError(cause).message);
+      setError(parseIpcError(cause));
     } finally {
       setSubmitting(false);
     }
@@ -288,11 +305,7 @@ export function NeedUserInputModal({
               Answer every question before resuming.
             </p>
           ) : null}
-          {error === null ? null : (
-            <p role="alert" className="form-field__error">
-              {error}
-            </p>
-          )}
+          {error === null ? null : <ErrorSurface error={error} variant="compact" />}
         </div>
 
         <footer className="sheet__footer">

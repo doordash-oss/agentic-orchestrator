@@ -1,10 +1,26 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * Bounded creation-file selection, repository indexing, and path resolution.
  * Renderer input is always rechecked against fresh repository discovery.
  */
 import { lstat, opendir, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { SafeErrorException, safeError } from '../shared/errors';
+import { buildCanonicalError, CanonicalErrorException } from '../shared/errors';
 import {
   AbsolutePathSchema,
   CREATION_ATTACHMENT_LIMIT,
@@ -104,20 +120,20 @@ export class CreationFilesService {
     for (const ref of refs) {
       const root = repositories.get(ref.repoKey);
       if (root === undefined || path.isAbsolute(ref.path) || ref.path.includes('\0')) {
-        throw invalidRepositoryFile('A selected repository file is no longer eligible.');
+        throw repositoryFileError('E_REPOSITORY_FILE_INELIGIBLE');
       }
       const rootReal = await realpath(root);
       const candidate = path.resolve(rootReal, ref.path);
       if (!isWithinRoot(rootReal, candidate)) {
-        throw invalidRepositoryFile('A selected repository file escaped its repository.');
+        throw repositoryFileError('E_REPOSITORY_FILE_ESCAPED');
       }
       const candidateReal = await realpath(candidate);
       if (!isWithinRoot(rootReal, candidateReal)) {
-        throw invalidRepositoryFile('A selected repository file resolved outside its repository.');
+        throw repositoryFileError('E_REPOSITORY_FILE_OUTSIDE');
       }
       const info = await lstat(candidate);
       if (!info.isFile() || info.isSymbolicLink()) {
-        throw invalidRepositoryFile('A selected repository file is not a regular file.');
+        throw repositoryFileError('E_REPOSITORY_FILE_NOT_REGULAR');
       }
       resolved.push(candidateReal);
     }
@@ -125,8 +141,14 @@ export class CreationFilesService {
   }
 }
 
-function invalidRepositoryFile(message: string): SafeErrorException {
-  return new SafeErrorException(safeError('E_INVALID_REPOSITORY_FILE', message));
+function repositoryFileError(
+  code:
+    | 'E_REPOSITORY_FILE_INELIGIBLE'
+    | 'E_REPOSITORY_FILE_ESCAPED'
+    | 'E_REPOSITORY_FILE_OUTSIDE'
+    | 'E_REPOSITORY_FILE_NOT_REGULAR',
+): CanonicalErrorException {
+  return new CanonicalErrorException(buildCanonicalError(code));
 }
 
 function isWithinRoot(root: string, candidate: string): boolean {

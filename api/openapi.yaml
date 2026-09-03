@@ -838,10 +838,23 @@ paths:
     post:
       operationId: startChatPrompt
       summary: Start a chat prompt session.
+      description: >-
+        Sends one user turn to the singleton AMA chat session, starting the
+        session when none is live. An optional `context` reference points at
+        the durable home of an error the question is about; the server
+        resolves it into a hidden context bundle the provider sees but the
+        transcript never echoes. Failure machine codes: 400
+        `chat_context_invalid` (malformed reference) and 404
+        `chat_context_not_found` (referenced error no longer present); both
+        are rejected before any chat turn is sent.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatStartRequest"
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
@@ -1177,26 +1190,7 @@ components:
       in: path
       required: true
       schema:
-        type: string
-        enum:
-          - setup
-          - start
-          - resume
-          - pause-stop
-          - restart
-          - publish
-          - merge
-          - rewind
-          - retry
-          - rebase
-          - need-user-input
-          - need-user-input-draft
-          - mark-done
-          - cleanup
-          - delete
-          - refactor
-          - review-feedback
-          - discard
+        $ref: "#/components/schemas/FeatureAction"
     FeatureSubaction:
       name: subaction
       in: path
@@ -1565,19 +1559,150 @@ components:
           type: string
         error:
           $ref: "#/components/schemas/Error"
+    FeatureAction:
+      type: string
+      description: Feature lifecycle action identifier.
+      enum:
+        - setup
+        - start
+        - resume
+        - pause-stop
+        - restart
+        - publish
+        - merge
+        - rewind
+        - retry
+        - rebase
+        - need-user-input
+        - need-user-input-draft
+        - mark-done
+        - cleanup
+        - delete
+        - refactor
+        - review-feedback
+        - discard
     Error:
       type: object
-      required: [code, message, status]
+      description: Canonical catalog-rendered error.
+      required: [code, class, title, summary]
       properties:
         code:
           type: string
-        message:
+          description: Stable snake_case catalog code.
+        class:
           type: string
-        status:
+          description: Severity treatment class.
+          enum: [blocking, needs_action, warning]
+        title:
+          type: string
+          description: Catalog-authored title; never empty.
+        summary:
+          type: string
+          description: Catalog-authored summary, with request-scoped facts interpolated as human text; never empty.
+        remediation:
+          x-go-type-skip-optional-pointer: false
+          $ref: "#/components/schemas/ErrorRemediation"
+        context:
+          x-go-type-skip-optional-pointer: false
+          $ref: "#/components/schemas/ErrorContext"
+        diagnostics:
+          type: string
+          description: Raw detail text, deepest disclosure only.
+    ErrorRemediation:
+      type: object
+      description: Catalog-authored next step for an error code.
+      properties:
+        hint:
+          type: string
+        actions:
+          type: array
+          description: Referenced feature actions the user can run next.
+          items:
+            $ref: "#/components/schemas/FeatureAction"
+    ErrorContext:
+      type: object
+      description: Typed context blocks the error code declared.
+      properties:
+        repositories:
+          type: array
+          items:
+            $ref: "#/components/schemas/ErrorRepositoryContext"
+        phase:
+          x-go-type-skip-optional-pointer: false
+          $ref: "#/components/schemas/ErrorPhaseContext"
+        command:
+          x-go-type-skip-optional-pointer: false
+          $ref: "#/components/schemas/ErrorCommandContext"
+        setup_task:
+          x-go-type-skip-optional-pointer: false
+          $ref: "#/components/schemas/ErrorSetupTaskContext"
+    ErrorSetupTaskContext:
+      type: object
+      description: Setup task that owns a setup failure.
+      required: [key, kind, label]
+      properties:
+        key:
+          type: string
+        kind:
+          type: string
+        label:
+          type: string
+    ErrorRepositoryContext:
+      type: object
+      description: Repository a code references.
+      required: [name]
+      properties:
+        name:
+          type: string
+        branch:
+          type: string
+        rebase_target:
+          type: string
+          description: Rebase target branch of a conflicted publish pull-rebase, when known.
+        remote_only_commits:
           type: integer
-        target:
-          type: object
-          additionalProperties: true
+          minimum: 0
+          description: Commits on the remote pull-request branch that are not in this workspace, when known.
+        conflict_files:
+          type: array
+          items:
+            type: string
+        dirty_files:
+          type: array
+          items:
+            type: string
+        parent_anchor_sha:
+          type: string
+        expected_ref_sha:
+          type: string
+        child_head_sha:
+          type: string
+        candidate_sha:
+          type: string
+        merge_head:
+          type: string
+        observed_sha:
+          type: string
+    ErrorPhaseContext:
+      type: object
+      description: Phase a code references.
+      required: [name]
+      properties:
+        name:
+          type: string
+        iteration:
+          type: integer
+          minimum: 0
+    ErrorCommandContext:
+      type: object
+      description: Failed command a code references.
+      properties:
+        exit_code:
+          type: integer
+        log_paths:
+          type: array
+          items:
+            type: string
     PermissionAnswerRequest:
       x-go-name: PermissionAnswerSchema
       type: object
@@ -1592,6 +1717,12 @@ components:
           enum: [allow_once, allow_remember, deny]
         remember_pattern:
           type: string
+        auto_approve_scope:
+          type: string
+          enum: [feature, workspace]
+          description: >-
+            Turn automatic Bash review on for the request's feature or for the
+            whole workspace before answering. Not allowed with deny.
         remember_scope:
           type: string
           description: Existing permission cache scope. Empty string means global.
@@ -1661,6 +1792,9 @@ components:
             Session's current transcript record count at emission time — the
             same index space /transcript and /output/stream use. Only set on
             session.output.activity events.
+        error:
+          $ref: "#/components/schemas/SSEEventError"
+          x-go-type-skip-optional-pointer: false
     SessionOutputChunk:
       type: object
       required: [api_version, index]
@@ -1679,6 +1813,20 @@ components:
           description: A TranscriptMessageDTO row (see the /transcript response).
         done:
           type: boolean
+    SSEEventError:
+      type: object
+      description: >-
+        Canonical failure identity for failure-carrying lifecycle events
+        (feature lifecycle failed). Absent on every other event kind.
+      required: [code, class]
+      properties:
+        code:
+          type: string
+          description: Stable snake_case catalog code.
+        class:
+          type: string
+          description: Severity treatment class.
+          enum: [blocking, needs_action, warning]
     JSONResponse:
       type: object
       required: [api_version]
@@ -1775,40 +1923,6 @@ components:
             token auth and single-owner discovery).
         server_build:
           $ref: "#/components/schemas/BuildIdentity"
-    ReadinessIssueCode:
-      type: string
-      description: >-
-        Readiness problem taxonomy. missing_executable — a provider CLI binary
-        is not installed; unsupported_version — an installed provider CLI is
-        below the enforced minimum version; unauthenticated — a provider CLI
-        is installed but its authentication flow has not been completed;
-        models_unavailable — no usable provider exposes any model;
-        invalid_configuration — the runtime configuration is unusable;
-        invalid_workspace_root — a configured workspace root does not resolve
-        to a directory; invalid_repository — a configured repository path is
-        not a git repository.
-      enum:
-        - missing_executable
-        - unsupported_version
-        - unauthenticated
-        - models_unavailable
-        - invalid_configuration
-        - invalid_workspace_root
-        - invalid_repository
-    ReadinessIssue:
-      type: object
-      required: [code, message]
-      properties:
-        code:
-          $ref: "#/components/schemas/ReadinessIssueCode"
-        message:
-          type: string
-          description: Human-readable problem summary. Never contains credentials.
-        remedy:
-          type: string
-          description: >-
-            Safe remediation metadata, such as the CLI command to run. Never
-            contains credentials or non-configured filesystem paths.
     ProviderReadiness:
       type: object
       required: [name, installed, ready]
@@ -1822,7 +1936,7 @@ components:
         ready:
           type: boolean
         issue:
-          $ref: "#/components/schemas/ReadinessIssue"
+          $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
     ModelReadiness:
       type: object
@@ -1835,7 +1949,7 @@ components:
           items:
             type: string
         issue:
-          $ref: "#/components/schemas/ReadinessIssue"
+          $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
     ConfigurationReadiness:
       type: object
@@ -1844,7 +1958,7 @@ components:
         valid:
           type: boolean
         issue:
-          $ref: "#/components/schemas/ReadinessIssue"
+          $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
     WorkspaceRootReadiness:
       type: object
@@ -1855,7 +1969,7 @@ components:
         valid:
           type: boolean
         issue:
-          $ref: "#/components/schemas/ReadinessIssue"
+          $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
     RepositoryReadiness:
       type: object
@@ -1868,7 +1982,7 @@ components:
         valid:
           type: boolean
         issue:
-          $ref: "#/components/schemas/ReadinessIssue"
+          $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
     RepositoryInitRequest:
       x-go-name: RepositoryInitSchema
@@ -1949,9 +2063,11 @@ components:
               $ref: "#/components/schemas/WorkspaceReadiness"
             issues:
               type: array
-              description: Flattened outstanding issues across all sections.
+              description: >-
+                Flattened outstanding issues across all sections, each the
+                canonical catalog-rendered error for its readiness code.
               items:
-                $ref: "#/components/schemas/ReadinessIssue"
+                $ref: "#/components/schemas/Error"
     FeatureListResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -1964,8 +2080,11 @@ components:
                 $ref: "#/components/schemas/FeatureSummary"
             warnings:
               type: array
+              description: >-
+                Canonical warning errors for feature files that could not be
+                loaded at list level; absent when every feature loaded.
               items:
-                $ref: "#/components/schemas/Warning"
+                $ref: "#/components/schemas/Error"
     FeatureDetailResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -2548,6 +2667,66 @@ components:
               type: string
             result:
               type: string
+    ErrorScope:
+      type: string
+      enum: [run, transaction, repository, setup, recovery]
+    ErrorReference:
+      # Points at the durable home of an error. `scope` picks the home; the
+      # keys each scope requires are validated server-side: run needs
+      # feature_id; transaction needs feature_id (the child) and optionally
+      # repository to address a journal entry's warning instead of the
+      # attention record; repository needs feature_id and repository; setup
+      # needs feature_id and task_key; recovery needs snapshot_id and key.
+      # Shared by chat start's `context` (explain-in-chat questions) and the
+      # feature summary's owned-error entries (presence surfaces).
+      type: object
+      additionalProperties: false
+      required: [scope, code]
+      properties:
+        scope:
+          $ref: "#/components/schemas/ErrorScope"
+        code:
+          type: string
+          minLength: 1
+          maxLength: 128
+        feature_id: { type: string, minLength: 1, maxLength: 200 }
+        repository: { type: string, minLength: 1, maxLength: 200 }
+        task_key: { type: string, minLength: 1, maxLength: 200 }
+        snapshot_id: { type: string, minLength: 1, maxLength: 128 }
+        key: { type: string, minLength: 1, maxLength: 500 }
+    OwnedError:
+      # One current non-warning error a feature (or its active child) owns,
+      # projected on the feature summary so every presence surface can
+      # indicate it and link to its owning card. The error is the
+      # catalog-rendered canonical object without diagnostics; `ref` is the
+      # owner reference resolving back to the durable home.
+      type: object
+      additionalProperties: false
+      required: [ref, error]
+      properties:
+        ref:
+          $ref: "#/components/schemas/ErrorReference"
+        error:
+          $ref: "#/components/schemas/Error"
+    ChatStartRequest:
+      # Bound by the startChatPrompt operation at
+      # /api/v1/prompts/chat/start; oapi-codegen emits the Go binding
+      # (internal/server/serverapi.gen.go).
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties:
+        message: { type: string, minLength: 1 }
+        images:
+          type: array
+          maxItems: 12
+          items: { type: string }
+        image_uploads:
+          type: array
+          maxItems: 12
+          items: { type: string }
+        context:
+          $ref: "#/components/schemas/ErrorReference"
     ChatStartResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -2603,8 +2782,6 @@ components:
               type: string
             roadmap_phase:
               type: integer
-            warning_count:
-              type: integer
             upgrade_pipeline:
               type: string
             source_run_number:
@@ -2616,8 +2793,10 @@ components:
             warnings:
               type: array
               items:
-                type: string
-              description: Redacted non-fatal warning details (PR close, backup branch, worktree reset failures).
+                $ref: "#/components/schemas/Error"
+              description: >-
+                Canonical warning-class errors for non-fatal rewind failures
+                (pull-request close, backup branch, worktree reset).
     RewindPreviewResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -3040,9 +3219,10 @@ components:
         freshness:
           type: string
           description: Server-authored freshness state.
-        last_error:
-          type: string
-          description: Safe, bounded last error text.
+        error:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: Canonical catalog-rendered publish failure record this repository owns, when any.
         base_branch:
           type: string
           maxLength: 128
@@ -3101,9 +3281,13 @@ components:
             file_unavailable:
               type: boolean
               description: Whether the single-file diff content is unavailable.
-            partial_failure:
-              type: string
-              description: Safe, server-authored reason one repository could not be fully inspected, when non-empty.
+            error:
+              $ref: "#/components/schemas/Error"
+              x-go-type-skip-optional-pointer: false
+              description: >-
+                Canonical warning-class error rendering the typed partial
+                failure of this repository's inspection; absent when the
+                repository was fully inspected.
     RepositoryPathDTO:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -3451,7 +3635,7 @@ components:
     RecoveryItem:
       type: object
       required:
-        [key, feature_id, process_alive, default_action, allowed_actions]
+        [key, feature_id, process_alive, default_action, allowed_actions, error]
       properties:
         key:
           type: string
@@ -3470,6 +3654,12 @@ components:
           x-go-name: PID
         process_alive:
           type: boolean
+        error:
+          $ref: "#/components/schemas/Error"
+          description: >-
+            Canonical needs_action error classifying this orphan session by
+            liveness, with the phase and repositories context blocks; carries
+            no diagnostics and no filesystem paths.
         log_available:
           type: boolean
           description: Whether a bounded log read is available for this item.
@@ -3505,8 +3695,6 @@ components:
           type: array
           items:
             type: string
-        last_error:
-          type: string
     SetupTask:
       type: object
       required: [key, kind, status]
@@ -3541,8 +3729,12 @@ components:
           type: string
           format: date-time
           x-go-type-skip-optional-pointer: false
-        last_error:
-          type: string
+        error:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            Canonical error rendering the task's stored failure record;
+            absent when the task has not failed.
     ToolCall:
       type: object
       properties:
@@ -3632,16 +3824,6 @@ components:
     # --- Feature/session payload types backing FeatureListResponse,
     # FeatureDetailResponse, SessionListResponse, SessionDetailResponse.
     # Mirror internal/server/types.go field-for-field.
-    Warning:
-      type: object
-      required: [code, message]
-      properties:
-        code:
-          type: string
-        feature_id:
-          type: string
-        message:
-          type: string
     Checkpoints:
       type: object
       required:
@@ -3688,24 +3870,6 @@ components:
           type: string
         parent_branch:
           type: string
-    RelationshipAttention:
-      type: object
-      required: [code, message]
-      properties:
-        code:
-          type: string
-        message:
-          type: string
-        repo:
-          type: string
-    RelationshipCleanupWarning:
-      type: object
-      required: [message]
-      properties:
-        message:
-          type: string
-        repo:
-          type: string
     RelationshipChildOutcome:
       type: string
       description: Recorded relationship close outcome; absent while the child is open.
@@ -3728,8 +3892,7 @@ components:
         - started_at
         - cost
         - integration_state
-        - attention
-        - cleanup_warnings
+        - warnings
       properties:
         id:
           type: string
@@ -3771,16 +3934,19 @@ components:
         integration_state:
           type: string
         attention:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            Canonical error rendering the child's stored integration
+            attention record; absent when integration is not parked.
+        warnings:
           type: array
           items:
-            $ref: "#/components/schemas/RelationshipAttention"
-        cleanup_warnings:
-          type: array
-          items:
-            $ref: "#/components/schemas/RelationshipCleanupWarning"
-        last_error:
-          type: string
-          description: Setup failure message when the child's setup failed.
+            $ref: "#/components/schemas/Error"
+          description: >-
+            Canonical warning-class errors for this child's stored cleanup
+            and review-feedback tail records; absent when both settled
+            cleanly.
         has_diff_summary:
           type: boolean
           description: >-
@@ -3851,7 +4017,21 @@ components:
         warnings:
           type: array
           items:
-            $ref: "#/components/schemas/Warning"
+            $ref: "#/components/schemas/Error"
+          description: >-
+            Canonical warning-class errors for this feature, such as
+            effort-capability drift; absent when there is nothing to warn
+            about.
+        errors:
+          type: array
+          description: >-
+            Current non-warning errors this feature or its active child owns,
+            each pairing the catalog-rendered error (without diagnostics) with
+            the reference to its durable home. Entries are ordered blocking
+            first, then needs_action, stable by scope and key; absent when
+            there are none. Warning-class records never appear here.
+          items:
+            $ref: "#/components/schemas/OwnedError"
         active_child:
           $ref: "#/components/schemas/RelationshipChildSummary"
           x-go-type-skip-optional-pointer: false
@@ -3940,13 +4120,6 @@ components:
           type: object
           additionalProperties:
             type: string
-    Failure:
-      type: object
-      properties:
-        type:
-          type: string
-        message:
-          type: string
     NeedUserInputGate:
       type: object
       required: [open, waiting_since]
@@ -4056,8 +4229,10 @@ components:
         pr_url:
           type: string
           x-go-name: PRURL
-        last_error:
-          type: string
+        error:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: Canonical catalog-rendered publish failure record this repository owns, when any.
         publishable:
           type: boolean
     RunSummary:
@@ -4358,7 +4533,7 @@ components:
               items:
                 $ref: "#/components/schemas/VerificationItem"
             failure:
-              $ref: "#/components/schemas/Failure"
+              $ref: "#/components/schemas/Error"
               x-go-type-skip-optional-pointer: false
             need_user_input:
               $ref: "#/components/schemas/NeedUserInputGate"
@@ -4415,31 +4590,6 @@ components:
                 parents.
               items:
                 $ref: "#/components/schemas/ReviewFeedbackComment"
-    ChildDirtyDiagnostics:
-      type: object
-      properties:
-        repo:
-          type: string
-        path:
-          type: string
-        staged:
-          type: array
-          items:
-            type: string
-        unstaged:
-          type: array
-          items:
-            type: string
-        untracked:
-          type: array
-          items:
-            type: string
-        staged_total:
-          type: integer
-        unstaged_total:
-          type: integer
-        untracked_total:
-          type: integer
     TransactionJournal:
       type: object
       description: >-
@@ -4452,7 +4602,11 @@ components:
             Aggregate transaction phase: preparing, prepared, applying,
             applied, rolling_back, rolled_back, attention, or merged.
         attention:
-          type: string
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            Canonical error rendering the journal's single stored
+            attention record; absent when integration is not parked.
         entries:
           type: array
           items:
@@ -4480,21 +4634,11 @@ components:
           type: string
         observed_sha:
           type: string
-        conflict_files:
-          type: array
-          items:
-            type: string
-        dirty:
-          type: array
+        pending_sync:
+          type: boolean
           description: >-
-            Categorized parent-worktree diagnostics recorded when a dirty
-            preflight blocked preparation for this repository.
-          items:
-            $ref: "#/components/schemas/ChildDirtyDiagnostics"
-        cleanup_warning:
-          type: string
-        diagnostics:
-          type: string
+            True when this applied entry's parent worktree sync failed after
+            the ref update; closure retries the sync automatically.
     Usage:
       type: object
       properties:
@@ -4694,6 +4838,19 @@ components:
         remember:
           $ref: "#/components/schemas/PermissionRememberPreview"
           x-go-type-skip-optional-pointer: false
+        auto_approve:
+          $ref: "#/components/schemas/PermissionAutoApproveOffer"
+          x-go-type-skip-optional-pointer: false
+    PermissionAutoApproveOffer:
+      type: object
+      description: >-
+        Present when automatic Bash review is off for the session but would
+        have handled this request had it been on.
+      required: [would_fast_path]
+      properties:
+        would_fast_path:
+          type: boolean
+          description: The deterministic guardrail alone would have approved the command.
     SessionDetail:
       allOf:
         - $ref: "#/components/schemas/SessionSummary"
@@ -4716,5 +4873,3 @@ components:
               type: boolean
             log_available:
               type: boolean
-            safe_error:
-              type: string

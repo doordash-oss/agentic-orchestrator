@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -7,7 +23,12 @@ import type {
   ProviderModelRefreshResult,
   WorkspaceDefaults,
 } from '../../../shared/ipc';
-import { defaultUpdateState, installAgenticoMock, readySnapshot } from '../test/agenticoMock';
+import {
+  defaultUpdateState,
+  installAgenticoMock,
+  ipcError,
+  readySnapshot,
+} from '../test/agenticoMock';
 import { SettingsPanel } from './SettingsPanel';
 
 afterEach(cleanup);
@@ -111,16 +132,51 @@ describe('SettingsPanel provider refresh', () => {
     mock.api.getWorkspaceDefaults.mockResolvedValue(WORKSPACE_DEFAULTS);
     mock.api.getModelCatalogue.mockResolvedValue(OLD_CATALOGUE);
     mock.api.refreshProviderModels.mockRejectedValue(
-      new Error('E_PROVIDER_MODEL_REFRESH: Model refresh failed. Retry the provider.'),
+      ipcError('E_INTERNAL', 'Model refresh failed. Retry the provider.'),
     );
 
     render(<SettingsPanel pane="providers" />);
     const recheck = await screen.findByRole('button', { name: 'Recheck' });
     await userEvent.click(recheck);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Model refresh failed');
+    // The failure lands on the panel-level compact ErrorSurface.
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveClass('error-surface', 'error-surface--compact');
+    expect(screen.getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+    expect(alert).toHaveTextContent('Model refresh failed');
     expect(screen.getByRole('button', { name: 'Recheck' })).toBeEnabled();
     expect(screen.getByText('claude')).toBeVisible();
+  });
+
+  it('renders a degraded provider as a compact ErrorSurface whose Recheck posts the readiness refresh', async () => {
+    const degraded = readySnapshot({
+      providers: [
+        {
+          name: 'claude',
+          installed: true,
+          version: '2.1.0',
+          ready: false,
+          issue: {
+            code: 'unauthenticated',
+            class: 'blocking',
+            title: 'Unauthenticated',
+            summary:
+              'A provider CLI is installed but its authentication flow has not been completed.',
+            remediation: { hint: 'claude login' },
+          },
+        },
+      ],
+    });
+    const mock = installAgenticoMock({ readiness: degraded });
+    render(<SettingsPanel pane="providers" />);
+
+    const row = (await screen.findByText('claude')).closest('li')!;
+    const surface = within(row).getByText('unauthenticated').closest('.error-surface');
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveClass('error-surface--compact');
+    // A degraded row carries Recheck on the surface itself.
+    await userEvent.click(within(surface as HTMLElement).getByRole('button', { name: 'Recheck' }));
+    expect(mock.api.refreshProviderModels).toHaveBeenCalledWith('claude');
   });
 });
 
@@ -190,6 +246,40 @@ describe('SettingsPanel updates pane', () => {
     expect(await within(updates).findByRole('button', { name: 'Restart to Update' })).toBeVisible();
     expect(within(updates).queryByRole('button', { name: 'Install When Idle' })).toBeNull();
     expect(within(updates).queryByRole('button', { name: 'Stop Work and Install Now' })).toBeNull();
+    // A non-failed update state never renders an error surface.
+    expect(within(updates).queryByRole('alert')).toBeNull();
+  });
+
+  it('renders a failed update state as one compact ErrorSurface whose action checks for updates', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      readiness: readySnapshot(),
+      updates: defaultUpdateState({
+        status: 'failed',
+        message: 'GitHub Releases returned HTTP 503.',
+        error: {
+          code: 'E_UPDATE_CHECK_FAILED',
+          class: 'blocking',
+          title: 'Update check failed',
+          summary: 'GitHub Releases returned HTTP 503.',
+          remediation: { hint: 'Open the release notes to choose a signed artifact manually.' },
+        },
+      }),
+    });
+    render(<SettingsPanel pane="updates" />);
+
+    const updates = await screen.findByRole('region', { name: 'Updates' });
+    const surface = await within(updates).findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(within(surface).getByText('E_UPDATE_CHECK_FAILED')).toHaveClass('error-surface__code');
+    expect(within(surface).getByText('Update check failed')).toBeVisible();
+    // The failed status replaces the message and guidance markup with the
+    // canonical surface.
+    expect(within(updates).queryByText('Agentico is up to date.')).toBeNull();
+    expect(updates.querySelector('.settings-panel__guidance')).toBeNull();
+
+    await user.click(within(surface).getByRole('button', { name: 'Check for updates' }));
+    await waitFor(() => expect(mock.api.checkForUpdates).toHaveBeenCalled());
   });
 
   it('shows non-interrupting and explicit stop-work update controls only when work is active', async () => {
@@ -315,7 +405,7 @@ describe('SettingsPanel workspace roots on a remote server', () => {
       readiness: readySnapshot(),
     });
     mock.api.addWorkspaceRoot.mockRejectedValueOnce(
-      new Error('invalid_workspace_root: /srv/work/gone does not exist on this server'),
+      ipcError('invalid_workspace_root', '/srv/work/gone does not exist on this server'),
     );
     render(<SettingsPanel pane="workspace-roots" />);
 
@@ -323,18 +413,22 @@ describe('SettingsPanel workspace roots on a remote server', () => {
     const field = await screen.findByLabelText('Folder path on the server');
     expect(screen.queryByRole('button', { name: 'Add workspace root' })).toBeNull();
 
-    // A non-absolute entry is refused before the server is ever asked.
+    // A non-absolute entry is refused before the server is ever asked; the
+    // message is a FieldError described by the input.
     await user.type(field, 'srv/work');
     await user.click(screen.getByRole('button', { name: 'Add root' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/starting with \//);
+    const localError = await screen.findByText(/starting with \//);
+    expect(localError).toHaveClass('field-error');
+    expect(field).toHaveAttribute('aria-describedby', 'settings-root-add-error');
+    expect(field).toHaveAttribute('aria-invalid', 'true');
     expect(mock.api.addWorkspaceRoot).not.toHaveBeenCalled();
 
     // The server's rejection renders inline and names the bad path.
     await user.clear(field);
     await user.type(field, '/srv/work/gone');
     await user.click(screen.getByRole('button', { name: 'Add root' }));
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('/srv/work/gone does not exist on this server');
+    const serverError = await screen.findByText('/srv/work/gone does not exist on this server');
+    expect(serverError).toHaveClass('field-error');
     expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/srv/work/gone');
 
     // A valid path saves through the same PATCH-backed action and clears.
@@ -343,6 +437,52 @@ describe('SettingsPanel workspace roots on a remote server', () => {
     await user.click(screen.getByRole('button', { name: 'Add root' }));
     await waitFor(() => expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/srv/work'));
     await waitFor(() => expect(field).toHaveValue(''));
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(document.querySelector('.field-error')).toBeNull();
+    expect(field).not.toHaveAttribute('aria-invalid');
+  });
+
+  it("renders an invalid root's issue as a FieldError beside the row", async () => {
+    installAgenticoMock({
+      readiness: readySnapshot({
+        workspaceRoots: [
+          {
+            path: '/work/gone',
+            valid: false,
+            issue: {
+              code: 'invalid_workspace_root',
+              class: 'blocking',
+              title: 'Invalid workspace root',
+              summary: 'The workspace root /work/gone does not exist.',
+            },
+          },
+        ],
+      }),
+    });
+    render(<SettingsPanel pane="workspace-roots" />);
+
+    expect(await screen.findByText('The workspace root /work/gone does not exist.')).toHaveClass(
+      'field-error',
+    );
+    expect(document.querySelector('.settings-panel__root-issue')).toBeNull();
+  });
+});
+
+describe('SettingsPanel load failures', () => {
+  it('renders a rejected load as a compact ErrorSurface whose Retry re-invokes the load', async () => {
+    const mock = installAgenticoMock({ readiness: readySnapshot() });
+    mock.api.getReadiness
+      .mockRejectedValueOnce(ipcError('E_NOT_CONNECTED', 'The app is not connected.'))
+      .mockResolvedValueOnce(readySnapshot());
+    render(<SettingsPanel pane="workspace-roots" />);
+
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface', 'error-surface--compact');
+    expect(screen.getByText('E_NOT_CONNECTED')).toHaveClass('error-surface__code');
+    // The legacy global-error markup is gone.
+    expect(document.querySelector('.settings-panel__error')).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mock.api.getReadiness).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   });
 });

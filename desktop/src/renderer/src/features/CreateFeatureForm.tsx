@@ -1,3 +1,19 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * The creation sheet: a window-modal, title-bar-attached sheet carrying the
  * four-step creation contract — Repositories, Describe, Depth, Contract.
@@ -14,15 +30,19 @@ import {
   type RepositoryState,
 } from '../../../shared/ipc';
 import { ConsentDialog } from '../components/wizard/ConsentDialog';
+import { ErrorSurface } from '../components/ErrorSurface';
+import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../components/FieldError';
 import { useModalDismiss } from '../components/useModalDismiss';
-import { useConnectionState } from '../hooks';
+import { retryAction, useConnectionState, type LoadState } from '../hooks';
 import {
   isBlockingStagedItem,
   STAGED_ITEMS_BLOCK_SUBMIT,
   submittableReferences,
   type ComposerUploadItem,
 } from './stagedItems';
-import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { parseIpcError } from '../wizard/ipcError';
+import { buildCanonicalError } from '../../../shared/errors';
+import type { CanonicalError } from '../../../shared/ipc';
 import {
   GATE_FIELDS,
   ModelEffortRow,
@@ -43,10 +63,7 @@ import {
   type Pipeline,
 } from './runContract';
 
-type DefaultsState =
-  | { phase: 'loading' }
-  | { phase: 'error'; error: WizardError }
-  | { phase: 'loaded'; defaults: CreationDefaults };
+type DefaultsState = LoadState<{ phase: 'loaded'; defaults: CreationDefaults }>;
 
 const STEPS = ['Repositories', 'Describe', 'Depth', 'Contract'] as const;
 type Step = (typeof STEPS)[number];
@@ -153,7 +170,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
   const [pending, setPending] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
   const [repoError, setRepoError] = useState<string | null>(null);
-  const [formError, setFormError] = useState<WizardError | null>(null);
+  const [formError, setFormError] = useState<CanonicalError | null>(null);
   const catalogue = useModelCatalogue();
   const creationKey = useRef(crypto.randomUUID());
   const sheetRef = useRef<HTMLDivElement | null>(null);
@@ -319,7 +336,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
       // On a remote server the typed path's fate is the form's own affair:
       // the server's rejection stays next to the field, not in the sheet's
       // global alert.
-      if (remoteServer) setFolderError(parseIpcError(err).message);
+      if (remoteServer) setFolderError(parseIpcError(err).summary);
       else setFormError(parseIpcError(err));
     } finally {
       setFolderPending(false);
@@ -338,10 +355,12 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
     const parent = parentDirectory(folder);
     if (parent === null) {
       setConsentOpen(false);
-      setFormError({
-        code: 'E_INVALID_PATH',
-        message: 'Choose a folder inside another directory to initialize it as a repository.',
-      });
+      setFormError(
+        buildCanonicalError('E_INVALID_PATH', {
+          remediationHint:
+            'Choose a folder inside another directory to initialize it as a repository.',
+        }),
+      );
       return;
     }
     const parentAlreadyRoot = workspaceRoots.includes(parent);
@@ -364,7 +383,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
           : `Initialized ${initialized[0]?.name} and selected it.`,
       );
     } catch (err) {
-      if (remoteServer) setFolderError(parseIpcError(err).message);
+      if (remoteServer) setFolderError(parseIpcError(err).summary);
       else setFormError(parseIpcError(err));
       if (!parentAlreadyRoot) {
         await window.agentico
@@ -478,10 +497,10 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
         const field = fieldForCreationError(parsed);
         if (field === 'name') {
           setStepIndex(1);
-          setNameError(parsed.message);
+          setNameError(parsed.summary);
         } else if (field === 'repos') {
           setStepIndex(0);
-          setRepoError(parsed.message);
+          setRepoError(parsed.summary);
         } else setFormError(parsed);
       } finally {
         setPending(false);
@@ -588,31 +607,20 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                 Loading creation defaults from the runtime…
               </p>
             ) : state.phase === 'error' ? (
-              <div className="creation-sheet__retry">
-                <div role="alert" className="creation-sheet__alert">
-                  <b>{state.error.code}</b>
-                  <p>{state.error.message}</p>
-                </div>
-                <button
-                  type="button"
-                  className="creation-sheet__button"
-                  onClick={loadInitialDefaults}
-                >
-                  Try again
-                </button>
-              </div>
+              <ErrorSurface
+                error={state.error}
+                variant="compact"
+                localAction={retryAction(loadInitialDefaults)}
+              />
             ) : (
               <>
                 {formError !== null ? (
-                  <div
-                    ref={formErrorRef}
-                    tabIndex={-1}
-                    role="alert"
-                    className="creation-sheet__alert"
-                  >
-                    <b>{formError.code}</b>
-                    <p>{formError.message}</p>
-                  </div>
+                  <ErrorSurface
+                    error={formError}
+                    variant="compact"
+                    rootRef={formErrorRef}
+                    rootTabIndex={-1}
+                  />
                 ) : null}
 
                 {currentStep === 'Repositories' ? (
@@ -636,7 +644,11 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                       ref={repoGroupRef}
                       tabIndex={-1}
                       className="creation-sheet__group"
-                      aria-invalid={repoError !== null}
+                      aria-invalid={fieldAriaInvalid(repoError !== null)}
+                      aria-describedby={fieldAriaDescribedBy(
+                        'creation-repositories-error',
+                        repoError !== null,
+                      )}
                     >
                       <legend className="creation-sheet__group-label">
                         {repositories.length === 0
@@ -658,7 +670,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                                   <code className="creation-sheet__row-path">{repo.path}</code>
                                   {!repo.valid ? (
                                     <span className="creation-sheet__row-issue">
-                                      {repo.issue?.message ?? 'Unavailable'}
+                                      {repo.issue?.summary ?? 'Unavailable'}
                                     </span>
                                   ) : null}
                                 </span>
@@ -688,9 +700,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                           ) : null}
                         </ul>
                       )}
-                      {repoError ? (
-                        <p className="creation-sheet__field-error">{repoError}</p>
-                      ) : null}
+                      <FieldError id="creation-repositories-error" message={repoError} />
                     </fieldset>
                     <section
                       className="creation-sheet__browser"
@@ -728,7 +738,11 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                               spellCheck={false}
                               autoComplete="off"
                               disabled={folderPending}
-                              aria-invalid={folderError !== null}
+                              aria-invalid={fieldAriaInvalid(folderError !== null)}
+                              aria-describedby={fieldAriaDescribedBy(
+                                'creation-folder-path-error',
+                                folderError !== null,
+                              )}
                               onChange={(event) => {
                                 setFolderDraft(event.target.value);
                                 setFolderError(null);
@@ -751,11 +765,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                               Use this path
                             </button>
                           </div>
-                          {folderError !== null ? (
-                            <p className="creation-sheet__field-error" role="alert">
-                              {folderError}
-                            </p>
-                          ) : null}
+                          <FieldError id="creation-folder-path-error" message={folderError} />
                         </div>
                       ) : null}
                       <p
@@ -856,18 +866,17 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                         className="creation-sheet__input"
                         value={name}
                         maxLength={200}
-                        aria-invalid={nameError !== null}
-                        aria-describedby={nameError ? 'feature-name-error' : undefined}
+                        aria-invalid={fieldAriaInvalid(nameError !== null)}
+                        aria-describedby={fieldAriaDescribedBy(
+                          'feature-name-error',
+                          nameError !== null,
+                        )}
                         onChange={(event) => {
                           setName(event.target.value);
                           setNameError(null);
                         }}
                       />
-                      {nameError ? (
-                        <span id="feature-name-error" className="creation-sheet__field-error">
-                          {nameError}
-                        </span>
-                      ) : null}
+                      <FieldError id="feature-name-error" message={nameError} />
                     </label>
                   </section>
                 ) : null}

@@ -67,7 +67,11 @@ func TestStartupCopyListsOpenCodeAsSupportedProvider(t *testing.T) {
 // filter registers Claude, Codex, and OpenCode together, before readiness
 // filtering. No config signal or auto-registration gate is required.
 func TestProviderFxModules_DefaultIncludesOpenCode(t *testing.T) {
-	if got := len(providerFxModules(nil)); got != 3 {
+	modules, err := providerFxModules(nil)
+	if err != nil {
+		t.Fatalf("providerFxModules(nil) error = %v", err)
+	}
+	if got := len(modules); got != 3 {
 		t.Fatalf("providerFxModules(nil) = %d modules, want 3 (claude+codex+opencode)", got)
 	}
 }
@@ -76,10 +80,18 @@ func TestProviderFxModules_DefaultIncludesOpenCode(t *testing.T) {
 // --providers opt-in selects exactly the named providers, including OpenCode
 // alone or alongside the others.
 func TestProviderFxModules_ExplicitProvidersFlagHonorsOpenCode(t *testing.T) {
-	if got := len(providerFxModules([]string{providerNameOpencode})); got != 1 {
+	modules, err := providerFxModules([]string{providerNameOpencode})
+	if err != nil {
+		t.Fatalf("providerFxModules([opencode]) error = %v", err)
+	}
+	if got := len(modules); got != 1 {
 		t.Fatalf("providerFxModules([opencode]) = %d modules, want 1", got)
 	}
-	if got := len(providerFxModules([]string{"claude", "codex", providerNameOpencode})); got != 3 {
+	modules, err = providerFxModules([]string{"claude", "codex", providerNameOpencode})
+	if err != nil {
+		t.Fatalf("providerFxModules([claude codex opencode]) error = %v", err)
+	}
+	if got := len(modules); got != 3 {
 		t.Fatalf("providerFxModules([claude codex opencode]) = %d modules, want 3", got)
 	}
 }
@@ -88,10 +100,18 @@ func TestProviderFxModules_ExplicitProvidersFlagHonorsOpenCode(t *testing.T) {
 // --providers list can place OpenCode in any position and tolerates surrounding
 // whitespace.
 func TestProviderFxModules_MixedListWithOpenCodeAnyPositionTrimmed(t *testing.T) {
-	if got := len(providerFxModules([]string{" opencode ", " claude "})); got != 2 {
+	modules, err := providerFxModules([]string{" opencode ", " claude "})
+	if err != nil {
+		t.Fatalf("providerFxModules([ opencode , claude ]) error = %v", err)
+	}
+	if got := len(modules); got != 2 {
 		t.Fatalf("providerFxModules([ opencode , claude ]) = %d modules, want 2 (trimmed, opencode leading)", got)
 	}
-	if got := len(providerFxModules([]string{"codex", providerNameOpencode})); got != 2 {
+	modules, err = providerFxModules([]string{"codex", providerNameOpencode})
+	if err != nil {
+		t.Fatalf("providerFxModules([codex opencode]) error = %v", err)
+	}
+	if got := len(modules); got != 2 {
 		t.Fatalf("providerFxModules([codex opencode]) = %d modules, want 2", got)
 	}
 }
@@ -118,8 +138,12 @@ func TestCheckRequiredProviders_OpenCodeUnreadyFallsBackToReadyProvider(t *testi
 	if len(detected) != 1 || detected[0].Name() != "claude" {
 		t.Fatalf("detected = %v, want only claude", providerNames(detected))
 	}
-	if len(notices) != 1 || !strings.Contains(notices[0], providerNameOpencode) || !strings.Contains(notices[0], "Starting with claude only") {
+	if len(notices) != 1 {
 		t.Fatalf("notices = %v, want an opencode startup notice", notices)
+	}
+	noticeText := warningText(notices[0])
+	if !strings.Contains(noticeText, providerNameOpencode) || !strings.Contains(noticeText, "Starting with claude only") {
+		t.Fatalf("notice = %q, want an opencode startup notice", noticeText)
 	}
 	// After filtering, an explicit opencode selection no longer resolves.
 	if _, _, err := r.ResolveModel("opencode:anthropic/claude-sonnet-4-5"); err == nil {
@@ -174,10 +198,14 @@ func TestCheckRequiredProviders_OpenCodeTooOldFallsBackToReadyProvider(t *testin
 	if len(detected) != 1 || detected[0].Name() != "claude" {
 		t.Fatalf("detected = %v, want only claude", providerNames(detected))
 	}
-	if len(notices) != 1 || !strings.Contains(notices[0], providerNameOpencode) ||
-		!strings.Contains(notices[0], "1.17.8") || !strings.Contains(notices[0], "1.17.9") ||
-		!strings.Contains(notices[0], "Starting with claude only") {
+	if len(notices) != 1 {
 		t.Fatalf("notices = %v, want a too-old opencode startup notice citing the installed and minimum versions", notices)
+	}
+	tooOldText := warningText(notices[0])
+	if !strings.Contains(tooOldText, providerNameOpencode) ||
+		!strings.Contains(tooOldText, "1.17.8") || !strings.Contains(tooOldText, "1.17.9") ||
+		!strings.Contains(tooOldText, "Starting with claude only") {
+		t.Fatalf("notice = %q, want a too-old opencode startup notice citing the installed and minimum versions", tooOldText)
 	}
 	// After filtering, an explicit opencode selection no longer resolves to a
 	// launchable provider.
@@ -258,7 +286,11 @@ func TestCheckRequiredProviders_OpenCodeMissingFallsBack(t *testing.T) {
 	if len(detected) != 1 || detected[0].Name() != "claude" {
 		t.Fatalf("detected = %v, want only claude", providerNames(detected))
 	}
-	if len(notices) != 1 || !strings.Contains(notices[0], providerNameOpencode) || !strings.Contains(notices[0], "opencode.ai/install") {
+	if len(notices) != 1 {
 		t.Fatalf("notices = %v, want a missing-opencode install notice", notices)
+	}
+	missingText := warningText(notices[0])
+	if !strings.Contains(missingText, providerNameOpencode) || !strings.Contains(missingText, "opencode.ai/install") {
+		t.Fatalf("notice = %q, want a missing-opencode install notice", missingText)
 	}
 }

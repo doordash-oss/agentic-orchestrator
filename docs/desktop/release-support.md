@@ -52,7 +52,9 @@ GoReleaser subsequently consumes the validated operator key to sign
 validated before GoReleaser can create a GitHub release. The optional
 `AGENTICO_RELEASE_NOTES_FILE` is deliberately the sole operator-controlled
 GoReleaser input: raw GoReleaser flags are not accepted, so a shell variable
-cannot bypass the release checks.
+cannot bypass the release checks. The fixed command sets a six-hour publication
+timeout because the desktop assets total hundreds of megabytes and slow
+operator uplinks routinely exceed GoReleaser's one-hour default.
 
 1. `npm ci` runs unconditionally inside the detached release worktree after
    preflight, so the captured commit's root lockfile is the

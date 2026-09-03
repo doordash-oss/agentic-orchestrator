@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -43,8 +44,10 @@ const (
 
 // autoReviewPermissionDecorator wraps the fully composed session permission
 // policy. It asks the existing handler first and returns every non-empty
-// decision or existing error unchanged. Only an empty decision for canonical
-// Bash first checks the deterministic guardrail fast path. Fast-path approvals
+// decision or existing error unchanged. The enabled setting is read live on
+// each request; while off, an empty decision for canonical Bash is annotated
+// with an AutoApproveOffer and deferred unchanged. While on, an empty decision
+// for canonical Bash first checks the deterministic guardrail fast path. Fast-path approvals
 // need no reviewer, mutex, cache, or circuit-breaker state. Every other
 // reviewable command reaches the hidden reviewer when one is available.
 // Successful model ALLOW and DEFER classifications are memoized by the
@@ -57,6 +60,7 @@ const (
 // is never decorated and cannot recurse.
 type autoReviewPermissionDecorator struct {
 	inner            ports.PermissionHandler
+	enabled          func() bool
 	reviewer         autoreview.Reviewer
 	workDir          string
 	writableRoots    []string
@@ -197,6 +201,12 @@ func (s *autoReviewSessionState) review(
 	return "", false, autoReviewBreakerUnchanged
 }
 
+// isEnabled reads the live automatic-review setting so a mid-session opt-in
+// takes effect on the next Bash request. A nil source means always on.
+func (d *autoReviewPermissionDecorator) isEnabled() bool {
+	return d.enabled == nil || d.enabled()
+}
+
 func (d *autoReviewPermissionDecorator) timeNow() time.Time {
 	if d.now != nil {
 		return d.now()
@@ -219,6 +229,14 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 		return decision, nil
 	}
 	command := permission.ExtractBashCommand(req.Input)
+	if !d.isEnabled() {
+		if permission.ReviewableBashCommand(command) {
+			decision.AutoApproveOffer = &llm.AutoApproveOffer{
+				WouldFastPath: permission.GuardrailFastPath(command, d.workDir, d.writableRoots),
+			}
+		}
+		return decision, nil
+	}
 	if permission.GuardrailFastPath(command, d.workDir, d.writableRoots) {
 		d.recordFastPathAllow(req, command)
 		return ports.PermissionDecision{Behavior: permission.DecisionAllow}, nil

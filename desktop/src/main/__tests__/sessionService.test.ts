@@ -1,6 +1,23 @@
+/*
+Copyright 2026 DoorDash, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 import { describe, expect, it, vi } from 'vitest';
 import type { SseStream } from '../gateway/events';
 import { SessionService, parseSessionOutputBlock, type ServerTransport } from '../serverClient';
+import { CanonicalErrorException } from '../../shared/errors';
 
 function stream(lines: readonly string[]): SseStream {
   return {
@@ -107,7 +124,7 @@ describe('SessionService snapshots', () => {
       const service = new SessionService(
         transport({ apiRequest: () => Promise.resolve({ status: 200, body }) }),
       );
-      await expect(service.list()).rejects.toMatchObject({ safe: expect.any(Object) });
+      await expect(service.list()).rejects.toMatchObject({ canonical: expect.any(Object) });
     }
   });
 });
@@ -158,7 +175,7 @@ describe('SessionService singleton chat mutations', () => {
     );
 
     await expect(service.startChat({ message: 'hello' })).rejects.toMatchObject({
-      safe: { code: 'E_SCHEMA_MISMATCH' },
+      canonical: { code: 'E_SCHEMA_MISMATCH' },
     });
   });
 
@@ -173,7 +190,7 @@ describe('SessionService singleton chat mutations', () => {
 
     await expect(
       service.startChat({ message: 'What is running?', images: ['/tmp/clipboard.png'] }),
-    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    ).rejects.toMatchObject({ canonical: { code: 'E_REQUIRES_LOCAL_SERVER' } });
     expect(apiRequest).not.toHaveBeenCalled();
   });
 
@@ -221,6 +238,89 @@ describe('SessionService singleton chat mutations', () => {
     expect(apiRequest).toHaveBeenCalledWith('/api/v1/prompts/chat/start', {
       method: 'POST',
       body: { message: 'no images', images: [] },
+    });
+  });
+
+  it('forwards a chat context reference as snake_case context, present fields only', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
+      }),
+    );
+    const service = new SessionService(transport({ apiRequest }));
+
+    await service.startChat({
+      message: 'Explain this error',
+      context: {
+        scope: 'transaction',
+        code: 'integration_attention',
+        featureId: 'abcd1234',
+        repository: 'main',
+      },
+    });
+    await service.startChat({
+      message: 'And this one',
+      context: { scope: 'recovery', code: 'orphan_process', snapshotId: 'snap-1', key: 'item-2' },
+    });
+    expect(apiRequest).toHaveBeenNthCalledWith(1, '/api/v1/prompts/chat/start', {
+      method: 'POST',
+      body: {
+        message: 'Explain this error',
+        images: [],
+        context: {
+          scope: 'transaction',
+          code: 'integration_attention',
+          feature_id: 'abcd1234',
+          repository: 'main',
+        },
+      },
+    });
+    expect(apiRequest).toHaveBeenNthCalledWith(2, '/api/v1/prompts/chat/start', {
+      method: 'POST',
+      body: {
+        message: 'And this one',
+        images: [],
+        context: {
+          scope: 'recovery',
+          code: 'orphan_process',
+          snapshot_id: 'snap-1',
+          key: 'item-2',
+        },
+      },
+    });
+  });
+
+  it('surfaces a chat_context_not_found rejection as the cataloged canonical error', async () => {
+    const service = new SessionService(
+      transport({
+        apiRequest: () =>
+          Promise.resolve({
+            status: 404,
+            body: {
+              api_version: 'v1',
+              error: {
+                class: 'warning',
+                code: 'chat_context_not_found',
+                title: 'Referenced error no longer present',
+                summary: 'The error referenced by this question is no longer present.',
+                remediation: { hint: 'Refresh the view to see the current errors.' },
+              },
+            },
+          }),
+      }),
+    );
+
+    await expect(
+      service.startChat({
+        message: 'Explain this error',
+        context: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+      }),
+    ).rejects.toMatchObject({
+      canonical: {
+        code: 'chat_context_not_found',
+        title: 'Referenced error no longer present',
+      },
     });
   });
 });
@@ -311,7 +411,7 @@ describe('SessionService output subscriptions', () => {
     expect(emit).toHaveBeenCalledOnce();
   });
 
-  it('delivers a safe stream error when the sink remains available', async () => {
+  it('delivers a canonical stream error when the sink remains available', async () => {
     const service = new SessionService(
       transport({
         openSessionOutputStream: () => Promise.reject(new Error('stream setup failed')),
@@ -329,7 +429,10 @@ describe('SessionService output subscriptions', () => {
       sessionId: 'session-1',
       error: {
         code: 'E_SESSION_STREAM',
-        message: 'stream setup failed',
+        class: 'blocking',
+        title: 'The session stream failed',
+        summary: 'The session output stream stopped unexpectedly.',
+        diagnostics: 'stream setup failed',
       },
     });
   });
@@ -343,7 +446,20 @@ describe('parseSessionOutputBlock', () => {
         event: 'session.output.unknown',
         data: '{"api_version":"v1","session_id":"session-1","index":1}',
       }),
-    ).toThrow('Unknown session output event.');
+    ).toThrow(CanonicalErrorException);
+    try {
+      parseSessionOutputBlock({
+        id: '1',
+        event: 'session.output.unknown',
+        data: '{"api_version":"v1","session_id":"session-1","index":1}',
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(CanonicalErrorException);
+      expect((error as CanonicalErrorException).canonical).toMatchObject({
+        code: 'E_STREAM_PROTOCOL_UNKNOWN_EVENT',
+        summary: 'The session output stream contained an unknown event.',
+      });
+    }
   });
 
   it('fails closed on version mismatch, pollution, oversized text, and cursor disagreement', () => {

@@ -58,7 +58,7 @@ test(
       testInfo,
       transcript,
       'downgrade with prerelease ignored',
-      () => 'E_UPDATE_CHECK_FAILED',
+      () => 'E_UPDATE_DOWNGRADE_REJECTED',
       (world) =>
         writeSignedUpdateFixture(world.root, {
           tag: 'v0.0.9',

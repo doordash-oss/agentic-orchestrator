@@ -103,14 +103,11 @@ describe('buildCanonicalError', () => {
     expect(err.remediation?.hint).toBeTruthy();
   });
 
-  it('redacts a parameter path and token in the summary', () => {
+  it('keeps the internal fallback summary catalog-authored', () => {
     const err = buildCanonicalError('E_INTERNAL', {
       params: { reason: 'boom at /Users/somebody/app with Bearer tok123' },
     });
-    expect(err.summary).toContain('[path]');
-    expect(err.summary).toContain('[redacted]');
-    expect(err.summary).not.toContain('/Users/somebody');
-    expect(err.summary).not.toContain('tok123');
+    expect(err.summary).toBe('The request failed unexpectedly.');
   });
 
   it('redacts free-form diagnostics', () => {
@@ -143,7 +140,7 @@ describe('toCanonicalError', () => {
     expect(toCanonicalError(exc, 'E_GATEWAY')).toBe(canonical);
   });
 
-  it('redacts an unknown Error message into the fallback code', () => {
+  it('keeps an unknown Error message out of the fallback summary and redacts its diagnostics', () => {
     const err = toCanonicalError(
       new Error('boom at /Users/somebody/app with Bearer tok123'),
       'E_INTERNAL',
@@ -151,17 +148,19 @@ describe('toCanonicalError', () => {
     expect(err.code).toBe('E_INTERNAL');
     expect(err.class).toBe('blocking');
     expect(err.title).toBe('Request failed');
-    expect(err.summary).toContain('[path]');
-    expect(err.summary).toContain('[redacted]');
-    expect(err.summary).not.toContain('/Users/somebody');
-    expect(err.summary).not.toContain('tok123');
+    expect(err.summary).toBe('The request failed unexpectedly.');
+    expect(err.diagnostics).toContain('[path]');
+    expect(err.diagnostics).toContain('[redacted]');
+    expect(err.diagnostics).not.toContain('/Users/somebody');
+    expect(err.diagnostics).not.toContain('tok123');
   });
 
   it('never embeds non-Error payloads (which could hold raw data) in the summary', () => {
     const err = toCanonicalError({ secret: 'hunter2' }, 'E_INTERNAL');
     expect(err.code).toBe('E_INTERNAL');
     expect(JSON.stringify(err)).not.toContain('hunter2');
-    expect(err.summary).toBe('An unexpected error occurred.');
+    expect(err.summary).toBe('The request failed unexpectedly.');
+    expect(err.diagnostics).toBeUndefined();
   });
 
   it('maps a fetch abort to the typed timeout code instead of its raw DOM message', () => {
@@ -224,7 +223,7 @@ describe('redactedCanonicalError', () => {
     });
     expect(err.diagnostics).toContain('[path]');
     expect(err.diagnostics).toContain('[redacted]');
-    expect(err.summary).toBe('boom');
+    expect(err.summary).toBe('The request failed unexpectedly.');
   });
 
   it('leaves an error without diagnostics untouched', () => {

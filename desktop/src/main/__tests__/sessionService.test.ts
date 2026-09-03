@@ -17,6 +17,7 @@ limitations under the License.
 import { describe, expect, it, vi } from 'vitest';
 import type { SseStream } from '../gateway/events';
 import { SessionService, parseSessionOutputBlock, type ServerTransport } from '../serverClient';
+import { CanonicalErrorException } from '../../shared/errors';
 
 function stream(lines: readonly string[]): SseStream {
   return {
@@ -444,7 +445,20 @@ describe('parseSessionOutputBlock', () => {
         event: 'session.output.unknown',
         data: '{"api_version":"v1","session_id":"session-1","index":1}',
       }),
-    ).toThrow('Unknown session output event.');
+    ).toThrow(CanonicalErrorException);
+    try {
+      parseSessionOutputBlock({
+        id: '1',
+        event: 'session.output.unknown',
+        data: '{"api_version":"v1","session_id":"session-1","index":1}',
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(CanonicalErrorException);
+      expect((error as CanonicalErrorException).canonical).toMatchObject({
+        code: 'E_STREAM_PROTOCOL_UNKNOWN_EVENT',
+        summary: 'The session output stream contained an unknown event.',
+      });
+    }
   });
 
   it('fails closed on version mismatch, pollution, oversized text, and cursor disagreement', () => {

@@ -270,10 +270,7 @@ export function RewindJourney(props: RewindJourneyProps) {
               </div>
               {validPhaseOptions.length === 0 && (
                 <ErrorSurface
-                  error={buildCanonicalError('E_INTERNAL', {
-                    params: { reason: 'Rewind targets are no longer available.' },
-                    remediationHint: 'Refresh the feature and try again.',
-                  })}
+                  error={buildCanonicalError('E_REWIND_TARGETS_UNAVAILABLE')}
                   variant="compact"
                 />
               )}

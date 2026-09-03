@@ -98,7 +98,7 @@ export const ERROR_CATALOG = {
   E_INTERNAL: entry({
     class: 'blocking',
     title: 'Request failed',
-    summary: ({ reason }: { reason: string }) => reason,
+    summary: (_params: { reason: string }) => 'The request failed unexpectedly.',
   }),
   E_UNTRUSTED_SENDER: entry({
     class: 'blocking',
@@ -629,6 +629,24 @@ export const ERROR_CATALOG = {
     title: 'Update package unavailable',
     summary: () => 'No compatible update package is available for this platform.',
   }),
+  E_REWIND_TARGETS_UNAVAILABLE: entry({
+    class: 'blocking',
+    title: 'Rewind targets unavailable',
+    summary: () => 'Rewind targets are no longer available.',
+    remediationHint: () => 'Refresh the feature and try again.',
+  }),
+  E_WORKTREE_PATH_MISSING: entry({
+    class: 'blocking',
+    title: 'Worktree path unavailable',
+    summary: () => 'The server did not report a worktree path for this repository.',
+    remediationHint: () => 'Refresh the completion preview and try again.',
+  }),
+  E_CLIPBOARD_WRITE_FAILED: entry({
+    class: 'blocking',
+    title: 'Could not copy the worktree path',
+    summary: () => 'The clipboard write failed.',
+    remediationHint: () => 'Copy from the path shown instead.',
+  }),
   E_UPDATE_CHECK_FAILED: entry({
     class: 'blocking',
     title: 'Update check failed',
@@ -740,8 +758,9 @@ export function isAbortError(err: unknown): boolean {
  * Converts an arbitrary thrown value into a canonical error.
  * CanonicalErrorExceptions pass through untouched; a fetch/DOM abort becomes
  * the typed timeout; Error messages are redacted into the fallback code's
- * `reason` parameter; anything else (which could hold raw payload data) is
- * replaced with a generic reason.
+ * `reason` parameter. E_INTERNAL keeps its catalog-authored summary and puts
+ * the caught message in diagnostics instead. Anything else (which could hold
+ * raw payload data) is replaced with a generic reason.
  */
 export function toCanonicalError(err: unknown, fallbackCode: ReasonCode): CanonicalError {
   if (err instanceof CanonicalErrorException) {
@@ -752,6 +771,12 @@ export function toCanonicalError(err: unknown, fallbackCode: ReasonCode): Canoni
   }
   const reason =
     err instanceof Error && err.message !== '' ? err.message : 'An unexpected error occurred.';
+  if (fallbackCode === 'E_INTERNAL') {
+    return buildCanonicalError('E_INTERNAL', {
+      params: { reason: 'An unexpected error occurred.' },
+      ...(err instanceof Error && err.message !== '' ? { diagnostics: err.message } : {}),
+    });
+  }
   return buildCanonicalError(fallbackCode, { params: { reason } });
 }
 

@@ -191,22 +191,12 @@ export function ChangesSurface({
         const result = await revealPath(featureId, repo);
         const serverPath = result.path;
         if (!result.ok || serverPath === undefined) {
-          setWorktreeActionError(
-            buildCanonicalError('E_INTERNAL', {
-              params: { reason: 'The server did not report a worktree path for this repository.' },
-              remediationHint: 'Refresh the completion preview and try again.',
-            }),
-          );
+          setWorktreeActionError(buildCanonicalError('E_WORKTREE_PATH_MISSING'));
           return;
         }
         const copied = await copyText(serverPath);
         if (!copied.ok) {
-          setWorktreeActionError(
-            buildCanonicalError('E_INTERNAL', {
-              params: { reason: 'The clipboard write failed.' },
-              remediationHint: 'Copy from the path shown instead.',
-            }),
-          );
+          setWorktreeActionError(buildCanonicalError('E_CLIPBOARD_WRITE_FAILED'));
           setWorktreeNotice(serverPath);
           return;
         }

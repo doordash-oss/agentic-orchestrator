@@ -71,7 +71,9 @@ describe('RewindJourney error surfaces', () => {
 
     const alert = screen.getByRole('alert');
     expect(alert).toHaveClass('error-surface', 'error-surface--compact');
-    expect(within(alert).getByText('E_INTERNAL')).toHaveClass('error-surface__code');
+    expect(within(alert).getByText('E_REWIND_TARGETS_UNAVAILABLE')).toHaveClass(
+      'error-surface__code',
+    );
     expect(within(alert).getByText('Rewind targets are no longer available.')).toBeVisible();
     expect(within(alert).getByText('Refresh the feature and try again.')).toHaveClass(
       'error-surface__remediation-hint',

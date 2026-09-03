@@ -2823,12 +2823,12 @@ func (m *mutationTargetSessionManager) Shutdown()            {}
 func (m *mutationTargetSessionManager) IsShuttingDown() bool { return false }
 
 type mutationTargetSessionView struct {
-	id               string
-	featureID        string
-	phase            feature.Phase
-	status           ports.SessionStatus
-	active           bool
-	permCacheScope   string
+	id                 string
+	featureID          string
+	phase              feature.Phase
+	status             ports.SessionStatus
+	active             bool
+	permCacheScope     string
 	pending            []*llm.ControlRequestMessage
 	sentMessages       []string
 	hiddenContextTurns []mutationTargetHiddenTurn

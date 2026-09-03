@@ -35,11 +35,11 @@ import (
 // flow into; unset methods fail loudly via the embedded nil target.
 type uploadMutationRecorder struct {
 	MutationTarget
-	mu          sync.Mutex
-	createReq   *CreateFeatureRequest
-	createErr   error
-	refactorReq *RefactorFeatureRequest
-	refactorErr error
+	mu                sync.Mutex
+	createReq         *CreateFeatureRequest
+	createErr         error
+	refactorReq       *RefactorFeatureRequest
+	refactorErr       error
 	chatReq           *ChatStartRequest
 	chatHiddenContext string
 	chatErr           error

@@ -1259,11 +1259,11 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 	switch req.AutoApproveScope {
 	case "", AutoApproveScopeFeature, AutoApproveScopeWorkspace:
 	default:
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "auto_approve_scope must be feature or workspace", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("auto_approve_scope must be feature or workspace"))
 		return
 	}
 	if req.AutoApproveScope != "" && req.Decision == decisionDeny {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "auto_approve_scope cannot be combined with deny", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("auto_approve_scope cannot be combined with deny"))
 		return
 	}
 	resp, err := h.mutations.AnswerPermission(req)

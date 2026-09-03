@@ -36,6 +36,8 @@ const RELEASE_NOTES = 'https://github.com/doordash-oss/agentic-orchestrator/rele
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const CHECK_JITTER_MS = 20 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 8000;
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
+const DOWNLOAD_PROGRESS_NOTIFY_MS = 250;
 const MAX_RELEASE_BYTES = 1024 * 1024;
 const MAX_RELEASE_ENVELOPE_BYTES = 1024 * 1024;
 const MAX_SIGNATURE_BYTES = 64 * 1024;
@@ -638,11 +640,24 @@ export class UpdateCoordinator {
       message: 'Downloading the verified update package.',
     };
     this.notify();
-    const packageBytes = await fetchBytes(
+    let lastProgressNotifyMs = 0;
+    const packageBytes = await fetchBytesStreaming(
       this.fetchImpl,
       selected.packageAsset.browser_download_url,
       MAX_PACKAGE_BYTES,
-      60_000,
+      DOWNLOAD_IDLE_TIMEOUT_MS,
+      { setTimeout: this.setTimer, clearTimeout: this.clearTimer },
+      (downloadedBytes) => {
+        this.state = {
+          ...this.state,
+          progress: { downloadedBytes, totalBytes: selected.packageAsset.size },
+        };
+        const nowMs = this.now().getTime();
+        if (nowMs - lastProgressNotifyMs >= DOWNLOAD_PROGRESS_NOTIFY_MS) {
+          lastProgressNotifyMs = nowMs;
+          this.notify();
+        }
+      },
     );
     if (packageBytes.byteLength !== selected.packageAsset.size) {
       // An incomplete transfer is a download failure, not a verification
@@ -1073,6 +1088,71 @@ async function fetchBytes(
     return bytes;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * Streamed download for the large update package. A total deadline would
+ * abort slow-but-flowing transfers, so it aborts only when no bytes arrive
+ * for `idleTimeoutMs`, and enforces `maxBytes` as chunks accumulate.
+ */
+export async function fetchBytesStreaming(
+  fetchImpl: typeof fetch,
+  url: string,
+  maxBytes: number,
+  idleTimeoutMs: number,
+  timers: { setTimeout: typeof setTimeout; clearTimeout: typeof clearTimeout },
+  onChunk: (downloadedBytes: number) => void,
+): Promise<Buffer> {
+  const controller = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const armIdleTimer = () => {
+    if (idleTimer !== null) timers.clearTimeout(idleTimer);
+    idleTimer = timers.setTimeout(() => controller.abort(), idleTimeoutMs);
+  };
+  // Injected fetch mocks may not honor the abort signal, so every await is
+  // raced against the stall rejection.
+  const stalled = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener(
+      'abort',
+      () => reject(new Error('The update download stalled without receiving data.')),
+      { once: true },
+    );
+  });
+  void stalled.catch(() => undefined);
+  armIdleTimer();
+  try {
+    const response = await Promise.race([
+      fetchWithTrustedRedirect(fetchImpl, url, controller.signal, {}),
+      stalled,
+    ]);
+    const length = response.headers.get('content-length');
+    if (length !== null && Number(length) > maxBytes) {
+      throw new Error('The update response exceeded the size limit.');
+    }
+    if (!response.ok) {
+      throw new Error(`GitHub Releases returned HTTP ${response.status}.`);
+    }
+    if (response.body === null) {
+      throw new Error('The update download returned no response body.');
+    }
+    const reader = response.body.getReader();
+    const chunks: Buffer[] = [];
+    let downloadedBytes = 0;
+    for (;;) {
+      const { done, value } = await Promise.race([reader.read(), stalled]);
+      if (done) break;
+      armIdleTimer();
+      downloadedBytes += value.byteLength;
+      if (downloadedBytes > maxBytes) {
+        throw new Error('The update response exceeded the size limit.');
+      }
+      chunks.push(Buffer.from(value));
+      onChunk(downloadedBytes);
+    }
+    return Buffer.concat(chunks);
+  } finally {
+    if (idleTimer !== null) timers.clearTimeout(idleTimer);
   }
 }
 

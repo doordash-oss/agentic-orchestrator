@@ -124,17 +124,14 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
       });
       await expect(row).toBeVisible({ timeout: 30_000 });
       // This section's actual claim is reachability — every bulk-created
-      // feature stays one click away with no overflow affordance — not a
-      // specific lane. A just-created feature can occasionally pick up a
-      // pending attention item of its own (e.g. a review checkpoint) and
-      // land in Waiting rather than At rest; either labeled action reaches
-      // the feature (Answer opens the cockpit plainly when there is no
-      // concrete pending item to jump to), so asserting a specific label
-      // here would test lane classification rather than this section's
-      // actual claim.
-      const actionButton = row.locator('.overview-row__action');
-      await expect(actionButton).toBeVisible({ timeout: 30_000 });
-      await actionButton.click();
+      // feature stays one click away with no overflow affordance — not the
+      // contextual action attached to its current lane. Canonical error
+      // attention can legitimately make that action open the live preview;
+      // the row hit target always performs the plain navigation this loop is
+      // exercising.
+      const rowHitTarget = row.locator('.overview-row__hit');
+      await expect(rowHitTarget).toBeVisible({ timeout: 30_000 });
+      await rowHitTarget.click();
       await handle.page.getByRole('option', { name: 'Overview' }).click();
     }
     await setWindowSize(handle, 760, 900);

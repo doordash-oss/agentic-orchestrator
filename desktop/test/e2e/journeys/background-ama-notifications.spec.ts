@@ -278,27 +278,19 @@ test('packaged attention notifications are private, deduplicated, bounded, passi
       window.agentico.updateSettings({ notifications: { previewEnabled: true } }),
     );
     await hideMainWindow(handle);
-    await waitForNotificationBody(handle, 'Questions');
+    await waitForNotificationCount(handle, 2);
     notifications = await capturedNotifications(handle);
-    // Full-suite Linux workers share an X server, so another Electron window
-    // can legitimately steal focus and cause additional private no-preview
-    // notices. The contract under test is that this pending question emits
-    // exactly one bounded preview notification, independent of those ambient
-    // focus transitions.
-    const askNotifications = notifications.filter((notification) =>
-      notification.body.includes('Questions'),
-    );
-    expect(askNotifications).toHaveLength(1);
-    const askNotification = askNotifications[0];
+    // Exactly the two intended notifications: the hidden-window permission
+    // notice and the previewed question. The test focus override prevents
+    // other full-suite workers on the shared Linux display from injecting an
+    // ambient no-preview notice into this count.
+    expect(notifications).toHaveLength(2);
+    const askNotification = notifications[1];
     expect(askNotification?.body).toContain('Questions');
     expect(askNotification?.body).toContain('Background Notification Questions');
     expect(askNotification?.body.length ?? 0).toBeLessThanOrEqual(180);
 
-    const askNotificationIndex = notifications.findIndex((notification) =>
-      notification.body.includes('Questions'),
-    );
-    expect(askNotificationIndex).toBeGreaterThanOrEqual(0);
-    await activateNotification(handle, askNotificationIndex);
+    await activateNotification(handle, 1);
     await expect(inbox).not.toBeVisible();
     await handle.page.getByRole('button', { name: /Attention inbox, 1 pending/ }).click();
     await expect(inbox).toBeVisible();
@@ -400,17 +392,6 @@ async function waitForNotificationCount(handle: AppHandle, count: number): Promi
   );
 }
 
-async function waitForNotificationBody(handle: AppHandle, text: string): Promise<void> {
-  await waitFor(
-    async () =>
-      (await capturedNotifications(handle)).some((notification) =>
-        notification.body.includes(text),
-      ),
-    `a captured background notification containing ${JSON.stringify(text)}`,
-    10_000,
-  );
-}
-
 function uniqueNotificationIdentities(
   notifications: Array<{ title: string; body: string }>,
 ): Array<string> {
@@ -440,7 +421,9 @@ async function ensureMainWindowFocus(handle: AppHandle): Promise<void> {
   await handle.app.evaluate(({ BrowserWindow, app }) => {
     const global = globalThis as typeof globalThis & {
       __agenticoMainWindowFocusState?: { focused: boolean };
+      __agenticoSetMainWindowAttentionFocusOverride?: (focused: boolean) => void;
     };
+    global.__agenticoSetMainWindowAttentionFocusOverride?.(true);
     if (global.__agenticoMainWindowFocusState?.focused === true) return;
     const window = BrowserWindow.getAllWindows()[0];
     if (window === undefined) throw new Error('main window missing');

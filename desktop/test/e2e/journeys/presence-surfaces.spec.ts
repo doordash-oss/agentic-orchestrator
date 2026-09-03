@@ -104,6 +104,12 @@ test('presence surfaces: one failure, one owner, every surface agrees', async ({
     // this app instance.
     await ensureMainWindowFocus(handle);
     await installNotificationCapture(handle);
+    await handle.app.evaluate(() => {
+      const global = globalThis as typeof globalThis & {
+        __agenticoResetAttentionNotificationDelivery?: () => void;
+      };
+      global.__agenticoResetAttentionNotificationDelivery?.();
+    });
 
     const sidebar = handle.page.getByRole('navigation', { name: 'Feature sidebar' });
     const failedGroup = sidebar.getByRole('group', { name: 'Failed' });
@@ -317,7 +323,9 @@ async function ensureMainWindowFocus(handle: AppHandle): Promise<void> {
   await handle.app.evaluate(({ BrowserWindow, app }) => {
     const global = globalThis as typeof globalThis & {
       __agenticoMainWindowFocusState?: { focused: boolean };
+      __agenticoSetMainWindowAttentionFocusOverride?: (focused: boolean) => void;
     };
+    global.__agenticoSetMainWindowAttentionFocusOverride?.(true);
     if (global.__agenticoMainWindowFocusState?.focused === true) return;
     const window = BrowserWindow.getAllWindows()[0];
     if (window === undefined) throw new Error('main window missing');

@@ -580,6 +580,7 @@ if (!hasSingleInstanceLock) {
     let nativeCommands: NativeCommandController | null = null;
     let featureLabels = new Map<string, string>();
     let mainWindowAttentionFocused = false;
+    let mainWindowAttentionFocusOverride: boolean | undefined;
     let stopStreams = (): void => {};
 
     /**
@@ -802,7 +803,11 @@ if (!hasSingleInstanceLock) {
       sink: electronNotificationSink,
       shouldNotify: () => {
         const window = mainWindowOrNull();
-        return window === null || !window.isVisible() || !mainWindowAttentionFocused;
+        return (
+          window === null ||
+          !window.isVisible() ||
+          !(mainWindowAttentionFocusOverride ?? mainWindowAttentionFocused)
+        );
       },
       show: () => {
         showMainWindow();
@@ -1154,10 +1159,30 @@ if (!hasSingleInstanceLock) {
     if (testUserData !== null) {
       const global = globalThis as typeof globalThis & {
         __agenticoRefreshBackgroundState?: () => void;
+        __agenticoResetAttentionNotificationDelivery?: () => void;
+        __agenticoSetMainWindowAttentionFocusOverride?: (focused: boolean) => void;
       };
       global.__agenticoRefreshBackgroundState = () => {
         mainWindowAttentionFocused = false;
         void refreshBackgroundState();
+      };
+      // Packaged journeys share one Linux display across workers. Let tests
+      // pin the notification-facing focus signal so another app window's
+      // ambient focus event cannot rewrite the scenario under assertion.
+      global.__agenticoSetMainWindowAttentionFocusOverride = (focused) => {
+        mainWindowAttentionFocusOverride = focused;
+      };
+      // A seeded item may be observed before a journey installs its capture
+      // sink. Clearing the snapshot resets delivery memory without exposing
+      // mutable coordinator internals or affecting production startup.
+      global.__agenticoResetAttentionNotificationDelivery = () => {
+        notifications.update(
+          { items: [] },
+          {
+            previewEnabled: settings.get().notifications.previewEnabled,
+            featureLabel: (featureId) => featureLabels.get(featureId) ?? 'Untitled feature',
+          },
+        );
       };
     }
 

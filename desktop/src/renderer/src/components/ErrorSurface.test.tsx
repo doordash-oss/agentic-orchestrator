@@ -94,6 +94,18 @@ describe('ErrorSurface class treatment', () => {
 });
 
 describe('ErrorSurface disclosure order', () => {
+  it('renders a shared disabled reason only once for an action row', () => {
+    const disabledReason = 'Another recovery action is running.';
+    render(
+      <ErrorSurface
+        error={FULL_ERROR}
+        resolveAction={() => ({ enabled: false, label: 'Resume', disabledReason })}
+        secondaryAction={{ label: 'Kill', disabledReason }}
+      />,
+    );
+    expect(screen.getAllByText(disabledReason)).toHaveLength(1);
+  });
+
   it('lays caption, title, summary, remediation, details, diagnostics out in order', () => {
     const { container } = render(<ErrorSurface error={FULL_ERROR} caption="Rebase was rejected" />);
     const caption = screen.getByText('Rebase was rejected');
@@ -272,7 +284,7 @@ describe('ErrorSurface local action', () => {
     render(
       <ErrorSurface
         error={BASE_ERROR}
-        localAction={{ label: 'Retry', onAction: vi.fn(), disabledReason: 'A child is running.' }}
+        localAction={{ label: 'Retry', disabledReason: 'A child is running.' }}
       />,
     );
     expect(screen.getByText('A child is running.')).toHaveClass('error-surface__action-reason');

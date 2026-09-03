@@ -615,7 +615,6 @@ export function SettingsPanel({
                         refreshingProviders.has(p.name)
                           ? {
                               label: 'Recheck',
-                              onAction: () => void handleRecheckProvider(p.name),
                               disabledReason: 'Rechecking…',
                             }
                           : { label: 'Recheck', onAction: () => void handleRecheckProvider(p.name) }
@@ -705,7 +704,6 @@ export function SettingsPanel({
                 checkingUpdates
                   ? {
                       label: 'Check for updates',
-                      onAction: () => undefined,
                       disabledReason: 'Checking…',
                     }
                   : {

@@ -600,7 +600,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
       // Open the Kill impact dialog on the second item so the per-item
       // action and the confirmation are visible in one viewport.
       const secondItem = p.locator('.recovery-workspace__item').nth(1);
-      const killButton = secondItem.locator('.recovery-workspace__action--kill');
+      const killButton = secondItem.getByRole('button', { name: 'Kill' });
       await expect(killButton).toBeVisible({ timeout: 5_000 });
       await killButton.click();
       await expect(p.locator('.impact-dialog__backdrop')).toBeVisible({ timeout: 5_000 });

@@ -82,7 +82,11 @@ const helpAttention: AttentionItem = {
   prompt: 'Feature waiting for implementation guidance.',
 };
 
-function renderCockpit(mock = installAgenticoMock(), active = true) {
+function renderCockpit(
+  mock = installAgenticoMock(),
+  active = true,
+  attentionItems: AttentionItem[] = [],
+) {
   const onClose = vi.fn();
   const onLoadedName = vi.fn();
   const view = render(
@@ -91,8 +95,8 @@ function renderCockpit(mock = installAgenticoMock(), active = true) {
       titleHint="Search revamp"
       onClose={onClose}
       onLoadedName={onLoadedName}
-      attentionItems={[]}
-      refreshAttention={() => Promise.resolve([])}
+      attentionItems={attentionItems}
+      refreshAttention={() => Promise.resolve(attentionItems)}
       attentionDrafts={emptyAttentionDrafts()}
       setAttentionDrafts={vi.fn()}
       active={active}
@@ -109,8 +113,8 @@ function renderCockpit(mock = installAgenticoMock(), active = true) {
           titleHint="Search revamp"
           onClose={onClose}
           onLoadedName={onLoadedName}
-          attentionItems={[]}
-          refreshAttention={() => Promise.resolve([])}
+          attentionItems={attentionItems}
+          refreshAttention={() => Promise.resolve(attentionItems)}
           attentionDrafts={emptyAttentionDrafts()}
           setAttentionDrafts={vi.fn()}
           active={next}
@@ -1443,7 +1447,17 @@ describe('FeatureCockpit failure and retry', () => {
         ],
       }),
     );
-    renderCockpit(mock);
+    const attention: AttentionItem = {
+      kind: 'error',
+      id: `error:${FEATURE_ID}:iteration_budget_exhausted`,
+      featureId: FEATURE_ID,
+      waitingSince: '2026-07-15T10:00:00.000Z',
+      ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: FEATURE_ID },
+      class: 'blocking',
+      code: 'iteration_budget_exhausted',
+      title: 'Iteration budget exhausted',
+    };
+    renderCockpit(mock, true, [attention]);
     await screen.findByRole('region', { name: 'Feature Search revamp' });
 
     const alert = screen.getByRole('alert');
@@ -1451,6 +1465,10 @@ describe('FeatureCockpit failure and retry', () => {
     expect(within(alert).getByText('Iteration budget exhausted')).toBeInTheDocument();
     expect(within(alert).getByRole('button', { name: 'Restart' })).toBeEnabled();
     expect(within(alert).queryByRole('button', { name: 'Retry setup' })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: 'Agent request' })).not.toBeInTheDocument();
+    });
+    expect(document.querySelector('.live-preview__attention')).toBeNull();
   });
 
   it('retries via the card action on the SAME feature', async () => {

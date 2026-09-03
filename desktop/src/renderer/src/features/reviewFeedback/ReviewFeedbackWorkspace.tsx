@@ -448,7 +448,7 @@ export function ReviewFeedbackWorkspace({
             rootTabIndex={-1}
             localAction={
               draft.retrying
-                ? { label: 'Retry save', onAction: draft.retrySave, disabledReason: 'Retrying…' }
+                ? { label: 'Retry save', disabledReason: 'Retrying…' }
                 : { label: 'Retry save', onAction: draft.retrySave }
             }
           />

@@ -32,6 +32,7 @@ import {
   type ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
 import { ErrorSurface, type ErrorSurfaceAction } from '../../components/ErrorSurface';
+import { useRegisteredErrorCard } from '../../components/errorCardRegistry';
 import { retryAction, type LoadState } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
 import { buildCanonicalError } from '../../../../shared/errors';
@@ -322,6 +323,12 @@ export function RefactorPassWorkspace({
   }, [attentionPreviewRequest]);
 
   const view = pass.view;
+  const registeredInlineError = attentionItems.find(
+    (item) => item.kind === 'error' && item.featureId === view?.id,
+  );
+  const inlineAttentionOwnerIsVisible = useRegisteredErrorCard(
+    registeredInlineError?.kind === 'error' ? registeredInlineError.ref : undefined,
+  );
   if (view === undefined) return null;
   const { child, childState } = pass;
   const state = child === null ? null : passState(child);
@@ -682,7 +689,8 @@ export function RefactorPassWorkspace({
                   )
                 }
                 attentionFooter={
-                  inlineAttention === undefined ? undefined : questionsAttention !== undefined ? (
+                  inlineAttention === undefined ||
+                  inlineAttentionOwnerIsVisible ? undefined : questionsAttention !== undefined ? (
                     <QuestionComposer
                       item={questionsAttention}
                       busy={attentionBusy === questionsAttention.id}

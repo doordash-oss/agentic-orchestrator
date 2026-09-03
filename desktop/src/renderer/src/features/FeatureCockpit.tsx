@@ -76,7 +76,10 @@ import { RefactorLauncher } from './refactor/RefactorLauncher';
 import { ReviewFeedbackWorkspace } from './reviewFeedback/ReviewFeedbackWorkspace';
 import { RefactorPassWorkspace, useRefactorPass } from './refactor/RefactorPassWorkspace';
 import { errorStatusChip } from './statusChip';
-import { focusErrorCardWhenRegistered } from '../components/errorCardRegistry';
+import {
+  focusErrorCardWhenRegistered,
+  useRegisteredErrorCard,
+} from '../components/errorCardRegistry';
 import { useCompletionPreflight } from './completion/useCompletionPreflight';
 import { pendingDeliveryFact, pendingDeliverySummary } from './completion/pendingDelivery';
 import {
@@ -1523,6 +1526,32 @@ export function FeatureCockpit({
     aftercareSurface,
   );
 
+  const visibleAttentionItems = attentionItems.filter((item) => item.kind !== 'review');
+  const featureAttentionItems = visibleAttentionItems.filter(
+    (item) => item.kind !== 'recovery' && item.featureId === featureId,
+  );
+  const routedAttentionItem =
+    attentionPreviewRequest === null || attentionPreviewRequest.attentionId === undefined
+      ? undefined
+      : featureAttentionItems.find((item) => item.id === attentionPreviewRequest.attentionId);
+  const activeAttentionItem =
+    routedAttentionItem?.kind === 'gate'
+      ? featureAttentionItems.find((item) => item.kind !== 'gate')
+      : (routedAttentionItem ?? featureAttentionItems.find((item) => item.kind !== 'gate'));
+  const activeAttentionOwnerIsVisible = useRegisteredErrorCard(
+    activeAttentionItem?.kind === 'error' ? activeAttentionItem.ref : undefined,
+  );
+  const questionsAttention =
+    activeAttentionItem?.kind === 'questions' ? activeAttentionItem : undefined;
+  const pendingQuestion = questionsAttention?.questions[0];
+  const suppressQuestion =
+    pendingQuestion === undefined
+      ? undefined
+      : {
+          prompt: pendingQuestion.key,
+          optionLabels: pendingQuestion.options.map((option) => option.label),
+        };
+
   if (state.phase !== 'loaded') {
     // No authoritative catalogue, no funnel target: every feature command
     // resolves to a no-op until the snapshot lands.
@@ -1672,28 +1701,6 @@ export function FeatureCockpit({
       });
   };
 
-  const visibleAttentionItems = attentionItems.filter((item) => item.kind !== 'review');
-  const featureAttentionItems = visibleAttentionItems.filter(
-    (item) => item.kind !== 'recovery' && item.featureId === featureId,
-  );
-  const routedAttentionItem =
-    attentionPreviewRequest === null || attentionPreviewRequest.attentionId === undefined
-      ? undefined
-      : featureAttentionItems.find((item) => item.id === attentionPreviewRequest.attentionId);
-  const activeAttentionItem =
-    routedAttentionItem?.kind === 'gate'
-      ? featureAttentionItems.find((item) => item.kind !== 'gate')
-      : (routedAttentionItem ?? featureAttentionItems.find((item) => item.kind !== 'gate'));
-  const questionsAttention =
-    activeAttentionItem?.kind === 'questions' ? activeAttentionItem : undefined;
-  const pendingQuestion = questionsAttention?.questions[0];
-  const suppressQuestion =
-    pendingQuestion === undefined
-      ? undefined
-      : {
-          prompt: pendingQuestion.key,
-          optionLabels: pendingQuestion.options.map((option) => option.label),
-        };
   const preferredGate =
     routedAttentionItem?.kind === 'gate'
       ? routedAttentionItem
@@ -2726,7 +2733,8 @@ export function FeatureCockpit({
                         )
                       }
                       attentionFooter={
-                        activeAttentionItem === undefined ? undefined : questionsAttention !==
+                        activeAttentionItem === undefined ||
+                        activeAttentionOwnerIsVisible ? undefined : questionsAttention !==
                           undefined ? (
                           <QuestionComposer
                             item={questionsAttention}

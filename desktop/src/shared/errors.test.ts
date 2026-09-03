@@ -233,7 +233,7 @@ describe('redactText', () => {
 describe('redactedCanonicalError', () => {
   it('redacts diagnostics while leaving the catalog-authored fields intact', () => {
     const err = redactedCanonicalError({
-      ...buildCanonicalError('E_INTERNAL', { params: { reason: 'boom' } }),
+      ...buildCanonicalError('E_INTERNAL'),
       diagnostics: 'path /Users/somebody/secret.txt and Bearer tok123',
     });
     expect(err.diagnostics).toContain('[path]');

@@ -188,7 +188,7 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     }
 
     transcript.section('Kill impact confirmation on live orphan');
-    const killButton = firstItem.locator('.recovery-workspace__action--kill');
+    const killButton = firstItem.getByRole('button', { name: 'Kill' });
     await expect(killButton).toBeVisible({ timeout: 5_000 });
     await killButton.click();
     const killDialog = handle.page.locator('.impact-dialog__backdrop');

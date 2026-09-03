@@ -615,11 +615,20 @@ describe('RuntimeGateway launch', () => {
   });
 
   it('maps a spawn failure (e.g. permissions) to launch-failed with remediation', async () => {
-    const env = makeEnv({ spawnError: new Error('EACCES: permission denied') });
+    const env = makeEnv({
+      spawnError: new Error('EACCES: permission denied'),
+      diagnosticLines: ['runtime log tail'],
+    });
     await env.gateway.start();
     const state = env.gateway.getState();
     expect(state.status).toBe('launch-failed');
-    expect(requireError(state).code).toBe('E_LAUNCH_FAILED');
+    const error = requireError(state);
+    expect(error.code).toBe('E_LAUNCH_FAILED');
+    expect(error.diagnostics).toContain('EACCES: permission denied');
+    expect(error.diagnostics).toContain(
+      'bundled agentico server --config [path] --state-dir [path]',
+    );
+    expect(error.diagnostics).toContain('runtime log tail');
     expectNoTokenLeak(env);
   });
 

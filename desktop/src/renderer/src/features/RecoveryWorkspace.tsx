@@ -343,17 +343,13 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
                       ? executingKey === null
                         ? {
                             label: 'Kill',
-                            onAction: () => {
-                              killTriggerRef.current =
-                                document.activeElement instanceof HTMLButtonElement
-                                  ? document.activeElement
-                                  : null;
+                            onAction: (event) => {
+                              killTriggerRef.current = event.currentTarget;
                               setKillTarget(item);
                             },
                           }
                         : {
                             label: 'Kill',
-                            onAction: () => {},
                             disabledReason: 'Another recovery action is running.',
                           }
                       : undefined

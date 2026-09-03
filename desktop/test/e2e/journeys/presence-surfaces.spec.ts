@@ -140,17 +140,13 @@ test('presence surfaces: one failure, one owner, every surface agrees', async ({
     await expect(failureCard).toBeFocused({ timeout: 15_000 });
     transcript.step('the inbox row landed on the cockpit with the failure card focused');
 
-    // The routed item's detail — the live-preview overlay's attention footer —
-    // shows the class-label eyebrow and the catalog title, never remediation
-    // or diagnostics.
-    const detail = handle.page.locator('.attention-detail').filter({
-      hasText: 'Iteration budget exhausted',
-    });
-    await expect(detail).toBeVisible({ timeout: 30_000 });
-    await expect(detail.locator('.error-surface__remediation')).toHaveCount(0);
-    transcript.step("the item's detail shows the title without remediation or diagnostics");
+    // The owning card suppresses the live-preview projection entirely.
+    await expect(handle.page.locator('.attention-detail')).toHaveCount(0);
+    await expect(handle.page.locator('.live-preview__attention')).toHaveCount(0);
+    transcript.step('the owning card suppresses the duplicate live-preview error region');
 
-    // Leave the overlay; its focus restoration returns to the card.
+    // The inbox jump still opens the requested live preview; close its empty
+    // overlay before exercising the title-bar chip behind it.
     await handle.page.getByRole('button', { name: 'Exit full screen' }).click();
     await expect(handle.page.getByRole('dialog', { name: 'Live agent preview' })).not.toBeVisible();
     await expect(failureCard).toBeFocused({ timeout: 15_000 });

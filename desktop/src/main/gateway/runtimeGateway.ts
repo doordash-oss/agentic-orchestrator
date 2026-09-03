@@ -1202,15 +1202,14 @@ export class RuntimeGateway {
     try {
       child = this.deps.spawnServer(resolved.path, args);
     } catch (err) {
-      const safe = toCanonicalError(err, 'E_LAUNCH_FAILED');
-      this.deps.log(`server spawn failed: ${safe.summary}`);
+      this.deps.log('server spawn failed: E_LAUNCH_FAILED');
       this.setState({
         status: 'launch-failed',
         stage: 'connect',
         detail: 'The bundled runtime could not be started.',
         ownership: 'none',
         error: this.ownedError('E_LAUNCH_FAILED', {
-          ...(safe.diagnostics === undefined ? {} : { diagnostics: safe.diagnostics }),
+          ...(err instanceof Error && err.message !== '' ? { diagnostics: err.message } : {}),
         }),
       });
       return;
@@ -1558,10 +1557,12 @@ export class RuntimeGateway {
     code: C,
     options: BuildCanonicalErrorOptions<C> = {},
   ): CanonicalError {
-    const diagnostics = this.ownedDiagnosticsText();
+    const diagnostics = [options.diagnostics, this.ownedDiagnosticsText()]
+      .filter((text): text is string => text !== undefined && text !== '')
+      .join('\n');
     return buildCanonicalError(code, {
       ...options,
-      ...(diagnostics === undefined ? {} : { diagnostics }),
+      ...(diagnostics === '' ? {} : { diagnostics }),
     });
   }
 

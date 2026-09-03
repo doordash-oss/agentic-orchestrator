@@ -10,7 +10,7 @@
  * use. Class drives the whole treatment at once — left rule, icon, label
  * word — so the surface never signals by color alone.
  */
-import { useEffect, useRef, type Ref } from 'react';
+import { useEffect, useRef, type MouseEvent, type Ref } from 'react';
 import type { CanonicalError } from '../../../shared/api/parse';
 import { ERROR_CLASS_LABELS, type ErrorReference } from '../../../shared/ipc';
 import { useExplainChat } from '../explainChat';
@@ -32,13 +32,19 @@ export interface ErrorSurfaceAction {
  * A disabled reason mirrors the resolved action's semantics — the reason
  * renders as text and the local action has no enabled state.
  */
-export interface ErrorSurfaceLocalAction {
-  label: string;
-  /** Invoked when the primary action button is clicked. */
-  onAction: () => void;
-  /** Shown as text instead of a button; a local action with a reason has no enabled state. */
-  disabledReason?: string;
-}
+export type ErrorSurfaceLocalAction =
+  | {
+      label: string;
+      /** Invoked with the triggering button when the local action is clicked. */
+      onAction: (event: MouseEvent<HTMLButtonElement>) => void;
+      disabledReason?: never;
+    }
+  | {
+      label: string;
+      /** Shown as text instead of a button; disabled actions have no callback. */
+      disabledReason: string;
+      onAction?: never;
+    };
 
 export interface ErrorSurfaceProps {
   error: CanonicalError;
@@ -282,8 +288,12 @@ export function ErrorSurface({
       <span className="error-surface__action-reason">{resolvedAction.disabledReason}</span>
     ) : null;
   const actionSlot = localActionSlot ?? resolvedActionSlot;
+  const primaryDisabledReason = localAction?.disabledReason ?? resolvedAction?.disabledReason;
   const secondaryActionSlot =
-    secondaryAction == null ? null : secondaryAction.disabledReason != null ? (
+    secondaryAction == null ||
+    (primaryDisabledReason !== undefined &&
+      secondaryAction.disabledReason ===
+        primaryDisabledReason) ? null : secondaryAction.disabledReason != null ? (
       <span className="error-surface__action-reason">{secondaryAction.disabledReason}</span>
     ) : (
       <button

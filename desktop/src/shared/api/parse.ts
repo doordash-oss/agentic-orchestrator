@@ -1060,10 +1060,6 @@ export const SessionDetailResponseSchema = z.object({
       .optional(),
     can_attach: z.boolean(),
     log_available: z.boolean(),
-    safe_error: z
-      .string()
-      .max(1024 * 1024)
-      .optional(),
   }),
 });
 export type ServerSessionDetail = z.output<typeof SessionDetailResponseSchema>['session'];

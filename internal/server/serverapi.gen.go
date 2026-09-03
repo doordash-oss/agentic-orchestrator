@@ -2741,7 +2741,6 @@ type SessionDetail struct {
 	Repo             string           `json:"repo,omitempty"`
 	RunNumber        int              `json:"run_number"`
 	RunningTaskCount int              `json:"running_task_count"`
-	SafeError        string           `json:"safe_error,omitempty"`
 	StartedAt        time.Time        `json:"started_at"`
 	Status           string           `json:"status"`
 	TaskActivities   []TaskActivity   `json:"task_activities"`

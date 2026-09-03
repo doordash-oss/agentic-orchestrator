@@ -34,7 +34,7 @@ limitations under the License.
 import path from 'node:path';
 
 import { buildCanonicalError, CanonicalErrorException, stripSecrets } from '../../shared/errors';
-import type { CompatibilityFailure } from '../../shared/errors';
+import type { CanonicalError } from '../../shared/api/parse';
 import type {
   KnownServer,
   RemoteServerAddRequest,
@@ -88,10 +88,8 @@ function fail(code: 'E_REMOTE_UNREACHABLE' | 'E_REMOTE_AUTH_REJECTED'): never {
   throw new CanonicalErrorException(buildCanonicalError(code));
 }
 
-function failIncompatible(failure: CompatibilityFailure): never {
-  throw new CanonicalErrorException(
-    buildCanonicalError('E_REMOTE_INCOMPATIBLE', { params: failure }),
-  );
+function failIncompatible(error: CanonicalError): never {
+  throw new CanonicalErrorException(error);
 }
 
 /**
@@ -156,13 +154,17 @@ export async function addRemoteServer(
   const probe = ProbeHealthSchema.safeParse(health.body);
   if (!probe.success || probe.data.status !== 'ok') {
     deps.log(`add-remote-server failed: ${E_REMOTE_INCOMPATIBLE} (unusable health payload)`);
-    failIncompatible({ compatible: false, code: 'unrecognized_contract' });
+    failIncompatible(
+      buildCanonicalError('E_REMOTE_INCOMPATIBLE', {
+        params: { compatible: false, code: 'unrecognized_contract' },
+      }),
+    );
   }
   const verdict = evaluateCompatibility(probe.data.compatibility);
   if (!verdict.compatible) {
     const error = buildCanonicalError('E_REMOTE_INCOMPATIBLE', { params: verdict });
     deps.log(`add-remote-server failed: ${E_REMOTE_INCOMPATIBLE} (${error.summary})`);
-    failIncompatible(verdict);
+    failIncompatible(error);
   }
 
   // (c) Paste-duplication guard: a remote alias for a known LOCAL server is

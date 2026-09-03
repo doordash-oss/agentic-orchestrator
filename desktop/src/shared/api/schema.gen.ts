@@ -2320,7 +2320,6 @@ export interface components {
             initial_prompt?: string;
             can_attach: boolean;
             log_available: boolean;
-            safe_error?: string;
         };
     };
     responses: {

@@ -4865,5 +4865,3 @@ components:
               type: boolean
             log_available:
               type: boolean
-            safe_error:
-              type: string

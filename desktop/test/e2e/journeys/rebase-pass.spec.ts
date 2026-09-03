@@ -344,10 +344,9 @@ test('rebase pass dirty parent: one attention card, chip focuses it, retry compl
     // The repository and the untracked file sit under the Details disclosure.
     await expect(card).toContainText('alpha');
     await expect(card).toContainText('stray-parent.txt');
-    // The catalog title is the one presence wording: the card, the parent's
-    // waiting-lane sub-line, and the pass's inline attention detail — nothing
-    // else carries it.
-    await expect(handle.page.getByText('Parent worktree is dirty', { exact: true })).toHaveCount(3);
+    // The catalog title appears only at its owning card and the parent's
+    // waiting-lane sub-line; the live surface does not repeat the error.
+    await expect(handle.page.getByText('Parent worktree is dirty', { exact: true })).toHaveCount(2);
     const parentRow = handle.page
       .getByRole('navigation', { name: 'Feature sidebar' })
       .getByRole('option', { name: new RegExp(featureName) });

@@ -111,6 +111,7 @@ describe('RecoveryWorkspace', () => {
     await user.click(kill);
     expect(await screen.findByRole('dialog', { name: 'Confirm kill' })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(kill).toHaveFocus();
 
     // Exactly one Resume button, inside the card, dispatching the single-item request.
     expect(within(queue).getAllByRole('button', { name: 'Resume' })).toHaveLength(1);

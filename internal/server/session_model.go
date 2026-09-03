@@ -111,7 +111,6 @@ func (h *apiHandler) handleSessionDetail(w http.ResponseWriter, r *http.Request,
 	detail.InitialPrompt = SafeDisplayText(sess.InitialPrompt(), 2000)
 	detail.CanAttach = sess.IsActive()
 	detail.LogAvailable = fileExists(sess.LogFilePath())
-	detail.SafeError = SafeDisplayText(firstNonEmpty(sess.ErrorDetail(), sess.ExitCodeDetail()), 240)
 	revision := revisionForAny(detail)
 	h.writeRevisionedJSON(w, r, revision, SessionDetailResponse{
 		APIVersion: APIVersion,

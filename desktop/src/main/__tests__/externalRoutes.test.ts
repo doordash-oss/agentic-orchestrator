@@ -20,6 +20,7 @@ import { buildCanonicalError, CanonicalErrorException } from '../../shared/error
 import type { AppRouteEvent, RemoteServerAddResult } from '../../shared/ipc';
 import {
   addServerFromLink,
+  initialExternalRoute,
   routeFromArgv,
   routeFromUrl,
   type AddServerLinkDeps,
@@ -108,6 +109,27 @@ describe('routeFromArgv', () => {
   });
 });
 
+describe('initialExternalRoute', () => {
+  it('prefers the argv route over buffered open-url events', () => {
+    const route = initialExternalRoute(['/app', '--agentico-route=updates'], [CONNECTION_STRING]);
+    expect(appRouteOf(route)).toEqual({ target: 'settings', settingsSection: 'updates' });
+  });
+
+  it('falls back to the newest parseable buffered link', () => {
+    const newer = `agentico://${TOKEN}@10.9.9.9:9090?name=newer`;
+    const route = initialExternalRoute(
+      ['/app'],
+      [CONNECTION_STRING, 'https://example.invalid/not-ours', newer],
+    );
+    expect(route).toEqual({ kind: 'add-server', connectionString: newer });
+  });
+
+  it('skips foreign-scheme urls and yields null when nothing applies', () => {
+    expect(initialExternalRoute(['/app'], ['https://example.invalid/'])).toBeNull();
+    expect(initialExternalRoute(['/app'], [])).toBeNull();
+  });
+});
+
 function makeDeps(overrides: Partial<AddServerLinkDeps> = {}): {
   deps: AddServerLinkDeps;
   routes: AppRouteEvent[];
@@ -142,6 +164,27 @@ function makeDeps(overrides: Partial<AddServerLinkDeps> = {}): {
 }
 
 describe('addServerFromLink', () => {
+  it('resolves true once the server is known, so a cold start keeps the remote', async () => {
+    const { deps } = makeDeps();
+    await expect(addServerFromLink(CONNECTION_STRING, deps)).resolves.toBe(true);
+    const duplicate = makeDeps({
+      addServer: vi.fn(async (): Promise<RemoteServerAddResult> => {
+        return { status: 'duplicate-local', serverKey: SERVER_KEY };
+      }),
+    });
+    await expect(addServerFromLink(CONNECTION_STRING, duplicate.deps)).resolves.toBe(true);
+  });
+
+  it('resolves false when the add pipeline rejects the link, so a cold start falls back', async () => {
+    const { deps, switched } = makeDeps({
+      addServer: vi.fn(async (): Promise<RemoteServerAddResult> => {
+        throw new CanonicalErrorException(buildCanonicalError('E_REMOTE_UNREACHABLE'));
+      }),
+    });
+    await expect(addServerFromLink(CONNECTION_STRING, deps)).resolves.toBe(false);
+    expect(switched).toEqual([]);
+  });
+
   it('adds, switches to the new server, and routes to the Servers pane', async () => {
     const { deps, routes, notifications, switched } = makeDeps();
     await addServerFromLink(CONNECTION_STRING, deps);

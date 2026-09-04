@@ -44,6 +44,7 @@ import { addRemoteServer } from './gateway/addRemoteServer';
 import { removeKnownServer, serverTokenStatus } from './gateway/removeServer';
 import {
   addServerFromLink,
+  initialExternalRoute,
   routeFromArgv,
   routeFromUrl,
   type ExternalRoute,
@@ -55,7 +56,6 @@ import {
   resolveTestUserDataDir,
 } from './testHooks';
 import { EventStreamSupervisor } from './gateway/events';
-import type { RuntimeGateway } from './gateway/runtimeGateway';
 import { FeatureService } from './features';
 import { CompletionService } from './completion';
 import { RecoveryService } from './recovery';
@@ -217,6 +217,18 @@ const trusted: TrustedSender = {
 
 app.setAsDefaultProtocolClient('agentico');
 
+// macOS hands a protocol click that launches the app to `open-url` before
+// `ready`, and Electron does not replay it for listeners added later. Buffer
+// the raw URLs here; the ready handler drains them once the gateway exists.
+// A connection-string link is a bearer token: this array is the only place
+// it rests, and it is never logged.
+const bufferedOpenUrls: string[] = [];
+const bufferOpenUrl = (event: ElectronEvent, url: string): void => {
+  event.preventDefault();
+  bufferedOpenUrls.push(url);
+};
+app.on('open-url', bufferOpenUrl);
+
 // Must be registered before app readiness. The private standard/secure origin
 // lets Chromium resolve relative renderer assets without file:// privileges.
 protocol.registerSchemesAsPrivileged([
@@ -286,7 +298,7 @@ function loadRenderer(window: BrowserWindow): void {
 
 function createMainWindow(
   settings: SettingsStore,
-  gateway: RuntimeGateway,
+  startConnection: () => void,
   onClose: (event: ElectronEvent, window: BrowserWindow) => void,
   getCurrentAccent: () => string | null,
 ): BrowserWindow {
@@ -332,7 +344,7 @@ function createMainWindow(
         { mode: 0o600 },
       );
     }
-    void gateway.start();
+    startConnection();
   });
 
   window.on('close', (event) => {
@@ -583,6 +595,28 @@ if (!hasSingleInstanceLock) {
     let mainWindowAttentionFocusOverride: boolean | undefined;
     let stopStreams = (): void => {};
 
+    // The main window's ready-to-show normally enters the gateway's standard
+    // selection (last-used → registry → discovery → spawn the bundled
+    // server). A connection-string deep link that launched the app replaces
+    // that step: the linked server is added and attached directly and no
+    // local child is spawned, so the app runs against the remote alone. Only
+    // an unusable link falls back to the standard startup, so the user is
+    // never left without a server.
+    let coldStartConnectionString: string | null = null;
+    const startConnection = (): void => {
+      const link = coldStartConnectionString;
+      coldStartConnectionString = null;
+      if (link === null) {
+        void gateway.start();
+        return;
+      }
+      void connectFromLink(link).then((added) => {
+        if (!added) {
+          void gateway.start();
+        }
+      });
+    };
+
     /**
      * The registry is the only thing that creates a window: every entry path
      * (⌘,, the menu, the tray, a deep link, a second instance, a renderer
@@ -595,7 +629,9 @@ if (!hasSingleInstanceLock) {
           const created =
             purpose === 'settings'
               ? createSettingsWindow(settings, () => accent.getCurrent())
-              : createMainWindow(settings, gateway, handleWindowClose, () => accent.getCurrent());
+              : createMainWindow(settings, startConnection, handleWindowClose, () =>
+                  accent.getCurrent(),
+                );
           // Eviction is registered at creation so it is impossible to open a
           // window that outlives its own trust-set membership.
           created.on('closed', () => windows.evict(created));
@@ -893,25 +929,28 @@ if (!hasSingleInstanceLock) {
     // argv with no route at all) shows the main window as before. A
     // connection-string link carries the server's bearer token: it is consumed
     // here by the add pipeline and never logged or forwarded as a route event.
+    const connectFromLink = (connectionString: string): Promise<boolean> =>
+      addServerFromLink(connectionString, {
+        addServer: performRemoteServerAdd,
+        switchServer: (request) => gateway.switchServer(request),
+        route,
+        notify: (body) => {
+          if (electronNotificationSink.isSupported()) {
+            electronNotificationSink
+              .create({ title: 'Agentico', body: redactText(body).slice(0, 180) })
+              .show();
+          }
+        },
+        log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
+      });
+
     const dispatchExternalRoute = (requestedRoute: ExternalRoute | null): void => {
       if (requestedRoute === null) {
         showMainWindow();
         return;
       }
       if (requestedRoute.kind === 'add-server') {
-        void addServerFromLink(requestedRoute.connectionString, {
-          addServer: performRemoteServerAdd,
-          switchServer: (request) => gateway.switchServer(request),
-          route,
-          notify: (body) => {
-            if (electronNotificationSink.isSupported()) {
-              electronNotificationSink
-                .create({ title: 'Agentico', body: redactText(body).slice(0, 180) })
-                .show();
-            }
-          },
-          log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
-        });
+        void connectFromLink(requestedRoute.connectionString);
         return;
       }
       route(requestedRoute.event);
@@ -921,6 +960,9 @@ if (!hasSingleInstanceLock) {
       dispatchExternalRoute(routeFromArgv(argv));
     });
 
+    // From here on links are dispatched live; the pre-ready buffer is drained
+    // once below, at cold start.
+    app.removeListener('open-url', bufferOpenUrl);
     app.on('open-url', (event, url) => {
       event.preventDefault();
       dispatchExternalRoute(routeFromUrl(url));
@@ -1442,9 +1484,15 @@ if (!hasSingleInstanceLock) {
     };
     registerIpcHandlers(ipcMain, trusted, services);
 
+    // Resolved before the window exists so ready-to-show already knows
+    // whether this launch attaches to a linked server instead of starting
+    // the standard selection.
+    const initialRoute = initialExternalRoute(process.argv, bufferedOpenUrls.splice(0));
+    if (initialRoute?.kind === 'add-server') {
+      coldStartConnectionString = initialRoute.connectionString;
+    }
     showMainWindow();
-    const initialRoute = routeFromArgv(process.argv);
-    if (initialRoute !== null) {
+    if (initialRoute !== null && initialRoute.kind !== 'add-server') {
       dispatchExternalRoute(initialRoute);
     }
 

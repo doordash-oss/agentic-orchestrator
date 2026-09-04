@@ -94,6 +94,29 @@ function appRoute(event: AppRouteEvent): ExternalRoute {
   return { kind: 'app-route', event };
 }
 
+/**
+ * The route a cold start honors. Windows and Linux carry the link in argv;
+ * macOS delivers it as an `open-url` event that fires before `ready` and is
+ * never replayed, so the caller buffers those raw URLs at module load and
+ * hands them over here. argv wins, then the newest parseable buffered link.
+ */
+export function initialExternalRoute(
+  argv: readonly string[],
+  bufferedUrls: readonly string[],
+): ExternalRoute | null {
+  const fromArgv = routeFromArgv(argv);
+  if (fromArgv !== null) {
+    return fromArgv;
+  }
+  for (let index = bufferedUrls.length - 1; index >= 0; index -= 1) {
+    const route = routeFromUrl(bufferedUrls[index]!);
+    if (route !== null) {
+      return route;
+    }
+  }
+  return null;
+}
+
 export interface AddServerLinkDeps {
   /** The Settings → Servers add pipeline (probe, compat gate, verify, persist). */
   addServer(request: RemoteServerAddRequest): Promise<RemoteServerAddResult>;
@@ -112,11 +135,15 @@ export interface AddServerLinkDeps {
  * known, so the link just switches to it. Failures land on the Servers pane
  * with the add form focused, the error carried by a native notification
  * (canonical summaries never echo the link or its token).
+ *
+ * Resolves `true` once the server is known (added or already present) and
+ * the switch has been attempted, `false` when the add pipeline rejected the
+ * link — a cold start uses that to fall back to the standard startup.
  */
 export async function addServerFromLink(
   connectionString: string,
   deps: AddServerLinkDeps,
-): Promise<void> {
+): Promise<boolean> {
   let result: RemoteServerAddResult;
   try {
     result = await deps.addServer({ connectionString });
@@ -125,7 +152,7 @@ export async function addServerFromLink(
     deps.log(`add-server link failed: ${safe.code}`);
     deps.notify(`${safe.title}. ${safe.summary}`);
     deps.route({ target: 'settings', settingsSection: 'servers', settingsFocus: 'add-server' });
-    return;
+    return false;
   }
   try {
     await deps.switchServer({ serverKey: result.serverKey });
@@ -139,4 +166,5 @@ export async function addServerFromLink(
     );
   }
   deps.route({ target: 'settings', settingsSection: 'servers' });
+  return true;
 }

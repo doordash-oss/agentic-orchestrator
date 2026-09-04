@@ -698,3 +698,82 @@ test('local↔remote switching: per-server selection and workspace truth restore
     destroyWorld(world);
   }
 });
+
+// --- (e) cold start: the connection-string deep link launched the app ----------
+
+test('remote cold start: a connection-string deep link attaches without spawning the local child', async ({}, testInfo) => {
+  const transcript = new Transcript(
+    'remote-servers-cold-start',
+    'Cold-start connection-string deep link (packaged)',
+  );
+  const world = createWorld('remote-servers-cold-start', { auth: AUTH, presetWorkspaceRoot: true });
+  createRepo(world, 'remote-lab', { commit: true });
+  let remote: RemoteTestServer | null = null;
+  let handle: AppHandle | null = null;
+  try {
+    transcript.section('Start the isolated test-owned server (its own HOME, its own state dir)');
+    remote = await startRemoteServer(world, REMOTE_NAME);
+    expect(readAppRegistry(world)).toEqual([]);
+    transcript.step(
+      `remote listening on 127.0.0.1:${String(remote.port)}, outside the app registry`,
+    );
+
+    transcript.section('Launch the app with the connection string as its protocol argument');
+    // The OS delivers a protocol launch as argv (Windows/Linux) or as a
+    // pre-ready open-url event that the app buffers (macOS); both resolve
+    // through the same cold-start route, exercised here via argv.
+    handle = await launchApp(world, testInfo, {
+      traceName: 'remote-servers-cold-start-launch',
+      args: [remote.connectionString],
+    });
+    const keychain = await keychainAvailable(handle);
+    transcript.step(`OS keychain available (safeStorage): ${String(keychain)}`);
+    await waitFor(
+      async () => (await connectionState(handle!)).serverName === REMOTE_NAME,
+      'the cold-start attach to the remote server',
+      90_000,
+    );
+    const attached = await connectionState(handle);
+    expect(attached.status).toBe('ready');
+    expect(attached.ownership).toBe('external');
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(handle.page.locator('.sidebar__footer')).toContainText(REMOTE_NAME);
+    expect(JSON.stringify(attached)).not.toContain(remote.token);
+    transcript.step('the app attached to the linked server directly');
+
+    transcript.section('The bundled local child was never spawned');
+    // A spawned child publishes itself in the app registry; a remote attach
+    // records only a known-servers entry.
+    expect(readAppRegistry(world)).toEqual([]);
+    transcript.step('app registry stays empty: no app-owned server exists');
+
+    if (keychain) {
+      const prefs = await handle.page.evaluate(() => window.agentico.getSettings());
+      const remoteEntry = prefs.servers.known.find((entry) => entry.kind === 'remote');
+      expect(remoteEntry).toBeDefined();
+      expect(remoteEntry!.name).toBe(REMOTE_NAME);
+      expect(prefs.servers.lastUsed).toBe(remoteEntry!.serverKey);
+      expect(JSON.stringify(prefs)).not.toContain(remote.token);
+      transcript.step('the remote is persisted as last-used, token-free');
+    } else {
+      noteCapabilitySkip(testInfo, transcript, 'cold-start');
+    }
+
+    persistAppLogs(handle, 'remote-servers-cold-start-app');
+    transcript.write(testInfo);
+  } finally {
+    if (handle !== null) {
+      await closeApp(handle).catch(() => {});
+    }
+    if (remote !== null) {
+      await stopRemoteServer(remote);
+      if (remote.logs.length > 0) {
+        transcript.codeBlock('remote server stderr tail', tailText(remote.logs.join(''), 15));
+      }
+    }
+    assertNoLeakedProcesses(world);
+    destroyWorld(world);
+  }
+});

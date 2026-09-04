@@ -728,6 +728,32 @@ test('remote cold start: a connection-string deep link attaches without spawning
     });
     const keychain = await keychainAvailable(handle);
     transcript.step(`OS keychain available (safeStorage): ${String(keychain)}`);
+
+    if (!keychain) {
+      // Documented skip-alternate: without an OS keychain the add resolves
+      // session-only — nothing persists and the app does not switch — and
+      // the cold-start path must still never fall back to spawning the child.
+      await waitFor(
+        async () => {
+          const state = await connectionState(handle!);
+          return state.status === 'error' || state.status === 'ready';
+        },
+        'the cold-start attempt to settle',
+        90_000,
+      );
+      const settled = await connectionState(handle);
+      expect(settled.serverName ?? null).not.toBe(REMOTE_NAME);
+      expect(JSON.stringify(settled)).not.toContain(remote.token);
+      expect(readAppRegistry(world)).toEqual([]);
+      const prefs = await handle.page.evaluate(() => window.agentico.getSettings());
+      expect(prefs.servers.known.filter((entry) => entry.kind === 'remote')).toEqual([]);
+      transcript.step('session-only outcome: no switch, nothing persisted, no local child spawned');
+      noteCapabilitySkip(testInfo, transcript, 'cold-start');
+      persistAppLogs(handle, 'remote-servers-cold-start-app');
+      transcript.write(testInfo);
+      return;
+    }
+
     await waitFor(
       async () => (await connectionState(handle!)).serverName === REMOTE_NAME,
       'the cold-start attach to the remote server',
@@ -749,17 +775,13 @@ test('remote cold start: a connection-string deep link attaches without spawning
     expect(readAppRegistry(world)).toEqual([]);
     transcript.step('app registry stays empty: no app-owned server exists');
 
-    if (keychain) {
-      const prefs = await handle.page.evaluate(() => window.agentico.getSettings());
-      const remoteEntry = prefs.servers.known.find((entry) => entry.kind === 'remote');
-      expect(remoteEntry).toBeDefined();
-      expect(remoteEntry!.name).toBe(REMOTE_NAME);
-      expect(prefs.servers.lastUsed).toBe(remoteEntry!.serverKey);
-      expect(JSON.stringify(prefs)).not.toContain(remote.token);
-      transcript.step('the remote is persisted as last-used, token-free');
-    } else {
-      noteCapabilitySkip(testInfo, transcript, 'cold-start');
-    }
+    const prefs = await handle.page.evaluate(() => window.agentico.getSettings());
+    const remoteEntry = prefs.servers.known.find((entry) => entry.kind === 'remote');
+    expect(remoteEntry).toBeDefined();
+    expect(remoteEntry!.name).toBe(REMOTE_NAME);
+    expect(prefs.servers.lastUsed).toBe(remoteEntry!.serverKey);
+    expect(JSON.stringify(prefs)).not.toContain(remote.token);
+    transcript.step('the remote is persisted as last-used, token-free');
 
     persistAppLogs(handle, 'remote-servers-cold-start-app');
     transcript.write(testInfo);

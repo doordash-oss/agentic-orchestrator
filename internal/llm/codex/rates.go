@@ -33,23 +33,27 @@ type tokenRate struct {
 }
 
 // modelRates maps canonical model names to their token pricing.
-// Source: https://developers.openai.com/api/docs/pricing (July 2026)
+// Source: https://developers.openai.com/api/docs/pricing (verified 2026-09-04; standard API estimates, not ChatGPT credit prices)
 var modelRates = map[string]tokenRate{
+	"gpt-6-astra": {
+		inputPerMToken: 10, cachedInputPerMToken: 1, cacheWritePerMToken: 12.5, outputPerMToken: 50,
+		longInputPerMToken: 20, longCachedInputPerMToken: 2, longCacheWritePerMToken: 25, longOutputPerMToken: 75,
+	},
 	"gpt-5.6": {
-		inputPerMToken: 5.00, cachedInputPerMToken: 0.50, cacheWritePerMToken: 6.25, outputPerMToken: 30.00,
-		longInputPerMToken: 10.00, longCachedInputPerMToken: 1.00, longCacheWritePerMToken: 12.50, longOutputPerMToken: 45.00,
+		inputPerMToken: 4, cachedInputPerMToken: 0.4, cacheWritePerMToken: 5, outputPerMToken: 20,
+		longInputPerMToken: 8, longCachedInputPerMToken: 0.8, longCacheWritePerMToken: 10, longOutputPerMToken: 30,
 	},
 	"gpt-5.6-sol": {
-		inputPerMToken: 5.00, cachedInputPerMToken: 0.50, cacheWritePerMToken: 6.25, outputPerMToken: 30.00,
-		longInputPerMToken: 10.00, longCachedInputPerMToken: 1.00, longCacheWritePerMToken: 12.50, longOutputPerMToken: 45.00,
+		inputPerMToken: 4, cachedInputPerMToken: 0.4, cacheWritePerMToken: 5, outputPerMToken: 20,
+		longInputPerMToken: 8, longCachedInputPerMToken: 0.8, longCacheWritePerMToken: 10, longOutputPerMToken: 30,
 	},
 	"gpt-5.6-terra": {
-		inputPerMToken: 2.50, cachedInputPerMToken: 0.25, cacheWritePerMToken: 3.125, outputPerMToken: 15.00,
-		longInputPerMToken: 5.00, longCachedInputPerMToken: 0.50, longCacheWritePerMToken: 6.25, longOutputPerMToken: 22.50,
+		inputPerMToken: 2, cachedInputPerMToken: 0.2, cacheWritePerMToken: 2.5, outputPerMToken: 12,
+		longInputPerMToken: 4, longCachedInputPerMToken: 0.4, longCacheWritePerMToken: 5, longOutputPerMToken: 18,
 	},
 	"gpt-5.6-luna": {
-		inputPerMToken: 1.00, cachedInputPerMToken: 0.10, cacheWritePerMToken: 1.25, outputPerMToken: 6.00,
-		longInputPerMToken: 2.00, longCachedInputPerMToken: 0.20, longCacheWritePerMToken: 2.50, longOutputPerMToken: 9.00,
+		inputPerMToken: 0.2, cachedInputPerMToken: 0.02, cacheWritePerMToken: 0.25, outputPerMToken: 1.2,
+		longInputPerMToken: 0.4, longCachedInputPerMToken: 0.04, longCacheWritePerMToken: 0.5, longOutputPerMToken: 1.8,
 	},
 	"gpt-5.5":       {inputPerMToken: 5.00, cachedInputPerMToken: 0.50, outputPerMToken: 30.00, longInputPerMToken: 10.00, longCachedInputPerMToken: 1.00, longOutputPerMToken: 45.00},
 	"gpt-5.4":       {inputPerMToken: 2.50, cachedInputPerMToken: 0.25, outputPerMToken: 15.00, longInputPerMToken: 5.00, longCachedInputPerMToken: 0.50, longOutputPerMToken: 22.50},
@@ -60,12 +64,12 @@ var modelRates = map[string]tokenRate{
 // OpenAI applies long-context rates when a request exceeds 272K input tokens.
 const longContextInputThreshold = 272_000
 
-// defaultModel is the fallback when a model string doesn't match any rate entry.
+// defaultModel is the model requested when no model is configured.
 const defaultModel = "gpt-5.4"
 
 // lookupRate resolves a model string to its token rate.
-// It strips explicit context-window suffixes and falls back to the default
-// model rate for unrecognized gpt-* variants.
+// It strips context-window suffixes. Unknown models have no price; substituting
+// another model would produce a misleading estimate.
 func lookupRate(model string) (tokenRate, bool) {
 	m := strings.ToLower(llm.StripModelContextWindow(model))
 
@@ -78,11 +82,22 @@ func lookupRate(model string) (tokenRate, bool) {
 		return modelRates[defaultModel], true
 	}
 
-	// Any gpt-* variant we don't have specific rates for:
-	// fall back to the default model rate so cost is never silently zero.
-	if strings.HasPrefix(m, "gpt-") {
-		return modelRates[defaultModel], true
-	}
-
 	return tokenRate{}, false
+}
+
+// computeCostForServiceTier applies known API tier prices to the live fallback.
+// Provider billing reconciliation remains authoritative for account-specific
+// credits, promotions, and tiers not represented by this rate card.
+func computeCostForServiceTier(model, tier string, input, cached, writes, output, contextInput int) float64 {
+	cost := computeCostForContext(model, input, cached, writes, output, contextInput)
+	switch strings.ToLower(tier) {
+	case "flex", "batch":
+		return cost * 0.5
+	case "fast", "priority":
+		switch strings.ToLower(llm.StripModelContextWindow(model)) {
+		case "gpt-6-astra", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+			return cost * 2
+		}
+	}
+	return cost
 }

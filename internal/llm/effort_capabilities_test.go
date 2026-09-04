@@ -52,6 +52,9 @@ func TestCodexCatalogHasEffortCapabilities(t *testing.T) {
 			t.Errorf("model %s: expected non-empty EffortCapabilities", m.ID)
 		}
 		want := []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}
+		if llm.StripModelContextWindow(m.ID) == "gpt-6-astra" {
+			want = append(want, llm.EffortUltra)
+		}
 		if !equalEffortLevels(m.EffortCapabilities, want) {
 			t.Errorf("model %s: got %v, want %v", m.ID, m.EffortCapabilities, want)
 		}
@@ -166,13 +169,13 @@ func TestEffortCapabilitySupported(t *testing.T) {
 }
 
 func TestIsValidExplicitEffort(t *testing.T) {
-	valid := []llm.EffortLevel{llm.EffortAuto, llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}
+	valid := []llm.EffortLevel{llm.EffortAuto, llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax, llm.EffortUltra}
 	for _, level := range valid {
 		if !llm.IsValidExplicitEffort(level) {
 			t.Errorf("expected %q to be valid", level)
 		}
 	}
-	invalid := []llm.EffortLevel{"", "ultra", "extreme"}
+	invalid := []llm.EffortLevel{"", "invalid", "extreme"}
 	for _, level := range invalid {
 		if llm.IsValidExplicitEffort(level) {
 			t.Errorf("expected %q to be invalid", level)

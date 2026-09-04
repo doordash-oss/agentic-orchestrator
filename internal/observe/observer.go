@@ -254,6 +254,8 @@ func (o *Observer) SessionStarted(sc SpanContext, phase, sessionID, provider, mo
 // SessionUsage carries cost and token data for a completed session.
 // Defined in observe to avoid importing llm — callers convert from llm.Usage.
 type SessionUsage struct {
+	CostSource               string
+	CostCreditsMicros        *int64
 	TotalCostUSD             float64
 	InputTokens              int
 	OutputTokens             int
@@ -286,6 +288,13 @@ func (o *Observer) SessionEnded(sc SpanContext, phase, sessionID, repoName strin
 			"cache_creation_input_tokens": usage.CacheCreationInputTokens,
 		},
 	}
+	if usage.CostSource != "" {
+		evt.Data["cost_source"] = usage.CostSource
+	}
+	if usage.CostCreditsMicros != nil {
+		evt.Data["cost_credits_micros"] = *usage.CostCreditsMicros
+	}
+
 	if err != nil {
 		evt.Status = "error"
 		evt.Error = err.Error()

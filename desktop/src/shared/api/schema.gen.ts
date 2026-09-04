@@ -1118,6 +1118,10 @@ export interface components {
             path: string;
             valid: boolean;
             issue?: components["schemas"]["Error"];
+            /** @description Whether this root is suitable as a clone destination. A root that is valid for repository discovery may still be ineligible for cloning (e.g. it is not writable or is itself a repository). */
+            clone_eligible: boolean;
+            /** @description When clone_eligible is false, the canonical error explaining why the root cannot be used as a clone destination. */
+            clone_issue?: components["schemas"]["Error"];
         };
         RepositoryReadiness: {
             name: string;

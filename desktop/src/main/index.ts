@@ -541,6 +541,7 @@ if (!hasSingleInstanceLock) {
           return result.canceled || picked === undefined ? null : picked;
         },
       },
+      locality: () => gateway.connectedLocality,
     });
     const creationFiles = new CreationFilesService({
       pickFiles: pickCreationFiles,

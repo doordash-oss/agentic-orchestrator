@@ -1962,7 +1962,7 @@ components:
           x-go-type-skip-optional-pointer: false
     WorkspaceRootReadiness:
       type: object
-      required: [path, valid]
+      required: [path, valid, clone_eligible]
       properties:
         path:
           type: string
@@ -1971,6 +1971,18 @@ components:
         issue:
           $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
+        clone_eligible:
+          type: boolean
+          description: >-
+            Whether this root is suitable as a clone destination. A root that
+            is valid for repository discovery may still be ineligible for
+            cloning (e.g. it is not writable or is itself a repository).
+        clone_issue:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            When clone_eligible is false, the canonical error explaining why
+            the root cannot be used as a clone destination.
     RepositoryReadiness:
       type: object
       required: [name, path, valid]

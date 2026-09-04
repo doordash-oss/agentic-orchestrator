@@ -308,6 +308,10 @@ func configurationReadiness(cfg *config.Config) ConfigurationReadiness {
 // workspaceReadiness validates each configured workspace root and each
 // configured/discovered repository. Paths reported here are the user's own
 // configured locations (the same surface as the runtime-config endpoint).
+// Each root also carries clone eligibility: a root suitable for discovery
+// (valid) may still be unsuitable as a clone destination (not writable or
+// itself a repository), and that distinction is surfaced separately so
+// discovery is not globally invalidated.
 func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 	out := WorkspaceReadiness{
 		Roots:        []WorkspaceRootReadiness{},
@@ -318,12 +322,19 @@ func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 	}
 	for _, root := range cfg.WorkspaceRoots {
 		entry := WorkspaceRootReadiness{Path: root}
-		if info, err := os.Stat(workspace.ExpandHome(root)); err == nil && info.IsDir() {
+		expanded := workspace.ExpandHome(root)
+		if info, err := os.Stat(expanded); err == nil && info.IsDir() {
 			entry.Valid = true
+			entry.CloneEligible, entry.CloneIssue = cloneEligibility(expanded)
 		} else {
 			entry.Issue = readinessIssue(errcat.InvalidWorkspaceRoot,
 				errcat.WithParams(errcat.WorkspaceRootParams{Paths: []errcat.InvalidPath{{Path: root}}}),
 			)
+			entry.CloneEligible = false
+			cloneIssue := readinessIssue(errcat.InvalidWorkspaceRoot,
+				errcat.WithParams(errcat.WorkspaceRootParams{Paths: []errcat.InvalidPath{{Path: root}}}),
+			)
+			entry.CloneIssue = cloneIssue
 		}
 		out.Roots = append(out.Roots, entry)
 	}
@@ -345,6 +356,35 @@ func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 		out.Repositories = append(out.Repositories, entry)
 	}
 	return out
+}
+
+// cloneEligibility checks whether an existing directory is suitable as a
+// clone destination. A root is clone-eligible when it is writable and not
+// itself a git repository. Missing or non-directory roots are handled by the
+// caller before this function runs.
+func cloneEligibility(dir string) (bool, *Error) {
+	if workspace.IsGitRepo(dir) {
+		issue := readinessIssue(errcat.RootIsRepository)
+		return false, issue
+	}
+	if !isWritableDir(dir) {
+		issue := readinessIssue(errcat.RootNotWritable)
+		return false, issue
+	}
+	return true, nil
+}
+
+// isWritableDir checks whether the server process can write to a directory
+// by creating and removing a temporary file. The probe is atomic and does
+// not leave artifacts behind on success.
+func isWritableDir(dir string) bool {
+	tmp, err := os.CreateTemp(dir, ".agentico-clone-eligibility-*")
+	if err != nil {
+		return false
+	}
+	tmp.Close()
+	os.Remove(tmp.Name())
+	return true
 }
 
 // flattenReadinessIssues collects every outstanding issue across all

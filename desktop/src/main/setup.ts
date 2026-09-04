@@ -35,6 +35,7 @@ import {
 } from '../shared/ipc';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
+import { assertLocalConnection, alwaysLocal, type LocalitySource } from './locality';
 
 /** The authenticated transport surface the gateway provides. */
 export type SetupTransport = ServerTransport;
@@ -47,10 +48,14 @@ export interface SetupDialogs {
 export interface SetupServiceDeps {
   transport: SetupTransport;
   dialogs: SetupDialogs;
+  locality?: LocalitySource;
 }
 
 export class SetupService {
-  constructor(private readonly deps: SetupServiceDeps) {}
+  private readonly locality: LocalitySource;
+  constructor(private readonly deps: SetupServiceDeps) {
+    this.locality = deps.locality ?? alwaysLocal;
+  }
 
   async getReadiness(): Promise<ReadinessSnapshot> {
     const body = await this.api('/api/v1/readiness');
@@ -63,6 +68,7 @@ export class SetupService {
   }
 
   async pickWorkspaceDirectory(): Promise<PickedDirectory> {
+    assertLocalConnection(this.locality);
     const picked = await this.deps.dialogs.pickDirectory();
     if (picked === null) {
       return { path: null };
@@ -81,6 +87,7 @@ export class SetupService {
    * returns the fresh authoritative readiness snapshot.
    */
   async addWorkspaceRoot(path: string): Promise<ReadinessSnapshot> {
+    assertLocalConnection(this.locality);
     const validated = validateWithSchema(path, AbsolutePathSchema);
     const configBody = await this.api('/api/v1/config/runtime');
     const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
@@ -99,6 +106,7 @@ export class SetupService {
    * Existing features remain intact; discovery refreshes from the server.
    */
   async removeWorkspaceRoot(path: string): Promise<ReadinessSnapshot> {
+    assertLocalConnection(this.locality);
     const validated = validateWithSchema(path, AbsolutePathSchema);
     const configBody = await this.api('/api/v1/config/runtime');
     const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
@@ -119,6 +127,7 @@ export class SetupService {
    * only the order changes.
    */
   async reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot> {
+    assertLocalConnection(this.locality);
     const validated = paths.map((p) => validateWithSchema(p, AbsolutePathSchema));
     const configBody = await this.api('/api/v1/config/runtime');
     const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
@@ -140,6 +149,7 @@ export class SetupService {
    * fresh discovery snapshot is returned so the renderer never infers state.
    */
   async initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot> {
+    assertLocalConnection(this.locality);
     if (request.consent !== true) {
       throw new CanonicalErrorException(buildCanonicalError('E_CONSENT_REQUIRED'));
     }
@@ -191,6 +201,8 @@ export function toReadinessSnapshot(server: ReadinessResponse): ReadinessSnapsho
       path: root.path,
       valid: root.valid,
       ...(root.issue === undefined ? {} : { issue: root.issue }),
+      cloneEligible: root.clone_eligible,
+      ...(root.clone_issue === undefined ? {} : { cloneIssue: root.clone_issue }),
     })),
     repositories: server.workspace.repositories.map((repository) => ({
       name: repository.name,

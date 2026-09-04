@@ -929,3 +929,119 @@ func TestProviderModelRefreshHandlesUnknownUnreadyAndUnsupportedProviders(t *tes
 		t.Fatalf("unsupported provider status = %d body=%s; want 409", cannotRefresh.Code, cannotRefresh.Body.String())
 	}
 }
+
+func TestWorkspaceRootCloneEligibility(t *testing.T) {
+	t.Parallel()
+
+	// writableNonRepo: a plain writable directory — clone_eligible=true.
+	writableNonRepo := t.TempDir()
+
+	// gitRepoRoot: a directory that is itself a git repository —
+	// clone_eligible=false, clone_issue code root_is_repository.
+	gitRepoRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(gitRepoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git dir: %v", err)
+	}
+
+	// readOnlyDir: a directory without write permission —
+	// clone_eligible=false, clone_issue code root_not_writable.
+	readOnlyDir := t.TempDir()
+	if err := os.Chmod(readOnlyDir, 0o555); err != nil {
+		t.Fatalf("chmod read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(readOnlyDir, 0o755) })
+
+	// missingRoot: a path that does not exist —
+	// clone_eligible=false, clone_issue code invalid_workspace_root.
+	missingRoot := filepath.Join(t.TempDir(), "does-not-exist")
+
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{
+		writableNonRepo,
+		gitRepoRoot,
+		readOnlyDir,
+		missingRoot,
+	}
+
+	handler := NewHandler(HandlerOptions{
+		Config:                cfg,
+		Registry:              newReadinessRegistry(),
+		DisableHostValidation: true,
+	})
+
+	snapshot := getReadinessSnapshot(t, handler)
+
+	rootsByPath := map[string]WorkspaceRootReadiness{}
+	for _, r := range snapshot.Workspace.Roots {
+		rootsByPath[r.Path] = r
+	}
+
+	// Writable non-repo directory: clone_eligible=true, clone_issue=nil.
+	entry, ok := rootsByPath[writableNonRepo]
+	if !ok {
+		t.Fatalf("writable non-repo root missing from snapshot: %+v", snapshot.Workspace.Roots)
+	}
+	if !entry.Valid {
+		t.Fatalf("writable non-repo root valid = false; want true: %+v", entry)
+	}
+	if !entry.CloneEligible {
+		t.Fatalf("writable non-repo root clone_eligible = false; want true: %+v", entry)
+	}
+	if entry.CloneIssue != nil {
+		t.Fatalf("writable non-repo root clone_issue = %+v; want nil", entry.CloneIssue)
+	}
+
+	// Git repository root: clone_eligible=false, clone_issue root_is_repository.
+	entry, ok = rootsByPath[gitRepoRoot]
+	if !ok {
+		t.Fatalf("git-repo root missing from snapshot: %+v", snapshot.Workspace.Roots)
+	}
+	if !entry.Valid {
+		t.Fatalf("git-repo root valid = false; want true: %+v", entry)
+	}
+	if entry.CloneEligible {
+		t.Fatalf("git-repo root clone_eligible = true; want false: %+v", entry)
+	}
+	if entry.CloneIssue == nil || entry.CloneIssue.Code != string(errcat.RootIsRepository) {
+		t.Fatalf("git-repo root clone_issue = %+v; want root_is_repository", entry.CloneIssue)
+	}
+
+	// Read-only directory: clone_eligible=false, clone_issue root_not_writable.
+	entry, ok = rootsByPath[readOnlyDir]
+	if !ok {
+		t.Fatalf("read-only root missing from snapshot: %+v", snapshot.Workspace.Roots)
+	}
+	if !entry.Valid {
+		t.Fatalf("read-only root valid = false; want true: %+v", entry)
+	}
+	if entry.CloneEligible {
+		t.Fatalf("read-only root clone_eligible = true; want false: %+v", entry)
+	}
+	if entry.CloneIssue == nil || entry.CloneIssue.Code != string(errcat.RootNotWritable) {
+		t.Fatalf("read-only root clone_issue = %+v; want root_not_writable", entry.CloneIssue)
+	}
+
+	// Missing root: clone_eligible=false, clone_issue invalid_workspace_root.
+	// Also valid=false (the root itself is invalid for discovery).
+	entry, ok = rootsByPath[missingRoot]
+	if !ok {
+		t.Fatalf("missing root missing from snapshot: %+v", snapshot.Workspace.Roots)
+	}
+	if entry.Valid {
+		t.Fatalf("missing root valid = true; want false: %+v", entry)
+	}
+	if entry.CloneEligible {
+		t.Fatalf("missing root clone_eligible = true; want false: %+v", entry)
+	}
+	if entry.CloneIssue == nil || entry.CloneIssue.Code != string(errcat.InvalidWorkspaceRoot) {
+		t.Fatalf("missing root clone_issue = %+v; want invalid_workspace_root", entry.CloneIssue)
+	}
+
+	// A root valid for discovery but not clone-eligible does NOT
+	// invalidate the root for discovery: the git-repo root has
+	// valid=true and clone_eligible=false.
+	entry = rootsByPath[gitRepoRoot]
+	if !entry.Valid || entry.CloneEligible {
+		t.Fatalf("git-repo root should be valid=true clone_eligible=false: %+v", entry)
+	}
+}

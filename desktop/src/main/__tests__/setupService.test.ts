@@ -54,7 +54,7 @@ function serverReadiness(overrides: Record<string, unknown> = {}): Record<string
     models: { available: false, issue: modelsIssue },
     configuration: { valid: true },
     workspace: {
-      roots: [{ path: '/work/space', valid: true }],
+      roots: [{ path: '/work/space', valid: true, clone_eligible: true }],
       repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true }],
     },
     issues: [claudeIssue, modelsIssue],
@@ -94,7 +94,9 @@ describe('SetupService.getReadiness', () => {
     expect(snapshot.probedAt).toBe('2026-07-14T10:00:00Z');
     expect(snapshot.providers).toHaveLength(2);
     expect(snapshot.providers[0]?.issue?.remediation?.hint).toBe('claude login');
-    expect(snapshot.workspaceRoots).toEqual([{ path: '/work/space', valid: true }]);
+    expect(snapshot.workspaceRoots).toEqual([
+      { path: '/work/space', valid: true, cloneEligible: true },
+    ]);
     expect(snapshot.repositories[0]?.name).toBe('repo-a');
     expect(snapshot.issues.map((issue) => issue.code)).toEqual([
       'unauthenticated',
@@ -144,7 +146,7 @@ describe('CreationFilesService', () => {
       status: 200,
       body: serverReadiness({
         workspace: {
-          roots: [{ path: root, valid: true }],
+          roots: [{ path: root, valid: true, clone_eligible: true }],
           repositories: [{ name: 'repo-a', path: root, valid: true }],
         },
       }),
@@ -402,5 +404,71 @@ describe('SetupService.pickWorkspaceDirectory', () => {
     expect(failure).toBeInstanceOf(CanonicalErrorException);
     expect((failure as CanonicalErrorException).canonical.code).toBe('E_INVALID_PATH');
     expect(JSON.stringify((failure as CanonicalErrorException).canonical)).not.toContain('sneaky');
+  });
+});
+
+describe('SetupService locality enforcement', () => {
+  function makeRemoteService(): { service: SetupService; calls: Call[] } {
+    const calls: Call[] = [];
+    const service = new SetupService({
+      transport: {
+        apiRequest: (path, init) => {
+          calls.push(init === undefined ? { path } : { path, init });
+          return Promise.resolve({ status: 200, body: serverReadiness() });
+        },
+      },
+      dialogs: { pickDirectory: () => Promise.resolve('/work/picked') },
+      locality: () => 'remote',
+    });
+    return { service, calls };
+  }
+
+  it('addWorkspaceRoot throws E_REQUIRES_LOCAL_SERVER without calling the transport', async () => {
+    const { service, calls } = makeRemoteService();
+    await expect(service.addWorkspaceRoot('/work/new')).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('removeWorkspaceRoot throws E_REQUIRES_LOCAL_SERVER without calling the transport', async () => {
+    const { service, calls } = makeRemoteService();
+    await expect(service.removeWorkspaceRoot('/work/old')).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('reorderWorkspaceRoots throws E_REQUIRES_LOCAL_SERVER without calling the transport', async () => {
+    const { service, calls } = makeRemoteService();
+    await expect(service.reorderWorkspaceRoots(['/a', '/b'])).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('pickWorkspaceDirectory throws E_REQUIRES_LOCAL_SERVER without calling the dialog', async () => {
+    const pick = vi.fn(() => Promise.resolve('/work/picked'));
+    const service = new SetupService({
+      transport: {
+        apiRequest: () => Promise.resolve({ status: 200, body: serverReadiness() }),
+      },
+      dialogs: { pickDirectory: pick },
+      locality: () => 'remote',
+    });
+    await expect(service.pickWorkspaceDirectory()).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(pick).not.toHaveBeenCalled();
+  });
+
+  it('initRepository throws E_REQUIRES_LOCAL_SERVER without calling the transport', async () => {
+    const { service, calls } = makeRemoteService();
+    await expect(
+      service.initRepository({ path: '/work/repo', consent: true }),
+    ).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(calls).toHaveLength(0);
   });
 });

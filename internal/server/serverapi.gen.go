@@ -2972,6 +2972,12 @@ type WorkspaceRepository struct {
 
 // WorkspaceRootReadiness defines model for WorkspaceRootReadiness.
 type WorkspaceRootReadiness struct {
+	// CloneEligible Whether this root is suitable as a clone destination. A root that is valid for repository discovery may still be ineligible for cloning (e.g. it is not writable or is itself a repository).
+	CloneEligible bool `json:"clone_eligible"`
+
+	// CloneIssue When clone_eligible is false, the canonical error explaining why the root cannot be used as a clone destination.
+	CloneIssue *Error `json:"clone_issue,omitempty"`
+
 	// Issue Canonical catalog-rendered error.
 	Issue *Error `json:"issue,omitempty"`
 	Path  string `json:"path"`

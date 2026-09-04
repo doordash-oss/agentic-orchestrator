@@ -389,6 +389,8 @@ export const ReadinessResponseSchema = z.object({
         path: z.string(),
         valid: z.boolean(),
         issue: CanonicalErrorSchema.optional(),
+        clone_eligible: z.boolean(),
+        clone_issue: CanonicalErrorSchema.optional(),
       }),
     ),
     repositories: z.array(

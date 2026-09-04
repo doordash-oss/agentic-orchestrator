@@ -1284,7 +1284,7 @@ const READY_SNAPSHOT: ReadinessSnapshot = {
   providers: [{ name: 'claude', installed: true, version: '2.1.0', ready: true }],
   models: { available: true, models: ['claude-sonnet-4-5'] },
   configuration: { valid: true },
-  workspaceRoots: [{ path: '/work/space', valid: true }],
+  workspaceRoots: [{ path: '/work/space', valid: true, cloneEligible: true }],
   repositories: [
     { name: 'signal-lab', path: '/work/space/signal-lab', valid: true },
     { name: 'orchestrator-core', path: '/work/space/orchestrator-core', valid: true },

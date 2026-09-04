@@ -401,3 +401,65 @@ describe('SetupService transport confinement', () => {
     }
   });
 });
+
+describe('SetupService locality enforcement on a remote connection', () => {
+  const remoteLocality = () => 'remote' as const;
+
+  function makeRemoteSetupService() {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: {
+          api_version: 'v1',
+          ready: false,
+          providers: [],
+          models: { available: false },
+          configuration: { valid: true },
+          workspace: {
+            roots: [{ path: '/work', valid: true, clone_eligible: true }],
+            repositories: [],
+          },
+        },
+      }),
+    );
+    const pickDirectory = vi.fn(() => Promise.resolve(null));
+    const service = new SetupService({
+      transport: { apiRequest },
+      dialogs: { pickDirectory },
+      locality: remoteLocality,
+    });
+    return { service, apiRequest, pickDirectory };
+  }
+
+  it('addWorkspaceRoot refuses with E_REQUIRES_LOCAL_SERVER and never calls the transport', async () => {
+    const { service, apiRequest } = makeRemoteSetupService();
+    await expect(service.addWorkspaceRoot('/work/new')).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it('removeWorkspaceRoot refuses with E_REQUIRES_LOCAL_SERVER and never calls the transport', async () => {
+    const { service, apiRequest } = makeRemoteSetupService();
+    await expect(service.removeWorkspaceRoot('/work/old')).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it('reorderWorkspaceRoots refuses with E_REQUIRES_LOCAL_SERVER and never calls the transport', async () => {
+    const { service, apiRequest } = makeRemoteSetupService();
+    await expect(service.reorderWorkspaceRoots(['/a', '/b'])).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it('pickWorkspaceDirectory refuses with E_REQUIRES_LOCAL_SERVER and never calls the dialog', async () => {
+    const { service, pickDirectory } = makeRemoteSetupService();
+    await expect(service.pickWorkspaceDirectory()).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(pickDirectory).not.toHaveBeenCalled();
+  });
+});

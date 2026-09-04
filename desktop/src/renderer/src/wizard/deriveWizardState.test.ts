@@ -83,6 +83,7 @@ describe('deriveWizardState', () => {
         {
           path: '/gone',
           valid: false,
+          cloneEligible: false,
           issue: canonicalIssue(
             'invalid_workspace_root',
             'Invalid workspace root',

@@ -129,7 +129,7 @@ describe('the creation sheet across its four steps', () => {
     mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/solo' });
     mock.api.addWorkspaceRoot.mockResolvedValue(
       readySnapshot({
-        workspaceRoots: [{ path: '/work/solo', valid: true }],
+        workspaceRoots: [{ path: '/work/solo', valid: true, cloneEligible: true }],
         repositories: [{ name: 'solo', path: '/work/solo', valid: true }],
       }),
     );
@@ -149,17 +149,19 @@ describe('the creation sheet across its four steps', () => {
     const mock = installAgenticoMock({ defaults: creationDefaults({ repositories: [] }) });
     mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space/fresh' });
     mock.api.addWorkspaceRoot.mockResolvedValue(
-      readySnapshot({ workspaceRoots: [{ path: '/work/space/fresh', valid: true }] }),
+      readySnapshot({
+        workspaceRoots: [{ path: '/work/space/fresh', valid: true, cloneEligible: true }],
+      }),
     );
     mock.api.initRepository.mockResolvedValue(
       readySnapshot({
-        workspaceRoots: [{ path: '/work/space/fresh', valid: true }],
+        workspaceRoots: [{ path: '/work/space/fresh', valid: true, cloneEligible: true }],
         repositories: [{ name: 'fresh', path: '/work/space/fresh', valid: true }],
       }),
     );
     mock.api.removeWorkspaceRoot.mockResolvedValue(
       readySnapshot({
-        workspaceRoots: [{ path: '/work/space/fresh', valid: true }],
+        workspaceRoots: [{ path: '/work/space/fresh', valid: true, cloneEligible: true }],
         repositories: [{ name: 'fresh', path: '/work/space/fresh', valid: true }],
       }),
     );
@@ -190,7 +192,9 @@ describe('the creation sheet across its four steps', () => {
     const mock = installAgenticoMock({ defaults: creationDefaults({ repositories: [] }) });
     mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space/full' });
     mock.api.addWorkspaceRoot.mockResolvedValue(
-      readySnapshot({ workspaceRoots: [{ path: '/work/space/full', valid: true }] }),
+      readySnapshot({
+        workspaceRoots: [{ path: '/work/space/full', valid: true, cloneEligible: true }],
+      }),
     );
     mock.api.initRepository.mockRejectedValue(
       ipcError('directory_not_empty', 'The directory is not empty and is not a git repository.', {
@@ -683,102 +687,26 @@ describe('the creation sheet across its four steps', () => {
 });
 
 describe('the creation sheet on a remote server', () => {
-  it('swaps the folder browse for server-validated typed path entry', async () => {
+  it('hides all add-folder controls while keeping existing repositories selectable', async () => {
     const mock = installAgenticoMock({
       connection: READY_REMOTE,
-      defaults: creationDefaults({ repositories: [] }),
+      defaults: creationDefaults(),
     });
-    mock.api.addWorkspaceRoot.mockResolvedValue(
-      readySnapshot({
-        workspaceRoots: [{ path: '/srv/work/solo', valid: true }],
-        repositories: [{ name: 'solo', path: '/srv/work/solo', valid: true }],
-      }),
-    );
     const { user } = await renderForm(mock);
 
-    // The native dialog is gone: only the server can see its own folders.
+    // No add-folder controls are rendered on a remote server.
     expect(screen.queryByRole('button', { name: 'Browse for folder' })).toBeNull();
-    const field = screen.getByLabelText('Folder path on the server');
-    expect(screen.getByText(/validated on the server host/)).toBeVisible();
+    expect(screen.queryByLabelText('Folder path on the server')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Use this path' })).toBeNull();
 
-    // A non-absolute entry is refused before the server is ever asked.
-    await user.type(field, 'srv/work/solo');
-    await user.click(screen.getByRole('button', { name: 'Use this path' }));
-    expect(await screen.findByText(/starting with \//)).toHaveClass('field-error');
-    expect(field).toHaveAttribute('aria-describedby', 'creation-folder-path-error');
-    expect(field).toHaveAttribute('aria-invalid', 'true');
-    expect(mock.api.pickWorkspaceDirectory).not.toHaveBeenCalled();
-    expect(mock.api.addWorkspaceRoot).not.toHaveBeenCalled();
+    // Existing configured repositories are still selectable.
+    const repoCheckbox = screen.getByRole('checkbox', { name: /repo-a/ });
+    expect(repoCheckbox).toBeVisible();
+    await user.click(repoCheckbox);
+    expect(repoCheckbox).toBeChecked();
 
-    // The server's rejection stays beside the field and names the bad path.
-    await user.clear(field);
-    await user.type(field, '/srv/work/solo');
-    await user.click(screen.getByRole('button', { name: 'Use this path' }));
-    mock.api.addWorkspaceRoot.mockRejectedValueOnce(
-      ipcError('invalid_workspace_root', '/srv/work/solo does not exist on this server'),
-    );
-    await user.click(screen.getByRole('button', { name: 'Use this folder' }));
-    expect(await screen.findByText('/srv/work/solo does not exist on this server')).toHaveClass(
-      'field-error',
-    );
-    expect(field).toHaveAttribute('aria-describedby', 'creation-folder-path-error');
-
-    // A valid path saves and the discovered repository selects itself.
-    await user.click(screen.getByRole('button', { name: 'Use this folder' }));
-    expect(mock.api.addWorkspaceRoot).toHaveBeenLastCalledWith('/srv/work/solo');
-    expect(await screen.findByRole('checkbox', { name: /solo/ })).toBeChecked();
-    expect(screen.getByText('Added solo and selected it.')).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     expect(screen.getByRole('heading', { name: 'Define the work' })).toBeVisible();
-  });
-
-  it('initializes a typed folder as a repository with server errors surfaced inline', async () => {
-    const mock = installAgenticoMock({
-      connection: READY_REMOTE,
-      defaults: creationDefaults({ repositories: [] }),
-    });
-    mock.api.addWorkspaceRoot.mockResolvedValue(
-      readySnapshot({ workspaceRoots: [{ path: '/srv/work/fresh', valid: true }] }),
-    );
-    mock.api.removeWorkspaceRoot.mockResolvedValue(
-      readySnapshot({
-        workspaceRoots: [{ path: '/srv/work/fresh', valid: true }],
-        repositories: [{ name: 'fresh', path: '/srv/work/fresh', valid: true }],
-      }),
-    );
-    mock.api.initRepository
-      .mockRejectedValueOnce(
-        ipcError('directory_not_empty', 'the directory contains files. Empty it or pick another.'),
-      )
-      .mockResolvedValue(
-        readySnapshot({
-          workspaceRoots: [{ path: '/srv/work/fresh', valid: true }],
-          repositories: [{ name: 'fresh', path: '/srv/work/fresh', valid: true }],
-        }),
-      );
-    const { user } = await renderForm(mock);
-
-    await user.type(screen.getByLabelText('Folder path on the server'), '/srv/work/fresh');
-    await user.click(screen.getByRole('button', { name: 'Use this path' }));
-    await user.click(screen.getByRole('button', { name: 'Use this folder' }));
-    expect(await screen.findByText(/holds no git repository yet/i)).toBeVisible();
-    expect(screen.getByText(/or type a different folder/)).toBeVisible();
-
-    await user.click(screen.getByRole('button', { name: /Initialize it as a repository/ }));
-    await user.click(screen.getByRole('button', { name: 'Initialize repository' }));
-
-    // The transient parent root dance is unchanged remotely; the server's
-    // rejection stays next to the typed path, recoverable in place.
-    expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/srv/work');
-    expect(mock.api.initRepository).toHaveBeenCalledWith({
-      path: '/srv/work/fresh',
-      consent: true,
-    });
-    expect(await screen.findByText(/the directory contains files/)).toHaveClass('field-error');
-
-    await user.click(screen.getByRole('button', { name: /Initialize it as a repository/ }));
-    await user.click(screen.getByRole('button', { name: 'Initialize repository' }));
-    expect(await screen.findByRole('checkbox', { name: /fresh/ })).toBeChecked();
   });
 
   it('stages picked files as uploads and submits references, never local paths', async () => {

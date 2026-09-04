@@ -90,6 +90,13 @@ const (
 	DirectoryNotEmpty        Code = "directory_not_empty"
 )
 
+// Clone-eligibility codes for workspace roots.
+const (
+	RootNotWritable    Code = "root_not_writable"
+	RootIsRepository   Code = "root_is_repository"
+	NoCloneEligibleRoot Code = "no_clone_eligible_root"
+)
+
 // Readiness and provider codes.
 const (
 	NotReady                        Code = "not_ready"
@@ -442,6 +449,24 @@ var catalog = map[Code]Entry{
 			return "Some workspace roots do not resolve to existing directories: " + strings.Join(paths, "; ") + "."
 		},
 		Remediation: "Create the directory or update workspace_roots in the runtime configuration.",
+	},
+	RootNotWritable: {
+		Class:       ClassBlocking,
+		Title:       "Root is not writable",
+		Summary:     "The server process does not have write permission for this workspace root.",
+		Remediation: "Ask the server administrator to grant write access to the directory.",
+	},
+	RootIsRepository: {
+		Class:       ClassBlocking,
+		Title:       "Root is a repository",
+		Summary:     "This workspace root is itself a git repository and cannot be used as a clone destination.",
+		Remediation: "Choose a different root or configure a parent directory as a workspace root.",
+	},
+	NoCloneEligibleRoot: {
+		Class:       ClassBlocking,
+		Title:       "No clone-eligible root",
+		Summary:     "No configured workspace root is suitable for cloning.",
+		Remediation: "Ask the server administrator to configure a writable, non-repository directory as a workspace root.",
 	},
 
 	// --- Publish failure codes -------------------------------------------------

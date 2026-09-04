@@ -398,47 +398,28 @@ const READY_REMOTE: ConnectionState = {
 };
 
 describe('SettingsPanel workspace roots on a remote server', () => {
-  it('replaces the native picker with typed paths the server validates inline', async () => {
-    const user = userEvent.setup();
-    const mock = installAgenticoMock({
+  it('hides add/remove/reorder controls and shows a managed-by-administrator message', async () => {
+    installAgenticoMock({
       connection: READY_REMOTE,
-      readiness: readySnapshot(),
+      readiness: readySnapshot({
+        workspaceRoots: [{ path: '/srv/work', valid: true, cloneEligible: true }],
+      }),
     });
-    mock.api.addWorkspaceRoot.mockRejectedValueOnce(
-      ipcError('invalid_workspace_root', '/srv/work/gone does not exist on this server'),
-    );
     render(<SettingsPanel pane="workspace-roots" />);
 
-    // The native dialog is gone: only the server can see its own folders.
-    const field = await screen.findByLabelText('Folder path on the server');
+    // The root list is still visible.
+    expect(await screen.findByText('/srv/work')).toBeVisible();
+
+    // Add/remove/reorder controls are not rendered.
     expect(screen.queryByRole('button', { name: 'Add workspace root' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add root' })).toBeNull();
+    expect(screen.queryByLabelText('Folder path on the server')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Move /srv/work up' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Move /srv/work down' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove /srv/work' })).toBeNull();
 
-    // A non-absolute entry is refused before the server is ever asked; the
-    // message is a FieldError described by the input.
-    await user.type(field, 'srv/work');
-    await user.click(screen.getByRole('button', { name: 'Add root' }));
-    const localError = await screen.findByText(/starting with \//);
-    expect(localError).toHaveClass('field-error');
-    expect(field).toHaveAttribute('aria-describedby', 'settings-root-add-error');
-    expect(field).toHaveAttribute('aria-invalid', 'true');
-    expect(mock.api.addWorkspaceRoot).not.toHaveBeenCalled();
-
-    // The server's rejection renders inline and names the bad path.
-    await user.clear(field);
-    await user.type(field, '/srv/work/gone');
-    await user.click(screen.getByRole('button', { name: 'Add root' }));
-    const serverError = await screen.findByText('/srv/work/gone does not exist on this server');
-    expect(serverError).toHaveClass('field-error');
-    expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/srv/work/gone');
-
-    // A valid path saves through the same PATCH-backed action and clears.
-    await user.clear(field);
-    await user.type(field, '/srv/work');
-    await user.click(screen.getByRole('button', { name: 'Add root' }));
-    await waitFor(() => expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/srv/work'));
-    await waitFor(() => expect(field).toHaveValue(''));
-    expect(document.querySelector('.field-error')).toBeNull();
-    expect(field).not.toHaveAttribute('aria-invalid');
+    // The managed-by-administrator message is shown.
+    expect(screen.getByText(/managed by the server administrator/)).toBeVisible();
   });
 
   it("renders an invalid root's issue as a FieldError beside the row", async () => {
@@ -448,6 +429,7 @@ describe('SettingsPanel workspace roots on a remote server', () => {
           {
             path: '/work/gone',
             valid: false,
+            cloneEligible: false,
             issue: {
               code: 'invalid_workspace_root',
               class: 'blocking',

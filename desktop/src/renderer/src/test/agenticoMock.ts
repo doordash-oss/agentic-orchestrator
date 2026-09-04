@@ -126,7 +126,7 @@ export function readySnapshot(overrides: Partial<ReadinessSnapshot> = {}): Readi
     providers: [{ name: 'claude', installed: true, version: '2.1.0', ready: true }],
     models: { available: true, models: ['claude-sonnet-4-5'] },
     configuration: { valid: true },
-    workspaceRoots: [{ path: '/work/space', valid: true }],
+    workspaceRoots: [{ path: '/work/space', valid: true, cloneEligible: true }],
     repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true }],
     issues: [],
     ...overrides,

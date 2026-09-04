@@ -651,6 +651,8 @@ export const WorkspaceRootStateSchema = z.strictObject({
   path: z.string(),
   valid: z.boolean(),
   issue: ReadinessIssueSchema.optional(),
+  cloneEligible: z.boolean(),
+  cloneIssue: ReadinessIssueSchema.optional(),
 });
 
 export type WorkspaceRootState = z.output<typeof WorkspaceRootStateSchema>;

@@ -39,12 +39,40 @@ const (
 	CompletionIntentRetry   CompletionIntentStatus = "retry"
 )
 
-// CompletionIntent is parsed only from final root-assistant text.
+// CompletionIntent is the root agent's requested outcome. Providers carry it
+// through either a structured tool request or final root-assistant text.
 type CompletionIntent struct {
 	Found   bool                   `json:"-"`
 	Status  CompletionIntentStatus `json:"status,omitempty"`
 	Summary string                 `json:"summary,omitempty"`
 	Error   string                 `json:"-"`
+}
+
+// PhaseCompletionRequest asks the harness to validate and commit a phase.
+// Receiving a request alone never authorizes completion.
+type PhaseCompletionRequest struct {
+	RequestID string
+	Intent    CompletionIntent
+}
+
+// StructuredCompletionProtocol exposes provider-native completion requests.
+// The harness answers each request after checking the phase contract.
+type StructuredCompletionProtocol interface {
+	UsesStructuredCompletion() bool
+	RespondToCompletion(requestID string, accepted bool, message string) error
+}
+
+// Harness-owned structured tool names shared by providers that expose them
+// and by the prompts and nudges that reference them.
+const (
+	AskUserToolName       = "ask_user"
+	CompletePhaseToolName = "complete_phase"
+)
+
+// CompletionToolProvider is implemented by providers whose sessions commit
+// phases through a structured tool call instead of prose outcome tags.
+type CompletionToolProvider interface {
+	CompletionToolName() string
 }
 
 // TurnDisposition is the harness's provider-neutral interpretation of one
@@ -127,7 +155,8 @@ func ClassifyTurn(in TurnSignals) TurnDisposition {
 	return TurnProtocolViolation
 }
 
-// Valid reports whether the text contained exactly one recognized outcome.
+// Valid reports whether the provider supplied a recognized outcome without
+// a parsing or protocol error.
 func (i CompletionIntent) Valid() bool {
 	return i.Found && i.Error == "" &&
 		(i.Status == CompletionIntentSuccess || i.Status == CompletionIntentRetry)

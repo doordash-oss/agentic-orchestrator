@@ -67,7 +67,6 @@ type implementationReviewAxis struct {
 	SkillName        string
 	Role             Role
 	ExecutionPosture implementationReviewExecutionPosture
-	ModelOverride    string
 	Memberships      []implementationReviewGateMembership
 }
 
@@ -288,10 +287,6 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 	}
 
 	reviewID := implementationReviewSessionID(cfg, axisSlug, iteration)
-	model := cfg.ReviewModel
-	if axis.ModelOverride != "" {
-		model = axis.ModelOverride
-	}
 	helper := &PhaseRunner{
 		SessionManager: sm,
 		FeatureStore:   cfg.FeatureStore,
@@ -310,7 +305,7 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		FeatureID:              featureID,
 		Phase:                  feature.PhaseReview,
 		ParentSpanCtx:          parentCtx,
-		Model:                  model,
+		Model:                  cfg.ReviewModel,
 		Prompt:                 reviewPrompt,
 		PromptPath:             filepath.Join(axisDir, "review-prompt.md"),
 		FeedbackPath:           feedbackPath,
@@ -322,6 +317,7 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		LogPath:                filepath.Join(axisDir, "review-output.txt"),
 		SystemPromptPrefix:     "implementation-review-" + axisSlug,
 		CompletionAskingClause: cfg.AskingClause,
+		CompletionTool:         cfg.CompletionTool,
 		EffortLevel:            reviewHelperEffortFromImpl(cfg),
 		EffectiveEffort:        cfg.ReviewEffectiveEffort,
 		EffortSource:           cfg.ReviewEffortSource,

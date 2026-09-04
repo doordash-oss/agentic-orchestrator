@@ -98,6 +98,21 @@ func (pr *PhaseRunner) askingQuestionsClauseForModel(model string) string {
 	return pa.AskingQuestionsClause()
 }
 
+// completionToolForModel selects the provider's structured completion transport.
+func (pr *PhaseRunner) completionToolForModel(model string) string {
+	if pr.Registry == nil {
+		return ""
+	}
+	provider, _, err := pr.Registry.ResolveModel(model)
+	if err != nil {
+		return ""
+	}
+	if p, ok := provider.(llm.CompletionToolProvider); ok {
+		return p.CompletionToolName()
+	}
+	return ""
+}
+
 // phaseExitGate resolves the feature's phase-exit gate; nil when no factory
 // is installed or the factory declines to gate the feature.
 func (pr *PhaseRunner) phaseExitGate(f *feature.Feature) PhaseExitGate {
@@ -201,6 +216,7 @@ func (pr *PhaseRunner) SessionRuntimeConfigResolver(featureID string) func(llm.P
 			EffectiveEffort: effort,
 			EffortSource:    effortSource,
 			AskingClause:    pr.askingQuestionsClauseForModel(model),
+			CompletionTool:  pr.completionToolForModel(model),
 		}, nil
 	}
 }
@@ -277,12 +293,13 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	effectiveEffort, effortSource := pr.resolveEffortForRole(f, cfg.ModelRole, phaseModel)
 
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:          cfg.Spec,
-		IterationDir:  artifactDir,
-		SkillsDir:     pr.SkillsDir,
-		GuidelinesDir: cfg.GuidelinesDir,
-		KBInfos:       cfg.KBInfos,
-		AskingClause:  pr.askingQuestionsClauseForModel(phaseModel),
+		Spec:           cfg.Spec,
+		IterationDir:   artifactDir,
+		SkillsDir:      pr.SkillsDir,
+		GuidelinesDir:  cfg.GuidelinesDir,
+		KBInfos:        cfg.KBInfos,
+		AskingClause:   pr.askingQuestionsClauseForModel(phaseModel),
+		CompletionTool: pr.completionToolForModel(phaseModel),
 	})
 	sessionID := fmt.Sprintf("%s%s", f.ID, cfg.SessionSuffix)
 
@@ -617,11 +634,12 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 	kbEffectiveEffort, kbEffortSource := pr.resolveEffortForRole(f, llm.PhaseKBBuild, kbModel)
 
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:          KnowledgeBaseBuilderRoleSpec(),
-		IterationDir:  kbDir,
-		SkillsDir:     pr.SkillsDir,
-		GuidelinesDir: pr.GuidelinesDir,
-		AskingClause:  pr.askingQuestionsClauseForModel(kbModel),
+		Spec:           KnowledgeBaseBuilderRoleSpec(),
+		IterationDir:   kbDir,
+		SkillsDir:      pr.SkillsDir,
+		GuidelinesDir:  pr.GuidelinesDir,
+		AskingClause:   pr.askingQuestionsClauseForModel(kbModel),
+		CompletionTool: pr.completionToolForModel(kbModel),
 	})
 	sessionID := BuildKBSessionID(f.ID, repo.Name)
 
@@ -781,6 +799,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
 	validatorEffort, validatorEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
 	cfg := PlanLoopConfig{
+		Registry:                     pr.Registry,
 		Feature:                      f,
 		FeatureStore:                 pr.FeatureStore,
 		StateDir:                     pr.StateDir,
@@ -797,6 +816,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		RepoName:                     repoName,
 		BuildSession:                 pr.buildSessionForFeature(f),
 		AskingClause:                 pr.askingQuestionsClauseForModel(planningModel),
+		CompletionTool:               pr.completionToolForModel(planningModel),
 		EffortLevel:                  f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:              planEffort,
 		EffortSource:                 planEffortSource,
@@ -852,6 +872,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 	phaseValidatorEffort, phaseValidatorEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, phaseValidatorModel)
 	cfg := PhasePlanLoopConfig{
 		PlanLoopConfig: PlanLoopConfig{
+			Registry:                     pr.Registry,
 			Feature:                      f,
 			FeatureStore:                 pr.FeatureStore,
 			StateDir:                     pr.StateDir,
@@ -867,6 +888,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			RepoName:                     planRepoName,
 			BuildSession:                 pr.buildSessionForFeature(f),
 			AskingClause:                 pr.askingQuestionsClauseForModel(phasePlanModel),
+			CompletionTool:               pr.completionToolForModel(phasePlanModel),
 			EffortLevel:                  f.EffectivePipeline().EffortLevel(),
 			EffectiveEffort:              phasePlanEffort,
 			EffortSource:                 phasePlanEffortSource,
@@ -953,6 +975,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		CommandRunner:              pr.CommandRunner,
 		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
+		CompletionTool:             pr.completionToolForModel(implementationModel),
 		EffortLevel:                pipelineEffort,
 		EffectiveEffort:            effectiveEffort,
 		EffortSource:               effortSource,
@@ -1018,6 +1041,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		CommandRunner:              pr.CommandRunner,
 		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
+		CompletionTool:             pr.completionToolForModel(model),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:            implEffort,
 		EffortSource:               implEffortSource,
@@ -1082,6 +1106,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		CommandRunner:              pr.CommandRunner,
 		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
+		CompletionTool:             pr.completionToolForModel(model),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:            reviewEffort,
 		EffortSource:               reviewEffortSource,
@@ -1621,16 +1646,17 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	}
 
 	protocol := prov.NewProtocol(llm.ProtocolOpts{
-		Model:           bareModel,
-		ContextWindow:   contextWindow,
-		WorkDir:         opts.WorkDir,
-		SystemPrompt:    opts.SystemPrompt,
-		InitialPrompt:   opts.Prompt,
-		WritableRoots:   writableRoots,
-		DSP:             dangerouslySkipPermissions,
-		StateDir:        pr.StateDir,
-		ResumeSessionID: opts.ResumeSessionID,
-		Interactive:     opts.Interactive,
+		Model:                bareModel,
+		ContextWindow:        contextWindow,
+		WorkDir:              opts.WorkDir,
+		SystemPrompt:         opts.SystemPrompt,
+		InitialPrompt:        opts.Prompt,
+		WritableRoots:        writableRoots,
+		DSP:                  dangerouslySkipPermissions,
+		StateDir:             providerStateDir(pr.StateDir),
+		ResumeSessionID:      opts.ResumeSessionID,
+		Interactive:          opts.Interactive,
+		StructuredCompletion: opts.CompletionProtocol && !opts.Interactive,
 	})
 
 	// Snapshot the automatic-review settings and decorate the permission

@@ -236,16 +236,8 @@ func validatorForRoleArtifact(artifact RoleArtifactSpec) func(iterDir, path stri
 		return validatePlanAttemptMetaArtifact
 	case roles.ValidatorKnowledgeBaseIndex:
 		return validateKnowledgeBaseIndexArtifact
-	case roles.ValidatorPhaseMarkdown:
-		display := artifact.DisplayPath
-		return func(_ string, dir string, out *Outcome) ([]ProtocolViolation, error) {
-			path := newestPhaseMarkdownArtifact(dir)
-			if path == "" {
-				return []ProtocolViolation{{Artifact: display, Reason: missingArtifactReason(display, dir)}}, nil
-			}
-			out.PhaseArtifactPath = path
-			return nil, nil
-		}
+	case roles.ValidatorPhaseMarkdown, roles.ValidatorInquiryQuestions, roles.ValidatorDesignDocument:
+		return phaseMarkdownValidator(artifact)
 	case roles.ValidatorReviewFeedback:
 		displayPath := artifact.DisplayPath
 		return func(iterDir, path string, out *Outcome) ([]ProtocolViolation, error) {

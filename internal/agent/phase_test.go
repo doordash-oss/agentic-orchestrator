@@ -3054,3 +3054,42 @@ func TestBuildSessionCrashResumeSnapshotPrecedesFeatureMode(t *testing.T) {
 		t.Fatalf("AutoReview.Enabled = %v, want snapshotted true", sessOpts.AutoReview.Enabled)
 	}
 }
+
+func TestBuildSessionKeepsCodexContractStateOutsideFeatureStore(t *testing.T) {
+	for _, providerName := range []string{"codex", "opencode"} {
+		for _, interactive := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/interactive=%t", providerName, interactive), func(t *testing.T) {
+				dir := t.TempDir()
+				stateDir := filepath.Join(dir, "features")
+				workDir := filepath.Join(dir, "repo")
+				if err := os.MkdirAll(workDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				provider := &captureProvider{name: providerName, model: "test-model"}
+				pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(stateDir), stateDir)
+				pr.Registry = newRegistryWithCaptureProvider(provider)
+				_, _, _, err := pr.BuildSession(BuildSessionOpts{
+					Model: "test-model", Prompt: "Continue the phase", SystemPrompt: "Phase contract",
+					WorkDir: workDir, CompletionProtocol: true, Interactive: interactive, ResumeSessionID: "saved-thread",
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := provider.protocolOpts.StateDir; got != filepath.Join(dir, "provider-state") {
+					t.Fatalf("ProtocolOpts.StateDir=%q, want provider-state", got)
+				}
+				if got := provider.buildOpts.StateDir; got != filepath.Join(dir, "provider-state") {
+					t.Fatalf("CommandBuildOpts.StateDir=%q, want provider-state", got)
+				}
+				if provider.protocolOpts.StructuredCompletion == interactive || provider.protocolOpts.ResumeSessionID != "saved-thread" || provider.protocolOpts.SystemPrompt != "Phase contract" {
+					t.Fatalf("completion/resume contract changed at provider boundary: %+v", provider.protocolOpts)
+				}
+				for _, roots := range [][]string{provider.buildOpts.ReadRoots, provider.buildOpts.WritableRoots, provider.protocolOpts.WritableRoots} {
+					if slices.Contains(roots, filepath.Join(dir, "provider-state")) || slices.Contains(roots, stateDir) {
+						t.Fatalf("provider bookkeeping or feature store became agent context: %v", roots)
+					}
+				}
+			})
+		}
+	}
+}

@@ -431,6 +431,8 @@ const DefaultMaxPlanAttempts = maxPlanValidationAttempts
 
 // PlanLoopConfig holds configuration for the planning loop with validation.
 type PlanLoopConfig struct {
+	// Registry resolves each validator's prompt protocol from its own model.
+	Registry     *llm.Registry
 	Feature      *feature.Feature
 	FeatureStore ports.FeatureStore
 	StateDir     string // feature state directory
@@ -482,7 +484,8 @@ type PlanLoopConfig struct {
 	// AskingClause is the pre-resolved "Asking Questions" prompt section
 	// from the PromptAdapter for the planning model. Set by PhaseRunner
 	// before launching the loop.
-	AskingClause string
+	AskingClause   string
+	CompletionTool string
 
 	// EffortLevel is the pipeline-driven effort level passed to providers.
 	EffortLevel llm.EffortLevel
@@ -712,6 +715,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	}
 	reviewID := fmt.Sprintf("%s-planreview-%s-%02d", cfg.Feature.ID, domainLower, attempt)
 	helper := &PhaseRunner{
+		Registry:       cfg.Registry,
 		SessionManager: sm,
 		FeatureStore:   cfg.FeatureStore,
 		StateDir:       cfg.StateDir,
@@ -745,6 +749,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 			LogPath:                logPath,
 			SystemPromptPrefix:     "validation-" + domainLower,
 			CompletionAskingClause: cfg.AskingClause,
+			CompletionTool:         cfg.CompletionTool,
 			EffortLevel:            validatorEffortLevel(cfg),
 			EffectiveEffort:        cfg.ValidatorEffectiveEffort,
 			EffortSource:           cfg.ValidatorEffortSource,
@@ -1531,12 +1536,13 @@ roadmapAttemptLoop:
 			}
 
 			systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-				Spec:          plannerSpec,
-				IterationDir:  attemptDir,
-				SkillsDir:     cfg.SkillsDir,
-				GuidelinesDir: cfg.GuidelinesDir,
-				KBInfos:       cfg.KBInfos,
-				AskingClause:  cfg.AskingClause,
+				Spec:           plannerSpec,
+				IterationDir:   attemptDir,
+				SkillsDir:      cfg.SkillsDir,
+				GuidelinesDir:  cfg.GuidelinesDir,
+				KBInfos:        cfg.KBInfos,
+				AskingClause:   cfg.AskingClause,
+				CompletionTool: cfg.CompletionTool,
 			})
 			pidDir := filepath.Join(cfg.StateDir, cfg.Feature.ID)
 
@@ -1921,12 +1927,13 @@ phasePlanAttemptLoop:
 			}
 
 			systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-				Spec:          plannerSpec,
-				IterationDir:  attemptDir,
-				SkillsDir:     cfg.SkillsDir,
-				GuidelinesDir: cfg.GuidelinesDir,
-				KBInfos:       cfg.KBInfos,
-				AskingClause:  cfg.AskingClause,
+				Spec:           plannerSpec,
+				IterationDir:   attemptDir,
+				SkillsDir:      cfg.SkillsDir,
+				GuidelinesDir:  cfg.GuidelinesDir,
+				KBInfos:        cfg.KBInfos,
+				AskingClause:   cfg.AskingClause,
+				CompletionTool: cfg.CompletionTool,
 			})
 			pidDir := filepath.Join(cfg.StateDir, cfg.Feature.ID)
 

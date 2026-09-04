@@ -50,6 +50,8 @@ const (
 	ValidatorPlanAttemptMeta           ArtifactValidator = "plan_attempt_meta"
 	ValidatorKnowledgeBaseIndex        ArtifactValidator = "knowledge_base_index"
 	ValidatorPhaseMarkdown             ArtifactValidator = "phase_markdown"
+	ValidatorInquiryQuestions          ArtifactValidator = "inquiry_questions"
+	ValidatorDesignDocument            ArtifactValidator = "design_document"
 	ValidatorReviewFeedback            ArtifactValidator = "review_feedback"
 	ValidatorPlanValidatorAxisApproval ArtifactValidator = "plan_validator_axis_approval"
 )
@@ -276,7 +278,7 @@ func planAttemptMetaRoleArtifact() RoleArtifactSpec {
 	}
 }
 
-func phaseMarkdownRoleArtifact(display string) RoleArtifactSpec {
+func phaseMarkdownRoleArtifact(display string, validator ArtifactValidator) RoleArtifactSpec {
 	return RoleArtifactSpec{
 		Name:         "phase_markdown_artifact",
 		DisplayPath:  display,
@@ -287,7 +289,7 @@ func phaseMarkdownRoleArtifact(display string) RoleArtifactSpec {
 		ResolvePath: func(rt RoleRuntime, _ RoleArtifactSpec) string {
 			return rt.IterationDir
 		},
-		Validate: ValidatorPhaseMarkdown,
+		Validate: validator,
 	}
 }
 

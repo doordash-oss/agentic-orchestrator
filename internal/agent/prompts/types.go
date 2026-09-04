@@ -89,7 +89,8 @@ type RoleSystemInput struct {
 	// harness will reject at commit time.
 	RetryOutcomeAllowed bool
 
-	AskingClause string
+	AskingClause   string
+	CompletionTool string
 }
 
 // ChatSystemInput is the data passed to chat.system.tmpl for the persistent

@@ -24,6 +24,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -160,7 +161,7 @@ func TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPha
 			// Drop a stand-in artifact so contract validation doesn't trip the
 			// onArtifactPhaseCompleted control flow.
 			artifactPath := filepath.Join(phaseDir, tc.phaseKey+".md")
-			if err := os.WriteFile(artifactPath, []byte("# "+tc.phaseKey+"\n"), 0o644); err != nil {
+			if err := os.WriteFile(artifactPath, []byte(testutil.PhaseMarkdown(tc.phaseKey)), 0o644); err != nil {
 				t.Fatalf("write artifact: %v", err)
 			}
 
@@ -246,7 +247,7 @@ func TestInquirePhase_WritesHarnessOwnedQAFile(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	artifactPath := filepath.Join(phaseDir, "inquire.md")
-	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
+	if err := os.WriteFile(artifactPath, []byte(testutil.PhaseMarkdown("inquire")), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
 	qaPath := filepath.Join(phaseDir, "qa-answers.md")
@@ -315,7 +316,7 @@ func TestInquirePhase_AutoPickAnnotationPreserved(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	artifactPath := filepath.Join(phaseDir, "inquire.md")
-	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
+	if err := os.WriteFile(artifactPath, []byte(testutil.PhaseMarkdown("inquire")), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
 	qaPath := filepath.Join(phaseDir, "qa-answers.md")
@@ -378,7 +379,7 @@ func TestInquirePhase_NoExistingQAFile_WritesHarnessOwnedFile(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	artifactPath := filepath.Join(phaseDir, "inquire.md")
-	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
+	if err := os.WriteFile(artifactPath, []byte(testutil.PhaseMarkdown("inquire")), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
 	lc := newGateLifecycle(f)

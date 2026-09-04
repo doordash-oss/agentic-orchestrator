@@ -369,6 +369,15 @@ type RootOutcomeResetter interface {
 	ClearRootCompletionIntent()
 }
 
+// PhaseCompletionRequester routes structured completion requests to the
+// phase coordinator. Only the coordinator validates artifacts and commits
+// receipts; provider requests and prose cannot authorize completion.
+type PhaseCompletionRequester interface {
+	UsesStructuredCompletion() bool
+	PhaseCompletionRequests() <-chan llm.PhaseCompletionRequest
+	RespondToPhaseCompletion(requestID string, accepted bool, message string) error
+}
+
 // ResultSequencer is an optional session capability reporting a monotonic count
 // of terminal Result records observed, so waiters can detect a genuinely new
 // result without relying on pointer identity.

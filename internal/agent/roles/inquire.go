@@ -31,7 +31,7 @@ var inquirerRoleSpec = RoleSpec{
 		singleShotPhaseDirOutputRoot("Inquire phase artifact directory."),
 	},
 	Artifacts: []RoleArtifactSpec{
-		phaseMarkdownRoleArtifact("inquire markdown artifact"),
+		phaseMarkdownRoleArtifact("inquire markdown artifact", ValidatorInquiryQuestions),
 	},
 	ReadOnlyOutsideRoots: true,
 }

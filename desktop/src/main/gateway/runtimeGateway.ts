@@ -371,6 +371,11 @@ export class RuntimeGateway {
     return this.supervision.hasLiveChild();
   }
 
+  /** Runtime path changes remain pending until the owned runtime is restarted. */
+  getBundledRuntime(): SelectedRuntime {
+    return this.supervision.getOwnedSelected() ?? this.deps.selectRuntime();
+  }
+
   /**
    * Authenticated request against the connected runtime's REST API. The
    * bearer token and base URL never leave this method's closure — callers
@@ -482,6 +487,32 @@ export class RuntimeGateway {
       this.busy = false;
     }
     return true;
+  }
+
+  /**
+   * Parks the gateway in the visible error state without entering the
+   * standard selection. Used when a connection-string deep link launched the
+   * app and the linked server could not be added: the user asked for that
+   * server specifically, so spawning the bundled runtime instead would be a
+   * silent substitution. The caller wires Retry to re-attempt the link. A
+   * connection that is already healthy or mid-cycle is left alone.
+   */
+  failStartup(error: CanonicalError, detail: string): ConnectionState {
+    if (this.shuttingDown || this.busy || this.state.status === 'ready') {
+      return this.state;
+    }
+    this.deps.log(`startup failed: ${error.code}: ${error.summary}`);
+    this.setState({
+      status: 'error',
+      stage: 'connect',
+      detail,
+      ownership: 'none',
+      error,
+      // The structured signal the connection shell keys its explicit
+      // start-local escape hatch on; nothing here falls back on its own.
+      startupLink: true,
+    });
+    return this.state;
   }
 
   /** Manual retry from any terminal state; a healthy connection is untouched. */
@@ -662,6 +693,173 @@ export class RuntimeGateway {
       this.busy = false;
     }
     return this.state;
+  }
+
+  /**
+   * Starts the app's own bundled runtime — the same selected runtime
+   * connect() would spawn as its last fallback — and switches the workspace
+   * to it. This is the only way back to the local runtime once the last-used
+   * pointer names a remote server: the startup cascade short-circuits to the
+   * remote and switchServer() deliberately never spawns.
+   *
+   * A live server for the selected runtime dir (registry scan first, legacy
+   * discovery second) is attached to without spawning — an app-owned child
+   * left behind by an earlier switch-away is re-owned. Otherwise the standard
+   * launch() path runs. Like switchServer, the generation bump fences
+   * in-flight work and no child is stopped (the remote is not a child, and a
+   * surviving child is the very server this attaches to).
+   * A pending runtime-path change is applied by restart(), not this action:
+   * until then, the supervised child's coordinates remain the bundled target.
+   *
+   * Every failure lands on the standard switch surface: `status: 'error'`
+   * with a switchContext whose attempted target is the bundled runtime and
+   * whose previous is the server we came from, so the renderer offers Retry
+   * (re-invoking this action) and Back exactly as for a failed switch.
+   * settings.runtime.selection stays untouched.
+   */
+  async startLocal(): Promise<ConnectionState> {
+    if (this.shuttingDown || this.busy) {
+      return this.state;
+    }
+    const selected = this.getBundledRuntime();
+    const targetKey = registryEntryKey(selected.runtimeDir);
+    if (this.state.status === 'ready' && this.serverKey === targetKey) {
+      // Already connected to the bundled runtime: a no-op.
+      return this.state;
+    }
+    const previous = this.switchPrevious(targetKey);
+    const attempted: ServerChoiceCandidate = {
+      serverKey: targetKey,
+      kind: 'local',
+      name:
+        this.deps.knownServers().known.find((entry) => entry.serverKey === targetKey)?.name ?? null,
+      runtimeDir: selected.runtimeDir,
+    };
+    const switchContext: SwitchContext = { attempted, previous, startLocal: true };
+    this.busy = true;
+    const generation = ++this.generation;
+    try {
+      // Deliberately no stopChild(): a surviving app-owned child is re-owned
+      // below rather than restarted, and a remote connection has no child.
+      await this.resetConnection({ resetCrashAttempts: true, clearPendingCandidates: true });
+      this.connectedRuntimeDir = selected.runtimeDir;
+      const scan = this.deps.scanRegistry();
+      const candidate = scan.candidates.find((entry) => entry.serverKey === targetKey);
+      if (candidate !== undefined) {
+        const attached = await this.attachCandidate(generation, candidate, 'launch', switchContext);
+        if (this.cancelled(generation)) {
+          return this.state;
+        }
+        if (attached) {
+          this.surfaceStartLocalFailure(switchContext);
+          return this.state;
+        }
+        // Died between scan and probe: spawn exactly as the startup cascade would.
+      } else {
+        const outcome = evaluateDiscoveryFile(
+          selected.runtimeDir,
+          selected.stateDir,
+          this.deps.discovery,
+        );
+        if (outcome.kind === 'rejected' || outcome.kind === 'stale') {
+          this.deps.log(`discovery ignored: ${outcome.reason}`);
+        }
+        if (outcome.kind === 'candidate') {
+          const attach = await this.tryAttach(
+            generation,
+            selected,
+            outcome.record,
+            'launch',
+            undefined,
+            switchContext,
+          );
+          if (attach !== 'launch') {
+            this.surfaceStartLocalFailure(switchContext);
+            return this.state;
+          }
+        }
+      }
+      if (this.cancelled(generation)) {
+        return this.state;
+      }
+      if (this.supervision.hasLiveChild()) {
+        // A probe failure is not proof that the owned process exited. Never
+        // overwrite its supervision slot with another child on a failed attach.
+        this.setState({
+          status: 'error',
+          stage: 'connect',
+          detail: 'The app-managed runtime is still running but could not be reached.',
+          ownership: 'none',
+          error: buildCanonicalError('E_LAUNCH_FAILED', {
+            remediationHint: 'Retry when the running runtime is reachable, or restart Agentico.',
+          }),
+          switchContext,
+        });
+        return this.state;
+      }
+      await this.launch(generation, selected);
+      if (this.cancelled(generation)) {
+        return this.state;
+      }
+      if (this.state.status === 'ready' && this.baseUrl !== null) {
+        // The user explicitly chose the bundled runtime: it becomes the
+        // last-used server (the remote stays in the known list), so the next
+        // launch reconnects here instead of silently returning to the remote.
+        this.deps.recordAttachedServer({
+          serverKey: targetKey,
+          kind: 'local',
+          name: this.state.serverName ?? '',
+          baseUrl: this.baseUrl,
+          runtimeDir: selected.runtimeDir,
+          lastSeenAt: new Date(this.now()).toISOString(),
+        });
+        return this.state;
+      }
+      this.surfaceStartLocalFailure(switchContext);
+    } catch (err) {
+      const safe = toCanonicalError(err, 'E_GATEWAY');
+      this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.summary}`);
+      this.setState({
+        status: 'error',
+        stage: 'connect',
+        detail: 'The bundled runtime could not be started.',
+        ownership: 'none',
+        error: safe,
+        switchContext,
+      });
+    } finally {
+      this.busy = false;
+    }
+    return this.state;
+  }
+
+  /**
+   * Re-homes a terminal failure of the start-local attempt onto the switch
+   * surface: the launch and local-attach profiles emit their own terminal
+   * variants (launch-failed, resources-missing, incompatible, …), which carry
+   * no switch identities. The canonical error and detail are kept verbatim;
+   * only the status and the recovery context change, so Retry and Back are
+   * offered exactly as for a failed switch. A state that already carries the
+   * context, or that is not a failure, is left alone.
+   */
+  private surfaceStartLocalFailure(switchContext: SwitchContext): void {
+    const state = this.state;
+    if (!isConnectionErrorState(state)) {
+      return;
+    }
+    if (state.status === 'error' && state.switchContext !== undefined) {
+      return;
+    }
+    this.setState({
+      status: 'error',
+      stage: 'connect',
+      detail: state.detail,
+      ownership: state.ownership,
+      error: state.error,
+      ...(state.serverBuild === undefined ? {} : { serverBuild: state.serverBuild }),
+      ...(state.serverName === undefined ? {} : { serverName: state.serverName }),
+      switchContext,
+    });
   }
 
   /**

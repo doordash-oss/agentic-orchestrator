@@ -120,6 +120,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'sendHelp',
   'setThemePreference',
   'startChat',
+  'startLocalRuntime',
   'switchConnectionServer',
   'updateFeatureConfig',
   'updateReviewFeedbackSelection',

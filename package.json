@@ -15,6 +15,7 @@
     "test": "npm run test --workspace desktop",
     "test:security": "npm run test:security --workspace desktop",
     "test:e2e:packaged": "npm run test:e2e:packaged --workspace desktop",
+    "e2e:cleanup-handlers": "npm run e2e:cleanup-handlers --workspace desktop --",
     "build": "npm run build --workspace desktop",
     "package:build": "npm run package:build --workspace desktop",
     "package:verify": "npm run package:verify --workspace desktop",

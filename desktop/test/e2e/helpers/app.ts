@@ -57,6 +57,11 @@ export interface LaunchOptions {
   traceName?: string;
   /** Narrow per-journey environment additions, merged onto the hermetic base. */
   env?: Record<string, string>;
+  /**
+   * Extra argv after the app entry — e.g. an `agentico://` URL, which is how
+   * the OS hands a protocol launch to the app on Windows and Linux.
+   */
+  args?: string[];
 }
 
 export interface CreateFeatureOptions {
@@ -132,6 +137,7 @@ export async function launchApp(
     // without relying on platform detection.
     args.push('--no-sandbox');
   }
+  args.push(...(options.args ?? []));
   args.unshift(packagedAppAsar(installExecutablePath));
   // Concurrent workers exec the same binary; Linux can transiently report
   // ETXTBSY when a spawn races a fork that briefly inherits a write fd

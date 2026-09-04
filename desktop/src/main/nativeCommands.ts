@@ -29,6 +29,8 @@ export interface NativeCommandControllerDeps {
   showWindow(): void;
   route(event: AppRouteEvent): void;
   quit(): void;
+  /** Starts (or attaches to) the bundled runtime and switches to it. */
+  startLocalRuntime(): void;
 }
 
 export interface BackgroundStatus {
@@ -154,6 +156,7 @@ export class NativeCommandController {
           showWindow: () => this.deps.showWindow(),
           quit: () => this.deps.quit(),
           route: (event) => this.routeEvent(event),
+          startLocalRuntime: () => this.deps.startLocalRuntime(),
           adjustZoom: adjustFocusedZoom,
           setZoom: setFocusedZoom,
         }),

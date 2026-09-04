@@ -24,7 +24,7 @@ import {
   type ServersPrefs,
 } from '../../shared/ipc';
 import { serverKeyForBaseUrl } from '../connectionString';
-import type { RegistryScan } from '../gateway/registry';
+import { registryEntryKey, type RegistryScan } from '../gateway/registry';
 import type { LoadResult } from '../gateway/remoteTokenStore';
 import type { ChildExit } from '../gateway/serverProcess';
 import {
@@ -710,6 +710,43 @@ describe('RuntimeGateway remote switching', () => {
 
     await env.gateway.shutdown();
     expect(child.stopCalls).toHaveLength(1);
+  });
+
+  it('startLocal from a remote connection spawns the bundled runtime and keeps the remote known', async () => {
+    // Last-used remote: the startup cascade short-circuits to it and the
+    // bundled runtime is never reached — the case startLocal exists for.
+    const env = makeEnv({});
+    env.updateServers({ upsertKnown: remoteEntry(), lastUsed: remoteKey() });
+    env.tokens.save(remoteKey(), REMOTE_TOKEN);
+    env.deps.sleep = () => Promise.resolve();
+    await env.gateway.start();
+    expect(env.gateway.getState()).toMatchObject({ status: 'ready', kind: 'remote' });
+    expect(env.spawnCalls).toBe(0);
+    const remoteFetches = env.fetchCalls.length;
+
+    const state = await env.gateway.startLocal();
+
+    expect(state).toMatchObject({
+      status: 'ready',
+      ownership: 'app-owned',
+      kind: 'local',
+      serverKey: registryEntryKey(SELECTED.runtimeDir),
+      connectedRuntimeDir: SELECTED.runtimeDir,
+    });
+    expect(env.spawnCalls).toBe(1);
+    // The remote was never signalled or probed again on the way out.
+    expect(
+      env.fetchCalls.slice(remoteFetches).filter((call) => call.url.startsWith(REMOTE_BASE)),
+    ).toHaveLength(0);
+    // The remote stays known; the bundled runtime is now last-used.
+    expect(env.servers().known.find((entry) => entry.serverKey === remoteKey())).toBeDefined();
+    expect(env.servers().lastUsed).toBe(registryEntryKey(SELECTED.runtimeDir));
+
+    // And the way back is the ordinary switch.
+    const back = await env.gateway.switchServer({ serverKey: remoteKey() });
+    expect(back).toMatchObject({ status: 'ready', kind: 'remote', serverKey: remoteKey() });
+    expect(env.spawned[0]!.stopCalls).toHaveLength(0);
+    expectNoTokenLeak(env);
   });
 
   it('generation fencing: a restart mid-remote-attach cancels the in-flight attach', async () => {

@@ -16,6 +16,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -68,6 +69,15 @@ type ReviewHelperConfig struct {
 	// Label is a short context-specific sub-label (validator domain, review
 	// target, …) surfaced in attach-view tabs.
 	Label string
+
+	// Child resume metadata is set by composite fan-out callers. Empty
+	// ResumeChildKey preserves the legacy fresh-only helper behavior.
+	ResumeFeature       *feature.Feature
+	ResumeParent        ResumeParentContext
+	ResumeChildKey      string
+	ResumePhaseContext  string
+	disableChildResume  bool
+	freshFallbackNumber int
 }
 
 // ReviewHelperResult captures the parsed verdict from a bounded helper run.
@@ -103,12 +113,89 @@ func setReviewHelperEffortOnOpts(sessOpts *ports.SessionOpts, cfg ReviewHelperCo
 	}
 }
 
+type reviewChildResumeLaunch struct {
+	coordinator     *ResumeCoordinator
+	claim           *ResumeClaim
+	resumeSessionID string
+	resumed         bool
+}
+
+func (pr *PhaseRunner) prepareReviewChildResume(cfg *ReviewHelperConfig) (reviewChildResumeLaunch, error) {
+	if cfg == nil || cfg.ResumeChildKey == "" || cfg.ResumeFeature == nil {
+		return reviewChildResumeLaunch{}, nil
+	}
+	coordinator := NewChildResumeCoordinator(cfg.HelperIterDir, cfg.ResumeChildKey, cfg.ResumeParent)
+	launch := reviewChildResumeLaunch{coordinator: coordinator}
+	if cfg.disableChildResume {
+		return launch, nil
+	}
+	claim, eligibility, err := coordinator.Claim(
+		cfg.ResumeFeature.ID, cfg.ResumeFeature, cfg.Model, pr.Registry, time.Now(),
+	)
+	if err != nil {
+		return launch, fmt.Errorf("claiming %s child resume: %w", cfg.ResumeChildKey, err)
+	}
+	if !eligibility.Eligible {
+		return launch, nil
+	}
+	record := coordinator.Snapshot()
+	if record == nil {
+		if claim != nil {
+			if relErr := claim.Release(time.Now()); relErr != nil {
+				return launch, fmt.Errorf("releasing %s child resume claim: %w", cfg.ResumeChildKey, relErr)
+			}
+		}
+		return launch, nil
+	}
+	launch.claim = claim
+	launch.resumed = true
+	launch.resumeSessionID = record.ProviderSessionID
+	cfg.Prompt = coordinator.Prompt(cfg.ResumePhaseContext)
+	cfg.SessionID = fmt.Sprintf("%s-resume-%02d", cfg.SessionID, record.ResumeCount+1)
+	return launch, nil
+}
+
+func initializeFreshReviewChild(cfg ReviewHelperConfig, launch reviewChildResumeLaunch, sessOpts *ports.SessionOpts) error {
+	if launch.coordinator == nil {
+		return nil
+	}
+	now := time.Now()
+	record := ResumeRecord{
+		PhaseKey:              cfg.ResumeParent.PhaseKey,
+		Iteration:             cfg.ResumeParent.Iteration,
+		RunNumber:             activeRunNumber(cfg.ResumeFeature),
+		OrchestratorSessionID: cfg.SessionID,
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}
+	if sessOpts != nil {
+		record.Provider = sessOpts.ProviderName
+		record.ResolvedModel = sessOpts.Model
+	}
+	if err := launch.coordinator.Initialize(record); err != nil {
+		return fmt.Errorf("initializing %s child resume record: %w", cfg.ResumeChildKey, err)
+	}
+	return nil
+}
+
+func childResumeFallbackConfig(cfg ReviewHelperConfig, baseSessionID, originalPrompt string, rejection *resumeRejectionError) (ReviewHelperConfig, error) {
+	cfg.disableChildResume = true
+	cfg.freshFallbackNumber++
+	cfg.Prompt = originalPrompt
+	cfg.SessionID = fmt.Sprintf("%s-fresh-%02d", baseSessionID, cfg.freshFallbackNumber)
+	coordinator := NewChildResumeCoordinator(cfg.HelperIterDir, cfg.ResumeChildKey, cfg.ResumeParent)
+	if err := coordinator.MarkFreshFallback(rejection.reason, time.Now()); err != nil {
+		return cfg, fmt.Errorf("recording %s child fresh fallback: %w", cfg.ResumeChildKey, err)
+	}
+	return cfg, nil
+}
+
 // RunReadOnlyReviewHelper runs a bounded review helper under the file-based
 // handoff protocol and parses ParseReviewFeedback(FeedbackPath). The helper
 // is read-only with respect to the worktree; it may only write to
 // FeedbackPath, and the harness deterministically routes on the structured
 // `## Verdict` section of that file.
-func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHelperConfig) (*ReviewHelperResult, error) {
+func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHelperConfig) (helperResult *ReviewHelperResult, helperErr error) {
 	if cfg.SessionID == "" {
 		return nil, fmt.Errorf("running review helper: missing session id")
 	}
@@ -131,6 +218,20 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		return nil, fmt.Errorf("running review helper: missing helper role")
 	}
 
+	baseSessionID := cfg.SessionID
+	originalPrompt := cfg.Prompt
+	resumeLaunch, err := pr.prepareReviewChildResume(&cfg)
+	if err != nil {
+		return nil, err
+	}
+	claimTransferred := false
+	defer func() {
+		if resumeLaunch.claim != nil && !claimTransferred {
+			if relErr := resumeLaunch.claim.Release(time.Now()); relErr != nil {
+				helperErr = errors.Join(helperErr, relErr)
+			}
+		}
+	}()
 	if cfg.PromptPath != "" {
 		if err := os.WriteFile(cfg.PromptPath, []byte(cfg.Prompt), 0o644); err != nil {
 			return nil, fmt.Errorf("running review helper: writing prompt: %w", err)
@@ -162,6 +263,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:                          cfg.Model,
 		Prompt:                         cfg.Prompt,
+		ResumeSessionID:                resumeLaunch.resumeSessionID,
 		SystemPrompt:                   systemPrompt,
 		DisallowedTools:                boundedHelperDisallowedTools,
 		AdditionalDirs:                 cfg.AdditionalDirs,
@@ -179,6 +281,14 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	})
 	if err != nil {
 		return nil, fmt.Errorf("running review helper: building session: %w", err)
+	}
+	if resumeLaunch.coordinator != nil {
+		if !resumeLaunch.resumed {
+			if err := initializeFreshReviewChild(cfg, resumeLaunch, sessOpts); err != nil {
+				return nil, err
+			}
+		}
+		installResumeProviderInitCapture(sessOpts, resumeLaunch.coordinator)
 	}
 	sandboxRequested := sessOpts != nil && sessOpts.UsesBoundedHelperSandbox
 	if sessOpts != nil && cfg.SystemPromptPrefix != "" && cfg.PromptPath != "" {
@@ -211,25 +321,37 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 
 	// requireOutput stays false: the verdict lives in FeedbackPath, not in
 	// chat output, so an empty stdout body is a perfectly valid run.
+	claimTransferred = true
 	boundedResult, runErr := pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
-		sessionID:     cfg.SessionID,
-		featureID:     cfg.FeatureID,
-		phase:         cfg.Phase,
-		label:         "review helper",
-		observerPhase: "review",
-		model:         cfg.Model,
-		responsePath:  cfg.ResponsePath,
-		repoName:      cfg.RepoName,
-		workDir:       cfg.WorkDir,
-		command:       command,
-		env:           env,
-		sessOpts:      sessOpts,
-		requireOutput: false,
-		completionDir: cfg.HelperIterDir,
-		contractPhase: contractPhase,
-		contractRole:  cfg.Role,
-		parentSpanCtx: cfg.ParentSpanCtx,
+		sessionID:         cfg.SessionID,
+		featureID:         cfg.FeatureID,
+		phase:             cfg.Phase,
+		label:             "review helper",
+		observerPhase:     "review",
+		model:             cfg.Model,
+		responsePath:      cfg.ResponsePath,
+		repoName:          cfg.RepoName,
+		workDir:           cfg.WorkDir,
+		command:           command,
+		env:               env,
+		sessOpts:          sessOpts,
+		requireOutput:     false,
+		completionDir:     cfg.HelperIterDir,
+		contractPhase:     contractPhase,
+		contractRole:      cfg.Role,
+		parentSpanCtx:     cfg.ParentSpanCtx,
+		resumeCoordinator: resumeLaunch.coordinator,
+		resumeClaim:       resumeLaunch.claim,
+		resumed:           resumeLaunch.resumed,
 	})
+	var rejection *resumeRejectionError
+	if errors.As(runErr, &rejection) && resumeLaunch.resumed && cfg.freshFallbackNumber == 0 {
+		fallback, fallbackErr := childResumeFallbackConfig(cfg, baseSessionID, originalPrompt, rejection)
+		if fallbackErr != nil {
+			return nil, fallbackErr
+		}
+		return pr.RunReadOnlyReviewHelper(ctx, fallback)
+	}
 	if boundedResult == nil {
 		return nil, runErr
 	}
@@ -276,7 +398,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 // RunLiveRunReviewHelper runs a review helper with the live-run posture: broad
 // shell access plus harness-owned writable scratch roots, while file tools stay
 // scoped away from the reviewed source tree.
-func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHelperConfig) (*ReviewHelperResult, error) {
+func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHelperConfig) (helperResult *ReviewHelperResult, helperErr error) {
 	if cfg.SessionID == "" {
 		return nil, fmt.Errorf("running live-run review helper: missing session id")
 	}
@@ -299,6 +421,20 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 		return nil, fmt.Errorf("running live-run review helper: missing helper role")
 	}
 
+	baseSessionID := cfg.SessionID
+	originalPrompt := cfg.Prompt
+	resumeLaunch, err := pr.prepareReviewChildResume(&cfg)
+	if err != nil {
+		return nil, err
+	}
+	claimTransferred := false
+	defer func() {
+		if resumeLaunch.claim != nil && !claimTransferred {
+			if relErr := resumeLaunch.claim.Release(time.Now()); relErr != nil {
+				helperErr = errors.Join(helperErr, relErr)
+			}
+		}
+	}()
 	scratch, err := prepareLiveRunReviewScratch(cfg.HelperIterDir)
 	if err != nil {
 		return nil, err
@@ -341,6 +477,7 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:                          cfg.Model,
 		Prompt:                         prompt,
+		ResumeSessionID:                resumeLaunch.resumeSessionID,
 		SystemPrompt:                   systemPrompt,
 		DisallowedTools:                boundedHelperDisallowedTools,
 		AdditionalDirs:                 cfg.AdditionalDirs,
@@ -358,6 +495,14 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 	})
 	if err != nil {
 		return nil, fmt.Errorf("running live-run review helper: building session: %w", err)
+	}
+	if resumeLaunch.coordinator != nil {
+		if !resumeLaunch.resumed {
+			if err := initializeFreshReviewChild(cfg, resumeLaunch, sessOpts); err != nil {
+				return nil, err
+			}
+		}
+		installResumeProviderInitCapture(sessOpts, resumeLaunch.coordinator)
 	}
 	env = mergeSessionEnv(env, scratch.env()...)
 
@@ -385,25 +530,37 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 		defer sandboxCleanup()
 	}
 
+	claimTransferred = true
 	boundedResult, runErr := pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
-		sessionID:     cfg.SessionID,
-		featureID:     cfg.FeatureID,
-		phase:         cfg.Phase,
-		label:         "live-run review helper",
-		observerPhase: "review",
-		model:         cfg.Model,
-		responsePath:  cfg.ResponsePath,
-		repoName:      cfg.RepoName,
-		workDir:       cfg.WorkDir,
-		command:       command,
-		env:           env,
-		sessOpts:      sessOpts,
-		requireOutput: false,
-		completionDir: cfg.HelperIterDir,
-		contractPhase: contractPhase,
-		contractRole:  cfg.Role,
-		parentSpanCtx: cfg.ParentSpanCtx,
+		sessionID:         cfg.SessionID,
+		featureID:         cfg.FeatureID,
+		phase:             cfg.Phase,
+		label:             "live-run review helper",
+		observerPhase:     "review",
+		model:             cfg.Model,
+		responsePath:      cfg.ResponsePath,
+		repoName:          cfg.RepoName,
+		workDir:           cfg.WorkDir,
+		command:           command,
+		env:               env,
+		sessOpts:          sessOpts,
+		requireOutput:     false,
+		completionDir:     cfg.HelperIterDir,
+		contractPhase:     contractPhase,
+		contractRole:      cfg.Role,
+		parentSpanCtx:     cfg.ParentSpanCtx,
+		resumeCoordinator: resumeLaunch.coordinator,
+		resumeClaim:       resumeLaunch.claim,
+		resumed:           resumeLaunch.resumed,
 	})
+	var rejection *resumeRejectionError
+	if errors.As(runErr, &rejection) && resumeLaunch.resumed && cfg.freshFallbackNumber == 0 {
+		fallback, fallbackErr := childResumeFallbackConfig(cfg, baseSessionID, originalPrompt, rejection)
+		if fallbackErr != nil {
+			return nil, fallbackErr
+		}
+		return pr.RunLiveRunReviewHelper(ctx, fallback)
+	}
 	if boundedResult == nil {
 		return nil, runErr
 	}

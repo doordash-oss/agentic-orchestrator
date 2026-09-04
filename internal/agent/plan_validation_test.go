@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -191,6 +193,17 @@ type phasePlanningLoopRun struct {
 	Result       *PlanLoopResult
 	PhasePlanDir string
 }
+
+type planResumeTestSession struct {
+	*terminalStatusTestSession
+	providerSessionID string
+	provider          string
+	model             string
+}
+
+func (s *planResumeTestSession) SessionID() string    { return s.providerSessionID }
+func (s *planResumeTestSession) ProviderName() string { return s.provider }
+func (s *planResumeTestSession) Model() string        { return s.model }
 
 func runPhasePlanningLoopWithPlannerArtifacts(t *testing.T, artifacts plannerScriptArtifacts) phasePlanningLoopRun {
 	t.Helper()
@@ -1462,6 +1475,21 @@ func TestRunPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T
 	}); err != nil {
 		t.Fatal(err)
 	}
+	attemptDir := filepath.Join(phasePlanDir, "attempt-02")
+	if err := WriteResumeRecord(attemptDir, ResumeRecord{
+		ProviderSessionID:     "provider-plan-2",
+		Provider:              "codex",
+		ResolvedModel:         "planner",
+		PhaseKey:              "phase-1-plan",
+		Iteration:             2,
+		RunNumber:             1,
+		OrchestratorSessionID: "old-session",
+		CreatedAt:             time.Now(),
+		UpdatedAt:             time.Now(),
+		PendingResume:         true,
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	store := feature.NewStore(tmpDir)
 	f := newTestPlanFeature(t, workDir)
@@ -1470,6 +1498,7 @@ func TestRunPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T
 	}
 
 	var gotSessionID string
+	var gotBuildOpts BuildSessionOpts
 	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
 		PlanLoopConfig: PlanLoopConfig{
 			Feature:      f,
@@ -1478,7 +1507,8 @@ func TestRunPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T
 			WorkDir:      workDir,
 			MaxAttempts:  3,
 			BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-				return []string{"echo", "unused"}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir}, nil
+				gotBuildOpts = opts
+				return []string{"echo", "unused"}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir, ProviderName: "codex", Model: "planner"}, nil
 			},
 			SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
 				gotSessionID = id
@@ -1500,6 +1530,12 @@ func TestRunPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T
 	}
 	if gotSessionID != "test-plan-001-phase-01-plan-02-retry-02" {
 		t.Fatalf("sessionID = %q, want test-plan-001-phase-01-plan-02-retry-02", gotSessionID)
+	}
+	if gotBuildOpts.ResumeSessionID != "provider-plan-2" {
+		t.Fatalf("ResumeSessionID = %q, want provider-plan-2", gotBuildOpts.ResumeSessionID)
+	}
+	if !strings.Contains(gotBuildOpts.Prompt, "mid attempt 2 of the phase-1 plan") {
+		t.Fatalf("resume prompt missing attempt context: %q", gotBuildOpts.Prompt)
 	}
 	updated, err := store.Load(f.ID)
 	if err != nil {
@@ -1575,6 +1611,348 @@ func TestRunPhasePlanningLoopRetriesEarlyInfrastructureFailureInProcess(t *testi
 	}
 	if _, err := os.Stat(filepath.Join(phasePlanDir, "attempt-02")); !os.IsNotExist(err) {
 		t.Fatalf("attempt-02 stat err = %v, want not exist", err)
+	}
+}
+
+func TestRunPhasePlanningLoopAutoResumesKilledAttemptInPlace(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	phasePlanDir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	for _, dir := range []string{workDir, phasePlanDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := feature.NewStore(tmpDir)
+	f := newTestPlanFeature(t, workDir)
+	f.Pipeline = feature.PipelineMedium
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	var builds []BuildSessionOpts
+	var waits []time.Duration
+	var audits []ports.FeatureResumedData
+	starts := 0
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature:      f,
+			FeatureStore: store,
+			StateDir:     tmpDir,
+			WorkDir:      workDir,
+			MaxAttempts:  1,
+			BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				builds = append(builds, opts)
+				return []string{"echo", "unused"}, nil, &ports.SessionOpts{
+					ProviderName:          "codex",
+					Model:                 "planner",
+					SupportsSessionResume: true,
+				}, nil
+			},
+			AutoResumeWait: func(wait time.Duration) bool {
+				waits = append(waits, wait)
+				return true
+			},
+			OnFeatureResumed: func(data ports.FeatureResumedData) {
+				audits = append(audits, data)
+			},
+			SessionStartFunc: func(_ string, _ string, _ feature.Phase, _ []string, _ string, _ []string, _ ...*ports.SessionOpts) (ports.SessionHandle, error) {
+				starts++
+				if starts == 1 {
+					return &planResumeTestSession{
+						terminalStatusTestSession: newTerminalStatusTestSession(ports.SessionFailed),
+						providerSessionID:         "thread-plan-1",
+						provider:                  "codex",
+						model:                     "planner",
+					}, nil
+				}
+				if err := os.WriteFile(filepath.Join(phasePlanDir, "plan.md"), []byte(validPhasePlanText()), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				sess := newUtilityTestSession()
+				sess.setRootIntent(validSuccessCompletionIntent())
+				sess.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
+				sess.statusCh <- agentStatusSuccess
+				return sess, nil
+			},
+		},
+		Phase: RoadmapPhase{Number: 1, Name: "Resume plan", Type: "tdd-fill-in", Goal: "resume"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalStatus != "approved" || starts != 2 {
+		t.Fatalf("result=%+v starts=%d, want approved after one resume", result, starts)
+	}
+	if len(builds) != 2 || builds[1].ResumeSessionID != "thread-plan-1" {
+		t.Fatalf("builds=%+v, want resumed provider identity", builds)
+	}
+	if !strings.Contains(builds[1].Prompt, "mid attempt 1 of the phase-1 plan") {
+		t.Fatalf("resume prompt = %q", builds[1].Prompt)
+	}
+	if !reflect.DeepEqual(waits, []time.Duration{5 * time.Second}) {
+		t.Fatalf("waits=%v, want [5s]", waits)
+	}
+	if len(audits) != 1 || audits[0].ResumeCount != 1 {
+		t.Fatalf("audits=%+v, want one established resume", audits)
+	}
+	if _, err := os.Stat(filepath.Join(phasePlanDir, "attempt-02")); !os.IsNotExist(err) {
+		t.Fatalf("attempt-02 exists after resume: %v", err)
+	}
+}
+
+func TestRunPhasePlanningLoopAutoResumeStopsAfterThreeIdleContinuations(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	phasePlanDir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	for _, dir := range []string{workDir, phasePlanDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := feature.NewStore(tmpDir)
+	f := newTestPlanFeature(t, workDir)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	var waits []time.Duration
+	starts := 0
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature: f, FeatureStore: store, StateDir: tmpDir, WorkDir: workDir, MaxAttempts: 1,
+			BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				return []string{"echo", "unused"}, nil, &ports.SessionOpts{
+					ProviderName: "codex", Model: "planner", SupportsSessionResume: true,
+				}, nil
+			},
+			AutoResumeWait: func(wait time.Duration) bool {
+				waits = append(waits, wait)
+				return true
+			},
+			SessionStartFunc: func(_ string, _ string, _ feature.Phase, _ []string, _ string, _ []string, _ ...*ports.SessionOpts) (ports.SessionHandle, error) {
+				starts++
+				return &planResumeTestSession{
+					terminalStatusTestSession: newTerminalStatusTestSession(ports.SessionFailed),
+					providerSessionID:         fmt.Sprintf("thread-%d", starts),
+					provider:                  "codex",
+					model:                     "planner",
+				}, nil
+			},
+		},
+		Phase: RoadmapPhase{Number: 1, Name: "Bound resume", Type: "tdd-fill-in"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalStatus != "failed" || starts != 4 {
+		t.Fatalf("result=%+v starts=%d, want failure after initial + 3 resumed processes", result, starts)
+	}
+	if !reflect.DeepEqual(waits, []time.Duration{5 * time.Second, 20 * time.Second, 60 * time.Second}) {
+		t.Fatalf("waits=%v, want [5s 20s 1m0s]", waits)
+	}
+	record, err := ReadResumeRecord(filepath.Join(phasePlanDir, "attempt-01"))
+	if err != nil || record == nil {
+		t.Fatalf("ReadResumeRecord() = %+v, %v", record, err)
+	}
+	if record.ResumeCount != 3 {
+		t.Fatalf("ResumeCount=%d, want 3", record.ResumeCount)
+	}
+}
+
+func TestRunRoadmapPlanningLoopAutoResumesKilledAttemptInPlace(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	roadmapDir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "roadmap")
+	for _, dir := range []string{workDir, roadmapDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := feature.NewStore(tmpDir)
+	f := newTestPlanFeature(t, workDir)
+	f.Pipeline = feature.PipelineMedium
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	var builds []BuildSessionOpts
+	starts := 0
+	result, err := RunRoadmapPlanningLoop(PlanLoopConfig{
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     tmpDir,
+		WorkDir:      workDir,
+		MaxAttempts:  1,
+		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			builds = append(builds, opts)
+			return []string{"echo", "unused"}, nil, &ports.SessionOpts{
+				ProviderName:          "codex",
+				Model:                 "planner",
+				SupportsSessionResume: true,
+			}, nil
+		},
+		AutoResumeWait: func(time.Duration) bool { return true },
+		SessionStartFunc: func(_ string, _ string, _ feature.Phase, _ []string, _ string, _ []string, _ ...*ports.SessionOpts) (ports.SessionHandle, error) {
+			starts++
+			if starts == 1 {
+				return &planResumeTestSession{
+					terminalStatusTestSession: newTerminalStatusTestSession(ports.SessionFailed),
+					providerSessionID:         "thread-roadmap-1",
+					provider:                  "codex",
+					model:                     "planner",
+				}, nil
+			}
+			if err := os.WriteFile(filepath.Join(roadmapDir, "roadmap.md"), []byte(validRoadmapText()), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			sess := newUtilityTestSession()
+			sess.setRootIntent(validSuccessCompletionIntent())
+			sess.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
+			sess.statusCh <- agentStatusSuccess
+			return sess, nil
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalStatus != "approved" || starts != 2 {
+		t.Fatalf("result=%+v starts=%d, want approved after one resume", result, starts)
+	}
+	if len(builds) != 2 || builds[1].ResumeSessionID != "thread-roadmap-1" {
+		t.Fatalf("builds=%+v, want resumed provider identity", builds)
+	}
+	if !strings.Contains(builds[1].Prompt, "mid attempt 1 of the roadmap plan") {
+		t.Fatalf("resume prompt = %q", builds[1].Prompt)
+	}
+	if _, err := os.Stat(filepath.Join(roadmapDir, "attempt-02")); !os.IsNotExist(err) {
+		t.Fatalf("attempt-02 exists after resume: %v", err)
+	}
+}
+
+func TestRunPhasePlanningLoopResumeRejectionFallsBackFreshInSameAttempt(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	phasePlanDir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	attemptDir := filepath.Join(phasePlanDir, "attempt-01")
+	for _, dir := range []string{workDir, attemptDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := WriteResumeRecord(attemptDir, ResumeRecord{
+		ProviderSessionID: "missing-thread", Provider: "codex", ResolvedModel: "planner",
+		PhaseKey: "phase-1-plan", Iteration: 1, RunNumber: 1,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(), PendingResume: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := feature.NewStore(tmpDir)
+	f := newTestPlanFeature(t, workDir)
+	f.Pipeline = feature.PipelineMedium
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	var builds []BuildSessionOpts
+	starts := 0
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature: f, FeatureStore: store, StateDir: tmpDir, WorkDir: workDir, MaxAttempts: 1,
+			BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				builds = append(builds, opts)
+				return []string{"echo", "unused"}, nil, &ports.SessionOpts{ProviderName: "codex", Model: "planner"}, nil
+			},
+			SessionStartFunc: func(_ string, _ string, _ feature.Phase, _ []string, _ string, _ []string, _ ...*ports.SessionOpts) (ports.SessionHandle, error) {
+				starts++
+				if starts == 1 {
+					return nil, errors.New("thread/resume error: thread not found")
+				}
+				if err := os.WriteFile(filepath.Join(phasePlanDir, "plan.md"), []byte(validPhasePlanText()), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				sess := newUtilityTestSession()
+				sess.setRootIntent(validSuccessCompletionIntent())
+				sess.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
+				sess.statusCh <- agentStatusSuccess
+				return sess, nil
+			},
+		},
+		Phase: RoadmapPhase{Number: 1, Name: "Fallback", Type: "tdd-fill-in", Goal: "fallback"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalStatus != "approved" || len(builds) != 2 {
+		t.Fatalf("result=%+v builds=%d", result, len(builds))
+	}
+	if builds[0].ResumeSessionID != "missing-thread" || builds[1].ResumeSessionID != "" {
+		t.Fatalf("resume IDs = [%q %q], want rejected resume then fresh", builds[0].ResumeSessionID, builds[1].ResumeSessionID)
+	}
+	record, err := ReadResumeRecord(attemptDir)
+	if err != nil || record == nil {
+		t.Fatalf("ReadResumeRecord() = %+v, %v", record, err)
+	}
+	if record.FreshFallbackCount != 1 || record.FreshFallbackReason == "" || !record.Completed {
+		t.Fatalf("resume record = %+v, want completed fresh fallback lineage", record)
+	}
+	if _, err := os.Stat(filepath.Join(phasePlanDir, "attempt-02")); !os.IsNotExist(err) {
+		t.Fatalf("attempt-02 exists after fallback: %v", err)
+	}
+}
+
+func TestRunPhasePlanningLoopValidationPendingDoesNotMutateResumeRecord(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	phasePlanDir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	attemptDir := filepath.Join(phasePlanDir, "attempt-01")
+	if err := os.MkdirAll(attemptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(phasePlanDir, "plan.md"), []byte(validPhasePlanText()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	completedAt := time.Date(2026, 7, 30, 1, 2, 3, 0, time.UTC)
+	wantRecord := ResumeRecord{
+		ProviderSessionID: "thread-complete", Provider: "codex", ResolvedModel: "planner",
+		PhaseKey: "phase-1-plan", Iteration: 1, RunNumber: 1,
+		OrchestratorSessionID: "planner-1", CreatedAt: completedAt, UpdatedAt: completedAt,
+		Completed: true, CompletedAt: &completedAt,
+	}
+	if err := WriteResumeRecord(attemptDir, wantRecord); err != nil {
+		t.Fatal(err)
+	}
+	if err := WritePlanAttemptMeta(phasePlanDir, PlanAttemptMeta{
+		Attempt: 1, AgentStatus: agentStatusSuccess, ReviewStatus: "VALIDATION_PENDING",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := feature.NewStore(tmpDir)
+	f := newTestPlanFeature(t, workDir)
+	f.Pipeline = feature.PipelineMedium
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature: f, FeatureStore: store, StateDir: tmpDir, WorkDir: workDir, MaxAttempts: 1,
+			BuildSession: func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				t.Fatal("VALIDATION_PENDING re-entry dispatched a planner")
+				return nil, nil, nil, nil
+			},
+		},
+		Phase: RoadmapPhase{Number: 1, Name: "Validation only"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalStatus != "approved" {
+		t.Fatalf("result=%+v, want approved", result)
+	}
+	got, err := ReadResumeRecord(attemptDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, &wantRecord) {
+		t.Fatalf("resume record mutated during validation-only re-entry:\n got %+v\nwant %+v", got, wantRecord)
 	}
 }
 
@@ -1951,10 +2329,17 @@ func TestFrozenSectionsDigest(t *testing.T) {
 func TestPlanAttemptMetaRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	meta := PlanAttemptMeta{
-		Attempt:        2,
-		SessionAttempt: 3,
-		AgentStatus:    agentStatusSuccess,
-		ReviewStatus:   agentStatusChangesRequested,
+		Attempt:             2,
+		SessionAttempt:      3,
+		AgentStatus:         agentStatusSuccess,
+		ReviewStatus:        agentStatusChangesRequested,
+		Provider:            "codex",
+		ResolvedModel:       "gpt-5",
+		ProviderSessionID:   "thread-123",
+		Resumed:             true,
+		ResumeCount:         2,
+		FreshFallbackCount:  1,
+		FreshFallbackReason: "session_rejected",
 	}
 	if err := WritePlanAttemptMeta(dir, meta); err != nil {
 		t.Fatalf("write error: %v", err)
@@ -1964,8 +2349,38 @@ func TestPlanAttemptMetaRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read error: %v", err)
 	}
-	if got.Attempt != 2 || got.SessionAttempt != 3 || got.AgentStatus != agentStatusSuccess || got.ReviewStatus != agentStatusChangesRequested {
+	if !reflect.DeepEqual(got, meta) {
 		t.Errorf("round-trip mismatch: %+v", got)
+	}
+}
+
+func TestRunPhasePlanningLoopPersistsCompletedResumeIdentityInAttemptMeta(t *testing.T) {
+	run := runPhasePlanningLoopWithPlannerArtifacts(t, plannerScriptArtifacts{
+		PlanText: validPhasePlanText(),
+	})
+	attemptDir := filepath.Join(run.PhasePlanDir, "attempt-01")
+	record, err := ReadResumeRecord(attemptDir)
+	if err != nil {
+		t.Fatalf("ReadResumeRecord() error = %v", err)
+	}
+	if record == nil {
+		t.Fatal("ReadResumeRecord() = nil, want completed planner identity")
+	}
+	if !record.Completed || record.ResolvedModel == "" {
+		t.Fatalf("resume record = %+v, want completed provider/model identity", record)
+	}
+	meta, err := readPlanAttemptMeta(run.PhasePlanDir, 1)
+	if err != nil {
+		t.Fatalf("readPlanAttemptMeta() error = %v", err)
+	}
+	if meta.ProviderSessionID != record.ProviderSessionID ||
+		meta.Provider != record.Provider ||
+		meta.ResolvedModel != record.ResolvedModel ||
+		meta.Resumed != record.Resumed ||
+		meta.ResumeCount != record.ResumeCount ||
+		meta.FreshFallbackCount != record.FreshFallbackCount ||
+		meta.FreshFallbackReason != record.FreshFallbackReason {
+		t.Fatalf("attempt meta %+v does not mirror resume record %+v", meta, record)
 	}
 }
 

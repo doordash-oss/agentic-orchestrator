@@ -358,7 +358,7 @@ func (h *apiHandler) handleLivePreview(w http.ResponseWriter, r *http.Request, f
 	sess := h.sessionForFeature(featureID)
 	resp := LivePreviewResponse{
 		APIVersion: APIVersion,
-		Feature:    summarizeFeature(f),
+		Feature:    h.featureSummaryDTO(f),
 		Activity:   f.Status.String(),
 		Timing:     timingDTO(f),
 		Cost:       costDTO(f),

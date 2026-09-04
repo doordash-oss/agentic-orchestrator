@@ -23,6 +23,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // Observer is the central observability facade. It coordinates JSONL event
@@ -1169,6 +1170,31 @@ func (o *Observer) FeatureRewound(sc SpanContext, input RewindEventInput) {
 		EventType:    "feature.rewound",
 		FeatureID:    sc.FeatureID,
 		Phase:        input.TargetPhase.String(),
+		Data:         data,
+	})
+}
+
+// FeatureResumed emits the durable audit record for a successfully relaunched
+// provider session.
+func (o *Observer) FeatureResumed(sc SpanContext, input ports.FeatureResumedData) {
+	if o == nil || !o.enabled {
+		return
+	}
+	data := map[string]any{
+		"resume_count": input.ResumeCount,
+	}
+	if input.ChildKey != "" {
+		data["child_key"] = input.ChildKey
+	}
+	o.emit(sc.WithRun(input.RunNumber), Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "feature.resumed",
+		FeatureID:    input.FeatureID,
+		Phase:        input.PhaseKey,
+		Iteration:    input.Iteration,
 		Data:         data,
 	})
 }

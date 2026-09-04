@@ -78,6 +78,22 @@ type BoundedHelperConfig struct {
 	ContractPhase feature.Phase
 	ContractRole  Role
 	ParentSpanCtx observe.SpanContext
+	// RouteUserInput pauses the helper instead of failing when the session
+	// asks the user a question or surfaces an unhandled permission request:
+	// the live session keeps waiting while the desktop answers the pending
+	// control request through the session's control surface. Helpers without
+	// a user surface keep the fail-fast default.
+	RouteUserInput bool
+	// Child-resume fields pair with the completion-receipt commit path: a
+	// bounded helper can resume a child session and still commit its outcome
+	// receipt through CompletionDir.
+	SystemPromptHasUsefulResources bool
+	ResumeFeature                  *feature.Feature
+	ResumeParent                   ResumeParentContext
+	ResumeChildKey                 string
+	ResumePhaseContext             string
+	disableChildResume             bool
+	freshFallbackNumber            int
 }
 
 // BoundedHelperResult captures the output and terminal state of a bounded helper run.
@@ -120,30 +136,68 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		defer cancel()
 	}
 
+	baseSessionID := cfg.SessionID
+	originalPrompt := cfg.Prompt
+	reviewCfg := ReviewHelperConfig{
+		SessionID:           cfg.SessionID,
+		Model:               cfg.Model,
+		Prompt:              cfg.Prompt,
+		HelperIterDir:       cfg.CompletionDir,
+		ResumeFeature:       cfg.ResumeFeature,
+		ResumeParent:        cfg.ResumeParent,
+		ResumeChildKey:      cfg.ResumeChildKey,
+		ResumePhaseContext:  cfg.ResumePhaseContext,
+		disableChildResume:  cfg.disableChildResume,
+		freshFallbackNumber: cfg.freshFallbackNumber,
+	}
+	resumeLaunch, err := pr.prepareReviewChildResume(&reviewCfg)
+	if err != nil {
+		return nil, err
+	}
+	cfg.SessionID = reviewCfg.SessionID
+	cfg.Prompt = reviewCfg.Prompt
+
 	pidDir := pr.StateDir
 	if cfg.FeatureID != "" {
 		pidDir = filepath.Join(pr.StateDir, cfg.FeatureID)
 	}
 
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:              cfg.Model,
-		Prompt:             cfg.Prompt,
-		SystemPrompt:       cfg.SystemPrompt,
-		DisallowedTools:    boundedHelperDisallowedTools,
-		AdditionalDirs:     cfg.AdditionalDirs,
-		WritableRoots:      cfg.WritableRoots,
-		PIDDir:             pidDir,
-		PermHandler:        cfg.PermHandler,
-		RepoName:           cfg.RepoName,
-		WorkDir:            cfg.WorkDir,
-		LogPath:            cfg.LogPath,
-		EffortLevel:        boundedHelperEffortLevel(cfg),
-		AgentNames:         []string{},
-		Phase:              cfg.Phase,
-		CompletionProtocol: cfg.CompletionDir != "",
+		Model:           cfg.Model,
+		Prompt:          cfg.Prompt,
+		ResumeSessionID: resumeLaunch.resumeSessionID,
+		SystemPrompt:    cfg.SystemPrompt,
+		DisallowedTools: boundedHelperDisallowedTools,
+		AdditionalDirs:  cfg.AdditionalDirs,
+		WritableRoots:   cfg.WritableRoots,
+		PIDDir:          pidDir,
+		PermHandler:     cfg.PermHandler,
+		RepoName:        cfg.RepoName,
+		WorkDir:         cfg.WorkDir,
+		LogPath:         cfg.LogPath,
+		EffortLevel:     boundedHelperEffortLevel(cfg),
+		AgentNames:      []string{},
+		Phase:           cfg.Phase,
+		// The completion protocol replaces the former phase_complete marker
+		// handshake and is armed exactly when a receipt target is configured.
+		CompletionProtocol:             cfg.CompletionDir != "",
+		SystemPromptHasUsefulResources: cfg.SystemPromptHasUsefulResources,
 	})
 	if err != nil {
+		if resumeLaunch.claim != nil {
+			if relErr := resumeLaunch.claim.Release(time.Now()); relErr != nil {
+				err = errors.Join(err, relErr)
+			}
+		}
 		return nil, fmt.Errorf("running bounded helper: building session: %w", err)
+	}
+	if resumeLaunch.coordinator != nil {
+		if !resumeLaunch.resumed {
+			if err := initializeFreshReviewChild(reviewCfg, resumeLaunch, sessOpts); err != nil {
+				return nil, err
+			}
+		}
+		installResumeProviderInitCapture(sessOpts, resumeLaunch.coordinator)
 	}
 	if cfg.EffectiveEffort != "" {
 		if sessOpts == nil {
@@ -152,25 +206,42 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		sessOpts.EffectiveEffort = cfg.EffectiveEffort
 		sessOpts.EffortSource = cfg.EffortSource
 	}
-	return pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
-		sessionID:     cfg.SessionID,
-		featureID:     cfg.FeatureID,
-		phase:         cfg.Phase,
-		label:         cfg.Label,
-		observerPhase: cfg.ObserverPhase,
-		model:         cfg.Model,
-		responsePath:  cfg.ResponsePath,
-		repoName:      cfg.RepoName,
-		workDir:       cfg.WorkDir,
-		command:       cmd,
-		env:           env,
-		sessOpts:      sessOpts,
-		requireOutput: cfg.RequireOutput,
-		completionDir: cfg.CompletionDir,
-		contractPhase: cfg.ContractPhase,
-		contractRole:  cfg.ContractRole,
-		parentSpanCtx: cfg.ParentSpanCtx,
+
+	result, runErr := pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
+		sessionID:         cfg.SessionID,
+		featureID:         cfg.FeatureID,
+		phase:             cfg.Phase,
+		label:             cfg.Label,
+		observerPhase:     cfg.ObserverPhase,
+		model:             cfg.Model,
+		responsePath:      cfg.ResponsePath,
+		repoName:          cfg.RepoName,
+		workDir:           cfg.WorkDir,
+		command:           cmd,
+		env:               env,
+		sessOpts:          sessOpts,
+		requireOutput:     cfg.RequireOutput,
+		completionDir:     cfg.CompletionDir,
+		contractPhase:     cfg.ContractPhase,
+		contractRole:      cfg.ContractRole,
+		parentSpanCtx:     cfg.ParentSpanCtx,
+		resumeCoordinator: resumeLaunch.coordinator,
+		resumeClaim:       resumeLaunch.claim,
+		resumed:           resumeLaunch.resumed,
+		routeUserInput:    cfg.RouteUserInput,
 	})
+	var rejection *resumeRejectionError
+	if errors.As(runErr, &rejection) && resumeLaunch.resumed && cfg.freshFallbackNumber == 0 {
+		cfg.disableChildResume = true
+		cfg.freshFallbackNumber++
+		cfg.Prompt = originalPrompt
+		cfg.SessionID = fmt.Sprintf("%s-fresh-%02d", baseSessionID, cfg.freshFallbackNumber)
+		if err := resumeLaunch.coordinator.MarkFreshFallback(rejection.reason, time.Now()); err != nil {
+			return nil, fmt.Errorf("recording bounded helper fresh fallback: %w", err)
+		}
+		return pr.RunBoundedHelper(ctx, cfg)
+	}
+	return result, runErr
 }
 
 type boundedHelperRunConfig struct {
@@ -191,6 +262,14 @@ type boundedHelperRunConfig struct {
 	contractPhase feature.Phase
 	contractRole  Role
 	parentSpanCtx observe.SpanContext
+	// Nudging is owned by WaitForPhaseOutcome and the statusCh arm below.
+	resumeCoordinator *ResumeCoordinator
+	resumeClaim       *ResumeClaim
+	resumed           bool
+	// routeUserInput keeps the session alive on user questions and unhandled
+	// permission requests so the desktop can answer them, instead of failing
+	// the helper run.
+	routeUserInput bool
 }
 
 func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedHelperRunConfig) (*BoundedHelperResult, error) {
@@ -234,7 +313,36 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 	}
 	sess, err := pr.SessionManager.StartSession(cfg.sessionID, cfg.featureID, cfg.phase, cfg.command, cfg.workDir, cfg.env, cfg.sessOpts)
 	if err != nil {
-		return nil, fmt.Errorf("running %s: starting session: %w", label, err), false
+		if cfg.resumed && cfg.resumeCoordinator != nil {
+			if verdict := detectResumeStartRejection(providerNameFromOpts(cfg.sessOpts), err, 0); verdict.Rejected {
+				// Persist the rejection while the claim is still owned:
+				// releasing first would admit a second claimant before the
+				// rejection is durable.
+				if cfg.resumeClaim != nil {
+					if persistErr := cfg.resumeClaim.Reject(verdict.Reason, time.Now()); persistErr != nil {
+						return nil, fmt.Errorf("recording bounded helper resume rejection: %w", persistErr), false
+					}
+				} else if persistErr := cfg.resumeCoordinator.MarkRejected(verdict.Reason, time.Now()); persistErr != nil {
+					return nil, fmt.Errorf("recording bounded helper resume rejection: %w", persistErr), false
+				}
+				return nil, &resumeRejectionError{reason: verdict.Reason}, false
+			}
+		}
+		var relErr error
+		if cfg.resumeClaim != nil {
+			relErr = cfg.resumeClaim.Release(time.Now())
+		}
+		return nil, fmt.Errorf("running %s: starting session: %w", label, errors.Join(err, relErr)), false
+	}
+	if cfg.resumeClaim != nil {
+		cfg.resumeClaim.DispatchStarted()
+	}
+	if cfg.resumeCoordinator != nil {
+		if err := cfg.resumeCoordinator.CaptureProviderSnapshot(
+			providerSessionID(sess), sess.ProviderName(), sess.Model(),
+		); err != nil {
+			return nil, fmt.Errorf("capturing bounded helper provider identity: %w", err), false
+		}
 	}
 
 	sessionCtx := observe.SpanContext{}
@@ -286,12 +394,40 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 
 	// Counts semantic-completion nudges for this invocation.
 	finishOrViolateNudges := 0
+	resumeEstablished := false
 	// Commit violations already delivered as a correction nudge. A nudge
 	// clears the session's parsed intent, so if the process dies before it
 	// can answer, the final report must restore these instead of degrading
 	// to a generic missing-outcome violation.
 	var pendingCommitViolations []ProtocolViolation
 	finish := func(result *BoundedHelperResult, err error) (*BoundedHelperResult, error, bool) {
+		if cfg.resumeCoordinator != nil {
+			if persistErr := cfg.resumeCoordinator.CaptureProviderSnapshot(
+				providerSessionID(sess), sess.ProviderName(), sess.Model(),
+			); persistErr != nil {
+				return result, fmt.Errorf("capturing bounded helper provider identity: %w", persistErr), false
+			}
+		}
+		if cfg.resumed && cfg.resumeCoordinator != nil && !resumeEstablished {
+			if verdict := detectResumeRejection(sess, time.Since(sessionStart)); verdict.Rejected {
+				if persistErr := cfg.resumeCoordinator.MarkRejected(verdict.Reason, time.Now()); persistErr != nil {
+					return result, fmt.Errorf("recording bounded helper resume rejection: %w", persistErr), false
+				}
+				return result, &resumeRejectionError{reason: verdict.Reason}, false
+			}
+			resumeEstablished = true
+			if persistErr := cfg.resumeCoordinator.MarkResumed(time.Now()); persistErr != nil {
+				return result, fmt.Errorf("marking bounded helper resumed: %w", persistErr), false
+			}
+			pr.emitChildResume(cfg)
+		}
+		if err == nil && result != nil && result.Status == BoundedHelperStatusCompleted && cfg.resumeCoordinator != nil && cfg.completionDir != "" {
+			if persistErr := cfg.resumeCoordinator.MarkCompleted(time.Now()); persistErr != nil {
+				return result, fmt.Errorf("marking bounded helper resume record completed: %w", persistErr), false
+			}
+		}
+		// Resume-completion bookkeeping above pairs with the commit-violation
+		// restore path below.
 		if err != nil && len(pendingCommitViolations) > 0 &&
 			isMissingOutcomeViolationError(err) {
 			result.Status = BoundedHelperStatusProtocolViolation
@@ -353,6 +489,14 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			if msg.ControlRequest == nil {
 				continue
 			}
+			if cfg.routeUserInput {
+				// Pause: the live session waits on the pending control request
+				// (question or permission) while the desktop answers it through
+				// the session's control surface. The statusCh arm below picks
+				// the turn back up once the CLI resumes; if the process dies
+				// instead, the Done arm finalizes.
+				continue
+			}
 			if msg.ControlRequest.Request.ToolName == "AskUserQuestion" {
 				result := boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusAskedUser)
 				return finish(result, fmt.Errorf("running %s: helper asked for user input", label))
@@ -367,6 +511,13 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 				continue
 			}
 			awaitingBackgroundTasks = false
+			if cfg.routeUserInput && disposition == llm.TurnAwaitingUser {
+				// The helper's turn ended on a pending user question: keep the
+				// session alive and keep waiting rather than failing the run.
+				// A process exit while the question is pending is caught by
+				// the Done arm below.
+				continue
+			}
 			if cfg.completionDir != "" && disposition == llm.TurnTruncated && autoResumeAttempts < maxAutoResumeAttempts {
 				autoResumeAttempts++
 				if err := sess.SendUserMessage(autoResumeMessage); err == nil {
@@ -400,6 +551,31 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			return finish(result, err)
 		}
 	}
+}
+
+func providerNameFromOpts(opts *ports.SessionOpts) string {
+	if opts == nil {
+		return ""
+	}
+	return opts.ProviderName
+}
+
+func (pr *PhaseRunner) emitChildResume(cfg boundedHelperRunConfig) {
+	if pr.OnFeatureResumed == nil || cfg.resumeCoordinator == nil {
+		return
+	}
+	record := cfg.resumeCoordinator.Snapshot()
+	if record == nil {
+		return
+	}
+	pr.OnFeatureResumed(ports.FeatureResumedData{
+		FeatureID:   cfg.featureID,
+		PhaseKey:    record.PhaseKey,
+		ChildKey:    record.ChildKey,
+		Iteration:   record.Iteration,
+		RunNumber:   record.RunNumber,
+		ResumeCount: record.ResumeCount,
+	})
 }
 
 // boundedHelperMissingOutcomeReason is the generic no-outcome violation. It

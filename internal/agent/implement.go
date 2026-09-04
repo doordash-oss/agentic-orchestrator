@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -39,6 +40,7 @@ import (
 type ImplementConfig struct {
 	Feature             *feature.Feature
 	FeatureStore        ports.FeatureStore // for reading updated help answers
+	Registry            *llm.Registry
 	WorkDir             string
 	PlanPath            string // absolute path to the plan artifact; the agent reads it via tool use
 	MaxIterations       int
@@ -104,6 +106,10 @@ type ImplementConfig struct {
 	// verification status transition.
 	OnVerificationProgress func(featureID string)
 
+	// OnFeatureResumed emits the typed audit event after a crash-resume process
+	// has actually launched.
+	OnFeatureResumed func(ports.FeatureResumedData)
+
 	// RepoName is the repo name for session ID namespacing in multi-repo features.
 	RepoName string
 
@@ -151,6 +157,10 @@ type ImplementConfig struct {
 	// When non-nil, called instead of sm.StartSession. Return
 	// ports.ErrSessionShuttingDown to exit the loop cleanly.
 	SessionStartFunc func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error)
+
+	// AutoResumeWait overrides the interruptible backoff wait in tests. It
+	// returns true when the wait completed and false when it was interrupted.
+	AutoResumeWait func(time.Duration) bool
 
 	// RoundCommitHook, when non-nil, is invoked once per implementation or
 	// fix round right after the round's agent session ends (before the
@@ -293,6 +303,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 	// Resume from the latest completed iteration, if any.
 	startIter := am.LatestIteration()
+	pendingResume := pendingManualResumeRecord(cfg.ArtifactDir)
+	if pendingResume != nil && pendingResume.Iteration > 0 {
+		startIter = pendingResume.Iteration - 1
+	}
 	var consecutiveFailures int
 	var reviewerFeedback string
 	// Iteration number of the most recent CHANGES_REQUESTED review. RETRY
@@ -405,6 +419,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			waitResult          PhaseOutcomeWaitResult
 			testingContractPath string
 			contractFingerprint string
+			resumeCoordinator   *ResumeCoordinator
+			manualResumeLaunch  bool
+			autoResumeFailure   string
 		)
 		planContent := readPlanContent(cfg.PlanPath)
 		if violations := verificationScopeViolations(planContent); len(violations) > 0 {
@@ -422,6 +439,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// already accounted at that run's line ~430, so leave zero here.
 			skipImplement = false
 			iterDir = filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", i))
+			resumeCoordinator = NewResumeCoordinator(iterDir)
 			agentStatus = agentStatusSuccess
 			var prepareErr error
 			testingContractPath, contractFingerprint, prepareErr = prepareImplementationTestingContract(cfg, planContent)
@@ -535,8 +553,21 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if sessionConfig.EffectiveEffort != "" {
 				implBuildOpts.EffortLevel = sessionConfig.EffectiveEffort
 			}
+			resumeCoordinator = NewResumeCoordinator(iterDir)
+			freshBuildOpts := implBuildOpts
+			if pendingResume != nil && pendingResume.Iteration == i {
+				manualResumeLaunch = true
+				implBuildOpts.ResumeSessionID = pendingResume.ProviderSessionID
+				implBuildOpts.Prompt = resumeCoordinator.Prompt(implementResumeContext)
+				prompt = implBuildOpts.Prompt
+			}
 			command, env, sessOpts, buildErr := cfg.BuildSession(implBuildOpts)
 			if buildErr != nil {
+				if manualResumeLaunch {
+					if err := resumeCoordinator.ClearPending(time.Now()); err != nil {
+						return nil, fmt.Errorf("clearing pending implementation resume after build failure: %w", err)
+					}
+				}
 				return nil, fmt.Errorf("building session for iteration %d: %w", i, buildErr)
 			}
 			// Copy the auto-review snapshot from sessOpts into implBuildOpts
@@ -544,6 +575,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// the current (possibly edited) workspace config.
 			if sessOpts != nil && sessOpts.AutoReview.Enabled != nil {
 				implBuildOpts.AutoReview = sessOpts.AutoReview
+				freshBuildOpts.AutoReview = sessOpts.AutoReview
 			}
 
 			sessOpts = enableTurnContinuation(sessOpts)
@@ -559,13 +591,33 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// Capture provider stderr so silent process deaths are diagnosable.
 			sessOpts.StderrPath = filepath.Join(iterDir, "stderr.log")
 
-			// Start session in interactive mode
 			if cfg.Feature.CurrentRoadmapPhase > 0 {
 				sessionID = fmt.Sprintf("%s-phase-%02d-impl", cfg.Feature.ID, cfg.Feature.CurrentRoadmapPhase)
 			} else {
 				sessionID = cfg.Feature.ID + "-impl"
 			}
 			sessionID += fmt.Sprintf("-%02d", i)
+
+			if manualResumeLaunch {
+				sessionID += fmt.Sprintf("-resume-%02d", pendingResume.ResumeCount+1)
+			} else {
+				now := time.Now()
+				if err := resumeCoordinator.Initialize(ResumeRecord{
+					Provider:              sessOpts.ProviderName,
+					ResolvedModel:         sessOpts.Model,
+					PhaseKey:              implementResumePhaseKey(cfg),
+					Iteration:             i,
+					RunNumber:             activeRunNumber(cfg.Feature),
+					OrchestratorSessionID: sessionID,
+					CreatedAt:             now,
+					UpdatedAt:             now,
+				}); err != nil {
+					return nil, fmt.Errorf("initializing implementation resume record: %w", err)
+				}
+			}
+			installResumeProviderInitCapture(sessOpts, resumeCoordinator)
+
+			// Start session in interactive mode
 			startSession := resolveSessionStartFunc(cfg.SessionStartFunc, sm)
 			sess, err = startSession(
 				sessionID,
@@ -576,6 +628,34 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				env,
 				sessOpts,
 			)
+			if err != nil {
+				if manualResumeLaunch {
+					if verdict := detectResumeStartRejection(sessOpts.ProviderName, err, time.Since(iterStart)); verdict.Rejected {
+						if persistErr := resumeCoordinator.MarkRejected(verdict.Reason, time.Now()); persistErr != nil {
+							return nil, fmt.Errorf("recording implementation resume rejection: %w", persistErr)
+						}
+						freshSessionID := sessionID + "-fresh-01"
+						sess, sessOpts, err = resumeCoordinator.DispatchFreshAfterRejection(
+							cfg,
+							sm,
+							freshBuildOpts,
+							freshSessionID,
+							i,
+							permRepoName,
+						)
+						if err != nil {
+							return nil, err
+						}
+						sessionID = freshSessionID
+						manualResumeLaunch = false
+						pendingResume = nil
+					} else {
+						if persistErr := resumeCoordinator.ClearPending(time.Now()); persistErr != nil {
+							return nil, fmt.Errorf("clearing pending implementation resume: %w", persistErr)
+						}
+					}
+				}
+			}
 			if err != nil {
 				if errors.Is(err, ports.ErrSessionShuttingDown) {
 					cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), "interrupted")
@@ -653,6 +733,57 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// phase completion.
 			waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
 			agentStatus = waitResult.Status
+			if err := resumeCoordinator.CaptureProviderSnapshot(providerSessionID(sess), sess.ProviderName(), sess.Model()); err != nil {
+				return nil, fmt.Errorf("capturing implementation provider identity: %w", err)
+			}
+			if manualResumeLaunch {
+				verdict, persistErr := resumeCoordinator.CompleteResumeEstablishment(cfg, sess, time.Since(iterStart), i)
+				if persistErr != nil {
+					return nil, persistErr
+				}
+				pendingResume = nil
+				if verdict.Rejected {
+					rejectedCost := ExtractSessionCost(sess)
+					cfg.Observer.SessionEnded(
+						implSessionCtx,
+						"implement",
+						sessionID,
+						cfg.RepoName,
+						toSessionUsage(rejectedCost),
+						time.Since(iterStart),
+						sessionErrFromLogicalAgentStatus(agentStatus, sess),
+					)
+					_ = accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", rejectedCost, SessionCostMetadata{
+						SessionID:     sessionID,
+						ObserverPhase: "implement",
+						RepoName:      cfg.RepoName,
+					})
+					appendIterationLog(aggregateLogPath, i, sess.MessageLog().Text())
+
+					freshSessionID := sessionID + "-fresh-01"
+					sess, sessOpts, err = resumeCoordinator.DispatchFreshAfterRejection(
+						cfg,
+						sm,
+						freshBuildOpts,
+						freshSessionID,
+						i,
+						permRepoName,
+					)
+					if err != nil {
+						return nil, err
+					}
+					sessionID = freshSessionID
+					manualResumeLaunch = false
+					implSessionCtx = iterCtx.Child()
+					cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, sessOpts.ProviderName, cfg.Model, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
+					implTracker.Install(sess, implSessionCtx, "implement", sessionID)
+					waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
+					agentStatus = waitResult.Status
+					if err := resumeCoordinator.CaptureProviderSnapshot(providerSessionID(sess), sess.ProviderName(), sess.Model()); err != nil {
+						return nil, fmt.Errorf("capturing fresh implementation provider identity: %w", err)
+					}
+				}
+			}
 
 			// App shutdown should not serialize an in-flight iteration as FAILED.
 			// Leaving the iteration incomplete (no meta.yaml) allows restart to replay
@@ -674,42 +805,113 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
 			}
 
-			// Crash resume: the provider process died mid-turn without
-			// completing the iteration (a completed one is reclassified
-			// SUCCESS by the waiter). For providers that can resume their
-			// native session, give the same conversation one fresh process to
-			// finish or report state before charging the iteration as FAILED.
-			if agentStatus == agentStatusFailed && sessOpts != nil && sessOpts.SupportsSessionResume &&
-				!HasCommittedPhaseOutcome(iterDir, feature.PhaseImplement, RoleImplementer) {
-				if resumeID := providerSessionID(sess); resumeID != "" {
-					// Account the dead session before replacing it.
-					deadCost := ExtractSessionCost(sess)
-					cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(deadCost), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
-					_ = accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", deadCost, SessionCostMetadata{
-						SessionID:     sessionID,
+			// Crash resume runs through the AutoResumeEngine, which supersedes the old
+			// inline crash-resume block; the engine path applies the commit-boundary
+			// APIs (HasCommittedPhaseOutcome, WaitForPhaseOutcome).
+			// Auto-resume transient provider failures within this iteration.
+			if agentStatus == agentStatusFailed && sessOpts != nil && sessOpts.SupportsSessionResume && !HasCommittedPhaseOutcome(iterDir, feature.PhaseImplement, RoleImplementer) {
+				baseSessionID := sessionID
+				launchAndWait := func(nextID string, nextSess ports.SessionHandle, nextOpts *ports.SessionOpts) (AutoResumeProcess, error) {
+					sess, sessOpts, sessionID = nextSess, nextOpts, nextID
+					implSessionCtx = iterCtx.Child()
+					cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, sessOpts.ProviderName, cfg.Model, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
+					implTracker.Install(sess, implSessionCtx, "implement", sessionID)
+					waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
+					agentStatus = waitResult.Status
+					if err := resumeCoordinator.CaptureProviderSnapshot(providerSessionID(sess), sess.ProviderName(), sess.Model()); err != nil {
+						return AutoResumeProcess{}, fmt.Errorf("capturing implementation provider identity: %w", err)
+					}
+					return AutoResumeProcess{Session: sess, Status: agentStatus, ID: sessionID}, nil
+				}
+				accountProcess := func(process AutoResumeProcess) error {
+					deadCost := ExtractSessionCost(process.Session)
+					cfg.Observer.SessionEnded(implSessionCtx, "implement", process.ID, cfg.RepoName, toSessionUsage(deadCost), time.Since(iterStart), sessionErrFromLogicalAgentStatus(process.Status, process.Session))
+					if err := accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", deadCost, SessionCostMetadata{
+						SessionID:     process.ID,
 						ObserverPhase: "implement",
 						RepoName:      cfg.RepoName,
-					})
-					appendIterationLog(aggregateLogPath, i, sess.MessageLog().Text())
-
-					resumeSessionID := sessionID + "-resume"
-					resumeSess, resumeOpts, resumeErr := startCrashResumeSession(cfg, sm, implBuildOpts, resumeID, resumeSessionID, i, iterDir, permRepoName)
-					if resumeErr == nil {
-						sess, sessOpts = resumeSess, resumeOpts
-						sessionID = resumeSessionID
-						implSessionCtx = iterCtx.Child()
-						cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, sessOpts.ProviderName, sessionConfig.Model, cfg.RepoName, string(sessionConfig.EffectiveEffort), string(sessionConfig.EffortSource))
-						implTracker.Install(sess, implSessionCtx, "implement", sessionID)
-
-						waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
-						agentStatus = waitResult.Status
-						if agentStatus == agentStatusFailed && sm != nil && waitForShutdownIntent(sm, shutdownDetectionGrace) {
-							return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
-						}
-						if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
-							return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
-						}
+					}); err != nil {
+						return err
 					}
+					appendIterationLog(aggregateLogPath, i, process.Session.MessageLog().Text())
+					return nil
+				}
+				engineResult, engineErr := (AutoResumeEngine{}).Run(
+					AutoResumeProcess{Session: sess, Status: agentStatus, ID: sessionID},
+					AutoResumeCallbacks{
+						Failed: func(process AutoResumeProcess) bool {
+							return process.Status == agentStatusFailed
+						},
+						SupportsResume: func(AutoResumeProcess) bool { return true },
+						HasCompleted: func(AutoResumeProcess) bool {
+							return HasCommittedPhaseOutcome(iterDir, feature.PhaseImplement, RoleImplementer)
+						},
+						ResumeID: func(process AutoResumeProcess) string {
+							return providerSessionID(process.Session)
+						},
+						WaitBackoff: func(_ AutoResumeProcess, wait time.Duration) bool {
+							return waitForAutoResume(cfg, sm, wait)
+						},
+						Account: accountProcess,
+						Resume: func(_ AutoResumeProcess, resumeID string, ordinal int) (AutoResumeAttempt, error) {
+							resumeSessionID := fmt.Sprintf("%s-resume-%02d", baseSessionID, ordinal)
+							resumeStartedAt := time.Now()
+							resumeSess, resumeOpts, err := resumeCoordinator.DispatchCrashResume(cfg, sm, implBuildOpts, resumeID, resumeSessionID, i, permRepoName)
+							var rejectionErr *resumeRejectionError
+							if errors.As(err, &rejectionErr) {
+								return AutoResumeAttempt{Rejected: true, Reason: rejectionErr.reason}, nil
+							}
+							if err != nil {
+								return AutoResumeAttempt{}, err
+							}
+							process, err := launchAndWait(resumeSessionID, resumeSess, resumeOpts)
+							if err != nil {
+								return AutoResumeAttempt{}, err
+							}
+							verdict, err := resumeCoordinator.CompleteResumeEstablishment(cfg, sess, time.Since(resumeStartedAt), i)
+							if err != nil {
+								return AutoResumeAttempt{}, err
+							}
+							if verdict.Rejected {
+								if err := accountProcess(process); err != nil {
+									return AutoResumeAttempt{}, err
+								}
+								return AutoResumeAttempt{Process: process, Rejected: true, Reason: verdict.Reason}, nil
+							}
+							return AutoResumeAttempt{Process: process}, nil
+						},
+						FreshFallback: func(_ AutoResumeProcess, _ string, ordinal int) (AutoResumeAttempt, error) {
+							freshSessionID := fmt.Sprintf("%s-fresh-%02d", baseSessionID, ordinal)
+							// freshBuildOpts is the pre-resume snapshot: implBuildOpts
+							// carries the resume-continuation prompt (and possibly the
+							// stale ResumeSessionID), which would launch the fresh
+							// session claiming to continue a conversation it never had.
+							freshSess, freshOpts, err := resumeCoordinator.DispatchFreshAfterRejection(cfg, sm, freshBuildOpts, freshSessionID, i, permRepoName)
+							if err != nil {
+								return AutoResumeAttempt{}, err
+							}
+							process, err := launchAndWait(freshSessionID, freshSess, freshOpts)
+							return AutoResumeAttempt{Process: process}, err
+						},
+						Interrupted: func(process AutoResumeProcess) bool {
+							return (process.Status == agentStatusFailed && sm != nil && waitForShutdownIntent(sm, shutdownDetectionGrace)) ||
+								isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID)
+						},
+					},
+				)
+				if engineErr != nil {
+					return nil, engineErr
+				}
+				sess = engineResult.Process.Session.(ports.SessionHandle)
+				sessionID = engineResult.Process.ID
+				agentStatus = engineResult.Process.Status
+				autoResumeFailure = engineResult.Failure
+				if engineResult.Interrupted {
+					iterations := i
+					if sm != nil && sm.IsShuttingDown() {
+						iterations = i - 1
+					}
+					return &LoopResult{FinalStatus: "interrupted", Iterations: iterations}, nil
 				}
 			}
 
@@ -732,6 +934,12 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// intentional cleanup.
 			exitCode = exitCodeFromAgentStatus(agentStatus)
 		}
+		if agentStatus == agentStatusSuccess {
+			if err := resumeCoordinator.MarkCompleted(time.Now()); err != nil {
+				return nil, fmt.Errorf("marking implementation resume record completed: %w", err)
+			}
+		}
+		resumeRecord := resumeCoordinator.Snapshot()
 
 		meta := IterationMeta{
 			Iteration:    i,
@@ -742,6 +950,15 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			MadeProgress: madeProgress,
 			CostUSD:      cost.TotalCostUSD,
 			Context:      iterationContextMeta(sess, waitResult.Handoff),
+		}
+		if resumeRecord != nil {
+			meta.Provider = resumeRecord.Provider
+			meta.ResolvedModel = resumeRecord.ResolvedModel
+			meta.ProviderSessionID = resumeRecord.ProviderSessionID
+			meta.Resumed = resumeRecord.Resumed
+			meta.ResumeCount = resumeRecord.ResumeCount
+			meta.FreshFallbackCount = resumeRecord.FreshFallbackCount
+			meta.FreshFallbackReason = resumeRecord.FreshFallbackReason
 		}
 
 		// Per-round commit: fire as soon as the round's session has fully
@@ -791,6 +1008,17 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			ObserverPhase: "implement",
 			RepoName:      cfg.RepoName,
 		})
+		if autoResumeFailure != "" {
+			meta.AgentStatus = agentStatusFailed
+			_ = am.WriteMeta(iterDir, meta)
+			_ = am.WriteSummary(summaryPath, meta)
+			cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), agentStatusFailed)
+			return &LoopResult{
+				FinalStatus: "failed",
+				Iterations:  i,
+				LastError:   autoResumeFailure,
+			}, nil
+		}
 
 		// Handle based on agent status
 		if waitResult.Err != nil {
@@ -1215,17 +1443,31 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 	}, nil
 }
 
-// crashResumeMessageFragment is the stable fragment tests and log scans match
-// on; keep crashResumeMessage in sync with it.
+// crashResumeMessageFragment is the stable fragment tests and log scans match.
 const crashResumeMessageFragment = "process terminated unexpectedly mid-turn"
 
-// crashResumeMessage is the prompt for a crash-resume session. The resumed
-// conversation already carries the full iteration context; this only explains
-// the process boundary and re-anchors the completion protocol.
-const crashResumeMessage = "Your previous process terminated unexpectedly mid-turn; this session resumes that conversation. " +
-	"Reassess the repository and your artifacts: if the iteration's work is already complete, write any missing " +
-	"required artifacts, run the artifact preflight, and emit the structured root outcome; otherwise update progress " +
-	"and continue from where you left off."
+func waitForAutoResume(cfg ImplementConfig, sm ports.SessionManager, wait time.Duration) bool {
+	if cfg.AutoResumeWait != nil {
+		return cfg.AutoResumeWait(wait)
+	}
+	if sm != nil && sm.IsShuttingDown() || isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+		return false
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-timer.C:
+			return true
+		case <-ticker.C:
+			if sm != nil && sm.IsShuttingDown() || isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+				return false
+			}
+		}
+	}
+}
 
 // providerSessionID returns the provider-native session identifier for a
 // session handle, "" when the handle does not expose one. SessionID is not
@@ -1241,9 +1483,9 @@ func providerSessionID(sess ports.SessionView) string {
 // provider-native session resumeID after the previous process died mid-turn.
 // The iteration's response.txt is opened in append mode so the dead session's
 // streamed output is preserved.
-func startCrashResumeSession(cfg ImplementConfig, sm ports.SessionManager, buildOpts BuildSessionOpts, resumeID, sessionID string, iteration int, iterDir, permScope string) (ports.SessionHandle, *ports.SessionOpts, error) {
+func (c *ResumeCoordinator) DispatchCrashResume(cfg ImplementConfig, sm ports.SessionManager, buildOpts BuildSessionOpts, resumeID, sessionID string, iteration int, permScope string) (ports.SessionHandle, *ports.SessionOpts, error) {
 	buildOpts.ResumeSessionID = resumeID
-	buildOpts.Prompt = crashResumeMessage
+	buildOpts.Prompt = c.Prompt(implementResumeContext)
 	command, env, sessOpts, err := cfg.BuildSession(buildOpts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("building crash-resume session: %w", err)
@@ -1256,17 +1498,169 @@ func startCrashResumeSession(cfg ImplementConfig, sm ports.SessionManager, build
 	sessOpts.Iteration = iteration
 	sessOpts.RunNumber = cfg.Feature.ActiveRun
 	sessOpts.PermCacheScope = permScope
-	sessOpts.StderrPath = filepath.Join(iterDir, "stderr-resume.log")
+	sessOpts.StderrPath = filepath.Join(c.dir, "stderr-resume.log")
+	installResumeProviderInitCapture(sessOpts, c)
 
 	startSession := resolveSessionStartFunc(cfg.SessionStartFunc, sm)
 	sess, err := startSession(sessionID, cfg.Feature.ID, feature.PhaseImplement, command, cfg.WorkDir, env, sessOpts)
 	if err != nil {
+		if verdict := detectResumeStartRejection(sessOpts.ProviderName, err, 0); verdict.Rejected {
+			if persistErr := c.MarkRejected(verdict.Reason, time.Now()); persistErr != nil {
+				return nil, nil, fmt.Errorf("recording crash-resume rejection: %w", persistErr)
+			}
+			return nil, nil, &resumeRejectionError{reason: verdict.Reason}
+		}
 		return nil, nil, fmt.Errorf("starting crash-resume session: %w", err)
 	}
-	if logFile, logErr := os.OpenFile(filepath.Join(iterDir, "response.txt"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); logErr == nil {
+	if logFile, logErr := os.OpenFile(filepath.Join(c.dir, "response.txt"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); logErr == nil {
 		sess.SetLogFile(logFile)
 	}
 	return sess, sessOpts, nil
+}
+
+// DispatchFreshAfterRejection starts a normal provider session for the same
+// iteration after the provider refuses to restore the prior native session.
+func (c *ResumeCoordinator) DispatchFreshAfterRejection(cfg ImplementConfig, sm ports.SessionManager, buildOpts BuildSessionOpts, sessionID string, iteration int, permScope string) (ports.SessionHandle, *ports.SessionOpts, error) {
+	buildOpts.ResumeSessionID = ""
+	command, env, sessOpts, err := cfg.BuildSession(buildOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("building fresh session after resume rejection: %w", err)
+	}
+	sessOpts = enableTurnContinuation(sessOpts)
+	if cfg.EffectiveEffort != "" {
+		sessOpts.EffectiveEffort = cfg.EffectiveEffort
+		sessOpts.EffortSource = cfg.EffortSource
+	}
+	sessOpts.Iteration = iteration
+	sessOpts.PermCacheScope = permScope
+	sessOpts.StderrPath = filepath.Join(c.dir, "stderr-fresh.log")
+
+	now := time.Now()
+	fallbackReason := string(ResumeReasonSessionRejected)
+	if record := c.Snapshot(); record != nil && strings.TrimSpace(record.RejectionReason) != "" {
+		fallbackReason = record.RejectionReason
+	}
+	if err := c.MarkFreshFallback(fallbackReason, now); err != nil {
+		return nil, nil, fmt.Errorf("recording implementation fresh fallback: %w", err)
+	}
+	if err := c.Initialize(ResumeRecord{
+		Provider:              sessOpts.ProviderName,
+		ResolvedModel:         sessOpts.Model,
+		PhaseKey:              implementResumePhaseKey(cfg),
+		Iteration:             iteration,
+		RunNumber:             activeRunNumber(cfg.Feature),
+		OrchestratorSessionID: sessionID,
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}); err != nil {
+		return nil, nil, fmt.Errorf("initializing implementation fresh fallback: %w", err)
+	}
+	installResumeProviderInitCapture(sessOpts, c)
+
+	startSession := resolveSessionStartFunc(cfg.SessionStartFunc, sm)
+	sess, err := startSession(sessionID, cfg.Feature.ID, feature.PhaseImplement, command, cfg.WorkDir, env, sessOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("starting fresh session after resume rejection: %w", err)
+	}
+	if logFile, logErr := os.OpenFile(filepath.Join(c.dir, "response.txt"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); logErr == nil {
+		sess.SetLogFile(logFile)
+	}
+	return sess, sessOpts, nil
+}
+
+// CompleteResumeEstablishment records a resumed session only after the
+// provider has either produced activity or exited without a rejection signal.
+func (c *ResumeCoordinator) CompleteResumeEstablishment(cfg ImplementConfig, sess ports.SessionView, elapsed time.Duration, iteration int) (ResumeRejectionVerdict, error) {
+	verdict := detectResumeRejection(sess, elapsed)
+	if verdict.Rejected {
+		if err := c.MarkRejected(verdict.Reason, time.Now()); err != nil {
+			return verdict, fmt.Errorf("recording implementation resume rejection: %w", err)
+		}
+		return verdict, nil
+	}
+	resumeCount := 1
+	if before := c.Snapshot(); before != nil {
+		resumeCount = before.ResumeCount + 1
+	}
+	if err := c.MarkResumed(time.Now()); err != nil {
+		return ResumeRejectionVerdict{}, fmt.Errorf("marking implementation resumed: %w", err)
+	}
+	if cfg.OnFeatureResumed != nil {
+		input := ports.FeatureResumedData{
+			FeatureID:   cfg.Feature.ID,
+			PhaseKey:    implementResumePhaseKey(cfg),
+			ChildKey:    c.ChildKey(),
+			Iteration:   iteration,
+			RunNumber:   activeRunNumber(cfg.Feature),
+			ResumeCount: resumeCount,
+		}
+		record := c.Snapshot()
+		if record != nil {
+			input.PhaseKey = record.PhaseKey
+			input.ChildKey = record.ChildKey
+			input.Iteration = record.Iteration
+			input.RunNumber = record.RunNumber
+			input.ResumeCount = record.ResumeCount
+		}
+		cfg.OnFeatureResumed(input)
+	}
+	return ResumeRejectionVerdict{}, nil
+}
+
+func installResumeProviderInitCapture(opts *ports.SessionOpts, coordinator *ResumeCoordinator) {
+	if opts == nil || coordinator == nil {
+		return
+	}
+	existing := opts.OnProviderInit
+	opts.OnProviderInit = func(info ports.ProviderInitInfo) {
+		if existing != nil {
+			existing(info)
+		}
+		if err := coordinator.CaptureProviderInit(info); err != nil {
+			log.Printf("resume coordinator: capturing provider initialization: %v", err)
+		}
+	}
+}
+
+func activeRunNumber(f *feature.Feature) int {
+	if f != nil && f.ActiveRun > 0 {
+		return f.ActiveRun
+	}
+	return 1
+}
+
+func implementResumePhaseKey(cfg ImplementConfig) string {
+	if cfg.Feature == nil {
+		return "implement"
+	}
+	if key := strings.TrimSpace(cfg.Feature.ActiveTimingKey); key != "" {
+		return key
+	}
+	if cfg.Feature.CurrentRoadmapPhase > 0 {
+		return fmt.Sprintf("phase-%d-impl", cfg.Feature.CurrentRoadmapPhase)
+	}
+	return "implement"
+}
+
+func pendingManualResumeRecord(artifactDir string) *ResumeRecord {
+	entries, err := os.ReadDir(artifactDir)
+	if err != nil {
+		return nil
+	}
+	var latest *ResumeRecord
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "iteration-") {
+			continue
+		}
+		record, readErr := ReadResumeRecord(filepath.Join(artifactDir, entry.Name()))
+		if readErr != nil || record == nil || !record.PendingResume {
+			continue
+		}
+		if latest == nil || record.Iteration > latest.Iteration {
+			latest = record
+		}
+	}
+	return latest
 }
 
 func formatProtocolViolationError(role Role, iterDir string, violations []ProtocolViolation) string {

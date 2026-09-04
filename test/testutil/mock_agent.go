@@ -357,6 +357,12 @@ VR_EOF
 fi`, artifactDir, artifactDir, "~~~", "~~~", state, stateNote, rewriteExistingReportRowsPassed("$_d", "mock agent reported success for this contract check"), verifBody)
 }
 
+// TouchPhaseCompleteInDir returns a shell command that writes phase_complete
+// directly in the given directory.
+func TouchPhaseCompleteInDir(dir string) string {
+	return fmt.Sprintf(`touch "%s/phase_complete"`, dir)
+}
+
 // WritePhasePlanSuccessArtifacts returns a shell snippet that writes the
 // plan.md artifact required from a successful phase-planning session.
 func WritePhasePlanSuccessArtifacts(phasePlanDir, planText string) string {

@@ -3980,6 +3980,8 @@ components:
         - created_at
         - checkpoints
         - progress
+        - resumed
+        - resume_count
       properties:
         id:
           type: string
@@ -4006,6 +4008,12 @@ components:
           $ref: "#/components/schemas/Checkpoints"
         progress:
           $ref: "#/components/schemas/FeatureProgress"
+        resumed:
+          type: boolean
+          description: Whether the active phase unit has resumed a persisted provider session.
+        resume_count:
+          type: integer
+          description: Number of persisted provider-session resumptions for the active phase unit.
         warnings:
           type: array
           items:

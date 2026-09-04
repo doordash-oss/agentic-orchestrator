@@ -1213,6 +1213,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					TotalCostUSD: costUSD,
 				},
 			}
+			if completed.Turn.Error != nil && completed.Turn.Error.ErrorInfo != nil {
+				info := completed.Turn.Error.ErrorInfo
+				msg.Result.Failure = &llm.FailureMetadata{Type: info.Type}
+				if info.HttpStatusCode != nil {
+					msg.Result.Failure.StatusCode = *info.HttpStatusCode
+				}
+			}
 			if inTok > 0 || outTok > 0 {
 				msg.Result.Usage = &llm.Usage{
 					InputTokens:          inTok,

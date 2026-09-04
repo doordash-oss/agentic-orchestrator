@@ -66,6 +66,22 @@ func PhaseImplementDir(stateDir string, f *feature.Feature, phase int) string {
 	return filepath.Join(PhaseDir(stateDir, f, phase), "implement")
 }
 
+// ActiveImplementDir returns the implementation artifact root for the
+// feature's current phase or cycle.
+func ActiveImplementDir(stateDir string, f *feature.Feature) string {
+	if f == nil {
+		return ""
+	}
+	runDir := ActiveRunDir(stateDir, f)
+	// No cycle/refactor path prefix applies: those subsystems were deleted, and
+	// their non-empty values only ever applied to the deleted feature kinds.
+	base := runDir
+	if f.CurrentRoadmapPhase > 0 {
+		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")
+	}
+	return filepath.Join(base, "implement")
+}
+
 // PhaseTestingContractDir returns the base directory for a roadmap phase's
 // testing contract artifact. The contract lives at the phase root so
 // implementation and review share one binding file.
@@ -86,15 +102,22 @@ func RoadmapDir(stateDir string, f *feature.Feature) string {
 }
 
 type IterationMeta struct {
-	Iteration    int           `yaml:"iteration"`
-	StartedAt    time.Time     `yaml:"started_at"`
-	Duration     time.Duration `yaml:"duration"`
-	ExitCode     int           `yaml:"exit_code"`
-	AgentStatus  string        `yaml:"agent_status"`
-	ReviewStatus string        `yaml:"review_status"`
-	MadeProgress bool          `yaml:"made_progress"`
-	CostUSD      float64       `yaml:"cost_usd,omitempty"`
-	Context      *ContextMeta  `yaml:"context,omitempty"`
+	Iteration           int           `yaml:"iteration"`
+	StartedAt           time.Time     `yaml:"started_at"`
+	Duration            time.Duration `yaml:"duration"`
+	ExitCode            int           `yaml:"exit_code"`
+	AgentStatus         string        `yaml:"agent_status"`
+	ReviewStatus        string        `yaml:"review_status"`
+	MadeProgress        bool          `yaml:"made_progress"`
+	CostUSD             float64       `yaml:"cost_usd,omitempty"`
+	Context             *ContextMeta  `yaml:"context,omitempty"`
+	Provider            string        `yaml:"provider,omitempty"`
+	ResolvedModel       string        `yaml:"resolved_model,omitempty"`
+	ProviderSessionID   string        `yaml:"provider_session_id,omitempty"`
+	Resumed             bool          `yaml:"resumed,omitempty"`
+	ResumeCount         int           `yaml:"resume_count,omitempty"`
+	FreshFallbackCount  int           `yaml:"fresh_fallback_count,omitempty"`
+	FreshFallbackReason string        `yaml:"fresh_fallback_reason,omitempty"`
 }
 
 type ContextMeta struct {

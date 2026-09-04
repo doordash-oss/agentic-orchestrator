@@ -1476,6 +1476,28 @@ func TestTurnCompletedComputesCostWithCachedInputTokens(t *testing.T) {
 	}
 }
 
+func TestTurnCompletedFailureSurfacesStructuredErrorInfo(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{})
+	params := json.RawMessage(`{
+		"threadId":"thread-1",
+		"turn":{
+			"id":"turn-1",
+			"status":"failed",
+			"error":{
+				"message":"usage exhausted",
+				"codexErrorInfo":{"type":"UsageLimitExceeded","httpStatusCode":429}
+			}
+		}
+	}`)
+	msg, ok := p.parseNotification("turn/completed", params)
+	if !ok || msg.Result == nil || msg.Result.Failure == nil {
+		t.Fatalf("turn/completed produced (%+v, %v), want structured failure", msg, ok)
+	}
+	if msg.Result.Failure.Type != "UsageLimitExceeded" || msg.Result.Failure.StatusCode != 429 {
+		t.Errorf("failure metadata = %+v, want UsageLimitExceeded status 429", msg.Result.Failure)
+	}
+}
+
 func TestTurnCompletedAccumulatesShortAndLongContextRates(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "gpt-5.6-luna"})
 

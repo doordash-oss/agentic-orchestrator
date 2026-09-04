@@ -33,6 +33,9 @@ const (
 	// Subscribers should refresh feature detail and run-scoped artifacts because
 	// ActiveRun and carried artifact maps may have changed.
 	FeatureRewound
+	// FeatureResumed fires after a persisted provider session is successfully
+	// relaunched. It maps to the existing lifecycle.updated SSE kind.
+	FeatureResumed
 	PhaseStarted
 	PhaseCompleted
 	ReviewRequired
@@ -101,6 +104,10 @@ type Event struct {
 
 	RunNumber   int
 	Attempt     int
+	PhaseKey    string
+	ChildKey    string
+	Iteration   int
+	ResumeCount int
 	SetupLog    string
 	SetupTask   string
 	SetupKind   feature.SetupTaskKind
@@ -108,4 +115,15 @@ type Event struct {
 	RepoName    string
 	Path        string
 	Branch      string
+}
+
+// FeatureResumedData is the typed identity carried through the resume audit
+// pipeline after a provider session has been successfully relaunched.
+type FeatureResumedData struct {
+	FeatureID   string
+	PhaseKey    string
+	ChildKey    string
+	Iteration   int
+	RunNumber   int
+	ResumeCount int
 }

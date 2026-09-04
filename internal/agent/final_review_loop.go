@@ -27,7 +27,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -539,9 +538,19 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 	if err := os.MkdirAll(axisDir, 0o755); err != nil {
 		return ReviewFailed, "", fmt.Errorf("creating %s final review helper directory: %w", axis.Name, err)
 	}
-	RemoveCompletionReceipt(axisDir)
-
 	feedbackPath := filepath.Join(axisDir, "review-feedback.md")
+	// Stop/restart resume: preserve a completed clean verdict and only
+	// redispatch axes whose local handoff is incomplete or invalid.
+	// Axis completion is decided by committed outcome receipts (axis helpers
+	// commit Phase=PhaseReview, Role=axis.Role): a prior receipt survives to
+	// short-circuit a completed axis, and any stale or invalid receipt is
+	// removed before redispatch.
+	if HasCommittedPhaseOutcome(axisDir, feature.PhaseReview, axis.Role) {
+		if cached, err := ParseReviewFeedback(feedbackPath); err == nil && len(cached.ProtocolViolations) == 0 {
+			return cached.Verdict, cached.Body, nil
+		}
+	}
+	RemoveCompletionReceipt(axisDir)
 	_ = os.Remove(feedbackPath)
 
 	diffBase := featureDefaultDiffBase(cfg.Feature)
@@ -583,13 +592,15 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 	additionalDirs = append([]string{s.workspace.Cwd}, additionalDirs...)
 
 	helper := &PhaseRunner{
-		SessionManager: s.sm,
-		FeatureStore:   cfg.FeatureStore,
-		StateDir:       cfg.StateDir,
-		SkillsDir:      cfg.SkillsDir,
-		GuidelinesDir:  cfg.GuidelinesDir,
-		Observer:       cfg.Observer,
-		BuildSessionFn: cfg.BuildSession,
+		SessionManager:   s.sm,
+		FeatureStore:     cfg.FeatureStore,
+		Registry:         cfg.Registry,
+		StateDir:         cfg.StateDir,
+		SkillsDir:        cfg.SkillsDir,
+		GuidelinesDir:    cfg.GuidelinesDir,
+		Observer:         cfg.Observer,
+		OnFeatureResumed: cfg.OnFeatureResumed,
+		BuildSessionFn:   cfg.BuildSession,
 	}
 	helperCfg := ReviewHelperConfig{
 		SessionID:              s.featureFinalReviewSessionID(axisSlug, iteration),
@@ -613,6 +624,13 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		EffortSource:           finalReviewAxisEffortSource(cfg),
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
+		ResumeFeature:          cfg.Feature,
+		ResumeParent: ResumeParentContext{
+			PhaseKey:  feature.PhaseFinalReview.DirName(),
+			Iteration: iteration,
+		},
+		ResumeChildKey:     axisSlug,
+		ResumePhaseContext: fmt.Sprintf("You were mid the %s final-review axis for iteration %d.", axis.Name, iteration),
 	}
 	var helperResult *ReviewHelperResult
 	var err error
@@ -695,6 +713,22 @@ func (s *featureFinalReviewLoopState) rejectDirtyWorktreesAtApproval() error {
 // fix agent can address review findings in any repo.
 func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback string) (string, error) {
 	cfg := s.cfg
+	fixDir := filepath.Join(iterDir, "fix")
+	if err := os.MkdirAll(fixDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating final-review fix helper directory: %w", err)
+	}
+	// Stop/restart resume: a completed fix session committed its receipt into
+	// fixDir (Phase=PhaseReview, Role=RoleFinalReviewFixer). Reuse it and
+	// republish the receipt into the parent iteration directory so
+	// receipt-based consumers see the completed unit.
+	if HasCommittedPhaseOutcome(fixDir, feature.PhaseReview, RoleFinalReviewFixer) {
+		if outcome, _, err := Validate(feature.PhaseReview, RoleFinalReviewFixer, fixDir); err == nil && outcome.OK {
+			if err := republishCompletionReceipt(fixDir, iterDir); err != nil {
+				return "", fmt.Errorf("restoring final-review iteration completion receipt: %w", err)
+			}
+			return agentStatusSuccess, nil
+		}
+	}
 	sessionConfig, err := resolveOrchestratorSessionConfig(cfg, llm.PhaseImplementation)
 	if err != nil {
 		return "", fmt.Errorf("resolving final review fix session configuration for iteration %d: %w", iteration, err)
@@ -718,11 +752,11 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		RefactorPassForkPoint: refactorPassForkPoint(cfg.Feature),
 	})
 
-	_ = os.WriteFile(filepath.Join(iterDir, "fix-prompt.md"), []byte(prompt), 0o644)
+	_ = os.WriteFile(filepath.Join(fixDir, "fix-prompt.md"), []byte(prompt), 0o644)
 
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
 		Spec:          FinalReviewFixerRoleSpec(),
-		IterationDir:  iterDir,
+		IterationDir:  fixDir,
 		SkillsDir:     cfg.SkillsDir,
 		GuidelinesDir: cfg.GuidelinesDir,
 		KBInfos:       cfg.KBInfos,
@@ -730,88 +764,75 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	})
 
 	RemoveCompletionReceipt(iterDir)
+	RemoveCompletionReceipt(fixDir)
 
 	additionalDirs := append([]string{s.workspace.Cwd}, additionalDirsExcludingStateDir(s.workspace, s.stateDir)...)
 	additionalDirs = append(additionalDirs, guidelineAdditionalDirs(cfg.GuidelinesDir)...)
-
-	command, env, sessOpts, buildErr := cfg.BuildSession(BuildSessionOpts{
+	helper := &PhaseRunner{
+		SessionManager:   s.sm,
+		FeatureStore:     cfg.FeatureStore,
+		Registry:         cfg.Registry,
+		StateDir:         cfg.StateDir,
+		SkillsDir:        cfg.SkillsDir,
+		GuidelinesDir:    cfg.GuidelinesDir,
+		Observer:         cfg.Observer,
+		OnFeatureResumed: cfg.OnFeatureResumed,
+		BuildSessionFn:   cfg.BuildSession,
+	}
+	result, err := helper.RunBoundedHelper(context.Background(), BoundedHelperConfig{
+		SessionID:                      s.featureFinalReviewSessionID("fix", iteration),
+		FeatureID:                      cfg.Feature.ID,
+		Phase:                          feature.PhaseFinalReview,
+		Label:                          "final-review fixer",
+		ObserverPhase:                  feature.PhaseFinalReview.DirName(),
 		Model:                          cfg.Model,
 		Prompt:                         prompt,
 		SystemPrompt:                   systemPrompt,
-		AdditionalDirs:                 additionalDirs,
-		AgentNames:                     []string{},
-		PIDDir:                         s.stateDir,
-		PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
 		WorkDir:                        s.workspace.Cwd,
+		AdditionalDirs:                 additionalDirs,
+		LogPath:                        filepath.Join(fixDir, "fix-output.txt"),
 		EffortLevel:                    finalReviewFixEffortLevel(cfg),
-		Phase:                          feature.PhaseReview,
+		EffectiveEffort:                finalReviewFixEffectiveEffort(cfg),
+		EffortSource:                   finalReviewFixEffortSource(cfg),
+		PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
+		CompletionDir:                  fixDir,
+		ContractPhase:                  feature.PhaseReview,
+		ContractRole:                   RoleFinalReviewFixer,
 		SystemPromptHasUsefulResources: true,
-		CompletionProtocol:             true,
-	})
-	if buildErr != nil {
-		return "", fmt.Errorf("building feature fix agent session: %w", buildErr)
-	}
-	sessOpts = enableTurnContinuation(sessOpts)
-	if finalReviewFixEffectiveEffort(cfg) != "" {
-		sessOpts.EffectiveEffort = finalReviewFixEffectiveEffort(cfg)
-		sessOpts.EffortSource = finalReviewFixEffortSource(cfg)
-	}
-	sessOpts.RunNumber = cfg.Feature.ActiveRun
-	WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
-
-	sessionID := s.featureFinalReviewSessionID("fix", iteration)
-
-	sess, startErr := s.sm.StartSession(sessionID, cfg.Feature.ID, feature.PhaseFinalReview, command, s.workspace.Cwd, env, sessOpts)
-	if startErr != nil {
-		if errors.Is(startErr, ports.ErrSessionShuttingDown) {
-			return "", fmt.Errorf("session manager shutting down")
-		}
-		return "", fmt.Errorf("starting feature fix agent session: %w", startErr)
-	}
-	providerName := ""
-	if sessOpts != nil {
-		providerName = sessOpts.ProviderName
-	}
-	sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, sessionID, providerName, cfg.Model)
-	defer func() {
-		cost := ExtractSessionCost(sess)
-		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost, SessionCostMetadata{
-			SessionID:     sessionID,
-			ObserverPhase: feature.PhaseFinalReview.String(),
-		})
-		if observed {
-			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
-		}
-	}()
-
-	logFile, logErr := os.Create(filepath.Join(iterDir, "fix-output.txt"))
-	if logErr != nil {
-		return "", fmt.Errorf("creating fix log file: %w", logErr)
-	}
-	sess.SetLogFile(logFile)
-
-	waitResult := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
-		CommitOutcome: func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
-			_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
-				Phase:       feature.PhaseReview,
-				Role:        RoleFinalReviewFixer,
-				ArtifactDir: iterDir,
-				SessionID:   sessionID,
-				Intent:      intent,
-			})
-			if err == nil && len(violations) == 0 {
-				sess.SetHasUnansweredQuestion(false)
-			}
-			return violations, err
+		ResumeFeature:                  cfg.Feature,
+		ResumeParent: ResumeParentContext{
+			PhaseKey:  feature.PhaseFinalReview.DirName(),
+			Iteration: iteration,
 		},
+		ResumeChildKey:     string(RoleFinalReviewFixer),
+		ResumePhaseContext: fmt.Sprintf("You were mid the final-review fixer for iteration %d.", iteration),
+		// The fixer replaced an interactive pipeline: user questions and
+		// unhandled permission requests must pause for the desktop to answer,
+		// not hard-fail the fix round.
+		RouteUserInput: true,
 	})
-	if waitResult.Err != nil {
-		return waitResult.Status, waitResult.Err
+	// RunBoundedHelper owns the fix session's commit validation; a protocol
+	// violation error carries the structured violations the loop needs to
+	// report, so it is returned alongside the status instead of swallowed.
+	if err != nil {
+		if isProtocolViolationError(err) {
+			return agentStatusProtocolViolation, err
+		}
+		return "", err
 	}
-	if waitResult.Status == agentStatusProtocolViolation {
-		return waitResult.Status, newProtocolViolationError(RoleFinalReviewFixer, iterDir, waitResult.ProtocolViolations)
+	if result == nil || result.Status != BoundedHelperStatusCompleted {
+		if result == nil {
+			return "", fmt.Errorf("final-review fixer returned no result")
+		}
+		return result.Status, nil
 	}
-	return waitResult.Status, nil
+	// The helper committed its receipt into fixDir; republish it into the
+	// parent iteration directory so receipt-based consumers see the completed
+	// fix without re-running preflight against iterDir.
+	if err := republishCompletionReceipt(fixDir, iterDir); err != nil {
+		return "", fmt.Errorf("writing final-review iteration completion receipt: %w", err)
+	}
+	return agentStatusSuccess, nil
 }
 
 func (s *featureFinalReviewLoopState) recordFixProtocolViolation(iterDir string, iteration int, violations []ProtocolViolation, consecutiveFailures *int) *FeatureFinalReviewResult {

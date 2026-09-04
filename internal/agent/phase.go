@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
@@ -57,6 +58,10 @@ type PhaseRunner struct {
 	// clients while verification runs without an active agent session.
 	OnVerificationProgress func(featureID string)
 
+	// OnFeatureResumed publishes the resume audit event after a continuation
+	// provider process has successfully launched.
+	OnFeatureResumed func(ports.FeatureResumedData)
+
 	// RoundCommitHook, when non-nil, is forwarded into the phase-implement
 	// and final-review loop configs so every implementation/fix round
 	// commits as soon as its session ends. The orchestrator layer installs
@@ -82,6 +87,48 @@ type PhaseRunner struct {
 	// can stub the unified feature-level Final Review loop driven by the
 	// engine without launching real sessions.
 	RunFinalReviewFn func(OrchestratorConfig, ports.SessionManager) (*FeatureFinalReviewResult, error)
+
+	singleShotResumeMu sync.RWMutex
+	singleShotResumes  map[string]*singleShotResumeLaunch
+}
+
+type singleShotResumeLaunch struct {
+	feature             *feature.Feature
+	phase               feature.Phase
+	artifactDir         string
+	resumeDir           string
+	repoName            string
+	baseID              string
+	buildOpts           BuildSessionOpts
+	workDir             string
+	supportsResume      bool
+	acquireContinuation func() (func(), error)
+}
+
+func (l *singleShotResumeLaunch) coordinator() *ResumeCoordinator {
+	if l == nil {
+		return nil
+	}
+	resumeDir := l.resumeDir
+	if resumeDir == "" {
+		resumeDir = l.artifactDir
+	}
+	if l.phase == feature.PhaseKnowledgeBase {
+		return NewChildResumeCoordinator(
+			resumeDir,
+			l.repoName,
+			ResumeParentContext{PhaseKey: feature.PhaseKnowledgeBase.DirName()},
+		)
+	}
+	return NewResumeCoordinator(resumeDir)
+}
+
+// SingleShotResumeResult is a replacement process for one inquire, research,
+// or design artifact phase.
+type SingleShotResumeResult struct {
+	SessionID string
+	Session   ports.SessionView
+	Options   *ports.SessionOpts
 }
 
 // askingQuestionsClauseForModel returns the PromptAdapter.AskingQuestionsClause()
@@ -272,6 +319,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	artifactDir := pr.resolvePhaseArtifactDir(f, cfg.DirName)
 	_ = os.MkdirAll(artifactDir, 0o755)
 	RemoveCompletionReceipt(artifactDir)
+	resumeCoordinator := NewResumeCoordinator(artifactDir)
 	phaseModel := pr.modelForRole(cfg.ConfiguredModel, cfg.ModelRole)
 
 	effectiveEffort, effortSource := pr.resolveEffortForRole(f, cfg.ModelRole, phaseModel)
@@ -284,7 +332,8 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		KBInfos:       cfg.KBInfos,
 		AskingClause:  pr.askingQuestionsClauseForModel(phaseModel),
 	})
-	sessionID := fmt.Sprintf("%s%s", f.ID, cfg.SessionSuffix)
+	baseSessionID := fmt.Sprintf("%s%s", f.ID, cfg.SessionSuffix)
+	sessionID := baseSessionID
 
 	workDir, additionalDirs := resolveUnifiedWorkDir(f, pr.StateDir)
 
@@ -297,7 +346,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	if effectiveEffort != "" {
 		effortLevel = effectiveEffort
 	}
-	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+	buildOpts := BuildSessionOpts{
 		FeatureID:                      f.ID,
 		AutomaticReviewMode:            feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
 		Model:                          phaseModel,
@@ -311,9 +360,25 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		EffortLevel:                    effortLevel,
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
-		CompletionProtocol:             true,
-	})
+		// The completion protocol replaces the former phase_complete marker
+		// handshake for single-shot sessions.
+		CompletionProtocol: true,
+	}
+	freshBuildOpts := buildOpts
+	pendingResume := resumeCoordinator.Snapshot()
+	manualResume := pendingResume != nil && pendingResume.PendingResume
+	if manualResume {
+		buildOpts.ResumeSessionID = pendingResume.ProviderSessionID
+		buildOpts.Prompt = resumeCoordinator.Prompt(singleShotResumeContext(cfg.Phase))
+		sessionID = fmt.Sprintf("%s-resume-%02d", baseSessionID, pendingResume.ResumeCount+1)
+	}
+	cmd, env, sessOpts, err := pr.BuildSession(buildOpts)
 	if err != nil {
+		if manualResume {
+			if persistErr := resumeCoordinator.ClearPending(time.Now()); persistErr != nil {
+				return "", fmt.Errorf("clearing pending %s resume after build failure: %w", cfg.SkillName, persistErr)
+			}
+		}
 		return "", fmt.Errorf("building inquire session: %w", err)
 	}
 	if sessOpts == nil {
@@ -323,8 +388,27 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		sessOpts.EffectiveEffort = effectiveEffort
 		sessOpts.EffortSource = effortSource
 	}
+	sessOpts.StderrPath = filepath.Join(artifactDir, "stderr.log")
+	installResumeProviderInitCapture(sessOpts, resumeCoordinator)
+	if manualResume {
+		archiveExistingLog(filepath.Join(artifactDir, "output.txt"))
+		archiveExistingLog(sessOpts.StderrPath)
+	} else {
+		now := time.Now()
+		if err := resumeCoordinator.Initialize(ResumeRecord{
+			Provider:              sessOpts.ProviderName,
+			ResolvedModel:         sessOpts.Model,
+			PhaseKey:              ResumePhaseKey(f),
+			RunNumber:             activeRunNumber(f),
+			OrchestratorSessionID: sessionID,
+			CreatedAt:             now,
+			UpdatedAt:             now,
+		}); err != nil {
+			return "", fmt.Errorf("initializing %s resume record: %w", cfg.SkillName, err)
+		}
+	}
 	sessOpts.RunNumber = f.ActiveRun
-	WriteDebugPrompts(artifactDir, sessOpts.DebugSystemPrompt, cfg.Prompt)
+	WriteDebugPrompts(artifactDir, sessOpts.DebugSystemPrompt, buildOpts.Prompt)
 	sessOpts.PermCacheScope = ""
 	sessionCtx := phaseCtx.Child()
 	sessOpts.AskUserAutoPick = askUserAutoPickConfig(
@@ -338,9 +422,45 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		0,
 	)
 
+	resumeLaunch := &singleShotResumeLaunch{
+		feature:        f,
+		phase:          cfg.Phase,
+		artifactDir:    artifactDir,
+		baseID:         baseSessionID,
+		buildOpts:      freshBuildOpts,
+		workDir:        workDir,
+		supportsResume: sessOpts.SupportsSessionResume,
+	}
+	pr.rememberSingleShotResume(sessionID, resumeLaunch)
 	sess, err := pr.SessionManager.StartSession(sessionID, f.ID, cfg.Phase, cmd, workDir, env, sessOpts)
 	if err != nil {
-		return "", fmt.Errorf("starting %s session: %w", cfg.SkillName, err)
+		if manualResume {
+			if verdict := detectResumeStartRejection(sessOpts.ProviderName, err, 0); verdict.Rejected {
+				if persistErr := resumeCoordinator.MarkRejected(verdict.Reason, time.Now()); persistErr != nil {
+					return "", fmt.Errorf("recording %s resume rejection: %w", cfg.SkillName, persistErr)
+				}
+				freshResult, freshErr := pr.DispatchSingleShotContinuation(sessionID, "", 1, true)
+				if freshErr != nil {
+					return "", freshErr
+				}
+				if _, ok := freshResult.Session.(ports.SessionHandle); !ok {
+					return "", fmt.Errorf("starting %s fresh fallback: replacement session is not mutable", cfg.SkillName)
+				}
+				// The fresh fallback owns its full session setup — SessionStarted,
+				// trackers, cost accounting, cleanup, and its append-mode output
+				// log. Falling through into the normal setup tail here would
+				// double-register all of it and truncate output.txt out from
+				// under the fallback's open append handle.
+				return freshResult.SessionID, nil
+			} else {
+				if persistErr := resumeCoordinator.ClearPending(time.Now()); persistErr != nil {
+					return "", fmt.Errorf("clearing pending %s resume: %w", cfg.SkillName, persistErr)
+				}
+			}
+		}
+		if sess == nil {
+			return "", fmt.Errorf("starting %s session: %w", cfg.SkillName, err)
+		}
 	}
 
 	providerName := ""
@@ -373,6 +493,309 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	}
 
 	return sessionID, nil
+}
+
+func singleShotResumeContext(phase feature.Phase) string {
+	artifact := phase.DirName() + ".md"
+	switch phase {
+	case feature.PhaseKnowledgeBase:
+		artifact = "index.md"
+	case feature.PhaseInquire:
+		artifact = "questions.md and any qa-answers.md"
+	}
+	return fmt.Sprintf(
+		"You were interrupted while producing the %s phase artifact contract (%s). Reconcile any partial artifacts already present in this directory, complete the contract, run the artifact preflight, and emit the structured root outcome required by your instructions.",
+		phase.String(),
+		artifact,
+	)
+}
+
+func (pr *PhaseRunner) rememberSingleShotResume(sessionID string, launch *singleShotResumeLaunch) {
+	if pr == nil || launch == nil || sessionID == "" {
+		return
+	}
+	pr.singleShotResumeMu.Lock()
+	defer pr.singleShotResumeMu.Unlock()
+	if pr.singleShotResumes == nil {
+		pr.singleShotResumes = make(map[string]*singleShotResumeLaunch)
+	}
+	pr.singleShotResumes[sessionID] = launch
+}
+
+func (pr *PhaseRunner) replaceSingleShotResume(previousSessionID, sessionID string, launch *singleShotResumeLaunch) {
+	if pr == nil || launch == nil || sessionID == "" {
+		return
+	}
+	pr.singleShotResumeMu.Lock()
+	defer pr.singleShotResumeMu.Unlock()
+	if pr.singleShotResumes == nil {
+		pr.singleShotResumes = make(map[string]*singleShotResumeLaunch)
+	}
+	delete(pr.singleShotResumes, previousSessionID)
+	pr.singleShotResumes[sessionID] = launch
+}
+
+func (pr *PhaseRunner) singleShotResume(sessionID string) *singleShotResumeLaunch {
+	if pr == nil {
+		return nil
+	}
+	pr.singleShotResumeMu.RLock()
+	defer pr.singleShotResumeMu.RUnlock()
+	return pr.singleShotResumes[sessionID]
+}
+
+// SingleShotPhaseComplete reports whether the artifact contract marker exists
+// for the session's phase directory.
+func (pr *PhaseRunner) SingleShotPhaseComplete(sessionID string) bool {
+	launch := pr.singleShotResume(sessionID)
+	// Completion is decided by receipt presence rather than a marker file; the
+	// check is role-agnostic because no role is recoverable from the launch
+	// record.
+	if launch == nil {
+		return false
+	}
+	_, err := ReadCompletionReceipt(launch.artifactDir)
+	return err == nil
+}
+
+// SingleShotSupportsResume reports the launch-time provider capability.
+func (pr *PhaseRunner) SingleShotSupportsResume(sessionID string) bool {
+	launch := pr.singleShotResume(sessionID)
+	return launch != nil && launch.supportsResume
+}
+
+// SingleShotInterrupted reports whether the feature owning this launch has
+// been interrupted while a continuation is waiting to dispatch.
+func (pr *PhaseRunner) SingleShotInterrupted(sessionID string) bool {
+	launch := pr.singleShotResume(sessionID)
+	return launch != nil && isFeatureInterrupted(pr.FeatureStore, launch.feature.ID)
+}
+
+// SingleShotNeedsEstablishment reports a manual pending resume consumed by
+// the first phase dispatch.
+func (pr *PhaseRunner) SingleShotNeedsEstablishment(sessionID string) bool {
+	launch := pr.singleShotResume(sessionID)
+	if launch == nil {
+		return false
+	}
+	record := launch.coordinator().Snapshot()
+	return record != nil && record.PendingResume
+}
+
+// CaptureSingleShotProviderSnapshot preserves provider identity when a test or
+// legacy adapter does not deliver an init callback.
+func (pr *PhaseRunner) CaptureSingleShotProviderSnapshot(sessionID string, sess ports.SessionView) error {
+	launch := pr.singleShotResume(sessionID)
+	if launch == nil || sess == nil {
+		return nil
+	}
+	if err := launch.coordinator().CaptureProviderSnapshot(providerSessionID(sess), sess.ProviderName(), sess.Model()); err != nil {
+		return fmt.Errorf("capturing single-shot provider identity: %w", err)
+	}
+	return nil
+}
+
+// DispatchSingleShotContinuation starts either a provider-native continuation
+// or a fresh fallback in the same artifact directory.
+func (pr *PhaseRunner) DispatchSingleShotContinuation(previousSessionID, resumeID string, ordinal int, fresh bool) (*SingleShotResumeResult, error) {
+	launch := pr.singleShotResume(previousSessionID)
+	if launch == nil {
+		return nil, fmt.Errorf("single-shot resume launch %q not found", previousSessionID)
+	}
+	coordinator := launch.coordinator()
+	opts := launch.buildOpts
+	suffix := "resume"
+	record := coordinator.Snapshot()
+	if fresh {
+		suffix = "fresh"
+		opts.ResumeSessionID = ""
+		fallbackReason := string(ResumeReasonSessionRejected)
+		if record != nil && strings.TrimSpace(record.RejectionReason) != "" {
+			fallbackReason = record.RejectionReason
+		}
+		if err := coordinator.MarkFreshFallback(fallbackReason, time.Now()); err != nil {
+			return nil, fmt.Errorf("recording single-shot fresh fallback: %w", err)
+		}
+	} else {
+		opts.ResumeSessionID = resumeID
+		opts.Prompt = coordinator.Prompt(singleShotResumeContext(launch.phase))
+	}
+	if record != nil {
+		if fresh {
+			ordinal = max(ordinal, record.FreshFallbackCount+1)
+		} else {
+			ordinal = max(ordinal, record.ResumeCount+1)
+		}
+	}
+	sessionID := fmt.Sprintf("%s-%s-%02d", launch.baseID, suffix, ordinal)
+	command, env, sessOpts, err := pr.BuildSession(opts)
+	if err != nil {
+		return nil, fmt.Errorf("building single-shot %s session: %w", suffix, err)
+	}
+	if sessOpts == nil {
+		sessOpts = &ports.SessionOpts{}
+	}
+	sessOpts.StderrPath = filepath.Join(launch.artifactDir, "stderr.log")
+	sessionCtx := observe.SpanContextForFeature(
+		launch.feature.ID,
+		launch.feature.TraceID,
+		launch.feature.Name,
+		launch.feature.FeatureSpanID,
+	).WithRun(launch.feature.ActiveRun).Child().Child()
+	sessOpts.AskUserAutoPick = askUserAutoPickConfig(
+		pr.FeatureStore,
+		pr.Observer,
+		launch.feature,
+		interactiveAutoPickPurpose(launch.phase),
+		sessionCtx,
+		sessionID,
+		"",
+		0,
+	)
+	installResumeProviderInitCapture(sessOpts, coordinator)
+	if fresh {
+		now := time.Now()
+		if err := coordinator.Initialize(ResumeRecord{
+			Provider:              sessOpts.ProviderName,
+			ResolvedModel:         sessOpts.Model,
+			PhaseKey:              ResumePhaseKey(launch.feature),
+			RunNumber:             activeRunNumber(launch.feature),
+			OrchestratorSessionID: sessionID,
+			CreatedAt:             now,
+			UpdatedAt:             now,
+		}); err != nil {
+			return nil, fmt.Errorf("initializing single-shot fresh fallback: %w", err)
+		}
+	}
+	archiveExistingLog(filepath.Join(launch.artifactDir, "output.txt"))
+	archiveExistingLog(sessOpts.StderrPath)
+	var releaseContinuation func()
+	if launch.acquireContinuation != nil {
+		releaseContinuation, err = launch.acquireContinuation()
+		if err != nil {
+			return nil, fmt.Errorf("preparing single-shot %s session: %w", suffix, err)
+		}
+	}
+	sess, err := pr.SessionManager.StartSession(sessionID, launch.feature.ID, launch.phase, command, launch.workDir, env, sessOpts)
+	if err != nil {
+		if releaseContinuation != nil {
+			releaseContinuation()
+		}
+		if !fresh {
+			if verdict := detectResumeStartRejection(sessOpts.ProviderName, err, 0); verdict.Rejected {
+				if persistErr := coordinator.MarkRejected(verdict.Reason, time.Now()); persistErr != nil {
+					return nil, fmt.Errorf("recording single-shot resume rejection: %w", persistErr)
+				}
+				return nil, &resumeRejectionError{reason: verdict.Reason}
+			}
+		}
+		return nil, fmt.Errorf("starting single-shot %s session: %w", suffix, err)
+	}
+	if releaseContinuation != nil {
+		sess.AddCleanupFunc(releaseContinuation)
+	}
+	pr.Observer.SessionStarted(
+		sessionCtx,
+		launch.phase.String(),
+		sessionID,
+		sessOpts.ProviderName,
+		sessOpts.Model,
+		launch.repoName,
+		string(sessOpts.EffectiveEffort),
+		string(sessOpts.EffortSource),
+	)
+	pr.installContextReadTracker(sess, sessionCtx, launch.phase.String(), sessionID, pr.StateDir)
+	pr.installSubagentProgressTracker(sess, sessionCtx, launch.phase.String(), sessionID)
+	sessionStart := time.Now()
+	sess.AddCleanupFunc(func() {
+		cost := ExtractSessionCost(sess)
+		_ = accumulateSessionCostToFeatureKey(pr.FeatureStore, launch.feature.ID, launch.phase.DirName(), cost, SessionCostMetadata{
+			SessionID:     sessionID,
+			ObserverPhase: launch.phase.String(),
+			RepoName:      launch.repoName,
+		})
+		pr.Observer.SessionEnded(
+			sessionCtx,
+			launch.phase.String(),
+			sessionID,
+			launch.repoName,
+			toSessionUsage(cost),
+			time.Since(sessionStart),
+			sessionErrFromStatus(sess),
+		)
+	})
+	if logFile, logErr := os.OpenFile(filepath.Join(launch.artifactDir, "output.txt"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); logErr == nil {
+		sess.SetLogFile(logFile)
+	}
+	replacement := *launch
+	replacement.supportsResume = sessOpts.SupportsSessionResume
+	pr.replaceSingleShotResume(previousSessionID, sessionID, &replacement)
+	return &SingleShotResumeResult{SessionID: sessionID, Session: sess, Options: sessOpts}, nil
+}
+
+// CompleteSingleShotResumeEstablishment records one actual continuation and
+// emits its audit event. Rejected establishment is left for a fresh fallback.
+func (pr *PhaseRunner) CompleteSingleShotResumeEstablishment(sessionID string, sess ports.SessionView, elapsed time.Duration) (bool, error) {
+	launch := pr.singleShotResume(sessionID)
+	if launch == nil {
+		return false, nil
+	}
+	coordinator := launch.coordinator()
+	if verdict := detectResumeRejection(sess, elapsed); verdict.Rejected {
+		if err := coordinator.MarkRejected(verdict.Reason, time.Now()); err != nil {
+			return false, fmt.Errorf("recording single-shot resume rejection: %w", err)
+		}
+		return false, nil
+	}
+	if err := coordinator.MarkResumed(time.Now()); err != nil {
+		return false, fmt.Errorf("marking single-shot resumed: %w", err)
+	}
+	if pr.OnFeatureResumed != nil {
+		record := coordinator.Snapshot()
+		input := ports.FeatureResumedData{
+			FeatureID: launch.feature.ID,
+			PhaseKey:  ResumePhaseKey(launch.feature),
+			RunNumber: activeRunNumber(launch.feature),
+		}
+		if record != nil {
+			input.PhaseKey = record.PhaseKey
+			input.ChildKey = record.ChildKey
+			input.Iteration = record.Iteration
+			input.RunNumber = record.RunNumber
+			input.ResumeCount = record.ResumeCount
+		}
+		pr.OnFeatureResumed(input)
+	}
+	return true, nil
+}
+
+// MarkSingleShotCompleted stamps durable completion before the orchestrator
+// performs normal contract validation and protocol-retry handling.
+func (pr *PhaseRunner) MarkSingleShotCompleted(sessionID string) error {
+	if launch := pr.singleShotResume(sessionID); launch != nil {
+		if err := launch.coordinator().MarkCompleted(time.Now()); err != nil {
+			return fmt.Errorf("marking single-shot resume record completed: %w", err)
+		}
+	}
+	pr.RetireSingleShotResume(sessionID)
+	return nil
+}
+
+// RetireSingleShotResume removes terminal in-memory launch state.
+func (pr *PhaseRunner) RetireSingleShotResume(sessionID string) {
+	if pr == nil {
+		return
+	}
+	pr.singleShotResumeMu.Lock()
+	delete(pr.singleShotResumes, sessionID)
+	pr.singleShotResumeMu.Unlock()
+}
+
+// IsSingleShotResumeRejection identifies a provider refusal to establish a
+// native continuation so callers can fall back fresh without charging caps.
+func IsSingleShotResumeRejection(err error) bool {
+	var rejection *resumeRejectionError
+	return errors.As(err, &rejection)
 }
 
 // RunInquire starts an inquire session for a feature.
@@ -623,7 +1046,8 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 		GuidelinesDir: pr.GuidelinesDir,
 		AskingClause:  pr.askingQuestionsClauseForModel(kbModel),
 	})
-	sessionID := BuildKBSessionID(f.ID, repo.Name)
+	baseSessionID := BuildKBSessionID(f.ID, repo.Name)
+	sessionID := baseSessionID
 
 	featureCtx := observe.SpanContextForFeature(f.ID, f.TraceID, f.Name, f.FeatureSpanID).WithRun(f.ActiveRun)
 	phaseCtx := featureCtx.Child()
@@ -637,7 +1061,7 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 	if kbEffectiveEffort != "" {
 		kbEffortLevel = kbEffectiveEffort
 	}
-	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+	buildOpts := BuildSessionOpts{
 		FeatureID:           f.ID,
 		AutomaticReviewMode: feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
 		Model:               kbModel,
@@ -657,8 +1081,27 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 		SystemPromptHasUsefulResources: true,
 		CompletionProtocol:             true,
 		LogPath:                        logPath,
-	})
+	}
+	freshBuildOpts := buildOpts
+	resumeDir := KBResumeDir(pr.StateDir, f, repo.Name)
+	resumeCoordinator := NewChildResumeCoordinator(
+		resumeDir,
+		repo.Name,
+		ResumeParentContext{PhaseKey: feature.PhaseKnowledgeBase.DirName()},
+	)
+	pendingResume := resumeCoordinator.Snapshot()
+	manualResume := pendingResume != nil && pendingResume.PendingResume
+	if manualResume {
+		buildOpts.ResumeSessionID = pendingResume.ProviderSessionID
+		buildOpts.Prompt = resumeCoordinator.Prompt(singleShotResumeContext(feature.PhaseKnowledgeBase))
+		sessionID = fmt.Sprintf("%s-resume-%02d", baseSessionID, pendingResume.ResumeCount+1)
+	}
+	cmd, env, sessOpts, err := pr.BuildSession(buildOpts)
 	if err != nil {
+		_ = ReleaseKBLock(kbDir, f.ID)
+		if manualResume {
+			_ = resumeCoordinator.ClearPending(time.Now())
+		}
 		return "", fmt.Errorf("building KB session: %w", err)
 	}
 	if sessOpts == nil {
@@ -672,11 +1115,61 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 	if sessOpts.LogPath == "" {
 		sessOpts.LogPath = logPath
 	}
-	WriteDebugPrompts(kbDir, sessOpts.DebugSystemPrompt, prompt)
+	sessOpts.StderrPath = filepath.Join(kbDir, "stderr.log")
+	installResumeProviderInitCapture(sessOpts, resumeCoordinator)
+	if manualResume {
+		archiveExistingLog(logPath)
+		archiveExistingLog(sessOpts.StderrPath)
+	} else {
+		now := time.Now()
+		if err := resumeCoordinator.Initialize(ResumeRecord{
+			Provider:              sessOpts.ProviderName,
+			ResolvedModel:         sessOpts.Model,
+			PhaseKey:              feature.PhaseKnowledgeBase.DirName(),
+			ChildKey:              repo.Name,
+			RunNumber:             activeRunNumber(f),
+			OrchestratorSessionID: sessionID,
+			CreatedAt:             now,
+			UpdatedAt:             now,
+		}); err != nil {
+			_ = ReleaseKBLock(kbDir, f.ID)
+			return "", fmt.Errorf("initializing knowledge base resume record: %w", err)
+		}
+	}
+	WriteDebugPrompts(kbDir, sessOpts.DebugSystemPrompt, buildOpts.Prompt)
+
+	resumeLaunch := &singleShotResumeLaunch{
+		feature:        f,
+		phase:          feature.PhaseKnowledgeBase,
+		artifactDir:    kbDir,
+		resumeDir:      resumeDir,
+		repoName:       repo.Name,
+		baseID:         baseSessionID,
+		buildOpts:      freshBuildOpts,
+		workDir:        workDir,
+		supportsResume: sessOpts.SupportsSessionResume,
+		acquireContinuation: func() (func(), error) {
+			locked, err := AcquireKBLock(kbDir, f.ID)
+			if err != nil {
+				return nil, err
+			}
+			if !locked {
+				return nil, ErrKBLocked
+			}
+			return func() {
+				_ = ReleaseKBLock(kbDir, f.ID)
+			}, nil
+		},
+	}
+	pr.rememberSingleShotResume(sessionID, resumeLaunch)
 
 	sess, err := pr.SessionManager.StartSession(sessionID, f.ID, feature.PhaseKnowledgeBase, cmd, workDir, env, sessOpts)
 	if err != nil {
 		_ = ReleaseKBLock(kbDir, f.ID)
+		pr.RetireSingleShotResume(sessionID)
+		if manualResume {
+			_ = resumeCoordinator.ClearPending(time.Now())
+		}
 		return "", fmt.Errorf("starting KB session: %w", err)
 	}
 
@@ -783,6 +1276,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 	cfg := PlanLoopConfig{
 		Feature:                      f,
 		FeatureStore:                 pr.FeatureStore,
+		Registry:                     pr.Registry,
 		StateDir:                     pr.StateDir,
 		ResearchArtifactPath:         researchArtifactPath,
 		PlanningResearchArtifactPath: f.ResearchArtifactPath(),
@@ -805,6 +1299,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		SkillsDir:                    pr.SkillsDir,
 		GuidelinesDir:                pr.GuidelinesDir,
 		Observer:                     pr.Observer,
+		OnFeatureResumed:             pr.OnFeatureResumed,
 	}
 
 	resultCh := make(chan *PlanLoopResult, 1)
@@ -854,6 +1349,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 		PlanLoopConfig: PlanLoopConfig{
 			Feature:                      f,
 			FeatureStore:                 pr.FeatureStore,
+			Registry:                     pr.Registry,
 			StateDir:                     pr.StateDir,
 			PlanningResearchArtifactPath: f.ResearchArtifactPath(),
 			DesignArtifactPath:           f.DesignArtifactPath(),
@@ -875,6 +1371,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			SkillsDir:                    pr.SkillsDir,
 			GuidelinesDir:                pr.GuidelinesDir,
 			Observer:                     pr.Observer,
+			OnFeatureResumed:             pr.OnFeatureResumed,
 		},
 		RoadmapPath:         roadmapPath,
 		Phase:               phase,
@@ -932,6 +1429,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 	cfg := ImplementConfig{
 		Feature:                    f,
 		FeatureStore:               pr.FeatureStore,
+		Registry:                   pr.Registry,
 		WorkDir:                    workDir,
 		PlanPath:                   planPath,
 		KBInfos:                    kbInfos,
@@ -963,10 +1461,10 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
+		OnFeatureResumed:           pr.OnFeatureResumed,
 		RoundCommitHook:            pr.RoundCommitHook,
 		PhaseExitGate:              pr.phaseExitGate(f),
 	}
-
 	resultCh := make(chan *LoopResult, 1)
 	go func() {
 		result, err := RunImplementationLoop(cfg, pr.SessionManager)
@@ -1008,6 +1506,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		Config:                     pr.Config,
 		Model:                      model,
 		ReviewModel:                reviewModel,
+		Registry:                   pr.Registry,
 		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		MaxIterations:              maxIter,
 		MaxConsecFails:             maxFails,
@@ -1029,6 +1528,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		GuidelinesDir:              pr.GuidelinesDir,
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
+		OnFeatureResumed:           pr.OnFeatureResumed,
 		RoundCommitHook:            pr.RoundCommitHook,
 		PhaseExitGate:              pr.phaseExitGate(f),
 		RunImplementFn:             pr.RunImplementFn,
@@ -1072,6 +1572,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		Config:                     pr.Config,
 		Model:                      model,
 		ReviewModel:                reviewModel,
+		Registry:                   pr.Registry,
 		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		MaxIterations:              maxIter,
 		MaxConsecFails:             maxFails,
@@ -1093,6 +1594,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		GuidelinesDir:              pr.GuidelinesDir,
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
+		OnFeatureResumed:           pr.OnFeatureResumed,
 		RoundCommitHook:            pr.RoundCommitHook,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
@@ -1301,12 +1803,10 @@ func installAutoReviewObserver(handler ports.PermissionHandler, observer *observ
 // within the feature's active run. When in a roadmap phase, uses phase-scoped
 // directories.
 func (pr *PhaseRunner) resolveImplementArtifactDir(f *feature.Feature) string {
-	runDir := ActiveRunDir(pr.StateDir, f)
-	base := runDir
-	if f.CurrentRoadmapPhase > 0 {
-		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")
-	}
-	return filepath.Join(base, "implement")
+	// Artifact-dir resolution delegates to ActiveImplementDir so this path and
+	// the read model agree; the deleted cycle/refactor prefixes are treated as
+	// empty there, matching main's unscoped behavior.
+	return ActiveImplementDir(pr.StateDir, f)
 }
 
 // resolveUnifiedWorkDir computes the working directory and additional directories

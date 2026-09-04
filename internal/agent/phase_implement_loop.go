@@ -136,6 +136,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 	implCfg := ImplementConfig{
 		Feature:                    cfg.Feature,
 		FeatureStore:               cfg.FeatureStore,
+		Registry:                   cfg.Registry,
 		WorkDir:                    workspace.Cwd,
 		PlanPath:                   cfg.PlanPath,
 		MaxIterations:              cfg.MaxIterations,
@@ -167,6 +168,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		GuidelinesDir:              cfg.GuidelinesDir,
 		Observer:                   cfg.Observer,
 		OnVerificationProgress:     cfg.OnVerificationProgress,
+		OnFeatureResumed:           cfg.OnFeatureResumed,
 		RoundCommitHook:            cfg.RoundCommitHook,
 		RoundCommitRepos:           workspace.RepoPaths,
 		PhaseExitGate:              cfg.PhaseExitGate,

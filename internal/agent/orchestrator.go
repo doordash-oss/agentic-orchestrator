@@ -44,6 +44,7 @@ import (
 type OrchestratorConfig struct {
 	Feature      *feature.Feature
 	FeatureStore ports.FeatureStore
+	Registry     *llm.Registry
 	PlanPath     string
 	StateDir     string
 	Config       *config.Config
@@ -129,6 +130,10 @@ type OrchestratorConfig struct {
 	// OnVerificationProgress is called after each persisted harness
 	// verification status transition so API clients can refresh live state.
 	OnVerificationProgress func(featureID string)
+
+	// OnFeatureResumed publishes the resume audit event after a continuation
+	// provider process has successfully launched.
+	OnFeatureResumed func(ports.FeatureResumedData)
 
 	// RoundCommitHook, when non-nil, is invoked by the phase-implement and
 	// final-review loops once per implementation/fix round, right after the

@@ -42,6 +42,7 @@ const (
 	PhaseFinalizing       Code = "phase_finalizing"
 	InvalidTransition     Code = "invalid_transition"
 	InvalidWorkspaceRoot  Code = "invalid_workspace_root"
+	ResumeInProgress      Code = "resume_in_progress"
 )
 
 // Relationship-guard codes.
@@ -421,8 +422,16 @@ var catalog = map[Code]Entry{
 	InvalidTransition: {
 		Class:       ClassBlocking,
 		Title:       "Invalid transition",
+		Blocks:      []Block{BlockPhase},
 		Summary:     "The action is not valid in the feature's current state.",
 		Remediation: "Refresh the feature and retry.",
+	},
+	ResumeInProgress: {
+		Class:       ClassBlocking,
+		Title:       "Resume already in progress",
+		Blocks:      []Block{BlockPhase},
+		Summary:     "The feature already has an active session or a dispatched resume.",
+		Remediation: "Wait for the in-progress resume to finish, or stop the feature before resuming again.",
 	},
 	InvalidWorkspaceRoot: {
 		Class:   ClassBlocking,

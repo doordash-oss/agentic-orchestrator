@@ -43,6 +43,7 @@ func TestInquiryArtifactContract(t *testing.T) {
 		{name: "fenced template", body: "```markdown\n# Research Questions\n\n1. Which components exist?\n```\n", want: "inquiry must contain either"},
 		{name: "fenced list", body: "# Research Questions\n\n~~~markdown\n1. Which components exist?\n~~~\n", want: "nonempty numbered list"},
 		{name: "list outside section", body: "# Research Questions\n\n# Interview notes\n\n1. Which components exist?\n", want: "nonempty numbered list"},
+		{name: "heading case", body: "# Research questions:\n\n1. Which library is used?\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -64,6 +65,7 @@ func TestDesignArtifactContract(t *testing.T) {
 		{name: "empty acceptance criteria", body: strings.Replace(testutil.DesignDocumentMarkdown, "Cloning a valid URL makes the new repository available in the picker.", "", 1), want: "`## Acceptance Criteria`"},
 		{name: "fenced document", body: "````markdown\n" + testutil.DesignDocumentMarkdown + "````\n", want: "`## Problem Statement`"},
 		{name: "only a subsection heading", body: strings.Replace(testutil.DesignDocumentMarkdown, "Cloning a valid URL makes the new repository available in the picker.", "### Cloning", 1), want: "`## Acceptance Criteria`"},
+		{name: "heading case and trailing colon", body: strings.NewReplacer("## Acceptance Criteria", "## Acceptance criteria:", "## Out of Scope", "##  OUT OF SCOPE").Replace(testutil.DesignDocumentMarkdown)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()

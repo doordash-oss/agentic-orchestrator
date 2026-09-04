@@ -60,9 +60,9 @@ var numberedQuestionRE = regexp.MustCompile(`^[0-9]{1,9}[.)][ \t]+\S`)
 // decisions are tracked by the session protocol, not inferred from prose.
 func inquiryQuestionsViolations(body string) []string {
 	sections := phaseMarkdownSections(body, 1)
-	_, single := sections["# Research Questions"]
-	_, codebase := sections["# Codebase Research Questions"]
-	_, web := sections["# Web Research Questions"]
+	_, single := sections[normalizeHeading("# Research Questions")]
+	_, codebase := sections[normalizeHeading("# Codebase Research Questions")]
+	_, web := sections[normalizeHeading("# Web Research Questions")]
 	var headings []string
 	switch {
 	case single && !codebase && !web:
@@ -75,7 +75,7 @@ func inquiryQuestionsViolations(body string) []string {
 	var reasons []string
 	for _, heading := range headings {
 		found := false
-		for _, line := range sections[heading] {
+		for _, line := range sections[normalizeHeading(heading)] {
 			if numberedQuestionRE.MatchString(strings.TrimSpace(line)) {
 				found = true
 				break
@@ -101,16 +101,25 @@ func designDocumentViolations(body string) []string {
 		"## Out of Scope",
 		"## Further Notes",
 	} {
-		if strings.TrimSpace(strings.Join(sections[heading], "\n")) == "" {
+		if strings.TrimSpace(strings.Join(sections[normalizeHeading(heading)], "\n")) == "" {
 			reasons = append(reasons, fmt.Sprintf("design must contain a nonempty `%s` section", heading))
 		}
 	}
 	return reasons
 }
 
+// normalizeHeading keys sections case-insensitively and ignores trailing
+// punctuation so "## Acceptance criteria:" satisfies "## Acceptance Criteria".
+func normalizeHeading(line string) string {
+	line = strings.TrimSpace(line)
+	line = strings.TrimRight(line, ":.")
+	return strings.ToLower(strings.Join(strings.Fields(line), " "))
+}
+
 // phaseMarkdownSections collects unfenced content under headings at the
-// requested level. A parent heading ends the section; subheadings do not
-// count as content. Fenced examples cannot satisfy a document contract.
+// requested level, keyed by normalizeHeading. A parent heading ends the
+// section; subheadings do not count as content. Fenced examples cannot
+// satisfy a document contract.
 func phaseMarkdownSections(body string, level int) map[string][]string {
 	sections := make(map[string][]string)
 	var fence fenceState
@@ -124,7 +133,7 @@ func phaseMarkdownSections(body string, level int) map[string][]string {
 			if depth <= level {
 				current = ""
 				if depth == level {
-					current = line
+					current = normalizeHeading(line)
 					if _, exists := sections[current]; !exists {
 						sections[current] = nil
 					}

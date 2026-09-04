@@ -17,6 +17,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,14 +117,71 @@ func TestStructuredCompletionRejectsUnansweredQuestionAndLiveTasks(t *testing.T)
 				}
 				return nil
 			}
-			accepted, _, err := resolvePhaseCompletion(sess, llm.PhaseCompletionRequest{RequestID: "call", Intent: llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}}, func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+			resolution, err := resolvePhaseCompletion(sess, llm.PhaseCompletionRequest{RequestID: "call", Intent: llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}}, func(llm.CompletionIntent) ([]ProtocolViolation, error) {
 				t.Fatal("committer called before liveness validation")
 				return nil, nil
 			})
-			if accepted || err != nil || !responded {
-				t.Fatalf("accepted=%v err=%v responded=%v", accepted, err, responded)
+			if resolution.Accepted || !resolution.Deferred || err != nil || !responded {
+				t.Fatalf("resolution=%+v err=%v responded=%v", resolution, err, responded)
 			}
 		})
+	}
+}
+
+func TestStructuredCompletionRejectedThenPlainTurnReportsCommitViolations(t *testing.T) {
+	sess := newCompletionToolSession()
+	sess.requests <- llm.PhaseCompletionRequest{RequestID: "first", Intent: llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}}
+	sess.respond = func(_ string, accepted bool, _ string) error {
+		if accepted {
+			t.Fatal("defective artifact accepted")
+		}
+		// The model gives up and ends the turn in prose.
+		sess.result = newEndedAfterTextResult()
+		sess.statusCh <- agentStatusSuccess
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{Ctx: ctx, CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+		return []ProtocolViolation{{Artifact: "design.md", Reason: "design must contain a nonempty `## Acceptance Criteria` section"}}, nil
+	}})
+	if result.Status != agentStatusProtocolViolation {
+		t.Fatalf("result=%+v", result)
+	}
+	if got := JoinProtocolViolations(result.ProtocolViolations); !strings.Contains(got, "Acceptance Criteria") || strings.Contains(got, "without exactly one structured completion outcome") {
+		t.Fatalf("violations lost the rejected completion's reasons: %s", got)
+	}
+}
+
+func TestStructuredCompletionDeferredRejectionsDoNotConsumeBudget(t *testing.T) {
+	sess := newCompletionToolSession()
+	sess.tasks = 1
+	attempts := 0
+	sess.respond = func(_ string, accepted bool, reason string) error {
+		if accepted {
+			if sess.tasks > 0 {
+				t.Fatal("completion accepted while delegated tasks were running")
+			}
+			return nil
+		}
+		attempts++
+		if attempts <= maxFinishOrViolateNudges+2 {
+			// The model keeps retrying while its tasks run.
+			sess.requests <- llm.PhaseCompletionRequest{RequestID: fmt.Sprintf("retry-%d", attempts), Intent: llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}}
+			return nil
+		}
+		sess.tasks = 0
+		sess.requests <- llm.PhaseCompletionRequest{RequestID: "final", Intent: llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}}
+		return nil
+	}
+	sess.requests <- llm.PhaseCompletionRequest{RequestID: "first", Intent: llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{Ctx: ctx, CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+		return nil, nil
+	}})
+	if result.Status != agentStatusSuccess || attempts <= maxFinishOrViolateNudges {
+		t.Fatalf("result=%+v attempts=%d: waiting on live tasks was charged as protocol violations", result, attempts)
 	}
 }
 

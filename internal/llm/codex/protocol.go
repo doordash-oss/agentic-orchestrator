@@ -72,6 +72,7 @@ type Protocol struct {
 	// Handshake state
 	handshakeDone chan struct{}
 	threadReady   chan struct{}
+	threadErr     error
 
 	// Session state
 	threadID              string
@@ -175,6 +176,12 @@ func (p *Protocol) Handshake(ctx context.Context) error {
 	// Step 4: Wait for thread ready
 	select {
 	case <-p.threadReady:
+		p.mu.Lock()
+		threadErr := p.threadErr
+		p.mu.Unlock()
+		if threadErr != nil {
+			return threadErr
+		}
 	case <-ctx.Done():
 		return fmt.Errorf("codex thread start timeout: %w", ctx.Err())
 	}
@@ -634,6 +641,10 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 	var threadResult ThreadStartResult
 	if err := json.Unmarshal(result, &threadResult); err == nil && threadResult.Thread.ID != "" {
 		if err := p.recordThreadContract(threadResult.Thread.ID); err != nil {
+			p.mu.Lock()
+			p.threadErr = err
+			p.closeThreadReadyLocked()
+			p.mu.Unlock()
 			return llm.SDKMessage{Type: "result", Subtype: "error", Result: &llm.ResultMessage{Type: "result", Subtype: "error", IsError: true, Result: err.Error()}}, true, true
 		}
 		p.mu.Lock()
@@ -645,13 +656,7 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 		if effectivePolicy := strings.TrimSpace(threadResult.ApprovalPolicy); effectivePolicy != "" && !p.opts.NativeToollessReview {
 			p.approvalPolicy = effectivePolicy
 		}
-		if p.threadReady != nil {
-			select {
-			case <-p.threadReady:
-			default:
-				close(p.threadReady)
-			}
-		}
+		p.closeThreadReadyLocked()
 		p.mu.Unlock()
 		if p.opts.ResumeSessionID != "" {
 			p.requestUsageRead()
@@ -676,6 +681,18 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 // errorResultMessage converts a JSON-RPC error response into a user-visible
 // result/error so a rejected request fails the session loudly instead of
 // leaving it to hang waiting for output that will never arrive.
+// closeThreadReadyLocked releases Handshake; the caller holds p.mu.
+func (p *Protocol) closeThreadReadyLocked() {
+	if p.threadReady == nil {
+		return
+	}
+	select {
+	case <-p.threadReady:
+	default:
+		close(p.threadReady)
+	}
+}
+
 func (p *Protocol) errorResultMessage(errData json.RawMessage) llm.SDKMessage {
 	var rpcErr struct {
 		Code    int    `json:"code"`

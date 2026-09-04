@@ -62,6 +62,19 @@ type StructuredCompletionProtocol interface {
 	RespondToCompletion(requestID string, accepted bool, message string) error
 }
 
+// Harness-owned structured tool names shared by providers that expose them
+// and by the prompts and nudges that reference them.
+const (
+	AskUserToolName       = "ask_user"
+	CompletePhaseToolName = "complete_phase"
+)
+
+// CompletionToolProvider is implemented by providers whose sessions commit
+// phases through a structured tool call instead of prose outcome tags.
+type CompletionToolProvider interface {
+	CompletionToolName() string
+}
+
 // TurnDisposition is the harness's provider-neutral interpretation of one
 // root turn ending.
 type TurnDisposition int

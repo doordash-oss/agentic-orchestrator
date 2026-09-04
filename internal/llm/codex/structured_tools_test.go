@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -282,6 +284,35 @@ func TestDynamicToolsRejectStaleTurnsAndChildCompletion(t *testing.T) {
 		if err != nil || len(messages) != 0 || !strings.Contains(buf.String(), `"success":false`) {
 			t.Fatalf("unexpected call accepted: %+v %v %s", messages, err, buf.Bytes())
 		}
+	}
+}
+
+func TestThreadContractWriteFailureReleasesHandshake(t *testing.T) {
+	dir := t.TempDir()
+	// A file where the contract directory must be created makes MkdirAll fail.
+	if err := os.WriteFile(filepath.Join(dir, "codex-contracts"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := NewProtocol(llm.ProtocolOpts{StructuredCompletion: true, StateDir: dir})
+	var buf bytes.Buffer
+	p.SetStdin(&buf)
+	if err := p.sendInitialize(); err != nil {
+		t.Fatal(err)
+	}
+	msg, emit, handled := p.handleResponse(2, json.RawMessage(`{"thread":{"id":"fresh-thread"}}`), nil)
+	if !emit || !handled || msg.Result == nil || !msg.Result.IsError {
+		t.Fatalf("contract write failure not reported: emit=%v handled=%v msg=%+v", emit, handled, msg)
+	}
+	select {
+	case <-p.threadReady:
+	default:
+		t.Fatal("threadReady still blocks Handshake after the contract write failed")
+	}
+	p.mu.Lock()
+	err := p.threadErr
+	p.mu.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "record Codex phase contract") {
+		t.Fatalf("threadErr=%v, want contract write error", err)
 	}
 }
 

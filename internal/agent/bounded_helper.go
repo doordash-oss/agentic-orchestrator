@@ -319,7 +319,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 	for {
 		select {
 		case request := <-completionC:
-			accepted, violations, err := resolvePhaseCompletion(sess, request, func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
+			resolution, err := resolvePhaseCompletion(sess, request, func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
 				if cfg.requireOutput && strings.TrimSpace(readSessionOutput(cfg.responsePath, sess)) == "" {
 					return []ProtocolViolation{{Artifact: "output", Reason: "helper completed without output"}}, nil
 				}
@@ -331,13 +331,16 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			if err != nil {
 				return finish(boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusFailed), err)
 			}
-			if accepted {
+			if resolution.Accepted {
 				return finish(boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusCompleted), nil)
 			}
-			pendingCommitViolations = violations
+			if resolution.Deferred {
+				continue
+			}
+			pendingCommitViolations = resolution.Violations
 			finishOrViolateNudges++
 			if finishOrViolateNudges > maxFinishOrViolateNudges {
-				return finish(boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusProtocolViolation), newProtocolViolationError(cfg.contractRole, cfg.completionDir, violations))
+				return finish(boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusProtocolViolation), newProtocolViolationError(cfg.contractRole, cfg.completionDir, resolution.Violations))
 			}
 
 		case <-ctx.Done():

@@ -107,7 +107,7 @@ func (pr *PhaseRunner) completionToolForModel(model string) string {
 	if err != nil {
 		return ""
 	}
-	if p, ok := provider.(interface{ CompletionToolName() string }); ok {
+	if p, ok := provider.(llm.CompletionToolProvider); ok {
 		return p.CompletionToolName()
 	}
 	return ""
@@ -1645,10 +1645,6 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		contextWindow = cc.ContextWindowForModel(bareModel)
 	}
 
-	protocolStateDir := pr.StateDir
-	if prov.Name() == "codex" {
-		protocolStateDir = providerStateDir(pr.StateDir)
-	}
 	protocol := prov.NewProtocol(llm.ProtocolOpts{
 		Model:                bareModel,
 		ContextWindow:        contextWindow,
@@ -1657,7 +1653,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		InitialPrompt:        opts.Prompt,
 		WritableRoots:        writableRoots,
 		DSP:                  dangerouslySkipPermissions,
-		StateDir:             protocolStateDir,
+		StateDir:             providerStateDir(pr.StateDir),
 		ResumeSessionID:      opts.ResumeSessionID,
 		Interactive:          opts.Interactive,
 		StructuredCompletion: opts.CompletionProtocol && !opts.Interactive,

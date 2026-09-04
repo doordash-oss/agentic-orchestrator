@@ -30,52 +30,67 @@ func phaseCompletionRequests(sess ports.SessionView) <-chan llm.PhaseCompletionR
 	return nil
 }
 
+// phaseCompletionResolution is the harness decision on one complete_phase call.
+type phaseCompletionResolution struct {
+	// Accepted reports that the outcome was committed.
+	Accepted bool
+	// Deferred reports a rejection caused by harness state the model must wait
+	// out (an unanswered question, live delegated tasks) rather than an
+	// artifact defect. Deferred rejections do not consume the nudge budget.
+	Deferred bool
+	// Violations are the artifact defects behind a non-deferred rejection.
+	Violations []ProtocolViolation
+}
+
 // resolvePhaseCompletion keeps tool transport separate from the existing
 // artifact commit boundary. Rejection is returned to the pending tool call;
 // it never starts a new user turn or invents a successful outcome.
-func resolvePhaseCompletion(sess ports.SessionView, request llm.PhaseCompletionRequest, commit func(llm.CompletionIntent) ([]ProtocolViolation, error)) (bool, []ProtocolViolation, error) {
+func resolvePhaseCompletion(sess ports.SessionView, request llm.PhaseCompletionRequest, commit func(llm.CompletionIntent) ([]ProtocolViolation, error)) (phaseCompletionResolution, error) {
 	responder, ok := sess.(ports.PhaseCompletionRequester)
 	if !ok {
-		return false, nil, fmt.Errorf("session does not support structured completion")
+		return phaseCompletionResolution{}, fmt.Errorf("session does not support structured completion")
 	}
-	var violations []ProtocolViolation
+	var resolution phaseCompletionResolution
+	tool := llm.CompletePhaseToolName
 	switch {
 	case !request.Intent.Valid():
-		violations = []ProtocolViolation{{Artifact: "complete_phase", Reason: "invalid completion request"}}
+		resolution.Violations = []ProtocolViolation{{Artifact: tool, Reason: "invalid completion request"}}
 	case hasPendingRootQuestion(sess):
-		violations = []ProtocolViolation{{Artifact: "complete_phase", Reason: "a user question is still awaiting an answer"}}
+		resolution.Deferred = true
+		resolution.Violations = []ProtocolViolation{{Artifact: tool, Reason: "a user question is still awaiting an answer; wait for it before retrying"}}
 	case liveBackgroundTasks(sess) > 0:
-		violations = []ProtocolViolation{{Artifact: "complete_phase", Reason: "delegated tasks are still running"}}
+		resolution.Deferred = true
+		resolution.Violations = []ProtocolViolation{{Artifact: tool, Reason: "delegated tasks are still running; wait for them to finish before retrying"}}
 	case commit == nil:
 		err := fmt.Errorf("harness completion committer is not configured")
 		_ = responder.RespondToPhaseCompletion(request.RequestID, false, err.Error())
-		return false, nil, err
+		return phaseCompletionResolution{}, err
 	default:
-		var err error
-		violations, err = commit(request.Intent)
+		violations, err := commit(request.Intent)
 		if err != nil {
 			_ = responder.RespondToPhaseCompletion(request.RequestID, false, err.Error())
-			return false, nil, err
+			return phaseCompletionResolution{}, err
 		}
+		resolution.Violations = violations
 	}
-	accepted := len(violations) == 0
+	resolution.Accepted = len(resolution.Violations) == 0
 	message := "Phase completion accepted."
-	if !accepted {
+	if !resolution.Accepted {
 		var reasons []string
-		for _, v := range violations {
+		for _, v := range resolution.Violations {
 			reasons = append(reasons, v.Artifact+": "+v.Reason)
 		}
 		message = strings.Join(reasons, "\n")
 	}
-	if err := responder.RespondToPhaseCompletion(request.RequestID, accepted, message); err != nil {
-		if accepted {
+	if err := responder.RespondToPhaseCompletion(request.RequestID, resolution.Accepted, message); err != nil {
+		if resolution.Accepted {
 			// The durable receipt is authoritative even if the provider exits
 			// before receiving its acknowledgment. Never report a committed
 			// phase as failed merely because the transport closed.
 			log.Printf("session %s: phase committed but completion acknowledgment failed: %v", sess.ID(), err)
-			return true, nil, nil
+			return phaseCompletionResolution{Accepted: true}, nil
 		}
-		return false, violations, fmt.Errorf("responding to phase completion: %w", err)
+		return resolution, fmt.Errorf("responding to phase completion: %w", err)
 	}
-	return accepted, violations, nil
+	return resolution, nil
 }

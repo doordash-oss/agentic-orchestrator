@@ -3075,12 +3075,8 @@ func TestBuildSessionKeepsCodexContractStateOutsideFeatureStore(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				wantProtocolState := stateDir
-				if providerName == "codex" {
-					wantProtocolState = filepath.Join(dir, "provider-state")
-				}
-				if got := provider.protocolOpts.StateDir; got != wantProtocolState {
-					t.Fatalf("ProtocolOpts.StateDir=%q, want %q", got, wantProtocolState)
+				if got := provider.protocolOpts.StateDir; got != filepath.Join(dir, "provider-state") {
+					t.Fatalf("ProtocolOpts.StateDir=%q, want provider-state", got)
 				}
 				if got := provider.buildOpts.StateDir; got != filepath.Join(dir, "provider-state") {
 					t.Fatalf("CommandBuildOpts.StateDir=%q, want provider-state", got)

@@ -1711,7 +1711,8 @@ const autoResumeMessage = `Continue where you left off. If the task is complete,
 
 func autoResumeMessageForSession(sess ports.SessionView) string {
 	if phaseCompletionRequests(sess) != nil {
-		return "Continue where you left off. Validate the required artifacts before calling `complete_phase` with an outcome allowed by your role contract. Ask any unresolved user question through `ask_user` and wait for the answer."
+		return "Continue where you left off. Validate the required artifacts before calling `" + llm.CompletePhaseToolName +
+			"` with an outcome allowed by your role contract. Ask any unresolved user question through `" + llm.AskUserToolName + "` and wait for the answer."
 	}
 	return autoResumeMessage
 }
@@ -2094,7 +2095,7 @@ func currentContextSnapshot(sess ports.SessionView, thresholdPct int) contextSna
 func contextHandoffMessageForSession(sess ports.SessionView, snap contextSnapshot) string {
 	completion := "End with exactly `" + `<agentico-outcome>{"status":"retry","summary":"context handoff"}</agentico-outcome>` + "`"
 	if phaseCompletionRequests(sess) != nil {
-		completion = "Call `complete_phase` with `" + `{"status":"retry","summary":"context handoff"}` + "`"
+		completion = "Call `" + llm.CompletePhaseToolName + "` with `" + `{"status":"retry","summary":"context handoff"}` + "`"
 	}
 	return fmt.Sprintf("Your context window is ~%d%% full, above Agentic's %d%% handoff threshold.\n\n%s",
 		snap.Pct, snap.ThresholdPct, fmt.Sprintf(contextHandoffMessageBody, completion))
@@ -2146,6 +2147,10 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 	// Counts bounded completion-protocol nudges sent after a clean provider
 	// turn carried no committable root outcome.
 	finishOrViolateNudges := 0
+	// Violations from the last rejected complete_phase call. Structured
+	// sessions carry no prose intent, so a turn ending after a rejection
+	// must report these instead of a generic missing-outcome violation.
+	var pendingCommitViolations []ProtocolViolation
 
 	// Periodically sample the session's context-window utilization and, on
 	// first crossing of the provider-specific threshold, nudge the agent to
@@ -2352,6 +2357,9 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 			awaitingBackgroundTasks = false
 			autoResumeAttempts = 0
 			violations := completionIntentViolations(intent, opts.MissingArtifacts)
+			if len(pendingCommitViolations) > 0 {
+				violations = pendingCommitViolations
+			}
 			if !sessionDone && decideFinishOrViolate(sess, disposition, &finishOrViolateNudges, protocolViolationArtifacts(violations)) {
 				clearRootCompletionIntent(sess)
 				return PhaseOutcomeWaitResult{}, false
@@ -2399,19 +2407,23 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 	for {
 		select {
 		case request := <-completionC:
-			accepted, violations, err := resolvePhaseCompletion(sess, request, opts.CommitOutcome)
+			resolution, err := resolvePhaseCompletion(sess, request, opts.CommitOutcome)
 			if err != nil {
 				_ = sess.Stop()
 				return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff, Err: err}
 			}
-			if accepted {
+			if resolution.Accepted {
 				_ = sess.Stop()
 				return PhaseOutcomeWaitResult{Status: agentStatusSuccess, Handoff: handoff}
 			}
+			if resolution.Deferred {
+				continue
+			}
+			pendingCommitViolations = resolution.Violations
 			finishOrViolateNudges++
 			if finishOrViolateNudges > maxFinishOrViolateNudges {
 				_ = sess.Stop()
-				return PhaseOutcomeWaitResult{Status: agentStatusProtocolViolation, Handoff: handoff, ProtocolViolations: violations}
+				return PhaseOutcomeWaitResult{Status: agentStatusProtocolViolation, Handoff: handoff, ProtocolViolations: resolution.Violations}
 			}
 
 		case <-ctxDone:

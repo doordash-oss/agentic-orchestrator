@@ -214,7 +214,7 @@ func (p *Provider) prepareNativeToollessHome(stateDir string) ([]string, error) 
 }
 
 // CompletionToolName identifies the harness-owned phase completion transport.
-func (p *Provider) CompletionToolName() string { return "complete_phase" }
+func (p *Provider) CompletionToolName() string { return llm.CompletePhaseToolName }
 
 func (p *Provider) AskingQuestionsClause() string {
 	return `## Asking Questions

@@ -1836,14 +1836,55 @@ func (s *Session) RespondToControl(requestID string, allow bool, reason string) 
 // from the control request input; answers maps question text to the response;
 // annotations carries optional per-question notes/preview that ride in the
 // Claude Agent SDK `annotations` field of `updatedInput`.
+//
+// The request is released before the write so a follow-up question the
+// provider sends on receipt is not mistaken for the answered one. A rejected
+// write restores the request so it can be answered again.
 func (s *Session) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
+	s.mu.Lock()
+	answered := s.findPendingControlRequestLocked(requestID)
+	priorStatus := s.status
+	s.mu.Unlock()
 	s.captureAskUserResponse(requestID, questions, answers, annotations, nil)
-	s.appendAskUserMessages(questions, answers, nil)
 
+	var err error
 	if s.protocol != nil {
-		return s.protocol.RespondToAskUser(requestID, questions, answers, annotations)
+		err = s.protocol.RespondToAskUser(requestID, questions, answers, annotations)
+	} else {
+		err = s.writeJSON(llm.NewAskUserResponse(requestID, questions, answers, annotations))
 	}
-	return s.writeJSON(llm.NewAskUserResponse(requestID, questions, answers, annotations))
+	if err != nil {
+		s.restoreAskUserRequest(answered, priorStatus, askUserAnswerKeysInPresentedOrder(questions, answers))
+		return err
+	}
+	s.appendAskUserMessages(questions, answers, nil)
+	return nil
+}
+
+// restoreAskUserRequest undoes captureAskUserResponse after the provider
+// rejected the answer, unless a newer request with the same ID has arrived.
+func (s *Session) restoreAskUserRequest(answered *llm.ControlRequestMessage, priorStatus SessionStatus, keys []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if answered != nil && s.findPendingControlRequestLocked(answered.RequestID) == nil {
+		s.recordPendingControlRequestLocked(answered)
+	}
+	if n := len(s.qaLog) - len(keys); n >= 0 && len(keys) > 0 {
+		matches := true
+		for i, q := range keys {
+			if s.qaLog[n+i].Question != q {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			s.qaLog = s.qaLog[:n]
+		}
+	}
+	s.hasUnansweredQuestion = s.hasPendingAskUserQuestionLocked()
+	if s.hasUnansweredQuestion && priorStatus == SessionWaitingHelp && s.status == SessionRunning {
+		s.setStatusLocked(SessionWaitingHelp)
+	}
 }
 
 func (s *Session) respondToAskUserAutoPicked(requestID string, questions json.RawMessage, answers map[string]string, confidenceByQuestion map[string]float64) error {

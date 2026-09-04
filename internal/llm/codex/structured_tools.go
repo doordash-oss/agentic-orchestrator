@@ -74,39 +74,44 @@ func (p *Protocol) threadConfig() map[string]interface{} {
 	return map[string]interface{}{"include_collaboration_mode_instructions": false}
 }
 
+// askUserSchema is the ask_user input schema. Options stay unbounded below so
+// free_form questions can pass an empty array.
+var askUserSchema = map[string]interface{}{
+	"type": "object", "additionalProperties": false,
+	"required": []string{"id", "kind", "question", "header", "options"},
+	"properties": map[string]interface{}{
+		"id":       map[string]interface{}{"type": "string", "minLength": 1},
+		"kind":     map[string]interface{}{"type": "string", "enum": []string{"choice", "free_form"}},
+		"question": map[string]interface{}{"type": "string", "minLength": 1},
+		"header":   map[string]interface{}{"type": "string", "minLength": 1},
+		"options": map[string]interface{}{
+			"type": "array", "maxItems": 3,
+			"items": map[string]interface{}{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"label", "description", "confidence", "recommended"},
+				"properties": map[string]interface{}{
+					"label":       map[string]interface{}{"type": "string", "minLength": 1},
+					"description": map[string]interface{}{"type": "string", "minLength": 1},
+					"confidence":  map[string]interface{}{"type": "number", "minimum": 0, "maximum": 1},
+					"recommended": map[string]interface{}{"type": "boolean"},
+				},
+			},
+		},
+	},
+}
+
 func (p *Protocol) dynamicTools() *[]map[string]interface{} {
 	if p.opts.Interactive || p.opts.NativeToollessReview {
 		return nil
 	}
-	var questionSchema map[string]interface{}
-	_ = json.Unmarshal([]byte(`{
-  "type":"object","additionalProperties":false,
-  "required":["id","kind","question","header","options"],
-  "properties":{
-   "id":{"type":"string","minLength":1},
-   "kind":{"type":"string","enum":["choice","free_form"]},
-   "question":{"type":"string","minLength":1},
-   "header":{"type":"string","minLength":1},
-   "options":{"type":"array","maxItems":3,"items":{
-    "type":"object","additionalProperties":false,
-    "required":["label","description","confidence","recommended"],
-    "properties":{
-     "label":{"type":"string","minLength":1},
-     "description":{"type":"string","minLength":1},
-     "confidence":{"type":"number","minimum":0,"maximum":1},
-     "recommended":{"type":"boolean"}
-    }
-   }}
-  }
- }`), &questionSchema)
 	tools := []map[string]interface{}{{
-		"name":        "ask_user",
+		"name":        llm.AskUserToolName,
 		"description": "Ask one blocking question. Choice questions require exactly three options with confidence scores and one uniquely highest-confidence recommendation. Use free_form with empty options only for an inherently unconstrained exact value. Wait for the tool result before continuing.",
-		"inputSchema": questionSchema,
+		"inputSchema": askUserSchema,
 	}}
 	if p.UsesStructuredCompletion() {
 		tools = append(tools, map[string]interface{}{
-			"name":        "complete_phase",
+			"name":        llm.CompletePhaseToolName,
 			"description": "Request phase completion after all blocking questions are answered and required artifacts are ready. The harness validates completion; a rejected request returns corrections to address before retrying.",
 			"inputSchema": map[string]interface{}{
 				"type": "object", "additionalProperties": false,
@@ -206,7 +211,7 @@ func (p *Protocol) handleDynamicToolCall(id int, raw json.RawMessage) (llm.SDKMe
 		return p.rejectDynamicTool(id, "Tool call belongs to a stale turn")
 	}
 	switch call.Tool {
-	case "ask_user":
+	case llm.AskUserToolName:
 		if !isRoot {
 			return p.rejectDynamicTool(id, "Only the root agent may ask the user. Report missing inputs to your parent agent.")
 		}
@@ -230,7 +235,7 @@ func (p *Protocol) handleDynamicToolCall(id int, raw json.RawMessage) (llm.SDKMe
 		input, _ := json.Marshal(map[string]any{"questions": []map[string]any{{"question": question.Question, "header": question.Header, "multiSelect": false, "options": options}}})
 		p.rememberQuestions(id, pendingQuestionRequest{Dynamic: true, CallID: call.CallID, QuestionIDs: map[string]string{question.Question: question.ID}})
 		return p.askUserControl(id, call.ThreadID, input), true
-	case "complete_phase":
+	case llm.CompletePhaseToolName:
 		if !p.UsesStructuredCompletion() || !isRoot {
 			return p.rejectDynamicTool(id, "Only the root of an orchestrated phase can request completion")
 		}

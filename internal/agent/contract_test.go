@@ -544,20 +544,18 @@ func TestContractRegistryArtifactPhaseRolesRequireMarkdown(t *testing.T) {
 		phase    feature.Phase
 		role     Role
 		fileName string
+		body     string
 	}{
-		{"inquire", feature.PhaseInquire, RoleInquirer, "2026-05-07-inquire.md"},
-		{"research", feature.PhaseResearch, RoleResearcher, "2026-05-07-research.md"},
-		{"design", feature.PhaseDesign, RoleDesigner, "2026-05-07-design.md"},
-		// Legacy Design role still resolves and validates the same
-		// markdown artifact behavior so older runs continue to complete.
-		{"design", feature.PhaseDesign, RoleDesigner, "2026-05-07-design.md"},
+		{"inquire", feature.PhaseInquire, RoleInquirer, "2026-05-07-inquire.md", "# Research Questions\n\n1. Which components own repository initialization?\n"},
+		{"research", feature.PhaseResearch, RoleResearcher, "2026-05-07-research.md", "# Research findings\n"},
+		{"design", feature.PhaseDesign, RoleDesigner, "2026-05-07-design.md", testutil.DesignDocumentMarkdown},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			artifactPath := filepath.Join(dir, tt.fileName)
-			if err := os.WriteFile(artifactPath, []byte("# artifact\n"), 0o644); err != nil {
+			if err := os.WriteFile(artifactPath, []byte(tt.body), 0o644); err != nil {
 				t.Fatalf("write artifact: %v", err)
 			}
 
@@ -593,7 +591,6 @@ func TestContractRegistryArtifactPhaseRolesReportMissingMarkdown(t *testing.T) {
 	}{
 		{feature.PhaseInquire, RoleInquirer},
 		{feature.PhaseResearch, RoleResearcher},
-		{feature.PhaseDesign, RoleDesigner},
 		{feature.PhaseDesign, RoleDesigner},
 	}
 
@@ -639,7 +636,7 @@ func TestContractRegistryArtifactPhaseRolesSelectNewestMarkdown(t *testing.T) {
 	if err := os.WriteFile(oldPath, []byte("# old\n"), 0o644); err != nil {
 		t.Fatalf("write old artifact: %v", err)
 	}
-	if err := os.WriteFile(newPath, []byte("# new\n"), 0o644); err != nil {
+	if err := os.WriteFile(newPath, []byte(testutil.DesignDocumentMarkdown), 0o644); err != nil {
 		t.Fatalf("write new artifact: %v", err)
 	}
 	oldTime := time.Now().Add(-1 * time.Hour)

@@ -3076,10 +3076,11 @@ func TestImplementLoop_SkillReadInstruction(t *testing.T) {
 // that spawned background Task subagents.
 type bgTaskSession struct {
 	*utilityTestSession
-	liveTasks    atomic.Int32
-	lastStdoutNs atomic.Int64
-	userMessages chan string
-	stopped      atomic.Bool
+	liveTasks         atomic.Int32
+	lastStdoutNs      atomic.Int64
+	userMessages      chan string
+	taskCountObserved chan int
+	stopped           atomic.Bool
 }
 
 func newBgTaskSession() *bgTaskSession {
@@ -3091,8 +3092,15 @@ func newBgTaskSession() *bgTaskSession {
 	return s
 }
 
-func (s *bgTaskSession) LiveBackgroundTaskCount() int { return int(s.liveTasks.Load()) }
-func (s *bgTaskSession) LastStdoutAt() time.Time      { return time.Unix(0, s.lastStdoutNs.Load()) }
+func (s *bgTaskSession) LiveBackgroundTaskCount() int {
+	count := int(s.liveTasks.Load())
+	select {
+	case s.taskCountObserved <- count:
+	default:
+	}
+	return count
+}
+func (s *bgTaskSession) LastStdoutAt() time.Time { return time.Unix(0, s.lastStdoutNs.Load()) }
 func (s *bgTaskSession) SendUserMessage(text string) error {
 	s.setRootIntent(llm.CompletionIntent{})
 	s.userMessages <- text
@@ -3114,6 +3122,7 @@ func TestWaitForPhaseOutcome_DefersCommitUntilDelegatedTasksFinish(t *testing.T)
 	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
 
 	sess := newBgTaskSession()
+	sess.taskCountObserved = make(chan int, 1)
 	sess.liveTasks.Store(1)
 	sess.result = newEndedAfterTextResult()
 	sess.setRootIntent(validSuccessCompletionIntent())
@@ -3121,8 +3130,20 @@ func TestWaitForPhaseOutcome_DefersCommitUntilDelegatedTasksFinish(t *testing.T)
 
 	var commits atomic.Int32
 	resultCh := make(chan PhaseOutcomeWaitResult, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	waiterDone := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-waiterDone:
+		case <-time.After(5 * time.Second):
+			t.Error("phase waiter did not stop during cleanup")
+		}
+	})
 	go func() {
+		defer close(waiterDone)
 		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			Ctx: ctx,
 			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
 				commits.Add(1)
 				return nil, nil
@@ -3133,12 +3154,19 @@ func TestWaitForPhaseOutcome_DefersCommitUntilDelegatedTasksFinish(t *testing.T)
 	select {
 	case result := <-resultCh:
 		t.Fatalf("WaitForPhaseOutcome() returned while task was live: %+v", result)
-	case <-time.After(20 * time.Millisecond):
+	case count := <-sess.taskCountObserved:
+		if count != 1 {
+			t.Fatalf("waiter observed %d live tasks, want 1", count)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("phase waiter did not observe the live delegated task")
 	}
 	if got := commits.Load(); got != 0 {
 		t.Fatalf("commit calls while task was live = %d, want 0", got)
 	}
 
+	// Release the task only after the waiter has sampled its live state.
+	// Elapsed time alone does not establish that the waiter has been scheduled.
 	sess.liveTasks.Store(0)
 	sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
 	select {

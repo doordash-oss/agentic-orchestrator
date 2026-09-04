@@ -213,44 +213,21 @@ func (p *Provider) prepareNativeToollessHome(stateDir string) ([]string, error) 
 	}, nil
 }
 
+// CompletionToolName identifies the harness-owned phase completion transport.
+func (p *Provider) CompletionToolName() string { return "complete_phase" }
+
 func (p *Provider) AskingQuestionsClause() string {
 	return `## Asking Questions
 
-If you need to ask the user a question or require clarification, you MUST structure your question with numbered alternatives. The orchestration system will parse your text and present the options as selectable choices to the user.
+Use the Agentico ask_user tool whenever you need user input. Ask one decision at a time, then wait for its answer before continuing. Do not ask questions in prose or use Codex request_user_input.
 
-IMPORTANT: NEVER ask open-ended, free-form questions. ALWAYS propose exactly 3 concrete alternatives and recommend one. This rule applies on every turn — not just the first question of a conversation.
-
-Follow this format strictly:
-- Write a brief question stem (1-2 sentences) ending with a question mark.
-- List exactly 3 mutually exclusive options as a numbered list.
-- Each option MUST have a short label followed by a colon and a description of the tradeoff.
-- End each option with a user-visible confidence suffix in the exact form "[confidence: 0.00]".
-- Mark exactly one option with "(Recommended)" in its label.
-- Ask one question at a time. Do not bundle multiple decisions.
+Set kind to choice and provide exactly three mutually exclusive options. Each option needs a short label, a tradeoff description, confidence between 0 and 1, and a recommended boolean. Set recommended to true on exactly one option; the UI adds the recommendation marker and renders confidence. Use stable question IDs.
 
 ` + llm.RecommendationConfidenceClause + `
 
-Example:
+Use kind free_form with an empty options array only for an inherently unconstrained value, such as an exact version, name, or identifier. Uncertainty about preferences does not qualify: present three plausible choices.
 
-Which files should I document?
-1. Tracked source files only (Recommended): Faster, focuses on committed code that other developers will see. [confidence: 0.88]
-2. Source files and generated artifacts: Also covers build outputs and generated configs, but may include noise. [confidence: 0.42]
-3. All files in worktree: Comprehensive but includes temporary and generated files that may change frequently. [confidence: 0.19]
-
-Free-form exception (rare): ask a free-form question without numbered options ONLY when the answer is inherently unconstrained — e.g. an exact version string, a free-form name, or an arbitrary identifier. "I'm not sure what they prefer" is NOT a valid reason — if you can imagine 3 plausible answers, list them.
-
-Confirmation traps to avoid. Open-ended confirmation prose disguised as a question is the most common failure mode and ends the phase as a protocol violation. NEVER end a turn with patterns like:
-- "Is that the X you want?" / "Sound good?" / "Does that work for you?"
-- "Shall I proceed with Y?" / "Want me to do Z?"
-- "Let me know if this looks right."
-If you want the user to confirm a recommendation, restructure as a 3-option choice where one option is "Yes, do X (Recommended)" and the other options are concrete alternatives (e.g. a different scope, a different approach, a stop-and-discuss option). The same rule applies on every turn of an interview — not just the first question. After the user answers one question and you do follow-up tool exploration, your next question still needs the full numbered-options format.
-
-Self-check before sending every question. If any answer is "no" and the free-form exception above does not apply, rewrite before sending:
-1. Does the stem end with a single "?" and ask one decision?
-2. Are there exactly 3 numbered options, each formatted "Label: short tradeoff description [confidence: 0.00]"?
-3. Is exactly one option marked "(Recommended)" in its label?
-4. Are the options mutually exclusive and cover the realistic answer space?
-5. Is the question a real choice between alternatives, not a confirmation of a single direction you already proposed?`
+Apply this contract on every turn of an interview, including after repository exploration and previous answers. A request to confirm scope or proceed is also a question and must use ask_user. A tool answer clarifies that decision within the phase's existing scope; it does not grant unrelated implementation permission.`
 }
 
 func (p *Provider) ComputeCost(model string, inputTokens, outputTokens int64) float64 {
@@ -316,7 +293,12 @@ func (p *Provider) VersionInfo() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func (p *Provider) MinVersion() [3]int { return [3]int{0, 116, 0} }
+// MinVersion is the app-server baseline verified by the structured contract
+// compatibility suite (developer instructions, dynamic tools, and resume).
+func (p *Provider) MinVersion() [3]int { return [3]int{0, 153, 2} }
+
+// EnforcesMinVersion rejects CLI versions below the tested protocol baseline.
+func (p *Provider) EnforcesMinVersion() bool { return true }
 
 func (p *Provider) EnvVarsToExclude() []string { return nil }
 

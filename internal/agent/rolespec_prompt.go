@@ -25,24 +25,26 @@ import (
 // BuildImplementSystemPromptInput carries runtime values for the
 // RoleSpec-backed implement system prompt.
 type BuildImplementSystemPromptInput struct {
-	IterationDir  string
-	SkillsDir     string
-	GuidelinesDir string
-	KBInfos       []KBInfo
-	AskingClause  string
-	Frontend      bool
+	IterationDir   string
+	SkillsDir      string
+	GuidelinesDir  string
+	KBInfos        []KBInfo
+	AskingClause   string
+	CompletionTool string
+	Frontend       bool
 }
 
 // BuildRoleSystemPromptInput carries runtime values for a RoleSpec-backed
 // system prompt.
 type BuildRoleSystemPromptInput struct {
-	Spec          RoleSpec
-	IterationDir  string
-	SkillsDir     string
-	GuidelinesDir string
-	KBInfos       []KBInfo
-	Model         string
-	AskingClause  string
+	Spec           RoleSpec
+	IterationDir   string
+	SkillsDir      string
+	GuidelinesDir  string
+	KBInfos        []KBInfo
+	Model          string
+	AskingClause   string
+	CompletionTool string
 	// RequiredSkillNames lists utility skills the role must read and apply,
 	// rather than merely advertising them as optional resources.
 	RequiredSkillNames []string
@@ -77,6 +79,7 @@ func BuildImplementSystemPrompt(in BuildImplementSystemPromptInput) string {
 		GuidelinesDir:           in.GuidelinesDir,
 		KBInfos:                 in.KBInfos,
 		AskingClause:            in.AskingClause,
+		CompletionTool:          in.CompletionTool,
 		RequiredSkillNames:      requiredSkillNames,
 		RequiredSkillConditions: requiredSkillConditions,
 	})
@@ -120,6 +123,7 @@ func BuildRoleSystemPrompt(in BuildRoleSystemPromptInput) string {
 		SubagentsAvailable:   !in.SuppressSubagents,
 		RetryOutcomeAllowed:  roles.RoleSpec(spec).SupportsRetryOutcome(),
 		AskingClause:         askingClause,
+		CompletionTool:       in.CompletionTool,
 	})
 }
 

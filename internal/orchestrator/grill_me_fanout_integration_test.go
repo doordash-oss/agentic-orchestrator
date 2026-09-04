@@ -27,6 +27,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -322,7 +323,7 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 			}
 			// Drop a stand-in artifact so phase-completion routing finds one.
 			artifactPath := filepath.Join(phaseDir, tc.name+".md")
-			if err := os.WriteFile(artifactPath, []byte("# "+tc.name+"\n"), 0o644); err != nil {
+			if err := os.WriteFile(artifactPath, []byte(testutil.PhaseMarkdown(tc.name)), 0o644); err != nil {
 				t.Fatalf("write artifact: %v", err)
 			}
 			qaPath := filepath.Join(phaseDir, "qa-answers.md")

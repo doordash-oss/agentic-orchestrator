@@ -269,6 +269,8 @@ func TestValidateSpecializedPromptBranches(t *testing.T) {
 
 func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 	retained := map[string]bool{
+		"codex_design_system_rolespec":                         true,
+		"codex_implement_system_rolespec":                      true,
 		"autoreview_user":                                      true,
 		"design_system_rolespec":                               true,
 		"design_user_multi_repo":                               true,

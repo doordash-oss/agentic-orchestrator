@@ -279,6 +279,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 
 	attachCh := sess.AttachCh()
 	statusCh := sess.StatusCh()
+	completionC := phaseCompletionRequests(sess)
 	if registrar, ok := sess.(ports.AttachConsumerRegistrar); ok {
 		unregister := registrar.RegisterAttachConsumer()
 		defer unregister()
@@ -317,6 +318,28 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 
 	for {
 		select {
+		case request := <-completionC:
+			accepted, violations, err := resolvePhaseCompletion(sess, request, func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
+				if cfg.requireOutput && strings.TrimSpace(readSessionOutput(cfg.responsePath, sess)) == "" {
+					return []ProtocolViolation{{Artifact: "output", Reason: "helper completed without output"}}, nil
+				}
+				_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
+					Phase: cfg.contractPhase, Role: cfg.contractRole, ArtifactDir: cfg.completionDir, SessionID: sess.ID(), Intent: intent,
+				})
+				return violations, err
+			})
+			if err != nil {
+				return finish(boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusFailed), err)
+			}
+			if accepted {
+				return finish(boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusCompleted), nil)
+			}
+			pendingCommitViolations = violations
+			finishOrViolateNudges++
+			if finishOrViolateNudges > maxFinishOrViolateNudges {
+				return finish(boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusProtocolViolation), newProtocolViolationError(cfg.contractRole, cfg.completionDir, violations))
+			}
+
 		case <-ctx.Done():
 			result := boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusTimedOut)
 			return finish(result, fmt.Errorf("running %s: %w", label, ctx.Err()))
@@ -338,7 +361,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			awaitingBackgroundTasks = false
 			if autoResumeAttempts < maxAutoResumeAttempts {
 				autoResumeAttempts++
-				if err := sess.SendUserMessage(autoResumeMessage); err == nil {
+				if err := sess.SendUserMessage(autoResumeMessageForSession(sess)); err == nil {
 					continue
 				}
 			}
@@ -369,7 +392,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			awaitingBackgroundTasks = false
 			if cfg.completionDir != "" && disposition == llm.TurnTruncated && autoResumeAttempts < maxAutoResumeAttempts {
 				autoResumeAttempts++
-				if err := sess.SendUserMessage(autoResumeMessage); err == nil {
+				if err := sess.SendUserMessage(autoResumeMessageForSession(sess)); err == nil {
 					continue
 				}
 			}

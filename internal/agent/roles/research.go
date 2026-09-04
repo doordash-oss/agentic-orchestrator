@@ -32,7 +32,7 @@ var researcherRoleSpec = RoleSpec{
 		singleShotPhaseDirOutputRoot("Research phase artifact directory."),
 	},
 	Artifacts: []RoleArtifactSpec{
-		phaseMarkdownRoleArtifact("research markdown artifact"),
+		phaseMarkdownRoleArtifact("research markdown artifact", ValidatorPhaseMarkdown),
 	},
 }
 

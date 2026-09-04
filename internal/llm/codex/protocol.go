@@ -76,28 +76,32 @@ type Protocol struct {
 	threadReady   chan struct{}
 
 	// Session state
-	threadID           string
-	turnID             string
-	model              string
-	approvalPolicy     string
-	dangerFullAccess   bool
-	inputTokens        int
-	cachedInputTokens  int
-	outputTokens       int
-	totalCostUSD       float64
-	modelContextWindow int
-	deltaBuf           map[string]string
-	questionIDs        map[string]string
-	turnHadToolUse     bool
-	lastAssistantText  string
-	lastAssistantDraft string
-	formatRetryCount   int
-	fileReadSeen       map[string]struct{}
-	turnStarted        bool
-	nativeReviewTurnID string
-	nativeDecisionSeen bool
-	nativeReviewFailed bool
-	tasksByThread      map[string]codexTaskRef
+	threadID              string
+	turnID                string
+	model                 string
+	approvalPolicy        string
+	dangerFullAccess      bool
+	inputTokens           int
+	cachedInputTokens     int
+	cacheWriteInputTokens int
+	pricingModel          string
+	serviceTier           string
+	usageState            usageState
+	outputTokens          int
+	totalCostUSD          float64
+	modelContextWindow    int
+	deltaBuf              map[string]string
+	questionIDs           map[string]string
+	turnHadToolUse        bool
+	lastAssistantText     string
+	lastAssistantDraft    string
+	formatRetryCount      int
+	fileReadSeen          map[string]struct{}
+	turnStarted           bool
+	nativeReviewTurnID    string
+	nativeDecisionSeen    bool
+	nativeReviewFailed    bool
+	tasksByThread         map[string]codexTaskRef
 
 	logFunc func(string, ...interface{})
 }
@@ -125,6 +129,7 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 	}
 	return &Protocol{
 		opts:             opts,
+		usageState:       usageState{resumeBaselinePending: opts.ResumeSessionID != ""},
 		model:            llm.StripModelContextWindow(opts.Model),
 		approvalPolicy:   policy,
 		dangerFullAccess: opts.DSP,
@@ -208,6 +213,15 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 
 	// Response to our request (has id but no method)
 	if env.ID != nil && env.Method == "" {
+		// Negative IDs are reserved for optional billing lookups. Their failures
+		// must never turn a successful agent turn into a protocol error.
+		if *env.ID < 0 && !p.opts.NativeToollessReview {
+			msg, emit := p.handleUsageResponse(*env.ID, env.Result, env.Error)
+			if emit {
+				return []llm.SDKMessage{p.stampMessage(msg)}, nil
+			}
+			return nil, nil
+		}
 		if p.opts.NativeToollessReview && len(env.Error) > 0 && string(env.Error) != "null" {
 			return []llm.SDKMessage{p.nativeToollessViolation("JSON-RPC error response")}, nil
 		}
@@ -320,6 +334,10 @@ func (p *Protocol) SessionID() string {
 func (p *Protocol) TranscriptPath() string { return "" }
 
 func (p *Protocol) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.usageState.closed = true
+	p.finishUsageReadLocked()
 	return nil
 }
 
@@ -519,6 +537,8 @@ func (p *Protocol) sendFollowUpTurn(text string) error {
 	id := int(nextID.Add(1))
 
 	p.mu.Lock()
+	p.usageState.revision++
+	p.pricingModel = p.model
 	threadID := p.threadID
 	policy := p.approvalPolicy
 	model := p.model
@@ -667,6 +687,10 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 	if err := json.Unmarshal(result, &threadResult); err == nil && threadResult.Thread.ID != "" {
 		p.mu.Lock()
 		p.threadID = threadResult.Thread.ID
+		if threadResult.Model != "" {
+			p.pricingModel = threadResult.Model
+		}
+		p.serviceTier = threadResult.ServiceTier
 		if effectivePolicy := strings.TrimSpace(threadResult.ApprovalPolicy); effectivePolicy != "" && !p.opts.NativeToollessReview {
 			p.approvalPolicy = effectivePolicy
 		}
@@ -678,6 +702,9 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 			}
 		}
 		p.mu.Unlock()
+		if p.opts.ResumeSessionID != "" {
+			p.requestUsageRead()
+		}
 		p.logDebug("[codex] thread started: %s", threadResult.Thread.ID)
 		return llm.SDKMessage{}, false, true
 	}
@@ -1095,6 +1122,8 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			return p.taskProgressForChildThread(completed.ThreadID, "", "", "child turn "+completed.Turn.Status)
 		}
 
+		p.requestUsageRead()
+
 		switch completed.Turn.Status {
 		case "completed":
 			p.mu.Lock()
@@ -1115,7 +1144,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				if !decisionSeen || (decision != "ALLOW" && decision != "DEFER") {
 					return p.nativeToollessViolation("malformed reviewer decision"), true
 				}
-				return p.successResult(inTok, cachedInTok, outTok, costUSD), true
+				return p.withUsage(p.successResult(inTok, cachedInTok, outTok, costUSD)), true
 			}
 
 			// The entire text-parsed AskUserQuestion pipeline below exists only to
@@ -1174,7 +1203,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.formatRetryCount = 0
 			p.mu.Unlock()
 
-			return p.successResult(inTok, cachedInTok, outTok, costUSD), true
+			return p.withUsage(p.successResult(inTok, cachedInTok, outTok, costUSD)), true
 
 		case "failed":
 			if p.opts.NativeToollessReview {
@@ -1220,7 +1249,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					OutputTokens:         outTok,
 				}
 			}
-			return msg, true
+			return p.withUsage(msg), true
 
 		case "interrupted":
 			if p.opts.NativeToollessReview {
@@ -1251,7 +1280,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					OutputTokens:         outTok,
 				}
 			}
-			return msg, true
+			return p.withUsage(msg), true
 
 		default:
 			p.logDebug("[codex] turn/completed with unknown status: %s", completed.Turn.Status)
@@ -1277,54 +1306,15 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				return p.nativeToollessViolation(detail), true
 			}
 		}
-		// Total = lifetime cumulative (for cost calculation on turn completion).
-		// Last = current context fill (resets on compaction; use for context %).
 		p.mu.Lock()
-		inputDelta := usage.TokenUsage.Total.InputTokens - p.inputTokens
-		cachedInputDelta := usage.TokenUsage.Total.CachedInputTokens - p.cachedInputTokens
-		outputDelta := usage.TokenUsage.Total.OutputTokens - p.outputTokens
-		if inputDelta >= 0 && cachedInputDelta >= 0 && outputDelta >= 0 {
-			// The app-server protocol does not expose cache-write token counts,
-			// so cache writes remain zero until that telemetry becomes available.
-			p.totalCostUSD += computeCostForContext(
-				p.model,
-				inputDelta,
-				cachedInputDelta,
-				0,
-				outputDelta,
-				usage.TokenUsage.Last.InputTokens,
-			)
+		defer p.mu.Unlock()
+		// Child threads have independent cumulative counters. Mixing them
+		// with the root would corrupt both deltas and context usage.
+		if !p.isMainThread(usage.ThreadID) {
+			return llm.SDKMessage{}, false
 		}
-		p.inputTokens = usage.TokenUsage.Total.InputTokens
-		p.cachedInputTokens = usage.TokenUsage.Total.CachedInputTokens
-		p.outputTokens = usage.TokenUsage.Total.OutputTokens
-		if usage.TokenUsage.ModelContextWindow != nil {
-			p.modelContextWindow = *usage.TokenUsage.ModelContextWindow
-		}
-		ctxWindow := p.modelContextWindow
-		costUSD := p.totalCostUSD
-		p.mu.Unlock()
-
-		// Surface as synthetic SDKMessage so session layer can accumulate.
-		// Total = lifetime cumulative (for cost); Last = current context fill
-		// (resets on compaction, for context % display).
-		//
-		// ContextTotalTokens carries Last.TotalTokens (input + output +
-		// reasoning) so the session's ContextPercentage() can match Codex's
-		// own `/status` formula: (total - baseline) / (window - baseline).
-		return llm.SDKMessage{
-			Type: "usage_update",
-			UsageUpdate: &llm.Usage{
-				InputTokens:          usage.TokenUsage.Total.InputTokens,
-				CacheReadInputTokens: usage.TokenUsage.Total.CachedInputTokens,
-				OutputTokens:         usage.TokenUsage.Total.OutputTokens,
-				ContextInputTokens:   usage.TokenUsage.Last.InputTokens,
-				ContextTotalTokens:   usage.TokenUsage.Last.TotalTokens,
-				ContextBaseline:      codexContextBaselineTokens,
-				ContextWindow:        ctxWindow,
-				CostUSD:              costUSD,
-			},
-		}, true
+		p.updateTokenUsageLocked(usage.TokenUsage)
+		return p.usageMessageLocked(), true
 
 	case "item/commandExecution/outputDelta":
 		var delta CommandOutputDelta
@@ -1648,6 +1638,24 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			return llm.SDKMessage{}, false
 		}
 
+	case "model/rerouted":
+		if p.opts.NativeToollessReview {
+			return p.nativeToollessViolation("unexpected model rerouting"), true
+		}
+		var rerouted struct {
+			ThreadID string `json:"threadId"`
+			ToModel  string `json:"toModel"`
+		}
+		if json.Unmarshal(params, &rerouted) != nil {
+			return llm.SDKMessage{}, false
+		}
+		p.mu.Lock()
+		if p.isMainThread(rerouted.ThreadID) && rerouted.ToModel != "" {
+			p.pricingModel = rerouted.ToModel
+		}
+		p.mu.Unlock()
+		return llm.SDKMessage{}, false
+
 	case "turn/started":
 		var turnStarted struct {
 			ThreadID string `json:"threadId"`
@@ -1665,6 +1673,9 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		p.mu.Lock()
 		isMain := turnStarted.ThreadID == "" || p.threadID == "" || turnStarted.ThreadID == p.threadID
 		alreadyStarted := p.turnStarted
+		if isMain {
+			p.usageState.revision++
+		}
 		if isMain && !alreadyStarted {
 			p.turnStarted = true
 			p.nativeReviewTurnID = turnStarted.Turn.ID

@@ -1104,7 +1104,7 @@ func (f *Feature) AddPhaseCost(key string, cost float64) {
 // phase-level aggregate used by existing dashboard and summary readers.
 func (f *Feature) RecordSessionCost(record SessionCostRecord) {
 	record.PhaseKey = strings.TrimSpace(record.PhaseKey)
-	if record.CostUSD <= 0 || record.PhaseKey == "" {
+	if (record.CostUSD <= 0 && record.CostCreditsMicros == nil) || record.PhaseKey == "" {
 		return
 	}
 	record.SessionID = strings.TrimSpace(record.SessionID)

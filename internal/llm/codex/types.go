@@ -110,6 +110,8 @@ type ThreadResumeParams struct {
 type ThreadStartResult struct {
 	Thread         Thread `json:"thread"`
 	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
+	Model          string `json:"model,omitempty"`
+	ServiceTier    string `json:"serviceTier,omitempty"`
 }
 
 // Thread identifies a conversation thread.
@@ -223,6 +225,7 @@ type ThreadTokenUsage struct {
 type TokenUsageBreakdown struct {
 	InputTokens           int `json:"inputTokens"`
 	CachedInputTokens     int `json:"cachedInputTokens"`
+	CacheWriteInputTokens int `json:"cacheWriteInputTokens"`
 	OutputTokens          int `json:"outputTokens"`
 	ReasoningOutputTokens int `json:"reasoningOutputTokens"`
 	TotalTokens           int `json:"totalTokens"`

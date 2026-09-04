@@ -139,11 +139,13 @@ export class ServerListService {
     return this.snapshot();
   }
 
-  /** The current-server flag rides connection state; re-emit while open. */
+  /**
+   * Connection changes are authoritative even when a popover just stopped
+   * polling: another window may still be displaying the Servers pane.
+   * Publishing a snapshot performs no network probes.
+   */
   notifyConnectionChanged(): void {
-    if (this.open) {
-      this.emit();
-    }
+    this.emit();
   }
 
   /** Stops polling (window teardown); probing is never leaked. */

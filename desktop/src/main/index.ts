@@ -39,12 +39,7 @@ import {
   type MessageBoxReturnValue,
 } from 'electron';
 import { registryEntryKey } from './gateway/registry';
-import {
-  createRuntimeGateway,
-  fetchJson,
-  MAX_PROBE_RESPONSE_BYTES,
-  selectRuntime,
-} from './gateway/wiring';
+import { createRuntimeGateway, fetchJson, MAX_PROBE_RESPONSE_BYTES } from './gateway/wiring';
 import { ServerListService } from './gateway/serverListService';
 import { addRemoteServer } from './gateway/addRemoteServer';
 import { removeKnownServer, serverTokenStatus } from './gateway/removeServer';
@@ -705,7 +700,7 @@ if (!hasSingleInstanceLock) {
       knownServers: () => settings.get().servers,
       currentServerKey: () => gateway.getState().serverKey ?? null,
       bundledRuntime: () => {
-        const selected = selectRuntime(settings.get().runtime.selection);
+        const selected = gateway.getBundledRuntime();
         return {
           serverKey: registryEntryKey(selected.runtimeDir),
           runtimeDir: selected.runtimeDir,

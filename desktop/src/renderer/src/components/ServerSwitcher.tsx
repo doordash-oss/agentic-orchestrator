@@ -46,7 +46,7 @@ export const BUNDLED_RUNTIME_LABEL = 'This machine';
 
 /**
  * A popover row: a listed server, or the bundled runtime when it is not
- * running (no registry entry, so no list row exists for it). Choosing the
+ * running (a persisted list row may still exist for it). Choosing the
  * latter starts the bundled runtime instead of switching to a live server.
  */
 type SwitcherItem =
@@ -55,12 +55,12 @@ type SwitcherItem =
 
 function switcherItems(snapshot: ServerListSnapshot | null): SwitcherItem[] | null {
   if (snapshot === null) return null;
-  const items: SwitcherItem[] = snapshot.rows.map((row) => ({
-    kind: 'server',
-    key: row.serverKey,
-    row,
-  }));
   const bundled = snapshot.bundled;
+  const items: SwitcherItem[] = snapshot.rows.map((row) =>
+    bundled !== undefined && !bundled.running && !row.current && row.serverKey === bundled.serverKey
+      ? { kind: 'bundled-stopped', key: row.serverKey, runtimeDir: bundled.runtimeDir }
+      : { kind: 'server', key: row.serverKey, row },
+  );
   if (bundled !== undefined && !snapshot.rows.some((row) => row.serverKey === bundled.serverKey)) {
     items.push({ kind: 'bundled-stopped', key: bundled.serverKey, runtimeDir: bundled.runtimeDir });
   }

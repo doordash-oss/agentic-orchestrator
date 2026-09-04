@@ -2025,6 +2025,88 @@ describe('RuntimeGateway startLocal', () => {
     expect(env.spawnCalls).toHaveLength(1);
   });
 
+  it('keeps a path change pending when starting the currently owned runtime', async () => {
+    const env = makeEnv();
+    await env.gateway.start();
+    const child = env.spawned[0]!;
+    const ready = env.gateway.getState();
+    const pending = {
+      runtimeDir: '/rt/pending',
+      stateDir: '/rt/pending/features',
+      configPath: '/rt/pending/config.yaml',
+    };
+    env.deps.selectRuntime = () => pending;
+
+    expect(env.gateway.getBundledRuntime()).toEqual(SELECTED);
+    expect(await env.gateway.startLocal()).toBe(ready);
+    expect(env.spawnCalls).toHaveLength(1);
+    expect(child.stopCalls).toHaveLength(0);
+
+    // Only an explicit restart releases the old identity for the pending one.
+    env.deps.resolveServerBinary = () => ({ ok: false, tried: [] });
+    env.setDiscovery(null);
+    await env.gateway.restart();
+    expect(child.stopCalls).toHaveLength(1);
+    expect(env.gateway.getBundledRuntime()).toEqual(pending);
+  });
+
+  it('returns to the surviving child after a path change and a switch away', async () => {
+    const env = makeMultiServerEnv();
+    await env.gateway.start();
+    const child = env.spawned[0]!;
+    env.setRegistryScans([{ candidates: [betaCandidate()], pruned: 0, rejected: [] }]);
+    await env.gateway.switchServer({ serverKey: betaCandidate().serverKey });
+    env.deps.selectRuntime = () => ({
+      runtimeDir: '/rt/pending',
+      stateDir: '/rt/pending/features',
+      configPath: '/rt/pending/config.yaml',
+    });
+    env.setRegistryScans([
+      {
+        candidates: [
+          registryCandidate({
+            runtimeDir: SELECTED.runtimeDir,
+            baseUrl: LAUNCH_BASE,
+            token: LAUNCH_TOKEN,
+            name: 'alpha',
+            pid: child.pid,
+          }),
+        ],
+        pruned: 0,
+        rejected: [],
+      },
+    ]);
+
+    expect(env.gateway.getBundledRuntime()).toEqual(SELECTED);
+    expect(await env.gateway.startLocal()).toMatchObject({
+      status: 'ready',
+      ownership: 'app-owned',
+      serverKey: BUNDLED_KEY,
+    });
+    expect(env.spawnCalls).toHaveLength(1);
+    expect(child.stopCalls).toHaveLength(0);
+    await env.gateway.shutdown();
+    expect(child.stopCalls).toHaveLength(1);
+  });
+
+  it('does not replace a live owned child when its discovery record is missing', async () => {
+    const env = makeMultiServerEnv();
+    await env.gateway.start();
+    const child = env.spawned[0]!;
+    env.setRegistryScans([{ candidates: [betaCandidate()], pruned: 0, rejected: [] }]);
+    await env.gateway.switchServer({ serverKey: betaCandidate().serverKey });
+    env.setDiscovery(null);
+
+    expect(await env.gateway.startLocal()).toMatchObject({
+      status: 'error',
+      switchContext: { startLocal: true, attempted: { serverKey: BUNDLED_KEY } },
+    });
+    expect(env.spawnCalls).toHaveLength(1);
+    expect(child.stopCalls).toHaveLength(0);
+    await env.gateway.shutdown();
+    expect(child.stopCalls).toHaveLength(1);
+  });
+
   it('a failed start lands on the switch surface naming the bundled target and the previous server', async () => {
     const env = await startAtBeta({ binary: { ok: false, tried: ['/nowhere'] } });
 
@@ -2272,5 +2354,32 @@ describe('RuntimeGateway decoupled app-owned supervision', () => {
     await env.gateway.restart();
     expect(child.stopCalls).toHaveLength(1);
     expect(env.gateway.getState().status).toBe('ready');
+  });
+
+  it('an explicit restart cancels detached recovery and releases its runtime identity', async () => {
+    const env = await startAppOwned();
+    env.setRegistryScans([{ candidates: [betaCandidate()], pruned: 0, rejected: [] }]);
+    await env.gateway.switchServer({ serverKey: serverKeyFor(BETA_RUNTIME_DIR) });
+    let finishRecovery!: () => void;
+    const delay = new Promise<void>((resolve) => {
+      finishRecovery = resolve;
+    });
+    env.deps.sleep = () => delay;
+    env.spawned[0]!.emitExit(1, null);
+    expect(env.gateway.getBundledRuntime()).toEqual(SELECTED);
+    const pending = {
+      runtimeDir: '/rt/pending',
+      stateDir: '/rt/pending/features',
+      configPath: '/rt/pending/config.yaml',
+    };
+    env.deps.selectRuntime = () => pending;
+    await env.gateway.restart();
+    expect(env.gateway.getBundledRuntime()).toEqual(pending);
+
+    finishRecovery();
+    await delay;
+    // The retired runtime must not respawn after the explicit restart.
+    expect(env.spawnCalls).toHaveLength(1);
+    await env.gateway.shutdown();
   });
 });

@@ -268,4 +268,24 @@ describe('ServerSwitcher bundled runtime', () => {
     expect(screen.getAllByRole('option')).toHaveLength(3);
     expect(screen.queryByRole('option', { name: /This machine/ })).toBeNull();
   });
+
+  it('replaces a stopped known bundled runtime with one enabled Start row', async () => {
+    const mock = renderSwitcher(null, {
+      serverKey: GAMMA_KEY,
+      runtimeDir: '/rt/gamma',
+      running: false,
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'alpha — switch server' }));
+
+    const machine = await screen.findByRole('option', {
+      name: 'This machine at /rt/gamma — Not running',
+    });
+    expect(machine).toHaveAttribute('aria-disabled', 'false');
+    expect(machine).toHaveTextContent('Start');
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+    expect(screen.queryByRole('option', { name: 'gamma at /rt/gamma — Unreachable' })).toBeNull();
+    await userEvent.click(machine);
+    expect(mock.api.startLocalRuntime).toHaveBeenCalledTimes(1);
+    expect(mock.api.switchConnectionServer).not.toHaveBeenCalled();
+  });
 });

@@ -145,6 +145,23 @@ const HEALTH = (base: string) => `${base}/api/v1/health`;
 const OK = { status: 200, body: { status: 'ok' } };
 
 describe('ServerListService list building', () => {
+  it('publishes connection changes without reopening network polling', () => {
+    let currentKey: string | null = null;
+    const harness = makeHarness({
+      scanRegistry: () => scan(candidate(ALPHA_KEY, 'alpha', 'http://127.0.0.1:51001')),
+      currentServerKey: () => currentKey,
+    });
+    harness.service.setOpen(false);
+    currentKey = ALPHA_KEY;
+
+    harness.service.notifyConnectionChanged();
+
+    expect(harness.pushed).toHaveLength(1);
+    expect(harness.pushed[0]!.rows[0]).toMatchObject({ serverKey: ALPHA_KEY, current: true });
+    expect(harness.fetchCalls).toEqual([]);
+    expect(harness.intervalCount()).toBe(0);
+  });
+
   it('unions registry and known servers, deduping by serverKey (registry wins)', () => {
     const harness = makeHarness({
       scanRegistry: () => scan(candidate(ALPHA_KEY, 'alpha-live', 'http://127.0.0.1:51001')),

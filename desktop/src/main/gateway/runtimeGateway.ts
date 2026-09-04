@@ -371,6 +371,11 @@ export class RuntimeGateway {
     return this.supervision.hasLiveChild();
   }
 
+  /** Runtime path changes remain pending until the owned runtime is restarted. */
+  getBundledRuntime(): SelectedRuntime {
+    return this.supervision.getOwnedSelected() ?? this.deps.selectRuntime();
+  }
+
   /**
    * Authenticated request against the connected runtime's REST API. The
    * bearer token and base URL never leave this method's closure — callers
@@ -703,6 +708,8 @@ export class RuntimeGateway {
    * launch() path runs. Like switchServer, the generation bump fences
    * in-flight work and no child is stopped (the remote is not a child, and a
    * surviving child is the very server this attaches to).
+   * A pending runtime-path change is applied by restart(), not this action:
+   * until then, the supervised child's coordinates remain the bundled target.
    *
    * Every failure lands on the standard switch surface: `status: 'error'`
    * with a switchContext whose attempted target is the bundled runtime and
@@ -714,7 +721,7 @@ export class RuntimeGateway {
     if (this.shuttingDown || this.busy) {
       return this.state;
     }
-    const selected = this.deps.selectRuntime();
+    const selected = this.getBundledRuntime();
     const targetKey = registryEntryKey(selected.runtimeDir);
     if (this.state.status === 'ready' && this.serverKey === targetKey) {
       // Already connected to the bundled runtime: a no-op.
@@ -773,6 +780,21 @@ export class RuntimeGateway {
         }
       }
       if (this.cancelled(generation)) {
+        return this.state;
+      }
+      if (this.supervision.hasLiveChild()) {
+        // A probe failure is not proof that the owned process exited. Never
+        // overwrite its supervision slot with another child on a failed attach.
+        this.setState({
+          status: 'error',
+          stage: 'connect',
+          detail: 'The app-managed runtime is still running but could not be reached.',
+          ownership: 'none',
+          error: buildCanonicalError('E_LAUNCH_FAILED', {
+            remediationHint: 'Retry when the running runtime is reachable, or restart Agentico.',
+          }),
+          switchContext,
+        });
         return this.state;
       }
       await this.launch(generation, selected);

@@ -223,7 +223,12 @@ const trusted: TrustedSender = {
   allowedOrigins: appOrigins,
 };
 
-app.setAsDefaultProtocolClient('agentico');
+// Only a real install may own the `agentico:` scheme. Hermetic E2E launches
+// and dev shells would otherwise register their throwaway bundle with the OS
+// and could later receive a user's connection-string link.
+if (app.isPackaged && testUserData === null) {
+  app.setAsDefaultProtocolClient('agentico');
+}
 
 // macOS hands a protocol click that launches the app to `open-url` before
 // `ready`, and Electron does not replay it for listeners added later. Buffer

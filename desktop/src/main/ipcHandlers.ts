@@ -155,6 +155,7 @@ export interface IpcServices {
   restartConnection(): Promise<ConnectionState> | ConnectionState;
   chooseConnectionServer(request: ChooseServerRequest): Promise<ConnectionState> | ConnectionState;
   switchConnectionServer(request: SwitchServerRequest): Promise<ConnectionState> | ConnectionState;
+  startLocalRuntime(): Promise<ConnectionState> | ConnectionState;
   listServers(): ServerListSnapshot;
   probeServers(request: ServersProbeRequest): ServerListSnapshot;
   addRemoteServer(request: RemoteServerAddRequest): Promise<RemoteServerAddResult>;
@@ -320,6 +321,7 @@ export function registerIpcHandlers(
       services.chooseConnectionServer(request),
     [IPC_CHANNELS.connectionSwitchServer]: (_event, request: SwitchServerRequest) =>
       services.switchConnectionServer(request),
+    [IPC_CHANNELS.connectionStartLocal]: () => services.startLocalRuntime(),
     [IPC_CHANNELS.serversList]: () => services.listServers(),
     [IPC_CHANNELS.serversProbe]: (_event, request: ServersProbeRequest) =>
       services.probeServers(request),

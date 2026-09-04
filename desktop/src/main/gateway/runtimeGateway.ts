@@ -503,6 +503,9 @@ export class RuntimeGateway {
       detail,
       ownership: 'none',
       error,
+      // The structured signal the connection shell keys its explicit
+      // start-local escape hatch on; nothing here falls back on its own.
+      startupLink: true,
     });
     return this.state;
   }
@@ -685,6 +688,156 @@ export class RuntimeGateway {
       this.busy = false;
     }
     return this.state;
+  }
+
+  /**
+   * Starts the app's own bundled runtime — the same selected runtime
+   * connect() would spawn as its last fallback — and switches the workspace
+   * to it. This is the only way back to the local runtime once the last-used
+   * pointer names a remote server: the startup cascade short-circuits to the
+   * remote and switchServer() deliberately never spawns.
+   *
+   * A live server for the selected runtime dir (registry scan first, legacy
+   * discovery second) is attached to without spawning — an app-owned child
+   * left behind by an earlier switch-away is re-owned. Otherwise the standard
+   * launch() path runs. Like switchServer, the generation bump fences
+   * in-flight work and no child is stopped (the remote is not a child, and a
+   * surviving child is the very server this attaches to).
+   *
+   * Every failure lands on the standard switch surface: `status: 'error'`
+   * with a switchContext whose attempted target is the bundled runtime and
+   * whose previous is the server we came from, so the renderer offers Retry
+   * (re-invoking this action) and Back exactly as for a failed switch.
+   * settings.runtime.selection stays untouched.
+   */
+  async startLocal(): Promise<ConnectionState> {
+    if (this.shuttingDown || this.busy) {
+      return this.state;
+    }
+    const selected = this.deps.selectRuntime();
+    const targetKey = registryEntryKey(selected.runtimeDir);
+    if (this.state.status === 'ready' && this.serverKey === targetKey) {
+      // Already connected to the bundled runtime: a no-op.
+      return this.state;
+    }
+    const previous = this.switchPrevious(targetKey);
+    const attempted: ServerChoiceCandidate = {
+      serverKey: targetKey,
+      kind: 'local',
+      name:
+        this.deps.knownServers().known.find((entry) => entry.serverKey === targetKey)?.name ?? null,
+      runtimeDir: selected.runtimeDir,
+    };
+    const switchContext: SwitchContext = { attempted, previous, startLocal: true };
+    this.busy = true;
+    const generation = ++this.generation;
+    try {
+      // Deliberately no stopChild(): a surviving app-owned child is re-owned
+      // below rather than restarted, and a remote connection has no child.
+      await this.resetConnection({ resetCrashAttempts: true, clearPendingCandidates: true });
+      this.connectedRuntimeDir = selected.runtimeDir;
+      const scan = this.deps.scanRegistry();
+      const candidate = scan.candidates.find((entry) => entry.serverKey === targetKey);
+      if (candidate !== undefined) {
+        const attached = await this.attachCandidate(generation, candidate, 'launch', switchContext);
+        if (this.cancelled(generation)) {
+          return this.state;
+        }
+        if (attached) {
+          this.surfaceStartLocalFailure(switchContext);
+          return this.state;
+        }
+        // Died between scan and probe: spawn exactly as the startup cascade would.
+      } else {
+        const outcome = evaluateDiscoveryFile(
+          selected.runtimeDir,
+          selected.stateDir,
+          this.deps.discovery,
+        );
+        if (outcome.kind === 'rejected' || outcome.kind === 'stale') {
+          this.deps.log(`discovery ignored: ${outcome.reason}`);
+        }
+        if (outcome.kind === 'candidate') {
+          const attach = await this.tryAttach(
+            generation,
+            selected,
+            outcome.record,
+            'launch',
+            undefined,
+            switchContext,
+          );
+          if (attach !== 'launch') {
+            this.surfaceStartLocalFailure(switchContext);
+            return this.state;
+          }
+        }
+      }
+      if (this.cancelled(generation)) {
+        return this.state;
+      }
+      await this.launch(generation, selected);
+      if (this.cancelled(generation)) {
+        return this.state;
+      }
+      if (this.state.status === 'ready' && this.baseUrl !== null) {
+        // The user explicitly chose the bundled runtime: it becomes the
+        // last-used server (the remote stays in the known list), so the next
+        // launch reconnects here instead of silently returning to the remote.
+        this.deps.recordAttachedServer({
+          serverKey: targetKey,
+          kind: 'local',
+          name: this.state.serverName ?? '',
+          baseUrl: this.baseUrl,
+          runtimeDir: selected.runtimeDir,
+          lastSeenAt: new Date(this.now()).toISOString(),
+        });
+        return this.state;
+      }
+      this.surfaceStartLocalFailure(switchContext);
+    } catch (err) {
+      const safe = toCanonicalError(err, 'E_GATEWAY');
+      this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.summary}`);
+      this.setState({
+        status: 'error',
+        stage: 'connect',
+        detail: 'The bundled runtime could not be started.',
+        ownership: 'none',
+        error: safe,
+        switchContext,
+      });
+    } finally {
+      this.busy = false;
+    }
+    return this.state;
+  }
+
+  /**
+   * Re-homes a terminal failure of the start-local attempt onto the switch
+   * surface: the launch and local-attach profiles emit their own terminal
+   * variants (launch-failed, resources-missing, incompatible, …), which carry
+   * no switch identities. The canonical error and detail are kept verbatim;
+   * only the status and the recovery context change, so Retry and Back are
+   * offered exactly as for a failed switch. A state that already carries the
+   * context, or that is not a failure, is left alone.
+   */
+  private surfaceStartLocalFailure(switchContext: SwitchContext): void {
+    const state = this.state;
+    if (!isConnectionErrorState(state)) {
+      return;
+    }
+    if (state.status === 'error' && state.switchContext !== undefined) {
+      return;
+    }
+    this.setState({
+      status: 'error',
+      stage: 'connect',
+      detail: state.detail,
+      ownership: state.ownership,
+      error: state.error,
+      ...(state.serverBuild === undefined ? {} : { serverBuild: state.serverBuild }),
+      ...(state.serverName === undefined ? {} : { serverName: state.serverName }),
+      switchContext,
+    });
   }
 
   /**

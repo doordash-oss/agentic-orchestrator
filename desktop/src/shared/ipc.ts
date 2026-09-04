@@ -34,6 +34,7 @@ export const IPC_CHANNELS = {
   connectionRestart: 'agentico:connection:restart',
   connectionChooseServer: 'agentico:connection:choose-server',
   connectionSwitchServer: 'agentico:connection:switch-server',
+  connectionStartLocal: 'agentico:connection:start-local',
   serversList: 'agentico:servers:list',
   serversProbe: 'agentico:servers:probe',
   remoteServerAdd: 'agentico:servers:remote-add',
@@ -381,6 +382,13 @@ export const MAX_SERVER_CHOICE_CANDIDATES = 32;
 export const SwitchContextSchema = z.strictObject({
   attempted: ServerChoiceCandidateSchema,
   previous: ServerChoiceCandidateSchema.nullable(),
+  /**
+   * Present when the attempted target is the app's own bundled runtime,
+   * reached through the start-local action rather than a plain switch. Retry
+   * then re-invokes start-local (which may spawn) instead of the attach-only
+   * switch, which would fail again against a runtime that is not running.
+   */
+  startLocal: z.literal(true).optional(),
 });
 export type SwitchContext = z.output<typeof SwitchContextSchema>;
 
@@ -439,6 +447,13 @@ const ConnectionUnexpectedErrorStateSchema = z.strictObject({
   error: CanonicalErrorSchema,
   /** Present when this failure interrupted a server switch. */
   switchContext: SwitchContextSchema.optional(),
+  /**
+   * Present when a connection-string link that launched the app could not
+   * be used: the bundled runtime was deliberately not started in its place.
+   * The connection shell offers an explicit start-local escape hatch on it;
+   * nothing ever falls back automatically.
+   */
+  startupLink: z.literal(true).optional(),
 });
 
 export const ConnectionErrorStateSchema = z.union([
@@ -498,6 +513,20 @@ export const SwitchServerRequestSchema = z.strictObject({
 });
 export type SwitchServerRequest = z.output<typeof SwitchServerRequestSchema>;
 
+/**
+ * The bundled runtime as the renderer sees it: the identity key and runtime
+ * dir the app's own runtime selection resolves to, and whether a live server
+ * for that dir is currently in the registry. Never a base URL or token. The
+ * Servers pane folds any known-servers entry with this key into its
+ * permanent "This machine" row.
+ */
+export const BundledRuntimeInfoSchema = z.strictObject({
+  serverKey: z.string().min(1).max(64),
+  runtimeDir: z.string().max(4096),
+  running: z.boolean(),
+});
+export type BundledRuntimeInfo = z.output<typeof BundledRuntimeInfoSchema>;
+
 // --- Footer switcher server list (renderer-safe) ----------------------------
 // Union of the live registry scan and the persisted known-servers list,
 // probed for liveness while the switcher popover is open. Rows NEVER carry
@@ -517,6 +546,8 @@ export type ServerListRow = z.output<typeof ServerListRowSchema>;
 
 export const ServerListSnapshotSchema = z.strictObject({
   rows: z.array(ServerListRowSchema).max(MAX_SERVER_CHOICE_CANDIDATES),
+  /** The app's own bundled runtime; absent only when the list has no runtime selection. */
+  bundled: BundledRuntimeInfoSchema.optional(),
 });
 export type ServerListSnapshot = z.output<typeof ServerListSnapshotSchema>;
 
@@ -3487,6 +3518,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([SwitchServerRequestSchema]),
     response: ConnectionStateSchema,
   },
+  [IPC_CHANNELS.connectionStartLocal]: {
+    request: z.tuple([]),
+    response: ConnectionStateSchema,
+  },
   [IPC_CHANNELS.serversList]: {
     request: z.tuple([]),
     response: ServerListSnapshotSchema,
@@ -3888,6 +3923,13 @@ export interface AgenticoApi {
    * (and every intermediate transition) also streams via onConnectionChanged.
    */
   switchConnectionServer(request: SwitchServerRequest): Promise<ConnectionState>;
+  /**
+   * Starts (or attaches to, when already live) the app's own bundled runtime
+   * and switches the workspace to it. Invokable while ready on another
+   * server and from any terminal error state, including a failed link
+   * launch. Failures surface as a failed switch (Retry / Back).
+   */
+  startLocalRuntime(): Promise<ConnectionState>;
   /** Renderer-safe switcher rows: registry scan union persisted known servers. */
   listServers(): Promise<ServerListSnapshot>;
   /** Bounds health probing to the switcher popover's open lifetime. */

@@ -324,6 +324,8 @@ describe('RuntimeGateway failStartup', () => {
     expect(state.ownership).toBe('none');
     expect(state.detail).toBe('The linked server could not be added.');
     expect(requireError(state)).toEqual(error);
+    // The structured signal the connection shell keys its escape hatch on.
+    expect(state.status === 'error' && state.startupLink).toBe(true);
     expect(env.spawnCalls).toHaveLength(0);
     expect(env.logs).toContain(`startup failed: ${error.code}: ${error.summary}`);
   });
@@ -1879,6 +1881,241 @@ describe('RuntimeGateway switchServer', () => {
     expect(failed.error.code).toBe('E_ATTACH_UNREACHABLE');
     expect(failed.switchContext.attempted.serverKey).toBe(beta.serverKey);
     expect(failed.switchContext.previous?.serverKey).toBe(alphaCandidate().serverKey);
+  });
+});
+
+describe('RuntimeGateway startLocal', () => {
+  // In this file the selected runtime IS alpha's runtime dir, so alpha is the
+  // bundled runtime and beta is "some other local server".
+  const BUNDLED_KEY = serverKeyFor(SELECTED.runtimeDir);
+  function betaCandidate() {
+    return registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+      name: 'beta',
+    });
+  }
+  function liveBundledCandidate(pid = 4242) {
+    return registryCandidate({
+      runtimeDir: SELECTED.runtimeDir,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+      pid,
+    });
+  }
+  async function startAtBeta(options: EnvOptions = {}) {
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [betaCandidate()], pruned: 0, rejected: [] }],
+      ...options,
+    });
+    await env.gateway.start();
+    expect(env.gateway.getState().status).toBe('ready');
+    expect(env.gateway.getState().serverKey).toBe(betaCandidate().serverKey);
+    return env;
+  }
+
+  it('spawns the bundled runtime and switches to it when nothing live matches the selected runtime dir', async () => {
+    const env = await startAtBeta();
+    const before = env.states.length;
+
+    const state = await env.gateway.startLocal();
+
+    expect(state).toMatchObject({
+      status: 'ready',
+      ownership: 'app-owned',
+      kind: 'local',
+      serverKey: BUNDLED_KEY,
+      connectedRuntimeDir: SELECTED.runtimeDir,
+    });
+    expect(env.spawnCalls).toHaveLength(1);
+    expect(env.spawnCalls[0]!.args).toEqual([
+      'server',
+      '--config',
+      SELECTED.configPath,
+      '--state-dir',
+      SELECTED.stateDir,
+    ]);
+    const transition = env.states.slice(before).map((s) => s.status);
+    expect(transition).toContain('launching');
+    expect(transition[transition.length - 1]).toBe('ready');
+    // The explicit choice becomes last-used; the other server stays known.
+    expect(env.servers().lastUsed).toBe(BUNDLED_KEY);
+    expect(env.servers().known.map((entry) => entry.serverKey)).toContain(
+      betaCandidate().serverKey,
+    );
+    const recorded = env.attachRecords[env.attachRecords.length - 1]!;
+    expect(recorded).toMatchObject({ serverKey: BUNDLED_KEY, kind: 'local' });
+    expect(recorded.runtimeDir).toBe(SELECTED.runtimeDir);
+    expectNoTokenLeak(env);
+  });
+
+  it('attaches to a live server for the selected runtime dir without spawning', async () => {
+    const env = await startAtBeta();
+    env.setRegistryScans([
+      { candidates: [betaCandidate(), liveBundledCandidate()], pruned: 0, rejected: [] },
+    ]);
+
+    const state = await env.gateway.startLocal();
+
+    expect(state).toMatchObject({
+      status: 'ready',
+      ownership: 'external',
+      kind: 'local',
+      serverKey: BUNDLED_KEY,
+      serverName: 'alpha',
+    });
+    expect(env.spawnCalls).toHaveLength(0);
+    expect(env.servers().lastUsed).toBe(BUNDLED_KEY);
+    expectNoTokenLeak(env);
+  });
+
+  it('re-owns a surviving app-owned child instead of starting a second one', async () => {
+    // Spawn first (nothing live), then switch away to beta: the child survives.
+    const env = makeMultiServerEnv();
+    await env.gateway.start();
+    expect(env.gateway.getState().ownership).toBe('app-owned');
+    const child = env.spawned[0]!;
+    env.setRegistryScans([{ candidates: [betaCandidate()], pruned: 0, rejected: [] }]);
+    const away = await env.gateway.switchServer({ serverKey: betaCandidate().serverKey });
+    expect(away.serverKey).toBe(betaCandidate().serverKey);
+    expect(child.exited).toBe(false);
+
+    // The surviving child is what the registry shows for the selected dir.
+    env.setRegistryScans([
+      {
+        candidates: [
+          betaCandidate(),
+          registryCandidate({
+            runtimeDir: SELECTED.runtimeDir,
+            baseUrl: LAUNCH_BASE,
+            token: LAUNCH_TOKEN,
+            name: 'alpha',
+            pid: child.pid,
+          }),
+        ],
+        pruned: 0,
+        rejected: [],
+      },
+    ]);
+    const state = await env.gateway.startLocal();
+
+    expect(state).toMatchObject({
+      status: 'ready',
+      ownership: 'app-owned',
+      serverKey: BUNDLED_KEY,
+    });
+    expect(env.spawnCalls).toHaveLength(1);
+    expect(child.stopCalls).toHaveLength(0);
+    expectNoTokenLeak(env);
+  });
+
+  it('is a no-op when already connected to the bundled runtime', async () => {
+    const env = makeEnv();
+    await env.gateway.start();
+    const ready = env.gateway.getState();
+    expect(ready).toMatchObject({ status: 'ready', serverKey: BUNDLED_KEY });
+    const before = env.states.length;
+
+    const state = await env.gateway.startLocal();
+
+    expect(state).toBe(ready);
+    expect(env.states.length).toBe(before);
+    expect(env.spawnCalls).toHaveLength(1);
+  });
+
+  it('a failed start lands on the switch surface naming the bundled target and the previous server', async () => {
+    const env = await startAtBeta({ binary: { ok: false, tried: ['/nowhere'] } });
+
+    const failed = await env.gateway.startLocal();
+
+    expect(failed.status).toBe('error');
+    if (failed.status !== 'error' || failed.switchContext === undefined) {
+      throw new Error('expected a switch failure context');
+    }
+    expect(failed.stage).toBe('connect');
+    expect(failed.error.code).toBe('E_RESOURCES_MISSING');
+    expect(failed.switchContext.startLocal).toBe(true);
+    expect(failed.switchContext.attempted).toMatchObject({
+      serverKey: BUNDLED_KEY,
+      kind: 'local',
+      runtimeDir: SELECTED.runtimeDir,
+    });
+    expect(failed.switchContext.previous).toMatchObject({
+      serverKey: betaCandidate().serverKey,
+      kind: 'local',
+      runtimeDir: BETA_RUNTIME_DIR,
+    });
+    // A failed start never moves the last-used pointer.
+    expect(env.servers().lastUsed).toBe(betaCandidate().serverKey);
+    expect(env.spawnCalls).toHaveLength(0);
+
+    // Back re-attaches the previous server through the standard path.
+    const back = await env.gateway.switchServer({ serverKey: betaCandidate().serverKey });
+    expect(back).toMatchObject({ status: 'ready', serverKey: betaCandidate().serverKey });
+    expectNoTokenLeak(env);
+  });
+
+  it('a spawn failure keeps its canonical error while gaining the switch identities', async () => {
+    const env = await startAtBeta({ spawnError: new Error('EACCES: permission denied') });
+
+    const failed = await env.gateway.startLocal();
+
+    expect(failed.status).toBe('error');
+    if (failed.status !== 'error' || failed.switchContext === undefined) {
+      throw new Error('expected a switch failure context');
+    }
+    expect(failed.error.code).toBe('E_LAUNCH_FAILED');
+    expect(failed.detail).toBe('The bundled runtime could not be started.');
+    expect(failed.switchContext.attempted.serverKey).toBe(BUNDLED_KEY);
+    expect(failed.switchContext.previous?.serverKey).toBe(betaCandidate().serverKey);
+    expectNoTokenLeak(env);
+  });
+
+  it('is the escape hatch from a failed link launch: no previous, and the startup flag clears', async () => {
+    const env = makeEnv();
+    const parked = env.gateway.failStartup(
+      buildCanonicalError('E_REMOTE_UNREACHABLE'),
+      'The server this launch was linked to could not be added.',
+    );
+    expect(parked.status === 'error' && parked.startupLink).toBe(true);
+
+    const state = await env.gateway.startLocal();
+
+    expect(state).toMatchObject({
+      status: 'ready',
+      ownership: 'app-owned',
+      serverKey: BUNDLED_KEY,
+    });
+    expect('startupLink' in state).toBe(false);
+    expect(env.spawnCalls).toHaveLength(1);
+    expectNoTokenLeak(env);
+  });
+
+  it('a failed start from the link-failure state offers Retry only (no previous server)', async () => {
+    const env = makeEnv({ binary: { ok: false, tried: [] } });
+    env.gateway.failStartup(buildCanonicalError('E_REMOTE_UNREACHABLE'), 'link failed');
+
+    const failed = await env.gateway.startLocal();
+
+    if (failed.status !== 'error' || failed.switchContext === undefined) {
+      throw new Error('expected a switch failure context');
+    }
+    expect(failed.switchContext.previous).toBeNull();
+    expect(failed.switchContext.startLocal).toBe(true);
+  });
+
+  it('does nothing after shutdown', async () => {
+    const env = makeEnv();
+    await env.gateway.start();
+    await env.gateway.shutdown();
+    const before = env.states.length;
+
+    await env.gateway.startLocal();
+
+    expect(env.states.length).toBe(before);
+    expect(env.spawnCalls).toHaveLength(1);
   });
 });
 

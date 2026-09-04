@@ -35,6 +35,7 @@ limitations under the License.
 import { z } from 'zod';
 import {
   MAX_SERVER_CHOICE_CANDIDATES,
+  type BundledRuntimeInfo,
   type ServerListRow,
   type ServerListSnapshot,
   type ServersPrefs,
@@ -49,6 +50,12 @@ export interface ServerListServiceDeps {
   knownServers(): ServersPrefs;
   /** Identity of the currently connected server, when any. */
   currentServerKey(): string | null;
+  /**
+   * The app's own bundled runtime identity (key + runtime dir), resolved from
+   * the runtime selection at call time. Its liveness is derived from the
+   * registry scan, never probed. Absent when the build wires no selection.
+   */
+  bundledRuntime?(): Pick<BundledRuntimeInfo, 'serverKey' | 'runtimeDir'>;
   /** Bounded JSON GET; throws on network failure. Auth-exempt endpoints only. */
   fetchJson(url: string, options: { timeoutMs: number }): Promise<HttpResult>;
   /**
@@ -163,7 +170,8 @@ export class ServerListService {
       const nickname = nicknameByKey.get(serverKey);
       return nickname === undefined ? {} : { nickname };
     };
-    for (const candidate of this.deps.scanRegistry().candidates) {
+    const scan = this.deps.scanRegistry();
+    for (const candidate of scan.candidates) {
       seen.add(candidate.serverKey);
       rows.push({
         serverKey: candidate.serverKey,
@@ -190,7 +198,23 @@ export class ServerListService {
         health: this.health.get(entry.serverKey) ?? 'probing',
       });
     }
-    return { rows: rows.slice(0, MAX_SERVER_CHOICE_CANDIDATES) };
+    const bundled = this.deps.bundledRuntime?.();
+    return {
+      rows: rows.slice(0, MAX_SERVER_CHOICE_CANDIDATES),
+      ...(bundled === undefined
+        ? {}
+        : {
+            bundled: {
+              serverKey: bundled.serverKey,
+              runtimeDir: bundled.runtimeDir,
+              // The scan already pruned dead entries: presence means a live
+              // server for the app's runtime dir.
+              running: scan.candidates.some(
+                (candidate) => candidate.serverKey === bundled.serverKey,
+              ),
+            },
+          }),
+    };
   }
 
   private emit(): void {

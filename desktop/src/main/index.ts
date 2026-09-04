@@ -38,7 +38,13 @@ import {
   type Event as ElectronEvent,
   type MessageBoxReturnValue,
 } from 'electron';
-import { createRuntimeGateway, fetchJson, MAX_PROBE_RESPONSE_BYTES } from './gateway/wiring';
+import { registryEntryKey } from './gateway/registry';
+import {
+  createRuntimeGateway,
+  fetchJson,
+  MAX_PROBE_RESPONSE_BYTES,
+  selectRuntime,
+} from './gateway/wiring';
 import { ServerListService } from './gateway/serverListService';
 import { addRemoteServer } from './gateway/addRemoteServer';
 import { removeKnownServer, serverTokenStatus } from './gateway/removeServer';
@@ -635,6 +641,16 @@ if (!hasSingleInstanceLock) {
       coldStartConnectionString === null
         ? gateway.retry()
         : connectAtColdStart(coldStartConnectionString);
+    // The explicit escape hatch from a remote connection or a failed link
+    // launch back to the bundled runtime. Reaching the local runtime abandons
+    // the pending link: later retries run the standard cycle, not the link.
+    const startLocalRuntime = async (): Promise<ConnectionState> => {
+      const state = await gateway.startLocal();
+      if (state.status === 'ready') {
+        coldStartConnectionString = null;
+      }
+      return state;
+    };
 
     /**
      * The registry is the only thing that creates a window: every entry path
@@ -683,6 +699,13 @@ if (!hasSingleInstanceLock) {
       scanRegistry,
       knownServers: () => settings.get().servers,
       currentServerKey: () => gateway.getState().serverKey ?? null,
+      bundledRuntime: () => {
+        const selected = selectRuntime(settings.get().runtime.selection);
+        return {
+          serverKey: registryEntryKey(selected.runtimeDir),
+          runtimeDir: selected.runtimeDir,
+        };
+      },
       fetchJson: (url, options) =>
         fetchJson(url, { ...options, maxResponseBytes: MAX_PROBE_RESPONSE_BYTES }),
       // Locked name rule after successful liveness probes: the service only
@@ -918,6 +941,10 @@ if (!hasSingleInstanceLock) {
       route,
       quit: () => {
         void quitCoordinator.requestQuitDecision();
+      },
+      startLocalRuntime: () => {
+        showMainWindow();
+        void startLocalRuntime();
       },
     });
     nativeCommands.install();
@@ -1326,6 +1353,7 @@ if (!hasSingleInstanceLock) {
       restartConnection: () => gateway.restart(),
       chooseConnectionServer: (request) => gateway.chooseServer(request),
       switchConnectionServer: (request) => gateway.switchServer(request),
+      startLocalRuntime,
       listServers: () => serverList.list(),
       probeServers: (request) => serverList.setOpen(request.open),
       addRemoteServer: performRemoteServerAdd,

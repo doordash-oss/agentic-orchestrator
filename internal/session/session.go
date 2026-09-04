@@ -430,6 +430,15 @@ func (s *Session) AdditionalSessionCost(ctx context.Context) (llm.SessionCostAdj
 	return augmenter.AdditionalSessionCost(ctx)
 }
 
+// ReconciledUsage waits only for a provider's outstanding usage lookup; it does
+// not create another turn or terminal result.
+func (s *Session) ReconciledUsage(ctx context.Context) *llm.Usage {
+	if reconciler, ok := s.protocol.(llm.SessionUsageReconciler); ok {
+		return reconciler.ReconciledUsage(ctx)
+	}
+	return nil
+}
+
 // LastControlRequest returns the most recently arrived pending
 // control_request, or nil if none are outstanding. Preserves the historical
 // "single-slot" semantics: callers that just want "is there one to deal
@@ -1108,6 +1117,14 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 				s.accumulatedUsage.InputTokens = msg.UsageUpdate.InputTokens
 				s.accumulatedUsage.OutputTokens = msg.UsageUpdate.OutputTokens
 				s.accumulatedUsage.CostUSD = msg.UsageUpdate.CostUSD
+				if msg.UsageUpdate.CostSource != "" {
+					s.accumulatedUsage.CostSource = msg.UsageUpdate.CostSource
+					s.accumulatedUsage.CostCreditsMicros = msg.UsageUpdate.CostCreditsMicros
+					// Cost() is an immutable terminal record: outcome
+					// consumers also use its identity to detect new results.
+					// Reconciliation updates cumulative usage only.
+
+				}
 				if msg.UsageUpdate.CacheReadInputTokens > 0 {
 					s.accumulatedUsage.CacheReadInputTokens = msg.UsageUpdate.CacheReadInputTokens
 				}

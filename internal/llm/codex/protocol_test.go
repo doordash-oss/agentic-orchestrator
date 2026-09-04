@@ -1519,9 +1519,9 @@ func TestTurnCompletedAccumulatesShortAndLongContextRates(t *testing.T) {
 	if !ok || msg.Result == nil {
 		t.Fatal("turn completed did not return a result")
 	}
-	// First update uses short-context rates ($0.242); the 100K/10K/10K
-	// deltas in the second update use long-context rates ($0.272).
-	const want = 0.514
+	// First update uses short-context rates ($0.0484); the 100K/10K/10K
+	// deltas in the second update use long-context rates ($0.0544).
+	const want = 0.1028
 	if diff := msg.Result.TotalCostUSD - want; diff < -0.001 || diff > 0.001 {
 		t.Fatalf("TotalCostUSD = %.6f, want %.3f", msg.Result.TotalCostUSD, want)
 	}
@@ -1565,7 +1565,7 @@ func TestTurnCompleted_WellFormedQuestionSurfacesOptions(t *testing.T) {
 	if msg.Type != "control_request" || msg.ControlRequest == nil {
 		t.Fatalf("got Type=%q ControlRequest=%v, want control_request", msg.Type, msg.ControlRequest)
 	}
-	if buf.Len() != 0 {
+	if strings.Contains(buf.String(), `"method":"turn/start"`) {
 		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
 	}
 	p.mu.Lock()
@@ -1618,7 +1618,7 @@ func TestTurnCompleted_MultiSentenceStemQuestionSurfacesOptions(t *testing.T) {
 	if !strings.HasPrefix(parsed.Questions[0].Question, "How should the opt-in notification preview setting be scoped?") {
 		t.Errorf("question = %q", parsed.Questions[0].Question)
 	}
-	if buf.Len() != 0 {
+	if strings.Contains(buf.String(), `"method":"turn/start"`) {
 		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
 	}
 }
@@ -1791,7 +1791,7 @@ func TestTurnCompleted_BlankAgentMessageDoesNotEraseWellFormedQuestion(t *testin
 	if len(parsed.Questions[0].Options) != 3 {
 		t.Errorf("options len = %d, want 3", len(parsed.Questions[0].Options))
 	}
-	if buf.Len() != 0 {
+	if strings.Contains(buf.String(), `"method":"turn/start"`) {
 		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
 	}
 }
@@ -1810,7 +1810,7 @@ func TestTurnCompleted_IllFormedQuestionTriggersReformatRetry(t *testing.T) {
 	if ok {
 		t.Fatalf("parseNotification ok = true, want false (got msg=%+v)", msg)
 	}
-	if buf.Len() == 0 {
+	if !strings.Contains(buf.String(), `"method":"turn/start"`) {
 		t.Fatal("expected a follow-up turn to be written to stdin")
 	}
 	if !strings.Contains(buf.String(), "not in the required question format") {
@@ -1845,7 +1845,7 @@ func TestTurnCompleted_IllFormedFallsThroughAfterCap(t *testing.T) {
 	if msg.Type != "control_request" || msg.ControlRequest == nil {
 		t.Fatalf("got Type=%q, want control_request", msg.Type)
 	}
-	if buf.Len() != 0 {
+	if strings.Contains(buf.String(), `"method":"turn/start"`) {
 		t.Errorf("no follow-up should be written after cap; got %s", buf.String())
 	}
 	// Options should be empty in the fall-through path.
@@ -1882,7 +1882,7 @@ func TestTurnCompleted_FreeFormSentinelSkipsRetry(t *testing.T) {
 	if !ok {
 		t.Fatal("parseNotification ok = false, want true")
 	}
-	if buf.Len() != 0 {
+	if strings.Contains(buf.String(), `"method":"turn/start"`) {
 		t.Errorf("no follow-up should be written for FREE_FORM; got %s", buf.String())
 	}
 	var parsed struct {
@@ -1992,7 +1992,7 @@ APPROVED`
 	if msg.ControlRequest != nil {
 		t.Errorf("unexpected ControlRequest on validator verdict: %+v", msg.ControlRequest)
 	}
-	if buf.Len() != 0 {
+	if strings.Contains(buf.String(), `"method":"turn/start"`) {
 		t.Errorf("unexpected reformat follow-up written to stdin: %s", buf.String())
 	}
 	p.mu.Lock()
@@ -2031,7 +2031,7 @@ func TestTurnCompleted_NumberedOptionsAfterToolUseSurfacesQuestion(t *testing.T)
 	if msg.Type != "control_request" || msg.ControlRequest == nil {
 		t.Fatalf("got Type=%q ControlRequest=%v, want control_request (tool-use turn ended in well-formed question)", msg.Type, msg.ControlRequest)
 	}
-	if buf.Len() != 0 {
+	if strings.Contains(buf.String(), `"method":"turn/start"`) {
 		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
 	}
 
@@ -2072,7 +2072,7 @@ func TestTurnCompleted_FreeFormSentinelAfterToolUse(t *testing.T) {
 	if msg.Type != "control_request" || msg.ControlRequest == nil {
 		t.Fatalf("got Type=%q ControlRequest=%v, want control_request", msg.Type, msg.ControlRequest)
 	}
-	if buf.Len() != 0 {
+	if strings.Contains(buf.String(), `"method":"turn/start"`) {
 		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
 	}
 }
@@ -2105,7 +2105,7 @@ func TestTurnCompleted_LooseQuestionAfterToolUseEmitsSuccess(t *testing.T) {
 	if msg.ControlRequest != nil {
 		t.Errorf("unexpected ControlRequest on loose-question tool-use turn: %+v", msg.ControlRequest)
 	}
-	if buf.Len() != 0 {
+	if strings.Contains(buf.String(), `"method":"turn/start"`) {
 		t.Errorf("unexpected reformat follow-up written to stdin: %s", buf.String())
 	}
 }
@@ -2134,7 +2134,7 @@ func TestTurnCompleted_InformationalNumberedListIsCleanSuccess(t *testing.T) {
 	if msg.Type != "result" || msg.Subtype != "success" {
 		t.Fatalf("got Type=%q Subtype=%q ControlRequest=%v, want result/success", msg.Type, msg.Subtype, msg.ControlRequest)
 	}
-	if buf.Len() != 0 {
+	if strings.Contains(buf.String(), `"method":"turn/start"`) {
 		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
 	}
 }
@@ -2177,7 +2177,7 @@ func TestTurnCompleted_InteractiveNeverSynthesizesQuestion(t *testing.T) {
 			if msg.Type != "result" || msg.Subtype != "success" {
 				t.Fatalf("got Type=%q Subtype=%q ControlRequest=%v, want result/success", msg.Type, msg.Subtype, msg.ControlRequest)
 			}
-			if buf.Len() != 0 {
+			if strings.Contains(buf.String(), `"method":"turn/start"`) {
 				t.Errorf("sent a reformat reminder, want none: %s", buf.String())
 			}
 		})

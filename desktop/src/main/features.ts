@@ -129,7 +129,15 @@ const PHASE_MODEL_LABELS: ReadonlyArray<readonly [string, string]> = [
   ['kb_build', 'Knowledge base'],
 ];
 
-const EFFORT_LEVELS = new Set<EffortLevel>(['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+const EFFORT_LEVELS = new Set<EffortLevel>([
+  'auto',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
+]);
 
 /**
  * Remote submit guard: while remotely connected, a locally shaped path

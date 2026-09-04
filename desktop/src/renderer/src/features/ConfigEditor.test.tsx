@@ -253,6 +253,47 @@ describe('FeatureConfigPanel', () => {
     ).toBeVisible();
   });
 
+  it('saves Astra ultra effort and hides it for models that do not support it', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeatureConfig.mockResolvedValue(SNAPSHOT);
+    mock.api.updateFeatureConfig.mockResolvedValue(SNAPSHOT);
+    mock.api.getModelCatalogue.mockResolvedValue({
+      ...CATALOGUE,
+      providerModels: {
+        ...CATALOGUE.providerModels,
+        codex: [
+          {
+            id: 'gpt-6-astra[872K]',
+            displayName: 'GPT-6 Astra (872K)',
+            aliases: ['gpt-6-astra'],
+            effortCapabilities: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+          },
+        ],
+      },
+      phaseProviderModels: {
+        implementation: { claude: ['sonnet', 'opus'], codex: ['gpt-6-astra[872K]'] },
+      },
+    });
+    render(<FeatureConfigPanel featureId="feat-1" />);
+    const user = userEvent.setup();
+    const model = await screen.findByLabelText('Implementation model');
+    const effort = screen.getByLabelText('Implementation effort');
+    expect(within(effort).queryByRole('option', { name: 'Ultra' })).toBeNull();
+    await user.selectOptions(model, 'codex:gpt-6-astra[872K]');
+    await user.selectOptions(effort, 'ultra');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(mock.api.updateFeatureConfig).toHaveBeenCalledWith({
+        featureId: 'feat-1',
+        config: {
+          ...SNAPSHOT.current,
+          models: { implementation: 'codex:gpt-6-astra[872K]' },
+          effort: { implementation: 'ultra' },
+        },
+      }),
+    );
+  });
+
   it('links roadmap review to phase plan review and hides gates the pipeline drops', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeatureConfig.mockResolvedValue({

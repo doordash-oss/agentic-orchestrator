@@ -2476,7 +2476,7 @@ export const RepositoryFileRefSchema = z.strictObject({
 });
 export type RepositoryFileRef = z.output<typeof RepositoryFileRefSchema>;
 
-export const EffortLevelSchema = z.enum(['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+export const EffortLevelSchema = z.enum(['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 export type EffortLevel = z.output<typeof EffortLevelSchema>;
 
 /** The narrow creation input, validated at both IPC boundaries. */

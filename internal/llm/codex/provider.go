@@ -448,7 +448,8 @@ func (p *Provider) OutputPricePerMToken(model string) float64 {
 // as an offline fallback so the Session.ContextPercentage() signal works from
 // session start even when discovery is unavailable.
 //
-// Sources (verified 2026-04-18):
+// Astra windows/efforts: codex-cli 0.153.2 bundled catalog (2026-09-04).
+// Other sources (verified 2026-04-18):
 //   - https://developers.openai.com/api/docs/models/gpt-5.5
 //   - https://developers.openai.com/api/docs/models/gpt-5.4
 //   - https://developers.openai.com/api/docs/models/gpt-5.4-mini
@@ -456,6 +457,11 @@ func (p *Provider) OutputPricePerMToken(model string) float64 {
 //   - https://developers.openai.com/api/docs/models/gpt-5.2
 func (p *Provider) defaultModelInfos() []llm.ModelInfo {
 	return []llm.ModelInfo{
+		{ID: "gpt-6-astra[272K]", DisplayName: "GPT-6 Astra (272K)", ContextWindow: 272_000, Aliases: []string{"gpt-6-astra"}, Category: "capable",
+			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax, llm.EffortUltra}},
+		{ID: "gpt-6-astra[872K]", DisplayName: "GPT-6 Astra (872K)", ContextWindow: 872_000, Category: "capable",
+			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax, llm.EffortUltra}},
+
 		{ID: "gpt-5.5[272K]", DisplayName: "GPT-5.5 (272K)", ContextWindow: 272_000, Aliases: []string{"gpt-5.5"}, Category: "capable",
 			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}},
 		{ID: "gpt-5.4[272K]", DisplayName: "GPT-5.4 (272K)", ContextWindow: 272_000, Aliases: []string{"gpt-5.4"}, Category: "balanced",

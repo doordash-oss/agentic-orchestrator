@@ -55,7 +55,9 @@ function serverReadiness(overrides: Record<string, unknown> = {}): Record<string
     configuration: { valid: true },
     workspace: {
       roots: [{ path: '/work/space', valid: true, clone_eligible: true }],
-      repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true }],
+      repositories: [
+        { name: 'repo-a', path: '/work/space/repo-a', valid: true, feature_ready: true },
+      ],
     },
     issues: [claudeIssue, modelsIssue],
     ...overrides,
@@ -147,7 +149,7 @@ describe('CreationFilesService', () => {
       body: serverReadiness({
         workspace: {
           roots: [{ path: root, valid: true, clone_eligible: true }],
-          repositories: [{ name: 'repo-a', path: root, valid: true }],
+          repositories: [{ name: 'repo-a', path: root, valid: true, feature_ready: true }],
         },
       }),
     }));
@@ -374,7 +376,9 @@ describe('SetupService.listRepositories', () => {
   it('always returns repositories from fresh server discovery', async () => {
     const { service, calls } = makeService(() => ({ status: 200, body: serverReadiness() }));
     const repositories = await service.listRepositories();
-    expect(repositories).toEqual([{ name: 'repo-a', path: '/work/space/repo-a', valid: true }]);
+    expect(repositories).toEqual([
+      { name: 'repo-a', path: '/work/space/repo-a', valid: true, featureReady: true },
+    ]);
     expect(calls.map((call) => call.path)).toEqual(['/api/v1/readiness']);
   });
 });
@@ -408,13 +412,15 @@ describe('SetupService.pickWorkspaceDirectory', () => {
 });
 
 describe('SetupService locality enforcement', () => {
-  function makeRemoteService(): { service: SetupService; calls: Call[] } {
+  function makeRemoteService(
+    respond: (path: string) => HttpResult = () => ({ status: 200, body: serverReadiness() }),
+  ): { service: SetupService; calls: Call[] } {
     const calls: Call[] = [];
     const service = new SetupService({
       transport: {
         apiRequest: (path, init) => {
           calls.push(init === undefined ? { path } : { path, init });
-          return Promise.resolve({ status: 200, body: serverReadiness() });
+          return Promise.resolve(respond(path));
         },
       },
       dialogs: { pickDirectory: () => Promise.resolve('/work/picked') },
@@ -423,12 +429,16 @@ describe('SetupService locality enforcement', () => {
     return { service, calls };
   }
 
-  it('addWorkspaceRoot throws E_REQUIRES_LOCAL_SERVER without calling the transport', async () => {
-    const { service, calls } = makeRemoteService();
-    await expect(service.addWorkspaceRoot('/work/new')).rejects.toMatchObject({
-      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
-    });
-    expect(calls).toHaveLength(0);
+  it('addWorkspaceRoot works remotely: the path names a server-side location', async () => {
+    const { service, calls } = makeRemoteService((path) =>
+      path === '/api/v1/readiness'
+        ? { status: 200, body: serverReadiness() }
+        : path === '/api/v1/config/runtime'
+          ? { status: 200, body: { api_version: 'v1', workspace_roots: [] } }
+          : { status: 200, body: {} },
+    );
+    await expect(service.addWorkspaceRoot('/work/new')).resolves.toBeDefined();
+    expect(calls.length).toBeGreaterThan(0);
   });
 
   it('removeWorkspaceRoot throws E_REQUIRES_LOCAL_SERVER without calling the transport', async () => {

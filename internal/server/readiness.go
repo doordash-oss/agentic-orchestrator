@@ -27,6 +27,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 )
@@ -348,8 +349,12 @@ func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 	for _, name := range names {
 		repo := allRepos[name]
 		entry := RepositoryReadiness{Name: name, Path: repo.Path}
-		if workspace.IsGitRepo(workspace.ExpandHome(repo.Path)) {
+		expanded := workspace.ExpandHome(repo.Path)
+		if workspace.IsGitRepo(expanded) {
 			entry.Valid = true
+			// A repository without commits (an unborn clone of an empty
+			// remote) is valid and visible but cannot start feature work.
+			entry.FeatureReady = git.HasHead(expanded)
 		} else {
 			entry.Issue = readinessIssue(errcat.InvalidRepository)
 		}

@@ -143,6 +143,12 @@ function makeServices(): IpcServices {
     removeWorkspaceRoot: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     reorderWorkspaceRoots: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     initRepository: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    startClone: vi.fn(() => Promise.reject(new Error('unused'))),
+    getCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    listCloneOperations: vi.fn(() => Promise.reject(new Error('unused'))),
+    cancelCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    retryCloneCleanup: vi.fn(() => Promise.reject(new Error('unused'))),
+    retryCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
     listRepositories: vi.fn(() => Promise.resolve([])),
     listFeatures: vi.fn(() => Promise.resolve({ features: [], warnings: [] })),
     getFeature: vi.fn(() =>

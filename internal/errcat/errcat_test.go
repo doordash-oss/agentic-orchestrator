@@ -46,6 +46,7 @@ var zeroParams = []Params{
 	WarningRepoParams{},
 	OrphanSessionParams{},
 	ChatContextParams{},
+	CloneDestinationParams{},
 }
 
 func TestCatalogEntriesAreValid(t *testing.T) {

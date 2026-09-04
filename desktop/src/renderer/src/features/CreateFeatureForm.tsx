@@ -165,6 +165,8 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
   const [discardOpen, setDiscardOpen] = useState(false);
   const [folderPending, setFolderPending] = useState(false);
   /** Typed path + its inline rejection, only ever used on remote servers. */
+  const [folderDraft, setFolderDraft] = useState('');
+  const [folderError, setFolderError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
   const [repoError, setRepoError] = useState<string | null>(null);
@@ -255,6 +257,24 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
     }
   };
 
+  /**
+   * Remote-only candidate entry: the folder lives on the server host, so the
+   * typed path is adopted as-is and the server's own filesystem check (the
+   * tightened PATCH on workspace roots) is the validation gate.
+   */
+  const checkTypedFolder = (): void => {
+    const folder = folderDraft.trim();
+    if (folder === '') return;
+    if (!folder.startsWith('/')) {
+      setFolderError('Enter the path exactly as the server sees it, starting with /.');
+      return;
+    }
+    setFolderCandidate(folder);
+    setFolderHoldsNoRepository(false);
+    setFolderError(null);
+    setFolderNotice('');
+  };
+
   /** Adopts a snapshot's workspace view and selects whatever it discovered. */
   const adoptSnapshot = (snapshot: {
     repositories: readonly RepositoryState[];
@@ -306,6 +326,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
       }
       selectDiscovered(discovered);
       setFolderCandidate(null);
+      setFolderDraft('');
       setFolderNotice(
         discovered.length === 1
           ? `Added ${discovered[0]?.name} and selected it.`
@@ -645,13 +666,18 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                                     <span className="creation-sheet__row-issue">
                                       {repo.issue?.summary ?? 'Unavailable'}
                                     </span>
+                                  ) : !repo.featureReady ? (
+                                    <span className="creation-sheet__row-issue">
+                                      No commits yet — an initial commit is required before feature
+                                      work can start.
+                                    </span>
                                   ) : null}
                                 </span>
                                 <input
                                   className="creation-sheet__row-control"
                                   type="checkbox"
                                   checked={repoKeys.includes(repo.name)}
-                                  disabled={!repo.valid || pending}
+                                  disabled={!repo.valid || !repo.featureReady || pending}
                                   onChange={() => {
                                     const nextRepoKeys = repoKeys.includes(repo.name)
                                       ? repoKeys.filter((item) => item !== repo.name)
@@ -697,16 +723,58 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                           </button>
                         </div>
                       )}
-                      {remoteServer ? null : (
-                        <p
-                          className="creation-sheet__browser-notice"
-                          role="status"
-                          aria-live="polite"
-                        >
-                          {folderNotice}
-                        </p>
-                      )}
-                      {remoteServer ? null : folderCandidate !== null ? (
+                      {remoteServer ? (
+                        <div className="creation-sheet__path-entry">
+                          <label className="creation-sheet__field">
+                            <span className="creation-sheet__field-label">
+                              Folder path on the server
+                            </span>
+                            <input
+                              className="creation-sheet__input"
+                              type="text"
+                              value={folderDraft}
+                              placeholder="/srv/work/my-repo"
+                              spellCheck={false}
+                              autoComplete="off"
+                              disabled={folderPending}
+                              aria-invalid={fieldAriaInvalid(folderError !== null)}
+                              aria-describedby={fieldAriaDescribedBy(
+                                'creation-folder-path-error',
+                                folderError !== null,
+                              )}
+                              onChange={(event) => {
+                                setFolderDraft(event.target.value);
+                                setFolderError(null);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault();
+                                  checkTypedFolder();
+                                }
+                              }}
+                            />
+                          </label>
+                          <div className="creation-sheet__browser-actions">
+                            <button
+                              type="button"
+                              className="creation-sheet__button"
+                              disabled={folderPending || folderDraft.trim() === ''}
+                              onClick={checkTypedFolder}
+                            >
+                              Use this path
+                            </button>
+                          </div>
+                          <FieldError id="creation-folder-path-error" message={folderError} />
+                        </div>
+                      ) : null}
+                      <p
+                        className="creation-sheet__browser-notice"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        {folderNotice}
+                      </p>
+                      {folderCandidate !== null ? (
                         <>
                           <code className="creation-sheet__browser-path">{folderCandidate}</code>
                           <div className="creation-sheet__browser-actions">

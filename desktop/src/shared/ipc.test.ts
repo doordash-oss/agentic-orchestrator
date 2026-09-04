@@ -1227,7 +1227,7 @@ describe('ReadinessSnapshotSchema', () => {
     },
     configuration: { valid: true },
     workspaceRoots: [{ path: '/w', valid: true, cloneEligible: true }],
-    repositories: [{ name: 'r', path: '/w/r', valid: true }],
+    repositories: [{ name: 'r', path: '/w/r', valid: true, featureReady: true }],
     issues: [issue],
   };
 

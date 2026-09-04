@@ -398,7 +398,7 @@ const READY_REMOTE: ConnectionState = {
 };
 
 describe('SettingsPanel workspace roots on a remote server', () => {
-  it('hides add/remove/reorder controls and shows a managed-by-administrator message', async () => {
+  it('hides native add/remove/reorder controls and shows the server-validated typed entry', async () => {
     installAgenticoMock({
       connection: READY_REMOTE,
       readiness: readySnapshot({
@@ -407,13 +407,15 @@ describe('SettingsPanel workspace roots on a remote server', () => {
     });
     render(<SettingsPanel pane="workspace-roots" />);
 
-    // The root list is still visible.
-    expect(await screen.findByText('/srv/work')).toBeVisible();
+    // The root list is still visible (the clone form's root selector may
+    // list the same path, so assert on at least one match).
+    expect((await screen.findAllByText('/srv/work')).length).toBeGreaterThan(0);
 
-    // Add/remove/reorder controls are not rendered.
+    // The native picker and remove/reorder controls are not rendered; the
+    // remote entry is the typed path the server validates itself.
     expect(screen.queryByRole('button', { name: 'Add workspace root' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Add root' })).toBeNull();
-    expect(screen.queryByLabelText('Folder path on the server')).toBeNull();
+    expect(screen.getByLabelText('Folder path on the server')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Add root' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Move /srv/work up' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Move /srv/work down' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Remove /srv/work' })).toBeNull();

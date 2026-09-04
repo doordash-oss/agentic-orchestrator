@@ -695,6 +695,17 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return []string{http.MethodPost}, true
 	}
 	if !strings.HasPrefix(path, "/api/v1/features/") {
+		if strings.HasPrefix(path, apiPathWorkspaceClone+"/") {
+			parts := splitPath(strings.TrimPrefix(path, apiPathWorkspaceClone+"/"))
+			if invalidPathParts(parts) || len(parts) != 2 || !validEntityID(parts[0]) {
+				return nil, false
+			}
+			switch parts[1] {
+			case "cancel", "cleanup", "retry":
+				return []string{http.MethodPost}, true
+			}
+			return nil, false
+		}
 		return nil, false
 	}
 	parts := splitPath(strings.TrimPrefix(path, "/api/v1/features/"))

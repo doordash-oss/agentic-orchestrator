@@ -1286,8 +1286,13 @@ const READY_SNAPSHOT: ReadinessSnapshot = {
   configuration: { valid: true },
   workspaceRoots: [{ path: '/work/space', valid: true, cloneEligible: true }],
   repositories: [
-    { name: 'signal-lab', path: '/work/space/signal-lab', valid: true },
-    { name: 'orchestrator-core', path: '/work/space/orchestrator-core', valid: true },
+    { name: 'signal-lab', path: '/work/space/signal-lab', valid: true, featureReady: true },
+    {
+      name: 'orchestrator-core',
+      path: '/work/space/orchestrator-core',
+      valid: true,
+      featureReady: true,
+    },
   ],
   issues: [],
 };
@@ -1725,6 +1730,12 @@ function makeMockApi(
     removeWorkspaceRoot: () => Promise.resolve(READY_SNAPSHOT),
     reorderWorkspaceRoots: () => Promise.resolve(READY_SNAPSHOT),
     initRepository: () => Promise.resolve(READY_SNAPSHOT),
+    startClone: () => Promise.reject(new Error('unused')),
+    getCloneOperation: () => Promise.reject(new Error('unused')),
+    listCloneOperations: () => Promise.resolve({ operations: [] }),
+    cancelCloneOperation: () => Promise.reject(new Error('unused')),
+    retryCloneCleanup: () => Promise.reject(new Error('unused')),
+    retryCloneOperation: () => Promise.reject(new Error('unused')),
     listRepositories: () => Promise.resolve(READY_SNAPSHOT.repositories),
     listFeatures: () =>
       Promise.resolve({

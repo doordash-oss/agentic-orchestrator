@@ -22,6 +22,7 @@ import type {
   AppEvent,
   AppRouteEvent,
   AttentionItem,
+  CloneOperation,
   ConnectionState,
   CreationDefaults,
   DiagnosticsSnapshot,
@@ -127,7 +128,7 @@ export function readySnapshot(overrides: Partial<ReadinessSnapshot> = {}): Readi
     models: { available: true, models: ['claude-sonnet-4-5'] },
     configuration: { valid: true },
     workspaceRoots: [{ path: '/work/space', valid: true, cloneEligible: true }],
-    repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true }],
+    repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true, featureReady: true }],
     issues: [],
     ...overrides,
   };
@@ -137,11 +138,12 @@ export function readySnapshot(overrides: Partial<ReadinessSnapshot> = {}): Readi
 export function creationDefaults(overrides: Partial<CreationDefaults> = {}): CreationDefaults {
   return {
     repositories: [
-      { name: 'repo-a', path: '/work/space/repo-a', valid: true },
+      { name: 'repo-a', path: '/work/space/repo-a', valid: true, featureReady: true },
       {
         name: 'repo-b',
         path: '/work/space/repo-b',
         valid: false,
+        featureReady: false,
         issue: {
           code: 'invalid_repository',
           class: 'blocking',
@@ -157,6 +159,25 @@ export function creationDefaults(overrides: Partial<CreationDefaults> = {}): Cre
       effort: [],
       useCurrentBranch: false,
     },
+    ...overrides,
+  };
+}
+
+/** A minimal clone operation snapshot, as the server returns it. */
+export function cloneOperation(overrides: Partial<CloneOperation> = {}): CloneOperation {
+  return {
+    id: 'clone-0123456789abcdef',
+    state: 'running',
+    stage: 'transferring',
+    progress: 'Receiving objects: 50% (1/2)',
+    remoteUrl: 'https://example.com/acme/widget.git',
+    rootPath: '/work/space',
+    destination: 'widget',
+    destinationPath: '/work/space/widget',
+    idempotencyKey: '0192f0c1-8f2a-7c3e-b9d1-3e4f5a6b7c8d',
+    cancelRequested: false,
+    createdAt: '2026-09-04T12:00:00Z',
+    updatedAt: '2026-09-04T12:00:01Z',
     ...overrides,
   };
 }
@@ -314,6 +335,12 @@ export interface AgenticoMock {
     removeWorkspaceRoot: ReturnType<typeof vi.fn>;
     reorderWorkspaceRoots: ReturnType<typeof vi.fn>;
     initRepository: ReturnType<typeof vi.fn>;
+    startClone: ReturnType<typeof vi.fn>;
+    getCloneOperation: ReturnType<typeof vi.fn>;
+    listCloneOperations: ReturnType<typeof vi.fn>;
+    cancelCloneOperation: ReturnType<typeof vi.fn>;
+    retryCloneCleanup: ReturnType<typeof vi.fn>;
+    retryCloneOperation: ReturnType<typeof vi.fn>;
     listRepositories: ReturnType<typeof vi.fn>;
     listFeatures: ReturnType<typeof vi.fn>;
     getFeature: ReturnType<typeof vi.fn>;
@@ -410,6 +437,9 @@ export function installAgenticoMock(
     session?: SessionDetail;
     transcript?: SessionTranscript;
     attention?: { items: AttentionItem[] };
+    cloneOperation?: Partial<CloneOperation>;
+    cloneOperations?: CloneOperation[];
+    cloneOperationsNextToken?: string;
     updates?: UpdateState;
     diagnostics?: DiagnosticsSnapshot;
     platform?: string;
@@ -477,6 +507,29 @@ export function installAgenticoMock(
     removeWorkspaceRoot: vi.fn(() => Promise.resolve(readiness)),
     reorderWorkspaceRoots: vi.fn(() => Promise.resolve(readiness)),
     initRepository: vi.fn(() => Promise.resolve(readiness)),
+    startClone: vi.fn(() =>
+      Promise.resolve(cloneOperation(overrides.cloneOperation ?? { state: 'accepted' })),
+    ),
+    getCloneOperation: vi.fn(() =>
+      Promise.resolve(cloneOperation(overrides.cloneOperation ?? { state: 'running' })),
+    ),
+    listCloneOperations: vi.fn(() =>
+      Promise.resolve({
+        operations: overrides.cloneOperations ?? [cloneOperation()],
+        ...(overrides.cloneOperationsNextToken
+          ? { nextPageToken: overrides.cloneOperationsNextToken }
+          : {}),
+      }),
+    ),
+    cancelCloneOperation: vi.fn(() =>
+      Promise.resolve(cloneOperation(overrides.cloneOperation ?? { state: 'cancelling' })),
+    ),
+    retryCloneCleanup: vi.fn(() =>
+      Promise.resolve(cloneOperation(overrides.cloneOperation ?? { state: 'failed' })),
+    ),
+    retryCloneOperation: vi.fn(() =>
+      Promise.resolve(cloneOperation(overrides.cloneOperation ?? { state: 'accepted' })),
+    ),
     listRepositories: vi.fn(() => Promise.resolve(readiness.repositories)),
     listFeatures: vi.fn(() =>
       Promise.resolve({

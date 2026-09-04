@@ -32,8 +32,9 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { retryAction, useConnectionState, useTheme } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import { WorkspaceDefaultsPanel } from './ConfigEditor';
+import { CloneRepositorySection } from './CloneRepositorySection';
 import { ErrorSurface } from '../components/ErrorSurface';
-import { FieldError } from '../components/FieldError';
+import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../components/FieldError';
 import type { PaneFocusIntent } from './settingsPanes';
 import type {
   CanonicalError,
@@ -52,6 +53,9 @@ import type {
 import { canInstallInApp, hasActiveWork, installWhenIdleLabel } from '../../../shared/updateState';
 
 const TERMINAL_SESSION_STATUSES = new Set(['Done', 'Failed']);
+
+/** The inline FieldError id for the remote typed-root entry. */
+const SETTINGS_ROOT_ADD_ERROR_ID = 'settings-root-add-error';
 
 function isRuntimeIdle(sessions: SessionSummary[]): boolean {
   return sessions.every((s) => TERMINAL_SESSION_STATUSES.has(s.status));
@@ -77,6 +81,9 @@ export function SettingsPanel({
   const { preference: themePref, setPreference: setThemePref } = useTheme();
   const [error, setError] = useState<CanonicalError | null>(null);
   const [addingRoot, setAddingRoot] = useState(false);
+  /** Typed remote root entry + its inline server-validated rejection. */
+  const [rootDraft, setRootDraft] = useState('');
+  const [rootAddError, setRootAddError] = useState<string | null>(null);
   const [removingRoot, setRemovingRoot] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
   const [refreshingProviders, setRefreshingProviders] = useState<Set<string>>(() => new Set());
@@ -205,6 +212,32 @@ export function SettingsPanel({
       setAddingRoot(false);
     }
   }, [refresh]);
+
+  /**
+   * Remote-only typed root entry: the folder lives on the server host, so
+   * the server's own filesystem check on the workspace-roots mutation is
+   * the validation gate; its rejection is the validation the form reports
+   * inline.
+   */
+  const handleAddTypedRoot = useCallback(async () => {
+    const path = rootDraft.trim();
+    if (path === '') return;
+    if (!path.startsWith('/')) {
+      setRootAddError('Enter the path exactly as the server sees it, starting with /.');
+      return;
+    }
+    try {
+      setAddingRoot(true);
+      setRootAddError(null);
+      await window.agentico.addWorkspaceRoot(path);
+      setRootDraft('');
+      refresh();
+    } catch (e: unknown) {
+      setRootAddError(parseIpcError(e).summary);
+    } finally {
+      setAddingRoot(false);
+    }
+  }, [rootDraft, refresh]);
 
   const handleRemoveRoot = useCallback(
     async (rootPath: string) => {
@@ -493,10 +526,49 @@ export function SettingsPanel({
             )}
           </ul>
           {remoteServer ? (
-            <p className="settings-panel__root-readonly-notice">
-              Workspace roots are managed by the server administrator. Contact them to add, remove,
-              or reorder roots.
-            </p>
+            <div className="settings-panel__path-entry">
+              <p className="settings-panel__root-readonly-notice">
+                Workspace roots are managed by the server administrator. Removal and reordering stay
+                with them; add a root by its path on the server below.
+              </p>
+              <label className="form-field" htmlFor="settings-root-path">
+                <span className="form-field__label">Folder path on the server</span>
+                <input
+                  id="settings-root-path"
+                  className="form-field__input"
+                  type="text"
+                  value={rootDraft}
+                  placeholder="/srv/work"
+                  spellCheck={false}
+                  autoComplete="off"
+                  disabled={addingRoot}
+                  aria-describedby={fieldAriaDescribedBy(
+                    SETTINGS_ROOT_ADD_ERROR_ID,
+                    rootAddError !== null,
+                  )}
+                  aria-invalid={fieldAriaInvalid(rootAddError !== null)}
+                  onChange={(event) => {
+                    setRootDraft(event.currentTarget.value);
+                    setRootAddError(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void handleAddTypedRoot();
+                    }
+                  }}
+                />
+              </label>
+              <FieldError id={SETTINGS_ROOT_ADD_ERROR_ID} message={rootAddError} />
+              <button
+                type="button"
+                className="setup-wizard__action"
+                onClick={() => void handleAddTypedRoot()}
+                disabled={addingRoot || refreshingProviders.size > 0 || rootDraft.trim() === ''}
+              >
+                {addingRoot ? 'Adding…' : 'Add root'}
+              </button>
+            </div>
           ) : (
             <button
               type="button"
@@ -508,6 +580,10 @@ export function SettingsPanel({
             </button>
           )}
         </section>
+      )}
+
+      {pane === 'workspace-roots' && (
+        <CloneRepositorySection readiness={readiness} connection={connection} />
       )}
 
       {pane === 'servers' && (

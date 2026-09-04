@@ -130,7 +130,7 @@ describe('the creation sheet across its four steps', () => {
     mock.api.addWorkspaceRoot.mockResolvedValue(
       readySnapshot({
         workspaceRoots: [{ path: '/work/solo', valid: true, cloneEligible: true }],
-        repositories: [{ name: 'solo', path: '/work/solo', valid: true }],
+        repositories: [{ name: 'solo', path: '/work/solo', valid: true, featureReady: true }],
       }),
     );
     const { user } = await renderForm(mock);
@@ -156,13 +156,17 @@ describe('the creation sheet across its four steps', () => {
     mock.api.initRepository.mockResolvedValue(
       readySnapshot({
         workspaceRoots: [{ path: '/work/space/fresh', valid: true, cloneEligible: true }],
-        repositories: [{ name: 'fresh', path: '/work/space/fresh', valid: true }],
+        repositories: [
+          { name: 'fresh', path: '/work/space/fresh', valid: true, featureReady: true },
+        ],
       }),
     );
     mock.api.removeWorkspaceRoot.mockResolvedValue(
       readySnapshot({
         workspaceRoots: [{ path: '/work/space/fresh', valid: true, cloneEligible: true }],
-        repositories: [{ name: 'fresh', path: '/work/space/fresh', valid: true }],
+        repositories: [
+          { name: 'fresh', path: '/work/space/fresh', valid: true, featureReady: true },
+        ],
       }),
     );
     const { user } = await renderForm(mock);
@@ -227,8 +231,8 @@ describe('the creation sheet across its four steps', () => {
     mock.api.addWorkspaceRoot.mockResolvedValue(
       readySnapshot({
         repositories: [
-          { name: 'repo-a', path: '/work/space/repo-a', valid: true },
-          { name: 'repo-new', path: '/work/new-root/repo-new', valid: true },
+          { name: 'repo-a', path: '/work/space/repo-a', valid: true, featureReady: true },
+          { name: 'repo-new', path: '/work/new-root/repo-new', valid: true, featureReady: true },
         ],
       }),
     );
@@ -687,17 +691,17 @@ describe('the creation sheet across its four steps', () => {
 });
 
 describe('the creation sheet on a remote server', () => {
-  it('hides all add-folder controls while keeping existing repositories selectable', async () => {
+  it('replaces the native folder picker with the typed server path entry remotely', async () => {
     const mock = installAgenticoMock({
       connection: READY_REMOTE,
       defaults: creationDefaults(),
     });
     const { user } = await renderForm(mock);
 
-    // No add-folder controls are rendered on a remote server.
+    // No native picker remotely: server-side typed entry replaces it.
     expect(screen.queryByRole('button', { name: 'Browse for folder' })).toBeNull();
-    expect(screen.queryByLabelText('Folder path on the server')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Use this path' })).toBeNull();
+    expect(screen.getByLabelText('Folder path on the server')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Use this path' })).toBeDisabled();
 
     // Existing configured repositories are still selectable.
     const repoCheckbox = screen.getByRole('checkbox', { name: /repo-a/ });

@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/clone"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -64,7 +65,10 @@ type apiHandler struct {
 	// uploads owns the octet-stream upload staging area under the runtime
 	// state dir; nil when the runtime identity has no state dir (tests that
 	// never stage uploads).
-	uploads               *uploadStore
+	uploads *uploadStore
+	// clones owns the repository clone lifecycle; nil when no clone
+	// service is available (tests, or a runtime without a state dir).
+	clones                CloneService
 	persistProviderModels func(llm.LLMProvider, []llm.ModelInfo) error
 	disableHostValidation bool
 	runtimePolicy         string
@@ -135,6 +139,24 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 	if opts.Worktrees != nil {
 		handler.cleanliness = git.NewCleanlinessCache(opts.Worktrees)
 	}
+	if opts.Clones != nil {
+		handler.clones = opts.Clones
+	} else if strings.TrimSpace(opts.Runtime.StateDir) != "" {
+		// The default clone service owns durable records under the state
+		// dir and publishes SSE invalidations through this handler's
+		// broker.
+		svc, err := clone.New(clone.Options{
+			StateDir: opts.Runtime.StateDir,
+			Config:   func() *config.Config { return handler.configOrDefault() },
+			Hooks: clone.Hooks{
+				OperationChanged: handler.publishCloneEvent,
+				WorkspaceChanged: handler.publishCloneWorkspaceEvent,
+			},
+		})
+		if err == nil {
+			handler.clones = svc
+		}
+	}
 	return handler
 }
 
@@ -182,9 +204,10 @@ const entityFeatureSubject = "Feature"
 
 // Resource type discriminators used by SSE refresh routing.
 const (
-	resourceTypeSession      = "session"
-	resourceTypeRuntime      = "runtime"
-	resourceTypeRelationship = "relationship"
+	resourceTypeSession        = "session"
+	resourceTypeRuntime        = "runtime"
+	resourceTypeRelationship   = "relationship"
+	resourceTypeCloneOperation = "clone_operation"
 )
 
 var topLevelServerRoutes = []topLevelRoute{
@@ -197,6 +220,8 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathReadiness, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleReadiness) }},
 	{apiPathReadinessRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleReadinessRefreshRoute }},
 	{apiPathWorkspaceRepositoriesInit, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitRoute }},
+	{apiPathWorkspaceClone, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneRoute }},
+	{apiPathWorkspaceClone + "/", func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneOperationRoutes }},
 	{apiPathPrompts, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},
 	{apiPathPrompts + "/", func(h *apiHandler) http.HandlerFunc { return h.handlePromptMutationRoutes }},
 	{apiPathPermissions, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePermissions) }},

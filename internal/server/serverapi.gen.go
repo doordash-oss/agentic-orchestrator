@@ -86,6 +86,66 @@ func (e AutomaticReviewStateSource) Valid() bool {
 	}
 }
 
+// Defines values for CloneOperationPendingOutcome.
+const (
+	CloneOperationPendingOutcomeCancelled   CloneOperationPendingOutcome = "cancelled"
+	CloneOperationPendingOutcomeFailed      CloneOperationPendingOutcome = "failed"
+	CloneOperationPendingOutcomeInterrupted CloneOperationPendingOutcome = "interrupted"
+)
+
+// Valid indicates whether the value is a known member of the CloneOperationPendingOutcome enum.
+func (e CloneOperationPendingOutcome) Valid() bool {
+	switch e {
+	case CloneOperationPendingOutcomeCancelled:
+		return true
+	case CloneOperationPendingOutcomeFailed:
+		return true
+	case CloneOperationPendingOutcomeInterrupted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CloneOperationState.
+const (
+	CloneOperationStateAccepted       CloneOperationState = "accepted"
+	CloneOperationStateCancelled      CloneOperationState = "cancelled"
+	CloneOperationStateCancelling     CloneOperationState = "cancelling"
+	CloneOperationStateCleanupPending CloneOperationState = "cleanup_pending"
+	CloneOperationStateFailed         CloneOperationState = "failed"
+	CloneOperationStateFinalizing     CloneOperationState = "finalizing"
+	CloneOperationStateInterrupted    CloneOperationState = "interrupted"
+	CloneOperationStateRunning        CloneOperationState = "running"
+	CloneOperationStateSucceeded      CloneOperationState = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the CloneOperationState enum.
+func (e CloneOperationState) Valid() bool {
+	switch e {
+	case CloneOperationStateAccepted:
+		return true
+	case CloneOperationStateCancelled:
+		return true
+	case CloneOperationStateCancelling:
+		return true
+	case CloneOperationStateCleanupPending:
+		return true
+	case CloneOperationStateFailed:
+		return true
+	case CloneOperationStateFinalizing:
+		return true
+	case CloneOperationStateInterrupted:
+		return true
+	case CloneOperationStateRunning:
+		return true
+	case CloneOperationStateSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateFeatureMutationRequestInquireness.
 const (
 	CreateFeatureMutationRequestInquirenessHigh   CreateFeatureMutationRequestInquireness = "high"
@@ -902,6 +962,66 @@ func (e StageUploadParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for StartWorkspaceCloneParamsXAgenticoClient.
+const (
+	StartWorkspaceCloneParamsXAgenticoClientLocal StartWorkspaceCloneParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the StartWorkspaceCloneParamsXAgenticoClient enum.
+func (e StartWorkspaceCloneParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case StartWorkspaceCloneParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CancelWorkspaceCloneParamsXAgenticoClient.
+const (
+	CancelWorkspaceCloneParamsXAgenticoClientLocal CancelWorkspaceCloneParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CancelWorkspaceCloneParamsXAgenticoClient enum.
+func (e CancelWorkspaceCloneParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CancelWorkspaceCloneParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RetryWorkspaceCloneCleanupParamsXAgenticoClient.
+const (
+	RetryWorkspaceCloneCleanupParamsXAgenticoClientLocal RetryWorkspaceCloneCleanupParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the RetryWorkspaceCloneCleanupParamsXAgenticoClient enum.
+func (e RetryWorkspaceCloneCleanupParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case RetryWorkspaceCloneCleanupParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RetryWorkspaceCloneParamsXAgenticoClient.
+const (
+	RetryWorkspaceCloneParamsXAgenticoClientLocal RetryWorkspaceCloneParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the RetryWorkspaceCloneParamsXAgenticoClient enum.
+func (e RetryWorkspaceCloneParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case RetryWorkspaceCloneParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for InitWorkspaceRepositoryParamsXAgenticoClient.
 const (
 	InitWorkspaceRepositoryParamsXAgenticoClientLocal InitWorkspaceRepositoryParamsXAgenticoClient = "local"
@@ -1147,6 +1267,96 @@ type CleanupFeatureResponse struct {
 	Meta       ResponseMeta `json:"meta,omitempty"`
 	Result     string       `json:"result"`
 	Target     string       `json:"target,omitempty"`
+}
+
+// CloneActionResponse defines model for CloneActionResponse.
+type CloneActionResponse struct {
+	APIVersion string         `json:"api_version"`
+	Meta       ResponseMeta   `json:"meta,omitempty"`
+	Operation  CloneOperation `json:"operation"`
+	Result     string         `json:"result"`
+}
+
+// CloneOperation defines model for CloneOperation.
+type CloneOperation struct {
+	CancelRequested   bool       `json:"cancel_requested"`
+	CancelRequestedAt *time.Time `json:"cancel_requested_at,omitempty"`
+
+	// CleanupIssue Canonical reason cleanup could not yet be proved safe.
+	CleanupIssue    string    `json:"cleanup_issue,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	Destination     string    `json:"destination"`
+	DestinationPath string    `json:"destination_path"`
+
+	// Error Canonical catalog-rendered error.
+	Error          *Error `json:"error,omitempty"`
+	ID             string `json:"id"`
+	IdempotencyKey string `json:"idempotency_key"`
+
+	// PendingOutcome For cleanup-pending attempts: the outcome the attempt resolves to once cleanup completes.
+	PendingOutcome CloneOperationPendingOutcome `json:"pending_outcome,omitempty"`
+
+	// Progress Bounded sanitized progress summary, never raw git output.
+	Progress  string            `json:"progress,omitempty"`
+	Published *ClonePublication `json:"published,omitempty"`
+
+	// RemoteURL The validated remote as recorded (secrets rejected before recording).
+	RemoteURL  string              `json:"remote_url"`
+	ResolvedAt *time.Time          `json:"resolved_at,omitempty"`
+	RootPath   string              `json:"root_path"`
+	Stage      string              `json:"stage,omitempty"`
+	State      CloneOperationState `json:"state"`
+	TerminalAt *time.Time          `json:"terminal_at,omitempty"`
+	UpdatedAt  time.Time           `json:"updated_at"`
+}
+
+// CloneOperationPendingOutcome For cleanup-pending attempts: the outcome the attempt resolves to once cleanup completes.
+type CloneOperationPendingOutcome string
+
+// CloneOperationState defines model for CloneOperation.State.
+type CloneOperationState string
+
+// CloneOperationListResponse defines model for CloneOperationListResponse.
+type CloneOperationListResponse struct {
+	APIVersion string       `json:"api_version"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+
+	// NextPageToken Continuation token for the next page. A truncated page is never proof that an operation does not exist.
+	NextPageToken *string          `json:"next_page_token,omitempty"`
+	Operations    []CloneOperation `json:"operations"`
+}
+
+// CloneOperationResponse defines model for CloneOperationResponse.
+type CloneOperationResponse struct {
+	APIVersion string         `json:"api_version"`
+	Meta       ResponseMeta   `json:"meta,omitempty"`
+	Operation  CloneOperation `json:"operation"`
+}
+
+// ClonePublication defines model for ClonePublication.
+type ClonePublication struct {
+	// HasHead Whether the published repository has commits. An empty remote still publishes successfully with has_head false.
+	HasHead     bool      `json:"has_head"`
+	Path        string    `json:"path"`
+	PublishedAt time.Time `json:"published_at"`
+
+	// RepoKey Actual collision-safe catalog key from discovery after publication.
+	RepoKey string `json:"repo_key"`
+}
+
+// CloneStartSchema defines model for CloneStartRequest.
+type CloneStartSchema struct {
+	// Destination Single new folder name inside the root. Separators, traversal, controls, hidden and reserved names are rejected.
+	Destination string `json:"destination"`
+
+	// IdempotencyKey Client-generated key binding this request. Same-key same-input replays return the retained operation; changed-input reuse conflicts.
+	IdempotencyKey string `json:"idempotency_key"`
+
+	// RemoteURL HTTP, HTTPS or SSH remote URL for the clone. Local paths, helper transports, embedded credentials and token-bearing queries or fragments are rejected without echoing secrets.
+	RemoteURL string `json:"remote_url"`
+
+	// RootPath Configured workspace root that will receive the clone.
+	RootPath string `json:"root_path"`
 }
 
 // CompatibilityDeclaration The server's explicit compatibility contract. Clients (such as the desktop app) must attach only when they support the declared (api_version, schema_version) REST contract AND the declared runtime_policy, and when their own client schema version is at least min_client_schema. A shared API major version alone is never sufficient. Contains no secrets.
@@ -2277,6 +2487,9 @@ type RepositoryPathDTO struct {
 
 // RepositoryReadiness defines model for RepositoryReadiness.
 type RepositoryReadiness struct {
+	// FeatureReady Whether the repository can start feature work. A repository without commits (e.g. cloned from an empty remote) is a valid, discoverable git repository but is not feature ready.
+	FeatureReady bool `json:"feature_ready"`
+
 	// Issue Canonical catalog-rendered error.
 	Issue *Error `json:"issue,omitempty"`
 	Name  string `json:"name"`
@@ -2987,6 +3200,15 @@ type WorkspaceRootReadiness struct {
 // ArtifactID defines model for ArtifactID.
 type ArtifactID = string
 
+// CloneListAfter defines model for CloneListAfter.
+type CloneListAfter = string
+
+// CloneListLimit defines model for CloneListLimit.
+type CloneListLimit = int
+
+// CloneOperationID defines model for CloneOperationID.
+type CloneOperationID = string
+
 // FeatureID defines model for FeatureID.
 type FeatureID = string
 
@@ -3368,6 +3590,48 @@ type StageUploadParams struct {
 // StageUploadParamsXAgenticoClient defines parameters for StageUpload.
 type StageUploadParamsXAgenticoClient string
 
+// ListWorkspaceClonesParams defines parameters for ListWorkspaceClones.
+type ListWorkspaceClonesParams struct {
+	Limit CloneListLimit `form:"limit,omitempty" json:"limit,omitempty"`
+	After CloneListAfter `form:"after,omitempty" json:"after,omitempty"`
+}
+
+// StartWorkspaceCloneParams defines parameters for StartWorkspaceClone.
+type StartWorkspaceCloneParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient StartWorkspaceCloneParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// StartWorkspaceCloneParamsXAgenticoClient defines parameters for StartWorkspaceClone.
+type StartWorkspaceCloneParamsXAgenticoClient string
+
+// CancelWorkspaceCloneParams defines parameters for CancelWorkspaceClone.
+type CancelWorkspaceCloneParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CancelWorkspaceCloneParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CancelWorkspaceCloneParamsXAgenticoClient defines parameters for CancelWorkspaceClone.
+type CancelWorkspaceCloneParamsXAgenticoClient string
+
+// RetryWorkspaceCloneCleanupParams defines parameters for RetryWorkspaceCloneCleanup.
+type RetryWorkspaceCloneCleanupParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient RetryWorkspaceCloneCleanupParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// RetryWorkspaceCloneCleanupParamsXAgenticoClient defines parameters for RetryWorkspaceCloneCleanup.
+type RetryWorkspaceCloneCleanupParamsXAgenticoClient string
+
+// RetryWorkspaceCloneParams defines parameters for RetryWorkspaceClone.
+type RetryWorkspaceCloneParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient RetryWorkspaceCloneParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// RetryWorkspaceCloneParamsXAgenticoClient defines parameters for RetryWorkspaceClone.
+type RetryWorkspaceCloneParamsXAgenticoClient string
+
 // InitWorkspaceRepositoryParams defines parameters for InitWorkspaceRepository.
 type InitWorkspaceRepositoryParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -3445,6 +3709,9 @@ type RefreshReadinessJSONRequestBody RefreshReadinessJSONBody
 
 // ExecuteRecoveryActionsJSONRequestBody defines body for ExecuteRecoveryActions for application/json ContentType.
 type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody
+
+// StartWorkspaceCloneJSONRequestBody defines body for StartWorkspaceClone for application/json ContentType.
+type StartWorkspaceCloneJSONRequestBody = CloneStartSchema
 
 // InitWorkspaceRepositoryJSONRequestBody defines body for InitWorkspaceRepository for application/json ContentType.
 type InitWorkspaceRepositoryJSONRequestBody = RepositoryInitSchema

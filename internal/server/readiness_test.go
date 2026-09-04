@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1043,5 +1044,72 @@ func TestWorkspaceRootCloneEligibility(t *testing.T) {
 	entry = rootsByPath[gitRepoRoot]
 	if !entry.Valid || entry.CloneEligible {
 		t.Fatalf("git-repo root should be valid=true clone_eligible=false: %+v", entry)
+	}
+}
+
+// unbornRepoFixture creates two discovered repositories under one root:
+// one with a commit and one freshly initialized without any commit.
+func unbornRepoFixture(t *testing.T) (root, populated, unborn string) {
+	t.Helper()
+	root = t.TempDir()
+	populated = filepath.Join(root, "populated")
+	unborn = filepath.Join(root, "unborn")
+	for _, dir := range []string{populated, unborn} {
+		cmd := exec.Command("git", "init", "--initial-branch=main", dir)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git init %s: %v\n%s", dir, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(populated, "README.md"), []byte("# x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "-C", populated, "add", ".")
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", populated, "commit", "-m", "initial")
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	return root, populated, unborn
+}
+
+func TestReadinessDistinguishesUnbornRepositories(t *testing.T) {
+	t.Parallel()
+	root, _, _ := unbornRepoFixture(t)
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{root}
+	handler := NewHandler(HandlerOptions{
+		Config:                cfg,
+		Registry:              newReadinessRegistry(),
+		DisableHostValidation: true,
+	})
+	snapshot := getReadinessSnapshot(t, handler)
+	byName := map[string]RepositoryReadiness{}
+	for _, repo := range snapshot.Workspace.Repositories {
+		byName[repo.Name] = repo
+	}
+	populatedEntry, ok := byName["populated"]
+	if !ok {
+		t.Fatalf("populated repository missing: %+v", snapshot.Workspace.Repositories)
+	}
+	unbornEntry, ok := byName["unborn"]
+	if !ok {
+		t.Fatalf("unborn repository not visible in readiness: %+v", snapshot.Workspace.Repositories)
+	}
+	if !unbornEntry.Valid {
+		t.Fatalf("unborn repository reported invalid: %+v", unbornEntry)
+	}
+	if unbornEntry.FeatureReady {
+		t.Fatalf("unborn repository reported feature_ready: %+v", unbornEntry)
+	}
+	if !populatedEntry.Valid || !populatedEntry.FeatureReady {
+		t.Fatalf("populated repository not valid+ready: %+v", populatedEntry)
 	}
 }

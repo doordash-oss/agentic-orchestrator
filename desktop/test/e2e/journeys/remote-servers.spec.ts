@@ -645,9 +645,15 @@ test('local↔remote switching: per-server selection and workspace truth restore
     await handle.page
       .getByRole('option', { name: new RegExp(`${localName} at .+ — Available`) })
       .click();
+    // Wait for the switch to COMPLETE: serverName is stamped on the
+    // transitional connecting state too, so the ready status is the
+    // authoritative completion signal.
     await waitFor(
-      async () => (await connectionState(handle!)).serverName === localName,
-      'the switch back to the local server',
+      async () => {
+        const state = await connectionState(handle!);
+        return state.status === 'ready' && state.serverName === localName;
+      },
+      'the switch back to the local server to complete',
       60_000,
     );
     const backOnLocal = await connectionState(handle);

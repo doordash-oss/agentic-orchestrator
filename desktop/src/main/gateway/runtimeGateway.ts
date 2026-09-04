@@ -360,6 +360,24 @@ export class RuntimeGateway {
     return this.state.status === 'ready' ? this.connectedKind : null;
   }
 
+  /**
+   * Identity of the currently connected server (null while not ready).
+   * Main-process services capture it before an async request and compare
+   * it afterwards so a server switch fences stale responses.
+   */
+  get connectedServerKey(): string | null {
+    return this.state.status === 'ready' ? this.serverKey : null;
+  }
+
+  /**
+   * The connection generation counter. Every attach/switch/disconnect
+   * bumps it; services compare a captured generation after async work to
+   * detect that the world changed under them.
+   */
+  get connectionGeneration(): number {
+    return this.generation;
+  }
+
   subscribe(listener: (state: ConnectionState) => void): () => void {
     this.listeners.add(listener);
     return () => {

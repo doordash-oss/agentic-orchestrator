@@ -137,6 +137,12 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     removeWorkspaceRoot: vi.fn(() => Promise.resolve(snapshot())),
     reorderWorkspaceRoots: vi.fn(() => Promise.resolve(snapshot())),
     initRepository: vi.fn(() => Promise.resolve(snapshot())),
+    startClone: vi.fn(() => Promise.reject(new Error('unused'))),
+    getCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    listCloneOperations: vi.fn(() => Promise.reject(new Error('unused'))),
+    cancelCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    retryCloneCleanup: vi.fn(() => Promise.reject(new Error('unused'))),
+    retryCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
     listRepositories: vi.fn(() => Promise.resolve([])),
     listFeatures: vi.fn(() => Promise.resolve({ features: [], warnings: [] })),
     getFeature: vi.fn(() => Promise.reject(new Error('not_found: feature not found'))),
@@ -431,12 +437,10 @@ describe('SetupService locality enforcement on a remote connection', () => {
     return { service, apiRequest, pickDirectory };
   }
 
-  it('addWorkspaceRoot refuses with E_REQUIRES_LOCAL_SERVER and never calls the transport', async () => {
+  it('addWorkspaceRoot works remotely: the path names a server-side location', async () => {
     const { service, apiRequest } = makeRemoteSetupService();
-    await expect(service.addWorkspaceRoot('/work/new')).rejects.toMatchObject({
-      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
-    });
-    expect(apiRequest).not.toHaveBeenCalled();
+    await expect(service.addWorkspaceRoot('/work/new')).resolves.toBeDefined();
+    expect(apiRequest).toHaveBeenCalled();
   });
 
   it('removeWorkspaceRoot refuses with E_REQUIRES_LOCAL_SERVER and never calls the transport', async () => {

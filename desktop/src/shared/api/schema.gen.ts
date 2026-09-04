@@ -824,6 +824,107 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspace/repositories/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List active and recent clone operations.
+         * @description Bounded, deterministically ordered listing of clone operations: unresolved records (active and cleanup-pending) first, then resolved terminal records by resolution time. A continuation token pages through history; a truncated page is never proof that an operation does not exist.
+         */
+        get: operations["listWorkspaceClones"];
+        put?: never;
+        /**
+         * Start a server-owned repository clone into a workspace root.
+         * @description Durably accepts a clone request (idempotency key, input fingerprint, destination reservation and hidden staging) before any git process is spawned, and returns the accepted operation snapshot promptly regardless of transfer duration. Same-key same-input requests return the retained operation; changed-input reuse conflicts. Closing the HTTP request does not own or cancel the worker.
+         */
+        post: operations["startWorkspaceClone"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspace/repositories/clone/{operation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one authoritative clone operation snapshot. */
+        get: operations["getWorkspaceClone"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspace/repositories/clone/{operation_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request explicit cancellation of a clone operation.
+         * @description Authenticated operation-scoped mutation returning the authoritative snapshot with cancellation requested. It never immediately claims cancelled, is idempotent, and never reclassifies a published success.
+         */
+        post: operations["cancelWorkspaceClone"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspace/repositories/clone/{operation_id}/cleanup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry cleanup for a cleanup-pending clone attempt.
+         * @description Re-runs the same reconciliation boundary as startup: process liveness and identity, publication evidence, root identity and staging ownership are rechecked before anything is deleted. Never force-deletes or kills based on a PID alone.
+         */
+        post: operations["retryWorkspaceCloneCleanup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspace/repositories/clone/{operation_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a deliberate fresh retry of a terminal clone attempt.
+         * @description Available only for failed, cancelled or interrupted operations with completed cleanup. Creates a new operation with a new idempotency key, retains the predecessor's history, and revalidates current authorization and destination conditions.
+         */
+        post: operations["retryWorkspaceClone"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recovery": {
         parameters: {
             query?: never;
@@ -1128,6 +1229,8 @@ export interface components {
             path: string;
             valid: boolean;
             issue?: components["schemas"]["Error"];
+            /** @description Whether the repository can start feature work. A repository without commits (e.g. cloned from an empty remote) is a valid, discoverable git repository but is not feature ready. */
+            feature_ready: boolean;
         };
         RepositoryInitRequest: {
             /** @description Absolute directory to initialize, confined to a configured workspace root. May not yet exist; an existing directory must be empty and not already a git repository. */
@@ -1145,6 +1248,71 @@ export interface components {
         RepositoryInitResponse: components["schemas"]["ActionBaseResponse"] & {
             result: string;
             repository: components["schemas"]["WorkspaceRepository"];
+        };
+        CloneStartRequest: {
+            /** @description HTTP, HTTPS or SSH remote URL for the clone. Local paths, helper transports, embedded credentials and token-bearing queries or fragments are rejected without echoing secrets. */
+            remote_url: string;
+            /** @description Configured workspace root that will receive the clone. */
+            root_path: string;
+            /** @description Single new folder name inside the root. Separators, traversal, controls, hidden and reserved names are rejected. */
+            destination: string;
+            /** @description Client-generated key binding this request. Same-key same-input replays return the retained operation; changed-input reuse conflicts. */
+            idempotency_key: string;
+        };
+        CloneOperation: {
+            id: string;
+            /** @enum {string} */
+            state: "accepted" | "running" | "finalizing" | "cancelling" | "succeeded" | "failed" | "cancelled" | "interrupted" | "cleanup_pending";
+            stage?: string;
+            /** @description Bounded sanitized progress summary, never raw git output. */
+            progress?: string;
+            /** @description The validated remote as recorded (secrets rejected before recording). */
+            remote_url: string;
+            root_path: string;
+            destination: string;
+            destination_path: string;
+            idempotency_key: string;
+            /**
+             * @description For cleanup-pending attempts: the outcome the attempt resolves to once cleanup completes.
+             * @enum {string}
+             */
+            pending_outcome?: "failed" | "cancelled" | "interrupted";
+            cancel_requested: boolean;
+            /** Format: date-time */
+            cancel_requested_at?: string;
+            /** @description Canonical reason cleanup could not yet be proved safe. */
+            cleanup_issue?: string;
+            error?: components["schemas"]["Error"];
+            published?: components["schemas"]["ClonePublication"];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            terminal_at?: string;
+            /** Format: date-time */
+            resolved_at?: string;
+        };
+        ClonePublication: {
+            /** @description Actual collision-safe catalog key from discovery after publication. */
+            repo_key: string;
+            path: string;
+            /** @description Whether the published repository has commits. An empty remote still publishes successfully with has_head false. */
+            has_head: boolean;
+            /** Format: date-time */
+            published_at: string;
+        };
+        CloneActionResponse: components["schemas"]["ActionBaseResponse"] & {
+            result: string;
+            operation: components["schemas"]["CloneOperation"];
+        };
+        CloneOperationResponse: components["schemas"]["JSONResponse"] & {
+            operation: components["schemas"]["CloneOperation"];
+        };
+        CloneOperationListResponse: components["schemas"]["JSONResponse"] & {
+            operations: components["schemas"]["CloneOperation"][];
+            /** @description Continuation token for the next page. A truncated page is never proof that an operation does not exist. */
+            next_page_token?: string;
         };
         WorkspaceReadiness: {
             roots: components["schemas"]["WorkspaceRootReadiness"][];
@@ -2606,6 +2774,33 @@ export interface components {
                 "application/json": components["schemas"]["RepositoryInitResponse"];
             };
         };
+        /** @description Authoritative clone operation snapshot after a mutation. */
+        CloneActionResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CloneActionResponse"];
+            };
+        };
+        /** @description Authoritative clone operation snapshot. */
+        CloneOperationResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CloneOperationResponse"];
+            };
+        };
+        /** @description Bounded page of clone operations with continuation. */
+        CloneOperationListResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CloneOperationListResponse"];
+            };
+        };
         /** @description Mutation result. */
         ActionResponse: {
             headers: {
@@ -2661,6 +2856,9 @@ export interface components {
     };
     parameters: {
         FeatureID: string;
+        CloneOperationID: string;
+        CloneListLimit: number;
+        CloneListAfter: string;
         RunNumber: number;
         ArtifactID: string;
         ReviewID: string;
@@ -3643,6 +3841,119 @@ export interface operations {
             201: components["responses"]["RepositoryInitResponse"];
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
+        };
+    };
+    listWorkspaceClones: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["CloneListLimit"];
+                after?: components["parameters"]["CloneListAfter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["CloneOperationListResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    startWorkspaceClone: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloneStartRequest"];
+            };
+        };
+        responses: {
+            202: components["responses"]["CloneActionResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
+        };
+    };
+    getWorkspaceClone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation_id: components["parameters"]["CloneOperationID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["CloneOperationResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+        };
+    };
+    cancelWorkspaceClone: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                operation_id: components["parameters"]["CloneOperationID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["CloneActionResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+        };
+    };
+    retryWorkspaceCloneCleanup: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                operation_id: components["parameters"]["CloneOperationID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["CloneActionResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+        };
+    };
+    retryWorkspaceClone: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                operation_id: components["parameters"]["CloneOperationID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: components["responses"]["CloneActionResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
             409: components["responses"]["ErrorResponse"];
         };
     };

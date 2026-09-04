@@ -37,11 +37,12 @@ function readiness(): ReadinessSnapshot {
     configuration: { valid: true },
     workspaceRoots: [{ path: '/work/space', valid: true, cloneEligible: true }],
     repositories: [
-      { name: 'repo-a', path: '/work/space/repo-a', valid: true },
+      { name: 'repo-a', path: '/work/space/repo-a', valid: true, featureReady: true },
       {
         name: 'repo-b',
         path: '/work/space/repo-b',
         valid: false,
+        featureReady: false,
         issue: {
           code: 'invalid_repository',
           class: 'blocking',

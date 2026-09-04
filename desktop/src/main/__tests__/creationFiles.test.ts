@@ -37,7 +37,9 @@ function makeService(overrides: Partial<CreationFilesServiceDeps> = {}) {
   const deps: CreationFilesServiceDeps = {
     pickFiles: vi.fn(() => Promise.resolve(['/picked/a.png', '/picked/b.png'])),
     readReadiness: () =>
-      Promise.resolve(readiness([{ name: 'repo-a', path: '/repo/a', valid: true }])),
+      Promise.resolve(
+        readiness([{ name: 'repo-a', path: '/repo/a', valid: true, featureReady: true }]),
+      ),
     ...overrides,
   };
   return { deps, service: new CreationFilesService(deps) };
@@ -56,7 +58,9 @@ describe('CreationFilesService remote-connection guards', () => {
 
   it('refuses the repository file search remotely before any walk', async () => {
     const readReadiness = vi.fn(() =>
-      Promise.resolve(readiness([{ name: 'repo-a', path: '/repo/a', valid: true }])),
+      Promise.resolve(
+        readiness([{ name: 'repo-a', path: '/repo/a', valid: true, featureReady: true }]),
+      ),
     );
     const { service } = makeService({ locality: remote, readReadiness });
     await expect(
@@ -67,7 +71,9 @@ describe('CreationFilesService remote-connection guards', () => {
 
   it('refuses repository file resolution remotely before touching the filesystem', async () => {
     const readReadiness = vi.fn(() =>
-      Promise.resolve(readiness([{ name: 'repo-a', path: '/repo/a', valid: true }])),
+      Promise.resolve(
+        readiness([{ name: 'repo-a', path: '/repo/a', valid: true, featureReady: true }]),
+      ),
     );
     const { service } = makeService({ locality: remote, readReadiness });
     await expect(
@@ -99,7 +105,7 @@ describe('CreationFilesService local behavior (unchanged)', () => {
     await mkdir(path.join(root, 'src', 'deps'), { recursive: true });
     await writeFile(path.join(root, 'src', 'deps', 'query.ts'), 'export {};\n');
     await writeFile(path.join(root, 'src', 'other.ts'), 'export {};\n');
-    const snapshot = readiness([{ name: 'repo-a', path: root, valid: true }]);
+    const snapshot = readiness([{ name: 'repo-a', path: root, valid: true, featureReady: true }]);
     const { service } = makeService({
       locality: () => 'local',
       readReadiness: () => Promise.resolve(snapshot),

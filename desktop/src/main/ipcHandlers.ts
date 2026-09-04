@@ -53,6 +53,9 @@ import {
   type FeatureActionRequest,
   type FeatureActionResult,
   type InitRepositoryRequest,
+  type CloneStartRequest,
+  type CloneOperation,
+  type CloneOperationsList,
   type IpcChannel,
   type IpcEnvelope,
   type PickedDirectory,
@@ -174,6 +177,12 @@ export interface IpcServices {
   removeWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
   reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot>;
   initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
+  startClone(request: CloneStartRequest): Promise<CloneOperation>;
+  getCloneOperation(operationId: string): Promise<CloneOperation>;
+  listCloneOperations(): Promise<CloneOperationsList>;
+  cancelCloneOperation(operationId: string): Promise<CloneOperation>;
+  retryCloneCleanup(operationId: string): Promise<CloneOperation>;
+  retryCloneOperation(operationId: string): Promise<CloneOperation>;
   listRepositories(): Promise<RepositoryState[]>;
   listFeatures(): Promise<FeaturesListResult>;
   getFeature(featureId: string): Promise<FeatureSnapshot>;
@@ -345,6 +354,16 @@ export function registerIpcHandlers(
       services.reorderWorkspaceRoots(paths),
     [IPC_CHANNELS.workspaceInitRepository]: (_event, request: InitRepositoryRequest) =>
       services.initRepository(request),
+    [IPC_CHANNELS.cloneStart]: (_event, request: CloneStartRequest) => services.startClone(request),
+    [IPC_CHANNELS.cloneOperationGet]: (_event, operationId: string) =>
+      services.getCloneOperation(operationId),
+    [IPC_CHANNELS.cloneOperationsList]: () => services.listCloneOperations(),
+    [IPC_CHANNELS.cloneOperationCancel]: (_event, operationId: string) =>
+      services.cancelCloneOperation(operationId),
+    [IPC_CHANNELS.cloneOperationCleanup]: (_event, operationId: string) =>
+      services.retryCloneCleanup(operationId),
+    [IPC_CHANNELS.cloneOperationRetry]: (_event, operationId: string) =>
+      services.retryCloneOperation(operationId),
     [IPC_CHANNELS.repositoriesList]: () => services.listRepositories(),
     [IPC_CHANNELS.featuresList]: () => services.listFeatures(),
     [IPC_CHANNELS.featuresGet]: (_event, featureId: string) => services.getFeature(featureId),

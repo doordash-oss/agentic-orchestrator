@@ -188,6 +188,18 @@ export const ERROR_CATALOG = {
     title: 'Disallowed API path',
     summary: () => 'The requested API path is not allowed.',
   }),
+  /**
+   * The connected server changed while a request was in flight. The stale
+   * response was discarded: late replies from a previous server must never
+   * update the current server's view.
+   */
+  E_SERVER_SWITCHED: entry({
+    class: 'blocking',
+    title: 'The connection switched servers',
+    summary: () =>
+      'The app switched servers while the request was running; the result was discarded.',
+    remediationHint: () => 'The current server was not changed. Retry against it if needed.',
+  }),
   E_NOT_CONNECTED: entry({
     class: 'blocking',
     title: 'Not connected',

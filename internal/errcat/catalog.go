@@ -92,9 +92,34 @@ const (
 
 // Clone-eligibility codes for workspace roots.
 const (
-	RootNotWritable    Code = "root_not_writable"
-	RootIsRepository   Code = "root_is_repository"
+	RootNotWritable     Code = "root_not_writable"
+	RootIsRepository    Code = "root_is_repository"
 	NoCloneEligibleRoot Code = "no_clone_eligible_root"
+)
+
+// Clone operation codes cover the Settings clone lifecycle: start
+// validation, execution outcomes, cleanup and retry. Codes that appear on
+// terminal snapshots carry the attempt's authoritative failure.
+const (
+	CloneRemoteInvalid          Code = "clone_remote_invalid"
+	CloneDestinationInvalid     Code = "clone_destination_invalid"
+	CloneDestinationExists      Code = "clone_destination_exists"
+	CloneDestinationReserved    Code = "clone_destination_reserved"
+	CloneDestinationShadowed    Code = "clone_destination_shadowed"
+	CloneRootIneligible         Code = "clone_root_ineligible"
+	CloneIdempotencyConflict    Code = "clone_idempotency_conflict"
+	CloneOperationNotFound      Code = "clone_operation_not_found"
+	CloneHistoryUnavailable     Code = "clone_history_unavailable"
+	CloneNotRetryable           Code = "clone_not_retryable"
+	CloneUnavailable            Code = "clone_unavailable"
+	CloneTimeout                Code = "clone_timeout"
+	CloneAuthenticationFailed   Code = "clone_authentication_failed"
+	CloneTrustFailed            Code = "clone_trust_failed"
+	ClonePromptUnsupported      Code = "clone_prompt_unsupported"
+	ClonePublicationUnsupported Code = "clone_publication_unsupported"
+	CloneDestinationConflict    Code = "clone_destination_conflict"
+	CloneExecutionFailed        Code = "clone_execution_failed"
+	CloneCleanupPending         Code = "clone_cleanup_pending"
 )
 
 // Readiness and provider codes.
@@ -297,6 +322,15 @@ type ProviderIssueParams struct {
 
 func (ProviderIssueParams) params() {}
 
+// CloneDestinationParams names the destination a clone request referred
+// to. It never carries the remote (which may have been rejected for
+// carrying credentials).
+type CloneDestinationParams struct {
+	Destination string
+}
+
+func (CloneDestinationParams) params() {}
+
 func joinQuoted(values []string) string {
 	quoted := make([]string, len(values))
 	for i, value := range values {
@@ -467,6 +501,124 @@ var catalog = map[Code]Entry{
 		Title:       "No clone-eligible root",
 		Summary:     "No configured workspace root is suitable for cloning.",
 		Remediation: "Ask the server administrator to configure a writable, non-repository directory as a workspace root.",
+	},
+
+	// --- Clone operation codes ------------------------------------------------
+	// Start-boundary rejections.
+	CloneRemoteInvalid: {
+		Class:       ClassBlocking,
+		Title:       "Invalid clone remote",
+		Summary:     "The remote was not an accepted HTTP, HTTPS or SSH repository URL.",
+		Remediation: "Use an https://, http://, ssh:// or SCP-style remote without embedded credentials.",
+	},
+	CloneDestinationInvalid: {
+		Class:       ClassBlocking,
+		Title:       "Invalid destination name",
+		Summary:     "The destination must be a single new folder name inside the workspace root.",
+		Remediation: "Choose a plain folder name without separators, dots at the start or end, or reserved words.",
+	},
+	CloneDestinationExists: {
+		Class:       ClassBlocking,
+		Title:       "Destination already exists",
+		Summary:     "Something already exists at the destination path.",
+		Remediation: "Choose a different destination folder name.",
+	},
+	CloneDestinationReserved: {
+		Class:       ClassBlocking,
+		Title:       "Destination reserved",
+		Summary:     "Another clone operation currently holds this destination.",
+		Remediation: "Wait for the listed operation to finish or cancel it from Settings before retrying.",
+	},
+	CloneDestinationShadowed: {
+		Class:       ClassBlocking,
+		Title:       "Destination name already registered",
+		Summary:     "An explicitly registered repository already uses this destination name.",
+		Remediation: "Choose a different destination folder name, or ask the server administrator to review the registration.",
+	},
+	CloneRootIneligible: {
+		Class:       ClassBlocking,
+		Title:       "Root is not clone-eligible",
+		Summary:     "The selected workspace root cannot accept new clones on the connected server.",
+		Remediation: "Choose a writable, non-repository workspace root, or ask the server administrator to configure one.",
+	},
+	CloneIdempotencyConflict: {
+		Class:       ClassBlocking,
+		Title:       "Conflicting retry of the same request",
+		Summary:     "This request key was already used with different input.",
+		Remediation: "Use a new request key for the changed clone request.",
+	},
+	CloneOperationNotFound: {
+		Class:       ClassBlocking,
+		Title:       "Clone operation not found",
+		Summary:     "No clone operation with this ID exists on the connected server.",
+		Remediation: "Reload the operations list in Settings to see current work.",
+	},
+	CloneHistoryUnavailable: {
+		Class:       ClassBlocking,
+		Title:       "Clone history unavailable",
+		Summary:     "The retained history for this clone request is no longer available.",
+		Remediation: "Recent history is kept for seven days; start a new clone with current server validation.",
+	},
+	CloneNotRetryable: {
+		Class:       ClassBlocking,
+		Title:       "Retry unavailable",
+		Summary:     "This operation is not in a state that allows a fresh retry.",
+		Remediation: "Retry is available for failed, cancelled or interrupted clones whose cleanup completed.",
+	},
+	CloneUnavailable: {
+		Class:       ClassBlocking,
+		Title:       "Clone work unavailable",
+		Summary:     "The server is not accepting clone work right now.",
+		Remediation: "Wait for the server to finish shutting down, then reconnect and retry.",
+	},
+	// Terminal failure outcomes carried on authoritative snapshots.
+	CloneTimeout: {
+		Class:       ClassBlocking,
+		Title:       "Clone timed out",
+		Summary:     "The clone exceeded its bounded execution time.",
+		Remediation: "Retry the clone; large repositories may need a faster network or mirror.",
+	},
+	CloneAuthenticationFailed: {
+		Class:       ClassNeedsAction,
+		Title:       "Clone authentication failed",
+		Summary:     "The remote rejected the server's credentials.",
+		Remediation: "Set up access for the server (credential helper, SSH agent or deploy key) on the owning server, then retry.",
+	},
+	CloneTrustFailed: {
+		Class:       ClassNeedsAction,
+		Title:       "Clone trust check failed",
+		Summary:     "The server could not establish trust with the remote host.",
+		Remediation: "Add the host to the server's known_hosts configuration, then retry.",
+	},
+	ClonePromptUnsupported: {
+		Class:       ClassNeedsAction,
+		Title:       "Clone needs unsupported interaction",
+		Summary:     "The remote required an interactive prompt the server cannot answer.",
+		Remediation: "Configure non-interactive credentials on the server, then retry.",
+	},
+	ClonePublicationUnsupported: {
+		Class:       ClassNeedsAction,
+		Title:       "Publication unsupported",
+		Summary:     "The destination filesystem cannot atomically publish without replacement.",
+		Remediation: "Ask the server administrator to use a filesystem that supports atomic no-replace rename, then retry.",
+	},
+	CloneDestinationConflict: {
+		Class:       ClassBlocking,
+		Title:       "Destination was taken during the clone",
+		Summary:     "Another actor created the destination while the clone was running.",
+		Remediation: "The other data was preserved; choose a different destination and retry.",
+	},
+	CloneExecutionFailed: {
+		Class:       ClassBlocking,
+		Title:       "Clone failed",
+		Summary:     "The clone command failed on the server.",
+		Remediation: "Review the diagnostics on the owning server, then retry.",
+	},
+	CloneCleanupPending: {
+		Class:       ClassNeedsAction,
+		Title:       "Cleanup pending",
+		Summary:     "The attempt's incomplete data could not yet be proved safe to remove.",
+		Remediation: "Use Retry cleanup in Settings, or ask the server administrator to remove the staged data after confirming it is unused.",
 	},
 
 	// --- Publish failure codes -------------------------------------------------

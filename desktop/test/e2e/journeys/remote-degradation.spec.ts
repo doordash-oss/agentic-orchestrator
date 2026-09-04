@@ -430,7 +430,11 @@ test('remote degradation: gated affordances, copy-path completion, server-valida
     await evidenceShot(handle, 'remote-degradation-root-rejected', settings);
     await rootField.fill(extraRoot);
     await settings.getByRole('button', { name: 'Add root' }).click();
-    await expect(settings.getByText(extraRoot)).toBeVisible({ timeout: 30_000 });
+    // Scoped to the workspace-roots list: the clone form's root selector
+    // legitimately lists the same path.
+    await expect(
+      settings.locator('section[aria-label="Workspace roots"]').getByText(extraRoot),
+    ).toBeVisible({ timeout: 30_000 });
     transcript.step('server 4xx named the bad path inline; the valid path saved');
 
     transcript.section('Seed completion on the remote server while it is stopped, then restart');

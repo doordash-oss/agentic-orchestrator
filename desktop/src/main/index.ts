@@ -57,6 +57,7 @@ import {
 import { EventStreamSupervisor } from './gateway/events';
 import type { RuntimeGateway } from './gateway/runtimeGateway';
 import { FeatureService } from './features';
+import { CloneService } from './cloneService';
 import { CompletionService } from './completion';
 import { RecoveryService } from './recovery';
 import { BulkService } from './bulk';
@@ -566,6 +567,16 @@ if (!hasSingleInstanceLock) {
       readReadiness: () => setup.getReadiness(),
       resolveRepositoryFiles: (refs) => creationFiles.resolve(refs),
       locality: () => gateway.connectedLocality,
+    });
+    // Clone lifecycle: every call is fenced by the connected server's
+    // identity and connection generation so a server switch discards stale
+    // responses instead of applying them to the new server.
+    const clones = new CloneService({
+      transport: gateway,
+      identity: () => ({
+        serverKey: gateway.connectedServerKey,
+        generation: gateway.connectionGeneration,
+      }),
     });
     const completion = new CompletionService({
       transport: gateway,
@@ -1318,6 +1329,12 @@ if (!hasSingleInstanceLock) {
       removeWorkspaceRoot: (rootPath) => setup.removeWorkspaceRoot(rootPath),
       reorderWorkspaceRoots: (paths) => setup.reorderWorkspaceRoots(paths),
       initRepository: (request) => setup.initRepository(request),
+      startClone: (request) => clones.startClone(request),
+      getCloneOperation: (operationId) => clones.getCloneOperation(operationId),
+      listCloneOperations: () => clones.listCloneOperations(),
+      cancelCloneOperation: (operationId) => clones.cancelCloneOperation(operationId),
+      retryCloneCleanup: (operationId) => clones.retryCloneCleanup(operationId),
+      retryCloneOperation: (operationId) => clones.retryCloneOperation(operationId),
       listRepositories: () => setup.listRepositories(),
       listFeatures: () => features.listFeatures(),
       getFeature: (featureId) => features.getFeature(featureId),

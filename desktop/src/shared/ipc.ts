@@ -51,6 +51,12 @@ export const IPC_CHANNELS = {
   workspaceRemoveRoot: 'agentico:workspace:remove-root',
   workspaceReorderRoots: 'agentico:workspace:reorder-roots',
   workspaceInitRepository: 'agentico:workspace:init-repository',
+  cloneStart: 'agentico:clone:start',
+  cloneOperationGet: 'agentico:clone:operation-get',
+  cloneOperationsList: 'agentico:clone:operations-list',
+  cloneOperationCancel: 'agentico:clone:operation-cancel',
+  cloneOperationCleanup: 'agentico:clone:operation-cleanup',
+  cloneOperationRetry: 'agentico:clone:operation-retry',
   repositoriesList: 'agentico:repositories:list',
   featuresList: 'agentico:features:list',
   featuresGet: 'agentico:features:get',
@@ -662,6 +668,8 @@ export const RepositoryStateSchema = z.strictObject({
   path: z.string(),
   valid: z.boolean(),
   issue: ReadinessIssueSchema.optional(),
+  /** Whether the repository can start feature work (has commits). */
+  featureReady: z.boolean(),
 });
 
 export type RepositoryState = z.output<typeof RepositoryStateSchema>;
@@ -1067,8 +1075,69 @@ export const InitRepositoryRequestSchema = z.strictObject({
   path: AbsolutePathSchema,
   consent: z.literal(true),
 });
-
 export type InitRepositoryRequest = z.output<typeof InitRepositoryRequestSchema>;
+
+// --- Clone operations --------------------------------------------------------
+// Authoritative snapshots of server-owned clone work. Only the server's
+// durable record decides state; the renderer never infers outcomes.
+
+export const CloneOperationStateSchema = z.enum([
+  'accepted',
+  'running',
+  'finalizing',
+  'cancelling',
+  'succeeded',
+  'failed',
+  'cancelled',
+  'interrupted',
+  'cleanup_pending',
+]);
+export type CloneOperationState = z.output<typeof CloneOperationStateSchema>;
+
+export const ClonePublicationSchema = z.strictObject({
+  repoKey: z.string(),
+  path: z.string(),
+  hasHead: z.boolean(),
+  publishedAt: z.string(),
+});
+export type ClonePublication = z.output<typeof ClonePublicationSchema>;
+
+export const CloneOperationSchema = z.strictObject({
+  id: z.string(),
+  state: CloneOperationStateSchema,
+  stage: z.string().optional(),
+  progress: z.string().optional(),
+  remoteUrl: z.string(),
+  rootPath: z.string(),
+  destination: z.string(),
+  destinationPath: z.string(),
+  idempotencyKey: z.string(),
+  pendingOutcome: z.enum(['failed', 'cancelled', 'interrupted']).optional(),
+  cancelRequested: z.boolean(),
+  cancelRequestedAt: z.string().optional(),
+  cleanupIssue: z.string().optional(),
+  error: ReadinessIssueSchema.optional(),
+  published: ClonePublicationSchema.optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  terminalAt: z.string().optional(),
+  resolvedAt: z.string().optional(),
+});
+export type CloneOperation = z.output<typeof CloneOperationSchema>;
+
+export const CloneStartRequestSchema = z.strictObject({
+  remoteUrl: z.string().min(1).max(2048),
+  rootPath: z.string().min(1).max(1024),
+  destination: z.string().min(1).max(128),
+  idempotencyKey: z.string().min(8).max(128),
+});
+export type CloneStartRequest = z.output<typeof CloneStartRequestSchema>;
+
+export const CloneOperationsListSchema = z.strictObject({
+  operations: z.array(CloneOperationSchema),
+  nextPageToken: z.string().optional(),
+});
+export type CloneOperationsList = z.output<typeof CloneOperationsListSchema>;
 
 // --- Features (renderer-facing views of authoritative server snapshots) -----
 // The renderer never receives raw server payloads; the main process maps
@@ -3557,6 +3626,30 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([InitRepositoryRequestSchema]),
     response: ReadinessSnapshotSchema,
   },
+  [IPC_CHANNELS.cloneStart]: {
+    request: z.tuple([CloneStartRequestSchema]),
+    response: CloneOperationSchema,
+  },
+  [IPC_CHANNELS.cloneOperationGet]: {
+    request: z.tuple([z.string().min(1).max(64)]),
+    response: CloneOperationSchema,
+  },
+  [IPC_CHANNELS.cloneOperationsList]: {
+    request: z.tuple([]),
+    response: CloneOperationsListSchema,
+  },
+  [IPC_CHANNELS.cloneOperationCancel]: {
+    request: z.tuple([z.string().min(1).max(64)]),
+    response: CloneOperationSchema,
+  },
+  [IPC_CHANNELS.cloneOperationCleanup]: {
+    request: z.tuple([z.string().min(1).max(64)]),
+    response: CloneOperationSchema,
+  },
+  [IPC_CHANNELS.cloneOperationRetry]: {
+    request: z.tuple([z.string().min(1).max(64)]),
+    response: CloneOperationSchema,
+  },
   [IPC_CHANNELS.repositoriesList]: {
     request: z.tuple([]),
     response: z.array(RepositoryStateSchema),
@@ -3925,6 +4018,21 @@ export interface AgenticoApi {
   removeWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
   reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot>;
   initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
+  /**
+   * Starts a server-owned clone. The returned snapshot is the durable
+   * accepted (or retained) operation, independent of transfer duration.
+   */
+  startClone(request: CloneStartRequest): Promise<CloneOperation>;
+  /** Reads one authoritative clone operation snapshot. */
+  getCloneOperation(operationId: string): Promise<CloneOperation>;
+  /** Lists active and recent clone operations on the connected server. */
+  listCloneOperations(): Promise<CloneOperationsList>;
+  /** Requests explicit cancellation; returns the cancelling snapshot. */
+  cancelCloneOperation(operationId: string): Promise<CloneOperation>;
+  /** Retries cleanup for a cleanup-pending attempt. */
+  retryCloneCleanup(operationId: string): Promise<CloneOperation>;
+  /** Starts a deliberate fresh retry of a terminal attempt. */
+  retryCloneOperation(operationId: string): Promise<CloneOperation>;
   listRepositories(): Promise<RepositoryState[]>;
   listFeatures(): Promise<FeaturesListResult>;
   getFeature(featureId: string): Promise<FeatureSnapshot>;

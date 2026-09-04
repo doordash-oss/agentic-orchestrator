@@ -99,7 +99,7 @@ var ErrLegacySchemaVersion = errors.New("legacy feature schema version")
 
 func isLegacyProviderBookkeepingDir(name string) bool {
 	switch name {
-	case "opencode", "codex-home", "chat", "uploads":
+	case "opencode", "codex-home", "chat", "uploads", "clone-operations":
 		return true
 	default:
 		return false

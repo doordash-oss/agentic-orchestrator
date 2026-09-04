@@ -399,6 +399,7 @@ export const ReadinessResponseSchema = z.object({
         path: z.string(),
         valid: z.boolean(),
         issue: CanonicalErrorSchema.optional(),
+        feature_ready: z.boolean(),
       }),
     ),
   }),
@@ -406,6 +407,75 @@ export const ReadinessResponseSchema = z.object({
 });
 
 export type ReadinessResponse = z.output<typeof ReadinessResponseSchema>;
+
+// --- Clone operations (POST/GET /api/v1/workspace/repositories/clone) ------
+// Authoritative snapshots from the server-owned clone lifecycle. State,
+// pending outcome and progress come from the durable record, never from
+// git text or transport completion.
+
+export const CloneOperationDTOSchema = z.object({
+  id: z.string(),
+  state: z.enum([
+    'accepted',
+    'running',
+    'finalizing',
+    'cancelling',
+    'succeeded',
+    'failed',
+    'cancelled',
+    'interrupted',
+    'cleanup_pending',
+  ]),
+  stage: z.string().optional(),
+  progress: z.string().optional(),
+  remote_url: z.string(),
+  root_path: z.string(),
+  destination: z.string(),
+  destination_path: z.string(),
+  idempotency_key: z.string(),
+  pending_outcome: z.enum(['failed', 'cancelled', 'interrupted']).optional(),
+  cancel_requested: z.boolean(),
+  cancel_requested_at: z.string().optional(),
+  cleanup_issue: z.string().optional(),
+  error: CanonicalErrorSchema.optional(),
+  published: z
+    .object({
+      repo_key: z.string(),
+      path: z.string(),
+      has_head: z.boolean(),
+      published_at: z.string(),
+    })
+    .optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  terminal_at: z.string().optional(),
+  resolved_at: z.string().optional(),
+});
+
+export type CloneOperationDTO = z.output<typeof CloneOperationDTOSchema>;
+
+export const CloneActionResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.string(),
+  operation: CloneOperationDTOSchema,
+});
+
+export type CloneActionResponse = z.output<typeof CloneActionResponseSchema>;
+
+export const CloneOperationResponseSchema = z.object({
+  api_version: z.string(),
+  operation: CloneOperationDTOSchema,
+});
+
+export type CloneOperationResponse = z.output<typeof CloneOperationResponseSchema>;
+
+export const CloneOperationListResponseSchema = z.object({
+  api_version: z.string(),
+  operations: z.array(CloneOperationDTOSchema),
+  next_page_token: z.string().optional(),
+});
+
+export type CloneOperationListResponse = z.output<typeof CloneOperationListResponseSchema>;
 
 // --- Features (GET/POST /api/v1/features, GET /api/v1/features/{id}) --------
 // Lenient subsets: z.object tolerates and strips fields this view does not
@@ -1469,3 +1539,18 @@ void _completionPreflightSubset;
 type RepositoryDiffDTO = components['schemas']['RepositoryDiffResponse'];
 const _repositoryDiffSubset = (value: RepositoryDiffDTO): RepositoryDiffResponse => value;
 void _repositoryDiffSubset;
+type CloneOperationWireDTO = components['schemas']['CloneOperation'];
+const _cloneOperationSubset = (value: CloneOperationWireDTO): CloneOperationDTO => value;
+void _cloneOperationSubset;
+type CloneActionWireDTO = components['schemas']['CloneActionResponse'];
+const _cloneActionSubset = (value: CloneActionWireDTO): CloneActionResponse => value;
+void _cloneActionSubset;
+type CloneOperationResponseWireDTO = components['schemas']['CloneOperationResponse'];
+const _cloneOperationResponseSubset = (
+  value: CloneOperationResponseWireDTO,
+): CloneOperationResponse => value;
+void _cloneOperationResponseSubset;
+type CloneOperationListWireDTO = components['schemas']['CloneOperationListResponse'];
+const _cloneOperationListSubset = (value: CloneOperationListWireDTO): CloneOperationListResponse =>
+  value;
+void _cloneOperationListSubset;

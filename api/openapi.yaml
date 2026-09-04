@@ -1005,6 +1005,131 @@ paths:
         "409":
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/v1/workspace/repositories/clone:
+    post:
+      operationId: startWorkspaceClone
+      summary: Start a server-owned repository clone into a workspace root.
+      description: >-
+        Durably accepts a clone request (idempotency key, input
+        fingerprint, destination reservation and hidden staging) before any
+        git process is spawned, and returns the accepted operation snapshot
+        promptly regardless of transfer duration. Same-key same-input
+        requests return the retained operation; changed-input reuse
+        conflicts. Closing the HTTP request does not own or cancel the
+        worker.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloneStartRequest"
+      responses:
+        "202":
+          $ref: "#/components/responses/CloneActionResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+    get:
+      operationId: listWorkspaceClones
+      summary: List active and recent clone operations.
+      description: >-
+        Bounded, deterministically ordered listing of clone operations:
+        unresolved records (active and cleanup-pending) first, then
+        resolved terminal records by resolution time. A continuation token
+        pages through history; a truncated page is never proof that an
+        operation does not exist.
+      parameters:
+        - $ref: "#/components/parameters/CloneListLimit"
+        - $ref: "#/components/parameters/CloneListAfter"
+      responses:
+        "200":
+          $ref: "#/components/responses/CloneOperationListResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/workspace/repositories/clone/{operation_id}:
+    get:
+      operationId: getWorkspaceClone
+      summary: Read one authoritative clone operation snapshot.
+      parameters:
+        - $ref: "#/components/parameters/CloneOperationID"
+      responses:
+        "200":
+          $ref: "#/components/responses/CloneOperationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/workspace/repositories/clone/{operation_id}/cancel:
+    post:
+      operationId: cancelWorkspaceClone
+      summary: Request explicit cancellation of a clone operation.
+      description: >-
+        Authenticated operation-scoped mutation returning the
+        authoritative snapshot with cancellation requested. It never
+        immediately claims cancelled, is idempotent, and never reclassifies
+        a published success.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+        - $ref: "#/components/parameters/CloneOperationID"
+      responses:
+        "200":
+          $ref: "#/components/responses/CloneActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/workspace/repositories/clone/{operation_id}/cleanup:
+    post:
+      operationId: retryWorkspaceCloneCleanup
+      summary: Retry cleanup for a cleanup-pending clone attempt.
+      description: >-
+        Re-runs the same reconciliation boundary as startup: process
+        liveness and identity, publication evidence, root identity and
+        staging ownership are rechecked before anything is deleted. Never
+        force-deletes or kills based on a PID alone.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+        - $ref: "#/components/parameters/CloneOperationID"
+      responses:
+        "200":
+          $ref: "#/components/responses/CloneActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/workspace/repositories/clone/{operation_id}/retry:
+    post:
+      operationId: retryWorkspaceClone
+      summary: Start a deliberate fresh retry of a terminal clone attempt.
+      description: >-
+        Available only for failed, cancelled or interrupted operations with
+        completed cleanup. Creates a new operation with a new idempotency
+        key, retains the predecessor's history, and revalidates current
+        authorization and destination conditions.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+        - $ref: "#/components/parameters/CloneOperationID"
+      responses:
+        "202":
+          $ref: "#/components/responses/CloneActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/recovery:
     get:
       operationId: getRecoverySnapshot
@@ -1154,6 +1279,29 @@ components:
       required: true
       schema:
         type: string
+    CloneOperationID:
+      name: operation_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-z0-9-]{1,64}$"
+    CloneListLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    CloneListAfter:
+      name: after
+      in: query
+      required: false
+      schema:
+        type: string
+        maxLength: 256
     RunNumber:
       name: run_number
       in: path
@@ -1492,6 +1640,24 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RepositoryInitResponse"
+    CloneActionResponse:
+      description: Authoritative clone operation snapshot after a mutation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CloneActionResponse"
+    CloneOperationResponse:
+      description: Authoritative clone operation snapshot.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CloneOperationResponse"
+    CloneOperationListResponse:
+      description: Bounded page of clone operations with continuation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CloneOperationListResponse"
     ActionResponse:
       description: Mutation result.
       content:
@@ -1985,7 +2151,7 @@ components:
             the root cannot be used as a clone destination.
     RepositoryReadiness:
       type: object
-      required: [name, path, valid]
+      required: [name, path, valid, feature_ready]
       properties:
         name:
           type: string
@@ -1996,6 +2162,12 @@ components:
         issue:
           $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
+        feature_ready:
+          type: boolean
+          description: >-
+            Whether the repository can start feature work. A repository
+            without commits (e.g. cloned from an empty remote) is a valid,
+            discoverable git repository but is not feature ready.
     RepositoryInitRequest:
       x-go-name: RepositoryInitSchema
       type: object
@@ -2034,6 +2206,169 @@ components:
               type: string
             repository:
               $ref: "#/components/schemas/WorkspaceRepository"
+    CloneStartRequest:
+      x-go-name: CloneStartSchema
+      type: object
+      required: [remote_url, root_path, destination, idempotency_key]
+      properties:
+        remote_url:
+          type: string
+          maxLength: 2048
+          description: >-
+            HTTP, HTTPS or SSH remote URL for the clone. Local paths,
+            helper transports, embedded credentials and token-bearing
+            queries or fragments are rejected without echoing secrets.
+        root_path:
+          type: string
+          maxLength: 1024
+          description: Configured workspace root that will receive the clone.
+        destination:
+          type: string
+          maxLength: 128
+          description: >-
+            Single new folder name inside the root. Separators,
+            traversal, controls, hidden and reserved names are rejected.
+        idempotency_key:
+          type: string
+          maxLength: 128
+          description: >-
+            Client-generated key binding this request. Same-key
+            same-input replays return the retained operation; changed-input
+            reuse conflicts.
+    CloneOperation:
+      type: object
+      required:
+        [
+          id,
+          state,
+          remote_url,
+          root_path,
+          destination,
+          destination_path,
+          idempotency_key,
+          created_at,
+          updated_at,
+          cancel_requested,
+        ]
+      properties:
+        id:
+          type: string
+        state:
+          type: string
+          enum:
+            [
+              accepted,
+              running,
+              finalizing,
+              cancelling,
+              succeeded,
+              failed,
+              cancelled,
+              interrupted,
+              cleanup_pending,
+            ]
+        stage:
+          type: string
+        progress:
+          type: string
+          description: Bounded sanitized progress summary, never raw git output.
+        remote_url:
+          type: string
+          description: The validated remote as recorded (secrets rejected before recording).
+        root_path:
+          type: string
+        destination:
+          type: string
+        destination_path:
+          type: string
+        idempotency_key:
+          type: string
+        pending_outcome:
+          type: string
+          enum: [failed, cancelled, interrupted]
+          description: >-
+            For cleanup-pending attempts: the outcome the attempt resolves
+            to once cleanup completes.
+        cancel_requested:
+          type: boolean
+        cancel_requested_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+        cleanup_issue:
+          type: string
+          description: Canonical reason cleanup could not yet be proved safe.
+        error:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+        published:
+          $ref: "#/components/schemas/ClonePublication"
+          x-go-type-skip-optional-pointer: false
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        terminal_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+        resolved_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+    ClonePublication:
+      type: object
+      required: [repo_key, path, has_head, published_at]
+      properties:
+        repo_key:
+          type: string
+          description: Actual collision-safe catalog key from discovery after publication.
+        path:
+          type: string
+        has_head:
+          type: boolean
+          description: >-
+            Whether the published repository has commits. An empty remote
+            still publishes successfully with has_head false.
+        published_at:
+          type: string
+          format: date-time
+    CloneActionResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [result, operation]
+          properties:
+            result:
+              type: string
+            operation:
+              $ref: "#/components/schemas/CloneOperation"
+    CloneOperationResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [operation]
+          properties:
+            operation:
+              $ref: "#/components/schemas/CloneOperation"
+    CloneOperationListResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [operations]
+          properties:
+            operations:
+              type: array
+              items:
+                $ref: "#/components/schemas/CloneOperation"
+            next_page_token:
+              type: string
+              x-go-type-skip-optional-pointer: false
+              description: >-
+                Continuation token for the next page. A truncated page is
+                never proof that an operation does not exist.
     WorkspaceReadiness:
       type: object
       required: [roots, repositories]

@@ -49,6 +49,7 @@ import {
   type CreationFileSearchRequest,
   type FeatureActionRequest,
   type InitRepositoryRequest,
+  type CloneStartRequest,
   type SettingsOpenRequest,
   type SettingsPatch,
   type ThemePreference,
@@ -202,6 +203,13 @@ const api: AgenticoApi = {
   reorderWorkspaceRoots: (paths: string[]) => call(IPC_CHANNELS.workspaceReorderRoots, paths),
   initRepository: (request: InitRepositoryRequest) =>
     call(IPC_CHANNELS.workspaceInitRepository, request),
+  startClone: (request: CloneStartRequest) => call(IPC_CHANNELS.cloneStart, request),
+  getCloneOperation: (operationId: string) => call(IPC_CHANNELS.cloneOperationGet, operationId),
+  listCloneOperations: () => call(IPC_CHANNELS.cloneOperationsList),
+  cancelCloneOperation: (operationId: string) =>
+    call(IPC_CHANNELS.cloneOperationCancel, operationId),
+  retryCloneCleanup: (operationId: string) => call(IPC_CHANNELS.cloneOperationCleanup, operationId),
+  retryCloneOperation: (operationId: string) => call(IPC_CHANNELS.cloneOperationRetry, operationId),
   listRepositories: () => call(IPC_CHANNELS.repositoriesList),
   listFeatures: () => call(IPC_CHANNELS.featuresList),
   getFeature: (featureId: string) => call(IPC_CHANNELS.featuresGet, featureId),

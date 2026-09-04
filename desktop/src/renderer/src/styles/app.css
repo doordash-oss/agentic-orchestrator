@@ -13625,3 +13625,129 @@ body {
   color: var(--bad);
   font-size: 12px;
 }
+
+/* --- Clone repository section (Settings workspace-roots pane) ------------- */
+.settings-panel__section-subtitle {
+  margin: var(--space-5) 0 var(--space-1);
+  font-size: var(--font-size-md);
+}
+
+.settings-panel__clone-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 32rem;
+}
+
+.settings-panel__clone-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.settings-panel__clone-field label {
+  font-weight: var(--font-weight-medium);
+}
+
+.settings-panel__clone-field input,
+.settings-panel__clone-field select {
+  width: 100%;
+}
+
+.settings-panel__clone-no-roots {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.settings-panel__clone-preview {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.settings-panel__clone-empty {
+  margin: var(--space-2) 0;
+  color: var(--text-secondary);
+}
+
+.settings-panel__clone-operations {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-panel__clone-operation {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-panel__clone-operation-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.settings-panel__clone-operation-path code {
+  color: var(--text-secondary);
+}
+
+.settings-panel__clone-operation-state {
+  margin-left: auto;
+  font-weight: var(--font-weight-medium);
+}
+
+.settings-panel__clone-operation-state.is-succeeded {
+  color: var(--status-ready, var(--text-primary));
+}
+
+.settings-panel__clone-operation-state.is-failed,
+.settings-panel__clone-operation-state.is-interrupted,
+.settings-panel__clone-operation-state.is-cleanup_pending {
+  color: var(--status-degraded, var(--text-primary));
+}
+
+.settings-panel__clone-operation-progress,
+.settings-panel__clone-operation-issue {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.settings-panel__clone-operation-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.settings-panel__clone-action {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-3);
+  background: var(--surface-raised);
+}
+
+.settings-panel__clone-help {
+  margin-top: var(--space-4);
+  color: var(--text-secondary);
+}
+
+.settings-panel__clone-help ul {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+}
+
+.settings-panel__clone-announcement {
+  margin-top: var(--space-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-panel__clone-operation,
+  .settings-panel__clone-action {
+    transition: none;
+  }
+}

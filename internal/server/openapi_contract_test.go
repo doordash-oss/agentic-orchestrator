@@ -536,6 +536,10 @@ func topLevelPatternForPath(path string) string {
 		return apiPathReadinessRefresh
 	case path == apiPathWorkspaceRepositoriesInit:
 		return apiPathWorkspaceRepositoriesInit
+	case path == apiPathWorkspaceClone:
+		return apiPathWorkspaceClone
+	case strings.HasPrefix(path, apiPathWorkspaceClone+"/"):
+		return apiPathWorkspaceClone + "/"
 	case path == apiPathPrompts:
 		return apiPathPrompts
 	case strings.HasPrefix(path, "/api/v1/prompts/"):
@@ -621,6 +625,12 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: apiPathReadiness},
 		{method: httpMethodPost, path: apiPathReadinessRefresh, mutation: true},
 		{method: httpMethodPost, path: apiPathWorkspaceRepositoriesInit, mutation: true},
+		{method: httpMethodPost, path: apiPathWorkspaceClone, mutation: true},
+		{method: httpMethodGet, path: apiPathWorkspaceClone},
+		{method: httpMethodGet, path: apiPathWorkspaceClone + "/{operation_id}"},
+		{method: httpMethodPost, path: apiPathWorkspaceClone + "/{operation_id}/cancel", mutation: true},
+		{method: httpMethodPost, path: apiPathWorkspaceClone + "/{operation_id}/cleanup", mutation: true},
+		{method: httpMethodPost, path: apiPathWorkspaceClone + "/{operation_id}/retry", mutation: true},
 		{method: httpMethodGet, path: apiPathPrompts},
 		{method: httpMethodPost, path: "/api/v1/prompts/ask-user/answer", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/prompts/help/send", mutation: true},

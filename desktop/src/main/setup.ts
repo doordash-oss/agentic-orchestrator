@@ -84,10 +84,11 @@ export class SetupService {
   /**
    * Adds a workspace root through the server's runtime-config mutation
    * (which persists it and rediscovers repositories server-side), then
-   * returns the fresh authoritative readiness snapshot.
+   * returns the fresh authoritative readiness snapshot. No locality guard:
+   * the path names a location on the SERVER host and the mutation itself
+   * is server-side validation — remotely this is the typed-path entry.
    */
   async addWorkspaceRoot(path: string): Promise<ReadinessSnapshot> {
-    assertLocalConnection(this.locality);
     const validated = validateWithSchema(path, AbsolutePathSchema);
     const configBody = await this.api('/api/v1/config/runtime');
     const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
@@ -208,6 +209,7 @@ export function toReadinessSnapshot(server: ReadinessResponse): ReadinessSnapsho
       name: repository.name,
       path: repository.path,
       valid: repository.valid,
+      featureReady: repository.feature_ready,
       ...(repository.issue === undefined ? {} : { issue: repository.issue }),
     })),
     issues: server.issues ?? [],

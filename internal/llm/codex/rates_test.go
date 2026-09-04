@@ -32,12 +32,14 @@ func TestLookupRate(t *testing.T) {
 		wantLongWrite  float64
 		wantLongOut    float64
 	}{
+		{"gpt-6-astra", true, 10, 1, 12.5, 50, 20, 2, 25, 75},
+		{"GPT-6-ASTRA[872K]", true, 10, 1, 12.5, 50, 20, 2, 25, 75},
 		// GPT-5.6 family, including the generic alias.
-		{"gpt-5.6", true, 5.00, 0.50, 6.25, 30.00, 10.00, 1.00, 12.50, 45.00},
-		{"gpt-5.6[1M]", true, 5.00, 0.50, 6.25, 30.00, 10.00, 1.00, 12.50, 45.00},
-		{"gpt-5.6-sol", true, 5.00, 0.50, 6.25, 30.00, 10.00, 1.00, 12.50, 45.00},
-		{"gpt-5.6-terra", true, 2.50, 0.25, 3.125, 15.00, 5.00, 0.50, 6.25, 22.50},
-		{"gpt-5.6-luna", true, 1.00, 0.10, 1.25, 6.00, 2.00, 0.20, 2.50, 9.00},
+		{"gpt-5.6", true, 4.00, 0.40, 5.00, 20.00, 8.00, 0.80, 10.00, 30.00},
+		{"gpt-5.6[1M]", true, 4.00, 0.40, 5.00, 20.00, 8.00, 0.80, 10.00, 30.00},
+		{"gpt-5.6-sol", true, 4.00, 0.40, 5.00, 20.00, 8.00, 0.80, 10.00, 30.00},
+		{"gpt-5.6-terra", true, 2.00, 0.20, 2.50, 12.00, 4.00, 0.40, 5.00, 18.00},
+		{"gpt-5.6-luna", true, 0.20, 0.02, 0.25, 1.20, 0.40, 0.04, 0.50, 1.80},
 
 		// Direct matches
 		{"gpt-5.5", true, 5.00, 0.50, 0, 30.00, 10.00, 1.00, 0, 45.00},
@@ -51,11 +53,11 @@ func TestLookupRate(t *testing.T) {
 		// Empty model uses the default model rate.
 		{"", true, 2.50, 0.25, 0, 15.00, 5.00, 0.50, 0, 22.50},
 
-		// Unknown gpt-* variants fall back to default
-		{"gpt-future-model", true, 2.50, 0.25, 0, 15.00, 5.00, 0.50, 0, 22.50},
+		// Unknown models must not inherit an unrelated model's price.
+		{"gpt-future-model", false, 0, 0, 0, 0, 0, 0, 0, 0},
 
 		// Case insensitive
-		{"GPT-5.6-LUNA", true, 1.00, 0.10, 1.25, 6.00, 2.00, 0.20, 2.50, 9.00},
+		{"GPT-5.6-LUNA", true, 0.20, 0.02, 0.25, 1.20, 0.40, 0.04, 0.50, 1.80},
 		// Non-matching models
 		{"codex", false, 0, 0, 0, 0, 0, 0, 0, 0},
 		{"opus", false, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -135,8 +137,8 @@ func TestComputeCost(t *testing.T) {
 
 	// Cache reads and writes replace full-price input tokens.
 	costCacheWrite := computeCost("gpt-5.6-luna", 200_000, 50_000, 50_000, 10_000)
-	if math.Abs(costCacheWrite-0.2275) > 0.001 {
-		t.Errorf("computeCost(gpt-5.6-luna, cache write) = %f, want 0.2275", costCacheWrite)
+	if math.Abs(costCacheWrite-0.0455) > 0.001 {
+		t.Errorf("computeCost(gpt-5.6-luna, cache write) = %f, want 0.0455", costCacheWrite)
 	}
 	// Models without separate cache-write pricing keep those tokens at the
 	// ordinary input rate instead of treating them as free.
@@ -148,12 +150,12 @@ func TestComputeCost(t *testing.T) {
 	// The threshold itself remains short-context pricing; only larger requests
 	// use the 2x input and 1.5x output rates.
 	costAtThreshold := computeCost("gpt-5.6-luna", 272_000, 0, 0, 1_000)
-	if math.Abs(costAtThreshold-0.278) > 0.001 {
-		t.Errorf("computeCost(gpt-5.6-luna, threshold) = %f, want 0.278", costAtThreshold)
+	if math.Abs(costAtThreshold-0.0556) > 0.001 {
+		t.Errorf("computeCost(gpt-5.6-luna, threshold) = %f, want 0.0556", costAtThreshold)
 	}
 	costAboveThreshold := computeCost("gpt-5.6-luna", 273_000, 0, 0, 1_000)
-	if math.Abs(costAboveThreshold-0.555) > 0.001 {
-		t.Errorf("computeCost(gpt-5.6-luna, long context) = %f, want 0.555", costAboveThreshold)
+	if math.Abs(costAboveThreshold-0.111) > 0.001 {
+		t.Errorf("computeCost(gpt-5.6-luna, long context) = %f, want 0.111", costAboveThreshold)
 	}
 }
 
@@ -171,5 +173,24 @@ func TestProviderComputeCost(t *testing.T) {
 	expected := 0.75 + 4.50
 	if math.Abs(costMini-expected) > 0.001 {
 		t.Errorf("Provider.ComputeCost(gpt-5.4-mini, 1M, 1M) = %f, want %f", costMini, expected)
+	}
+}
+
+func TestAstraCostBoundaryAndServiceTiers(t *testing.T) {
+	for _, tc := range []struct {
+		tier  string
+		input int
+		want  float64
+	}{
+		{"default", 272_000, 2.77},
+		{"default", 273_000, 5.535},
+		{"fast", 273_000, 11.07},
+		{"priority", 273_000, 11.07},
+		{"flex", 273_000, 2.7675},
+	} {
+		got := computeCostForServiceTier("gpt-6-astra[872K]", tc.tier, tc.input, 0, 0, 1_000, tc.input)
+		if math.Abs(got-tc.want) > 0.00000001 {
+			t.Errorf("%s/%d = %v, want %v", tc.tier, tc.input, got, tc.want)
+		}
 	}
 }

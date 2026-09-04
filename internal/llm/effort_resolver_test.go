@@ -96,7 +96,7 @@ func TestEffortDrifted(t *testing.T) {
 	if llm.EffortDrifted(llm.EffortHigh, nil) {
 		t.Error("high with nil caps should not be drifted (model lacks effort control, not drift)")
 	}
-	if llm.EffortDrifted(llm.EffortLevel("ultra"), caps) {
+	if llm.EffortDrifted(llm.EffortLevel("invalid"), caps) {
 		t.Error("invalid effort should not be drifted (it's malformed, not drift)")
 	}
 }

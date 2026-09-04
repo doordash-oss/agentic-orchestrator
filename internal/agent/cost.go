@@ -56,8 +56,17 @@ func ExtractSessionCost(sess ports.SessionView) SessionCost {
 		Usage: sess.AccumulatedUsage(),
 	}
 	sc.TotalCostUSD = sc.Usage.CostUSD
-	if sess.Cost() != nil {
-		sc.TotalCostUSD = sess.Cost().TotalCostUSD
+	if result := sess.Cost(); result != nil && sc.Usage.CostSource == "" {
+		sc.TotalCostUSD = result.TotalCostUSD
+	}
+	if provider, ok := sess.(llm.SessionUsageReconciler); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), additionalSessionCostTimeout)
+		usage := provider.ReconciledUsage(ctx)
+		cancel()
+		if usage != nil {
+			sc.Usage = *usage
+			sc.TotalCostUSD = usage.CostUSD
+		}
 	}
 	if provider, ok := sess.(additionalSessionCostProvider); ok {
 		ctx, cancel := context.WithTimeout(context.Background(), additionalSessionCostTimeout)
@@ -87,6 +96,8 @@ func applySessionCostAdjustment(cost *SessionCost, adjustment llm.SessionCostAdj
 func toSessionUsage(cost SessionCost) observe.SessionUsage {
 	return observe.SessionUsage{
 		TotalCostUSD:             cost.TotalCostUSD,
+		CostSource:               cost.Usage.CostSource,
+		CostCreditsMicros:        cost.Usage.CostCreditsMicros,
 		InputTokens:              cost.Usage.InputTokens,
 		OutputTokens:             cost.Usage.OutputTokens,
 		CacheReadInputTokens:     cost.Usage.CacheReadInputTokens,
@@ -116,7 +127,7 @@ func firstSessionCostMetadata(metadata []SessionCostMetadata) SessionCostMetadat
 }
 
 func accumulateSessionCost(store ports.FeatureStore, featureID, fallbackKey string, cost SessionCost, preferActiveKey bool, metadata SessionCostMetadata) error {
-	if store == nil || strings.TrimSpace(featureID) == "" || cost.TotalCostUSD <= 0 {
+	if store == nil || strings.TrimSpace(featureID) == "" || (cost.TotalCostUSD <= 0 && cost.Usage.CostCreditsMicros == nil) {
 		return nil
 	}
 	return store.Modify(featureID, func(f *feature.Feature) error {
@@ -131,11 +142,13 @@ func accumulateSessionCost(store ports.FeatureStore, featureID, fallbackKey stri
 			return nil
 		}
 		f.RecordSessionCost(feature.SessionCostRecord{
-			SessionID:     metadata.SessionID,
-			PhaseKey:      costKey,
-			ObserverPhase: metadata.ObserverPhase,
-			RepoName:      metadata.RepoName,
-			CostUSD:       cost.TotalCostUSD,
+			SessionID:         metadata.SessionID,
+			PhaseKey:          costKey,
+			ObserverPhase:     metadata.ObserverPhase,
+			RepoName:          metadata.RepoName,
+			CostUSD:           cost.TotalCostUSD,
+			CostSource:        cost.Usage.CostSource,
+			CostCreditsMicros: cost.Usage.CostCreditsMicros,
 		})
 		return nil
 	})

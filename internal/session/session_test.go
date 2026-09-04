@@ -3397,3 +3397,28 @@ func TestCostAndResultSeq_AreRaceFree(t *testing.T) {
 		t.Fatalf("ResultSeq() = %d, want %d", got, results)
 	}
 }
+
+func TestLateCostReconciliationPreservesTerminalOutcome(t *testing.T) {
+	t.Parallel()
+	credits := int64(123)
+	terminal := &llm.ResultMessage{Type: "result", Subtype: "success", Result: "finished", TotalCostUSD: 2}
+	s := NewSession("late-billing", "feat-1", feature.PhaseImplement)
+	s.providerName = "codex"
+	runMockSession(t, s, []llm.SDKMessage{
+		{Type: "result", Result: terminal},
+		{Type: "usage_update", UsageUpdate: &llm.Usage{InputTokens: 100, CacheCreationInputTokens: 25, CostUSD: 0, CostSource: "provider_estimate", CostCreditsMicros: &credits}},
+	}, nil)
+	if s.ResultSeq() != 1 {
+		t.Fatalf("billing advanced result sequence: %d", s.ResultSeq())
+	}
+	if got := s.Cost(); got != terminal || got.TotalCostUSD != 2 || got.Result != "finished" || got.Subtype != "success" {
+		t.Fatalf("reconciled terminal: %+v", got)
+	}
+	if terminal.TotalCostUSD != 2 {
+		t.Fatal("mutated an already-published result")
+	}
+	usage := s.AccumulatedUsage()
+	if usage.CostUSD != 0 || usage.CacheCreationInputTokens != 25 || usage.CostCreditsMicros == nil || *usage.CostCreditsMicros != 123 {
+		t.Fatalf("lost usage: %+v", usage)
+	}
+}

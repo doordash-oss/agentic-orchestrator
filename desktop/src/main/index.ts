@@ -47,6 +47,7 @@ import {
   initialExternalRoute,
   routeFromArgv,
   routeFromUrl,
+  type AddServerLinkOutcome,
   type ExternalRoute,
 } from './externalRoutes';
 import { AccentController, type AccentColorSource } from './accent';
@@ -94,6 +95,7 @@ import {
   WINDOW_PURPOSE_ARGUMENT_PREFIX,
   type AppEvent,
   type AppRouteEvent,
+  type ConnectionState,
   type FeatureSnapshot,
   type FeaturesListResult,
   type RemoteServerAddRequest,
@@ -599,23 +601,40 @@ if (!hasSingleInstanceLock) {
     // selection (last-used → registry → discovery → spawn the bundled
     // server). A connection-string deep link that launched the app replaces
     // that step: the linked server is added and attached directly and no
-    // local child is spawned, so the app runs against the remote alone. Only
-    // an unusable link falls back to the standard startup, so the user is
-    // never left without a server.
+    // local child is spawned, so the app runs against the remote alone. If
+    // the link cannot be used, startup fails visibly with the pipeline's
+    // error — the bundled runtime is never substituted for the server the
+    // user asked for — and Retry re-attempts the same link.
     let coldStartConnectionString: string | null = null;
+    const connectAtColdStart = async (link: string): Promise<ConnectionState> => {
+      const outcome = await connectFromLink(link);
+      if (outcome.added) {
+        coldStartConnectionString = null;
+        return gateway.getState();
+      }
+      return gateway.failStartup(
+        {
+          ...outcome.error,
+          remediation: {
+            hint:
+              'Agentico was launched from a server link, so its bundled runtime was not started. ' +
+              'Make the linked server reachable and retry, or quit and launch Agentico normally.',
+          },
+        },
+        'The server this launch was linked to could not be added.',
+      );
+    };
     const startConnection = (): void => {
-      const link = coldStartConnectionString;
-      coldStartConnectionString = null;
-      if (link === null) {
+      if (coldStartConnectionString === null) {
         void gateway.start();
         return;
       }
-      void connectFromLink(link).then((added) => {
-        if (!added) {
-          void gateway.start();
-        }
-      });
+      void connectAtColdStart(coldStartConnectionString);
     };
+    const retryConnection = (): Promise<ConnectionState> =>
+      coldStartConnectionString === null
+        ? gateway.retry()
+        : connectAtColdStart(coldStartConnectionString);
 
     /**
      * The registry is the only thing that creates a window: every entry path
@@ -929,7 +948,7 @@ if (!hasSingleInstanceLock) {
     // argv with no route at all) shows the main window as before. A
     // connection-string link carries the server's bearer token: it is consumed
     // here by the add pipeline and never logged or forwarded as a route event.
-    const connectFromLink = (connectionString: string): Promise<boolean> =>
+    const connectFromLink = (connectionString: string): Promise<AddServerLinkOutcome> =>
       addServerFromLink(connectionString, {
         addServer: performRemoteServerAdd,
         switchServer: (request) => gateway.switchServer(request),
@@ -1303,7 +1322,7 @@ if (!hasSingleInstanceLock) {
 
     const services: IpcServices = {
       getConnectionStatus: () => gateway.getState(),
-      retryConnection: () => gateway.retry(),
+      retryConnection,
       restartConnection: () => gateway.restart(),
       chooseConnectionServer: (request) => gateway.chooseServer(request),
       switchConnectionServer: (request) => gateway.switchServer(request),

@@ -25,7 +25,7 @@ limitations under the License.
  * serialized into diagnostics, or forwarded to a renderer; only the
  * `app-route` variant's event may leave the main process as an IPC event.
  */
-import { toCanonicalError } from '../shared/errors';
+import { toCanonicalError, type CanonicalError } from '../shared/errors';
 import {
   type AppRouteEvent,
   type RemoteServerAddRequest,
@@ -136,14 +136,17 @@ export interface AddServerLinkDeps {
  * with the add form focused, the error carried by a native notification
  * (canonical summaries never echo the link or its token).
  *
- * Resolves `true` once the server is known (added or already present) and
- * the switch has been attempted, `false` when the add pipeline rejected the
- * link — a cold start uses that to fall back to the standard startup.
+ * Resolves `added: true` once the server is known (added or already present)
+ * and the switch has been attempted; `added: false` carries the canonical
+ * error when the add pipeline rejected the link, so a cold start can fail
+ * visibly with the real reason.
  */
+export type AddServerLinkOutcome = { added: true } | { added: false; error: CanonicalError };
+
 export async function addServerFromLink(
   connectionString: string,
   deps: AddServerLinkDeps,
-): Promise<boolean> {
+): Promise<AddServerLinkOutcome> {
   let result: RemoteServerAddResult;
   try {
     result = await deps.addServer({ connectionString });
@@ -152,7 +155,7 @@ export async function addServerFromLink(
     deps.log(`add-server link failed: ${safe.code}`);
     deps.notify(`${safe.title}. ${safe.summary}`);
     deps.route({ target: 'settings', settingsSection: 'servers', settingsFocus: 'add-server' });
-    return false;
+    return { added: false, error: safe };
   }
   try {
     await deps.switchServer({ serverKey: result.serverKey });
@@ -166,5 +169,5 @@ export async function addServerFromLink(
     );
   }
   deps.route({ target: 'settings', settingsSection: 'servers' });
-  return true;
+  return { added: true };
 }

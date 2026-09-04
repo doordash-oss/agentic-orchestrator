@@ -164,24 +164,30 @@ function makeDeps(overrides: Partial<AddServerLinkDeps> = {}): {
 }
 
 describe('addServerFromLink', () => {
-  it('resolves true once the server is known, so a cold start keeps the remote', async () => {
+  it('reports added once the server is known, so a cold start keeps the remote', async () => {
     const { deps } = makeDeps();
-    await expect(addServerFromLink(CONNECTION_STRING, deps)).resolves.toBe(true);
+    await expect(addServerFromLink(CONNECTION_STRING, deps)).resolves.toEqual({ added: true });
     const duplicate = makeDeps({
       addServer: vi.fn(async (): Promise<RemoteServerAddResult> => {
         return { status: 'duplicate-local', serverKey: SERVER_KEY };
       }),
     });
-    await expect(addServerFromLink(CONNECTION_STRING, duplicate.deps)).resolves.toBe(true);
+    await expect(addServerFromLink(CONNECTION_STRING, duplicate.deps)).resolves.toEqual({
+      added: true,
+    });
   });
 
-  it('resolves false when the add pipeline rejects the link, so a cold start falls back', async () => {
+  it('reports the canonical error when the add pipeline rejects the link, so a cold start fails visibly', async () => {
+    const error = buildCanonicalError('E_REMOTE_UNREACHABLE');
     const { deps, switched } = makeDeps({
       addServer: vi.fn(async (): Promise<RemoteServerAddResult> => {
-        throw new CanonicalErrorException(buildCanonicalError('E_REMOTE_UNREACHABLE'));
+        throw new CanonicalErrorException(error);
       }),
     });
-    await expect(addServerFromLink(CONNECTION_STRING, deps)).resolves.toBe(false);
+    await expect(addServerFromLink(CONNECTION_STRING, deps)).resolves.toEqual({
+      added: false,
+      error,
+    });
     expect(switched).toEqual([]);
   });
 

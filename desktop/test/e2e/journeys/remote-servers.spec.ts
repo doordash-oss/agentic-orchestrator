@@ -777,3 +777,69 @@ test('remote cold start: a connection-string deep link attaches without spawning
     destroyWorld(world);
   }
 });
+
+// --- (f) cold start: the link is unusable → visible failure, nothing spawned ---
+
+test('remote cold start: an unusable link fails startup visibly instead of spawning the local child', async ({}, testInfo) => {
+  const transcript = new Transcript(
+    'remote-servers-cold-start-unusable',
+    'Cold-start deep link to an unreachable server (packaged)',
+  );
+  const world = createWorld('remote-servers-cold-start-unusable', {
+    auth: AUTH,
+    presetWorkspaceRoot: true,
+  });
+  let handle: AppHandle | null = null;
+  try {
+    transcript.section('Reserve a loopback port nobody listens on');
+    const port = await freeLoopbackPort();
+    const link = `agentico://not-a-real-token@127.0.0.1:${String(port)}?name=ghost`;
+    transcript.step(`link targets 127.0.0.1:${String(port)} with no server behind it`);
+
+    transcript.section('Launch the app from that link');
+    handle = await launchApp(world, testInfo, {
+      traceName: 'remote-servers-cold-start-unusable-launch',
+      args: [link],
+    });
+    const shell = handle.page.getByLabel('Agentico connection');
+    await expect(shell).toBeVisible();
+    await expect(handle.page.locator('.shell-card__status-label[data-status="error"]')).toBeVisible(
+      { timeout: 60_000 },
+    );
+    await expect(shell).toContainText('E_REMOTE_UNREACHABLE');
+    await expect(shell).toContainText('The server this launch was linked to could not be added.');
+    await expect(shell).toContainText('launched from a server link');
+    const buttons = await shell.getByRole('button').allTextContents();
+    expect(buttons.filter((label) => label !== 'Explain in chat')).toEqual(['Retry']);
+    await evidenceShot(handle, 'remote-servers-cold-start-unusable');
+    transcript.step('startup failed on the connection surface with the pipeline error and Retry');
+
+    transcript.section('The bundled runtime was never substituted for the linked server');
+    const state = await connectionState(handle);
+    expect(state.status).toBe('error');
+    expect(state.ownership).toBe('none');
+    expect(readAppRegistry(world)).toEqual([]);
+    expect(JSON.stringify(state)).not.toContain('not-a-real-token');
+    const prefs = await handle.page.evaluate(() => window.agentico.getSettings());
+    expect(prefs.servers.known.filter((entry) => entry.kind === 'remote')).toEqual([]);
+    transcript.step('no app-owned server, nothing persisted');
+
+    transcript.section('Retry re-attempts the link, not the standard startup');
+    await shell.getByRole('button', { name: 'Retry' }).click();
+    await expect(handle.page.locator('.shell-card__status-label[data-status="error"]')).toBeVisible(
+      { timeout: 60_000 },
+    );
+    await expect(shell).toContainText('E_REMOTE_UNREACHABLE');
+    expect(readAppRegistry(world)).toEqual([]);
+    transcript.step('still failed, still nothing spawned');
+
+    persistAppLogs(handle, 'remote-servers-cold-start-unusable-app');
+    transcript.write(testInfo);
+  } finally {
+    if (handle !== null) {
+      await closeApp(handle).catch(() => {});
+    }
+    assertNoLeakedProcesses(world);
+    destroyWorld(world);
+  }
+});

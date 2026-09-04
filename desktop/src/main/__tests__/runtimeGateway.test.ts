@@ -25,6 +25,7 @@ import {
   type KnownServer,
   type ServersPrefs,
 } from '../../shared/ipc';
+import { buildCanonicalError } from '../../shared/errors';
 import type { RegistryScan } from '../gateway/registry';
 import { DEFAULT_STOP_TIMEOUT_MS, type ChildExit } from '../gateway/serverProcess';
 import {
@@ -308,6 +309,40 @@ function expectNoTokenLeak(env: Env): void {
   expect(JSON.stringify(env.logs)).not.toContain(EXTERNAL_TOKEN);
   expect(JSON.stringify(env.logs)).not.toContain(LAUNCH_TOKEN);
 }
+
+describe('RuntimeGateway failStartup', () => {
+  it('parks in the visible error state without spawning or scanning', () => {
+    const env = makeEnv({});
+    const error = buildCanonicalError('E_REMOTE_UNREACHABLE', {
+      remediationHint: 'Make the linked server reachable and retry.',
+    });
+
+    const state = env.gateway.failStartup(error, 'The linked server could not be added.');
+
+    expect(state.status).toBe('error');
+    expect(state.stage).toBe('connect');
+    expect(state.ownership).toBe('none');
+    expect(state.detail).toBe('The linked server could not be added.');
+    expect(requireError(state)).toEqual(error);
+    expect(env.spawnCalls).toHaveLength(0);
+    expect(env.logs).toContain(`startup failed: ${error.code}: ${error.summary}`);
+  });
+
+  it('leaves a healthy connection untouched', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    const before = env.gateway.getState();
+    expect(before.status).toBe('ready');
+
+    const after = env.gateway.failStartup(
+      buildCanonicalError('E_REMOTE_UNREACHABLE'),
+      'ignored while ready',
+    );
+
+    expect(after).toBe(before);
+    expect(env.gateway.getState().status).toBe('ready');
+  });
+});
 
 describe('RuntimeGateway attach', () => {
   it('attaches to a healthy, explicitly compatible external server without spawning', async () => {

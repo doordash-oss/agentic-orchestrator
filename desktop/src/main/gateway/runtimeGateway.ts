@@ -484,6 +484,29 @@ export class RuntimeGateway {
     return true;
   }
 
+  /**
+   * Parks the gateway in the visible error state without entering the
+   * standard selection. Used when a connection-string deep link launched the
+   * app and the linked server could not be added: the user asked for that
+   * server specifically, so spawning the bundled runtime instead would be a
+   * silent substitution. The caller wires Retry to re-attempt the link. A
+   * connection that is already healthy or mid-cycle is left alone.
+   */
+  failStartup(error: CanonicalError, detail: string): ConnectionState {
+    if (this.shuttingDown || this.busy || this.state.status === 'ready') {
+      return this.state;
+    }
+    this.deps.log(`startup failed: ${error.code}: ${error.summary}`);
+    this.setState({
+      status: 'error',
+      stage: 'connect',
+      detail,
+      ownership: 'none',
+      error,
+    });
+    return this.state;
+  }
+
   /** Manual retry from any terminal state; a healthy connection is untouched. */
   async retry(): Promise<ConnectionState> {
     if (this.state.status === 'crashed' && !this.supervision.isRecoveryPending) {

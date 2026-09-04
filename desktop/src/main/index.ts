@@ -38,14 +38,17 @@ import {
   type Event as ElectronEvent,
   type MessageBoxReturnValue,
 } from 'electron';
+import { registryEntryKey } from './gateway/registry';
 import { createRuntimeGateway, fetchJson, MAX_PROBE_RESPONSE_BYTES } from './gateway/wiring';
 import { ServerListService } from './gateway/serverListService';
 import { addRemoteServer } from './gateway/addRemoteServer';
 import { removeKnownServer, serverTokenStatus } from './gateway/removeServer';
 import {
   addServerFromLink,
+  initialExternalRoute,
   routeFromArgv,
   routeFromUrl,
+  type AddServerLinkOutcome,
   type ExternalRoute,
 } from './externalRoutes';
 import { AccentController, type AccentColorSource } from './accent';
@@ -55,7 +58,6 @@ import {
   resolveTestUserDataDir,
 } from './testHooks';
 import { EventStreamSupervisor } from './gateway/events';
-import type { RuntimeGateway } from './gateway/runtimeGateway';
 import { FeatureService } from './features';
 import { CompletionService } from './completion';
 import { RecoveryService } from './recovery';
@@ -94,6 +96,7 @@ import {
   WINDOW_PURPOSE_ARGUMENT_PREFIX,
   type AppEvent,
   type AppRouteEvent,
+  type ConnectionState,
   type FeatureSnapshot,
   type FeaturesListResult,
   type RemoteServerAddRequest,
@@ -215,7 +218,24 @@ const trusted: TrustedSender = {
   allowedOrigins: appOrigins,
 };
 
-app.setAsDefaultProtocolClient('agentico');
+// Only a real install may own the `agentico:` scheme. Hermetic E2E launches
+// and dev shells would otherwise register their throwaway bundle with the OS
+// and could later receive a user's connection-string link.
+if (app.isPackaged && testUserData === null) {
+  app.setAsDefaultProtocolClient('agentico');
+}
+
+// macOS hands a protocol click that launches the app to `open-url` before
+// `ready`, and Electron does not replay it for listeners added later. Buffer
+// the raw URLs here; the ready handler drains them once the gateway exists.
+// A connection-string link is a bearer token: this array is the only place
+// it rests, and it is never logged.
+const bufferedOpenUrls: string[] = [];
+const bufferOpenUrl = (event: ElectronEvent, url: string): void => {
+  event.preventDefault();
+  bufferedOpenUrls.push(url);
+};
+app.on('open-url', bufferOpenUrl);
 
 // Must be registered before app readiness. The private standard/secure origin
 // lets Chromium resolve relative renderer assets without file:// privileges.
@@ -286,7 +306,7 @@ function loadRenderer(window: BrowserWindow): void {
 
 function createMainWindow(
   settings: SettingsStore,
-  gateway: RuntimeGateway,
+  startConnection: () => void,
   onClose: (event: ElectronEvent, window: BrowserWindow) => void,
   getCurrentAccent: () => string | null,
 ): BrowserWindow {
@@ -332,7 +352,7 @@ function createMainWindow(
         { mode: 0o600 },
       );
     }
-    void gateway.start();
+    startConnection();
   });
 
   window.on('close', (event) => {
@@ -583,6 +603,55 @@ if (!hasSingleInstanceLock) {
     let mainWindowAttentionFocusOverride: boolean | undefined;
     let stopStreams = (): void => {};
 
+    // The main window's ready-to-show normally enters the gateway's standard
+    // selection (last-used → registry → discovery → spawn the bundled
+    // server). A connection-string deep link that launched the app replaces
+    // that step: the linked server is added and attached directly and no
+    // local child is spawned, so the app runs against the remote alone. If
+    // the link cannot be used, startup fails visibly with the pipeline's
+    // error — the bundled runtime is never substituted for the server the
+    // user asked for — and Retry re-attempts the same link.
+    let coldStartConnectionString: string | null = null;
+    const connectAtColdStart = async (link: string): Promise<ConnectionState> => {
+      const outcome = await connectFromLink(link);
+      if (outcome.added) {
+        coldStartConnectionString = null;
+        return gateway.getState();
+      }
+      return gateway.failStartup(
+        {
+          ...outcome.error,
+          remediation: {
+            hint:
+              'Agentico was launched from a server link, so its bundled runtime was not started. ' +
+              'Make the linked server reachable and retry, or quit and launch Agentico normally.',
+          },
+        },
+        'The server this launch was linked to could not be added.',
+      );
+    };
+    const startConnection = (): void => {
+      if (coldStartConnectionString === null) {
+        void gateway.start();
+        return;
+      }
+      void connectAtColdStart(coldStartConnectionString);
+    };
+    const retryConnection = (): Promise<ConnectionState> =>
+      coldStartConnectionString === null
+        ? gateway.retry()
+        : connectAtColdStart(coldStartConnectionString);
+    // The explicit escape hatch from a remote connection or a failed link
+    // launch back to the bundled runtime. Reaching the local runtime abandons
+    // the pending link: later retries run the standard cycle, not the link.
+    const startLocalRuntime = async (): Promise<ConnectionState> => {
+      const state = await gateway.startLocal();
+      if (state.status === 'ready') {
+        coldStartConnectionString = null;
+      }
+      return state;
+    };
+
     /**
      * The registry is the only thing that creates a window: every entry path
      * (⌘,, the menu, the tray, a deep link, a second instance, a renderer
@@ -595,7 +664,9 @@ if (!hasSingleInstanceLock) {
           const created =
             purpose === 'settings'
               ? createSettingsWindow(settings, () => accent.getCurrent())
-              : createMainWindow(settings, gateway, handleWindowClose, () => accent.getCurrent());
+              : createMainWindow(settings, startConnection, handleWindowClose, () =>
+                  accent.getCurrent(),
+                );
           // Eviction is registered at creation so it is impossible to open a
           // window that outlives its own trust-set membership.
           created.on('closed', () => windows.evict(created));
@@ -628,6 +699,13 @@ if (!hasSingleInstanceLock) {
       scanRegistry,
       knownServers: () => settings.get().servers,
       currentServerKey: () => gateway.getState().serverKey ?? null,
+      bundledRuntime: () => {
+        const selected = gateway.getBundledRuntime();
+        return {
+          serverKey: registryEntryKey(selected.runtimeDir),
+          runtimeDir: selected.runtimeDir,
+        };
+      },
       fetchJson: (url, options) =>
         fetchJson(url, { ...options, maxResponseBytes: MAX_PROBE_RESPONSE_BYTES }),
       // Locked name rule after successful liveness probes: the service only
@@ -864,6 +942,10 @@ if (!hasSingleInstanceLock) {
       quit: () => {
         void quitCoordinator.requestQuitDecision();
       },
+      startLocalRuntime: () => {
+        showMainWindow();
+        void startLocalRuntime();
+      },
     });
     nativeCommands.install();
     publishNativeCommandTestState(nativeCommands);
@@ -893,25 +975,28 @@ if (!hasSingleInstanceLock) {
     // argv with no route at all) shows the main window as before. A
     // connection-string link carries the server's bearer token: it is consumed
     // here by the add pipeline and never logged or forwarded as a route event.
+    const connectFromLink = (connectionString: string): Promise<AddServerLinkOutcome> =>
+      addServerFromLink(connectionString, {
+        addServer: performRemoteServerAdd,
+        switchServer: (request) => gateway.switchServer(request),
+        route,
+        notify: (body) => {
+          if (electronNotificationSink.isSupported()) {
+            electronNotificationSink
+              .create({ title: 'Agentico', body: redactText(body).slice(0, 180) })
+              .show();
+          }
+        },
+        log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
+      });
+
     const dispatchExternalRoute = (requestedRoute: ExternalRoute | null): void => {
       if (requestedRoute === null) {
         showMainWindow();
         return;
       }
       if (requestedRoute.kind === 'add-server') {
-        void addServerFromLink(requestedRoute.connectionString, {
-          addServer: performRemoteServerAdd,
-          switchServer: (request) => gateway.switchServer(request),
-          route,
-          notify: (body) => {
-            if (electronNotificationSink.isSupported()) {
-              electronNotificationSink
-                .create({ title: 'Agentico', body: redactText(body).slice(0, 180) })
-                .show();
-            }
-          },
-          log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
-        });
+        void connectFromLink(requestedRoute.connectionString);
         return;
       }
       route(requestedRoute.event);
@@ -921,6 +1006,9 @@ if (!hasSingleInstanceLock) {
       dispatchExternalRoute(routeFromArgv(argv));
     });
 
+    // From here on links are dispatched live; the pre-ready buffer is drained
+    // once below, at cold start.
+    app.removeListener('open-url', bufferOpenUrl);
     app.on('open-url', (event, url) => {
       event.preventDefault();
       dispatchExternalRoute(routeFromUrl(url));
@@ -1261,10 +1349,11 @@ if (!hasSingleInstanceLock) {
 
     const services: IpcServices = {
       getConnectionStatus: () => gateway.getState(),
-      retryConnection: () => gateway.retry(),
+      retryConnection,
       restartConnection: () => gateway.restart(),
       chooseConnectionServer: (request) => gateway.chooseServer(request),
       switchConnectionServer: (request) => gateway.switchServer(request),
+      startLocalRuntime,
       listServers: () => serverList.list(),
       probeServers: (request) => serverList.setOpen(request.open),
       addRemoteServer: performRemoteServerAdd,
@@ -1442,9 +1531,15 @@ if (!hasSingleInstanceLock) {
     };
     registerIpcHandlers(ipcMain, trusted, services);
 
+    // Resolved before the window exists so ready-to-show already knows
+    // whether this launch attaches to a linked server instead of starting
+    // the standard selection.
+    const initialRoute = initialExternalRoute(process.argv, bufferedOpenUrls.splice(0));
+    if (initialRoute?.kind === 'add-server') {
+      coldStartConnectionString = initialRoute.connectionString;
+    }
     showMainWindow();
-    const initialRoute = routeFromArgv(process.argv);
-    if (initialRoute !== null) {
+    if (initialRoute !== null && initialRoute.kind !== 'add-server') {
       dispatchExternalRoute(initialRoute);
     }
 

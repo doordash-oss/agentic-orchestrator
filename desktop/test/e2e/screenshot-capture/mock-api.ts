@@ -1679,6 +1679,7 @@ function makeMockApi(
     restartConnection: () => Promise.resolve(CONNECTION_STATE),
     chooseConnectionServer: () => Promise.resolve(CONNECTION_STATE),
     switchConnectionServer: () => Promise.resolve(CONNECTION_STATE),
+    startLocalRuntime: () => Promise.resolve(CONNECTION_STATE),
     listServers: () => Promise.resolve({ rows: [] }),
     probeServers: () => Promise.resolve({ rows: [] }),
     addRemoteServer: () => Promise.reject(new Error('addRemoteServer not available in capture')),

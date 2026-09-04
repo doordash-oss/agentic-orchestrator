@@ -53,6 +53,7 @@ function deps(
     showWindow: () => {},
     quit: () => {},
     route: () => {},
+    startLocalRuntime: () => {},
     adjustZoom: () => {},
     setZoom: () => {},
     ...overrides,
@@ -283,6 +284,31 @@ describe('application menu dispatch', () => {
     );
     expect(showWindow).toHaveBeenCalledTimes(1);
     expect(quit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('application menu start-local escape hatch', () => {
+  it('keeps Start bundled runtime enabled even before the runtime is ready', () => {
+    const template = buildApplicationMenuTemplate(deps(disabledMainWindowUiState()));
+    const item = itemById(template, 'global.start-local-runtime');
+    expect(item?.label).toBe('Start bundled runtime');
+    // Not gated on readiness: it is the way out of a connection error state.
+    expect(item?.enabled).not.toBe(false);
+  });
+
+  it('dispatches straight to the main-process action, never through a route', () => {
+    const route = vi.fn<(event: AppRouteEvent) => void>();
+    const startLocalRuntime = vi.fn();
+    const template = buildApplicationMenuTemplate(
+      deps(disabledMainWindowUiState(), { route, startLocalRuntime }),
+    );
+    itemById(template, 'global.start-local-runtime')?.click?.(
+      undefined as never,
+      undefined as never,
+      undefined as never,
+    );
+    expect(startLocalRuntime).toHaveBeenCalledTimes(1);
+    expect(route).not.toHaveBeenCalled();
   });
 });
 

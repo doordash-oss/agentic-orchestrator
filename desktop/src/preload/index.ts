@@ -132,6 +132,7 @@ const api: AgenticoApi = {
   restartConnection: () => call(IPC_CHANNELS.connectionRestart),
   chooseConnectionServer: (request) => call(IPC_CHANNELS.connectionChooseServer, request),
   switchConnectionServer: (request) => call(IPC_CHANNELS.connectionSwitchServer, request),
+  startLocalRuntime: () => call(IPC_CHANNELS.connectionStartLocal),
   listServers: () => call(IPC_CHANNELS.serversList),
   probeServers: (request) => call(IPC_CHANNELS.serversProbe, request),
   addRemoteServer: (request) => call(IPC_CHANNELS.remoteServerAdd, request),

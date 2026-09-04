@@ -18,7 +18,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log"
+	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -126,6 +129,87 @@ func (h *otelErrorHandler) Handle(err error) {
 	}
 }
 
+// otelStartupLogf receives the one-time startup report (enabled/disabled,
+// effective endpoint, exporter construction failures, reachability probe).
+// Without it a misconfigured or unroutable collector is invisible until the
+// first batch export fails, and even then only one suppressed summary line
+// ever appears. Package-level so tests can capture it.
+var otelStartupLogf = log.Printf
+
+// otelStartupProbe runs the asynchronous reachability check against the
+// effective endpoint. Tests replace it to keep the constructor synchronous.
+var otelStartupProbe = func(endpoint string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), collectorProbeTimeout)
+		defer cancel()
+		if reason := defaultCollectorProber.probe(ctx, endpoint); reason != "" {
+			otelStartupLogf("otel: collector unreachable at startup: %s — traces will be dropped until it becomes reachable", reason)
+			return
+		}
+		otelStartupLogf("otel: collector reachable: %s", endpoint)
+	}()
+}
+
+const collectorProbeTimeout = 5 * time.Second
+
+// collectorProber checks whether the OTLP endpoint can be reached at all,
+// separating "the name does not resolve" from "the port is closed" so the
+// operator knows whether to fix DNS/routing or start the collector.
+type collectorProber struct {
+	lookupHost func(ctx context.Context, host string) ([]string, error)
+	dial       func(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+var defaultCollectorProber = collectorProber{
+	lookupHost: net.DefaultResolver.LookupHost,
+	dial:       (&net.Dialer{}).DialContext,
+}
+
+// probe returns "" when a TCP connection to endpoint succeeds, otherwise a
+// human-readable reason.
+func (p collectorProber) probe(ctx context.Context, endpoint string) string {
+	host, _, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return fmt.Sprintf("invalid endpoint %q: %v", endpoint, err)
+	}
+	if net.ParseIP(host) == nil {
+		if _, err := p.lookupHost(ctx, host); err != nil {
+			return fmt.Sprintf("%s does not resolve: %v", host, err)
+		}
+	}
+	conn, err := p.dial(ctx, "tcp", endpoint)
+	if err != nil {
+		return fmt.Sprintf("%s is not accepting connections: %v", endpoint, err)
+	}
+	_ = conn.Close()
+	return ""
+}
+
+// effectiveOTLPEndpoint mirrors the otlptracegrpc resolution order so the
+// startup report names the host:port the exporter will actually dial: the
+// configured value, then OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, then
+// OTEL_EXPORTER_OTLP_ENDPOINT, then the SDK default. Any scheme or path on
+// the env form is stripped.
+func effectiveOTLPEndpoint(configured string) string {
+	ep := configured
+	if ep == "" {
+		ep = os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+	}
+	if ep == "" {
+		ep = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	}
+	if ep == "" {
+		return "localhost:4317"
+	}
+	if i := strings.Index(ep, "://"); i >= 0 {
+		ep = ep[i+3:]
+	}
+	if i := strings.IndexByte(ep, '/'); i >= 0 {
+		ep = ep[:i]
+	}
+	return ep
+}
+
 // otelBridge manages OTel span lifecycle. It maps roadmap SpanID values to
 // real OTel spans using an in-memory store, without requiring context.Context
 // propagation through the application.
@@ -184,6 +268,7 @@ func (roadmapIDGen) NewSpanID(ctx context.Context, _ trace.TraceID) trace.SpanID
 // gracefully to a bare provider.
 func newOtelBridge(enabled bool, endpoint string, insecure bool, serviceName string, grpcOpts ...otlptracegrpc.Option) *otelBridge {
 	if !enabled {
+		otelStartupLogf("otel: trace export disabled (observability.otel_enabled is off)")
 		return &otelBridge{
 			enabled: false,
 			spans:   make(map[string]activeSpan),
@@ -193,6 +278,8 @@ func newOtelBridge(enabled bool, endpoint string, insecure bool, serviceName str
 	if serviceName == "" {
 		serviceName = "agentico"
 	}
+	effective := effectiveOTLPEndpoint(endpoint)
+	otelStartupLogf("otel: trace export enabled: endpoint=%s insecure=%t service=%s", effective, insecure, serviceName)
 
 	if endpoint != "" {
 		grpcOpts = append([]otlptracegrpc.Option{otlptracegrpc.WithEndpoint(endpoint)}, grpcOpts...)
@@ -204,7 +291,9 @@ func newOtelBridge(enabled bool, endpoint string, insecure bool, serviceName str
 	ctx := context.Background()
 	exporter, err := otlptracegrpc.New(ctx, grpcOpts...)
 	if err != nil {
-		// Graceful degradation: create bridge with bare provider.
+		// Graceful degradation: create bridge with bare provider — but say
+		// so, since nothing downstream will ever report the missing export.
+		otelStartupLogf("otel: create OTLP exporter: %v — traces will not be exported", err)
 		tp := sdktrace.NewTracerProvider(sdktrace.WithIDGenerator(roadmapIDGen{}))
 		return &otelBridge{
 			enabled: true,
@@ -236,6 +325,9 @@ func newOtelBridge(enabled bool, endpoint string, insecure bool, serviceName str
 		sdktrace.WithResource(res),
 		sdktrace.WithIDGenerator(roadmapIDGen{}),
 	)
+	// The exporter dials lazily, so a wrong hostname or blocked route would
+	// otherwise surface only as the first (suppressed) batch failure.
+	otelStartupProbe(effective)
 	return &otelBridge{
 		enabled: true,
 		tracer:  tp.Tracer(serviceName),

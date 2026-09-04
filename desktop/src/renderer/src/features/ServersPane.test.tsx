@@ -23,6 +23,7 @@ import {
   type ConnectionState,
   type KnownServer,
   type ServerListRow,
+  type ServerListSnapshot,
   type Settings,
 } from '../../../shared/ipc';
 import {
@@ -76,7 +77,7 @@ function serversRows(overrides: { currentKey?: string } = {}): { rows: ServerLis
   };
 }
 
-function installServersMock(options: { settings?: Settings; rows?: { rows: ServerListRow[] } }): {
+function installServersMock(options: { settings?: Settings; rows?: ServerListSnapshot }): {
   mock: AgenticoMock;
   settings: { current: Settings };
 } {
@@ -462,5 +463,115 @@ describe('SettingsPanel servers pane', () => {
       expect(await within(pane).findByRole('button', { name: 'Probe and connect' })).toBeDisabled();
       expect(field).toBeEnabled();
     });
+  });
+});
+
+describe('SettingsPanel servers pane: This machine', () => {
+  const BUNDLED_KEY = 'c'.repeat(32);
+
+  it('always lists the bundled runtime, with Start when it is not running', async () => {
+    const user = userEvent.setup();
+    const { mock } = installServersMock({
+      rows: {
+        ...serversRows(),
+        bundled: { serverKey: BUNDLED_KEY, runtimeDir: '/rt/bundled', running: false },
+      },
+    });
+    render(<SettingsPanel pane="servers" />);
+
+    const pane = await screen.findByRole('region', { name: 'Servers' });
+    const items = await within(pane).findAllByRole('listitem');
+    // The permanent row comes first, ahead of the two persisted entries.
+    expect(items).toHaveLength(3);
+    const machine = items[0]!;
+    await waitFor(() => expect(machine).toHaveTextContent('This machine'));
+    expect(machine).toHaveTextContent('Local');
+    expect(machine).toHaveTextContent('/rt/bundled');
+    expect(within(machine).getByRole('status')).toHaveTextContent('Not running');
+    expect(machine).not.toHaveTextContent('Unreachable');
+
+    await user.click(within(machine).getByRole('button', { name: 'Start This machine' }));
+    await waitFor(() => expect(mock.api.startLocalRuntime).toHaveBeenCalledTimes(1));
+    expect(mock.api.switchConnectionServer).not.toHaveBeenCalled();
+  });
+
+  it('folds the persisted local entry for the app runtime into one row and offers Switch when it is running', async () => {
+    const user = userEvent.setup();
+    const { mock } = installServersMock({
+      rows: {
+        ...serversRows(),
+        bundled: { serverKey: LOCAL.serverKey, runtimeDir: '/rt/alpha', running: true },
+      },
+    });
+    render(<SettingsPanel pane="servers" />);
+
+    const pane = await screen.findByRole('region', { name: 'Servers' });
+    const items = await within(pane).findAllByRole('listitem');
+    // One row for the machine, one for the remote — never a second local row.
+    expect(items).toHaveLength(2);
+    const machine = items[0]!;
+    await waitFor(() => expect(machine).toHaveTextContent('This machine'));
+    expect(within(machine).getByRole('status')).toHaveTextContent('Running');
+    // The folded entry keeps its endpoint and its management actions.
+    expect(machine).toHaveTextContent('http://127.0.0.1:51001');
+    expect(within(machine).getByRole('button', { name: 'Rename This machine' })).toBeVisible();
+    expect(within(machine).getByRole('button', { name: 'Remove This machine' })).toBeVisible();
+
+    await user.click(within(machine).getByRole('button', { name: 'Switch to This machine' }));
+    await waitFor(() =>
+      expect(mock.api.switchConnectionServer).toHaveBeenCalledWith({ serverKey: LOCAL.serverKey }),
+    );
+    expect(mock.api.startLocalRuntime).not.toHaveBeenCalled();
+  });
+
+  it('reads Connected with no action while the bundled runtime is the current server', async () => {
+    installServersMock({
+      rows: {
+        ...serversRows({ currentKey: LOCAL.serverKey }),
+        bundled: { serverKey: LOCAL.serverKey, runtimeDir: '/rt/alpha', running: true },
+      },
+    });
+    render(<SettingsPanel pane="servers" />);
+
+    const pane = await screen.findByRole('region', { name: 'Servers' });
+    const machine = (await within(pane).findAllByRole('listitem'))[0]!;
+    await waitFor(() => expect(within(machine).getByRole('status')).toHaveTextContent('Connected'));
+    expect(within(machine).queryByRole('button', { name: /^Start/ })).toBeNull();
+    expect(within(machine).queryByRole('button', { name: /^Switch/ })).toBeNull();
+  });
+
+  it('never shows the folded entry as Unreachable: a dead bundled runtime reads Not running with Start', async () => {
+    const dead = serversRows();
+    dead.rows[0] = { ...dead.rows[0]!, health: 'unreachable' };
+    installServersMock({
+      rows: {
+        ...dead,
+        bundled: { serverKey: LOCAL.serverKey, runtimeDir: '/rt/alpha', running: false },
+      },
+    });
+    render(<SettingsPanel pane="servers" />);
+
+    const pane = await screen.findByRole('region', { name: 'Servers' });
+    const machine = (await within(pane).findAllByRole('listitem'))[0]!;
+    await waitFor(() =>
+      expect(within(machine).getByRole('status')).toHaveTextContent('Not running'),
+    );
+    expect(machine).not.toHaveTextContent('Unreachable');
+    expect(within(machine).getByRole('button', { name: 'Start This machine' })).toBeVisible();
+  });
+
+  it('shows the bundled runtime even when no server is persisted yet', async () => {
+    installServersMock({
+      settings: serversSettings([]),
+      rows: {
+        rows: [],
+        bundled: { serverKey: BUNDLED_KEY, runtimeDir: '/rt/bundled', running: false },
+      },
+    });
+    render(<SettingsPanel pane="servers" />);
+
+    const pane = await screen.findByRole('region', { name: 'Servers' });
+    expect(await within(pane).findByText('This machine')).toBeVisible();
+    expect(within(pane).queryByText('No servers known yet.')).toBeNull();
   });
 });

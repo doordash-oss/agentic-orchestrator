@@ -33,6 +33,7 @@ import { retryAction, useConnectionState, useTheme } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import { WorkspaceDefaultsPanel } from './ConfigEditor';
 import { ErrorSurface } from '../components/ErrorSurface';
+import { BUNDLED_RUNTIME_LABEL } from '../components/ServerSwitcher';
 import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../components/FieldError';
 import type { PaneFocusIntent } from './settingsPanes';
 import type {
@@ -41,6 +42,7 @@ import type {
   ReadinessSnapshot,
   RepositoryState,
   ServerListRow,
+  ServerListSnapshot,
   ServerTokenStatus,
   SessionSummary,
   Settings,
@@ -1069,7 +1071,9 @@ function ServersPane({
   onSettingsChange: (next: Settings) => void;
   focusIntent?: PaneFocusIntent | null;
 }) {
-  const [rows, setRows] = useState<readonly ServerListRow[] | null>(null);
+  const [snapshot, setSnapshot] = useState<ServerListSnapshot | null>(null);
+  const rows: readonly ServerListRow[] | null = snapshot?.rows ?? null;
+  const [startingLocal, setStartingLocal] = useState(false);
   const [error, setError] = useState<CanonicalError | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [nicknameDraft, setNicknameDraft] = useState('');
@@ -1097,12 +1101,12 @@ function ServersPane({
     let alive = true;
     void window.agentico
       .probeServers({ open: true })
-      .then((snapshot) => {
-        if (alive) setRows(snapshot.rows);
+      .then((next) => {
+        if (alive) setSnapshot(next);
       })
       .catch(() => {});
-    const unsubscribe = window.agentico.onServersChanged((snapshot) => {
-      setRows(snapshot.rows);
+    const unsubscribe = window.agentico.onServersChanged((next) => {
+      setSnapshot(next);
     });
     return () => {
       alive = false;
@@ -1128,6 +1132,67 @@ function ServersPane({
 
   const known = settings?.servers.known ?? [];
   const rowByKey = new Map((rows ?? []).map((row) => [row.serverKey, row]));
+  // The bundled runtime is a permanent row. A persisted local entry for the
+  // app's own runtime dir folds into it (one row, never a second "Unreachable"
+  // one), and the folded entry is listed first.
+  const bundled = snapshot?.bundled;
+  const bundledEntry =
+    bundled === undefined
+      ? undefined
+      : known.find((entry) => entry.kind === 'local' && entry.serverKey === bundled.serverKey);
+  const listed =
+    bundledEntry === undefined
+      ? known
+      : [bundledEntry, ...known.filter((entry) => entry.serverKey !== bundledEntry.serverKey)];
+  const bundledCurrent = bundled !== undefined && rowByKey.get(bundled.serverKey)?.current === true;
+
+  // Start (spawn or attach) the bundled runtime, or switch to it when it is
+  // already running. The connection shell owns the failure surface.
+  const startLocal = useCallback(async () => {
+    setStartingLocal(true);
+    try {
+      await window.agentico.startLocalRuntime();
+    } catch {
+      // Surfaced by the connection shell.
+    } finally {
+      setStartingLocal(false);
+    }
+  }, []);
+  const switchToBundled = useCallback(() => {
+    if (bundled === undefined) return;
+    void window.agentico.switchConnectionServer({ serverKey: bundled.serverKey }).catch(() => {
+      // Surfaced by the connection shell.
+    });
+  }, [bundled]);
+  const bundledAction =
+    bundled === undefined || bundledCurrent ? null : bundled.running ? (
+      <button
+        type="button"
+        className="settings-panel__root-btn"
+        aria-label={`Switch to ${BUNDLED_RUNTIME_LABEL}`}
+        onClick={switchToBundled}
+      >
+        Switch
+      </button>
+    ) : (
+      <button
+        type="button"
+        className="settings-panel__root-btn"
+        aria-label={`Start ${BUNDLED_RUNTIME_LABEL}`}
+        onClick={() => void startLocal()}
+        disabled={startingLocal}
+      >
+        {startingLocal ? 'Starting…' : 'Start'}
+      </button>
+    );
+  const bundledStatus =
+    bundled === undefined
+      ? ''
+      : bundledCurrent
+        ? 'Connected'
+        : bundled.running
+          ? 'Running'
+          : 'Not running';
   const confirmingEntry =
     confirmingKey === null ? undefined : known.find((entry) => entry.serverKey === confirmingKey);
 
@@ -1309,23 +1374,49 @@ function ServersPane({
         <p className="settings-panel__server-empty" role="status">
           Loading servers…
         </p>
-      ) : known.length === 0 ? (
+      ) : known.length === 0 && bundled === undefined ? (
         <p className="settings-panel__server-empty">No servers known yet.</p>
       ) : (
         <ul className="settings-panel__servers">
-          {known.map((entry) => {
+          {bundled !== undefined && bundledEntry === undefined ? (
+            // The bundled runtime with no persisted entry yet: identity comes
+            // from the app's own runtime selection, not from settings.
+            <li
+              className="settings-panel__server"
+              data-kind="local"
+              data-bundled="true"
+              data-current={bundledCurrent}
+            >
+              <div className="settings-panel__server-header">
+                <span className="settings-panel__server-name">{BUNDLED_RUNTIME_LABEL}</span>
+                <span className="settings-panel__server-kind" data-kind="local">
+                  Local
+                </span>
+                <span className="settings-panel__server-status" role="status">
+                  {bundledStatus}
+                </span>
+                <div className="settings-panel__root-actions">{bundledAction}</div>
+              </div>
+              <code className="settings-panel__server-endpoint">{bundled.runtimeDir}</code>
+            </li>
+          ) : null}
+          {listed.map((entry) => {
             const joined = rowByKey.get(entry.serverKey);
             const current = joined?.current === true;
-            const display = serverDisplayName(entry);
-            const statusText = current
-              ? 'Connected'
-              : (SERVERS_PANE_HEALTH_LABEL[joined?.health ?? 'probing'] ?? 'Checking…');
+            const isBundled = bundled !== undefined && entry.serverKey === bundled.serverKey;
+            const display = isBundled ? BUNDLED_RUNTIME_LABEL : serverDisplayName(entry);
+            const statusText = isBundled
+              ? bundledStatus
+              : current
+                ? 'Connected'
+                : (SERVERS_PANE_HEALTH_LABEL[joined?.health ?? 'probing'] ?? 'Checking…');
             const editing = editingKey === entry.serverKey;
             return (
               <li
                 key={entry.serverKey}
                 className="settings-panel__server"
                 data-kind={entry.kind}
+                data-bundled={isBundled}
                 data-current={current}
               >
                 <div className="settings-panel__server-header">
@@ -1376,6 +1467,7 @@ function ServersPane({
                         {statusText}
                       </span>
                       <div className="settings-panel__root-actions">
+                        {isBundled ? bundledAction : null}
                         <button
                           type="button"
                           className="settings-panel__root-btn"

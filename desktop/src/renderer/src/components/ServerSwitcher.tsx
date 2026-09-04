@@ -27,8 +27,8 @@ limitations under the License.
  * Settings → Servers with the paste field focused (the only add
  * affordance).
  */
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { ServerListRow } from '../../../shared/ipc';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import type { ServerListRow, ServerListSnapshot } from '../../../shared/ipc';
 import { ToolbarPopover, ToolbarPopoverAnchor } from './ToolbarPopover';
 
 const HEALTH_LABEL: Record<ServerListRow['health'], string> = {
@@ -39,6 +39,32 @@ const HEALTH_LABEL: Record<ServerListRow['health'], string> = {
 
 function statusLabel(row: ServerListRow): string {
   return row.current ? 'Connected' : HEALTH_LABEL[row.health];
+}
+
+/** The bundled runtime's fixed display name across the switcher and Settings. */
+export const BUNDLED_RUNTIME_LABEL = 'This machine';
+
+/**
+ * A popover row: a listed server, or the bundled runtime when it is not
+ * running (no registry entry, so no list row exists for it). Choosing the
+ * latter starts the bundled runtime instead of switching to a live server.
+ */
+type SwitcherItem =
+  | { kind: 'server'; key: string; row: ServerListRow }
+  | { kind: 'bundled-stopped'; key: string; runtimeDir: string };
+
+function switcherItems(snapshot: ServerListSnapshot | null): SwitcherItem[] | null {
+  if (snapshot === null) return null;
+  const items: SwitcherItem[] = snapshot.rows.map((row) => ({
+    kind: 'server',
+    key: row.serverKey,
+    row,
+  }));
+  const bundled = snapshot.bundled;
+  if (bundled !== undefined && !snapshot.rows.some((row) => row.serverKey === bundled.serverKey)) {
+    items.push({ kind: 'bundled-stopped', key: bundled.serverKey, runtimeDir: bundled.runtimeDir });
+  }
+  return items;
 }
 
 export function ServerSwitcher({
@@ -64,7 +90,8 @@ export function ServerSwitcher({
   onRouteHandled?(): void;
 }) {
   const [open, setOpen] = useState(false);
-  const [rows, setRows] = useState<readonly ServerListRow[] | null>(null);
+  const [snapshot, setSnapshot] = useState<ServerListSnapshot | null>(null);
+  const rows = useMemo(() => switcherItems(snapshot), [snapshot]);
   const [highlight, setHighlight] = useState(0);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -88,18 +115,18 @@ export function ServerSwitcher({
     let alive = true;
     void window.agentico
       .listServers()
-      .then((snapshot) => {
-        if (alive) setRows(snapshot.rows);
+      .then((next) => {
+        if (alive) setSnapshot(next);
       })
       .catch(() => {});
     void window.agentico
       .probeServers({ open: true })
-      .then((snapshot) => {
-        if (alive) setRows(snapshot.rows);
+      .then((next) => {
+        if (alive) setSnapshot(next);
       })
       .catch(() => {});
-    const unsubscribe = window.agentico.onServersChanged((snapshot) => {
-      setRows(snapshot.rows);
+    const unsubscribe = window.agentico.onServersChanged((next) => {
+      setSnapshot(next);
     });
     return () => {
       alive = false;
@@ -123,7 +150,18 @@ export function ServerSwitcher({
     }
   }, [highlight]);
 
-  const choose = useCallback((row: ServerListRow) => {
+  const choose = useCallback((item: SwitcherItem) => {
+    if (item.kind === 'bundled-stopped') {
+      // Start (and attach to) the bundled runtime; a plain switch would only
+      // re-check the registry and never spawn.
+      setOpen(false);
+      anchorRef.current?.focus();
+      void window.agentico.startLocalRuntime().catch(() => {
+        // The connection shell owns the failure surface.
+      });
+      return;
+    }
+    const row = item.row;
     if (row.current || row.health !== 'healthy') {
       return;
     }
@@ -203,8 +241,43 @@ export function ServerSwitcher({
             onKeyDown={onKeyDown}
             ref={listRef}
           >
-            {rows.map((row, index) => {
+            {rows.map((item, index) => {
               const selected = index === highlight;
+              if (item.kind === 'bundled-stopped') {
+                // The bundled runtime is not running: the row's action is
+                // Start, so it is never disabled.
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    aria-disabled={false}
+                    tabIndex={selected ? 0 : -1}
+                    aria-label={`${BUNDLED_RUNTIME_LABEL} at ${item.runtimeDir} — Not running`}
+                    className="server-switcher__row"
+                    data-selected={selected}
+                    data-health="stopped"
+                    data-current={false}
+                    data-bundled="true"
+                    onMouseEnter={() => setHighlight(index)}
+                    onFocus={() => setHighlight(index)}
+                    onClick={() => choose(item)}
+                  >
+                    <span className="server-switcher__check" aria-hidden="true"></span>
+                    <span className="server-switcher__primary" aria-hidden="true">
+                      {BUNDLED_RUNTIME_LABEL}
+                    </span>
+                    <span className="server-switcher__runtime" aria-hidden="true">
+                      {item.runtimeDir}
+                    </span>
+                    <span className="server-switcher__status" aria-hidden="true">
+                      Start
+                    </span>
+                  </button>
+                );
+              }
+              const row = item.row;
               const reachable = !row.current && row.health === 'healthy';
               const displayName = row.nickname ?? row.name ?? 'Unnamed server';
               // Remote rows have no local runtime dir to disambiguate by.
@@ -224,7 +297,7 @@ export function ServerSwitcher({
                   data-current={row.current}
                   onMouseEnter={() => setHighlight(index)}
                   onFocus={() => setHighlight(index)}
-                  onClick={() => choose(row)}
+                  onClick={() => choose(item)}
                 >
                   <span className="server-switcher__check" aria-hidden="true">
                     {row.current ? '✓' : ''}

@@ -239,6 +239,16 @@ export function ConnectionShell() {
       .catch((err: unknown) => setState(ipcFailureState(err)));
   }, []);
 
+  // The explicit escape hatch to the bundled runtime: offered on a failed
+  // link launch, and the Retry of a failed start-local attempt (a plain
+  // switch would only re-check the registry and never spawn).
+  const startLocal = useCallback(() => {
+    window.agentico
+      .startLocalRuntime()
+      .then(setState)
+      .catch((err: unknown) => setState(ipcFailureState(err)));
+  }, []);
+
   useEffect(() => {
     refresh();
     const unsubscribe = window.agentico.onConnectionChanged(setState);
@@ -254,6 +264,10 @@ export function ConnectionShell() {
   const switchContext = failure?.status === 'error' ? failure.switchContext : undefined;
   const retryTarget = switchContext?.attempted.serverKey ?? null;
   const backTarget = switchContext?.previous ?? null;
+  const retryStartsLocal = switchContext?.startLocal === true;
+  // A link launch that failed deliberately did not start the bundled
+  // runtime; the escape hatch is explicit, never automatic.
+  const offerStartLocal = failure?.status === 'error' && failure.startupLink === true;
   const activeIndex = CONNECTION_STAGES.indexOf(state.stage);
   const ownership = state.ownership === 'none' ? null : OWNERSHIP_META[state.ownership];
 
@@ -315,9 +329,18 @@ export function ConnectionShell() {
             variant="compact"
             localAction={{
               label: 'Retry',
-              onAction: retryTarget !== null ? () => switchTo(retryTarget) : retry,
+              onAction: retryStartsLocal
+                ? startLocal
+                : retryTarget !== null
+                  ? () => switchTo(retryTarget)
+                  : retry,
             }}
           />
+          {offerStartLocal ? (
+            <button type="button" className="setup-wizard__action" onClick={startLocal}>
+              Start bundled runtime
+            </button>
+          ) : null}
           {backTarget !== null ? (
             <button
               type="button"

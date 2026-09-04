@@ -545,5 +545,74 @@ describe('ConnectionShell failed switch', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
     expect(mock.api.retryConnection).toHaveBeenCalled();
     expect(mock.api.switchConnectionServer).not.toHaveBeenCalled();
+    // The start-local escape hatch is reserved for a failed link launch.
+    expect(screen.queryByRole('button', { name: 'Start bundled runtime' })).toBeNull();
+  });
+
+  it('Retry of a failed start-local re-invokes start-local, Back still switches', async () => {
+    const failed = failedSwitch();
+    if (failed.status !== 'error' || failed.switchContext === undefined) throw new Error('shape');
+    const mock = installAgenticoMock({
+      connection: state({
+        ...failed,
+        switchContext: {
+          ...failed.switchContext,
+          attempted: { serverKey: 'key-bundled', kind: 'local', name: null, runtimeDir: '/rt/me' },
+          startLocal: true,
+        },
+      }),
+    });
+    render(<ConnectionShell />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(mock.api.startLocalRuntime).toHaveBeenCalledTimes(1);
+    // A plain switch would only re-check the registry and never spawn.
+    expect(mock.api.switchConnectionServer).not.toHaveBeenCalled();
+    expect(mock.api.retryConnection).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Back to alpha' }));
+    expect(mock.api.switchConnectionServer).toHaveBeenCalledWith({ serverKey: 'key-alpha' });
+  });
+});
+
+describe('ConnectionShell failed link launch', () => {
+  function failedLink(): ConnectionState {
+    return state({
+      status: 'error',
+      stage: 'connect',
+      detail: 'The server this launch was linked to could not be added.',
+      error: {
+        code: 'E_REMOTE_UNREACHABLE',
+        class: 'blocking',
+        title: 'The remote server is unreachable',
+        summary: 'No server answered at the linked address.',
+        remediation: { hint: 'Make the linked server reachable and retry.' },
+      },
+      startupLink: true,
+    });
+  }
+
+  it('offers Start bundled runtime beside Retry, each on its own IPC path', async () => {
+    const mock = installAgenticoMock({ connection: failedLink() });
+    render(<ConnectionShell />);
+
+    const start = await screen.findByRole('button', { name: 'Start bundled runtime' });
+    await userEvent.click(start);
+    expect(mock.api.startLocalRuntime).toHaveBeenCalledTimes(1);
+    expect(mock.api.retryConnection).not.toHaveBeenCalled();
+
+    // Retry still re-attempts the link (the main process owns that choice).
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(mock.api.retryConnection).toHaveBeenCalledTimes(1);
+    expect(mock.api.switchConnectionServer).not.toHaveBeenCalled();
+  });
+
+  it('keeps the escape hatch keyboard reachable', async () => {
+    installAgenticoMock({ connection: failedLink() });
+    render(<ConnectionShell />);
+
+    const start = await screen.findByRole('button', { name: 'Start bundled runtime' });
+    start.focus();
+    expect(start).toHaveFocus();
   });
 });

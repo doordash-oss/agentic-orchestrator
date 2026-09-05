@@ -61,11 +61,46 @@ type cloneWireOperation struct {
 		Title string `json:"title"`
 	} `json:"error"`
 	Published *struct {
-		RepoKey string `json:"repo_key"`
-		Path    string `json:"path"`
-		HasHead bool   `json:"has_head"`
+		RepoKey  string        `json:"repo_key"`
+		Path     string        `json:"path"`
+		HasHead  bool          `json:"has_head"`
+		Identity *wireIdentity `json:"identity"`
 	} `json:"published"`
 	UpdatedAt string `json:"updated_at"`
+}
+
+// wireIdentity is the server-resolved repository identity on the wire.
+type wireIdentity struct {
+	Path      string `json:"path"`
+	CommonDir string `json:"common_dir"`
+	Device    string `json:"device"`
+	Inode     string `json:"inode"`
+}
+
+// repositoryIdentity reads the readiness identity of a named repository.
+func (j *cloneJourney) repositoryIdentity(name string) *wireIdentity {
+	j.t.Helper()
+	status, body := j.do("GET", "/api/v1/readiness", nil)
+	if status != http.StatusOK {
+		j.t.Fatalf("readiness status = %d", status)
+	}
+	var snapshot struct {
+		Workspace struct {
+			Repositories []struct {
+				Name     string        `json:"name"`
+				Identity *wireIdentity `json:"identity"`
+			} `json:"repositories"`
+		} `json:"workspace"`
+	}
+	if err := json.Unmarshal(body, &snapshot); err != nil {
+		j.t.Fatalf("decode readiness: %v", err)
+	}
+	for _, repo := range snapshot.Workspace.Repositories {
+		if repo.Name == name {
+			return repo.Identity
+		}
+	}
+	return nil
 }
 
 func newCloneJourney(t *testing.T) *cloneJourney {
@@ -285,6 +320,25 @@ func TestCloneAPIJourney(t *testing.T) {
 	if final.Published.RepoKey != "widget" || !final.Published.HasHead {
 		t.Fatalf("publication = %+v", final.Published)
 	}
+	// The publication durably binds the repository identity actually
+	// published, so adoption can never fall back to key or path.
+	if final.Published.Identity == nil {
+		t.Fatalf("publication carries no repository identity: %+v", final.Published)
+	}
+	if final.Published.Identity.Path != filepath.Join(j.root, "widget") {
+		t.Errorf("publication identity path = %q", final.Published.Identity.Path)
+	}
+	if final.Published.Identity.Device == "" || final.Published.Identity.Inode == "" {
+		t.Errorf("publication identity filesystem fields missing: %+v", final.Published.Identity)
+	}
+	// The identity matches what the server reports through readiness.
+	repoIdentity := j.repositoryIdentity("widget")
+	if repoIdentity == nil {
+		t.Fatal("readiness reports no identity for the published repository")
+	}
+	if *repoIdentity != *final.Published.Identity {
+		t.Errorf("publication identity %+v != readiness identity %+v", final.Published.Identity, repoIdentity)
+	}
 
 	// Real filesystem outcomes: full history, origin, checked-out HEAD.
 	dest := filepath.Join(j.root, "widget")
@@ -487,6 +541,15 @@ func TestCloneRestartJourney(t *testing.T) {
 		t.Fatalf("explicit cancel = %+v", snap)
 	}
 
+	// One clone completes before the restart: its publication identity must
+	// survive the restart and still match the untouched repository.
+	doneRemote := bareHTTPRemote(t, 1, false)
+	doneOp := j.start(doneRemote, "restart-done", "key-restart-3")
+	doneFinal := j.waitFor(doneOp.ID, "succeeded")
+	if doneFinal.Published == nil || doneFinal.Published.Identity == nil {
+		t.Fatalf("completed clone lacks publication identity: %+v", doneFinal.Published)
+	}
+
 	// Graceful shutdown through the production Close path.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
@@ -524,6 +587,16 @@ func TestCloneRestartJourney(t *testing.T) {
 	cancelledFinal := j.snapshot(cancelOp.ID)
 	if cancelledFinal.State != "cancelled" {
 		t.Errorf("explicitly cancelled reclassified to %s", cancelledFinal.State)
+	}
+
+	// The durable publication identity is retained across the restart and
+	// still matches the repository it published.
+	doneAfter := j.snapshot(doneOp.ID)
+	if doneAfter.Published == nil || doneAfter.Published.Identity == nil {
+		t.Fatalf("restart lost the publication identity: %+v", doneAfter.Published)
+	}
+	if ready := j.repositoryIdentity("restart-done"); ready == nil || *ready != *doneAfter.Published.Identity {
+		t.Errorf("retained identity %+v != readiness %+v", doneAfter.Published.Identity, ready)
 	}
 
 	// Fresh retry of the interrupted attempt works through the normal

@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1111,5 +1112,113 @@ func TestReadinessDistinguishesUnbornRepositories(t *testing.T) {
 	}
 	if !populatedEntry.Valid || !populatedEntry.FeatureReady {
 		t.Fatalf("populated repository not valid+ready: %+v", populatedEntry)
+	}
+}
+
+// readinessIdentityRepo initializes a real committed repository at dir.
+func readinessIdentityRepo(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "init", "--initial-branch=main", dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v\n%s", dir, err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "."}, {"commit", "-m", "initial"}} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git -C %s %v: %v\n%s", dir, args, err, out)
+		}
+	}
+}
+
+func TestReadinessReportsServerResolvedRepositoryIdentity(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	mainRepo := filepath.Join(root, "service")
+	readinessIdentityRepo(t, mainRepo)
+	worktree := filepath.Join(root, "wt-service")
+	cmd := exec.Command("git", "-C", mainRepo, "worktree", "add", worktree, "-b", "topic")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git worktree add: %v\n%s", err, out)
+	}
+	broken := filepath.Join(t.TempDir(), "broken")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.Repos["broken"] = config.RepoConfig{Path: broken}
+	handler := NewHandler(HandlerOptions{
+		Config:                cfg,
+		Registry:              newReadinessRegistry(),
+		DisableHostValidation: true,
+	})
+
+	snapshot := getReadinessSnapshot(t, handler)
+	byName := map[string]RepositoryReadiness{}
+	for _, repo := range snapshot.Workspace.Repositories {
+		byName[repo.Name] = repo
+	}
+	service, ok := byName["service"]
+	if !ok {
+		t.Fatalf("service repository missing: %+v", snapshot.Workspace.Repositories)
+	}
+	if service.Identity == nil {
+		t.Fatalf("service repository carries no identity: %+v", service)
+	}
+	decimal := regexp.MustCompile(`^[0-9]{1,20}$`)
+	if !decimal.MatchString(service.Identity.Device) || !decimal.MatchString(service.Identity.Inode) {
+		t.Fatalf("identity filesystem fields must be decimal wire text: %+v", service.Identity)
+	}
+	canonical, err := filepath.EvalSymlinks(mainRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.Identity.Path != canonical {
+		t.Errorf("identity path = %q; want canonical %q", service.Identity.Path, canonical)
+	}
+
+	wt, ok := byName["wt-service"]
+	if !ok {
+		t.Fatalf("linked worktree missing from readiness: %+v", snapshot.Workspace.Repositories)
+	}
+	if wt.Identity == nil {
+		t.Fatalf("linked worktree carries no identity: %+v", wt)
+	}
+	if wt.Identity.CommonDir != service.Identity.CommonDir {
+		t.Errorf("linked worktree common dir = %q; want shared %q", wt.Identity.CommonDir, service.Identity.CommonDir)
+	}
+	if wt.Identity.Path == service.Identity.Path || *wt.Identity == *service.Identity {
+		t.Errorf("linked worktree must stay distinguishable: %+v vs %+v", wt.Identity, service.Identity)
+	}
+
+	brokenEntry, ok := byName["broken"]
+	if !ok || brokenEntry.Valid {
+		t.Fatalf("broken repository must be reported invalid: %+v (ok=%v)", brokenEntry, ok)
+	}
+	if brokenEntry.Identity != nil {
+		t.Errorf("invalid repository must not carry an identity: %+v", brokenEntry.Identity)
+	}
+
+	// Replacing the checkout's git directory invalidates the identity: the
+	// next snapshot must not report the prior identity for the same path.
+	if err := os.RemoveAll(filepath.Join(mainRepo, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	readinessIdentityRepo(t, mainRepo)
+	replacement := getReadinessSnapshot(t, handler)
+	for _, repo := range replacement.Workspace.Repositories {
+		if repo.Name != "service" {
+			continue
+		}
+		if repo.Identity == nil || *repo.Identity == *service.Identity {
+			t.Fatalf("replaced git directory must invalidate the identity: old %+v new %+v", service.Identity, repo.Identity)
+		}
 	}
 }

@@ -20,8 +20,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // spawnWorker starts the worker goroutine for an accepted operation.
@@ -477,5 +480,26 @@ func (s *Service) marshalPublicationMarker(cur *Record) ([]byte, error) {
 		OperationID: cur.ID,
 		Nonce:       cur.OwnershipNonce,
 		PublishedAt: s.now().UTC(),
+		Identity:    stagedPublicationIdentity(cur),
 	})
+}
+
+// stagedPublicationIdentity pins, before the atomic rename, the identity the
+// published repository will carry at its destination: the canonical
+// destination path and its .git directory, with the filesystem identity of
+// the staged .git directory (the rename preserves it). A nil result leaves
+// the publication without provable identity rather than guessing.
+func stagedPublicationIdentity(cur *Record) *PublicationIdentity {
+	workGit := filepath.Join(cur.StagingPath, stagingWorkDir, ".git")
+	var stat unix.Stat_t
+	if err := unix.Stat(workGit, &stat); err != nil {
+		return nil
+	}
+	dest := filepath.Clean(cur.DestinationPath)
+	return &PublicationIdentity{
+		Path:      dest,
+		CommonDir: filepath.Join(dest, ".git"),
+		Device:    strconv.FormatUint(uint64(stat.Dev), 10),
+		Inode:     strconv.FormatUint(uint64(stat.Ino), 10),
+	}
 }

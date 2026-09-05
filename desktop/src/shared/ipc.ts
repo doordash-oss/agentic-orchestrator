@@ -663,6 +663,36 @@ export const WorkspaceRootStateSchema = z.strictObject({
 
 export type WorkspaceRootState = z.output<typeof WorkspaceRootStateSchema>;
 
+/**
+ * Server-resolved repository identity. Two catalog entries describe the same
+ * repository exactly when their identities are equal; reconciliation across
+ * discovery refreshes compares identities, never keys or paths alone. The
+ * filesystem fields are decimal text so 64-bit values stay exact.
+ */
+export const RepositoryIdentitySchema = z.strictObject({
+  /** Canonical checkout path (symlinks resolved). */
+  path: z.string().min(1).max(4096),
+  /** Resolved Git common directory; linked worktrees share it with the main checkout. */
+  commonDir: z.string().min(1).max(4096),
+  /** Device id of the Git common directory, as decimal text. */
+  device: z.string().regex(/^[0-9]{1,20}$/),
+  /** Inode of the Git common directory, as decimal text. */
+  inode: z.string().regex(/^[0-9]{1,20}$/),
+});
+
+export type RepositoryIdentity = z.output<typeof RepositoryIdentitySchema>;
+
+/**
+ * Repository identity equality: the whole server-resolved tuple, never a key
+ * or path alone. Shared by the renderer reconciliation and the main-process
+ * search/resolve boundaries so both agree on what "the same repository" is.
+ */
+export function sameRepositoryIdentity(a: RepositoryIdentity, b: RepositoryIdentity): boolean {
+  return (
+    a.path === b.path && a.commonDir === b.commonDir && a.device === b.device && a.inode === b.inode
+  );
+}
+
 export const RepositoryStateSchema = z.strictObject({
   name: z.string(),
   path: z.string(),
@@ -670,6 +700,12 @@ export const RepositoryStateSchema = z.strictObject({
   issue: ReadinessIssueSchema.optional(),
   /** Whether the repository can start feature work (has commits). */
   featureReady: z.boolean(),
+  /**
+   * Server-resolved identity. Absent when the server could not resolve it (or
+   * the repository is invalid): such repositories cannot be selected because
+   * their selection could not be reconciled across discovery changes.
+   */
+  identity: RepositoryIdentitySchema.optional(),
 });
 
 export type RepositoryState = z.output<typeof RepositoryStateSchema>;
@@ -1099,6 +1135,7 @@ export const ClonePublicationSchema = z.strictObject({
   path: z.string(),
   hasHead: z.boolean(),
   publishedAt: z.string(),
+  identity: RepositoryIdentitySchema.optional(),
 });
 export type ClonePublication = z.output<typeof ClonePublicationSchema>;
 
@@ -2541,9 +2578,18 @@ export const CREATION_IMAGE_FORMATS = [
   { extension: 'webp', mime: 'image/webp' },
 ] as const;
 
+/**
+ * A file referenced from a repository via @-mention. `repoKey` is the
+ * transmitted catalog key — reconciled by identity whenever discovery
+ * refreshes — and `identity` is the server-resolved repository identity the
+ * reference was captured from, so a reused key can never redirect the
+ * reference to a replacement repository. Identity is absent only for
+ * feature-inherited references that predate identity capture.
+ */
 export const RepositoryFileRefSchema = z.strictObject({
   repoKey: z.string().min(1).max(200),
   path: z.string().min(1).max(1000),
+  identity: RepositoryIdentitySchema.optional(),
 });
 export type RepositoryFileRef = z.output<typeof RepositoryFileRefSchema>;
 
@@ -2667,6 +2713,8 @@ export type SetupDispatchResult = z.output<typeof SetupDispatchResultSchema>;
  */
 export const CreationDefaultsSchema = z.strictObject({
   repositories: z.array(RepositoryStateSchema),
+  /** Workspace roots from the same readiness snapshot (clone eligibility). */
+  workspaceRoots: z.array(WorkspaceRootStateSchema).default([]),
   defaults: z.strictObject({
     pipeline: z.string().optional(),
     inquireness: z.string().optional(),
@@ -2731,9 +2779,21 @@ export const UploadCreationFilesResultSchema = z.strictObject({
   results: z.array(CreationFileUploadResultSchema).max(CREATION_ATTACHMENT_LIMIT),
 });
 export type UploadCreationFilesResult = z.output<typeof UploadCreationFilesResultSchema>;
+/**
+ * A repository whose files the mention search covers. Creation drafts always
+ * carry the expected identity (captured at selection time), so the search is
+ * bound to that repository rather than to whoever currently holds the key;
+ * identity is absent only for feature-inherited repositories.
+ */
+export const CreationFileSearchRepositorySchema = z.strictObject({
+  key: z.string().min(1).max(200),
+  identity: RepositoryIdentitySchema.optional(),
+});
+export type CreationFileSearchRepository = z.output<typeof CreationFileSearchRepositorySchema>;
+
 export const CreationFileSearchRequestSchema = z.strictObject({
   requestId: z.string().uuid(),
-  repoKeys: z.array(z.string().min(1).max(200)).min(1).max(32),
+  repositories: z.array(CreationFileSearchRepositorySchema).min(1).max(32),
   query: z.string().max(200),
 });
 export type CreationFileSearchRequest = z.output<typeof CreationFileSearchRequestSchema>;

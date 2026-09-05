@@ -22,6 +22,7 @@ import {
   creationDefaults,
   installAgenticoMock,
   ipcError,
+  mockRepoIdentity,
   readySnapshot,
 } from '../test/agenticoMock';
 import { CreateFeatureForm } from './CreateFeatureForm';
@@ -130,7 +131,15 @@ describe('the creation sheet across its four steps', () => {
     mock.api.addWorkspaceRoot.mockResolvedValue(
       readySnapshot({
         workspaceRoots: [{ path: '/work/solo', valid: true, cloneEligible: true }],
-        repositories: [{ name: 'solo', path: '/work/solo', valid: true, featureReady: true }],
+        repositories: [
+          {
+            name: 'solo',
+            path: '/work/solo',
+            valid: true,
+            featureReady: true,
+            identity: mockRepoIdentity('/work/solo'),
+          },
+        ],
       }),
     );
     const { user } = await renderForm(mock);
@@ -157,7 +166,13 @@ describe('the creation sheet across its four steps', () => {
       readySnapshot({
         workspaceRoots: [{ path: '/work/space/fresh', valid: true, cloneEligible: true }],
         repositories: [
-          { name: 'fresh', path: '/work/space/fresh', valid: true, featureReady: true },
+          {
+            name: 'fresh',
+            path: '/work/space/fresh',
+            valid: true,
+            featureReady: true,
+            identity: mockRepoIdentity('/work/space/fresh'),
+          },
         ],
       }),
     );
@@ -165,7 +180,13 @@ describe('the creation sheet across its four steps', () => {
       readySnapshot({
         workspaceRoots: [{ path: '/work/space/fresh', valid: true, cloneEligible: true }],
         repositories: [
-          { name: 'fresh', path: '/work/space/fresh', valid: true, featureReady: true },
+          {
+            name: 'fresh',
+            path: '/work/space/fresh',
+            valid: true,
+            featureReady: true,
+            identity: mockRepoIdentity('/work/space/fresh'),
+          },
         ],
       }),
     );
@@ -231,8 +252,20 @@ describe('the creation sheet across its four steps', () => {
     mock.api.addWorkspaceRoot.mockResolvedValue(
       readySnapshot({
         repositories: [
-          { name: 'repo-a', path: '/work/space/repo-a', valid: true, featureReady: true },
-          { name: 'repo-new', path: '/work/new-root/repo-new', valid: true, featureReady: true },
+          {
+            name: 'repo-a',
+            path: '/work/space/repo-a',
+            valid: true,
+            featureReady: true,
+            identity: mockRepoIdentity('/work/space/repo-a'),
+          },
+          {
+            name: 'repo-new',
+            path: '/work/new-root/repo-new',
+            valid: true,
+            featureReady: true,
+            identity: mockRepoIdentity('/work/new-root/repo-new'),
+          },
         ],
       }),
     );
@@ -351,7 +384,10 @@ describe('the creation sheet across its four steps', () => {
       screen.getByRole('button', { name: 'Remove reference repo-a/src/creation.ts' }),
     ).toBeVisible();
     expect(mock.api.searchCreationFiles).toHaveBeenCalledWith(
-      expect.objectContaining({ repoKeys: ['repo-a'], query: 'cre' }),
+      expect.objectContaining({
+        repositories: [{ key: 'repo-a', identity: mockRepoIdentity('/work/space/repo-a') }],
+        query: 'cre',
+      }),
     );
 
     // Deselecting the repository prunes its referenced files.

@@ -199,6 +199,7 @@ export class FeatureService {
     });
     return {
       repositories: readiness.repositories,
+      workspaceRoots: readiness.workspaceRoots,
       defaults: {
         ...(config.feature_defaults.pipeline === undefined ||
         config.feature_defaults.pipeline === ''

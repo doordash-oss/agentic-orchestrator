@@ -165,6 +165,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({
         repositories: [],
+        workspaceRoots: [],
         defaults: { models: [], effort: [], useCurrentBranch: false },
       }),
     ),

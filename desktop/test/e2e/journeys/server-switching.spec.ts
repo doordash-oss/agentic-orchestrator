@@ -25,6 +25,7 @@ limitations under the License.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import {
@@ -53,6 +54,8 @@ interface TestServer {
   runtimeDir: string;
   stateDir: string;
   configPath: string;
+  /** Fixed listen address when the server must return on the same one. */
+  listen?: string;
   proc: ChildProcess;
   logs: string[];
 }
@@ -63,6 +66,21 @@ interface RegistryEntry {
   runtime: { runtime_dir: string };
   pid: number;
   base_url: string;
+}
+
+/** Reserves and releases an ephemeral port for a fixed-address server. */
+async function pickFreePort(): Promise<number> {
+  const server = net.createServer();
+  const listening = new Promise<void>((resolve) => server.once('listening', () => resolve()));
+  server.listen(0, '127.0.0.1');
+  await listening;
+  const address = server.address();
+  const port = typeof address === 'object' && address !== null ? address.port : 0;
+  server.close();
+  if (port === 0) {
+    throw new Error('could not reserve a fixed listen port');
+  }
+  return port;
 }
 
 function registryDir(world: JourneyWorld): string {
@@ -83,21 +101,49 @@ function readRegistry(world: JourneyWorld): RegistryEntry[] {
 }
 
 /** Starts a test-owned server with its own runtime dir, name, and port. */
-function startTestServer(world: JourneyWorld, name: string, runtimeDir: string): TestServer {
+function startTestServer(
+  world: JourneyWorld,
+  name: string,
+  runtimeDir: string,
+  listen?: string,
+): TestServer {
   const runtimePath = path.join(world.root, runtimeDir);
   const stateDir = path.join(runtimePath, 'features');
   const configPath = path.join(runtimePath, 'config.yaml');
   fs.mkdirSync(stateDir, { recursive: true });
   fs.copyFileSync(world.configPath, configPath);
-  const logs: string[] = [];
-  const proc = spawn(
-    bundledServerBinary(packagedExecutable()),
-    ['server', '--config', configPath, '--state-dir', stateDir, '--name', name],
-    { env: minimalEnv(world), stdio: ['ignore', 'pipe', 'pipe'] },
-  );
-  proc.stdout?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
-  proc.stderr?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
-  return { name, runtimeDir: runtimePath, stateDir, configPath, proc, logs };
+  const server: TestServer = {
+    name,
+    runtimeDir: runtimePath,
+    stateDir,
+    configPath,
+    listen,
+    proc: null as unknown as ChildProcess,
+    logs: [],
+  };
+  server.proc = spawnServer(world, server);
+  return server;
+}
+
+/** (Re)spawns a test server; a fixed listen address returns on the same one. */
+function spawnServer(world: JourneyWorld, server: TestServer): ChildProcess {
+  const args = [
+    'server',
+    '--config',
+    server.configPath,
+    '--state-dir',
+    server.stateDir,
+    '--name',
+    server.name,
+  ];
+  if (server.listen !== undefined) args.push('--listen', server.listen);
+  const proc = spawn(bundledServerBinary(packagedExecutable()), args, {
+    env: minimalEnv(world),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  proc.stdout?.on('data', (chunk: Buffer) => server.logs.push(chunk.toString()));
+  proc.stderr?.on('data', (chunk: Buffer) => server.logs.push(chunk.toString()));
+  return proc;
 }
 
 function discoveryAt(runtimeDir: string): { pid: number; base_url: string } | null {
@@ -160,7 +206,10 @@ test("two-server switching: A→B→A restores each server's truth and selection
   let handle: AppHandle | null = null;
   try {
     transcript.section('Start two named servers sharing one HOME');
-    const alpha = startTestServer(world, 'alpha', 'runtime-alpha');
+    // alpha listens on a fixed address so it can die and return on the
+    // same one, which is what a retained creation draft keys on.
+    const alphaListen = `127.0.0.1:${await pickFreePort()}`;
+    const alpha = startTestServer(world, 'alpha', 'runtime-alpha', alphaListen);
     const beta = startTestServer(world, 'beta', 'runtime-beta');
     servers.push(alpha, beta);
     await waitFor(() => discoveryAt(alpha.runtimeDir) !== null, 'alpha discovery record', 30_000);
@@ -260,6 +309,69 @@ test("two-server switching: A→B→A restores each server's truth and selection
     const restoredSettings = await handle.page.evaluate(() => window.agentico.getSettings());
     expect(restoredSettings.shell.featureByServer[alphaKey!]).toBe(featureId);
     transcript.step('A→B→A: alpha workspace, feature list, and selection all restored');
+
+    transcript.section('Creation drafts survive a real connection flip');
+    // The creation sheet is window-modal, so the in-app switcher is not the
+    // boundary a draft crosses: a server-level disconnect is. Alpha opens a
+    // draft and gives it user-owned values first.
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await handle.page.getByRole('button', { name: 'New feature' }).click();
+    const alphaSheet = handle.page.getByRole('dialog', { name: 'New feature' });
+    await expect(alphaSheet).toBeVisible({ timeout: 30_000 });
+    await alphaSheet.getByRole('checkbox', { name: /switch-lab/ }).click();
+    await alphaSheet.getByRole('radio', { name: 'Current branch' }).click();
+    await alphaSheet.getByRole('button', { name: 'Next: Describe' }).click();
+    await alphaSheet.getByLabel('Name').fill('Alpha retained draft');
+
+    // Alpha dies: the ready tree — and with it the sheet — unmounts, and
+    // the connection shell takes over while the draft stays retained.
+    await stopServer(alpha);
+    await expect(handle.page.getByRole('dialog', { name: 'New feature' })).toHaveCount(0, {
+      timeout: 60_000,
+    });
+    await expect(handle.page.getByRole('region', { name: 'Agentico connection' })).toBeVisible({
+      timeout: 60_000,
+    });
+    transcript.step('dead alpha unmounted the ready tree with the draft retained');
+
+    // A retry while alpha is still down rescans and falls back to the live
+    // beta: the ready tree remounts on beta's workspace, alpha's creation
+    // sheet stays unmounted, and the retained draft never leaks into it.
+    await handle.page.getByRole('button', { name: 'Retry' }).click();
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(handle.page.getByRole('dialog', { name: 'New feature' })).toHaveCount(0);
+    const fallbackState = await connectionState(handle);
+    expect(fallbackState.status).toBe('ready');
+    expect(fallbackState.serverName).toBe('beta');
+    transcript.step('failed alpha retry fell back to beta with the draft retained');
+
+    // Alpha returns on the same address: switching back re-attaches and the
+    // draft restores verbatim — values, selection, branch mode, position.
+    alpha.proc = spawnServer(world, alpha);
+    await waitFor(() => discoveryAt(alpha.runtimeDir) !== null, 'alpha rediscovery', 30_000);
+    await openSwitcher(handle, 'beta');
+    await handle.page.getByRole('option', { name: /alpha at .+ — Available/ }).click();
+    await waitFor(
+      async () => (await connectionState(handle!)).serverName === 'alpha',
+      'alpha re-attach for draft restore',
+      60_000,
+    );
+    const restoredSheet = handle.page.getByRole('dialog', { name: 'New feature' });
+    await expect(restoredSheet).toBeVisible({ timeout: 60_000 });
+    await expect(restoredSheet.getByRole('heading', { name: 'Define the work' })).toBeVisible();
+    await expect(restoredSheet.getByLabel('Name')).toHaveValue('Alpha retained draft');
+    await restoredSheet.getByRole('button', { name: 'Back' }).click();
+    await expect(restoredSheet.getByRole('checkbox', { name: /switch-lab/ })).toBeChecked();
+    await expect(restoredSheet.getByRole('radio', { name: 'Current branch' })).toBeChecked();
+    transcript.step('alpha creation draft restored verbatim across the connection flip');
+
+    // An explicit discard retires the restored draft.
+    await restoredSheet.getByRole('button', { name: 'Cancel' }).click();
+    await restoredSheet.getByRole('button', { name: 'Discard draft' }).click();
+    await expect(handle.page.getByRole('dialog', { name: 'New feature' })).toHaveCount(0);
+    transcript.step('explicit discard retired the restored draft');
 
     persistAppLogs(handle, 'server-switching-app');
     transcript.write(testInfo);

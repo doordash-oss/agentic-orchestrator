@@ -242,6 +242,14 @@ func cloneOperationDTO(rec clone.Record) CloneOperation {
 			HasHead:     rec.Published.HasHead,
 			PublishedAt: rec.Published.PublishedAt,
 		}
+		if rec.Published.Identity != nil {
+			dto.Published.Identity = &RepositoryIdentity{
+				Path:      rec.Published.Identity.Path,
+				CommonDir: rec.Published.Identity.CommonDir,
+				Device:    rec.Published.Identity.Device,
+				Inode:     rec.Published.Identity.Inode,
+			}
+		}
 	}
 	return dto
 }

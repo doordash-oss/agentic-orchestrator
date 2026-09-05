@@ -203,6 +203,16 @@ export function toCloneOperation(dto: CloneOperationDTO): CloneOperation {
       path: dto.published.path,
       hasHead: dto.published.has_head,
       publishedAt: dto.published.published_at,
+      ...(dto.published.identity === undefined
+        ? {}
+        : {
+            identity: {
+              path: dto.published.identity.path,
+              commonDir: dto.published.identity.common_dir,
+              device: dto.published.identity.device,
+              inode: dto.published.identity.inode,
+            },
+          }),
     };
   }
   return operation;

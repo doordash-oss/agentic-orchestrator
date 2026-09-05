@@ -13751,3 +13751,52 @@ body {
     transition: none;
   }
 }
+
+/* --- Creation sheet: nested clone view -------------------------------------- */
+
+.creation-clone {
+  width: min(560px, 100%);
+  max-height: min(72vh, 640px);
+  overflow: auto;
+  animation: creation-clone-enter 160ms ease-out;
+}
+
+.creation-clone h2 {
+  margin: 0 0 var(--space-2);
+  font-family: var(--bench-font-text);
+  font-size: 20px;
+}
+
+.creation-clone__desc {
+  margin: 0 0 var(--space-4);
+}
+
+.creation-clone__operation {
+  margin: var(--space-4) 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+.creation-clone__help {
+  margin: var(--space-3) 0 0;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+@keyframes creation-clone-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .creation-clone {
+    animation: none;
+  }
+}

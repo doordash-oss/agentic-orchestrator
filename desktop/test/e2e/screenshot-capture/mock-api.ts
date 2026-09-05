@@ -2057,6 +2057,7 @@ function makeMockApi(
     getCreationDefaults: () =>
       Promise.resolve({
         repositories: READY_SNAPSHOT.repositories!.map((r) => ({ ...r, valid: true })),
+        workspaceRoots: READY_SNAPSHOT.workspaceRoots ?? [],
         defaults: {
           pipeline: 'large',
           inquireness: 'medium',

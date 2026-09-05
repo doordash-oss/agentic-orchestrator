@@ -63,6 +63,7 @@ import { parseIpcError } from '../wizard/ipcError';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { isEditingShortcutTarget } from '../components/CommandPalette';
 import { CreateFeatureForm } from './CreateFeatureForm';
+import { useCreationDrafts, useCreationDraftEntry } from './creationDrafts';
 import { FeatureCockpit } from './FeatureCockpit';
 import { PipRail } from '../components/Pip';
 import { HouseIcon } from '../components/icons';
@@ -284,7 +285,19 @@ export function WorkspaceShell({
   const clearSwitcherRoute = useCallback(() => setSwitcherRoute(null), []);
   const listRequestRef = useRef(0);
   const overviewActiveRef = useRef(false);
-  const [creationOpen, setCreationOpen] = useState(false);
+  // The creation sheet's open flag and retained draft live per server in a
+  // store that survives this shell's unmount (a disconnect or a server
+  // switch unmounts the whole ready tree; the store lives above it in App).
+  const creationDrafts = useCreationDrafts();
+  const creationEntry = useCreationDraftEntry(creationDrafts, scopeKey);
+  const creationOpen = creationEntry?.open ?? false;
+  const openCreation = useCallback(() => {
+    creationDrafts.openDraft(scopeKey);
+  }, [creationDrafts, scopeKey]);
+  const closeCreation = useCallback(() => {
+    // Explicit discard retires the server's draft and its associations.
+    creationDrafts.retire(scopeKey);
+  }, [creationDrafts, scopeKey]);
   // The cockpit-owned half of the native menu's summary: the live action
   // catalogue behind every feature verb, and the unpersisted inspector state
   // behind the View menu's Show/Hide label.
@@ -340,7 +353,7 @@ export function WorkspaceShell({
       // same duplicate-binding posture ⌘K already has.
       if (commandKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n') {
         event.preventDefault();
-        setCreationOpen(true);
+        openCreation();
         return;
       }
       if (commandKey && !event.shiftKey && !event.altKey && /^[2-9]$/.test(event.key)) {
@@ -691,7 +704,7 @@ export function WorkspaceShell({
       setBulkPreviewRequest(routeRequest.id);
       selectOverview();
     } else if (routeRequest.event.target === 'new-feature') {
-      setCreationOpen(true);
+      openCreation();
     } else if (routeRequest.event.target === 'toggle-sidebar') {
       shortcutRef.current.toggleSidebar();
     } else if (routeRequest.event.target === 'toggle-inspector') {
@@ -940,7 +953,7 @@ export function WorkspaceShell({
           subline={toolbarSubline}
           showTrailing={showTrailingToolbar}
           showNewFeature={showNewFeatureButton}
-          onNewFeature={() => setCreationOpen(true)}
+          onNewFeature={() => openCreation()}
           newFeatureButtonRef={newFeatureButtonRef}
           attention={{
             items: attentionItems,
@@ -1016,7 +1029,7 @@ export function WorkspaceShell({
                   <button
                     type="button"
                     className="overview-surface__cta"
-                    onClick={() => setCreationOpen(true)}
+                    onClick={() => openCreation()}
                   >
                     Create a feature
                   </button>
@@ -1057,11 +1070,16 @@ export function WorkspaceShell({
 
       {creationOpen ? (
         <CreateFeatureForm
-          onClose={() => setCreationOpen(false)}
+          key={scopeKey}
+          retainedDraft={creationEntry?.state}
+          onDraftDetach={(state) => creationDrafts.persist(scopeKey, state)}
+          onClose={closeCreation}
           onCreated={({ featureId }) => {
-            setCreationOpen(false);
+            // A successful creation retires the draft only after the
+            // existing success handling completes.
             loadList();
             selectFeature(featureId);
+            closeCreation();
           }}
         />
       ) : null}

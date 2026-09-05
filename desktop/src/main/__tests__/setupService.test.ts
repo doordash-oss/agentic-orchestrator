@@ -161,7 +161,7 @@ describe('CreationFilesService', () => {
       const requestId = crypto.randomUUID();
       const result = await service.search({
         requestId,
-        repoKeys: ['repo-a'],
+        repositories: [{ key: 'repo-a' }],
         query: 'creation context',
       });
       expect(result.files).toEqual([{ repoKey: 'repo-a', path: 'src/creation-context.md' }]);

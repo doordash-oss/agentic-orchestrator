@@ -400,6 +400,17 @@ export const ReadinessResponseSchema = z.object({
         valid: z.boolean(),
         issue: CanonicalErrorSchema.optional(),
         feature_ready: z.boolean(),
+        // Server-resolved repository identity; malformed identity data is
+        // rejected rather than half-parsed, and a missing identity simply
+        // leaves the repository unselectable upstream.
+        identity: z
+          .strictObject({
+            path: z.string().min(1).max(4096),
+            common_dir: z.string().min(1).max(4096),
+            device: z.string().regex(/^[0-9]{1,20}$/),
+            inode: z.string().regex(/^[0-9]{1,20}$/),
+          })
+          .optional(),
       }),
     ),
   }),
@@ -444,6 +455,16 @@ export const CloneOperationDTOSchema = z.object({
       path: z.string(),
       has_head: z.boolean(),
       published_at: z.string(),
+      // Server-resolved identity of the repository actually published;
+      // absent for older records or an unprovable destination.
+      identity: z
+        .strictObject({
+          path: z.string().min(1).max(4096),
+          common_dir: z.string().min(1).max(4096),
+          device: z.string().regex(/^[0-9]{1,20}$/),
+          inode: z.string().regex(/^[0-9]{1,20}$/),
+        })
+        .optional(),
     })
     .optional(),
   created_at: z.string(),

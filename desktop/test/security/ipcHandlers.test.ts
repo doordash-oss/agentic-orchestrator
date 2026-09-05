@@ -196,6 +196,7 @@ function makeServices(): IpcServices {
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({
         repositories: [],
+        workspaceRoots: [],
         defaults: { models: [], effort: [], useCurrentBranch: false },
       }),
     ),

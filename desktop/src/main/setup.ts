@@ -211,6 +211,16 @@ export function toReadinessSnapshot(server: ReadinessResponse): ReadinessSnapsho
       valid: repository.valid,
       featureReady: repository.feature_ready,
       ...(repository.issue === undefined ? {} : { issue: repository.issue }),
+      ...(repository.identity === undefined
+        ? {}
+        : {
+            identity: {
+              path: repository.identity.path,
+              commonDir: repository.identity.common_dir,
+              device: repository.identity.device,
+              inode: repository.identity.inode,
+            },
+          }),
     })),
     issues: server.issues ?? [],
   };

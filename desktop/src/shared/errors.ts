@@ -550,6 +550,14 @@ export const ERROR_CATALOG = {
     summary: () => 'A selected repository file is not a regular file.',
     remediationHint: () => 'Re-pick the file from the repository file picker, then retry.',
   }),
+  E_REPOSITORY_FILE_UNRESOLVED: entry({
+    class: 'needs_action',
+    title: 'The referenced repository is no longer available',
+    summary: () =>
+      'A referenced repository file belongs to a repository that is no longer available on the server.',
+    remediationHint: () =>
+      'Remove the reference, reselect the repository and reference the file again, then retry.',
+  }),
 
   // --- Settings / setup / drafts ------------------------------------------------
   E_INVALID_SETTINGS_PATCH: entry({

@@ -25,6 +25,7 @@ import {
   HealthResponseSchema,
   parseServerJson,
   PromptSnapshotResponseSchema,
+  ReadinessResponseSchema,
   RepositoryDiffResponseSchema,
   RewindActionResponseSchema,
   ServerFeatureDetailSchema,
@@ -880,5 +881,61 @@ describe('owned error wire shapes on the feature summary', () => {
         errors: [{ ...runEntry, error: { ...runEntry.error, diagnostics: 'raw' } }],
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('Readiness repository identity contract', () => {
+  const baseRepository = {
+    name: 'service',
+    path: '/work/service',
+    valid: true,
+    feature_ready: true,
+  };
+  const validIdentity = {
+    path: '/work/service',
+    common_dir: '/work/service/.git',
+    device: '16777234',
+    inode: '982394',
+  };
+
+  function readinessWith(identity: unknown) {
+    return {
+      api_version: 'v1',
+      ready: true,
+      providers: [],
+      models: { available: true },
+      configuration: { valid: true },
+      workspace: {
+        roots: [],
+        repositories: [{ ...baseRepository, identity }],
+      },
+    };
+  }
+
+  it('accepts a well-formed identity and maps it through the readiness snapshot', () => {
+    const parsed = ReadinessResponseSchema.parse(readinessWith(validIdentity));
+    expect(parsed.workspace.repositories[0]?.identity).toEqual({
+      path: '/work/service',
+      common_dir: '/work/service/.git',
+      device: '16777234',
+      inode: '982394',
+    });
+  });
+
+  it('accepts a repository without an identity (unselectable, not malformed)', () => {
+    const parsed = ReadinessResponseSchema.parse(readinessWith(undefined));
+    expect(parsed.workspace.repositories[0]?.identity).toBeUndefined();
+  });
+
+  it.each([
+    ['non-decimal device', { ...validIdentity, device: '0x1f' }],
+    ['negative inode', { ...validIdentity, inode: '-4' }],
+    ['numeric device instead of text', { ...validIdentity, device: 16777234 }],
+    ['empty path', { ...validIdentity, path: '' }],
+    ['missing common_dir', { ...validIdentity, common_dir: undefined }],
+    ['oversized path', { ...validIdentity, path: 'x'.repeat(4097) }],
+    ['extra field', { ...validIdentity, extra: 'no' }],
+  ])('rejects malformed identity data: %s', (_label, identity) => {
+    expect(() => ReadinessResponseSchema.parse(readinessWith(identity))).toThrow();
   });
 });

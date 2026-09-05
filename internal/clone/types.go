@@ -123,14 +123,29 @@ type OpError struct {
 	Diagnostics string `json:"diagnostics,omitempty"`
 }
 
+// PublicationIdentity is the server-resolved repository identity of the
+// repository actually published, pinned by the publication marker before the
+// atomic rename. Device and Inode are decimal text so the comparison stays
+// exact in every client language. It is absent when the identity could not
+// be proved (older records, or a destination whose repository no longer
+// matches the marker), and clients must never fall back to key or path.
+type PublicationIdentity struct {
+	Path      string `json:"path"`
+	CommonDir string `json:"common_dir"`
+	Device    string `json:"device"`
+	Inode     string `json:"inode"`
+}
+
 // Publication is the durable evidence of a successful atomic publication.
 // RepoKey is the actual collision-safe catalog key computed from discovery
-// after publication, never the requested folder name.
+// after publication, never the requested folder name. Identity binds the
+// publication to the repository that was actually published.
 type Publication struct {
-	RepoKey     string    `json:"repo_key"`
-	Path        string    `json:"path"`
-	HasHead     bool      `json:"has_head"`
-	PublishedAt time.Time `json:"published_at"`
+	RepoKey     string                `json:"repo_key"`
+	Path        string                `json:"path"`
+	HasHead     bool                  `json:"has_head"`
+	PublishedAt time.Time             `json:"published_at"`
+	Identity    *PublicationIdentity  `json:"identity,omitempty"`
 }
 
 // ProcessInfo records the spawned worker identity. PID alone is never

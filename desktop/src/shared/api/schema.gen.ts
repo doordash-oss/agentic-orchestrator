@@ -1231,6 +1231,19 @@ export interface components {
             issue?: components["schemas"]["Error"];
             /** @description Whether the repository can start feature work. A repository without commits (e.g. cloned from an empty remote) is a valid, discoverable git repository but is not feature ready. */
             feature_ready: boolean;
+            /** @description Server-resolved identity binding this repository to its canonical checkout path and Git repository. Present for every valid repository; stable across commits, branch checkouts, discovery refreshes and reconnects to the same server. Absent when the identity could not be resolved, in which case the repository cannot be selected. */
+            identity?: components["schemas"]["RepositoryIdentity"];
+        };
+        /** @description Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages. */
+        RepositoryIdentity: {
+            /** @description Canonical checkout path (symlinks resolved). */
+            path: string;
+            /** @description Resolved Git common directory. Linked worktrees share it with their main checkout but differ in path. */
+            common_dir: string;
+            /** @description Device id of the Git common directory, as decimal text. */
+            device: string;
+            /** @description Inode of the Git common directory, as decimal text. */
+            inode: string;
         };
         RepositoryInitRequest: {
             /** @description Absolute directory to initialize, confined to a configured workspace root. May not yet exist; an existing directory must be empty and not already a git repository. */
@@ -1301,6 +1314,8 @@ export interface components {
             has_head: boolean;
             /** Format: date-time */
             published_at: string;
+            /** @description Server-resolved identity of the repository actually published, pinned by the durable publication marker. Absent for older records or when the destination no longer matches the marker: such publications stay viewable but must never be adopted by a key or path fallback. */
+            identity?: components["schemas"]["RepositoryIdentity"];
         };
         CloneActionResponse: components["schemas"]["ActionBaseResponse"] & {
             result: string;

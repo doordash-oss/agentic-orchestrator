@@ -1336,9 +1336,12 @@ type CloneOperationResponse struct {
 // ClonePublication defines model for ClonePublication.
 type ClonePublication struct {
 	// HasHead Whether the published repository has commits. An empty remote still publishes successfully with has_head false.
-	HasHead     bool      `json:"has_head"`
-	Path        string    `json:"path"`
-	PublishedAt time.Time `json:"published_at"`
+	HasHead bool `json:"has_head"`
+
+	// Identity Server-resolved identity of the repository actually published, pinned by the durable publication marker. Absent for older records or when the destination no longer matches the marker: such publications stay viewable but must never be adopted by a key or path fallback.
+	Identity    *RepositoryIdentity `json:"identity,omitempty"`
+	Path        string              `json:"path"`
+	PublishedAt time.Time           `json:"published_at"`
 
 	// RepoKey Actual collision-safe catalog key from discovery after publication.
 	RepoKey string `json:"repo_key"`
@@ -2457,6 +2460,21 @@ type RepositoryDiffResponse struct {
 	Truncated bool `json:"truncated,omitempty"`
 }
 
+// RepositoryIdentity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+type RepositoryIdentity struct {
+	// CommonDir Resolved Git common directory. Linked worktrees share it with their main checkout but differ in path.
+	CommonDir string `json:"common_dir"`
+
+	// Device Device id of the Git common directory, as decimal text.
+	Device string `json:"device"`
+
+	// Inode Inode of the Git common directory, as decimal text.
+	Inode string `json:"inode"`
+
+	// Path Canonical checkout path (symlinks resolved).
+	Path string `json:"path"`
+}
+
 // RepositoryInitSchema defines model for RepositoryInitRequest.
 type RepositoryInitSchema struct {
 	// Consent Explicit user consent to create a git repository at the target path. Must be true.
@@ -2489,6 +2507,9 @@ type RepositoryPathDTO struct {
 type RepositoryReadiness struct {
 	// FeatureReady Whether the repository can start feature work. A repository without commits (e.g. cloned from an empty remote) is a valid, discoverable git repository but is not feature ready.
 	FeatureReady bool `json:"feature_ready"`
+
+	// Identity Server-resolved identity binding this repository to its canonical checkout path and Git repository. Present for every valid repository; stable across commits, branch checkouts, discovery refreshes and reconnects to the same server. Absent when the identity could not be resolved, in which case the repository cannot be selected.
+	Identity *RepositoryIdentity `json:"identity,omitempty"`
 
 	// Issue Canonical catalog-rendered error.
 	Issue *Error `json:"issue,omitempty"`

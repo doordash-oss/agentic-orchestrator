@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -347,9 +348,10 @@ type ownershipMarker struct {
 // staged repository's .git directory before the atomic rename, so a crash
 // between rename and the success write can be reconciled later.
 type publicationMarker struct {
-	OperationID string    `json:"operation_id"`
-	Nonce       string    `json:"nonce"`
-	PublishedAt time.Time `json:"published_at"`
+	OperationID string                `json:"operation_id"`
+	Nonce       string                `json:"nonce"`
+	PublishedAt time.Time             `json:"published_at"`
+	Identity    *PublicationIdentity  `json:"identity,omitempty"`
 }
 
 const (
@@ -542,11 +544,55 @@ func (s *Service) publicationIdentity(rec *Record) Publication {
 			break
 		}
 	}
-	return Publication{
+	pub := Publication{
 		RepoKey:     key,
 		Path:        rec.DestinationPath,
 		HasHead:     git.HasHead(rec.DestinationPath),
 		PublishedAt: s.now().UTC(),
+	}
+	// The publication identity is only provable when the repository now at
+	// the destination is the one the marker pinned before the rename: a
+	// replacement at the same path never inherits an old success.
+	if markerIdentity := s.publicationMarkerIdentity(rec); markerIdentity != nil {
+		if identity, ok := git.ResolveRepoIdentity(rec.DestinationPath); ok && publicationIdentityEqual(markerIdentity, identity) {
+			pub.Identity = wirePublicationIdentity(identity)
+		}
+	}
+	return pub
+}
+
+// publicationMarkerIdentity reads the durable publication marker at the
+// destination and returns the identity it pinned, if any.
+func (s *Service) publicationMarkerIdentity(rec *Record) *PublicationIdentity {
+	data, err := os.ReadFile(filepath.Join(rec.DestinationPath, ".git", publicationMarkerName))
+	if err != nil {
+		return nil
+	}
+	var marker publicationMarker
+	if json.Unmarshal(data, &marker) != nil {
+		return nil
+	}
+	return marker.Identity
+}
+
+// publicationIdentityEqual compares a pinned marker identity with a fresh
+// server-resolved identity.
+func publicationIdentityEqual(pinned *PublicationIdentity, fresh git.RepoIdentity) bool {
+	if pinned == nil {
+		return false
+	}
+	return pinned.Path == fresh.Path &&
+		pinned.CommonDir == fresh.CommonDir &&
+		pinned.Device == strconv.FormatUint(fresh.Device, 10) &&
+		pinned.Inode == strconv.FormatUint(fresh.Inode, 10)
+}
+
+func wirePublicationIdentity(identity git.RepoIdentity) *PublicationIdentity {
+	return &PublicationIdentity{
+		Path:      identity.Path,
+		CommonDir: identity.CommonDir,
+		Device:    strconv.FormatUint(identity.Device, 10),
+		Inode:     strconv.FormatUint(identity.Inode, 10),
 	}
 }
 

@@ -355,6 +355,18 @@ func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 			// A repository without commits (an unborn clone of an empty
 			// remote) is valid and visible but cannot start feature work.
 			entry.FeatureReady = git.HasHead(expanded)
+			// The identity binds the catalog entry to the actual checkout:
+			// clients reconcile selections by it across discovery refreshes
+			// and renames. It is omitted when it cannot be resolved, which
+			// makes the repository unselectable rather than mis-bound.
+			if identity, ok := git.ResolveRepoIdentity(expanded); ok {
+				entry.Identity = &RepositoryIdentity{
+					Path:      identity.Path,
+					CommonDir: identity.CommonDir,
+					Device:    git.FormatIdentityDevice(identity.Device),
+					Inode:     git.FormatIdentityInode(identity.Inode),
+				}
+			}
 		} else {
 			entry.Issue = readinessIssue(errcat.InvalidRepository)
 		}

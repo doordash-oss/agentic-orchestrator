@@ -31,7 +31,9 @@ import {
   CREATION_ATTACHMENT_LIMIT,
   CREATION_IMAGE_LIMIT,
   CREATION_REPOSITORY_FILE_LIMIT,
+  sameRepositoryIdentity,
   type CreationFileKind,
+  type CreationFileSearchRepository,
   type RepositoryFileRef,
 } from '../../../shared/ipc';
 import { parseIpcError } from '../wizard/ipcError';
@@ -69,13 +71,35 @@ function unique(items: readonly string[]): string[] {
   return [...new Set(items)];
 }
 
+/**
+ * A reference stays resolved while its repository is still among the
+ * searchable selections by identity (or, for feature-inherited references
+ * without identity, by key). Missing or replaced repositories surface as
+ * visibly unresolved instead of silently dropping or redirecting.
+ */
+function isResolvedReference(
+  file: RepositoryFileRef,
+  searchRepositories: readonly CreationFileSearchRepository[],
+): boolean {
+  return searchRepositories.some((expected) =>
+    expected.identity !== undefined && file.identity !== undefined
+      ? sameRepositoryIdentity(expected.identity, file.identity)
+      : file.identity === undefined && expected.key === file.repoKey,
+  );
+}
+
 export interface DescriptionComposerProps {
   id: string;
   label: string;
   placeholder: string;
   value: string;
-  /** Repositories the @-mention search covers. */
-  repoKeys: readonly string[];
+  /**
+   * Repositories the @-mention search covers, each bound to its expected
+   * server-resolved identity (feature-inherited repositories carry only a
+   * key). The search — and every reference it produces — stays associated
+   * with the repository it was issued against across discovery changes.
+   */
+  searchRepositories: readonly CreationFileSearchRepository[];
   /** Local-path attachments (local connections; remote refuses these at submit). */
   images: readonly string[];
   attachments: readonly string[];
@@ -103,7 +127,7 @@ export function DescriptionComposer({
   label,
   placeholder,
   value,
-  repoKeys,
+  searchRepositories,
   images,
   attachments,
   imageUploads,
@@ -143,7 +167,7 @@ export function DescriptionComposer({
   useEffect(() => {
     // Remote connections never search: the popover explains the limitation
     // instead of spinning on an endpoint the server cannot serve.
-    if (remote || mention === null || mention.query === '' || repoKeys.length === 0) {
+    if (remote || mention === null || mention.query === '' || searchRepositories.length === 0) {
       setMentionResults([]);
       setMentionStatus('idle');
       return;
@@ -154,7 +178,11 @@ export function DescriptionComposer({
       dispatched = true;
       setMentionStatus('searching');
       window.agentico
-        .searchCreationFiles({ requestId, repoKeys: [...repoKeys], query: mention.query })
+        .searchCreationFiles({
+          requestId,
+          repositories: [...searchRepositories],
+          query: mention.query,
+        })
         .then((result) => {
           if (!result.cancelled) {
             setMentionResults(result.files);
@@ -168,7 +196,7 @@ export function DescriptionComposer({
       window.clearTimeout(timer);
       if (dispatched) void window.agentico.cancelCreationFileSearch(requestId);
     };
-  }, [remote, mention, onError, repoKeys]);
+  }, [remote, mention, onError, searchRepositories]);
 
   /**
    * Stages picked/dropped/pasted local paths on the connected server. The
@@ -350,7 +378,7 @@ export function DescriptionComposer({
           onPaste={onPaste}
         />
       </label>
-      {mention !== null && repoKeys.length > 0 ? (
+      {mention !== null && searchRepositories.length > 0 ? (
         <div className="composer__mentions" role="listbox" aria-label="Repository files">
           {remote ? (
             <p className="composer__mentions-hint" role="status">
@@ -360,7 +388,7 @@ export function DescriptionComposer({
             <p className="composer__mentions-hint">Keep typing to search repository files…</p>
           ) : mentionStatus === 'searching' && mentionResults.length === 0 ? (
             <p className="composer__mentions-hint" role="status">
-              Searching {repoKeys.join(', ')}…
+              Searching {searchRepositories.map(({ key }) => key).join(', ')}…
             </p>
           ) : mentionResults.length === 0 ? (
             <p className="composer__mentions-hint">No files match “{mention.query}”.</p>
@@ -486,30 +514,42 @@ export function DescriptionComposer({
       ) : null}
       {repositoryFiles.length > 0 ? (
         <ol className="composer__chips" aria-label="Referenced repository files">
-          {repositoryFiles.map((file) => (
-            <li
-              key={`${file.repoKey}:${file.path}`}
-              className="composer__chip"
-              data-kind="reference"
-            >
-              <span>
-                @{file.repoKey}/{file.path}
-              </span>
-              <button
-                type="button"
-                aria-label={`Remove reference ${file.repoKey}/${file.path}`}
-                onClick={() =>
-                  onRepositoryFilesChange((files) =>
-                    files.filter(
-                      (item) => item.repoKey !== file.repoKey || item.path !== file.path,
-                    ),
-                  )
-                }
+          {repositoryFiles.map((file) => {
+            const unresolved = !isResolvedReference(file, searchRepositories);
+            return (
+              <li
+                key={`${file.repoKey}:${file.path}`}
+                className="composer__chip"
+                data-kind="reference"
+                data-unresolved={unresolved ? 'true' : undefined}
               >
-                ×
-              </button>
-            </li>
-          ))}
+                <span>
+                  @{file.repoKey}/{file.path}
+                </span>
+                {unresolved ? (
+                  <span
+                    className="composer__chip-badge"
+                    title="Reselect the repository and reference the file again."
+                  >
+                    Needs reselection
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  aria-label={`Remove reference ${file.repoKey}/${file.path}`}
+                  onClick={() =>
+                    onRepositoryFilesChange((files) =>
+                      files.filter(
+                        (item) => item.repoKey !== file.repoKey || item.path !== file.path,
+                      ),
+                    )
+                  }
+                >
+                  ×
+                </button>
+              </li>
+            );
+          })}
         </ol>
       ) : null}
     </div>

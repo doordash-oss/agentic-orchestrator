@@ -24,10 +24,12 @@ limitations under the License.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
+  type CloneOperation,
   type CreationDefaults,
   type EffortLevel,
   type RepositoryFileRef,
   type RepositoryState,
+  type WorkspaceRootState,
 } from '../../../shared/ipc';
 import { ConsentDialog } from '../components/wizard/ConsentDialog';
 import { ErrorSurface } from '../components/ErrorSurface';
@@ -51,8 +53,19 @@ import {
   useModelCatalogue,
   type PhaseKey,
 } from './ConfigEditor';
+import { retainableDraft, type CloneAssociation, type CreationDraftState } from './creationDrafts';
+import { PickerCloneDialog } from './PickerCloneDialog';
 import { DescriptionComposer } from './DescriptionComposer';
 import { fieldForCreationError } from './featureView';
+import {
+  hasUnresolvedSelection,
+  isSelectableRepository,
+  reconcileRepoSelections,
+  reconcileRepositoryFiles,
+  resolvedSelectionKeys,
+  sameRepoIdentity,
+  type RepoSelection,
+} from './repoSelections';
 import {
   PIPELINES,
   checkpointSummary,
@@ -133,50 +146,127 @@ export interface CreateFeatureFormProps {
   onCreated(created: { featureId: string; name: string }): void;
   /** Cancel/Escape after any confirmation: the sheet closes, draft discarded. */
   onClose(): void;
+  /**
+   * The server's retained draft, when the sheet remounts after a connection
+   * flip or server switch. Every user-owned value rehydrates from it; only
+   * the catalog is refreshed. Absent for a fresh draft.
+   */
+  retainedDraft?: CreationDraftState;
+  /**
+   * Captures the live draft when the sheet unmounts without being retired
+   * (a disconnect or server switch). Retirement paths (explicit discard,
+   * successful creation) never call it. Absent in standalone renders.
+   */
+  onDraftDetach?(state: CreationDraftState): void;
 }
 
-export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps) {
-  const [state, setState] = useState<DefaultsState>({ phase: 'loading' });
-  const [stepIndex, setStepIndex] = useState(0);
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [repoKeys, setRepoKeys] = useState<readonly string[]>([]);
-  const [repoQuery, setRepoQuery] = useState('');
-  const [useCurrentBranch, setUseCurrentBranch] = useState(false);
-  const [pipeline, setPipeline] = useState<Pipeline>('medium');
-  const [checkpoints, setCheckpoints] = useState<CheckpointState>(checkpointsForPipeline('medium'));
-  const [modelChoices, setModelChoices] = useState<Partial<Record<PhaseKey, string>>>({});
-  const [effortChoices, setEffortChoices] = useState<Partial<Record<PhaseKey, EffortLevel>>>({});
-  const [riskLevel, setRiskLevel] = useState<'low' | 'medium' | 'high'>('medium');
-  const [inquireness, setInquireness] = useState<'none' | 'medium' | 'high'>('medium');
-  const [exitCriteria, setExitCriteria] = useState('');
-  const [images, setImages] = useState<readonly string[]>([]);
-  const [attachments, setAttachments] = useState<readonly string[]>([]);
-  const [imageUploads, setImageUploads] = useState<readonly ComposerUploadItem[]>([]);
-  const [attachmentUploads, setAttachmentUploads] = useState<readonly ComposerUploadItem[]>([]);
-  const [repositoryFiles, setRepositoryFiles] = useState<readonly RepositoryFileRef[]>([]);
-  const [autoStart, setAutoStart] = useState(true);
-  const [folderCandidate, setFolderCandidate] = useState<string | null>(null);
+export function CreateFeatureForm({
+  onCreated,
+  onClose,
+  retainedDraft,
+  onDraftDetach,
+}: CreateFeatureFormProps) {
+  // A retained draft rehydrates every user-owned value; only in-flight
+  // work (a submission, a folder probe) resets, and the mount effect
+  // refreshes the catalog instead of re-applying server defaults.
+  const retained = retainedDraft;
+  const [state, setState] = useState<DefaultsState>(() =>
+    retained ? retained.defaultsState : { phase: 'loading' },
+  );
+  const [stepIndex, setStepIndex] = useState(() => retained?.stepIndex ?? 0);
+  const [name, setName] = useState(() => retained?.name ?? '');
+  const [description, setDescription] = useState(() => retained?.description ?? '');
+  // Selections are bound to the server-resolved repository identity captured
+  // at selection time; the catalog refresh reconciles them by identity so a
+  // rename moves a selection to its current key while a removed or replaced
+  // repository surfaces as needing reselection.
+  const [repoSelections, setRepoSelections] = useState<readonly RepoSelection[]>(
+    () => retained?.repoSelections ?? [],
+  );
+  const [repoQuery, setRepoQuery] = useState(() => retained?.repoQuery ?? '');
+  const [useCurrentBranch, setUseCurrentBranch] = useState(
+    () => retained?.useCurrentBranch ?? false,
+  );
+  const [pipeline, setPipeline] = useState<Pipeline>(() => retained?.pipeline ?? 'medium');
+  const [checkpoints, setCheckpoints] = useState<CheckpointState>(
+    () => retained?.checkpoints ?? checkpointsForPipeline('medium'),
+  );
+  const [modelChoices, setModelChoices] = useState<Partial<Record<PhaseKey, string>>>(
+    () => retained?.modelChoices ?? {},
+  );
+  const [effortChoices, setEffortChoices] = useState<Partial<Record<PhaseKey, EffortLevel>>>(
+    () => retained?.effortChoices ?? {},
+  );
+  const [riskLevel, setRiskLevel] = useState<'low' | 'medium' | 'high'>(
+    () => retained?.riskLevel ?? 'medium',
+  );
+  const [inquireness, setInquireness] = useState<'none' | 'medium' | 'high'>(
+    () => retained?.inquireness ?? 'medium',
+  );
+  const [exitCriteria, setExitCriteria] = useState(() => retained?.exitCriteria ?? '');
+  const [images, setImages] = useState<readonly string[]>(() => retained?.images ?? []);
+  const [attachments, setAttachments] = useState<readonly string[]>(
+    () => retained?.attachments ?? [],
+  );
+  const [imageUploads, setImageUploads] = useState<readonly ComposerUploadItem[]>(
+    () => retained?.imageUploads ?? [],
+  );
+  const [attachmentUploads, setAttachmentUploads] = useState<readonly ComposerUploadItem[]>(
+    () => retained?.attachmentUploads ?? [],
+  );
+  const [repositoryFiles, setRepositoryFiles] = useState<readonly RepositoryFileRef[]>(
+    () => retained?.repositoryFiles ?? [],
+  );
+  const [autoStart, setAutoStart] = useState(() => retained?.autoStart ?? true);
+  const [folderCandidate, setFolderCandidate] = useState<string | null>(
+    () => retained?.folderCandidate ?? null,
+  );
   /** Set once a candidate is a configured root that holds no repository. */
-  const [folderHoldsNoRepository, setFolderHoldsNoRepository] = useState(false);
-  const [folderNotice, setFolderNotice] = useState('');
-  const [workspaceRoots, setWorkspaceRoots] = useState<readonly string[]>([]);
-  const [consentOpen, setConsentOpen] = useState(false);
-  const [discardOpen, setDiscardOpen] = useState(false);
+  const [folderHoldsNoRepository, setFolderHoldsNoRepository] = useState(
+    () => retained?.folderHoldsNoRepository ?? false,
+  );
+  const [folderNotice, setFolderNotice] = useState(() => retained?.folderNotice ?? '');
+  const [workspaceRoots, setWorkspaceRoots] = useState<readonly string[]>(
+    () => retained?.workspaceRoots ?? [],
+  );
+  const [consentOpen, setConsentOpen] = useState(() => retained?.consentOpen ?? false);
+  const [discardOpen, setDiscardOpen] = useState(() => retained?.discardOpen ?? false);
   const [folderPending, setFolderPending] = useState(false);
   /** Typed path + its inline rejection, only ever used on remote servers. */
-  const [folderDraft, setFolderDraft] = useState('');
-  const [folderError, setFolderError] = useState<string | null>(null);
+  const [folderDraft, setFolderDraft] = useState(() => retained?.folderDraft ?? '');
+  const [folderError, setFolderError] = useState<string | null>(
+    () => retained?.folderError ?? null,
+  );
   const [pending, setPending] = useState(false);
-  const [nameError, setNameError] = useState<string | null>(null);
-  const [repoError, setRepoError] = useState<string | null>(null);
-  const [formError, setFormError] = useState<CanonicalError | null>(null);
+  const [nameError, setNameError] = useState<string | null>(() => retained?.nameError ?? null);
+  const [repoError, setRepoError] = useState<string | null>(() => retained?.repoError ?? null);
+  const [formError, setFormError] = useState<CanonicalError | null>(
+    () => retained?.formError ?? null,
+  );
+  /** A failed catalog refresh never becomes an authoritative empty catalog. */
+  const [catalogRefreshError, setCatalogRefreshError] = useState<CanonicalError | null>(
+    () => retained?.catalogRefreshError ?? null,
+  );
+  // The nested clone view and its association with this draft.
+  const [cloneOpen, setCloneOpen] = useState(() => retained?.cloneOpen ?? false);
+  const [cloneAssociation, setCloneAssociation] = useState<CloneAssociation | null>(
+    () => retained?.cloneAssociation ?? null,
+  );
+  const [cloneableRoots, setCloneableRoots] = useState<readonly WorkspaceRootState[]>(
+    () => retained?.cloneableRoots ?? [],
+  );
+  /** Authoritative snapshot of the associated clone operation. */
+  const [cloneOperation, setCloneOperation] = useState<CloneOperation | null>(null);
+  /** The repository row awaiting focus once the picker step is visible. */
+  const [focusRepoKey, setFocusRepoKey] = useState<string | null>(null);
   const catalogue = useModelCatalogue();
-  const creationKey = useRef(crypto.randomUUID());
+  const creationKey = useRef(retained?.creationKey ?? crypto.randomUUID());
   const sheetRef = useRef<HTMLDivElement | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
   const repoGroupRef = useRef<HTMLFieldSetElement | null>(null);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
+  const catalogRefreshSeq = useRef(0);
+  const cloneResolveSeq = useRef(0);
 
   // Locality decides how a folder reaches the form: the native directory
   // dialog on a local server (the picker resolves real paths on this
@@ -192,23 +282,70 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
     isBlockingStagedItem(item, serverKey),
   );
 
+  // Retirement marks the two deliberate exits (explicit discard, successful
+  // creation); any other unmount is a detach that captures the draft.
+  const retiredRef = useRef(false);
+  const retire = useCallback(() => {
+    retiredRef.current = true;
+  }, []);
+  const handleCreated = useCallback(
+    (created: { featureId: string; name: string }) => {
+      retire();
+      onCreated(created);
+    },
+    [onCreated, retire],
+  );
+  const handleClose = useCallback(() => {
+    retire();
+    onClose();
+  }, [onClose, retire]);
+
   /** Unsaved work worth confirming before it is thrown away. */
   const dirty =
     name.trim() !== '' ||
     description !== '' ||
-    repoKeys.length > 0 ||
+    repoSelections.length > 0 ||
     images.length > 0 ||
     attachments.length > 0 ||
     imageUploads.length > 0 ||
     attachmentUploads.length > 0;
+
+  // Catalog + reconciled selections. `repositories` is the current catalog;
+  // reconciliation by identity is derived so every catalog change (initial
+  // load, folder adoption, SSE refresh) re-reconciles selections without
+  // touching any other draft value.
+  const loadedDefaultsEarly = state.phase === 'loaded' ? state.defaults : null;
+  const repositories = loadedDefaultsEarly?.repositories ?? [];
+  const reconciledSelections = useMemo(
+    () => reconcileRepoSelections(repoSelections, repositories),
+    [repoSelections, repositories],
+  );
+  const selectedKeys = useMemo(
+    () => resolvedSelectionKeys(reconciledSelections),
+    [reconciledSelections],
+  );
+  /** Resolved selections as the identity-bound @-mention search scope. */
+  const searchRepositories = useMemo(
+    () =>
+      reconciledSelections.flatMap((selection) =>
+        selection.status === 'selected'
+          ? [{ key: selection.key, identity: selection.identity }]
+          : [],
+      ),
+    [reconciledSelections],
+  );
+  const unresolvedSelections = useMemo(
+    () => repoSelections.filter((_, index) => reconciledSelections[index]?.status === 'unresolved'),
+    [repoSelections, reconciledSelections],
+  );
 
   const requestCancel = useCallback(() => {
     if (dirty) {
       setDiscardOpen(true);
       return;
     }
-    onClose();
-  }, [dirty, onClose]);
+    handleClose();
+  }, [dirty, handleClose]);
 
   // Escape routes to the same Cancel path; the hook's nested-dialog bail
   // leaves Escape to the consent and discard dialogs while either is open.
@@ -220,6 +357,9 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
       .getCreationDefaults()
       .then((defaults) => {
         setState({ phase: 'loaded', defaults });
+        setCloneableRoots(
+          defaults.workspaceRoots.filter((root) => root.valid && root.cloneEligible),
+        );
         setUseCurrentBranch(defaults.defaults.useCurrentBranch);
         if (isPipeline(defaults.defaults.pipeline)) {
           setPipeline(defaults.defaults.pipeline);
@@ -230,7 +370,270 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
       .catch((err: unknown) => setState({ phase: 'error', error: parseIpcError(err) }));
   }, []);
 
-  useEffect(loadInitialDefaults, [loadInitialDefaults]);
+  /**
+   * Discovery refreshes reconcile the catalog (and with it every selection)
+   * by identity, without resetting any draft value. Requests are fenced by
+   * sequence so a stale reply cannot masquerade as a newer catalog, and a
+   * failed refresh keeps the last authoritative catalog instead of adopting
+   * an empty one.
+   */
+  const refreshCatalog = useCallback(() => {
+    const seq = ++catalogRefreshSeq.current;
+    void window.agentico
+      .getReadiness()
+      .then((snapshot) => {
+        if (seq !== catalogRefreshSeq.current) return;
+        setCatalogRefreshError(null);
+        setState((current) =>
+          current.phase === 'loaded'
+            ? {
+                phase: 'loaded',
+                defaults: { ...current.defaults, repositories: [...snapshot.repositories] },
+              }
+            : current,
+        );
+        // Attachment references follow their repository's current key by
+        // identity; their relative paths and the description text are kept.
+        setRepositoryFiles((files) => [...reconcileRepositoryFiles(files, snapshot.repositories)]);
+        setCloneableRoots(
+          snapshot.workspaceRoots.filter((root) => root.valid && root.cloneEligible),
+        );
+        setWorkspaceRoots(snapshot.workspaceRoots.map((root) => root.path));
+      })
+      .catch((err: unknown) => {
+        if (seq !== catalogRefreshSeq.current) return;
+        setCatalogRefreshError(parseIpcError(err));
+      });
+  }, []);
+
+  useEffect(() => {
+    const unsub = window.agentico.onAppEvent((event) => {
+      if (event.type !== 'invalidated') return;
+      // Any runtime configuration change can reshape discovery (roots,
+      // explicit registrations, clone publication); a resync replays the
+      // whole stream, so the catalog is re-read then too.
+      if (event.kind === 'resync' || event.kind.startsWith('config')) refreshCatalog();
+    });
+    return unsub;
+  }, [refreshCatalog]);
+
+  /**
+   * Resolves the draft's associated clone operation from the authoritative
+   * server state: by id when the start was observed, otherwise by
+   * idempotency key (a lost acceptance). Late replies cannot replace a
+   * newer snapshot, and a failed refresh never drops the association.
+   */
+  const resolveCloneOperation = useCallback(() => {
+    const association = cloneAssociationRef.current;
+    if (association === null) {
+      setCloneOperation(null);
+      return;
+    }
+    // While the start request itself is in flight, a keyed lookup must not
+    // conclude anything: the server may simply not have accepted yet.
+    if (association.operationId === null && association.startInFlight) return;
+    const seq = ++cloneResolveSeq.current;
+    const found: Promise<CloneOperation | null | 'unavailable'> =
+      association.operationId !== null
+        ? window.agentico
+            .getCloneOperation(association.operationId)
+            .catch(() => 'unavailable' as const)
+        : window.agentico
+            .listCloneOperations()
+            .then(
+              (list) =>
+                list.operations.find(
+                  (candidate) => candidate.idempotencyKey === association.idempotencyKey,
+                ) ?? null,
+            )
+            .catch(() => 'unavailable' as const);
+    void found.then((snapshot) => {
+      if (seq !== cloneResolveSeq.current) return;
+      if (snapshot === 'unavailable') return;
+      if (snapshot === null) {
+        if (association.operationId === null) {
+          // A keyed lookup that found nothing proves no operation was ever
+          // accepted: the association is stale, not in flight.
+          setCloneAssociation(null);
+          setCloneOperation(null);
+          return;
+        }
+        // A known-id lookup that misses this instant keeps the last known
+        // snapshot: the operation is merely unavailable right now.
+        return;
+      }
+      if (association.operationId === null) {
+        // A lost acceptance recovered by idempotency key: persist the
+        // operation id so later refreshes resolve directly.
+        setCloneAssociation({
+          idempotencyKey: association.idempotencyKey,
+          operationId: snapshot.id,
+          adopted: association.adopted,
+          startInFlight: false,
+        });
+      }
+      setCloneOperation(snapshot);
+    });
+  }, []);
+
+  // The association is tracked whether or not the clone view is open:
+  // background completion adopts into this draft from any wizard step,
+  // across Close, and after a restore — but only while the draft lives.
+  const cloneAssociationRef = useRef(cloneAssociation);
+  useEffect(() => {
+    cloneAssociationRef.current = cloneAssociation;
+  }, [cloneAssociation]);
+  useEffect(() => {
+    if (cloneAssociation === null) {
+      setCloneOperation(null);
+      return;
+    }
+    resolveCloneOperation();
+    const unsub = window.agentico.onAppEvent((event) => {
+      if (event.type !== 'invalidated') return;
+      if (
+        event.kind === 'resync' ||
+        event.kind.startsWith('clone.') ||
+        event.kind.startsWith('config')
+      ) {
+        resolveCloneOperation();
+      }
+    });
+    return unsub;
+  }, [cloneAssociation, resolveCloneOperation]);
+
+  // A restored draft re-reads its catalog before applying anything
+  // asynchronous; a fresh draft loads its creation defaults once. Server
+  // defaults are never re-applied over a restored draft's user-owned values.
+  useEffect(() => {
+    if (retained?.restored === true && retained.defaultsState.phase === 'loaded') {
+      refreshCatalog();
+      return;
+    }
+    // The load identity is the mount itself: a restored draft never
+    // re-applies defaults, and no later render re-triggers the load.
+    loadInitialDefaults();
+  }, []);
+
+  // The live draft is captured on every render so an unmount that is not a
+  // retirement (a disconnect or a server switch) retains the whole draft.
+  const snapshotRef = useRef<CreationDraftState | null>(null);
+  useEffect(() => {
+    snapshotRef.current = {
+      restored: true,
+      creationKey: creationKey.current,
+      defaultsState: state,
+      stepIndex,
+      name,
+      description,
+      repoSelections: [...repoSelections],
+      repoQuery,
+      useCurrentBranch,
+      pipeline,
+      checkpoints,
+      modelChoices,
+      effortChoices,
+      riskLevel,
+      inquireness,
+      exitCriteria,
+      images: [...images],
+      attachments: [...attachments],
+      imageUploads: [...imageUploads],
+      attachmentUploads: [...attachmentUploads],
+      repositoryFiles: [...repositoryFiles],
+      autoStart,
+      folderCandidate,
+      folderHoldsNoRepository,
+      folderNotice,
+      workspaceRoots: [...workspaceRoots],
+      consentOpen,
+      discardOpen,
+      folderDraft,
+      folderError,
+      nameError,
+      repoError,
+      formError,
+      catalogRefreshError,
+      cloneOpen,
+      cloneAssociation: cloneAssociation === null ? null : { ...cloneAssociation },
+      cloneableRoots: [...cloneableRoots],
+    };
+  });
+  const detachRef = useRef(onDraftDetach);
+  useEffect(() => {
+    detachRef.current = onDraftDetach;
+  }, [onDraftDetach]);
+  useEffect(
+    () => () => {
+      if (retiredRef.current || snapshotRef.current === null) return;
+      // A detach only retains the draft when a store is listening.
+      detachRef.current?.(retainableDraft(snapshotRef.current));
+    },
+    [],
+  );
+
+  /**
+   * A usable clone success adopts into exactly this draft, once: the
+   * published identity is selected under its current catalog key after the
+   * catalog has refreshed to include it. An unborn result or a publication
+   * without provable identity stays visible without selection, and nothing
+   * is adopted by a key or path fallback.
+   */
+  useEffect(() => {
+    if (cloneOperation === null || cloneOperation.state !== 'succeeded') return;
+    if (cloneAssociation === null || cloneAssociation.adopted) return;
+    // Only the draft's own associated operation adopts: a snapshot that
+    // belongs to another draft or to Settings stays visible without ever
+    // selecting anything here.
+    if (cloneOperation.idempotencyKey !== cloneAssociation.idempotencyKey) return;
+    const published = cloneOperation.published;
+    if (published === undefined || !published.hasHead || published.identity === undefined) return;
+    const identity = published.identity;
+    // Adoption requires the succeeded snapshot plus the repository still
+    // being the published one and feature-ready: stream completion alone,
+    // a replacement, or an unborn result never selects anything.
+    const match = repositories.find(
+      (repo) =>
+        repo.valid &&
+        repo.featureReady &&
+        repo.identity !== undefined &&
+        sameRepoIdentity(repo.identity, identity),
+    );
+    if (match === undefined || match.identity === undefined) return;
+    const matchIdentity = match.identity;
+    // The association has served its purpose: retiring it with the adoption
+    // makes the exactly-once guarantee structural — no later invalidation
+    // can reselect, and the clone view is free to start a fresh clone.
+    setCloneAssociation(null);
+    setRepoSelections((current) =>
+      current.some((selection) => sameRepoIdentity(selection.identity, matchIdentity))
+        ? current
+        : [...current, { key: match.name, identity: matchIdentity }],
+    );
+    // A search filter cannot hide the focus target.
+    setRepoQuery('');
+    setFocusRepoKey(match.name);
+    setCloneOpen(false);
+    setFolderNotice(`Cloned ${match.name} and selected it.`);
+    setRepoError(null);
+  }, [cloneOperation, cloneAssociation, repositories]);
+
+  /**
+   * Pending row focus lands only while the picker step is actually visible,
+   * so an adoption that completes elsewhere never steals focus.
+   */
+  useEffect(() => {
+    if (focusRepoKey === null || cloneOpen || stepIndex !== 0) return;
+    const group = repoGroupRef.current;
+    if (group === null) return;
+    const row = group.querySelector(
+      `[data-repo-key="${focusRepoKey}"] .creation-sheet__row-control`,
+    );
+    if (row === null) return;
+    (row as HTMLInputElement).focus();
+    setFocusRepoKey(null);
+  }, [focusRepoKey, cloneOpen, stepIndex, repositories, repoQuery]);
+
   // Field errors are announced by moving focus to the control that must
   // change — from an effect, so a submit-time error that first has to jump
   // back to an earlier step focuses the field once that step has rendered.
@@ -278,7 +681,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
   /** Adopts a snapshot's workspace view and selects whatever it discovered. */
   const adoptSnapshot = (snapshot: {
     repositories: readonly RepositoryState[];
-    workspaceRoots: readonly { path: string }[];
+    workspaceRoots: readonly WorkspaceRootState[];
   }): readonly RepositoryState[] => {
     setState((current) =>
       current.phase === 'loaded'
@@ -288,6 +691,8 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
           }
         : current,
     );
+    setRepositoryFiles((files) => [...reconcileRepositoryFiles(files, snapshot.repositories)]);
+    setCloneableRoots(snapshot.workspaceRoots.filter((root) => root.valid && root.cloneEligible));
     setWorkspaceRoots(snapshot.workspaceRoots.map((root) => root.path));
     return snapshot.repositories;
   };
@@ -295,8 +700,14 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
   /** An unambiguous discovery selects itself; several stay for the user. */
   const selectDiscovered = (discovered: readonly RepositoryState[]): void => {
     const only = discovered.length === 1 ? discovered[0] : undefined;
-    if (only === undefined) return;
-    setRepoKeys((current) => (current.includes(only.name) ? current : [...current, only.name]));
+    if (only === undefined || !isSelectableRepository(only)) return;
+    const identity = only.identity;
+    if (identity === undefined) return;
+    setRepoSelections((current) =>
+      current.some((selection) => sameRepoIdentity(selection.identity, identity))
+        ? current
+        : [...current, { key: only.name, identity }],
+    );
     setRepoError(null);
   };
 
@@ -394,9 +805,17 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
   const validateStep = (index: number): boolean => {
     setNameError(null);
     setRepoError(null);
-    if (index === 0 && repoKeys.length === 0) {
-      setRepoError('Select at least one repository.');
-      return false;
+    if (index === 0) {
+      if (hasUnresolvedSelection(reconciledSelections)) {
+        setRepoError(
+          'Resolve or remove the repositories marked as needing reselection before continuing.',
+        );
+        return false;
+      }
+      if (selectedKeys.length === 0) {
+        setRepoError('Select at least one repository.');
+        return false;
+      }
     }
     if (index === 1 && name.trim() === '') {
       setNameError('Enter a feature name.');
@@ -442,7 +861,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
         const created = await window.agentico.createFeature({
           name: name.trim(),
           description,
-          repoKeys: [...repoKeys],
+          repoKeys: [...selectedKeys],
           useCurrentBranch,
           images: [...images],
           attachments: [...attachments],
@@ -485,9 +904,16 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
             /* cockpit owns retry */
           }
         }
-        onCreated({ featureId: created.featureId, name: name.trim() });
+        handleCreated({ featureId: created.featureId, name: name.trim() });
       } catch (err) {
         const parsed = parseIpcError(err);
+        // An unresolved repository-file reference keeps the editable draft
+        // and surfaces where the reference chips are visible.
+        if (parsed.code === 'E_REPOSITORY_FILE_UNRESOLVED') {
+          setStepIndex(1);
+          setFormError(parsed);
+          return;
+        }
         const field = fieldForCreationError(parsed);
         if (field === 'name') {
           setStepIndex(1);
@@ -502,8 +928,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
     })();
   };
 
-  const loadedDefaults = state.phase === 'loaded' ? state.defaults : null;
-  const repositories = loadedDefaults?.repositories ?? [];
+  const loadedDefaults = loadedDefaultsEarly;
   const filteredRepositories = useMemo(() => {
     const query = repoQuery.trim().toLowerCase();
     if (query === '') return repositories;
@@ -622,6 +1047,13 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                     <h2 id="creation-repositories" className="creation-sheet__heading">
                       Choose repositories
                     </h2>
+                    {catalogRefreshError !== null ? (
+                      <ErrorSurface
+                        error={catalogRefreshError}
+                        variant="compact"
+                        localAction={retryAction(refreshCatalog)}
+                      />
+                    ) : null}
                     {repositories.length > 0 ? (
                       <label className="creation-sheet__field">
                         <span className="creation-sheet__field-label">Search repositories</span>
@@ -649,15 +1081,58 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                           ? 'No repositories yet'
                           : 'Fresh workspace discovery'}
                       </legend>
-                      {repositories.length === 0 ? (
+                      {repositories.length === 0 && unresolvedSelections.length === 0 ? (
                         <p className="creation-sheet__group-desc">
                           Point Agentico at a folder below: an existing repository, a folder that
                           holds several, or an empty folder to start something new.
                         </p>
                       ) : (
                         <ul className="creation-sheet__rows">
+                          {unresolvedSelections.map((selection) => (
+                            <li
+                              key={`unresolved:${selection.key}`}
+                              className="creation-sheet__row-item"
+                            >
+                              <div
+                                className="creation-sheet__row"
+                                data-valid={false}
+                                data-unresolved="true"
+                              >
+                                <span className="creation-sheet__row-body">
+                                  <b className="creation-sheet__row-name">{selection.key}</b>
+                                  <span className="creation-sheet__row-issue">
+                                    Needs reselection — this repository is no longer available on
+                                    the server. Reselect it below, or remove it.
+                                  </span>
+                                </span>
+                                <button
+                                  type="button"
+                                  className="creation-sheet__row-control creation-sheet__button"
+                                  disabled={pending}
+                                  onClick={() => {
+                                    setRepoSelections((current) =>
+                                      current.filter(
+                                        (item) =>
+                                          !sameRepoIdentity(item.identity, selection.identity),
+                                      ),
+                                    );
+                                    setRepositoryFiles((files) =>
+                                      files.filter((file) => file.repoKey !== selection.key),
+                                    );
+                                    setRepoError(null);
+                                  }}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </li>
+                          ))}
                           {filteredRepositories.map((repo) => (
-                            <li key={repo.name} className="creation-sheet__row-item">
+                            <li
+                              key={repo.name}
+                              className="creation-sheet__row-item"
+                              data-repo-key={repo.name}
+                            >
                               <label className="creation-sheet__row" data-valid={repo.valid}>
                                 <span className="creation-sheet__row-body">
                                   <b className="creation-sheet__row-name">{repo.name}</b>
@@ -671,20 +1146,46 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                                       No commits yet — an initial commit is required before feature
                                       work can start.
                                     </span>
+                                  ) : repo.identity === undefined ? (
+                                    <span className="creation-sheet__row-issue">
+                                      The server could not resolve this repository's identity, so it
+                                      cannot be selected.
+                                    </span>
                                   ) : null}
                                 </span>
                                 <input
                                   className="creation-sheet__row-control"
                                   type="checkbox"
-                                  checked={repoKeys.includes(repo.name)}
-                                  disabled={!repo.valid || !repo.featureReady || pending}
+                                  checked={
+                                    repo.identity !== undefined &&
+                                    reconciledSelections.some(
+                                      (selection) =>
+                                        selection.status === 'selected' &&
+                                        sameRepoIdentity(
+                                          selection.identity,
+                                          repo.identity as NonNullable<RepositoryState['identity']>,
+                                        ),
+                                    )
+                                  }
+                                  disabled={!isSelectableRepository(repo) || pending}
                                   onChange={() => {
-                                    const nextRepoKeys = repoKeys.includes(repo.name)
-                                      ? repoKeys.filter((item) => item !== repo.name)
-                                      : [...repoKeys, repo.name];
-                                    setRepoKeys(nextRepoKeys);
+                                    if (repo.identity === undefined) return;
+                                    const identity = repo.identity;
+                                    const isSelected = repoSelections.some((selection) =>
+                                      sameRepoIdentity(selection.identity, identity),
+                                    );
+                                    const nextSelections = isSelected
+                                      ? repoSelections.filter(
+                                          (selection) =>
+                                            !sameRepoIdentity(selection.identity, identity),
+                                        )
+                                      : [...repoSelections, { key: repo.name, identity }];
+                                    setRepoSelections(nextSelections);
+                                    const nextKeys = resolvedSelectionKeys(
+                                      reconcileRepoSelections(nextSelections, repositories),
+                                    );
                                     setRepositoryFiles((files) =>
-                                      files.filter((file) => nextRepoKeys.includes(file.repoKey)),
+                                      files.filter((file) => nextKeys.includes(file.repoKey)),
                                     );
                                     setRepoError(null);
                                   }}
@@ -692,7 +1193,8 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                               </label>
                             </li>
                           ))}
-                          {filteredRepositories.length === 0 ? (
+                          {filteredRepositories.length === 0 &&
+                          unresolvedSelections.length === 0 ? (
                             <li className="creation-sheet__row-item creation-sheet__row-empty">
                               No repositories match “{repoQuery.trim()}”.
                             </li>
@@ -804,6 +1306,18 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                           {'Choose deliberately; no folder is changed until you confirm an action.'}
                         </p>
                       )}
+                      <div className="creation-sheet__browser-actions">
+                        <button
+                          type="button"
+                          className="creation-sheet__button"
+                          onClick={() => {
+                            setCloneOpen(true);
+                            setFolderNotice('');
+                          }}
+                        >
+                          Clone a repository…
+                        </button>
+                      </div>
                     </section>
                     <fieldset className="creation-sheet__group">
                       <legend className="creation-sheet__group-label">Branch</legend>
@@ -841,7 +1355,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                       label="Description"
                       placeholder="Describe the work. Type @ to reference files in the selected repositories; paste or drop images and files to attach them."
                       value={description}
-                      repoKeys={repoKeys}
+                      searchRepositories={searchRepositories}
                       images={images}
                       attachments={attachments}
                       imageUploads={imageUploads}
@@ -1022,7 +1536,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                     <dl className="creation-sheet__summary">
                       <div>
                         <dt>Repositories</dt>
-                        <dd>{repoKeys.join(', ')}</dd>
+                        <dd>{selectedKeys.join(', ')}</dd>
                       </div>
                       <div>
                         <dt>Describe</dt>
@@ -1052,7 +1566,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
             {currentStep === 'Contract' && loadedDefaults !== null ? (
               <span className="sheet__footer-note">
                 {plural(checkedCheckpoints, 'checkpoint', 'checkpoints')} ·{' '}
-                {plural(repoKeys.length, 'repository', 'repositories')}
+                {plural(selectedKeys.length, 'repository', 'repositories')}
               </span>
             ) : null}
             {loadedDefaults === null ? null : (
@@ -1103,8 +1617,20 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
           </footer>
         </form>
 
+        {cloneOpen ? (
+          <PickerCloneDialog
+            connection={connection}
+            cloneableRoots={cloneableRoots}
+            association={cloneAssociation}
+            operation={cloneOperation}
+            onAssociate={(association) => setCloneAssociation(association)}
+            onRefresh={resolveCloneOperation}
+            onClose={() => setCloneOpen(false)}
+          />
+        ) : null}
+
         {discardOpen ? (
-          <DiscardDialog onKeepEditing={() => setDiscardOpen(false)} onDiscard={onClose} />
+          <DiscardDialog onKeepEditing={() => setDiscardOpen(false)} onDiscard={handleClose} />
         ) : null}
 
         {consentOpen && folderCandidate !== null ? (

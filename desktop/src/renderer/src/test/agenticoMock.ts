@@ -32,6 +32,7 @@ import type {
   FeatureActionRequest,
   FeatureSummaryView,
   ReadinessSnapshot,
+  RepositoryIdentity,
   SessionDetail,
   SessionOutputEvent,
   SessionSummary,
@@ -128,17 +129,40 @@ export function readySnapshot(overrides: Partial<ReadinessSnapshot> = {}): Readi
     models: { available: true, models: ['claude-sonnet-4-5'] },
     configuration: { valid: true },
     workspaceRoots: [{ path: '/work/space', valid: true, cloneEligible: true }],
-    repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true, featureReady: true }],
+    repositories: [
+      {
+        name: 'repo-a',
+        path: '/work/space/repo-a',
+        valid: true,
+        featureReady: true,
+        identity: mockRepoIdentity('/work/space/repo-a'),
+      },
+    ],
     issues: [],
     ...overrides,
   };
 }
 
+/** Deterministic server-resolved identity for mock repositories. */
+export function mockRepoIdentity(
+  path: string,
+  overrides: Partial<RepositoryIdentity> = {},
+): RepositoryIdentity {
+  return { path, commonDir: `${path}/.git`, device: '16777234', inode: '4242', ...overrides };
+}
+
 /** A minimal, valid creation-defaults payload for form tests. */
 export function creationDefaults(overrides: Partial<CreationDefaults> = {}): CreationDefaults {
   return {
+    workspaceRoots: [{ path: '/work/space', valid: true, cloneEligible: true }],
     repositories: [
-      { name: 'repo-a', path: '/work/space/repo-a', valid: true, featureReady: true },
+      {
+        name: 'repo-a',
+        path: '/work/space/repo-a',
+        valid: true,
+        featureReady: true,
+        identity: mockRepoIdentity('/work/space/repo-a'),
+      },
       {
         name: 'repo-b',
         path: '/work/space/repo-b',

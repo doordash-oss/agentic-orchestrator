@@ -35,6 +35,10 @@ const apiPathWorkspaceClone = "/api/v1/workspace/repositories/clone"
 // every response is an authoritative snapshot.
 type CloneService interface {
 	Start(ctx context.Context, input clone.StartInput) (clone.Record, error)
+	// Create runs the shared destination/publication boundary for a new
+	// child repository with one empty initial commit; it returns the
+	// authoritative final record.
+	Create(ctx context.Context, input clone.CreateStartInput) (clone.Record, error)
 	Snapshot(id string) (clone.Record, error)
 	List(q clone.ListQuery) (clone.ListResult, error)
 	Cancel(id string) (clone.Record, error)
@@ -309,10 +313,15 @@ func (h *apiHandler) writeCloneError(w http.ResponseWriter, err error) bool {
 	return false
 }
 
-// publishCloneEvent fires the snapshot-required SSE invalidation for one
-// clone operation. Events identify changes; snapshots stay authoritative.
-func (h *apiHandler) publishCloneEvent(operationID string) {
-	if h.broker == nil {
+// publishOperationEvent fires the snapshot-required SSE invalidation for
+// one operation change, routed by kind. Clone changes publish the
+// clone.updated event; create changes publish no per-operation event —
+// creation is synchronous, its result rides the response, and the
+// successful publication fires the runtime invalidation through
+// publishCloneWorkspaceEvent. Events identify changes; snapshots stay
+// authoritative.
+func (h *apiHandler) publishOperationEvent(kind, operationID string) {
+	if h.broker == nil || kind == clone.KindCreate {
 		return
 	}
 	h.broker.publish(snapshotRequiredEventDTO(sseEventCloneUpdated, Resource{

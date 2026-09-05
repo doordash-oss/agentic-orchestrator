@@ -149,7 +149,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 			StateDir: opts.Runtime.StateDir,
 			Config:   func() *config.Config { return handler.configOrDefault() },
 			Hooks: clone.Hooks{
-				OperationChanged: handler.publishCloneEvent,
+				OperationChanged: handler.publishOperationEvent,
 				WorkspaceChanged: handler.publishCloneWorkspaceEvent,
 			},
 		})
@@ -220,6 +220,7 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathReadiness, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleReadiness) }},
 	{apiPathReadinessRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleReadinessRefreshRoute }},
 	{apiPathWorkspaceRepositoriesInit, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitRoute }},
+	{apiPathWorkspaceRepositoriesCreate, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryCreateRoute }},
 	{apiPathWorkspaceClone, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneRoute }},
 	{apiPathWorkspaceClone + "/", func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneOperationRoutes }},
 	{apiPathPrompts, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},

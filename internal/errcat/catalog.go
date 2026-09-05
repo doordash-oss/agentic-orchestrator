@@ -524,9 +524,9 @@ var catalog = map[Code]Entry{
 		Remediation: "Choose a different destination folder name.",
 	},
 	CloneDestinationReserved: {
-		Class:       ClassBlocking,
-		Title:       "Destination reserved",
-		Summary:     "Another clone operation currently holds this destination.",
+		Class:   ClassBlocking,
+		Title:   "Destination reserved",
+		Summary: "Another repository-preparation operation currently holds this destination.",
 		Remediation: "Wait for the listed operation to finish or cancel it from Settings before retrying.",
 	},
 	CloneDestinationShadowed: {
@@ -538,7 +538,7 @@ var catalog = map[Code]Entry{
 	CloneRootIneligible: {
 		Class:       ClassBlocking,
 		Title:       "Root is not clone-eligible",
-		Summary:     "The selected workspace root cannot accept new clones on the connected server.",
+		Summary:     "The selected workspace root cannot accept new repositories on the connected server.",
 		Remediation: "Choose a writable, non-repository workspace root, or ask the server administrator to configure one.",
 	},
 	CloneIdempotencyConflict: {

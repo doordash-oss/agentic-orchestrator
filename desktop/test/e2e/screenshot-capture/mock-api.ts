@@ -1736,6 +1736,7 @@ function makeMockApi(
     cancelCloneOperation: () => Promise.reject(new Error('unused')),
     retryCloneCleanup: () => Promise.reject(new Error('unused')),
     retryCloneOperation: () => Promise.reject(new Error('unused')),
+    createRepository: () => Promise.reject(new Error('unused')),
     listRepositories: () => Promise.resolve(READY_SNAPSHOT.repositories),
     listFeatures: () =>
       Promise.resolve({

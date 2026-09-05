@@ -67,8 +67,9 @@ func serviceError(code, detail string) error {
 // Hooks let the server publish SSE invalidations when operation or
 // workspace state changes.
 type Hooks struct {
-	// OperationChanged fires on every persisted operation change.
-	OperationChanged func(operationID string)
+	// OperationChanged fires on every persisted operation change, with the
+	// operation's kind so clone and create changes can be routed apart.
+	OperationChanged func(kind, operationID string)
 	// WorkspaceChanged fires when discovery-visible state changed (a
 	// successful publication).
 	WorkspaceChanged func()
@@ -84,6 +85,11 @@ type Options struct {
 	Config func() *config.Config
 	// Runner overrides the git clone runner (tests inject fakes).
 	Runner Runner
+	// CreateGit overrides the repository-creation executor used by create
+	// operations (tests inject fakes). It receives the staged work
+	// directory and must leave a fresh repository with one empty initial
+	// commit on main inside it.
+	CreateGit func(ctx context.Context, dir string) error
 	// Deadline bounds one clone execution. Zero means DefaultDeadline.
 	Deadline time.Duration
 	// Now overrides the clock (tests inject deterministic time).
@@ -205,7 +211,7 @@ func (s *Service) save(rec *Record) error {
 		return err
 	}
 	if s.opts.Hooks.OperationChanged != nil {
-		s.opts.Hooks.OperationChanged(rec.ID)
+		s.opts.Hooks.OperationChanged(rec.Kind, rec.ID)
 	}
 	return nil
 }
@@ -215,13 +221,13 @@ func (s *Service) config() *config.Config {
 	return s.opts.Config()
 }
 
-// newID mints an unguessable operation ID.
-func newID() string {
+// newID mints an unguessable operation ID prefixed by its kind.
+func newID(kind string) string {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("clone-%d", time.Now().UnixNano())
+		return kind + "-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	}
-	return "clone-" + hex.EncodeToString(b[:])
+	return kind + "-" + hex.EncodeToString(b[:])
 }
 
 func newNonce() string {
@@ -357,16 +363,39 @@ type publicationMarker struct {
 const (
 	ownershipMarkerName   = ".agentico-ownership.json"
 	publicationMarkerName = "agentico-publication.json"
-	stagingPrefix         = ".agentico-clone-"
-	// stagingWorkDir is the git clone destination inside the staging
+	stagingPrefix         = ".agentico-"
+	// stagingWorkDir is the repository directory inside the staging
 	// directory: git requires an empty target, so the ownership marker
-	// lives at the staging root and the repository clones into this child.
+	// lives at the staging root and the repository clones (or is created)
+	// into this child.
 	stagingWorkDir = "work"
 )
 
-// stagingName is the hidden staging child name inside the root.
+// stagingNameFor is the hidden staging child name inside the root for an
+// operation of the given kind. Kinds share the reservation space but never
+// share staging directories.
+func stagingNameFor(kind, id string) string {
+	return stagingPrefix + kind + "-" + strings.TrimPrefix(strings.TrimPrefix(id, "clone-"), "create-")
+}
+
+// stagingName is the clone-kind staging name (legacy records have no kind).
 func stagingName(id string) string {
-	return stagingPrefix + strings.TrimPrefix(id, "clone-")
+	return stagingNameFor(KindClone, id)
+}
+
+// recordKind normalizes a record's kind: records written before kinds
+// existed are clone records.
+func recordKind(rec *Record) string {
+	if rec.Kind == "" {
+		return KindClone
+	}
+	return rec.Kind
+}
+
+// stagingNameForRecord is the record-driven staging name, tolerant of
+// legacy records without a kind.
+func stagingNameForRecord(rec *Record) string {
+	return stagingNameFor(recordKind(rec), rec.ID)
 }
 
 // Start validates and durably accepts a clone request, then spawns the
@@ -429,13 +458,13 @@ func (s *Service) Start(ctx context.Context, input StartInput) (Record, error) {
 		}
 	}
 
-	id := newID()
+	id := newID(KindClone)
 	nonce := newNonce()
 	handle, err := openRootHandle(root.Resolved)
 	if err != nil {
 		return Record{}, serviceError(CodeInternal, "open root")
 	}
-	staging := stagingName(id)
+	staging := stagingNameFor(KindClone, id)
 	if _, err := handle.root.Lstat(staging); err == nil {
 		handle.Close()
 		return Record{}, serviceError(CodeInternal, "staging path collision")
@@ -467,6 +496,7 @@ func (s *Service) Start(ctx context.Context, input StartInput) (Record, error) {
 	now := s.now().UTC()
 	rec := Record{
 		ID:               id,
+		Kind:             KindClone,
 		IdempotencyKey:   input.IdempotencyKey,
 		InputFingerprint: fp,
 		RemoteURL:        RedactRemote(input.Remote),
@@ -504,7 +534,7 @@ func (s *Service) releaseFreshStaging(rec *Record) {
 	if !SameDirIdentity(handle.file, DirIdentity{Device: rec.RootDevice, Inode: rec.RootInode}) {
 		return
 	}
-	_ = handle.root.RemoveAll(stagingName(rec.ID))
+	_ = handle.root.RemoveAll(stagingNameForRecord(rec))
 }
 
 // Snapshot returns the authoritative record.
@@ -622,7 +652,7 @@ func (s *Service) attemptCleanup(rec *Record) (bool, string) {
 	if handle.id != (DirIdentity{Device: rec.RootDevice, Inode: rec.RootInode}) {
 		return false, "root identity changed"
 	}
-	staging := stagingName(rec.ID)
+	staging := stagingNameForRecord(rec)
 	info, err := handle.root.Lstat(staging)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

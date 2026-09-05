@@ -21,12 +21,21 @@ limitations under the License.
  * editable folder suggestion, ordered configured roots, first usable root
  * selection, server/destination preview, canonical error mapping, and
  * operation-state presentation; only their surrounding chrome differs.
+ * The destination-root control (shared with repository creation) also
+ * offers the native folder chooser on a local server: choosing or creating
+ * a folder persists it as a workspace root before any preparation starts.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../components/FieldError';
 import { parseIpcError } from '../wizard/ipcError';
-import type { CanonicalError, CloneOperation, ConnectionState } from '../../../shared/ipc';
+import type {
+  CanonicalError,
+  CloneOperation,
+  ConnectionState,
+  ReadinessSnapshot,
+  WorkspaceRootState,
+} from '../../../shared/ipc';
 
 export const STATE_LABELS: Record<CloneOperation['state'], string> = {
   accepted: 'Starting',
@@ -82,47 +91,214 @@ export interface CloneStartInput {
   idempotencyKey: string;
 }
 
+/** The roots usable as a clone/create destination, in the server's configured order. */
+export function cloneEligibleRoots(
+  workspaceRoots: readonly WorkspaceRootState[],
+): WorkspaceRootState[] {
+  return workspaceRoots.filter((root) => root.valid && root.cloneEligible);
+}
+
+/**
+ * The shared destination-root control: the ordered configured roots with
+ * the first usable root as the default, plus the native folder chooser on
+ * a local server. Choosing (or creating) a folder through the chooser
+ * persists it as a workspace root through the runtime-config mutation and
+ * refreshes the authoritative root list before anything is selected: root
+ * persistence completes before preparation can start, a failed save
+ * changes nothing and retains the form, and cancelling the chooser keeps
+ * the current root, every form input, and the feature draft untouched.
+ * The whole chooser/config/refresh sequence is bound to the initiating
+ * server: a switch or disconnect mid-sequence discards the stale result
+ * instead of selecting a root or starting preparation on the new server.
+ */
+export function DestinationRootControl({
+  idPrefix,
+  workspaceRoots,
+  connection,
+  value,
+  onValueChange,
+  onReadinessChanged,
+  serverError = null,
+  disabled = false,
+}: {
+  /** Element-id prefix so two mounted forms never collide. */
+  idPrefix: string;
+  workspaceRoots: readonly WorkspaceRootState[];
+  connection: ConnectionState;
+  value: string;
+  onValueChange(path: string): void;
+  /** Notifies the owner of the authoritative root list after an addition. */
+  onReadinessChanged?(snapshot: ReadinessSnapshot): void;
+  /** A submit-time rejection associated with the root control. */
+  serverError?: string | null;
+  disabled?: boolean;
+}) {
+  const cloneable = cloneEligibleRoots(workspaceRoots);
+  const localServer = connection.status === 'ready' && connection.kind === 'local';
+  const [adding, setAdding] = useState(false);
+  const [chooserError, setChooserError] = useState<string | null>(null);
+  // The live connection, read by in-flight sequences so a stale result
+  // never lands on a different server's UI.
+  const connectionRef = useRef(connection);
+  useEffect(() => {
+    connectionRef.current = connection;
+  }, [connection]);
+  const attemptRef = useRef(0);
+
+  // Keep the root selection valid as readiness changes; the first usable
+  // root is the default, in the server's configured order. An explicit
+  // selection of a still-usable root is never clobbered by a refresh.
+  useEffect(() => {
+    if (cloneable.length === 0) {
+      if (value !== '') onValueChange('');
+      return;
+    }
+    if (!cloneable.some((root) => root.path === value)) {
+      onValueChange(cloneable[0]?.path ?? '');
+    }
+  }, [cloneable, value, onValueChange]);
+
+  const handleChooseFolder = (): void => {
+    if (adding || disabled) return;
+    const attempt = ++attemptRef.current;
+    const started = connectionRef.current;
+    const startServerKey = started.status === 'ready' ? (started.serverKey ?? null) : null;
+    setAdding(true);
+    setChooserError(null);
+    void (async () => {
+      let pickedPath: string | null = null;
+      try {
+        const picked = await window.agentico.pickWorkspaceDirectory();
+        if (attempt !== attemptRef.current) return;
+        // Cancelling the chooser preserves the current root, every form
+        // input, and the feature draft; no preparation starts.
+        if (picked.path === null) return;
+        pickedPath = picked.path;
+        // The main process fences this read-modify-write by server
+        // identity and refuses it on a remote connection; the returned
+        // snapshot is the authoritative post-save state.
+        const fresh = await window.agentico.addWorkspaceRoot(pickedPath);
+        if (attempt !== attemptRef.current) return;
+        // The sequence must still belong to the initiating server: a
+        // switch or disconnect discards the stale result entirely.
+        const now = connectionRef.current;
+        if (now.status !== 'ready' || startServerKey === null || now.serverKey !== startServerKey) {
+          return;
+        }
+        onReadinessChanged?.(fresh);
+        // Select the authoritative root entry the server reported for the
+        // chosen folder — never the raw picked path.
+        const entry = fresh.workspaceRoots.find((root) => root.path === pickedPath);
+        if (entry === undefined) {
+          setChooserError('The server did not report the chosen folder as a workspace root.');
+          return;
+        }
+        if (!entry.valid || !entry.cloneEligible) {
+          setChooserError(
+            entry.cloneIssue?.summary ??
+              entry.issue?.summary ??
+              'The chosen folder cannot be used as a destination root.',
+          );
+          return;
+        }
+        onValueChange(entry.path);
+      } catch (e: unknown) {
+        if (attempt !== attemptRef.current) return;
+        const parsed = parseIpcError(e);
+        // A switch mid-sequence is silent: the stale attempt is simply
+        // dropped, and the new server's UI is untouched.
+        if (parsed.code === 'E_SERVER_SWITCHED' || parsed.code === 'E_REQUIRES_LOCAL_SERVER') {
+          return;
+        }
+        // A failed save changed nothing: the active configuration is
+        // intact, the new root was never authorized, and the form stays
+        // exactly as it was for a retry.
+        setChooserError(parsed.summary);
+      } finally {
+        if (attempt === attemptRef.current) setAdding(false);
+      }
+    })();
+  };
+
+  const selectId = `${idPrefix}-root-select`;
+  const error = serverError ?? chooserError;
+  const describedBy = `${idPrefix}-root-error`;
+
+  return (
+    <div className="settings-panel__clone-field">
+      <label htmlFor={selectId}>Destination root</label>
+      <div className="settings-panel__clone-root-row">
+        {cloneable.length === 0 ? (
+          <p className="settings-panel__clone-no-roots" id={selectId}>
+            {localServer
+              ? 'No clone-eligible workspace root yet. Choose a folder to add one.'
+              : `No clone-eligible workspace root on ${serverDescriptor(connection)}. Ask the server administrator to configure a writable, non-repository folder as a workspace root.`}
+          </p>
+        ) : (
+          <select
+            id={selectId}
+            value={value}
+            disabled={disabled}
+            onChange={(event) => onValueChange(event.target.value)}
+            aria-invalid={fieldAriaInvalid(error !== null)}
+            aria-describedby={fieldAriaDescribedBy(describedBy, error !== null)}
+          >
+            {cloneable.map((root) => (
+              <option key={root.path} value={root.path}>
+                {root.path}
+              </option>
+            ))}
+          </select>
+        )}
+        {localServer ? (
+          <button
+            type="button"
+            className="settings-panel__clone-choose"
+            onClick={handleChooseFolder}
+            disabled={disabled || adding}
+          >
+            {adding ? 'Adding…' : 'Choose folder…'}
+          </button>
+        ) : null}
+      </div>
+      <FieldError id={describedBy} message={error} />
+    </div>
+  );
+}
+
 /**
  * The clone form. `onStart` performs the actual start and rejects with the
  * canonical error when the server refuses; the form maps canonical
  * rejections onto their controls and clears itself on acceptance.
  */
 export function CloneRepositoryForm({
-  cloneableRoots,
-  serverLabel,
+  workspaceRoots,
+  connection,
   idPrefix,
   onStart,
   onStarted,
+  onReadinessChanged,
   disabled = false,
 }: {
-  cloneableRoots: readonly { path: string }[];
-  serverLabel: string;
+  workspaceRoots: readonly WorkspaceRootState[];
+  connection: ConnectionState;
   /** Element-id prefix so two mounted forms never collide. */
   idPrefix: string;
   onStart(input: CloneStartInput): Promise<void>;
   onStarted?(input: CloneStartInput): void;
+  onReadinessChanged?(snapshot: ReadinessSnapshot): void;
   disabled?: boolean;
 }) {
+  const cloneableRoots = cloneEligibleRoots(workspaceRoots);
   const [remote, setRemote] = useState('');
   const [rootPath, setRootPath] = useState('');
   const [destination, setDestination] = useState('');
   const [destinationEdited, setDestinationEdited] = useState(false);
   const [remoteError, setRemoteError] = useState<string | null>(null);
+  const [rootError, setRootError] = useState<string | null>(null);
   const [destinationError, setDestinationError] = useState<string | null>(null);
   const [formError, setFormError] = useState<CanonicalError | null>(null);
   const [starting, setStarting] = useState(false);
-
-  // Keep the root selection valid as readiness changes; the first usable
-  // root is the default, in the server's configured order.
-  useEffect(() => {
-    if (cloneableRoots.length === 0) {
-      setRootPath('');
-      return;
-    }
-    if (!cloneableRoots.some((root) => root.path === rootPath)) {
-      setRootPath(cloneableRoots[0]?.path ?? '');
-    }
-  }, [cloneableRoots, rootPath]);
 
   const handleRemoteChange = (value: string): void => {
     setRemote(value);
@@ -150,9 +326,12 @@ export function CloneRepositoryForm({
       setRemoteError(null);
     }
     if (rootPath === '') {
-      setDestinationError('Choose a destination root.');
+      setRootError('Choose a destination root.');
       valid = false;
-    } else if (trimmedDestination === '') {
+    } else {
+      setRootError(null);
+    }
+    if (trimmedDestination === '') {
       setDestinationError('A destination folder name is required.');
       valid = false;
     } else if (/[\\/\s]|^\.|\.$|^-/.test(trimmedDestination)) {
@@ -186,6 +365,8 @@ export function CloneRepositoryForm({
         // else renders once at the form level.
         if (parsed.code === 'clone_remote_invalid') {
           setRemoteError(parsed.summary);
+        } else if (parsed.code === 'clone_root_ineligible') {
+          setRootError(parsed.summary);
         } else if (
           parsed.code === 'clone_destination_invalid' ||
           parsed.code === 'clone_destination_exists' ||
@@ -199,7 +380,6 @@ export function CloneRepositoryForm({
       });
   };
 
-  const rootSelectId = `${idPrefix}-root-select`;
   const destinationPreview =
     rootPath !== '' && destination.trim() !== ''
       ? `${rootPath.replace(/\/+$/, '')}/${destination.trim()}`
@@ -224,28 +404,16 @@ export function CloneRepositoryForm({
         <FieldError id={`${idPrefix}-remote-error`} message={remoteError} />
       </div>
 
-      <div className="settings-panel__clone-field">
-        <label htmlFor={rootSelectId}>Destination root</label>
-        {cloneableRoots.length === 0 ? (
-          <p className="settings-panel__clone-no-roots" id={rootSelectId}>
-            No clone-eligible workspace root on {serverLabel}. Ask the server administrator to
-            configure a writable, non-repository folder as a workspace root.
-          </p>
-        ) : (
-          <select
-            id={rootSelectId}
-            value={rootPath}
-            disabled={disabled}
-            onChange={(event) => setRootPath(event.target.value)}
-          >
-            {cloneableRoots.map((root) => (
-              <option key={root.path} value={root.path}>
-                {root.path}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
+      <DestinationRootControl
+        idPrefix={`${idPrefix}-root`}
+        workspaceRoots={workspaceRoots}
+        connection={connection}
+        value={rootPath}
+        onValueChange={setRootPath}
+        onReadinessChanged={onReadinessChanged}
+        serverError={rootError}
+        disabled={disabled || starting}
+      />
 
       <div className="settings-panel__clone-field">
         <label htmlFor={`${idPrefix}-destination`}>Folder name</label>
@@ -272,7 +440,7 @@ export function CloneRepositoryForm({
 
       {destinationPreview !== null ? (
         <p className="settings-panel__clone-preview">
-          Will clone into <code>{destinationPreview}</code> on {serverLabel}.
+          Will clone into <code>{destinationPreview}</code> on {serverDescriptor(connection)}.
         </p>
       ) : null}
 

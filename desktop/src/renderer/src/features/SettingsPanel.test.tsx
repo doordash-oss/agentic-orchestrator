@@ -398,7 +398,7 @@ const READY_REMOTE: ConnectionState = {
 };
 
 describe('SettingsPanel workspace roots on a remote server', () => {
-  it('hides native add/remove/reorder controls and shows the server-validated typed entry', async () => {
+  it('exposes no root mutation controls and explains the administrator action', async () => {
     installAgenticoMock({
       connection: READY_REMOTE,
       readiness: readySnapshot({
@@ -411,11 +411,12 @@ describe('SettingsPanel workspace roots on a remote server', () => {
     // list the same path, so assert on at least one match).
     expect((await screen.findAllByText('/srv/work')).length).toBeGreaterThan(0);
 
-    // The native picker and remove/reorder controls are not rendered; the
-    // remote entry is the typed path the server validates itself.
+    // No add, remove or reorder controls and no typed-path or native
+    // chooser entry: root mutation stays with the administrator.
     expect(screen.queryByRole('button', { name: 'Add workspace root' })).toBeNull();
-    expect(screen.getByLabelText('Folder path on the server')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Add root' })).toBeDisabled();
+    expect(screen.queryByLabelText('Folder path on the server')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add root' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /choose folder/i })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Move /srv/work up' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Move /srv/work down' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Remove /srv/work' })).toBeNull();

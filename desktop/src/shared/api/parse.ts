@@ -498,6 +498,34 @@ export const CloneOperationListResponseSchema = z.object({
 
 export type CloneOperationListResponse = z.output<typeof CloneOperationListResponseSchema>;
 
+// --- Repository creation (POST /api/v1/workspace/repositories/create) -------
+// The synchronous creation result: the actual collision-safe repository
+// key from discovery and the server-resolved identity of the repository
+// that was published, pinned by the durable publication marker.
+
+export const CreateRepositoryResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.string(),
+  repository: z.object({
+    repo_key: z.string(),
+    path: z.string(),
+    has_head: z.boolean(),
+    root: z.string(),
+    // Absent only for a replayed success whose destination no longer
+    // matches the publication marker; such a result is never adopted.
+    identity: z
+      .strictObject({
+        path: z.string().min(1).max(4096),
+        common_dir: z.string().min(1).max(4096),
+        device: z.string().regex(/^[0-9]{1,20}$/),
+        inode: z.string().regex(/^[0-9]{1,20}$/),
+      })
+      .optional(),
+  }),
+});
+
+export type CreateRepositoryResponse = z.output<typeof CreateRepositoryResponseSchema>;
+
 // --- Features (GET/POST /api/v1/features, GET /api/v1/features/{id}) --------
 // Lenient subsets: z.object tolerates and strips fields this view does not
 // consume yet.
@@ -1575,3 +1603,6 @@ type CloneOperationListWireDTO = components['schemas']['CloneOperationListRespon
 const _cloneOperationListSubset = (value: CloneOperationListWireDTO): CloneOperationListResponse =>
   value;
 void _cloneOperationListSubset;
+type CreateRepositoryWireDTO = components['schemas']['CreateRepositoryResponse'];
+const _createRepositorySubset = (value: CreateRepositoryWireDTO): CreateRepositoryResponse => value;
+void _createRepositorySubset;

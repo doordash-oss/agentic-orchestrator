@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 // fakeHandle is a scripted in-process stand-in for a git clone process.
@@ -177,9 +178,12 @@ type serviceFixture struct {
 	stateDir string
 	cfg      *config.Config
 	runner   *fakeRunner
-	svc      *Service
-	hooks    *recordingHooks
-	now      func() time.Time
+	// createGit overrides the repository-creation executor; nil uses the
+	// real bounded git implementation.
+	createGit func(ctx context.Context, dir string) error
+	svc       *Service
+	hooks     *recordingHooks
+	now       func() time.Time
 }
 
 type recordingHooks struct {
@@ -188,10 +192,10 @@ type recordingHooks struct {
 	workspace int
 }
 
-func (h *recordingHooks) operationChanged(id string) {
+func (h *recordingHooks) operationChanged(kind, id string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.ops = append(h.ops, id)
+	h.ops = append(h.ops, kind+"/"+id)
 }
 
 func (h *recordingHooks) workspaceChanged() {
@@ -234,7 +238,15 @@ func newServiceFixture(t *testing.T, script func(h *fakeHandle)) *serviceFixture
 		StateDir: stateDir,
 		Config:   func() *config.Config { return fx.cfg },
 		Runner:   fx.runner,
-		Now:      fx.now,
+		// Read through the fixture so tests may retarget the create
+		// executor after construction; nil means the real bounded git.
+		CreateGit: func(ctx context.Context, dir string) error {
+			if fx.createGit != nil {
+				return fx.createGit(ctx, dir)
+			}
+			return git.CreateRepository(ctx, dir)
+		},
+		Now: fx.now,
 		Hooks: Hooks{
 			OperationChanged: fx.hooks.operationChanged,
 			WorkspaceChanged: fx.hooks.workspaceChanged,

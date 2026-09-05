@@ -55,6 +55,8 @@ import {
   type InitRepositoryRequest,
   type CloneStartRequest,
   type CloneOperation,
+  type CreateRepositoryRequest,
+  type CreateRepositoryResult,
   type CloneOperationsList,
   type IpcChannel,
   type IpcEnvelope,
@@ -183,6 +185,7 @@ export interface IpcServices {
   cancelCloneOperation(operationId: string): Promise<CloneOperation>;
   retryCloneCleanup(operationId: string): Promise<CloneOperation>;
   retryCloneOperation(operationId: string): Promise<CloneOperation>;
+  createRepository(request: CreateRepositoryRequest): Promise<CreateRepositoryResult>;
   listRepositories(): Promise<RepositoryState[]>;
   listFeatures(): Promise<FeaturesListResult>;
   getFeature(featureId: string): Promise<FeatureSnapshot>;
@@ -364,6 +367,8 @@ export function registerIpcHandlers(
       services.retryCloneCleanup(operationId),
     [IPC_CHANNELS.cloneOperationRetry]: (_event, operationId: string) =>
       services.retryCloneOperation(operationId),
+    [IPC_CHANNELS.createRepository]: (_event, request: CreateRepositoryRequest) =>
+      services.createRepository(request),
     [IPC_CHANNELS.repositoriesList]: () => services.listRepositories(),
     [IPC_CHANNELS.featuresList]: () => services.listFeatures(),
     [IPC_CHANNELS.featuresGet]: (_event, featureId: string) => services.getFeature(featureId),

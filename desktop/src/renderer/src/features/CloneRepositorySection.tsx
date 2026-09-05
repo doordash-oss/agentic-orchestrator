@@ -20,7 +20,7 @@ limitations under the License.
  * the list refreshes from SSE invalidations and re-reads, never from
  * transport completion — and a failed list request never erases known work.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { parseIpcError } from '../wizard/ipcError';
 import type {
@@ -39,14 +39,14 @@ import {
 export function CloneRepositorySection({
   readiness,
   connection,
+  onReadinessChanged,
 }: {
   readiness: ReadinessSnapshot | null;
   connection: ConnectionState;
+  /** Applies an authoritative readiness snapshot (e.g. after a root addition). */
+  onReadinessChanged?(snapshot: ReadinessSnapshot): void;
 }) {
-  const cloneableRoots = useMemo(
-    () => (readiness?.workspaceRoots ?? []).filter((root) => root.valid && root.cloneEligible),
-    [readiness],
-  );
+  const workspaceRoots = readiness?.workspaceRoots ?? [];
 
   const [announcement, setAnnouncement] = useState<string | null>(null);
 
@@ -155,10 +155,11 @@ export function CloneRepositorySection({
       </p>
 
       <CloneRepositoryForm
-        cloneableRoots={cloneableRoots}
-        serverLabel={serverDescriptor(connection)}
+        workspaceRoots={workspaceRoots}
+        connection={connection}
         idPrefix="clone"
         onStart={handleStart}
+        onReadinessChanged={onReadinessChanged}
       />
 
       <h3 className="settings-panel__section-subtitle">Clone operations</h3>

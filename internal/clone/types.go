@@ -116,6 +116,15 @@ const (
 	MaxListLimit     = 200
 )
 
+// Operation kinds. The clone lifecycle machinery (records, reservations,
+// staging, publication, cleanup, recovery) is shared by both kinds; only
+// the worker differs. KindClone is the default so records written before
+// kinds existed keep their original meaning.
+const (
+	KindClone  = "clone"
+	KindCreate = "create"
+)
+
 // OpError is the bounded, redacted failure detail carried on a record. It
 // never contains raw git output or secret-bearing input.
 type OpError struct {
@@ -161,8 +170,12 @@ type ProcessInfo struct {
 // Record is the durable clone operation record. It is the single authority
 // for snapshots, reservations, idempotency and recovery.
 type Record struct {
-	ID               string `json:"id"`
-	IdempotencyKey   string `json:"idempotency_key"`
+	ID string `json:"id"`
+	// Kind separates clone operations from create operations; both share
+	// this record shape, reservation space and publication boundary. Empty
+	// means a legacy clone record.
+	Kind             string    `json:"kind,omitempty"`
+	IdempotencyKey   string    `json:"idempotency_key"`
 	InputFingerprint string `json:"input_fingerprint"`
 	RemoteURL        string `json:"remote_url"`
 	RootPath         string `json:"root_path"`

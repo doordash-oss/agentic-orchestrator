@@ -36,6 +36,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'chooseConnectionServer',
   'clearDiagnostics',
   'createFeature',
+  'createRepository',
   'decideReview',
   'deleteFeatureCascade',
   'discardLocalReviewDraft',

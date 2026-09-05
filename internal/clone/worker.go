@@ -281,7 +281,7 @@ func (s *Service) publishLocked(op *opState, cur *Record) {
 		s.finalizeOutcomeLocked(op, cur, StateFailed, FailureCleanupPending, "root identity changed at publication", nil)
 		return
 	}
-	staging := stagingName(cur.ID)
+	staging := stagingNameForRecord(cur)
 	info, err := handle.root.Lstat(staging)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		s.finalizeOutcomeLocked(op, cur, StateFailed, FailureCleanupPending, "staging is not an owned directory", nil)
@@ -456,6 +456,11 @@ func (s *Service) Retry(id string) (Record, error) {
 	rec, ok := s.store.get(id)
 	if !ok {
 		return Record{}, serviceError(CodeHistoryUnavailable, "operation history is unavailable")
+	}
+	if recordKind(&rec) == KindCreate {
+		// Create attempts are short and synchronous; a deliberate retry is
+		// a fresh Create request through the normal boundary.
+		return Record{}, serviceError(CodeNotRetryable, "create operations do not use clone retry")
 	}
 	switch rec.State {
 	case StateFailed, StateCancelled, StateInterrupted:

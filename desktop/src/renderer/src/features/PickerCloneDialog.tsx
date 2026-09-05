@@ -32,6 +32,7 @@ import type {
   CanonicalError,
   CloneOperation,
   ConnectionState,
+  ReadinessSnapshot,
   WorkspaceRootState,
 } from '../../../shared/ipc';
 import {
@@ -45,7 +46,7 @@ import type { CloneAssociation } from './creationDrafts';
 
 export interface PickerCloneDialogProps {
   connection: ConnectionState;
-  cloneableRoots: readonly WorkspaceRootState[];
+  workspaceRoots: readonly WorkspaceRootState[];
   association: CloneAssociation | null;
   /** The authoritative snapshot of the associated operation, from the sheet. */
   operation: CloneOperation | null;
@@ -53,17 +54,20 @@ export interface PickerCloneDialogProps {
   onAssociate(association: CloneAssociation): void;
   /** Re-resolves the tracked operation after an action. */
   onRefresh(): void;
+  /** Applies an authoritative readiness snapshot (e.g. after a root addition). */
+  onReadinessChanged?(snapshot: ReadinessSnapshot): void;
   /** Close detaches the view; the draft and association stay. */
   onClose(): void;
 }
 
 export function PickerCloneDialog({
   connection,
-  cloneableRoots,
+  workspaceRoots,
   association,
   operation,
   onAssociate,
   onRefresh,
+  onReadinessChanged,
   onClose,
 }: PickerCloneDialogProps) {
   const [actionError, setActionError] = useState<CanonicalError | null>(null);
@@ -174,10 +178,11 @@ export function PickerCloneDialog({
 
         {showForm ? (
           <CloneRepositoryForm
-            cloneableRoots={cloneableRoots}
-            serverLabel={serverDescriptor(connection)}
+            workspaceRoots={workspaceRoots}
+            connection={connection}
             idPrefix="picker-clone"
             onStart={handleStart}
+            onReadinessChanged={onReadinessChanged}
           />
         ) : null}
 

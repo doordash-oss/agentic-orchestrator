@@ -107,15 +107,18 @@ async function cloneFromSettings(
   destination: string,
   workspaceRoot: string,
 ): Promise<void> {
+  // The pane hosts both the clone and create preparation forms; scope to
+  // the clone section so the shared labels stay unambiguous.
+  const cloneForm = settings.getByRole('region', { name: 'Clone repositories' });
   // Wait for the readiness-driven root selector before submitting: the
   // clone form is inert until clone-eligible roots load.
-  await expect(settings.getByLabel('Destination root')).toHaveValue(workspaceRoot, {
+  await expect(cloneForm.getByLabel('Destination root')).toHaveValue(workspaceRoot, {
     timeout: 30_000,
   });
-  await settings.getByLabel('Repository URL').fill(remoteUrl);
-  await settings.getByLabel('Folder name').fill(destination);
-  await expect(settings.getByRole('button', { name: 'Clone repository' })).toBeEnabled();
-  await settings.getByRole('button', { name: 'Clone repository' }).click();
+  await cloneForm.getByLabel('Repository URL').fill(remoteUrl);
+  await cloneForm.getByLabel('Folder name').fill(destination);
+  await expect(cloneForm.getByRole('button', { name: 'Clone repository' })).toBeEnabled();
+  await cloneForm.getByRole('button', { name: 'Clone repository' }).click();
 }
 
 test(

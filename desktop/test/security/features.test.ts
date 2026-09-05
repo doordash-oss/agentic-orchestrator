@@ -157,6 +157,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     cancelCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
     retryCloneCleanup: vi.fn(() => Promise.reject(new Error('unused'))),
     retryCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    createRepository: vi.fn(() => Promise.reject(new Error('unused'))),
     listRepositories: vi.fn(() => Promise.resolve([])),
     listFeatures: vi.fn(() => Promise.resolve({ features: [], warnings: [] })),
     getFeature: vi.fn(() => Promise.resolve(snapshot())),

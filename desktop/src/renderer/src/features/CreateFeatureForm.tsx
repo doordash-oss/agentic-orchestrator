@@ -27,6 +27,7 @@ import {
   type CloneOperation,
   type CreationDefaults,
   type EffortLevel,
+  type ReadinessSnapshot,
   type RepositoryFileRef,
   type RepositoryState,
   type WorkspaceRootState,
@@ -53,8 +54,15 @@ import {
   useModelCatalogue,
   type PhaseKey,
 } from './ConfigEditor';
-import { retainableDraft, type CloneAssociation, type CreationDraftState } from './creationDrafts';
+import {
+  retainableDraft,
+  type CloneAssociation,
+  type CreationDraftState,
+  type PendingCreate,
+} from './creationDrafts';
 import { PickerCloneDialog } from './PickerCloneDialog';
+import { PickerCreateDialog } from './PickerCreateDialog';
+import type { CreateRepositoryStartInput } from './createViews';
 import { DescriptionComposer } from './DescriptionComposer';
 import { fieldForCreationError } from './featureView';
 import {
@@ -247,11 +255,18 @@ export function CreateFeatureForm({
   const [catalogRefreshError, setCatalogRefreshError] = useState<CanonicalError | null>(
     () => retained?.catalogRefreshError ?? null,
   );
-  // The nested clone view and its association with this draft.
+  // The nested clone view and its association with this draft, plus the
+  // nested create view and its pending adoption.
   const [cloneOpen, setCloneOpen] = useState(() => retained?.cloneOpen ?? false);
   const [cloneAssociation, setCloneAssociation] = useState<CloneAssociation | null>(
     () => retained?.cloneAssociation ?? null,
   );
+  const [createOpen, setCreateOpen] = useState(() => retained?.createOpen ?? false);
+  const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(
+    () => retained?.pendingCreate ?? null,
+  );
+  // All configured workspace roots (the destination controls filter for
+  // clone eligibility themselves).
   const [cloneableRoots, setCloneableRoots] = useState<readonly WorkspaceRootState[]>(
     () => retained?.cloneableRoots ?? [],
   );
@@ -357,9 +372,7 @@ export function CreateFeatureForm({
       .getCreationDefaults()
       .then((defaults) => {
         setState({ phase: 'loaded', defaults });
-        setCloneableRoots(
-          defaults.workspaceRoots.filter((root) => root.valid && root.cloneEligible),
-        );
+        setCloneableRoots(defaults.workspaceRoots);
         setUseCurrentBranch(defaults.defaults.useCurrentBranch);
         if (isPipeline(defaults.defaults.pipeline)) {
           setPipeline(defaults.defaults.pipeline);
@@ -368,6 +381,28 @@ export function CreateFeatureForm({
         setInquireness(normalizeInquireness(defaults.defaults.inquireness));
       })
       .catch((err: unknown) => setState({ phase: 'error', error: parseIpcError(err) }));
+  }, []);
+
+  /**
+   * Applies one authoritative readiness snapshot to the live draft: the
+   * catalog (and with it every selection) reconciles by identity, attachment
+   * references follow their repositories, and the destination controls see
+   * the fresh root list — all without resetting any draft value.
+   */
+  const applyCatalogSnapshot = useCallback((snapshot: ReadinessSnapshot) => {
+    setState((current) =>
+      current.phase === 'loaded'
+        ? {
+            phase: 'loaded',
+            defaults: { ...current.defaults, repositories: [...snapshot.repositories] },
+          }
+        : current,
+    );
+    // Attachment references follow their repository's current key by
+    // identity; their relative paths and the description text are kept.
+    setRepositoryFiles((files) => [...reconcileRepositoryFiles(files, snapshot.repositories)]);
+    setCloneableRoots(snapshot.workspaceRoots);
+    setWorkspaceRoots(snapshot.workspaceRoots.map((root) => root.path));
   }, []);
 
   /**
@@ -384,27 +419,13 @@ export function CreateFeatureForm({
       .then((snapshot) => {
         if (seq !== catalogRefreshSeq.current) return;
         setCatalogRefreshError(null);
-        setState((current) =>
-          current.phase === 'loaded'
-            ? {
-                phase: 'loaded',
-                defaults: { ...current.defaults, repositories: [...snapshot.repositories] },
-              }
-            : current,
-        );
-        // Attachment references follow their repository's current key by
-        // identity; their relative paths and the description text are kept.
-        setRepositoryFiles((files) => [...reconcileRepositoryFiles(files, snapshot.repositories)]);
-        setCloneableRoots(
-          snapshot.workspaceRoots.filter((root) => root.valid && root.cloneEligible),
-        );
-        setWorkspaceRoots(snapshot.workspaceRoots.map((root) => root.path));
+        applyCatalogSnapshot(snapshot);
       })
       .catch((err: unknown) => {
         if (seq !== catalogRefreshSeq.current) return;
         setCatalogRefreshError(parseIpcError(err));
       });
-  }, []);
+  }, [applyCatalogSnapshot]);
 
   useEffect(() => {
     const unsub = window.agentico.onAppEvent((event) => {
@@ -557,6 +578,8 @@ export function CreateFeatureForm({
       cloneOpen,
       cloneAssociation: cloneAssociation === null ? null : { ...cloneAssociation },
       cloneableRoots: [...cloneableRoots],
+      createOpen,
+      pendingCreate: pendingCreate === null ? null : { ...pendingCreate },
     };
   });
   const detachRef = useRef(onDraftDetach);
@@ -619,11 +642,92 @@ export function CreateFeatureForm({
   }, [cloneOperation, cloneAssociation, repositories]);
 
   /**
+   * A picker-initiated creation adopts into exactly this draft, once: the
+   * pending marker is recorded before the request flies, and once the
+   * server-resolved identity returns, the repository is selected under its
+   * current catalog key after the catalog has refreshed to include it. A
+   * result without provable identity never selects anything, and a
+   * discarded draft (or a server switch that remounts the sheet) can never
+   * adopt a late completion.
+   */
+  const serverKeyRef = useRef<string | null>(serverKey);
+  useEffect(() => {
+    serverKeyRef.current = serverKey;
+  }, [serverKey]);
+  const handleCreate = useCallback(
+    (input: CreateRepositoryStartInput) => {
+      const startServerKey = serverKeyRef.current;
+      // The marker precedes the flight: a lost response still adopts from
+      // the refreshed catalog, and closing the view never discards it.
+      setPendingCreate({ idempotencyKey: input.idempotencyKey, identity: null });
+      return window.agentico.createRepository(input).then(
+        (result) => {
+          // A completion from another server (or after a remount) is not
+          // this draft's result: the new server's UI stays untouched.
+          if (serverKeyRef.current !== startServerKey) {
+            return result;
+          }
+          if (result.identity !== undefined) {
+            setPendingCreate({ idempotencyKey: input.idempotencyKey, identity: result.identity });
+          } else {
+            // No provable identity (a replayed success whose destination
+            // was replaced): visible success, never adopted by key or path.
+            setPendingCreate(null);
+            setFolderNotice(`Created ${result.repoKey}; select it from the list once it appears.`);
+          }
+          // The catalog refresh reconciles the new repository (and every
+          // selection) by identity; adoption follows from it.
+          refreshCatalog();
+          return result;
+        },
+        (err: unknown) => {
+          if (serverKeyRef.current !== null && serverKeyRef.current === startServerKey) {
+            // The attempt is over for this draft; the form keeps its
+            // inputs and shows the canonical rejection.
+            setPendingCreate(null);
+          }
+          throw err;
+        },
+      );
+    },
+    [refreshCatalog],
+  );
+
+  useEffect(() => {
+    if (pendingCreate === null || pendingCreate.identity === null) return;
+    const identity = pendingCreate.identity;
+    // Adoption requires the published repository to still be the published
+    // one and feature-ready in the authoritative catalog.
+    const match = repositories.find(
+      (repo) =>
+        repo.valid &&
+        repo.featureReady &&
+        repo.identity !== undefined &&
+        sameRepoIdentity(repo.identity, identity),
+    );
+    if (match === undefined || match.identity === undefined) return;
+    const matchIdentity = match.identity;
+    // Exactly-once is structural: the marker retires with the adoption.
+    setPendingCreate(null);
+    setRepoSelections((current) =>
+      current.some((selection) => sameRepoIdentity(selection.identity, matchIdentity))
+        ? current
+        : [...current, { key: match.name, identity: matchIdentity }],
+    );
+    // A search filter cannot hide the focus target.
+    setRepoQuery('');
+    setFocusRepoKey(match.name);
+    setCreateOpen(false);
+    setFolderNotice(`Created ${match.name} and selected it.`);
+    setRepoError(null);
+  }, [pendingCreate, repositories]);
+
+  /**
    * Pending row focus lands only while the picker step is actually visible,
    * so an adoption that completes elsewhere never steals focus.
    */
   useEffect(() => {
-    if (focusRepoKey === null || cloneOpen || stepIndex !== 0) return;
+    if (focusRepoKey === null || cloneOpen || createOpen || stepIndex !== 0) return;
     const group = repoGroupRef.current;
     if (group === null) return;
     const row = group.querySelector(
@@ -632,7 +736,7 @@ export function CreateFeatureForm({
     if (row === null) return;
     (row as HTMLInputElement).focus();
     setFocusRepoKey(null);
-  }, [focusRepoKey, cloneOpen, stepIndex, repositories, repoQuery]);
+  }, [focusRepoKey, cloneOpen, createOpen, stepIndex, repositories, repoQuery]);
 
   // Field errors are announced by moving focus to the control that must
   // change — from an effect, so a submit-time error that first has to jump
@@ -692,7 +796,7 @@ export function CreateFeatureForm({
         : current,
     );
     setRepositoryFiles((files) => [...reconcileRepositoryFiles(files, snapshot.repositories)]);
-    setCloneableRoots(snapshot.workspaceRoots.filter((root) => root.valid && root.cloneEligible));
+    setCloneableRoots(snapshot.workspaceRoots);
     setWorkspaceRoots(snapshot.workspaceRoots.map((root) => root.path));
     return snapshot.repositories;
   };
@@ -1311,6 +1415,16 @@ export function CreateFeatureForm({
                           type="button"
                           className="creation-sheet__button"
                           onClick={() => {
+                            setCreateOpen(true);
+                            setFolderNotice('');
+                          }}
+                        >
+                          Create a repository…
+                        </button>
+                        <button
+                          type="button"
+                          className="creation-sheet__button"
+                          onClick={() => {
                             setCloneOpen(true);
                             setFolderNotice('');
                           }}
@@ -1620,12 +1734,23 @@ export function CreateFeatureForm({
         {cloneOpen ? (
           <PickerCloneDialog
             connection={connection}
-            cloneableRoots={cloneableRoots}
+            workspaceRoots={cloneableRoots}
             association={cloneAssociation}
             operation={cloneOperation}
             onAssociate={(association) => setCloneAssociation(association)}
             onRefresh={resolveCloneOperation}
+            onReadinessChanged={applyCatalogSnapshot}
             onClose={() => setCloneOpen(false)}
+          />
+        ) : null}
+
+        {createOpen ? (
+          <PickerCreateDialog
+            connection={connection}
+            workspaceRoots={cloneableRoots}
+            onCreate={handleCreate}
+            onReadinessChanged={applyCatalogSnapshot}
+            onClose={() => setCreateOpen(false)}
           />
         ) : null}
 

@@ -31,6 +31,9 @@ type fakeCloneService struct {
 	startInput  clone.StartInput
 	startErr    error
 	startRecord clone.Record
+	createInput clone.CreateStartInput
+	createErr   error
+	createRecord clone.Record
 	snapshotID  string
 	snapshotErr error
 	snapshotRec clone.Record
@@ -52,6 +55,11 @@ type fakeCloneService struct {
 func (f *fakeCloneService) Start(_ context.Context, input clone.StartInput) (clone.Record, error) {
 	f.startInput = input
 	return f.startRecord, f.startErr
+}
+
+func (f *fakeCloneService) Create(_ context.Context, input clone.CreateStartInput) (clone.Record, error) {
+	f.createInput = input
+	return f.createRecord, f.createErr
 }
 
 func (f *fakeCloneService) Snapshot(id string) (clone.Record, error) {

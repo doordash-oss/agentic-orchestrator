@@ -143,6 +143,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     cancelCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
     retryCloneCleanup: vi.fn(() => Promise.reject(new Error('unused'))),
     retryCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    createRepository: vi.fn(() => Promise.reject(new Error('unused'))),
     listRepositories: vi.fn(() => Promise.resolve([])),
     listFeatures: vi.fn(() => Promise.resolve({ features: [], warnings: [] })),
     getFeature: vi.fn(() => Promise.reject(new Error('not_found: feature not found'))),
@@ -307,6 +308,64 @@ describe('setup IPC surface: consent gating', () => {
     expect(result.ok).toBe(true);
     expect(services.initRepository).toHaveBeenCalledWith({ path: '/work/repo', consent: true });
   });
+
+  it('rejects repository creation without consent at the schema layer', async () => {
+    const { handlers, services } = register();
+    for (const request of [
+      { rootPath: '/work', destination: 'repo', idempotencyKey: 'key-12345678', consent: false },
+      { rootPath: '/work', destination: 'repo', idempotencyKey: 'key-12345678' },
+      { rootPath: '/work', destination: 'repo', idempotencyKey: 'key-12345678', consent: 'yes' },
+      {
+        rootPath: '/work',
+        destination: 'repo',
+        idempotencyKey: 'key-12345678',
+        consent: true,
+        extra: 1,
+      },
+    ]) {
+      const result = (await handlers.get(IPC_CHANNELS.createRepository)!(
+        goodEvent,
+        request,
+      )) as Envelope;
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    }
+    expect(services.createRepository).not.toHaveBeenCalled();
+  });
+
+  it('passes a well-formed consenting create request through to the service', async () => {
+    const { handlers, services } = register(
+      makeServices({
+        createRepository: vi.fn(() =>
+          Promise.resolve({
+            repoKey: 'repo',
+            path: '/work/repo',
+            hasHead: true,
+            root: '/work',
+            identity: {
+              path: '/work/repo',
+              commonDir: '/work/repo/.git',
+              device: '16777234',
+              inode: '4242',
+            },
+          }),
+        ),
+      }),
+    );
+    const result = (await handlers.get(IPC_CHANNELS.createRepository)!(goodEvent, {
+      rootPath: '/work',
+      destination: 'repo',
+      idempotencyKey: 'key-12345678',
+      consent: true,
+    })) as Envelope;
+    expect(result.ok).toBe(true);
+    expect(services.createRepository).toHaveBeenCalledWith({
+      rootPath: '/work',
+      destination: 'repo',
+      idempotencyKey: 'key-12345678',
+      consent: true,
+    });
+  });
 });
 
 describe('setup IPC surface: path validation', () => {
@@ -438,10 +497,14 @@ describe('SetupService locality enforcement on a remote connection', () => {
     return { service, apiRequest, pickDirectory };
   }
 
-  it('addWorkspaceRoot works remotely: the path names a server-side location', async () => {
+  it('addWorkspaceRoot refuses with E_REQUIRES_LOCAL_SERVER before any request or dialog', async () => {
     const { service, apiRequest } = makeRemoteSetupService();
-    await expect(service.addWorkspaceRoot('/work/new')).resolves.toBeDefined();
-    expect(apiRequest).toHaveBeenCalled();
+    await expect(service.addWorkspaceRoot('/work/new')).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    // A remote server's roots are administrator-owned: the refusal fires
+    // before any remote request, exactly like the native picker.
+    expect(apiRequest).not.toHaveBeenCalled();
   });
 
   it('removeWorkspaceRoot refuses with E_REQUIRES_LOCAL_SERVER and never calls the transport', async () => {

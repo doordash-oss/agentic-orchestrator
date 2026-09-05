@@ -70,7 +70,7 @@ func (s *Service) removeStagingWrapper(cur *Record) {
 	if handle.id != (DirIdentity{Device: cur.RootDevice, Inode: cur.RootInode}) {
 		return
 	}
-	staging := stagingName(cur.ID)
+	staging := stagingNameForRecord(cur)
 	data, err := handle.root.ReadFile(filepath.Join(staging, ownershipMarkerName))
 	if err != nil {
 		return

@@ -57,6 +57,7 @@ export const IPC_CHANNELS = {
   cloneOperationCancel: 'agentico:clone:operation-cancel',
   cloneOperationCleanup: 'agentico:clone:operation-cleanup',
   cloneOperationRetry: 'agentico:clone:operation-retry',
+  createRepository: 'agentico:create:repository',
   repositoriesList: 'agentico:repositories:list',
   featuresList: 'agentico:features:list',
   featuresGet: 'agentico:features:get',
@@ -1175,6 +1176,32 @@ export const CloneOperationsListSchema = z.strictObject({
   nextPageToken: z.string().optional(),
 });
 export type CloneOperationsList = z.output<typeof CloneOperationsListSchema>;
+
+// --- Repository creation -----------------------------------------------------
+// A synchronous server-owned creation: one empty initial commit on main
+// with Agentico's identity, no origin, no push. Consent is enforced at the
+// schema layer exactly like legacy initialization, and the result carries
+// the actual repository key and the server-resolved identity.
+
+export const CreateRepositoryRequestSchema = z.strictObject({
+  rootPath: z.string().min(1).max(1024),
+  destination: z.string().min(1).max(128),
+  idempotencyKey: z.string().min(8).max(128),
+  consent: z.literal(true),
+});
+export type CreateRepositoryRequest = z.output<typeof CreateRepositoryRequestSchema>;
+
+export const CreateRepositoryResultSchema = z.strictObject({
+  repoKey: z.string(),
+  path: z.string(),
+  hasHead: z.boolean(),
+  root: z.string(),
+  // Server-resolved identity of the repository actually published. Absent
+  // only for a replayed success whose destination no longer matches the
+  // publication marker: such a result is never adopted by key or path.
+  identity: RepositoryIdentitySchema.optional(),
+});
+export type CreateRepositoryResult = z.output<typeof CreateRepositoryResultSchema>;
 
 // --- Features (renderer-facing views of authoritative server snapshots) -----
 // The renderer never receives raw server payloads; the main process maps
@@ -3710,6 +3737,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([z.string().min(1).max(64)]),
     response: CloneOperationSchema,
   },
+  [IPC_CHANNELS.createRepository]: {
+    request: z.tuple([CreateRepositoryRequestSchema]),
+    response: CreateRepositoryResultSchema,
+  },
   [IPC_CHANNELS.repositoriesList]: {
     request: z.tuple([]),
     response: z.array(RepositoryStateSchema),
@@ -4093,6 +4124,13 @@ export interface AgenticoApi {
   retryCloneCleanup(operationId: string): Promise<CloneOperation>;
   /** Starts a deliberate fresh retry of a terminal attempt. */
   retryCloneOperation(operationId: string): Promise<CloneOperation>;
+  /**
+   * Creates a new repository as a child of a configured workspace root:
+   * one empty initial commit on main with Agentico's identity, no origin,
+   * no push. The resolved result carries the actual repository key and
+   * the server-resolved identity of the published repository.
+   */
+  createRepository(request: CreateRepositoryRequest): Promise<CreateRepositoryResult>;
   listRepositories(): Promise<RepositoryState[]>;
   listFeatures(): Promise<FeaturesListResult>;
   getFeature(featureId: string): Promise<FeatureSnapshot>;

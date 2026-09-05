@@ -188,6 +188,11 @@ export const ERROR_CATALOG = {
     title: 'Disallowed API path',
     summary: () => 'The requested API path is not allowed.',
   }),
+  E_BAD_API_RESPONSE: entry({
+    class: 'blocking',
+    title: 'Unexpected API response',
+    summary: () => 'The server response did not match its contract and was discarded.',
+  }),
   /**
    * The connected server changed while a request was in flight. The stale
    * response was discarded: late replies from a previous server must never

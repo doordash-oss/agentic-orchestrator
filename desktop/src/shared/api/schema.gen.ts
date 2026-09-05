@@ -925,6 +925,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspace/repositories/create": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a new feature-ready repository inside a workspace root.
+         * @description Creates a repository as a new child folder of a configured workspace root. Requires an explicit consent flag acknowledging one empty initial commit on the main branch using Agentico's identity, with no origin remote and no push. Shares the clone destination protections: child-name validation, canonical root containment and eligibility, catalog shadowing checks, a cross-kind destination reservation, hidden owned staging and atomic no-replace publication. Same-key same-input requests replay the retained result; the response reports the actual collision-safe repository key and the server-resolved identity of the repository that was published.
+         */
+        post: operations["createWorkspaceRepository"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recovery": {
         parameters: {
             query?: never;
@@ -1261,6 +1281,32 @@ export interface components {
         RepositoryInitResponse: components["schemas"]["ActionBaseResponse"] & {
             result: string;
             repository: components["schemas"]["WorkspaceRepository"];
+        };
+        CreateRepositoryRequest: {
+            /** @description Configured workspace root that receives the new repository. The root must be clone-eligible (existing, writable, not itself a repository) and is revalidated at execution. */
+            root_path: string;
+            /** @description Single new folder name inside the root. Separators, traversal, controls, hidden and reserved names are rejected, as is every existing destination (including empty directories). */
+            destination: string;
+            /** @description Client-generated key binding this request. Same-key same-input replays return the retained result; changed-input reuse conflicts. */
+            idempotency_key: string;
+            /** @description Explicit user consent to create the repository with one empty initial commit on main using Agentico's identity, without an origin remote or a push. Must be true. */
+            consent: boolean;
+        };
+        CreateRepositoryResult: {
+            /** @description Actual collision-safe catalog key computed from workspace discovery after publication, never the requested folder name. */
+            repo_key: string;
+            /** @description Absolute path of the created repository. */
+            path: string;
+            /** @description Whether the created repository has commits. A successful create always has exactly one empty initial commit, so this is true. */
+            has_head: boolean;
+            /** @description The configured workspace root that received the repository. */
+            root: string;
+            /** @description Server-resolved identity of the repository actually published, pinned by the durable publication marker. Clients select and adopt the repository by this identity, never by key or path. */
+            identity?: components["schemas"]["RepositoryIdentity"];
+        };
+        CreateRepositoryResponse: components["schemas"]["ActionBaseResponse"] & {
+            result: string;
+            repository: components["schemas"]["CreateRepositoryResult"];
         };
         CloneStartRequest: {
             /** @description HTTP, HTTPS or SSH remote URL for the clone. Local paths, helper transports, embedded credentials and token-bearing queries or fragments are rejected without echoing secrets. */
@@ -2789,6 +2835,15 @@ export interface components {
                 "application/json": components["schemas"]["RepositoryInitResponse"];
             };
         };
+        /** @description Newly created workspace repository. */
+        CreateRepositoryResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CreateRepositoryResponse"];
+            };
+        };
         /** @description Authoritative clone operation snapshot after a mutation. */
         CloneActionResponse: {
             headers: {
@@ -3970,6 +4025,29 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ErrorResponse"];
             409: components["responses"]["ErrorResponse"];
+        };
+    };
+    createWorkspaceRepository: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRepositoryRequest"];
+            };
+        };
+        responses: {
+            201: components["responses"]["CreateRepositoryResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
+            503: components["responses"]["ErrorResponse"];
         };
     };
     getRecoverySnapshot: {

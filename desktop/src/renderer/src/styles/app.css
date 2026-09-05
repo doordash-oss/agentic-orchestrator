@@ -13659,6 +13659,36 @@ body {
   color: var(--text-secondary);
 }
 
+/* The destination-root row: the ordered root selector beside the native
+   folder chooser (local servers only). */
+.settings-panel__clone-root-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.settings-panel__clone-root-row select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.settings-panel__clone-no-roots + .settings-panel__clone-choose {
+  flex: 1 1 auto;
+}
+
+.settings-panel__clone-choose {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.settings-panel__clone-consent {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+}
+
 .settings-panel__clone-preview {
   margin: 0;
   color: var(--text-secondary);
@@ -13747,7 +13777,8 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .settings-panel__clone-operation,
-  .settings-panel__clone-action {
+  .settings-panel__clone-action,
+  .settings-panel__clone-choose {
     transition: none;
   }
 }

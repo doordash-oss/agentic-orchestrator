@@ -1130,6 +1130,41 @@ paths:
         "409":
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/v1/workspace/repositories/create:
+    post:
+      operationId: createWorkspaceRepository
+      summary: Create a new feature-ready repository inside a workspace root.
+      description: >-
+        Creates a repository as a new child folder of a configured
+        workspace root. Requires an explicit consent flag acknowledging one
+        empty initial commit on the main branch using Agentico's identity,
+        with no origin remote and no push. Shares the clone destination
+        protections: child-name validation, canonical root containment and
+        eligibility, catalog shadowing checks, a cross-kind destination
+        reservation, hidden owned staging and atomic no-replace publication.
+        Same-key same-input requests replay the retained result; the
+        response reports the actual collision-safe repository key and the
+        server-resolved identity of the repository that was published.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRepositoryRequest"
+      responses:
+        "201":
+          $ref: "#/components/responses/CreateRepositoryResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/recovery:
     get:
       operationId: getRecoverySnapshot
@@ -1640,6 +1675,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RepositoryInitResponse"
+    CreateRepositoryResponse:
+      description: Newly created workspace repository.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CreateRepositoryResponse"
     CloneActionResponse:
       description: Authoritative clone operation snapshot after a mutation.
       content:
@@ -2249,6 +2290,75 @@ components:
               type: string
             repository:
               $ref: "#/components/schemas/WorkspaceRepository"
+    CreateRepositoryRequest:
+      x-go-name: CreateRepositorySchema
+      type: object
+      required: [root_path, destination, idempotency_key, consent]
+      properties:
+        root_path:
+          type: string
+          maxLength: 1024
+          description: >-
+            Configured workspace root that receives the new repository. The
+            root must be clone-eligible (existing, writable, not itself a
+            repository) and is revalidated at execution.
+        destination:
+          type: string
+          maxLength: 128
+          description: >-
+            Single new folder name inside the root. Separators, traversal,
+            controls, hidden and reserved names are rejected, as is every
+            existing destination (including empty directories).
+        idempotency_key:
+          type: string
+          maxLength: 128
+          description: >-
+            Client-generated key binding this request. Same-key same-input
+            replays return the retained result; changed-input reuse
+            conflicts.
+        consent:
+          type: boolean
+          description: >-
+            Explicit user consent to create the repository with one empty
+            initial commit on main using Agentico's identity, without an
+            origin remote or a push. Must be true.
+    CreateRepositoryResult:
+      type: object
+      required: [repo_key, path, has_head, root]
+      properties:
+        repo_key:
+          type: string
+          description: >-
+            Actual collision-safe catalog key computed from workspace
+            discovery after publication, never the requested folder name.
+        path:
+          type: string
+          description: Absolute path of the created repository.
+        has_head:
+          type: boolean
+          description: >-
+            Whether the created repository has commits. A successful create
+            always has exactly one empty initial commit, so this is true.
+        root:
+          type: string
+          description: The configured workspace root that received the repository.
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            Server-resolved identity of the repository actually published,
+            pinned by the durable publication marker. Clients select and
+            adopt the repository by this identity, never by key or path.
+    CreateRepositoryResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [result, repository]
+          properties:
+            result:
+              type: string
+            repository:
+              $ref: "#/components/schemas/CreateRepositoryResult"
     CloneStartRequest:
       x-go-name: CloneStartSchema
       type: object

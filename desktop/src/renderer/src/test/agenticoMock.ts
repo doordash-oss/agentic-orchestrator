@@ -23,6 +23,7 @@ import type {
   AppRouteEvent,
   AttentionItem,
   CloneOperation,
+  CreateRepositoryResult,
   ConnectionState,
   CreationDefaults,
   DiagnosticsSnapshot,
@@ -206,6 +207,21 @@ export function cloneOperation(overrides: Partial<CloneOperation> = {}): CloneOp
   };
 }
 
+/** A minimal successful create-repository result, as the server returns it. */
+export function createRepositoryResult(
+  overrides: Partial<CreateRepositoryResult> = {},
+): CreateRepositoryResult {
+  const path = '/work/space/created';
+  return {
+    repoKey: 'created',
+    path,
+    hasHead: true,
+    root: '/work/space',
+    identity: mockRepoIdentity(path),
+    ...overrides,
+  };
+}
+
 /** A parent feature's structured configuration, as the refactor wizard seeds it. */
 export function featureConfigSnapshot(
   overrides: {
@@ -365,6 +381,7 @@ export interface AgenticoMock {
     cancelCloneOperation: ReturnType<typeof vi.fn>;
     retryCloneCleanup: ReturnType<typeof vi.fn>;
     retryCloneOperation: ReturnType<typeof vi.fn>;
+    createRepository: ReturnType<typeof vi.fn>;
     listRepositories: ReturnType<typeof vi.fn>;
     listFeatures: ReturnType<typeof vi.fn>;
     getFeature: ReturnType<typeof vi.fn>;
@@ -464,6 +481,7 @@ export function installAgenticoMock(
     cloneOperation?: Partial<CloneOperation>;
     cloneOperations?: CloneOperation[];
     cloneOperationsNextToken?: string;
+    createResult?: Partial<CreateRepositoryResult>;
     updates?: UpdateState;
     diagnostics?: DiagnosticsSnapshot;
     platform?: string;
@@ -553,6 +571,9 @@ export function installAgenticoMock(
     ),
     retryCloneOperation: vi.fn(() =>
       Promise.resolve(cloneOperation(overrides.cloneOperation ?? { state: 'accepted' })),
+    ),
+    createRepository: vi.fn(() =>
+      Promise.resolve(createRepositoryResult(overrides.createResult ?? {})),
     ),
     listRepositories: vi.fn(() => Promise.resolve(readiness.repositories)),
     listFeatures: vi.fn(() =>

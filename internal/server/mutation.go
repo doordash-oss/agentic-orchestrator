@@ -1212,6 +1212,13 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 			return
 		}
 		defaultActionFields(&resp, "", resultUpdated)
+		if resp.Result == resultUpdated && h.broker != nil {
+			// A runtime configuration change (workspace roots, defaults,
+			// notifications) reshapes discovery and read models: every
+			// surface re-reads its snapshot. Unchanged mutations publish
+			// nothing.
+			h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
+		}
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		w.Header().Set("Allow", "GET, PATCH, PUT")
@@ -1231,6 +1238,10 @@ func validateWorkspaceRootPaths(w http.ResponseWriter, roots []string) bool {
 		Reason string `json:"reason"`
 	}
 	var invalid []rejectedRoot
+	// Canonical (home-expanded, symlink-resolved) forms detect duplicates
+	// that differ as text: adding a root that names the same directory as
+	// an existing entry must not create a second configuration entry.
+	canonical := make(map[string]string, len(roots))
 	for _, root := range roots {
 		info, err := os.Stat(workspace.ExpandHome(root))
 		switch {
@@ -1238,11 +1249,30 @@ func validateWorkspaceRootPaths(w http.ResponseWriter, roots []string) bool {
 			// Valid root.
 		case err == nil:
 			invalid = append(invalid, rejectedRoot{Path: root, Reason: "path is not a directory"})
+			continue
 		case errors.Is(err, fs.ErrNotExist):
 			invalid = append(invalid, rejectedRoot{Path: root, Reason: "path does not exist"})
+			continue
 		default:
 			invalid = append(invalid, rejectedRoot{Path: root, Reason: "path could not be resolved"})
+			continue
 		}
+		expanded, err := filepath.Abs(workspace.ExpandHome(root))
+		if err != nil {
+			continue
+		}
+		resolved, err := filepath.EvalSymlinks(expanded)
+		if err != nil {
+			continue
+		}
+		if existing, dup := canonical[resolved]; dup {
+			invalid = append(invalid, rejectedRoot{
+				Path:   root,
+				Reason: "names the same directory as the existing root " + existing,
+			})
+			continue
+		}
+		canonical[resolved] = root
 	}
 	if len(invalid) == 0 {
 		return true

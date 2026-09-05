@@ -14,13 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import userEvent from '@testing-library/user-event';
 import { CloneRepositorySection } from './CloneRepositorySection';
 import {
   cloneOperation,
   installAgenticoMock,
+  ipcError,
   readySnapshot,
   type AgenticoMock,
 } from '../test/agenticoMock';
@@ -310,5 +312,219 @@ describe('CloneRepositorySection operations list', () => {
     );
     expect(await screen.findByText('remote-stuck')).toBeInTheDocument();
     expect(screen.getAllByText(/the remote server/).length).toBeGreaterThan(0);
+  });
+});
+
+describe('CloneRepositorySection local root selection', () => {
+  function rootEntry(
+    path: string,
+    overrides: Partial<{ valid: boolean; cloneEligible: boolean }> = {},
+  ) {
+    return { path, valid: true, cloneEligible: true, ...overrides };
+  }
+
+  /** A stateful harness mirroring how Settings applies authoritative snapshots. */
+  function SectionHarness({
+    initial,
+    connection,
+  }: {
+    initial: ReadinessSnapshot;
+    connection: ConnectionState;
+  }) {
+    const [readiness, setReadiness] = useState(initial);
+    return (
+      <CloneRepositorySection
+        readiness={readiness}
+        connection={connection}
+        onReadinessChanged={setReadiness}
+      />
+    );
+  }
+
+  it('persists a chosen folder as a root, refreshes, and selects the authoritative entry', async () => {
+    const user = userEvent.setup();
+    const added = readinessWithRoots([rootEntry('/work/space'), rootEntry('/work/new')]);
+    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/new' });
+    mock.api.addWorkspaceRoot.mockResolvedValue(added);
+    render(
+      <SectionHarness
+        initial={readinessWithRoots(eligibleRoots)}
+        connection={readyConnection('local-1')}
+      />,
+    );
+    await screen.findByLabelText('Repository URL');
+
+    await user.click(screen.getByRole('button', { name: /choose folder/i }));
+
+    // Root persistence completes and the authoritative snapshot reaches
+    // the owning surface; the new root becomes the selection.
+    await waitFor(() => expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/work/new'));
+    const select = screen.getByLabelText('Destination root') as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe('/work/new'));
+    expect([...select.options].map((option) => option.value)).toEqual(['/work/space', '/work/new']);
+  });
+
+  it('cancelling the chooser preserves the root, form inputs, and starts nothing', async () => {
+    const user = userEvent.setup();
+    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: null });
+    renderSection();
+    await screen.findByLabelText('Repository URL');
+    await user.type(screen.getByLabelText('Repository URL'), 'https://example.com/acme/x.git');
+    await user.clear(screen.getByLabelText('Folder name'));
+    await user.type(screen.getByLabelText('Folder name'), 'kept');
+
+    await user.click(screen.getByRole('button', { name: /choose folder/i }));
+
+    await waitFor(() => expect(mock.api.pickWorkspaceDirectory).toHaveBeenCalled());
+    expect(mock.api.addWorkspaceRoot).not.toHaveBeenCalled();
+    expect(mock.api.startClone).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Repository URL')).toHaveValue('https://example.com/acme/x.git');
+    expect(screen.getByLabelText('Folder name')).toHaveValue('kept');
+    const select = screen.getByLabelText('Destination root') as HTMLSelectElement;
+    expect(select.value).toBe('/work/space');
+  });
+
+  it('a failed save keeps the active configuration and retains the form for retry', async () => {
+    const user = userEvent.setup();
+    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/new' });
+    mock.api.addWorkspaceRoot.mockRejectedValue(
+      ipcError('invalid_workspace_root', 'Some workspace roots do not resolve.'),
+    );
+    renderSection();
+    await screen.findByLabelText('Repository URL');
+    await user.type(screen.getByLabelText('Folder name'), 'kept');
+
+    await user.click(screen.getByRole('button', { name: /choose folder/i }));
+
+    expect(await screen.findByText('Some workspace roots do not resolve.')).toBeInTheDocument();
+    // The form (and every input) is retained for a retry.
+    expect(screen.getByLabelText('Folder name')).toHaveValue('kept');
+    const select = screen.getByLabelText('Destination root') as HTMLSelectElement;
+    expect(select.value).toBe('/work/space');
+
+    // A retry after the failure succeeds through the same boundary.
+    mock.api.addWorkspaceRoot.mockResolvedValue(
+      readinessWithRoots([rootEntry('/work/space'), rootEntry('/work/new')]),
+    );
+    await user.click(screen.getByRole('button', { name: /choose folder/i }));
+    await waitFor(() => expect(mock.api.addWorkspaceRoot).toHaveBeenCalledTimes(2));
+  });
+
+  it('selects an already-configured root without adding a duplicate entry', async () => {
+    const user = userEvent.setup();
+    // The chooser returns a path that is already configured: the server
+    // reports the same single entry and nothing is duplicated.
+    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space' });
+    mock.api.addWorkspaceRoot.mockResolvedValue(readinessWithRoots(eligibleRoots));
+    renderSection();
+    await screen.findByLabelText('Repository URL');
+
+    await user.click(screen.getByRole('button', { name: /choose folder/i }));
+
+    await waitFor(() => expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/work/space'));
+    const select = await screen.findByLabelText('Destination root');
+    await waitFor(() => expect((select as HTMLSelectElement).value).toBe('/work/space'));
+    expect([...(select as HTMLSelectElement).options]).toHaveLength(1);
+  });
+
+  it('shows the clone issue of an added root that is not clone-eligible and selects nothing', async () => {
+    const user = userEvent.setup();
+    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/is-a-repo' });
+    mock.api.addWorkspaceRoot.mockResolvedValue(
+      readySnapshot({
+        workspaceRoots: [
+          rootEntry('/work/space'),
+          {
+            path: '/work/is-a-repo',
+            valid: true,
+            cloneEligible: false,
+            cloneIssue: {
+              code: 'root_is_repository',
+              class: 'blocking',
+              title: 'Root is a repository',
+              summary: 'This workspace root is itself a git repository.',
+            },
+          },
+        ],
+      }),
+    );
+    renderSection();
+    await screen.findByLabelText('Repository URL');
+
+    await user.click(screen.getByRole('button', { name: /choose folder/i }));
+
+    expect(
+      await screen.findByText('This workspace root is itself a git repository.'),
+    ).toBeInTheDocument();
+    const select = screen.getByLabelText('Destination root') as HTMLSelectElement;
+    expect(select.value).toBe('/work/space');
+  });
+
+  it('discards the chooser result when the server switches mid-sequence', async () => {
+    const user = userEvent.setup();
+    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/new' });
+    let release: ((value: ReadinessSnapshot) => void) | undefined;
+    mock.api.addWorkspaceRoot.mockImplementation(
+      () =>
+        new Promise<ReadinessSnapshot>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const onReadinessChanged = vi.fn();
+    const view = render(
+      <CloneRepositorySection
+        readiness={readinessWithRoots(eligibleRoots)}
+        connection={readyConnection('alpha')}
+        onReadinessChanged={onReadinessChanged}
+      />,
+    );
+    await screen.findByLabelText('Repository URL');
+
+    await user.click(screen.getByRole('button', { name: /choose folder/i }));
+    await waitFor(() => expect(mock.api.addWorkspaceRoot).toHaveBeenCalled());
+    // The connection flips to another server while the save is in flight.
+    view.rerender(
+      <CloneRepositorySection
+        readiness={readinessWithRoots(eligibleRoots)}
+        connection={readyConnection('beta', 'beta server')}
+        onReadinessChanged={onReadinessChanged}
+      />,
+    );
+    release?.(readinessWithRoots([rootEntry('/work/space'), rootEntry('/work/new')]));
+
+    // The stale result never reaches the new server's UI and nothing is
+    // selected there.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(onReadinessChanged).not.toHaveBeenCalled();
+    const select = screen.getByLabelText('Destination root') as HTMLSelectElement;
+    expect(select.value).toBe('/work/space');
+  });
+
+  it('exposes no chooser or typed-path entry on a remote connection', async () => {
+    renderSection(
+      readinessWithRoots(eligibleRoots),
+      readyConnection('remote-1', 'remote', 'remote'),
+    );
+    await screen.findByLabelText('Repository URL');
+    expect(screen.queryByRole('button', { name: /choose folder/i })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: /folder path on the server/i })).toBeNull();
+    // The root list itself is still offered from the server's config.
+    expect(screen.getByLabelText('Destination root')).toHaveValue('/work/space');
+  });
+
+  it('explains the administrator action when no roots are usable on a remote server', async () => {
+    renderSection(readinessWithRoots([]), readyConnection('remote-1', 'remote', 'remote'));
+    expect(
+      await screen.findByText(/ask the server administrator to configure a writable/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /choose folder/i })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Clone repository' })).toBeDisabled();
+  });
+
+  it('offers the chooser when no roots exist yet on a local server', async () => {
+    renderSection(readinessWithRoots([]));
+    expect(await screen.findByText(/No clone-eligible workspace root yet/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /choose folder/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clone repository' })).toBeDisabled();
   });
 });

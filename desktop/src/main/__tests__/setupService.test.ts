@@ -411,6 +411,87 @@ describe('SetupService.pickWorkspaceDirectory', () => {
   });
 });
 
+describe('SetupService root-mutation fencing', () => {
+  /** A mutable identity source so a test can switch servers mid-sequence. */
+  function makeFencedService(respond: (path: string, init?: ApiRequestInit) => HttpResult): {
+    service: SetupService;
+    calls: Call[];
+    identity: { serverKey: string | null; generation: number };
+  } {
+    const calls: Call[] = [];
+    const identity = { serverKey: 'alpha', generation: 1 };
+    const service = new SetupService({
+      transport: {
+        apiRequest: (path, init) => {
+          calls.push(init === undefined ? { path } : { path, init });
+          return Promise.resolve(respond(path, init));
+        },
+      },
+      dialogs: { pickDirectory: () => Promise.resolve(null) },
+      identity: () => ({ ...identity }),
+    });
+    return { service, calls, identity };
+  }
+
+  const configResponse = { status: 200, body: { api_version: 'v1', workspace_roots: ['/old'] } };
+
+  it('aborts before the write when the server switches between the read and the patch', async () => {
+    const { service, calls, identity } = makeFencedService((path) => {
+      if (path === '/api/v1/config/runtime') {
+        // The switch lands while the config read is in flight.
+        identity.serverKey = 'beta';
+        return configResponse;
+      }
+      return { status: 200, body: serverReadiness() };
+    });
+    await expect(service.addWorkspaceRoot('/work/new')).rejects.toMatchObject({
+      canonical: { code: 'E_SERVER_SWITCHED' },
+    });
+    // The mutation never dispatched: an already switched sequence cannot
+    // write to the new server.
+    expect(calls.some((call) => call.init?.method === 'PATCH')).toBe(false);
+  });
+
+  it('reconciles a failed refresh after a successful save against the same server', async () => {
+    let readinessCalls = 0;
+    const { service, calls } = makeFencedService((path) => {
+      if (path === '/api/v1/config/runtime') return configResponse;
+      if (path === '/api/v1/readiness') {
+        readinessCalls += 1;
+        if (readinessCalls === 1) {
+          return { status: 500, body: { error: { code: 'internal_error' } } };
+        }
+        return { status: 200, body: serverReadiness() };
+      }
+      return { status: 200, body: {} };
+    });
+    const snapshot = await service.addWorkspaceRoot('/work/new');
+    expect(snapshot.workspaceRoots[0]?.path).toBe('/work/space');
+    // The save landed once and the refresh was retried exactly once more.
+    expect(calls.filter((call) => call.init?.method === 'PATCH')).toHaveLength(1);
+    expect(readinessCalls).toBe(2);
+  });
+
+  it('discards the result when the server switches before the refresh lands', async () => {
+    const { service, calls, identity } = makeFencedService((path) => {
+      if (path === '/api/v1/config/runtime') return configResponse;
+      if (path === '/api/v1/readiness') {
+        // The switch lands while the post-save refresh is in flight.
+        identity.serverKey = 'beta';
+        return { status: 200, body: serverReadiness() };
+      }
+      return { status: 200, body: {} };
+    });
+    await expect(service.addWorkspaceRoot('/work/new')).rejects.toMatchObject({
+      canonical: { code: 'E_SERVER_SWITCHED' },
+    });
+    // The save dispatched exactly once and the stale snapshot never
+    // escapes to the new server's UI.
+    expect(calls.filter((call) => call.init?.method === 'PATCH')).toHaveLength(1);
+    expect(calls.at(-1)?.path).toBe('/api/v1/readiness');
+  });
+});
+
 describe('SetupService locality enforcement', () => {
   function makeRemoteService(
     respond: (path: string) => HttpResult = () => ({ status: 200, body: serverReadiness() }),
@@ -429,7 +510,7 @@ describe('SetupService locality enforcement', () => {
     return { service, calls };
   }
 
-  it('addWorkspaceRoot works remotely: the path names a server-side location', async () => {
+  it('addWorkspaceRoot throws E_REQUIRES_LOCAL_SERVER before any request or dialog', async () => {
     const { service, calls } = makeRemoteService((path) =>
       path === '/api/v1/readiness'
         ? { status: 200, body: serverReadiness() }
@@ -437,8 +518,12 @@ describe('SetupService locality enforcement', () => {
           ? { status: 200, body: { api_version: 'v1', workspace_roots: [] } }
           : { status: 200, body: {} },
     );
-    await expect(service.addWorkspaceRoot('/work/new')).resolves.toBeDefined();
-    expect(calls.length).toBeGreaterThan(0);
+    await expect(service.addWorkspaceRoot('/work/new')).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    // The guard fires before any remote request: a remote server's roots
+    // are administrator-owned.
+    expect(calls).toHaveLength(0);
   });
 
   it('removeWorkspaceRoot throws E_REQUIRES_LOCAL_SERVER without calling the transport', async () => {

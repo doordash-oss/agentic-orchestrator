@@ -1022,15 +1022,30 @@ func (e RetryWorkspaceCloneParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for CreateWorkspaceRepositoryParamsXAgenticoClient.
+const (
+	CreateWorkspaceRepositoryParamsXAgenticoClientLocal CreateWorkspaceRepositoryParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CreateWorkspaceRepositoryParamsXAgenticoClient enum.
+func (e CreateWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CreateWorkspaceRepositoryParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for InitWorkspaceRepositoryParamsXAgenticoClient.
 const (
-	InitWorkspaceRepositoryParamsXAgenticoClientLocal InitWorkspaceRepositoryParamsXAgenticoClient = "local"
+	Local InitWorkspaceRepositoryParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the InitWorkspaceRepositoryParamsXAgenticoClient enum.
 func (e InitWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case InitWorkspaceRepositoryParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -1515,6 +1530,47 @@ type CreateFeatureResponse struct {
 	FeatureID  string       `json:"feature_id"`
 	Meta       ResponseMeta `json:"meta,omitempty"`
 	Result     string       `json:"result"`
+}
+
+// CreateRepositorySchema defines model for CreateRepositoryRequest.
+type CreateRepositorySchema struct {
+	// Consent Explicit user consent to create the repository with one empty initial commit on main using Agentico's identity, without an origin remote or a push. Must be true.
+	Consent bool `json:"consent"`
+
+	// Destination Single new folder name inside the root. Separators, traversal, controls, hidden and reserved names are rejected, as is every existing destination (including empty directories).
+	Destination string `json:"destination"`
+
+	// IdempotencyKey Client-generated key binding this request. Same-key same-input replays return the retained result; changed-input reuse conflicts.
+	IdempotencyKey string `json:"idempotency_key"`
+
+	// RootPath Configured workspace root that receives the new repository. The root must be clone-eligible (existing, writable, not itself a repository) and is revalidated at execution.
+	RootPath string `json:"root_path"`
+}
+
+// CreateRepositoryResponse defines model for CreateRepositoryResponse.
+type CreateRepositoryResponse struct {
+	APIVersion string                 `json:"api_version"`
+	Meta       ResponseMeta           `json:"meta,omitempty"`
+	Repository CreateRepositoryResult `json:"repository"`
+	Result     string                 `json:"result"`
+}
+
+// CreateRepositoryResult defines model for CreateRepositoryResult.
+type CreateRepositoryResult struct {
+	// HasHead Whether the created repository has commits. A successful create always has exactly one empty initial commit, so this is true.
+	HasHead bool `json:"has_head"`
+
+	// Identity Server-resolved identity of the repository actually published, pinned by the durable publication marker. Clients select and adopt the repository by this identity, never by key or path.
+	Identity *RepositoryIdentity `json:"identity,omitempty"`
+
+	// Path Absolute path of the created repository.
+	Path string `json:"path"`
+
+	// RepoKey Actual collision-safe catalog key computed from workspace discovery after publication, never the requested folder name.
+	RepoKey string `json:"repo_key"`
+
+	// Root The configured workspace root that received the repository.
+	Root string `json:"root"`
 }
 
 // Cursor defines model for Cursor.
@@ -3653,6 +3709,15 @@ type RetryWorkspaceCloneParams struct {
 // RetryWorkspaceCloneParamsXAgenticoClient defines parameters for RetryWorkspaceClone.
 type RetryWorkspaceCloneParamsXAgenticoClient string
 
+// CreateWorkspaceRepositoryParams defines parameters for CreateWorkspaceRepository.
+type CreateWorkspaceRepositoryParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CreateWorkspaceRepositoryParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CreateWorkspaceRepositoryParamsXAgenticoClient defines parameters for CreateWorkspaceRepository.
+type CreateWorkspaceRepositoryParamsXAgenticoClient string
+
 // InitWorkspaceRepositoryParams defines parameters for InitWorkspaceRepository.
 type InitWorkspaceRepositoryParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -3733,6 +3798,9 @@ type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody
 
 // StartWorkspaceCloneJSONRequestBody defines body for StartWorkspaceClone for application/json ContentType.
 type StartWorkspaceCloneJSONRequestBody = CloneStartSchema
+
+// CreateWorkspaceRepositoryJSONRequestBody defines body for CreateWorkspaceRepository for application/json ContentType.
+type CreateWorkspaceRepositoryJSONRequestBody = CreateRepositorySchema
 
 // InitWorkspaceRepositoryJSONRequestBody defines body for InitWorkspaceRepository for application/json ContentType.
 type InitWorkspaceRepositoryJSONRequestBody = RepositoryInitSchema

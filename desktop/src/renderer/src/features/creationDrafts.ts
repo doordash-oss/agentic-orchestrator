@@ -33,6 +33,7 @@ import type {
   CanonicalError,
   CreationDefaults,
   RepositoryFileRef,
+  RepositoryIdentity,
   WorkspaceRootState,
 } from '../../../shared/ipc';
 import type { ComposerUploadItem } from './stagedItems';
@@ -87,10 +88,33 @@ export interface CreationDraftState {
   catalogRefreshError: CanonicalError | null;
   /** Whether the nested clone view is open (restored with the draft). */
   cloneOpen: boolean;
-  /** Roots eligible as clone destinations, from the last catalog snapshot. */
+  /**
+   * All configured workspace roots from the last catalog snapshot; the
+   * destination controls filter them to clone-eligible entries.
+   */
   cloneableRoots: readonly WorkspaceRootState[];
   /** The picker-initiated clone operation associated with this draft. */
   cloneAssociation: CloneAssociation | null;
+  /** Whether the nested create view is open (restored with the draft). */
+  createOpen: boolean;
+  /**
+   * The picker-initiated repository creation this draft is waiting to
+   * adopt. `identity` is null while the request is in flight; a restored
+   * draft never keeps an unresolved in-flight marker.
+   */
+  pendingCreate: PendingCreate | null;
+}
+
+/**
+ * The picker-initiated repository creation associated with this draft. The
+ * idempotency key is recorded before the request flies; the server-resolved
+ * identity of the published repository lands when the response returns, and
+ * adoption (selection by identity) happens exactly once.
+ */
+export interface PendingCreate {
+  idempotencyKey: string;
+  /** Server-resolved identity of the published repository; null in flight. */
+  identity: RepositoryIdentity | null;
 }
 
 /**
@@ -140,6 +164,15 @@ export function retainableDraft(state: CreationDraftState): CreationDraftState {
     attachmentUploads: interrupt(state.attachmentUploads),
     cloneAssociation:
       state.cloneAssociation === null ? null : { ...state.cloneAssociation, startInFlight: false },
+    // An in-flight creation is dead once its sheet unmounts (the response
+    // closure belongs to the unmounted instance); a resolved identity is
+    // kept so a restored draft can still adopt from the refreshed catalog.
+    pendingCreate:
+      state.pendingCreate === null
+        ? null
+        : state.pendingCreate.identity === null
+          ? null
+          : { ...state.pendingCreate },
   };
 }
 
@@ -182,6 +215,8 @@ export function freshCreationDraft(): CreationDraftState {
     cloneOpen: false,
     cloneableRoots: [],
     cloneAssociation: null,
+    createOpen: false,
+    pendingCreate: null,
   };
 }
 

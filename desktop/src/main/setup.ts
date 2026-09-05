@@ -36,6 +36,7 @@ import {
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
 import { assertLocalConnection, alwaysLocal, type LocalitySource } from './locality';
+import type { ServerIdentity, ServerIdentitySource } from './cloneService';
 
 /** The authenticated transport surface the gateway provides. */
 export type SetupTransport = ServerTransport;
@@ -49,6 +50,8 @@ export interface SetupServiceDeps {
   transport: SetupTransport;
   dialogs: SetupDialogs;
   locality?: LocalitySource;
+  /** Captures the current server identity for root-mutation fencing. */
+  identity?: ServerIdentitySource;
 }
 
 export class SetupService {
@@ -84,13 +87,20 @@ export class SetupService {
   /**
    * Adds a workspace root through the server's runtime-config mutation
    * (which persists it and rediscovers repositories server-side), then
-   * returns the fresh authoritative readiness snapshot. No locality guard:
-   * the path names a location on the SERVER host and the mutation itself
-   * is server-side validation — remotely this is the typed-path entry.
+   * returns the fresh authoritative readiness snapshot. The whole
+   * read-modify-write sequence is local-only (a remote server's roots are
+   * administrator-owned) and fenced by server identity and connection
+   * generation: an already dispatched mutation can affect only its
+   * original server, and a switch mid-sequence aborts before the write.
+   * A refresh failure right after a successful save is reconciled once
+   * against the same server before giving up.
    */
   async addWorkspaceRoot(path: string): Promise<ReadinessSnapshot> {
+    assertLocalConnection(this.locality);
     const validated = validateWithSchema(path, AbsolutePathSchema);
+    const before = this.captureIdentity();
     const configBody = await this.api('/api/v1/config/runtime');
+    this.assertSameServer(before);
     const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
     const roots = config.workspace_roots ?? [];
     if (!roots.includes(validated)) {
@@ -98,8 +108,9 @@ export class SetupService {
         method: 'PATCH',
         body: { workspace_roots: [...roots, validated] },
       });
+      this.assertSameServer(before);
     }
-    return this.getReadiness();
+    return this.refreshAfterRootMutation(before);
   }
 
   /**
@@ -109,7 +120,9 @@ export class SetupService {
   async removeWorkspaceRoot(path: string): Promise<ReadinessSnapshot> {
     assertLocalConnection(this.locality);
     const validated = validateWithSchema(path, AbsolutePathSchema);
+    const before = this.captureIdentity();
     const configBody = await this.api('/api/v1/config/runtime');
+    this.assertSameServer(before);
     const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
     const roots = config.workspace_roots ?? [];
     const next = roots.filter((r) => r !== validated);
@@ -118,8 +131,9 @@ export class SetupService {
         method: 'PATCH',
         body: { workspace_roots: next },
       });
+      this.assertSameServer(before);
     }
-    return this.getReadiness();
+    return this.refreshAfterRootMutation(before);
   }
 
   /**
@@ -130,7 +144,9 @@ export class SetupService {
   async reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot> {
     assertLocalConnection(this.locality);
     const validated = paths.map((p) => validateWithSchema(p, AbsolutePathSchema));
+    const before = this.captureIdentity();
     const configBody = await this.api('/api/v1/config/runtime');
+    this.assertSameServer(before);
     const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
     const current = (config.workspace_roots ?? []).slice().sort();
     const sorted = validated.slice().sort();
@@ -141,7 +157,31 @@ export class SetupService {
       method: 'PATCH',
       body: { workspace_roots: validated },
     });
-    return this.getReadiness();
+    this.assertSameServer(before);
+    return this.refreshAfterRootMutation(before);
+  }
+
+  /**
+   * Refreshes the authoritative readiness after a root mutation, fenced to
+   * the server the mutation targeted. A failure right after a successful
+   * save is retried once against that same server before surfacing: the
+   * renderer must never conclude the save itself failed from a refresh
+   * failure.
+   */
+  private async refreshAfterRootMutation(before: ServerIdentity): Promise<ReadinessSnapshot> {
+    try {
+      const snapshot = await this.getReadiness();
+      this.assertSameServer(before);
+      return snapshot;
+    } catch (err) {
+      if (err instanceof CanonicalErrorException && err.canonical.code === 'E_SERVER_SWITCHED') {
+        throw err;
+      }
+      // One reconcile attempt against the same server.
+      const snapshot = await this.getReadiness();
+      this.assertSameServer(before);
+      return snapshot;
+    }
   }
 
   /**
@@ -172,6 +212,29 @@ export class SetupService {
 
   private api(path: string, init?: ApiRequestInit): Promise<unknown> {
     return serverRequest(this.deps.transport, path, init);
+  }
+
+  private captureIdentity(): ServerIdentity {
+    if (this.deps.identity === undefined) {
+      return { serverKey: null, generation: 0 };
+    }
+    return this.deps.identity();
+  }
+
+  /**
+   * Aborts a root-mutation sequence whose server changed mid-flight: an
+   * already dispatched mutation can affect only its original server, and
+   * stale results must never authorize or select a root on the new one.
+   */
+  private assertSameServer(before: ServerIdentity): void {
+    const after = this.captureIdentity();
+    if (
+      before.serverKey !== null &&
+      after.serverKey !== null &&
+      (before.serverKey !== after.serverKey || before.generation !== after.generation)
+    ) {
+      throw new CanonicalErrorException(buildCanonicalError('E_SERVER_SWITCHED'));
+    }
   }
 }
 

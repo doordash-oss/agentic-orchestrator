@@ -189,7 +189,8 @@ func (s *store) reservation(destinationPath string) (Record, bool) {
 // list returns one bounded page in deterministic order: unresolved records
 // (active and cleanup-pending, always discoverable) first, then resolved
 // terminal records, each group ordered by timestamp descending with ID
-// ascending as the tiebreak.
+// ascending as the tiebreak. Only clone-kind records are listed: create
+// records share the reservation space but are not clone operations.
 func (s *store) list(q ListQuery) ListResult {
 	limit := q.Limit
 	if limit <= 0 {
@@ -203,6 +204,9 @@ func (s *store) list(q ListQuery) ListResult {
 	unresolved := make([]*Record, 0)
 	resolved := make([]*Record, 0)
 	for _, rec := range s.records {
+		if recordKind(rec) != KindClone {
+			continue
+		}
 		if UnresolvedStates[rec.State] {
 			unresolved = append(unresolved, rec)
 		} else if ResolvedStates[rec.State] {

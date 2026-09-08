@@ -111,7 +111,7 @@ func findRepositoryRoot(t *testing.T) (string, error) {
 func hasRetainedMerge(t *testing.T, root, fork, target string) bool {
 	t.Helper()
 	out := gitOut(t, root, "rev-list", "--parents", "--first-parent", "HEAD")
-	for _, line := range strings.Fields(out) {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 3 {
 			continue

@@ -145,6 +145,23 @@ const HEALTH = (base: string) => `${base}/api/v1/health`;
 const OK = { status: 200, body: { status: 'ok' } };
 
 describe('ServerListService list building', () => {
+  it('publishes connection changes without reopening network polling', () => {
+    let currentKey: string | null = null;
+    const harness = makeHarness({
+      scanRegistry: () => scan(candidate(ALPHA_KEY, 'alpha', 'http://127.0.0.1:51001')),
+      currentServerKey: () => currentKey,
+    });
+    harness.service.setOpen(false);
+    currentKey = ALPHA_KEY;
+
+    harness.service.notifyConnectionChanged();
+
+    expect(harness.pushed).toHaveLength(1);
+    expect(harness.pushed[0]!.rows[0]).toMatchObject({ serverKey: ALPHA_KEY, current: true });
+    expect(harness.fetchCalls).toEqual([]);
+    expect(harness.intervalCount()).toBe(0);
+  });
+
   it('unions registry and known servers, deduping by serverKey (registry wins)', () => {
     const harness = makeHarness({
       scanRegistry: () => scan(candidate(ALPHA_KEY, 'alpha-live', 'http://127.0.0.1:51001')),
@@ -199,6 +216,36 @@ describe('ServerListService list building', () => {
     });
     const { rows } = harness.service.list();
     expect(rows.map((row) => row.current)).toEqual([false, true]);
+  });
+});
+
+describe('ServerListService bundled runtime', () => {
+  const BUNDLED_KEY = 'e'.repeat(32);
+  const bundledRuntime = () => ({ serverKey: BUNDLED_KEY, runtimeDir: '/rt/bundled' });
+
+  it('reports the bundled runtime as not running when the registry has no entry for it', () => {
+    const harness = makeHarness({ bundledRuntime });
+    expect(harness.service.list().bundled).toEqual({
+      serverKey: BUNDLED_KEY,
+      runtimeDir: '/rt/bundled',
+      running: false,
+    });
+  });
+
+  it('derives liveness from the registry scan, never from a probe', () => {
+    const harness = makeHarness({
+      bundledRuntime,
+      scanRegistry: () => scan(candidate(BUNDLED_KEY, 'bundled', 'http://127.0.0.1:51001')),
+    });
+    const snapshot = harness.service.list();
+    expect(snapshot.bundled?.running).toBe(true);
+    expect(snapshot.rows.map((row) => row.serverKey)).toEqual([BUNDLED_KEY]);
+    expect(harness.fetchCalls).toEqual([]);
+  });
+
+  it('omits the field entirely when no runtime selection is wired', () => {
+    const harness = makeHarness();
+    expect('bundled' in harness.service.list()).toBe(false);
   });
 });
 

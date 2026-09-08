@@ -57,6 +57,7 @@ type ReviewHelperConfig struct {
 	LogPath                string
 	SystemPromptPrefix     string
 	CompletionAskingClause string
+	CompletionTool         string
 	Timeout                time.Duration
 	EffortLevel            llm.EffortLevel
 	// EffectiveEffort, when non-empty, overrides EffortLevel in the
@@ -190,6 +191,24 @@ func childResumeFallbackConfig(cfg ReviewHelperConfig, baseSessionID, originalPr
 	return cfg, nil
 }
 
+// Review helpers may use a different provider from their parent planner or
+// implementer. Resolve the protocol for the model actually being launched.
+func (pr *PhaseRunner) reviewHelperSystemPrompt(spec RoleSpec, cfg ReviewHelperConfig) string {
+	askingClause, completionTool := cfg.CompletionAskingClause, cfg.CompletionTool
+	if pr.Registry != nil {
+		askingClause = pr.askingQuestionsClauseForModel(cfg.Model)
+		completionTool = pr.completionToolForModel(cfg.Model)
+	}
+	return BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+		Spec:           spec,
+		IterationDir:   cfg.HelperIterDir,
+		SkillsDir:      pr.SkillsDir,
+		GuidelinesDir:  pr.GuidelinesDir,
+		AskingClause:   askingClause,
+		CompletionTool: completionTool,
+	})
+}
+
 // RunReadOnlyReviewHelper runs a bounded review helper under the file-based
 // handoff protocol and parses ParseReviewFeedback(FeedbackPath). The helper
 // is read-only with respect to the worktree; it may only write to
@@ -251,13 +270,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	if !ok {
 		return nil, fmt.Errorf("running review helper: missing RoleSpec for phase %s role %s", contractPhase, cfg.Role)
 	}
-	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:          spec,
-		IterationDir:  cfg.HelperIterDir,
-		SkillsDir:     pr.SkillsDir,
-		GuidelinesDir: pr.GuidelinesDir,
-		AskingClause:  cfg.CompletionAskingClause,
-	})
+	systemPrompt := pr.reviewHelperSystemPrompt(spec, cfg)
 	allowedPaths := boundedReviewHelperAllowedPaths(cfg)
 	boundedHandler := &permission.BoundedHelperArtifactHandler{AllowedPaths: allowedPaths}
 	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
@@ -459,13 +472,7 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 	if !ok {
 		return nil, fmt.Errorf("running live-run review helper: missing RoleSpec for phase %s role %s", contractPhase, cfg.Role)
 	}
-	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:          spec,
-		IterationDir:  cfg.HelperIterDir,
-		SkillsDir:     pr.SkillsDir,
-		GuidelinesDir: pr.GuidelinesDir,
-		AskingClause:  cfg.CompletionAskingClause,
-	})
+	systemPrompt := pr.reviewHelperSystemPrompt(spec, cfg)
 	allowedPaths := boundedReviewHelperAllowedPaths(cfg)
 	writableRoots := append([]string(nil), allowedPaths...)
 	writableRoots = append(writableRoots, scratch.roots()...)

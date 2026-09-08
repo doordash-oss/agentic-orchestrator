@@ -29,13 +29,16 @@ type codexModelCatalogPayload struct {
 }
 
 type codexDiscoveredModel struct {
-	Slug             string `json:"slug"`
-	DisplayName      string `json:"display_name"`
-	Description      string `json:"description"`
-	Visibility       string `json:"visibility"`
-	SupportedInAPI   *bool  `json:"supported_in_api"`
-	ContextWindow    int    `json:"context_window"`
-	MaxContextWindow int    `json:"max_context_window"`
+	Slug                     string `json:"slug"`
+	DisplayName              string `json:"display_name"`
+	Description              string `json:"description"`
+	Visibility               string `json:"visibility"`
+	SupportedInAPI           *bool  `json:"supported_in_api"`
+	ContextWindow            int    `json:"context_window"`
+	MaxContextWindow         int    `json:"max_context_window"`
+	SupportedReasoningLevels []struct {
+		Effort llm.EffortLevel `json:"effort"`
+	} `json:"supported_reasoning_levels"`
 }
 
 // DiscoverModelCatalog refreshes Codex's local model catalog via
@@ -110,7 +113,7 @@ func parseCodexModelCatalogWithProgress(out []byte, report llm.ModelDiscoveryRep
 				DisplayName:        displayName,
 				ContextWindow:      window,
 				Category:           codexCategoryForDiscoveredModel(id),
-				EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax},
+				EffortCapabilities: codexEffortCapabilities(raw),
 			}
 			if label := llm.ContextWindowLabel(window); label != "" {
 				info.ID = llm.ModelWithContextWindow(id, window)
@@ -180,11 +183,29 @@ func codexCategoryForDiscoveredModel(id string) string {
 		return "balanced"
 	case lower == "gpt-5.3-codex":
 		return "balanced"
-	case strings.HasPrefix(lower, "gpt-5."):
+	case strings.HasPrefix(lower, "gpt-5."), strings.HasPrefix(lower, "gpt-6"):
 		return "capable"
 	case strings.Contains(lower, "codex"):
 		return "balanced"
 	default:
 		return ""
 	}
+}
+
+// Use the installed harness's advertised effort levels. Older catalogs omit
+// this field, so preserve their existing five-level fallback.
+func codexEffortCapabilities(model codexDiscoveredModel) []llm.EffortLevel {
+	if model.SupportedReasoningLevels == nil {
+		return []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}
+	}
+	var result []llm.EffortLevel
+	for _, level := range llm.AllEffortLevels {
+		for _, supported := range model.SupportedReasoningLevels {
+			if supported.Effort == level {
+				result = append(result, level)
+				break
+			}
+		}
+	}
+	return result
 }

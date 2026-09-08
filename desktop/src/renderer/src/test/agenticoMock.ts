@@ -297,6 +297,7 @@ export interface AgenticoMock {
     restartConnection: ReturnType<typeof vi.fn>;
     chooseConnectionServer: ReturnType<typeof vi.fn>;
     switchConnectionServer: ReturnType<typeof vi.fn>;
+    startLocalRuntime: ReturnType<typeof vi.fn>;
     listServers: ReturnType<typeof vi.fn>;
     probeServers: ReturnType<typeof vi.fn>;
     addRemoteServer: ReturnType<typeof vi.fn>;
@@ -445,6 +446,7 @@ export function installAgenticoMock(
     restartConnection: vi.fn(() => Promise.resolve(connection)),
     chooseConnectionServer: vi.fn(() => Promise.resolve(connection)),
     switchConnectionServer: vi.fn(() => Promise.resolve(connection)),
+    startLocalRuntime: vi.fn(() => Promise.resolve(connection)),
     listServers: vi.fn(() => Promise.resolve({ rows: [] })),
     probeServers: vi.fn(() => Promise.resolve({ rows: [] })),
     addRemoteServer: vi.fn(() => Promise.reject(new Error('addRemoteServer not mocked'))),

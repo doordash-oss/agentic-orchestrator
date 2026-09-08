@@ -17,7 +17,7 @@ limitations under the License.
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import type { ServerListRow } from '../../../shared/ipc';
+import type { ServerListRow, ServerListSnapshot } from '../../../shared/ipc';
 import { installAgenticoMock } from '../test/agenticoMock';
 import { ServerSwitcher } from './ServerSwitcher';
 
@@ -43,14 +43,18 @@ function remoteRow(overrides: Partial<ServerListRow> & { serverKey: string }): S
   return rest;
 }
 
-function renderSwitcher(openRequest: { id: number } | null = null) {
+function renderSwitcher(
+  openRequest: { id: number } | null = null,
+  bundled?: ServerListSnapshot['bundled'],
+) {
   const mock = installAgenticoMock();
-  const snapshot = {
+  const snapshot: ServerListSnapshot = {
     rows: [
       row({ serverKey: ALPHA_KEY, name: 'alpha', runtimeDir: '/rt/alpha', current: true }),
       row({ serverKey: BETA_KEY, name: 'beta', runtimeDir: '/rt/beta' }),
       row({ serverKey: GAMMA_KEY, name: 'gamma', runtimeDir: '/rt/gamma', health: 'unreachable' }),
     ],
+    ...(bundled === undefined ? {} : { bundled }),
   };
   mock.api.listServers.mockResolvedValue(snapshot);
   mock.api.probeServers.mockResolvedValue(snapshot);
@@ -226,5 +230,62 @@ describe('ServerSwitcher', () => {
     expect(trigger).toBeDisabled();
     expect(screen.queryByRole('listbox', { name: 'Servers' })).not.toBeInTheDocument();
     expect(mock.api.listServers).not.toHaveBeenCalled();
+  });
+});
+
+describe('ServerSwitcher bundled runtime', () => {
+  const BUNDLED_KEY = 'd'.repeat(64);
+
+  it('lists the stopped bundled runtime as a Start action that never switches', async () => {
+    const mock = renderSwitcher(null, {
+      serverKey: BUNDLED_KEY,
+      runtimeDir: '/rt/bundled',
+      running: false,
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'alpha — switch server' }));
+
+    const machine = await screen.findByRole('option', {
+      name: 'This machine at /rt/bundled — Not running',
+    });
+    expect(machine).toHaveAttribute('aria-disabled', 'false');
+    expect(machine).toHaveTextContent('Start');
+    expect(screen.getAllByRole('option')).toHaveLength(4);
+
+    await userEvent.click(machine);
+    await waitFor(() => expect(mock.api.startLocalRuntime).toHaveBeenCalledTimes(1));
+    expect(mock.api.switchConnectionServer).not.toHaveBeenCalled();
+    // Choosing closes the popover like any switch.
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: 'Servers' })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('adds no extra row when the bundled runtime is already listed as a live server', async () => {
+    renderSwitcher(null, { serverKey: BETA_KEY, runtimeDir: '/rt/beta', running: true });
+    await userEvent.click(screen.getByRole('button', { name: 'alpha — switch server' }));
+
+    await screen.findByRole('option', { name: 'beta at /rt/beta — Available' });
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+    expect(screen.queryByRole('option', { name: /This machine/ })).toBeNull();
+  });
+
+  it('replaces a stopped known bundled runtime with one enabled Start row', async () => {
+    const mock = renderSwitcher(null, {
+      serverKey: GAMMA_KEY,
+      runtimeDir: '/rt/gamma',
+      running: false,
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'alpha — switch server' }));
+
+    const machine = await screen.findByRole('option', {
+      name: 'This machine at /rt/gamma — Not running',
+    });
+    expect(machine).toHaveAttribute('aria-disabled', 'false');
+    expect(machine).toHaveTextContent('Start');
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+    expect(screen.queryByRole('option', { name: 'gamma at /rt/gamma — Unreachable' })).toBeNull();
+    await userEvent.click(machine);
+    expect(mock.api.startLocalRuntime).toHaveBeenCalledTimes(1);
+    expect(mock.api.switchConnectionServer).not.toHaveBeenCalled();
   });
 });

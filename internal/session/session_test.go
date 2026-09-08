@@ -387,11 +387,11 @@ func TestPendingToolWatchdogAllowsPromptResultAfterCompletedTool(t *testing.T) {
 	scriptPath := filepath.Join(tmpDir, "pending-tool-completed.sh")
 	script := `#!/usr/bin/env bash
 printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"pending"}'
-sleep 0.01
+sleep 0.04
 printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"in_progress"}'
-sleep 0.01
+sleep 0.04
 printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"completed"}'
-sleep 0.06
+sleep 0.24
 printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 `
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
@@ -411,11 +411,16 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 		&SessionOpts{
 			ProviderName: "test-provider",
 			Watchdog: &ports.SessionWatchdogConfig{
-				PendingToolIdleTimeout:    25 * time.Millisecond,
-				TurnCompletionIdleTimeout: 100 * time.Millisecond,
-				PollInterval:              5 * time.Millisecond,
+				// The margins scale the original 25/100ms pair 4x so a fully
+				// parallel test-binary run cannot starve the reader between
+				// the tool's completed event and the turn result. The
+				// completed-tool gap (240ms) still exceeds the pending-tool
+				// bound and stays under the turn-completion bound.
+				PendingToolIdleTimeout:    100 * time.Millisecond,
+				TurnCompletionIdleTimeout: 400 * time.Millisecond,
+				PollInterval:              20 * time.Millisecond,
 			},
-			ResultShutdownGrace: 20 * time.Millisecond,
+			ResultShutdownGrace: 80 * time.Millisecond,
 		},
 	)
 	if err != nil {
@@ -427,7 +432,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 		if status != "SUCCESS" {
 			t.Fatalf("StatusCh = %q, want SUCCESS", status)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for success status")
 	}
 }
@@ -3405,5 +3410,30 @@ func TestCostAndResultSeq_AreRaceFree(t *testing.T) {
 
 	if got := s.ResultSeq(); got != results {
 		t.Fatalf("ResultSeq() = %d, want %d", got, results)
+	}
+}
+
+func TestLateCostReconciliationPreservesTerminalOutcome(t *testing.T) {
+	t.Parallel()
+	credits := int64(123)
+	terminal := &llm.ResultMessage{Type: "result", Subtype: "success", Result: "finished", TotalCostUSD: 2}
+	s := NewSession("late-billing", "feat-1", feature.PhaseImplement)
+	s.providerName = "codex"
+	runMockSession(t, s, []llm.SDKMessage{
+		{Type: "result", Result: terminal},
+		{Type: "usage_update", UsageUpdate: &llm.Usage{InputTokens: 100, CacheCreationInputTokens: 25, CostUSD: 0, CostSource: "provider_estimate", CostCreditsMicros: &credits}},
+	}, nil)
+	if s.ResultSeq() != 1 {
+		t.Fatalf("billing advanced result sequence: %d", s.ResultSeq())
+	}
+	if got := s.Cost(); got != terminal || got.TotalCostUSD != 2 || got.Result != "finished" || got.Subtype != "success" {
+		t.Fatalf("reconciled terminal: %+v", got)
+	}
+	if terminal.TotalCostUSD != 2 {
+		t.Fatal("mutated an already-published result")
+	}
+	usage := s.AccumulatedUsage()
+	if usage.CostUSD != 0 || usage.CacheCreationInputTokens != 25 || usage.CostCreditsMicros == nil || *usage.CostCreditsMicros != 123 {
+		t.Fatalf("lost usage: %+v", usage)
 	}
 }

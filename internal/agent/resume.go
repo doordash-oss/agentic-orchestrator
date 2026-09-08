@@ -38,7 +38,7 @@ const ResumeSidecarFile = "resume.yaml"
 
 const (
 	resumePromptTemplateText = "Your previous process terminated unexpectedly mid-turn; this session resumes that conversation. {{.PhaseContext}}"
-	implementResumeContext   = "Reassess the repository and your artifacts: if the iteration's work is already complete, write any missing required artifacts, run the artifact preflight, and emit the structured root outcome; otherwise update progress and continue from where you left off."
+	implementResumeContext   = "Reassess the repository and your artifacts: if the iteration's work is already complete, write any missing required artifacts, run the artifact preflight, and request completion using the phase's declared protocol; otherwise update progress and continue from where you left off."
 	autoResumeConsecutiveCap = 3
 	autoResumeAbsoluteCap    = 10
 )

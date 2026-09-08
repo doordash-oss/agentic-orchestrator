@@ -880,3 +880,56 @@ func TestProviderSupportsSessionResume(t *testing.T) {
 		t.Error("SupportsSessionResume() = false, want true")
 	}
 }
+
+func TestAstraCatalogRoutingWindowsAndEffort(t *testing.T) {
+	p := &Provider{}
+	for _, selection := range []string{"gpt-6-astra", "gpt-6-astra[272K]", "gpt-6-astra[872K]"} {
+		if !p.MatchesModel(selection) {
+			t.Fatalf("Astra not routed to Codex: %s", selection)
+		}
+		if p.OutputPricePerMToken(selection) != 50 {
+			t.Fatalf("Astra priced as a different model: %s", selection)
+		}
+		wantWindow := 272_000
+		if strings.Contains(selection, "872K") {
+			wantWindow = 872_000
+		}
+		if p.ContextWindowForModel(selection) != wantWindow {
+			t.Fatalf("wrong window for %s", selection)
+		}
+	}
+	raw := []byte(`{"models":[{"slug":"gpt-6-astra","visibility":"list","supported_in_api":true,"context_window":272000,"max_context_window":872000,"supported_reasoning_levels":[{"effort":"low"},{"effort":"max"},{"effort":"ultra"}]}]}`)
+	catalog, err := parseCodexModelCatalog(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog) != 2 {
+		t.Fatalf("Astra windows: %+v", catalog)
+	}
+	p.SetModelCatalog(catalog)
+	for _, model := range catalog {
+		if model.Category != "capable" || !slices.Equal(model.EffortCapabilities, []llm.EffortLevel{llm.EffortLow, llm.EffortMax, llm.EffortUltra}) {
+			t.Fatalf("discovered capabilities: %+v", model)
+		}
+	}
+	if !p.MatchesModel("gpt-6-astra") {
+		t.Fatal("lost bare Astra alias after discovery")
+	}
+	t.Setenv("CODEX_HOME", t.TempDir())
+	command, _, err := p.BuildCommand(llm.CommandBuildOpts{Model: "gpt-6-astra[872K]", EffortLevel: llm.EffortUltra})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertConfigOverride(t, command, "model_context_window=872000")
+	assertReasoningOverride(t, command, "model_reasoning_effort=ultra")
+	var out bytes.Buffer
+	protocol := NewProtocol(llm.ProtocolOpts{Model: "gpt-6-astra[872K]"})
+	protocol.SetStdin(&out)
+	protocol.SetThreadIDForTest("root")
+	if err := protocol.startTurn("hello"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"model":"gpt-6-astra"`) || strings.Contains(out.String(), "872K") {
+		t.Fatalf("model suffix leaked onto wire: %s", out.String())
+	}
+}

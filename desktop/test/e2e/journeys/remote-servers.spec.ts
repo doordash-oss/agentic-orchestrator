@@ -698,3 +698,359 @@ test('local↔remote switching: per-server selection and workspace truth restore
     destroyWorld(world);
   }
 });
+
+// --- (e) cold start: the connection-string deep link launched the app ----------
+
+test('remote cold start: a connection-string deep link attaches without spawning the local child', async ({}, testInfo) => {
+  const transcript = new Transcript(
+    'remote-servers-cold-start',
+    'Cold-start connection-string deep link (packaged)',
+  );
+  const world = createWorld('remote-servers-cold-start', { auth: AUTH, presetWorkspaceRoot: true });
+  createRepo(world, 'remote-lab', { commit: true });
+  let remote: RemoteTestServer | null = null;
+  let handle: AppHandle | null = null;
+  try {
+    transcript.section('Start the isolated test-owned server (its own HOME, its own state dir)');
+    remote = await startRemoteServer(world, REMOTE_NAME);
+    expect(readAppRegistry(world)).toEqual([]);
+    transcript.step(
+      `remote listening on 127.0.0.1:${String(remote.port)}, outside the app registry`,
+    );
+
+    transcript.section('Launch the app with the connection string as its protocol argument');
+    // The OS delivers a protocol launch as argv (Windows/Linux) or as a
+    // pre-ready open-url event that the app buffers (macOS); both resolve
+    // through the same cold-start route, exercised here via argv.
+    handle = await launchApp(world, testInfo, {
+      traceName: 'remote-servers-cold-start-launch',
+      args: [remote.connectionString],
+    });
+    const keychain = await keychainAvailable(handle);
+    transcript.step(`OS keychain available (safeStorage): ${String(keychain)}`);
+
+    if (!keychain) {
+      // Documented skip-alternate: without an OS keychain the add resolves
+      // session-only — nothing persists and the app does not switch — and
+      // the cold-start path must still never fall back to spawning the child.
+      await waitFor(
+        async () => {
+          const state = await connectionState(handle!);
+          return state.status === 'error' || state.status === 'ready';
+        },
+        'the cold-start attempt to settle',
+        90_000,
+      );
+      const settled = await connectionState(handle);
+      expect(settled.serverName ?? null).not.toBe(REMOTE_NAME);
+      expect(JSON.stringify(settled)).not.toContain(remote.token);
+      expect(readAppRegistry(world)).toEqual([]);
+      const prefs = await handle.page.evaluate(() => window.agentico.getSettings());
+      expect(prefs.servers.known.filter((entry) => entry.kind === 'remote')).toEqual([]);
+      transcript.step('session-only outcome: no switch, nothing persisted, no local child spawned');
+      noteCapabilitySkip(testInfo, transcript, 'cold-start');
+      persistAppLogs(handle, 'remote-servers-cold-start-app');
+      transcript.write(testInfo);
+      return;
+    }
+
+    await waitFor(
+      async () => (await connectionState(handle!)).serverName === REMOTE_NAME,
+      'the cold-start attach to the remote server',
+      90_000,
+    );
+    const attached = await connectionState(handle);
+    expect(attached.status).toBe('ready');
+    expect(attached.ownership).toBe('external');
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(handle.page.locator('.sidebar__footer')).toContainText(REMOTE_NAME);
+    expect(JSON.stringify(attached)).not.toContain(remote.token);
+    transcript.step('the app attached to the linked server directly');
+
+    transcript.section('The bundled local child was never spawned');
+    // A spawned child publishes itself in the app registry; a remote attach
+    // records only a known-servers entry.
+    expect(readAppRegistry(world)).toEqual([]);
+    transcript.step('app registry stays empty: no app-owned server exists');
+
+    const prefs = await handle.page.evaluate(() => window.agentico.getSettings());
+    const remoteEntry = prefs.servers.known.find((entry) => entry.kind === 'remote');
+    expect(remoteEntry).toBeDefined();
+    expect(remoteEntry!.name).toBe(REMOTE_NAME);
+    expect(prefs.servers.lastUsed).toBe(remoteEntry!.serverKey);
+    expect(JSON.stringify(prefs)).not.toContain(remote.token);
+    transcript.step('the remote is persisted as last-used, token-free');
+
+    persistAppLogs(handle, 'remote-servers-cold-start-app');
+    transcript.write(testInfo);
+  } finally {
+    if (handle !== null) {
+      await closeApp(handle).catch(() => {});
+    }
+    if (remote !== null) {
+      await stopRemoteServer(remote);
+      if (remote.logs.length > 0) {
+        transcript.codeBlock('remote server stderr tail', tailText(remote.logs.join(''), 15));
+      }
+    }
+    assertNoLeakedProcesses(world);
+    destroyWorld(world);
+  }
+});
+
+// --- (f) cold start: the link is unusable → visible failure, nothing spawned ---
+
+test('remote cold start: an unusable link fails startup visibly instead of spawning the local child', async ({}, testInfo) => {
+  const transcript = new Transcript(
+    'remote-servers-cold-start-unusable',
+    'Cold-start deep link to an unreachable server (packaged)',
+  );
+  const world = createWorld('remote-servers-cold-start-unusable', {
+    auth: AUTH,
+    presetWorkspaceRoot: true,
+  });
+  let handle: AppHandle | null = null;
+  try {
+    transcript.section('Reserve a loopback port nobody listens on');
+    const port = await freeLoopbackPort();
+    const link = `agentico://not-a-real-token@127.0.0.1:${String(port)}?name=ghost`;
+    transcript.step(`link targets 127.0.0.1:${String(port)} with no server behind it`);
+
+    transcript.section('Launch the app from that link');
+    handle = await launchApp(world, testInfo, {
+      traceName: 'remote-servers-cold-start-unusable-launch',
+      args: [link],
+    });
+    const shell = handle.page.getByLabel('Agentico connection');
+    await expect(shell).toBeVisible();
+    await expect(handle.page.locator('.shell-card__status-label[data-status="error"]')).toBeVisible(
+      { timeout: 60_000 },
+    );
+    await expect(shell).toContainText('E_REMOTE_UNREACHABLE');
+    await expect(shell).toContainText('The server this launch was linked to could not be added.');
+    await expect(shell).toContainText('launched from a server link');
+    const buttons = await shell.getByRole('button').allTextContents();
+    // Retry re-attempts the link; the bundled runtime is only ever an
+    // explicit choice, never an automatic fallback.
+    expect(buttons.filter((label) => label !== 'Explain in chat')).toEqual([
+      'Retry',
+      'Start bundled runtime',
+    ]);
+    await evidenceShot(handle, 'remote-servers-cold-start-unusable');
+    transcript.step(
+      'startup failed on the connection surface with the pipeline error, Retry, and the escape hatch',
+    );
+
+    transcript.section('The bundled runtime was never substituted for the linked server');
+    const state = await connectionState(handle);
+    expect(state.status).toBe('error');
+    expect(state.ownership).toBe('none');
+    expect(readAppRegistry(world)).toEqual([]);
+    expect(JSON.stringify(state)).not.toContain('not-a-real-token');
+    const prefs = await handle.page.evaluate(() => window.agentico.getSettings());
+    expect(prefs.servers.known.filter((entry) => entry.kind === 'remote')).toEqual([]);
+    transcript.step('no app-owned server, nothing persisted');
+
+    transcript.section('Retry re-attempts the link, not the standard startup');
+    await shell.getByRole('button', { name: 'Retry' }).click();
+    await expect(handle.page.locator('.shell-card__status-label[data-status="error"]')).toBeVisible(
+      { timeout: 60_000 },
+    );
+    await expect(shell).toContainText('E_REMOTE_UNREACHABLE');
+    expect(readAppRegistry(world)).toEqual([]);
+    transcript.step('still failed, still nothing spawned');
+
+    transcript.section('Start bundled runtime is the explicit way out');
+    await shell.getByRole('button', { name: 'Start bundled runtime' }).click();
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 90_000,
+    });
+    const local = await connectionState(handle);
+    expect(local.status).toBe('ready');
+    expect(local.ownership).toBe('app-owned');
+    expect(local.status === 'ready' && local.kind).toBe('local');
+    expect(readAppRegistry(world)).toHaveLength(1);
+    expect(readAppRegistry(world)[0]!.runtime.runtime_dir).toBe(local.connectedRuntimeDir);
+    transcript.step('the bundled runtime started on request: one app-owned registry entry');
+
+    persistAppLogs(handle, 'remote-servers-cold-start-unusable-app');
+    transcript.write(testInfo);
+  } finally {
+    if (handle !== null) {
+      await closeApp(handle).catch(() => {});
+    }
+    assertNoLeakedProcesses(world);
+    destroyWorld(world);
+  }
+});
+
+// --- (g) this machine: back to the bundled runtime after a remote took over ---
+
+for (const surface of ['Settings', 'footer'] as const) {
+  test(`this machine: ${surface} starts the bundled runtime after a relaunch attached to the remote`, async ({}, testInfo) => {
+    test.setTimeout(360_000); // two full packaged launches against one world
+    const transcript = new Transcript(
+      'remote-servers-this-machine',
+      'Settings → Servers "This machine" Start action after a remote relaunch (packaged)',
+    );
+    const world = createWorld('remote-servers-this-machine', {
+      auth: AUTH,
+      presetWorkspaceRoot: true,
+    });
+    createRepo(world, 'remote-lab', { commit: true });
+    let remote: RemoteTestServer | null = null;
+    let handle: AppHandle | null = null;
+    const machineRow = (settings: Page) =>
+      settings.locator('.settings-panel__server[data-bundled="true"]');
+    try {
+      transcript.section('First launch: the bundled runtime, then add the remote from Settings');
+      remote = await startRemoteServer(world, REMOTE_NAME);
+      handle = await launchApp(world, testInfo, { traceName: 'remote-servers-this-machine-first' });
+      await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+        timeout: 90_000,
+      });
+      const localName = (await connectionState(handle)).serverName ?? '';
+      expect(localName).not.toBe('');
+      if (!(await keychainAvailable(handle))) {
+        noteCapabilitySkip(testInfo, transcript, 'this-machine');
+        persistAppLogs(handle, 'remote-servers-this-machine-first-app');
+        transcript.write(testInfo);
+        return;
+      }
+      let settings = await openSettings(handle);
+      await selectSettingsPane(settings, 'Servers');
+      await expect(machineRow(settings)).toHaveCount(1);
+      await expect(machineRow(settings).locator('.settings-panel__server-status')).toHaveText(
+        'Connected',
+        { timeout: 30_000 },
+      );
+      await pasteAndProbe(settings, remote.connectionString);
+      await expect(settings.getByText('Server added; switching to it now.')).toBeVisible({
+        timeout: 60_000,
+      });
+      await waitFor(
+        async () => (await connectionState(handle!)).serverName === REMOTE_NAME,
+        'the auto-switch to the remote server',
+        60_000,
+      );
+      const remoteKey = (await connectionState(handle)).serverKey;
+      // The app-owned child survives the switch-away, so the row reads Running.
+      await expect(machineRow(settings).locator('.settings-panel__server-status')).toHaveText(
+        'Running',
+        { timeout: 30_000 },
+      );
+      await expect(
+        machineRow(settings).getByRole('button', { name: 'Switch to This machine' }),
+      ).toBeVisible();
+      transcript.step('remote added and current; This machine reads Running with a Switch action');
+
+      transcript.section('Relaunch: the last-used remote wins and no local child is spawned');
+      persistAppLogs(handle, 'remote-servers-this-machine-first-app');
+      await closeApp(handle);
+      handle = null;
+      handle = await launchApp(world, testInfo, {
+        traceName: 'remote-servers-this-machine-relaunch',
+      });
+      await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+        timeout: 90_000,
+      });
+      const reconnected = await connectionState(handle);
+      expect(reconnected.serverName).toBe(REMOTE_NAME);
+      expect(reconnected.ownership).toBe('external');
+
+      transcript.section('Settings → Servers: This machine is Not running; Start it');
+      settings = await openSettings(handle);
+      await selectSettingsPane(settings, 'Servers');
+      await expect(machineRow(settings)).toHaveCount(1);
+      await expect(machineRow(settings).locator('.settings-panel__server-status')).toHaveText(
+        'Not running',
+        { timeout: 30_000 },
+      );
+      // Exactly one row for the machine: the persisted local entry folded in,
+      // no second "Unreachable" row for the same runtime.
+      await expect(settings.locator('.settings-panel__server[data-kind="local"]')).toHaveCount(1);
+      await expect(settings.getByText('Unreachable')).toHaveCount(0);
+      // The list snapshot came from a registry scan, which pruned the dead entry.
+      expect(readAppRegistry(world)).toEqual([]);
+      await evidenceShot(handle, 'remote-servers-this-machine-not-running');
+      if (surface === 'Settings') {
+        await machineRow(settings).getByRole('button', { name: 'Start This machine' }).click();
+      } else {
+        transcript.section('Footer: the persisted stopped local entry offers Start');
+        await handle.page.getByRole('button', { name: `${REMOTE_NAME} — switch server` }).click();
+        const machine = handle.page.getByRole('option', {
+          name: /This machine at .* — Not running/,
+        });
+        await expect(machine).toHaveCount(1);
+        await expect(machine).toHaveAttribute('aria-disabled', 'false');
+        await expect(machine).toContainText('Start');
+        await expect(
+          handle.page.getByRole('listbox', { name: 'Servers' }).getByRole('option'),
+        ).toHaveCount(2);
+        await machine.click();
+      }
+      await waitFor(
+        async () => {
+          const state = await connectionState(handle!);
+          return state.status === 'ready' && state.ownership === 'app-owned';
+        },
+        'the bundled runtime to start and take the connection',
+        90_000,
+      );
+      const onLocal = await connectionState(handle);
+      expect(onLocal.status === 'ready' && onLocal.kind).toBe('local');
+      expect(onLocal.serverName).toBe(localName);
+      const registry = readAppRegistry(world);
+      expect(registry).toHaveLength(1);
+      expect(registry[0]!.runtime.runtime_dir).toBe(onLocal.connectedRuntimeDir);
+      await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+        timeout: 60_000,
+      });
+      await expect(machineRow(settings).locator('.settings-panel__server-status')).toHaveText(
+        'Connected',
+        { timeout: 30_000 },
+      );
+      const prefs = await handle.page.evaluate(() => window.agentico.getSettings());
+      expect(prefs.servers.known.find((entry) => entry.serverKey === remoteKey)?.kind).toBe(
+        'remote',
+      );
+      expect(prefs.servers.lastUsed).toBe(onLocal.serverKey);
+      expect(JSON.stringify(prefs)).not.toContain(remote.token);
+      transcript.step(
+        'app-owned local started: one registry entry, remote still known, local last-used',
+      );
+
+      transcript.section('Back to the remote through the footer popover');
+      await handle.page.getByRole('button', { name: `${localName} — switch server` }).click();
+      await handle.page.getByRole('option', { name: `${REMOTE_NAME} — Available` }).click();
+      await waitFor(
+        async () => (await connectionState(handle!)).serverName === REMOTE_NAME,
+        'the switch back to the remote server',
+        60_000,
+      );
+      expect((await connectionState(handle)).ownership).toBe('external');
+      await expect(machineRow(settings).locator('.settings-panel__server-status')).toHaveText(
+        'Running',
+        { timeout: 30_000 },
+      );
+      transcript.step('remote current again; the started child survives as Running');
+
+      persistAppLogs(handle, 'remote-servers-this-machine-relaunch-app');
+      transcript.write(testInfo);
+    } finally {
+      if (handle !== null) {
+        await closeApp(handle).catch(() => {});
+      }
+      if (remote !== null) {
+        await stopRemoteServer(remote);
+        if (remote.logs.length > 0) {
+          transcript.codeBlock('remote server stderr tail', tailText(remote.logs.join(''), 15));
+        }
+      }
+      assertNoLeakedProcesses(world);
+      destroyWorld(world);
+    }
+  });
+}

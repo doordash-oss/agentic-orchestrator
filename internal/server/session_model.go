@@ -295,7 +295,7 @@ func sessionSummaryDTO(sess ports.SessionView) SessionSummary {
 		usage = *latest
 	}
 	cost := accumulatedUsage.CostUSD
-	if result := sess.Cost(); result != nil {
+	if result := sess.Cost(); result != nil && accumulatedUsage.CostSource == "" {
 		cost = result.TotalCostUSD
 	}
 	taskActivities, runningTaskCount := sessionTaskActivities(sess)

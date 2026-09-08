@@ -83,7 +83,8 @@ type OrchestratorConfig struct {
 	// AskingClause is the pre-resolved "Asking Questions" prompt section
 	// from the PromptAdapter for the implementation model. Passed through
 	// to ImplementConfig.
-	AskingClause string
+	AskingClause   string
+	CompletionTool string
 
 	// EffortLevel is the pipeline-driven effort level passed to providers.
 	EffortLevel llm.EffortLevel
@@ -156,6 +157,7 @@ func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole
 			EffectiveEffort: cfg.ReviewEffectiveEffort,
 			EffortSource:    cfg.ReviewEffortSource,
 			AskingClause:    cfg.AskingClause,
+			CompletionTool:  cfg.CompletionTool,
 		}, nil
 	}
 	return SessionRuntimeConfig{
@@ -163,6 +165,7 @@ func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole
 		EffectiveEffort: cfg.ImplEffectiveEffort,
 		EffortSource:    cfg.ImplEffortSource,
 		AskingClause:    cfg.AskingClause,
+		CompletionTool:  cfg.CompletionTool,
 	}, nil
 }
 

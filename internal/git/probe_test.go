@@ -39,10 +39,12 @@ func stubGit(t *testing.T, body string) {
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	prev, prevCleanliness := ProbeTimeout, CleanlinessProbeTimeout
-	// Generous enough to absorb the first exec of a freshly written script
-	// (a few hundred ms on macOS) while still far below the hangs it bounds.
-	ProbeTimeout = time.Second
-	CleanlinessProbeTimeout = time.Second
+	// The production default keeps enough headroom for the stub script's
+	// first exec under a fully parallel test-binary load (macOS code-signature
+	// checks on a freshly written script can cost hundreds of ms), while
+	// staying an order of magnitude below the 30s hangs it bounds.
+	ProbeTimeout = 3 * time.Second
+	CleanlinessProbeTimeout = 3 * time.Second
 	t.Cleanup(func() {
 		ProbeTimeout = prev
 		CleanlinessProbeTimeout = prevCleanliness

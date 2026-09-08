@@ -777,9 +777,11 @@ const DefaultMaxPlanAttempts = maxPlanValidationAttempts
 
 // PlanLoopConfig holds configuration for the planning loop with validation.
 type PlanLoopConfig struct {
+	// Registry resolves each validator's prompt protocol from its own model
+	// and backs resume-eligibility model checks for planning helpers.
+	Registry     *llm.Registry
 	Feature      *feature.Feature
 	FeatureStore ports.FeatureStore
-	Registry     *llm.Registry
 	StateDir     string // feature state directory
 
 	ResearchArtifactPath string // historical primary planning artifact path also used by validators
@@ -829,7 +831,8 @@ type PlanLoopConfig struct {
 	// AskingClause is the pre-resolved "Asking Questions" prompt section
 	// from the PromptAdapter for the planning model. Set by PhaseRunner
 	// before launching the loop.
-	AskingClause string
+	AskingClause   string
+	CompletionTool string
 
 	// EffortLevel is the pipeline-driven effort level passed to providers.
 	EffortLevel llm.EffortLevel
@@ -1066,9 +1069,9 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	}
 	reviewID := fmt.Sprintf("%s-planreview-%s-%02d", cfg.Feature.ID, domainLower, attempt)
 	helper := &PhaseRunner{
+		Registry:         cfg.Registry,
 		SessionManager:   sm,
 		FeatureStore:     cfg.FeatureStore,
-		Registry:         cfg.Registry,
 		StateDir:         cfg.StateDir,
 		SkillsDir:        cfg.SkillsDir,
 		GuidelinesDir:    cfg.GuidelinesDir,
@@ -1101,6 +1104,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 			LogPath:                logPath,
 			SystemPromptPrefix:     "validation-" + domainLower,
 			CompletionAskingClause: cfg.AskingClause,
+			CompletionTool:         cfg.CompletionTool,
 			EffortLevel:            validatorEffortLevel(cfg),
 			EffectiveEffort:        cfg.ValidatorEffectiveEffort,
 			EffortSource:           cfg.ValidatorEffortSource,
@@ -1895,12 +1899,13 @@ roadmapAttemptLoop:
 			}
 
 			systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-				Spec:          plannerSpec,
-				IterationDir:  attemptDir,
-				SkillsDir:     cfg.SkillsDir,
-				GuidelinesDir: cfg.GuidelinesDir,
-				KBInfos:       cfg.KBInfos,
-				AskingClause:  cfg.AskingClause,
+				Spec:           plannerSpec,
+				IterationDir:   attemptDir,
+				SkillsDir:      cfg.SkillsDir,
+				GuidelinesDir:  cfg.GuidelinesDir,
+				KBInfos:        cfg.KBInfos,
+				AskingClause:   cfg.AskingClause,
+				CompletionTool: cfg.CompletionTool,
 			})
 			execution, err := runPlanAttempt(
 				cfg, sm, attempt, maxAttempts, attemptDir, artifactDir, prompt, systemPrompt, plannerSpec,
@@ -2172,12 +2177,13 @@ phasePlanAttemptLoop:
 			}
 
 			systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-				Spec:          plannerSpec,
-				IterationDir:  attemptDir,
-				SkillsDir:     cfg.SkillsDir,
-				GuidelinesDir: cfg.GuidelinesDir,
-				KBInfos:       cfg.KBInfos,
-				AskingClause:  cfg.AskingClause,
+				Spec:           plannerSpec,
+				IterationDir:   attemptDir,
+				SkillsDir:      cfg.SkillsDir,
+				GuidelinesDir:  cfg.GuidelinesDir,
+				KBInfos:        cfg.KBInfos,
+				AskingClause:   cfg.AskingClause,
+				CompletionTool: cfg.CompletionTool,
 			})
 			execution, err := runPlanAttempt(
 				cfg.PlanLoopConfig, sm, attempt, maxAttempts, attemptDir, artifactDir, prompt, systemPrompt, plannerSpec,

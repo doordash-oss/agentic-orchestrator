@@ -19,8 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,30 +72,34 @@ type Protocol struct {
 	// Handshake state
 	handshakeDone chan struct{}
 	threadReady   chan struct{}
+	threadErr     error
 
 	// Session state
-	threadID           string
-	turnID             string
-	model              string
-	approvalPolicy     string
-	dangerFullAccess   bool
-	inputTokens        int
-	cachedInputTokens  int
-	outputTokens       int
-	totalCostUSD       float64
-	modelContextWindow int
-	deltaBuf           map[string]string
-	questionIDs        map[string]string
-	turnHadToolUse     bool
-	lastAssistantText  string
-	lastAssistantDraft string
-	formatRetryCount   int
-	fileReadSeen       map[string]struct{}
-	turnStarted        bool
-	nativeReviewTurnID string
-	nativeDecisionSeen bool
-	nativeReviewFailed bool
-	tasksByThread      map[string]codexTaskRef
+	threadID              string
+	turnID                string
+	model                 string
+	approvalPolicy        string
+	dangerFullAccess      bool
+	inputTokens           int
+	cachedInputTokens     int
+	cacheWriteInputTokens int
+	pricingModel          string
+	serviceTier           string
+	usageState            usageState
+	outputTokens          int
+	totalCostUSD          float64
+	modelContextWindow    int
+	deltaBuf              map[string]string
+	pendingQuestions      map[string]pendingQuestionRequest
+	pendingCompletion     string
+	lastAssistantText     string
+	lastAssistantDraft    string
+	fileReadSeen          map[string]struct{}
+	turnStarted           bool
+	nativeReviewTurnID    string
+	nativeDecisionSeen    bool
+	nativeReviewFailed    bool
+	tasksByThread         map[string]codexTaskRef
 
 	logFunc func(string, ...interface{})
 }
@@ -125,6 +127,7 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 	}
 	return &Protocol{
 		opts:             opts,
+		usageState:       usageState{resumeBaselinePending: opts.ResumeSessionID != ""},
 		model:            llm.StripModelContextWindow(opts.Model),
 		approvalPolicy:   policy,
 		dangerFullAccess: opts.DSP,
@@ -173,6 +176,12 @@ func (p *Protocol) Handshake(ctx context.Context) error {
 	// Step 4: Wait for thread ready
 	select {
 	case <-p.threadReady:
+		p.mu.Lock()
+		threadErr := p.threadErr
+		p.mu.Unlock()
+		if threadErr != nil {
+			return threadErr
+		}
 	case <-ctx.Done():
 		return fmt.Errorf("codex thread start timeout: %w", ctx.Err())
 	}
@@ -208,6 +217,15 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 
 	// Response to our request (has id but no method)
 	if env.ID != nil && env.Method == "" {
+		// Negative IDs are reserved for optional billing lookups. Their failures
+		// must never turn a successful agent turn into a protocol error.
+		if *env.ID < 0 && !p.opts.NativeToollessReview {
+			msg, emit := p.handleUsageResponse(*env.ID, env.Result, env.Error)
+			if emit {
+				return []llm.SDKMessage{p.stampMessage(msg)}, nil
+			}
+			return nil, nil
+		}
 		if p.opts.NativeToollessReview && len(env.Error) > 0 && string(env.Error) != "null" {
 			return []llm.SDKMessage{p.nativeToollessViolation("JSON-RPC error response")}, nil
 		}
@@ -286,19 +304,9 @@ func (p *Protocol) RespondToHook(_ string) error {
 	return nil
 }
 
-// RespondToAskUser sends a response to an AskUserQuestion request.
-// annotations is accepted for parity with the Claude protocol but is not
-// forwarded — Codex's native ask-user wire format carries a single answer
-// string per question with no side-channel for notes.
-func (p *Protocol) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, _ map[string]llm.AskUserAnnotation) error {
-	// Synthetic ask-user requests don't have a pending JSON-RPC server request,
-	// so the answer must be delivered as a new follow-up turn. A bare answer
-	// like "Replace README.md" is indistinguishable from a fresh directive in
-	// that channel, so we wrap it with the original question and options.
-	if strings.HasPrefix(requestID, "codex-synthetic-") {
-		return p.sendFollowUpTurn(buildAskUserAnswerEnvelope(questions, answers))
-	}
-	return p.respondToAskUser(requestID, answers)
+// RespondToAskUser returns the actual answer to its pending Codex tool call.
+func (p *Protocol) RespondToAskUser(requestID string, _ json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
+	return p.respondToAskUser(requestID, answers, annotations)
 }
 
 // Interrupt returns ErrNotSupported — Codex's app-server protocol has no
@@ -320,6 +328,10 @@ func (p *Protocol) SessionID() string {
 func (p *Protocol) TranscriptPath() string { return "" }
 
 func (p *Protocol) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.usageState.closed = true
+	p.finishUsageReadLocked()
 	return nil
 }
 
@@ -374,6 +386,9 @@ func (p *Protocol) sendInitialize() error {
 }
 
 func (p *Protocol) startThread() error {
+	if p.UsesStructuredCompletion() && p.opts.StateDir == "" {
+		return fmt.Errorf("Codex structured phases require a provider state directory for resumable tool contracts")
+	}
 	id := int(nextID.Add(1))
 
 	if p.opts.NativeToollessReview && p.opts.ResumeSessionID != "" {
@@ -385,12 +400,17 @@ func (p *Protocol) startThread() error {
 	// handleResponse closes threadReady for both paths. Model, approval
 	// policy, and sandbox are re-supplied per-turn by turn/start.
 	if p.opts.ResumeSessionID != "" {
+		if err := p.checkResumableContract(); err != nil {
+			return err
+		}
 		req := Request{
 			JSONRPC: "2.0",
 			Method:  "thread/resume",
 			ID:      id,
 			Params: ThreadResumeParams{
-				ThreadID: p.opts.ResumeSessionID,
+				ThreadID:              p.opts.ResumeSessionID,
+				DeveloperInstructions: p.developerInstructions(),
+				Config:                p.threadConfig(),
 			},
 		}
 		return p.writeJSON(req)
@@ -411,10 +431,13 @@ func (p *Protocol) startThread() error {
 		Method:  "thread/start",
 		ID:      id,
 		Params: ThreadStartParams{
-			Model:          model,
-			Cwd:            p.opts.WorkDir,
-			ApprovalPolicy: p.approvalPolicy,
-			Sandbox:        &sandbox,
+			Model:                 model,
+			Cwd:                   p.opts.WorkDir,
+			ApprovalPolicy:        p.approvalPolicy,
+			Sandbox:               &sandbox,
+			DeveloperInstructions: p.developerInstructions(),
+			Config:                p.threadConfig(),
+			DynamicTools:          p.dynamicTools(),
 		},
 	}
 	if p.opts.NativeToollessReview {
@@ -442,7 +465,6 @@ func (p *Protocol) startTurn(userPrompt string) error {
 
 	p.mu.Lock()
 	threadID := p.threadID
-	systemPrompt := p.opts.SystemPrompt
 	writableRoots := append([]string(nil), p.opts.WritableRoots...)
 	policy := p.approvalPolicy
 	dangerFullAccess := p.dangerFullAccess
@@ -471,13 +493,6 @@ func (p *Protocol) startTurn(userPrompt string) error {
 		return p.writeJSON(req)
 	}
 
-	collabSettings := CollaborationSettings{
-		Model: model,
-	}
-	if systemPrompt != "" {
-		collabSettings.DeveloperInstructions = &systemPrompt
-	}
-
 	sandboxPolicy := &SandboxPolicy{
 		Type:          "workspaceWrite",
 		WritableRoots: writableRoots,
@@ -503,10 +518,7 @@ func (p *Protocol) startTurn(userPrompt string) error {
 			Input:          input,
 			ApprovalPolicy: policy,
 			SandboxPolicy:  sandboxPolicy,
-			CollaborationMode: &CollaborationMode{
-				Mode:     "default",
-				Settings: collabSettings,
-			},
+			Model:          model,
 		},
 	}
 	return p.writeJSON(req)
@@ -519,6 +531,8 @@ func (p *Protocol) sendFollowUpTurn(text string) error {
 	id := int(nextID.Add(1))
 
 	p.mu.Lock()
+	p.usageState.revision++
+	p.pricingModel = p.model
 	threadID := p.threadID
 	policy := p.approvalPolicy
 	model := p.model
@@ -553,12 +567,7 @@ func (p *Protocol) sendFollowUpTurn(text string) error {
 			},
 			ApprovalPolicy: policy,
 			SandboxPolicy:  sandbox,
-			CollaborationMode: &CollaborationMode{
-				Mode: "default",
-				Settings: CollaborationSettings{
-					Model: model,
-				},
-			},
+			Model:          model,
 		},
 	}
 	return p.writeJSON(req)
@@ -585,40 +594,6 @@ func (p *Protocol) writeDenyResponse(requestID string) error {
 		JSONRPC: "2.0",
 		ID:      id,
 		Result:  ApprovalDecision{Decision: "decline"},
-	})
-}
-
-func (p *Protocol) respondToAskUser(requestID string, answers map[string]string) error {
-	id, err := strconv.Atoi(requestID)
-	if err != nil {
-		return fmt.Errorf("invalid codex request ID %q: %w", requestID, err)
-	}
-
-	p.mu.Lock()
-	qIDs := p.questionIDs
-	p.mu.Unlock()
-
-	var codexAnswers []AskUserAnswer
-	keys := make([]string, 0, len(answers))
-	for q := range answers {
-		keys = append(keys, q)
-	}
-	sort.Strings(keys)
-	for _, q := range keys {
-		questionID := qIDs[q]
-		if questionID == "" {
-			questionID = q
-		}
-		codexAnswers = append(codexAnswers, AskUserAnswer{
-			QuestionID: questionID,
-			Value:      answers[q],
-		})
-	}
-
-	return p.writeJSON(Response{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result:  AskUserResult{Answers: codexAnswers},
 	})
 }
 
@@ -665,19 +640,27 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 
 	var threadResult ThreadStartResult
 	if err := json.Unmarshal(result, &threadResult); err == nil && threadResult.Thread.ID != "" {
+		if err := p.recordThreadContract(threadResult.Thread.ID); err != nil {
+			p.mu.Lock()
+			p.threadErr = err
+			p.closeThreadReadyLocked()
+			p.mu.Unlock()
+			return llm.SDKMessage{Type: "result", Subtype: "error", Result: &llm.ResultMessage{Type: "result", Subtype: "error", IsError: true, Result: err.Error()}}, true, true
+		}
 		p.mu.Lock()
 		p.threadID = threadResult.Thread.ID
+		if threadResult.Model != "" {
+			p.pricingModel = threadResult.Model
+		}
+		p.serviceTier = threadResult.ServiceTier
 		if effectivePolicy := strings.TrimSpace(threadResult.ApprovalPolicy); effectivePolicy != "" && !p.opts.NativeToollessReview {
 			p.approvalPolicy = effectivePolicy
 		}
-		if p.threadReady != nil {
-			select {
-			case <-p.threadReady:
-			default:
-				close(p.threadReady)
-			}
-		}
+		p.closeThreadReadyLocked()
 		p.mu.Unlock()
+		if p.opts.ResumeSessionID != "" {
+			p.requestUsageRead()
+		}
 		p.logDebug("[codex] thread started: %s", threadResult.Thread.ID)
 		return llm.SDKMessage{}, false, true
 	}
@@ -698,6 +681,18 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 // errorResultMessage converts a JSON-RPC error response into a user-visible
 // result/error so a rejected request fails the session loudly instead of
 // leaving it to hang waiting for output that will never arrive.
+// closeThreadReadyLocked releases Handshake; the caller holds p.mu.
+func (p *Protocol) closeThreadReadyLocked() {
+	if p.threadReady == nil {
+		return
+	}
+	select {
+	case <-p.threadReady:
+	default:
+		close(p.threadReady)
+	}
+}
+
 func (p *Protocol) errorResultMessage(errData json.RawMessage) llm.SDKMessage {
 	var rpcErr struct {
 		Code    int    `json:"code"`
@@ -771,78 +766,10 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 			},
 		}, approval.ThreadID), true
 
-	case "tool/requestUserInput":
-		var uiParams UserInputRequestParams
-		if err := json.Unmarshal(params, &uiParams); err != nil {
-			p.logDebug("[codex] failed to parse tool/requestUserInput: %v", err)
-			return llm.SDKMessage{}, false
-		}
-
-		seen := make(map[string]int)
-		qIDMap := make(map[string]string)
-		type claudeOption struct {
-			Label       string   `json:"label"`
-			Description string   `json:"description"`
-			Confidence  *float64 `json:"confidence,omitempty"`
-		}
-		type claudeQuestion struct {
-			Question    string         `json:"question"`
-			Header      string         `json:"header"`
-			MultiSelect bool           `json:"multiSelect"`
-			Options     []claudeOption `json:"options"`
-		}
-
-		var claudeQuestions []claudeQuestion
-		for _, q := range uiParams.Questions {
-			displayLabel := q.Label
-			seen[q.Label]++
-			if seen[q.Label] > 1 {
-				displayLabel = fmt.Sprintf("%s (#%d)", q.Label, seen[q.Label])
-			}
-			qIDMap[displayLabel] = q.ID
-
-			var opts []claudeOption
-			if q.Type == "select" {
-				for _, o := range q.Options {
-					opts = append(opts, claudeOption{Label: o, Description: ""})
-				}
-			}
-			if opts == nil {
-				opts = []claudeOption{}
-			}
-
-			claudeQuestions = append(claudeQuestions, claudeQuestion{
-				Question: displayLabel,
-				Header:   "",
-				// Codex's native answer shape is a single Value string per question,
-				// so multi-select is intentionally not propagated from the Codex side.
-				MultiSelect: false,
-				Options:     opts,
-			})
-		}
-
-		p.mu.Lock()
-		p.questionIDs = qIDMap
-		p.mu.Unlock()
-
-		inputMap := map[string]interface{}{
-			"questions": claudeQuestions,
-		}
-		inputJSON, _ := json.Marshal(inputMap)
-
-		return p.controlMessageOrigin(llm.SDKMessage{
-			Type:    "control_request",
-			Subtype: "can_use_tool",
-			ControlRequest: &llm.ControlRequestMessage{
-				Type:      "control_request",
-				RequestID: strconv.Itoa(id),
-				Request: llm.ControlRequest{
-					Subtype:  "can_use_tool",
-					ToolName: "AskUserQuestion",
-					Input:    json.RawMessage(inputJSON),
-				},
-			},
-		}, uiParams.ThreadID), true
+	case "item/tool/call":
+		return p.handleDynamicToolCall(id, params)
+	case "item/tool/requestUserInput":
+		return p.handleNativeUserInput(id, params)
 
 	default:
 		p.logDebug("[codex] unhandled server request: %s", method)
@@ -1095,6 +1022,8 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			return p.taskProgressForChildThread(completed.ThreadID, "", "", "child turn "+completed.Turn.Status)
 		}
 
+		p.requestUsageRead()
+
 		switch completed.Turn.Status {
 		case "completed":
 			p.mu.Lock()
@@ -1102,7 +1031,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			cachedInTok := p.cachedInputTokens
 			outTok := p.outputTokens
 			costUSD := p.totalCostUSD
-			hadToolUse := p.turnHadToolUse
 			decisionSeen := p.nativeDecisionSeen
 			lastText := p.lastAssistantText
 			if lastText == "" {
@@ -1115,66 +1043,10 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				if !decisionSeen || (decision != "ALLOW" && decision != "DEFER") {
 					return p.nativeToollessViolation("malformed reviewer decision"), true
 				}
-				return p.successResult(inTok, cachedInTok, outTok, costUSD), true
+				return p.withUsage(p.successResult(inTok, cachedInTok, outTok, costUSD)), true
 			}
 
-			// The entire text-parsed AskUserQuestion pipeline below exists only to
-			// imitate Claude's native AskUserQuestion tool call for a provider whose
-			// questions are otherwise just plain text. Interactive sessions (a human
-			// answers every turn directly, e.g. AMA chat) get no benefit from that
-			// imitation — the human can read the model's question and reply with an
-			// ordinary chat message exactly as they would with bare Codex — so they
-			// always fall through to a normal completion below and never synthesize
-			// a picker.
-			if !p.opts.Interactive && !textContainsVerdictSentinel(lastText) {
-				if stripped, ok := trimFreeFormSentinel(lastText); ok {
-					p.mu.Lock()
-					p.formatRetryCount = 0
-					p.mu.Unlock()
-					return p.synthesizeAskUser(stripped, nil), true
-				}
-
-				// A numbered list is only a candidate AskUserQuestion when its stem
-				// actually reads like a question or its options carry
-				// question-contract markers (confidence scores / "(Recommended)").
-				// An informational list ("Here's what I found: 1. ... 2. ...") has
-				// neither and is a normal completion; it must not be forced through
-				// the question pipeline just because it enumerates items.
-				if stem, options, ok := parseNumberedOptions(lastText); ok && (stemLooksLikeQuestion(stem) || optionsCarryQuestionContract(options)) {
-					p.mu.Lock()
-					p.formatRetryCount = 0
-					p.mu.Unlock()
-					return p.synthesizeAskUser(stem, options), true
-				}
-
-				if (textLooksLikeQuestion(lastText) || textCarriesQuestionContract(lastText)) && p.shouldReformatRetryLoose(hadToolUse) {
-					p.mu.Lock()
-					retry := p.formatRetryCount
-					p.mu.Unlock()
-
-					if retry < maxQuestionFormatRetries {
-						if err := p.sendFollowUpTurn(questionFormatReminder(lastText)); err != nil {
-							p.logDebug("[codex] failed to send reformat reminder: %v", err)
-						} else {
-							p.mu.Lock()
-							p.formatRetryCount++
-							p.mu.Unlock()
-							return llm.SDKMessage{}, false
-						}
-					}
-
-					p.mu.Lock()
-					p.formatRetryCount = 0
-					p.mu.Unlock()
-					return p.synthesizeAskUser(lastText, nil), true
-				}
-			}
-
-			p.mu.Lock()
-			p.formatRetryCount = 0
-			p.mu.Unlock()
-
-			return p.successResult(inTok, cachedInTok, outTok, costUSD), true
+			return p.withUsage(p.successResult(inTok, cachedInTok, outTok, costUSD)), true
 
 		case "failed":
 			if p.opts.NativeToollessReview {
@@ -1227,7 +1099,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					OutputTokens:         outTok,
 				}
 			}
-			return msg, true
+			return p.withUsage(msg), true
 
 		case "interrupted":
 			if p.opts.NativeToollessReview {
@@ -1258,7 +1130,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					OutputTokens:         outTok,
 				}
 			}
-			return msg, true
+			return p.withUsage(msg), true
 
 		default:
 			p.logDebug("[codex] turn/completed with unknown status: %s", completed.Turn.Status)
@@ -1284,54 +1156,15 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				return p.nativeToollessViolation(detail), true
 			}
 		}
-		// Total = lifetime cumulative (for cost calculation on turn completion).
-		// Last = current context fill (resets on compaction; use for context %).
 		p.mu.Lock()
-		inputDelta := usage.TokenUsage.Total.InputTokens - p.inputTokens
-		cachedInputDelta := usage.TokenUsage.Total.CachedInputTokens - p.cachedInputTokens
-		outputDelta := usage.TokenUsage.Total.OutputTokens - p.outputTokens
-		if inputDelta >= 0 && cachedInputDelta >= 0 && outputDelta >= 0 {
-			// The app-server protocol does not expose cache-write token counts,
-			// so cache writes remain zero until that telemetry becomes available.
-			p.totalCostUSD += computeCostForContext(
-				p.model,
-				inputDelta,
-				cachedInputDelta,
-				0,
-				outputDelta,
-				usage.TokenUsage.Last.InputTokens,
-			)
+		defer p.mu.Unlock()
+		// Child threads have independent cumulative counters. Mixing them
+		// with the root would corrupt both deltas and context usage.
+		if !p.isMainThread(usage.ThreadID) {
+			return llm.SDKMessage{}, false
 		}
-		p.inputTokens = usage.TokenUsage.Total.InputTokens
-		p.cachedInputTokens = usage.TokenUsage.Total.CachedInputTokens
-		p.outputTokens = usage.TokenUsage.Total.OutputTokens
-		if usage.TokenUsage.ModelContextWindow != nil {
-			p.modelContextWindow = *usage.TokenUsage.ModelContextWindow
-		}
-		ctxWindow := p.modelContextWindow
-		costUSD := p.totalCostUSD
-		p.mu.Unlock()
-
-		// Surface as synthetic SDKMessage so session layer can accumulate.
-		// Total = lifetime cumulative (for cost); Last = current context fill
-		// (resets on compaction, for context % display).
-		//
-		// ContextTotalTokens carries Last.TotalTokens (input + output +
-		// reasoning) so the session's ContextPercentage() can match Codex's
-		// own `/status` formula: (total - baseline) / (window - baseline).
-		return llm.SDKMessage{
-			Type: "usage_update",
-			UsageUpdate: &llm.Usage{
-				InputTokens:          usage.TokenUsage.Total.InputTokens,
-				CacheReadInputTokens: usage.TokenUsage.Total.CachedInputTokens,
-				OutputTokens:         usage.TokenUsage.Total.OutputTokens,
-				ContextInputTokens:   usage.TokenUsage.Last.InputTokens,
-				ContextTotalTokens:   usage.TokenUsage.Last.TotalTokens,
-				ContextBaseline:      codexContextBaselineTokens,
-				ContextWindow:        ctxWindow,
-				CostUSD:              costUSD,
-			},
-		}, true
+		p.updateTokenUsageLocked(usage.TokenUsage)
+		return p.usageMessageLocked(), true
 
 	case "item/commandExecution/outputDelta":
 		var delta CommandOutputDelta
@@ -1347,9 +1180,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			}
 			return p.nativeToollessViolation("unexpected command activity"), true
 		}
-		p.mu.Lock()
-		p.turnHadToolUse = true
-		p.mu.Unlock()
 		return llm.SDKMessage{
 			Type: "tool_progress",
 			ToolProgress: &llm.ToolProgressMessage{
@@ -1374,9 +1204,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			}
 			return p.nativeToollessViolation("unexpected file activity"), true
 		}
-		p.mu.Lock()
-		p.turnHadToolUse = true
-		p.mu.Unlock()
 		return llm.SDKMessage{
 			Type: "tool_progress",
 			ToolProgress: &llm.ToolProgressMessage{
@@ -1604,9 +1431,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		}
 		p.mu.Lock()
 		isMainItem := p.isMainThread(started.ThreadID)
-		if isMainItem && (started.Item.Type == "commandExecution" || started.Item.Type == codexItemTypeFileChange) {
-			p.turnHadToolUse = true
-		}
 		p.mu.Unlock()
 		if !isMainItem {
 			if p.opts.NativeToollessReview {
@@ -1655,6 +1479,24 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			return llm.SDKMessage{}, false
 		}
 
+	case "model/rerouted":
+		if p.opts.NativeToollessReview {
+			return p.nativeToollessViolation("unexpected model rerouting"), true
+		}
+		var rerouted struct {
+			ThreadID string `json:"threadId"`
+			ToModel  string `json:"toModel"`
+		}
+		if json.Unmarshal(params, &rerouted) != nil {
+			return llm.SDKMessage{}, false
+		}
+		p.mu.Lock()
+		if p.isMainThread(rerouted.ThreadID) && rerouted.ToModel != "" {
+			p.pricingModel = rerouted.ToModel
+		}
+		p.mu.Unlock()
+		return llm.SDKMessage{}, false
+
 	case "turn/started":
 		var turnStarted struct {
 			ThreadID string `json:"threadId"`
@@ -1672,11 +1514,14 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		p.mu.Lock()
 		isMain := turnStarted.ThreadID == "" || p.threadID == "" || turnStarted.ThreadID == p.threadID
 		alreadyStarted := p.turnStarted
+		if isMain {
+			p.usageState.revision++
+			p.turnID = turnStarted.Turn.ID
+		}
 		if isMain && !alreadyStarted {
 			p.turnStarted = true
 			p.nativeReviewTurnID = turnStarted.Turn.ID
 			p.nativeDecisionSeen = false
-			p.turnHadToolUse = false
 			p.lastAssistantText = ""
 			p.lastAssistantDraft = ""
 		}
@@ -1974,66 +1819,6 @@ func countDiffPatchLines(patch string) (added, removed int) {
 	return added, removed
 }
 
-// textLooksLikeQuestion reports whether text's final utterance is a question.
-// It checks the trailing character rather than scanning for '?' anywhere, so a
-// completion that merely mentions a "?" mid-answer (or a follow-up offer tacked
-// onto an otherwise-finished answer) is not misread as a blocking question.
-func textLooksLikeQuestion(text string) bool {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return false
-	}
-	return strings.HasSuffix(text, "?")
-}
-
-// stemLooksLikeQuestion reports whether any sentence in a numbered-options
-// stem ends with '?'. The question contract allows a short stem where the
-// question leads and a declarative clarifier follows, so unlike
-// textLooksLikeQuestion the '?' need not be the stem's final character.
-func stemLooksLikeQuestion(stem string) bool {
-	stem = strings.TrimSpace(stem)
-	return strings.HasSuffix(stem, "?") ||
-		strings.Contains(stem, "? ") ||
-		strings.Contains(stem, "?\n")
-}
-
-// optionsCarryQuestionContract reports whether parsed options carry markers
-// only the question contract produces — confidence scores or a
-// "(Recommended)" label — which mark the list as a question regardless of
-// stem punctuation.
-func optionsCarryQuestionContract(options []parsedOption) bool {
-	for _, o := range options {
-		if o.Confidence != nil || strings.Contains(strings.ToLower(o.Label), "(recommended)") {
-			return true
-		}
-	}
-	return false
-}
-
-var confidenceMarkerRe = regexp.MustCompile(`(?i)\[confidence:\s*(?:0(?:\.\d+)?|1(?:\.0+)?)\]`)
-
-// textCarriesQuestionContract reports whether final text that failed option
-// parsing still carries question-contract confidence markers; such a turn is
-// a malformed question and should get a reformat reminder rather than being
-// misread as a silent completion.
-func textCarriesQuestionContract(text string) bool {
-	return confidenceMarkerRe.MatchString(text)
-}
-
-// verdictSentinelRe matches the structured `## Verdict` section the
-// review / validator handoff emits when summarizing what the agent wrote to
-// the review-feedback file. The token may be separated from the heading by
-// either a newline (the canonical schema) or a space (when the surrounding
-// numbered-list parser has flattened multi-line option bodies into a single
-// line). Presence anywhere in the final text is a strong signal that the
-// turn should be treated as a completed answer regardless of stray '?'
-// characters in the preceding rationale.
-var verdictSentinelRe = regexp.MustCompile(`## Verdict[\s]+(APPROVED|CHANGES_REQUESTED)\b`)
-
-func textContainsVerdictSentinel(text string) bool {
-	return verdictSentinelRe.MatchString(text)
-}
-
 func shouldSuppressFinalAnswerDelta(phase, previousText, currentText string) bool {
 	if phase != "final_answer" {
 		return false
@@ -2055,296 +1840,12 @@ func isDuplicateFinalAnswer(phase, previousText, currentText string) bool {
 	return previousText != "" && previousText == currentText
 }
 
-func (p *Protocol) synthesizeAskUser(text string, options []parsedOption) llm.SDKMessage {
-	requestID := fmt.Sprintf("codex-synthetic-%d", time.Now().UnixNano())
-
-	opts := make([]map[string]any, 0, len(options))
-	for _, o := range options {
-		opt := map[string]any{
-			"label":       o.Label,
-			"description": o.Description,
-		}
-		if o.Confidence != nil {
-			opt["confidence"] = *o.Confidence
-		}
-		opts = append(opts, opt)
-	}
-
-	questionsJSON, _ := json.Marshal([]map[string]interface{}{
-		{
-			"question":    text,
-			"header":      "Agent Question",
-			"multiSelect": false,
-			"options":     opts,
-		},
-	})
-
-	inputJSON, _ := json.Marshal(map[string]interface{}{
-		"questions": json.RawMessage(questionsJSON),
-	})
-
-	return llm.SDKMessage{
-		Type: "control_request",
-		ControlRequest: &llm.ControlRequestMessage{
-			Type:      "control_request",
-			RequestID: requestID,
-			Request: llm.ControlRequest{
-				Subtype:  "can_use_tool",
-				ToolName: "AskUserQuestion",
-				Input:    json.RawMessage(inputJSON),
-			},
-		},
-	}
-}
-
-// askUserOptionView is the subset of an AskUserQuestion option that the
-// answer-envelope renderer needs to restate context to the agent.
-type askUserOptionView struct {
-	Label       string `json:"label"`
-	Description string `json:"description,omitempty"`
-}
-
-// askUserQuestionView is the subset of an AskUserQuestion entry that the
-// answer-envelope renderer needs to restate context to the agent.
-type askUserQuestionView struct {
-	Question string              `json:"question"`
-	Options  []askUserOptionView `json:"options,omitempty"`
-}
-
-func buildAskUserAnswerEnvelope(questions json.RawMessage, answers map[string]string) string {
-	parsed := parseAskUserQuestions(questions)
-	byText := make(map[string]askUserQuestionView, len(parsed))
-	for _, q := range parsed {
-		byText[q.Question] = q
-	}
-
-	keys := make([]string, 0, len(answers))
-	for q := range answers {
-		keys = append(keys, q)
-	}
-	sort.Strings(keys)
-
-	var sb strings.Builder
-	sb.WriteString("[AskUserQuestion answer]\n")
-	sb.WriteString("The user has answered your question.\n")
-
-	for _, q := range keys {
-		sb.WriteString("\nQuestion you asked:\n> ")
-		sb.WriteString(strings.ReplaceAll(strings.TrimSpace(q), "\n", "\n> "))
-		sb.WriteString("\n")
-		if qv, ok := byText[q]; ok && len(qv.Options) > 0 {
-			sb.WriteString("\nOptions you presented:\n")
-			for i, opt := range qv.Options {
-				fmt.Fprintf(&sb, "  %d. %s", i+1, opt.Label)
-				if opt.Description != "" {
-					sb.WriteString(" — ")
-					sb.WriteString(opt.Description)
-				}
-				sb.WriteString("\n")
-			}
-		}
-		sb.WriteString("\nUser's selected answer: ")
-		sb.WriteString(answers[q])
-		sb.WriteString("\n")
-	}
-	sb.WriteString("\n")
-	sb.WriteString("This answer clarifies requirements; it is not authorization to implement, edit repository files, or modify files outside your phase artifact/output directory.\n\n")
-	sb.WriteString(askingFormatReminder)
-	return strings.TrimSpace(sb.String())
-}
-
-const askingFormatReminder = `[Reminder] When you ask your next question, follow the asking-questions format from your system prompt.`
-
-func parseAskUserQuestions(raw json.RawMessage) []askUserQuestionView {
-	if len(raw) == 0 {
-		return nil
-	}
-	var envelope struct {
-		Questions []askUserQuestionView `json:"questions"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err == nil && len(envelope.Questions) > 0 {
-		return envelope.Questions
-	}
-	var bare []askUserQuestionView
-	if err := json.Unmarshal(raw, &bare); err == nil && len(bare) > 0 {
-		return bare
-	}
-	return nil
-}
-
-const maxQuestionFormatRetries = 2
-
-func (p *Protocol) shouldReformatRetryLoose(hadToolUse bool) bool {
-	return !hadToolUse
-}
-
-// parsedOption holds one numbered alternative extracted from a Codex question.
-type parsedOption struct {
-	Label       string
-	Description string
-	Confidence  *float64
-}
-
-var numberedOptionRe = regexp.MustCompile(`^\d+\.\s+(.+)$`)
-var confidenceSuffixRe = regexp.MustCompile(`(?i)\s+\[confidence:\s*(0(?:\.\d+)?|1(?:\.0+)?)\]\s*$`)
-
-func parseNumberedOptions(text string) (string, []parsedOption, bool) {
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-	stem := make([]string, 0, len(lines))
-	raw := make([]string, 0, 4)
-	inOptions := false
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			if !inOptions && len(stem) > 0 && stem[len(stem)-1] != "" {
-				stem = append(stem, "")
-			}
-			continue
-		}
-		if m := numberedOptionRe.FindStringSubmatch(trimmed); m != nil {
-			inOptions = true
-			raw = append(raw, strings.TrimSpace(m[1]))
-			continue
-		}
-		if inOptions {
-			if len(raw) > 0 {
-				raw[len(raw)-1] += " " + trimmed
-			}
-			continue
-		}
-		stem = append(stem, trimmed)
-	}
-
-	if len(raw) < 2 {
-		return "", nil, false
-	}
-	questionLines := 0
-	for _, r := range raw {
-		if strings.Contains(r, "?") {
-			questionLines++
-		}
-	}
-	if questionLines == len(raw) {
-		// Every option contains "?" — this is a bundle of questions, not a
-		// stem + choices. Let the caller treat it as unformatted.
-		return "", nil, false
-	}
-	for _, r := range raw {
-		// An option body carrying a verdict sentinel means the numbered
-		// list is a critic's "1. Assessment / 2. Verdict / 3. Feedback"
-		// report, not a real AskUser — never surface it as options.
-		if textContainsVerdictSentinel(r) {
-			return "", nil, false
-		}
-	}
-
-	options := make([]parsedOption, 0, len(raw))
-	for _, r := range raw {
-		trimmed, confidence := splitOptionConfidence(r)
-		label, desc := splitOptionLabelDesc(trimmed)
-		if label == "" {
-			return "", nil, false
-		}
-		options = append(options, parsedOption{Label: label, Description: desc, Confidence: confidence})
-	}
-
-	cleaned := strings.TrimSpace(strings.Join(stem, "\n"))
-	if cleaned == "" {
-		cleaned = text
-	}
-	return cleaned, options, true
-}
-
-// trimFreeFormSentinel recognises the explicit "FREE_FORM:" opt-out that the
-// reformat reminder teaches Codex to emit when a question genuinely needs a
-// free-text answer. When present, we skip retry logic and surface the question
-// with no options. Returns the stripped text and ok=true when the sentinel was
-// found.
-func trimFreeFormSentinel(text string) (string, bool) {
-	trimmed := strings.TrimLeft(text, " \t\n\r")
-	const prefix = "FREE_FORM:"
-	if !strings.HasPrefix(trimmed, prefix) {
-		return "", false
-	}
-	return strings.TrimSpace(trimmed[len(prefix):]), true
-}
-
-func splitOptionLabelDesc(raw string) (string, string) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", ""
-	}
-	if strings.HasPrefix(raw, "**") {
-		if closing := strings.Index(raw[2:], "**"); closing >= 0 {
-			closing += 2
-			label := strings.TrimSpace(raw[2:closing])
-			desc := strings.TrimSpace(raw[closing+2:])
-			if desc != "" {
-				label = strings.TrimSpace(strings.TrimRight(label, ".:"))
-				desc = strings.TrimSpace(strings.TrimLeft(desc, "—–-: "))
-			}
-			return label, desc
-		}
-	}
-	label := raw
-	desc := ""
-	if idx := strings.Index(raw, ":"); idx >= 0 {
-		label = strings.TrimSpace(raw[:idx])
-		desc = strings.TrimSpace(raw[idx+1:])
-	}
-	label = strings.Trim(label, "`")
-	label = strings.TrimSpace(label)
-	return label, desc
-}
-
-func splitOptionConfidence(raw string) (string, *float64) {
-	raw = strings.TrimSpace(raw)
-	matches := confidenceSuffixRe.FindStringSubmatch(raw)
-	if matches == nil {
-		return raw, nil
-	}
-	confidence, err := strconv.ParseFloat(matches[1], 64)
-	if err != nil {
-		return raw, nil
-	}
-	trimmed := strings.TrimSpace(raw[:len(raw)-len(matches[0])])
-	return trimmed, &confidence
-}
-
-// questionFormatReminder is the follow-up user turn sent to Codex when it
-// emits a question that lacks the required numbered options.
-func questionFormatReminder(violating string) string {
-	return strings.Join([]string{
-		"Your previous message was not in the required question format:",
-		"",
-		"> " + strings.ReplaceAll(strings.TrimSpace(violating), "\n", "\n> "),
-		"",
-		"Reformat and resend the question using exactly 3 numbered options, one marked (Recommended).",
-		"Use this structure and output nothing else:",
-		"",
-		"<question stem ending with '?'>",
-		"1. <Label> (Recommended): <one-line tradeoff> [confidence: 0.00]",
-		"2. <Label>: <one-line tradeoff> [confidence: 0.00]",
-		"3. <Label>: <one-line tradeoff> [confidence: 0.00]",
-		"",
-		"Only skip numbered options if the answer is inherently unconstrained (an exact version string, a free-form name, or an arbitrary identifier). In that case, prefix the question with the literal string 'FREE_FORM:' so the orchestrator knows it is intentional.",
-	}, "\n")
-}
-
 // --- Test helpers ---
 
 // SetThreadIDForTest sets the thread ID for testing without a real handshake.
 func (p *Protocol) SetThreadIDForTest(threadID string) {
 	p.mu.Lock()
 	p.threadID = threadID
-	p.mu.Unlock()
-}
-
-// SetQuestionIDsForTest sets the question ID map for testing.
-func (p *Protocol) SetQuestionIDsForTest(qIDs map[string]string) {
-	p.mu.Lock()
-	p.questionIDs = qIDs
 	p.mu.Unlock()
 }
 

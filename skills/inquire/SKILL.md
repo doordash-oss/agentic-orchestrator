@@ -68,6 +68,8 @@ Write a markdown file with a numbered list of questions to the output directory.
 
 **CRITICAL: Do NOT include the feature name, title, or description in the output file.** The questions file will be handed to a research agent who must answer objectively without knowing the feature intent.
 
+Completion requires one of the section layouts below, with at least one nonempty numbered research question in each section. Resolve pending user clarifications before completing; an interview progress note is not the research-questions deliverable.
+
 **Codebase-only format** (when no external research is needed):
 ```markdown
 # Research Questions

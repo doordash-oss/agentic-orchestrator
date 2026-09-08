@@ -51,7 +51,7 @@ func TestClaudeCatalogProcess(t *testing.T) {
 	if testing.Short() {
 		t.Skip("launches CLI subprocesses")
 	}
-	for _, scenario := range []string{"success", "rejected", "partial", "exit", "timeout"} {
+	for _, scenario := range []string{"success", "rejected", "partial", "exit", "canceled"} {
 		t.Run(scenario, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("CLAUDECODE", "nested-session")
@@ -71,7 +71,7 @@ printf '%%s\n' "$request" > '%s/input'
 `, dir, dir, dir)
 			if scenario == "exit" {
 				body += "exit 5\n"
-			} else if scenario != "timeout" {
+			} else if scenario != "canceled" {
 				body += "printf '%s\n' '" + response + "'\n"
 			}
 			// Wait for another message. Discovery must kill/reap this process instead
@@ -81,8 +81,30 @@ printf '%%s\n' "$request" > '%s/input'
 			provider := claudeCatalogProvider(t, binary)
 			original := []llm.ModelInfo{{ID: "known-fable", Category: "capable"}}
 			provider.SetModelCatalog(original)
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
+			if scenario == "canceled" {
+				// Cancel only after the fake CLI receives initialization. Startup speed
+				// varies under the all-package race sweep and is not the contract here.
+				watched := make(chan struct{})
+				go func() {
+					defer close(watched)
+					ticker := time.NewTicker(10 * time.Millisecond)
+					defer ticker.Stop()
+					for {
+						if input, err := os.ReadFile(filepath.Join(dir, "input")); err == nil && json.Valid(input) {
+							cancel()
+							return
+						}
+						select {
+						case <-ctx.Done():
+							return
+						case <-ticker.C:
+						}
+					}
+				}()
+				t.Cleanup(func() { cancel(); <-watched })
+			}
 			var reported []llm.ModelInfo
 			models, err := provider.DiscoverModelCatalogWithProgress(ctx, func(model llm.ModelInfo) { reported = append(reported, model) })
 			if scenario == "success" {
@@ -96,8 +118,8 @@ printf '%%s\n' "$request" > '%s/input'
 				if err == nil || len(models) != 0 || len(reported) != 0 {
 					t.Fatalf("models=%+v reported=%+v err=%v", models, reported, err)
 				}
-				if scenario == "timeout" && !errors.Is(err, context.DeadlineExceeded) {
-					t.Fatalf("timeout error=%v", err)
+				if scenario == "canceled" && !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancellation error=%v", err)
 				}
 				if strings.Contains(err.Error(), "secret-value") {
 					t.Fatal("provider text leaked")

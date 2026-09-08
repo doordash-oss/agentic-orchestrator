@@ -34,6 +34,7 @@ import type {
   FeatureActionRequest,
   FeatureSummaryView,
   ReadinessSnapshot,
+  RepositorySourcesRequest,
   RepositoryIdentity,
   SessionDetail,
   SessionOutputEvent,
@@ -412,6 +413,7 @@ export interface AgenticoMock {
     openSessionOutput: ReturnType<typeof vi.fn>;
     cancelSessionOutput: ReturnType<typeof vi.fn>;
     getCreationDefaults: ReturnType<typeof vi.fn>;
+    inspectRepositorySources: ReturnType<typeof vi.fn>;
     pickCreationFiles: ReturnType<typeof vi.fn>;
     uploadCreationFiles: ReturnType<typeof vi.fn>;
     readClipboardImage: ReturnType<typeof vi.fn>;
@@ -647,6 +649,17 @@ export function installAgenticoMock(
       return () => sessionOutputListeners.delete(listener);
     }),
     getCreationDefaults: vi.fn(() => Promise.resolve(defaults)),
+    inspectRepositorySources: vi.fn((request: RepositorySourcesRequest) =>
+      Promise.resolve({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          observedSha: 'a'.repeat(40),
+        })),
+      }),
+    ),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
     uploadCreationFiles: vi.fn((kind: string, paths: readonly string[]) =>
       Promise.resolve({

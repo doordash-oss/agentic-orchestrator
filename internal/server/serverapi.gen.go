@@ -346,19 +346,19 @@ func (e FeatureConfigAutomaticReviewMode) Valid() bool {
 
 // Defines values for FeatureConfigInputNotifications.
 const (
-	Default FeatureConfigInputNotifications = "default"
-	Enabled FeatureConfigInputNotifications = "enabled"
-	Muted   FeatureConfigInputNotifications = "muted"
+	FeatureConfigInputNotificationsDefault FeatureConfigInputNotifications = "default"
+	FeatureConfigInputNotificationsEnabled FeatureConfigInputNotifications = "enabled"
+	FeatureConfigInputNotificationsMuted   FeatureConfigInputNotifications = "muted"
 )
 
 // Valid indicates whether the value is a known member of the FeatureConfigInputNotifications enum.
 func (e FeatureConfigInputNotifications) Valid() bool {
 	switch e {
-	case Default:
+	case FeatureConfigInputNotificationsDefault:
 		return true
-	case Enabled:
+	case FeatureConfigInputNotificationsEnabled:
 		return true
-	case Muted:
+	case FeatureConfigInputNotificationsMuted:
 		return true
 	default:
 		return false
@@ -473,6 +473,60 @@ func (e RelationshipChildOutcome) Valid() bool {
 	case RelationshipChildOutcomeCompleted:
 		return true
 	case RelationshipChildOutcomeDiscarded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositorySourceKind.
+const (
+	Branch   RepositorySourceKind = "branch"
+	Detached RepositorySourceKind = "detached"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourceKind enum.
+func (e RepositorySourceKind) Valid() bool {
+	switch e {
+	case Branch:
+		return true
+	case Detached:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositorySourceMode.
+const (
+	RepositorySourceModeCurrent RepositorySourceMode = "current"
+	RepositorySourceModeDefault RepositorySourceMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourceMode enum.
+func (e RepositorySourceMode) Valid() bool {
+	switch e {
+	case RepositorySourceModeCurrent:
+		return true
+	case RepositorySourceModeDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositorySourcesRequestMode.
+const (
+	Current RepositorySourcesRequestMode = "current"
+	Default RepositorySourcesRequestMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourcesRequestMode enum.
+func (e RepositorySourcesRequestMode) Valid() bool {
+	switch e {
+	case Current:
+		return true
+	case Default:
 		return true
 	default:
 		return false
@@ -1079,6 +1133,21 @@ const (
 func (e InitializeWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case InitializeWorkspaceRepositoryParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InspectWorkspaceRepositorySourcesParamsXAgenticoClient.
+const (
+	Local InspectWorkspaceRepositorySourcesParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the InspectWorkspaceRepositorySourcesParamsXAgenticoClient enum.
+func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case Local:
 		return true
 	default:
 		return false
@@ -2653,6 +2722,47 @@ type RepositoryReadiness struct {
 	Valid bool   `json:"valid"`
 }
 
+// RepositorySource defines model for RepositorySource.
+type RepositorySource struct {
+	Branch string `json:"branch,omitempty"`
+
+	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+	Identity    RepositoryIdentity   `json:"identity"`
+	Kind        RepositorySourceKind `json:"kind"`
+	Mode        RepositorySourceMode `json:"mode"`
+	ObservedSha string               `json:"observed_sha"`
+	RepoKey     string               `json:"repo_key"`
+}
+
+// RepositorySourceKind defines model for RepositorySource.Kind.
+type RepositorySourceKind string
+
+// RepositorySourceMode defines model for RepositorySource.Mode.
+type RepositorySourceMode string
+
+// RepositorySourceSelector defines model for RepositorySourceSelector.
+type RepositorySourceSelector struct {
+	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+	Identity RepositoryIdentity `json:"identity"`
+	RepoKey  string             `json:"repo_key"`
+}
+
+// RepositorySourcesRequest defines model for RepositorySourcesRequest.
+type RepositorySourcesRequest struct {
+	Mode         RepositorySourcesRequestMode `json:"mode"`
+	Repositories []RepositorySourceSelector   `json:"repositories"`
+}
+
+// RepositorySourcesRequestMode defines model for RepositorySourcesRequest.Mode.
+type RepositorySourcesRequestMode string
+
+// RepositorySourcesResponse defines model for RepositorySourcesResponse.
+type RepositorySourcesResponse struct {
+	APIVersion   string             `json:"api_version"`
+	Meta         ResponseMeta       `json:"meta,omitempty"`
+	Repositories []RepositorySource `json:"repositories"`
+}
+
 // Resource defines model for Resource.
 type Resource struct {
 	// ChildID Direct child feature id for a relationship lifecycle event.
@@ -3815,6 +3925,15 @@ type InitializeWorkspaceRepositoryParams struct {
 // InitializeWorkspaceRepositoryParamsXAgenticoClient defines parameters for InitializeWorkspaceRepository.
 type InitializeWorkspaceRepositoryParamsXAgenticoClient string
 
+// InspectWorkspaceRepositorySourcesParams defines parameters for InspectWorkspaceRepositorySources.
+type InspectWorkspaceRepositorySourcesParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient InspectWorkspaceRepositorySourcesParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// InspectWorkspaceRepositorySourcesParamsXAgenticoClient defines parameters for InspectWorkspaceRepositorySources.
+type InspectWorkspaceRepositorySourcesParamsXAgenticoClient string
+
 // RefreshProviderModelsJSONRequestBody defines body for RefreshProviderModels for application/json ContentType.
 type RefreshProviderModelsJSONRequestBody = ProviderModelRefreshRequest
 
@@ -3895,3 +4014,6 @@ type InitWorkspaceRepositoryJSONRequestBody = RepositoryInitSchema
 
 // InitializeWorkspaceRepositoryJSONRequestBody defines body for InitializeWorkspaceRepository for application/json ContentType.
 type InitializeWorkspaceRepositoryJSONRequestBody = InitializeRepositorySchema
+
+// InspectWorkspaceRepositorySourcesJSONRequestBody defines body for InspectWorkspaceRepositorySources for application/json ContentType.
+type InspectWorkspaceRepositorySourcesJSONRequestBody = RepositorySourcesRequest

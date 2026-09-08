@@ -965,6 +965,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspace/repositories/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve the local feature source for selected repositories.
+         * @description Resolves structured selectors against the connected server's current authorized repository catalog, verifies each expected identity, and reports the exact local branch or detached HEAD commit selected by the shared source mode. This inspection never contacts origin and renderer-supplied paths or refs are never revision authority.
+         */
+        post: operations["inspectWorkspaceRepositorySources"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recovery": {
         parameters: {
             query?: never;
@@ -1357,6 +1377,28 @@ export interface components {
              */
             result: "initialized" | "already_initialized";
             repository: components["schemas"]["InitializeRepositoryResult"];
+        };
+        RepositorySourceSelector: {
+            repo_key: string;
+            identity: components["schemas"]["RepositoryIdentity"];
+        };
+        RepositorySourcesRequest: {
+            /** @enum {string} */
+            mode: "default" | "current";
+            repositories: components["schemas"]["RepositorySourceSelector"][];
+        };
+        RepositorySource: {
+            repo_key: string;
+            identity: components["schemas"]["RepositoryIdentity"];
+            /** @enum {string} */
+            mode: "default" | "current";
+            /** @enum {string} */
+            kind: "branch" | "detached";
+            branch?: string;
+            observed_sha: string;
+        };
+        RepositorySourcesResponse: components["schemas"]["ActionBaseResponse"] & {
+            repositories: components["schemas"]["RepositorySource"][];
         };
         CloneStartRequest: {
             /** @description HTTP, HTTPS or SSH remote URL for the clone. Local paths, helper transports, embedded credentials and token-bearing queries or fragments are rejected without echoing secrets. */
@@ -2903,6 +2945,15 @@ export interface components {
                 "application/json": components["schemas"]["InitializeRepositoryResponse"];
             };
         };
+        /** @description Exact local sources for the selected repositories. */
+        RepositorySourcesResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RepositorySourcesResponse"];
+            };
+        };
         /** @description Authoritative clone operation snapshot after a mutation. */
         CloneActionResponse: {
             headers: {
@@ -4130,6 +4181,29 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             409: components["responses"]["ErrorResponse"];
             503: components["responses"]["ErrorResponse"];
+        };
+    };
+    inspectWorkspaceRepositorySources: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepositorySourcesRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["RepositorySourcesResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
         };
     };
     getRecoverySnapshot: {

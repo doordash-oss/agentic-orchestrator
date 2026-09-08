@@ -202,7 +202,7 @@ describe('the creation sheet repository identity reconciliation', () => {
     const { user } = await renderForm(mock);
 
     await user.click(screen.getByRole('checkbox', { name: /^service\b/ }));
-    await user.click(screen.getByRole('radio', { name: 'Current branch' }));
+    await user.click(screen.getByRole('radio', { name: 'Current branches' }));
     await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     await user.type(screen.getByLabelText('Name'), 'Kept draft');
     await user.type(
@@ -215,7 +215,7 @@ describe('the creation sheet repository identity reconciliation', () => {
 
     await user.click(screen.getByRole('button', { name: 'Back' }));
     expect(await screen.findByRole('checkbox', { name: /renamed\/service/ })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Current branch' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Current branches' })).toBeChecked();
     await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     expect(screen.getByLabelText('Name')).toHaveValue('Kept draft');
     expect(screen.getByLabelText('Description')).toHaveValue(

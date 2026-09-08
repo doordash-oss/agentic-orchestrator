@@ -319,7 +319,7 @@ test("two-server switching: A→B→A restores each server's truth and selection
     const alphaSheet = handle.page.getByRole('dialog', { name: 'New feature' });
     await expect(alphaSheet).toBeVisible({ timeout: 30_000 });
     await alphaSheet.getByRole('checkbox', { name: /switch-lab/ }).click();
-    await alphaSheet.getByRole('radio', { name: 'Current branch' }).click();
+    await alphaSheet.getByRole('radio', { name: 'Current branches' }).click();
     await alphaSheet.getByRole('button', { name: 'Next: Describe' }).click();
     await alphaSheet.getByLabel('Name').fill('Alpha retained draft');
 
@@ -364,7 +364,7 @@ test("two-server switching: A→B→A restores each server's truth and selection
     await expect(restoredSheet.getByLabel('Name')).toHaveValue('Alpha retained draft');
     await restoredSheet.getByRole('button', { name: 'Back' }).click();
     await expect(restoredSheet.getByRole('checkbox', { name: /switch-lab/ })).toBeChecked();
-    await expect(restoredSheet.getByRole('radio', { name: 'Current branch' })).toBeChecked();
+    await expect(restoredSheet.getByRole('radio', { name: 'Current branches' })).toBeChecked();
     transcript.step('alpha creation draft restored verbatim across the connection flip');
 
     // An explicit discard retires the restored draft.

@@ -1207,6 +1207,36 @@ paths:
         "503":
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/v1/workspace/repositories/sources:
+    post:
+      operationId: inspectWorkspaceRepositorySources
+      summary: Resolve the local feature source for selected repositories.
+      description: >-
+        Resolves structured selectors against the connected server's current
+        authorized repository catalog, verifies each expected identity, and
+        reports the exact local branch or detached HEAD commit selected by
+        the shared source mode. This inspection never contacts origin and
+        renderer-supplied paths or refs are never revision authority.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositorySourcesRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/RepositorySourcesResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/recovery:
     get:
       operationId: getRecoverySnapshot
@@ -1731,6 +1761,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/InitializeRepositoryResponse"
+    RepositorySourcesResponse:
+      description: Exact local sources for the selected repositories.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositorySourcesResponse"
     CloneActionResponse:
       description: Authoritative clone operation snapshot after a mutation.
       content:
@@ -2484,6 +2520,63 @@ components:
                 success.
             repository:
               $ref: "#/components/schemas/InitializeRepositoryResult"
+    RepositorySourceSelector:
+      type: object
+      additionalProperties: false
+      required: [repo_key, identity]
+      properties:
+        repo_key:
+          type: string
+          minLength: 1
+          maxLength: 512
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+    RepositorySourcesRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, repositories]
+      properties:
+        mode:
+          type: string
+          enum: [default, current]
+        repositories:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/RepositorySourceSelector"
+    RepositorySource:
+      type: object
+      additionalProperties: false
+      required: [repo_key, identity, mode, kind, observed_sha]
+      properties:
+        repo_key:
+          type: string
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+          x-go-type-skip-optional-pointer: false
+        mode:
+          type: string
+          enum: [default, current]
+        kind:
+          type: string
+          enum: [branch, detached]
+        branch:
+          type: string
+        observed_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+    RepositorySourcesResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [repositories]
+          properties:
+            repositories:
+              type: array
+              maxItems: 32
+              items:
+                $ref: "#/components/schemas/RepositorySource"
     CloneStartRequest:
       x-go-name: CloneStartSchema
       type: object

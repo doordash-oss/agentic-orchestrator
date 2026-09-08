@@ -185,6 +185,17 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
         defaults: { models: [], effort: [], useCurrentBranch: false },
       }),
     ),
+    inspectRepositorySources: vi.fn(
+      async (request: Parameters<IpcServices['inspectRepositorySources']>[0]) => ({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          observedSha: 'a'.repeat(40),
+        })),
+      }),
+    ),
     loadLocalReviewDraft: vi.fn(() => null),
     saveLocalReviewDraft: vi.fn((request) => ({ ...request, savedAt: '2026-07-16T00:00:00.000Z' })),
     discardLocalReviewDraft: vi.fn(() => false),

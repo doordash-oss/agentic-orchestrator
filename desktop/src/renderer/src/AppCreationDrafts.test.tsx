@@ -92,7 +92,7 @@ async function openSheet(user: ReturnType<typeof userEvent.setup>) {
 
 async function fillDraftBasics(user: ReturnType<typeof userEvent.setup>, name: string) {
   await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
-  await user.click(screen.getByRole('radio', { name: 'Current branch' }));
+  await user.click(screen.getByRole('radio', { name: 'Current branches' }));
   await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
   await user.type(screen.getByLabelText('Name'), name);
 }
@@ -117,7 +117,7 @@ describe('creation drafts across readiness flips (App-level)', () => {
     expect(within(sheet).getByLabelText('Name')).toHaveValue('Alpha draft');
     await user.click(within(sheet).getByRole('button', { name: 'Back' }));
     expect(within(sheet).getByRole('checkbox', { name: /repo-a/ })).toBeChecked();
-    expect(within(sheet).getByRole('radio', { name: 'Current branch' })).toBeChecked();
+    expect(within(sheet).getByRole('radio', { name: 'Current branches' })).toBeChecked();
   });
 
   it('keeps two servers’ drafts independent across an A→B→A switch', async () => {

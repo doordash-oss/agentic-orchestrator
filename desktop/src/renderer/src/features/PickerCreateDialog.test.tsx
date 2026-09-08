@@ -127,7 +127,7 @@ describe('the picker create view', () => {
 
     // Draft values that must survive the creation and adoption.
     await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
-    await user.click(screen.getByRole('radio', { name: 'Current branch' }));
+    await user.click(screen.getByRole('radio', { name: 'Current branches' }));
     await user.type(screen.getByRole('searchbox', { name: 'Search repositories' }), 'zzz');
 
     const dialog = await openCreateView(user);
@@ -157,7 +157,7 @@ describe('the picker create view', () => {
     await waitFor(() => expect(document.activeElement).toBe(widgetCheckbox));
     // Every other draft value survived.
     expect(screen.getByRole('checkbox', { name: /repo-a/ })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Current branch' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Current branches' })).toBeChecked();
     expect(screen.getByText('Created widget and selected it.')).toBeVisible();
     expect(screen.getByRole('searchbox', { name: 'Search repositories' })).toHaveValue('');
   });

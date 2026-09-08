@@ -419,6 +419,30 @@ export const ReadinessResponseSchema = z.object({
 
 export type ReadinessResponse = z.output<typeof ReadinessResponseSchema>;
 
+export const RepositorySourcesResponseSchema = z.object({
+  api_version: z.string(),
+  repositories: z
+    .array(
+      z.strictObject({
+        repo_key: z.string().min(1),
+        identity: z.strictObject({
+          path: z.string().min(1),
+          common_dir: z.string().min(1),
+          device: z.string().regex(/^[0-9]{1,20}$/),
+          inode: z.string().regex(/^[0-9]{1,20}$/),
+        }),
+        mode: z.enum(['default', 'current']),
+        kind: z.enum(['branch', 'detached']),
+        branch: z.string().optional(),
+        observed_sha: z.string().regex(/^[0-9a-f]{40,64}$/),
+      }),
+    )
+    .min(1)
+    .max(32),
+});
+
+export type RepositorySourcesResponse = z.output<typeof RepositorySourcesResponseSchema>;
+
 // --- Clone operations (POST/GET /api/v1/workspace/repositories/clone) ------
 // Authoritative snapshots from the server-owned clone lifecycle. State,
 // pending outcome and progress come from the durable record, never from

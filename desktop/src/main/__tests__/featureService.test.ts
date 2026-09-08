@@ -172,6 +172,70 @@ describe('FeatureService.creationDefaults', () => {
   });
 });
 
+describe('FeatureService.inspectRepositorySources', () => {
+  it('posts structured selectors and maps the server-owned local source', async () => {
+    const identity = {
+      path: '/work/space/repo-a',
+      commonDir: '/work/space/repo-a/.git',
+      device: '1',
+      inode: '2',
+    };
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        repositories: [
+          {
+            repo_key: 'repo-a',
+            identity: {
+              path: identity.path,
+              common_dir: identity.commonDir,
+              device: identity.device,
+              inode: identity.inode,
+            },
+            mode: 'current',
+            kind: 'detached',
+            observed_sha: 'a'.repeat(40),
+          },
+        ],
+      },
+    }));
+
+    const result = await service.inspectRepositorySources({
+      mode: 'current',
+      repositories: [{ repoKey: 'repo-a', identity }],
+    });
+
+    expect(calls[0]).toEqual({
+      path: '/api/v1/workspace/repositories/sources',
+      init: {
+        method: 'POST',
+        body: {
+          mode: 'current',
+          repositories: [
+            {
+              repo_key: 'repo-a',
+              identity: {
+                path: identity.path,
+                common_dir: identity.commonDir,
+                device: identity.device,
+                inode: identity.inode,
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(result.repositories[0]).toMatchObject({
+      repoKey: 'repo-a',
+      identity,
+      mode: 'current',
+      kind: 'detached',
+      observedSha: 'a'.repeat(40),
+    });
+  });
+});
+
 describe('FeatureService remote-connection submit boundary', () => {
   const created = () => ({
     status: 201,

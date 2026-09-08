@@ -142,7 +142,7 @@ describe('the picker clone view', () => {
     await screen.findByRole('button', { name: 'Next: Describe' });
 
     await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
-    await user.click(screen.getByRole('radio', { name: 'Current branch' }));
+    await user.click(screen.getByRole('radio', { name: 'Current branches' }));
     // A search filter that would hide the focus target.
     await user.type(screen.getByRole('searchbox', { name: 'Search repositories' }), 'zzz');
 
@@ -168,7 +168,7 @@ describe('the picker clone view', () => {
     await waitFor(() => expect(widgetCheckbox).toBeChecked());
     await waitFor(() => expect(document.activeElement).toBe(widgetCheckbox));
     expect(screen.getByRole('checkbox', { name: /repo-a/ })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Current branch' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Current branches' })).toBeChecked();
     expect(screen.getByText('Cloned widget and selected it.')).toBeVisible();
     // The filter that would have hidden the row was cleared.
     expect(screen.getByRole('searchbox', { name: 'Search repositories' })).toHaveValue('');

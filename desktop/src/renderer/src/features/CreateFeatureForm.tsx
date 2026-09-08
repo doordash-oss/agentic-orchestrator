@@ -30,6 +30,7 @@ import {
   type ReadinessSnapshot,
   type RepositoryFileRef,
   type RepositoryIdentity,
+  type RepositorySourcesResult,
   type RepositoryState,
   type WorkspaceRootState,
 } from '../../../shared/ipc';
@@ -88,6 +89,11 @@ import {
 } from './runContract';
 
 type DefaultsState = LoadState<{ phase: 'loaded'; defaults: CreationDefaults }>;
+type SourceState =
+  | { phase: 'idle' | 'loading' }
+  | { phase: 'loaded'; value: RepositorySourcesResult }
+  | { phase: 'error'; error: CanonicalError };
+const EMPTY_REPOSITORIES: readonly RepositoryState[] = [];
 
 const STEPS = ['Repositories', 'Describe', 'Depth', 'Contract'] as const;
 type Step = (typeof STEPS)[number];
@@ -258,6 +264,7 @@ export function CreateFeatureForm({
   const [catalogRefreshError, setCatalogRefreshError] = useState<CanonicalError | null>(
     () => retained?.catalogRefreshError ?? null,
   );
+  const [sourceState, setSourceState] = useState<SourceState>({ phase: 'idle' });
   // The nested clone view and its association with this draft, plus the
   // nested create view and its pending adoption.
   const [cloneOpen, setCloneOpen] = useState(() => retained?.cloneOpen ?? false);
@@ -298,6 +305,7 @@ export function CreateFeatureForm({
   const catalogRefreshSeq = useRef(0);
   const cloneResolveSeq = useRef(0);
   const initializeRequestSeq = useRef(0);
+  const sourceRequestSeq = useRef(0);
 
   // Locality decides how a folder reaches the form: the native directory
   // dialog on a local server (the picker resolves real paths on this
@@ -346,7 +354,7 @@ export function CreateFeatureForm({
   // load, folder adoption, SSE refresh) re-reconciles selections without
   // touching any other draft value.
   const loadedDefaultsEarly = state.phase === 'loaded' ? state.defaults : null;
-  const repositories = loadedDefaultsEarly?.repositories ?? [];
+  const repositories = loadedDefaultsEarly?.repositories ?? EMPTY_REPOSITORIES;
   const reconciledSelections = useMemo(
     () => reconcileRepoSelections(repoSelections, repositories),
     [repoSelections, repositories],
@@ -678,6 +686,38 @@ export function CreateFeatureForm({
     }
     serverKeyRef.current = serverKey;
   }, [serverKey]);
+
+  useEffect(() => {
+    const repositories = reconciledSelections.flatMap((selection) =>
+      selection.status === 'selected'
+        ? [{ repoKey: selection.key, identity: selection.identity }]
+        : [],
+    );
+    const request = ++sourceRequestSeq.current;
+    if (repositories.length === 0 || unresolvedSelections.length > 0) {
+      setSourceState({ phase: 'idle' });
+      return;
+    }
+    const requestedServer = serverKey;
+    setSourceState({ phase: 'loading' });
+    void window.agentico
+      .inspectRepositorySources({
+        mode: useCurrentBranch ? 'current' : 'default',
+        repositories,
+      })
+      .then(
+        (value) => {
+          if (sourceRequestSeq.current === request && serverKeyRef.current === requestedServer) {
+            setSourceState({ phase: 'loaded', value });
+          }
+        },
+        (error: unknown) => {
+          if (sourceRequestSeq.current === request && serverKeyRef.current === requestedServer) {
+            setSourceState({ phase: 'error', error: parseIpcError(error) });
+          }
+        },
+      );
+  }, [reconciledSelections, serverKey, unresolvedSelections.length, useCurrentBranch]);
   const handleCreate = useCallback(
     (input: CreateRepositoryStartInput) => {
       const startServerKey = serverKeyRef.current;
@@ -1142,6 +1182,14 @@ export function CreateFeatureForm({
         setRepoError('Select at least one repository.');
         return false;
       }
+      if (sourceState.phase !== 'loaded') {
+        setRepoError(
+          sourceState.phase === 'loading'
+            ? 'Wait for the selected repository sources to finish loading.'
+            : 'Refresh or reselect repositories whose local source could not be resolved.',
+        );
+        return false;
+      }
     }
     if (index === 1 && name.trim() === '') {
       setNameError('Enter a feature name.');
@@ -1478,6 +1526,21 @@ export function CreateFeatureForm({
                                       cannot be selected.
                                     </span>
                                   ) : null}
+                                  {sourceState.phase === 'loaded'
+                                    ? sourceState.value.repositories
+                                        .filter((source) => source.repoKey === repo.name)
+                                        .map((source) => (
+                                          <span
+                                            key={source.observedSha}
+                                            className="creation-sheet__row-hint"
+                                          >
+                                            Source:{' '}
+                                            {source.kind === 'detached'
+                                              ? `detached ${source.observedSha}`
+                                              : source.branch}
+                                          </span>
+                                        ))
+                                    : null}
                                 </span>
                                 <input
                                   className="creation-sheet__row-control"
@@ -1696,7 +1759,7 @@ export function CreateFeatureForm({
                       </div>
                     </section>
                     <fieldset className="creation-sheet__group">
-                      <legend className="creation-sheet__group-label">Branch</legend>
+                      <legend className="creation-sheet__group-label">Local source</legend>
                       <div className="creation-sheet__rows">
                         <label className="creation-sheet__row creation-sheet__row--choice">
                           <input
@@ -1705,7 +1768,7 @@ export function CreateFeatureForm({
                             checked={!useCurrentBranch}
                             onChange={() => setUseCurrentBranch(false)}
                           />
-                          <span className="creation-sheet__row-name">New feature branch</span>
+                          <span className="creation-sheet__row-name">Default branches</span>
                         </label>
                         <label className="creation-sheet__row creation-sheet__row--choice">
                           <input
@@ -1714,9 +1777,16 @@ export function CreateFeatureForm({
                             checked={useCurrentBranch}
                             onChange={() => setUseCurrentBranch(true)}
                           />
-                          <span className="creation-sheet__row-name">Current branch</span>
+                          <span className="creation-sheet__row-name">Current branches</span>
                         </label>
                       </div>
+                      {sourceState.phase === 'loading' ? (
+                        <p className="creation-sheet__row-hint" role="status">
+                          Resolving local sources…
+                        </p>
+                      ) : sourceState.phase === 'error' ? (
+                        <ErrorSurface error={sourceState.error} />
+                      ) : null}
                     </fieldset>
                   </section>
                 ) : null}
@@ -1913,6 +1983,20 @@ export function CreateFeatureForm({
                       <div>
                         <dt>Repositories</dt>
                         <dd>{selectedKeys.join(', ')}</dd>
+                      </div>
+                      <div>
+                        <dt>Local sources</dt>
+                        <dd>
+                          {sourceState.phase === 'loaded'
+                            ? sourceState.value.repositories
+                                .map((source) =>
+                                  source.kind === 'detached'
+                                    ? `${source.repoKey}: detached ${source.observedSha}`
+                                    : `${source.repoKey}: ${source.branch ?? ''}`,
+                                )
+                                .join(', ')
+                            : 'Not resolved'}
+                        </dd>
                       </div>
                       <div>
                         <dt>Describe</dt>

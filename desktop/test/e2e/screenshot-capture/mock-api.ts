@@ -2068,6 +2068,16 @@ function makeMockApi(
           useCurrentBranch: false,
         },
       } as CreationDefaults),
+    inspectRepositorySources: (request) =>
+      Promise.resolve({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          observedSha: 'a'.repeat(40),
+        })),
+      }),
     // The creation-sheet scenes need real-looking attachment chips; every
     // other scene keeps the picker inert.
     pickCreationFiles: (kind) =>

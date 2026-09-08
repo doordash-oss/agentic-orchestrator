@@ -227,6 +227,7 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathWorkspaceRepositoriesInit, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitRoute }},
 	{apiPathWorkspaceRepositoriesCreate, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryCreateRoute }},
 	{apiPathWorkspaceRepositoriesInitialize, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitializeRoute }},
+	{apiPathWorkspaceRepositorySources, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositorySourcesRoute }},
 	{apiPathWorkspaceClone, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneRoute }},
 	{apiPathWorkspaceClone + "/", func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneOperationRoutes }},
 	{apiPathPrompts, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},

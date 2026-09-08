@@ -38,6 +38,7 @@ import {
   FeatureListResponseSchema,
   PublishDescriptionResponseSchema,
   RuntimeConfigCreationSchema,
+  RepositorySourcesResponseSchema,
   RebaseFeatureResponseSchema,
   RefactorFeatureResponseSchema,
   DiscardChildResponseSchema,
@@ -68,6 +69,8 @@ import {
   type CreateFeatureInput,
   type CreateFeatureResult,
   type CreationDefaults,
+  type RepositorySourcesRequest,
+  type RepositorySourcesResult,
   type EffortLevel,
   type FeatureSetupView,
   type FeatureSnapshot,
@@ -214,6 +217,42 @@ export class FeatureService {
         // The creation contract's server default: a new feature branch.
         useCurrentBranch: false,
       },
+    };
+  }
+
+  async inspectRepositorySources(
+    request: RepositorySourcesRequest,
+  ): Promise<RepositorySourcesResult> {
+    const body = await this.api('/api/v1/workspace/repositories/sources', {
+      method: 'POST',
+      body: {
+        mode: request.mode,
+        repositories: request.repositories.map((repository) => ({
+          repo_key: repository.repoKey,
+          identity: {
+            path: repository.identity.path,
+            common_dir: repository.identity.commonDir,
+            device: repository.identity.device,
+            inode: repository.identity.inode,
+          },
+        })),
+      },
+    });
+    const parsed = validateWithSchema(body, RepositorySourcesResponseSchema);
+    return {
+      repositories: parsed.repositories.map((repository) => ({
+        repoKey: repository.repo_key,
+        identity: {
+          path: repository.identity.path,
+          commonDir: repository.identity.common_dir,
+          device: repository.identity.device,
+          inode: repository.identity.inode,
+        },
+        mode: repository.mode,
+        kind: repository.kind,
+        ...(repository.branch === undefined ? {} : { branch: repository.branch }),
+        observedSha: repository.observed_sha,
+      })),
     };
   }
 

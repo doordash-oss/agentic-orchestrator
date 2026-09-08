@@ -157,7 +157,7 @@ describe('the picker: explicit initialization of an unborn clone', () => {
 
     // Draft values that must survive the initialization adoption.
     await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
-    await user.click(screen.getByRole('radio', { name: 'Current branch' }));
+    await user.click(screen.getByRole('radio', { name: 'Current branches' }));
     await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     await user.type(screen.getByLabelText('Name'), 'Preserved initialization draft');
     await user.type(screen.getByLabelText('Description'), 'Keep this text through adoption.');
@@ -192,7 +192,7 @@ describe('the picker: explicit initialization of an unborn clone', () => {
     expect(screen.getByText('Initialized widget and selected it.')).toBeVisible();
     // The rest of the draft is intact.
     expect(screen.getByRole('checkbox', { name: /repo-a/ })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Current branch' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Current branches' })).toBeChecked();
     expect(screen.getByRole('searchbox', { name: 'Search repositories' })).toHaveValue('');
     await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     expect(screen.getByLabelText('Name')).toHaveValue('Preserved initialization draft');

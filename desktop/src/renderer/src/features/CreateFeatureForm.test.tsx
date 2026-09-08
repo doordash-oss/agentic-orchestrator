@@ -280,13 +280,13 @@ describe('the creation sheet across its four steps', () => {
     await user.click(screen.getByRole('button', { name: 'Back' }));
     await user.click(screen.getByRole('button', { name: 'Back' }));
     await user.click(screen.getByRole('button', { name: 'Back' }));
-    await user.click(screen.getByRole('radio', { name: 'Current branch' }));
+    await user.click(screen.getByRole('radio', { name: 'Current branches' }));
     await user.click(screen.getByRole('button', { name: 'Browse for folder' }));
     await user.click(screen.getByRole('button', { name: 'Use this folder' }));
 
     expect(await screen.findByRole('checkbox', { name: /repo-new/ })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Choose repositories' })).toBeVisible();
-    expect(screen.getByRole('radio', { name: 'Current branch' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Current branches' })).toBeChecked();
     await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     expect(screen.getByLabelText('Name')).toHaveValue('Preserved draft');
     await user.click(screen.getByRole('button', { name: 'Next: Depth' }));

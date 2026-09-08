@@ -235,6 +235,42 @@ func TestWorkspaceRepositoryInitializeCreatesInitialCommit(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRepositorySourcesResolveAuthorizedCatalogSelections(t *testing.T) {
+	fx := newInitializeFixture(t)
+	repo := fx.unbornClone("service", "main")
+	fx.gitIn(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial")
+	fx.gitIn(repo, "branch", "release/2026/q3")
+	fx.gitIn(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release/2026/q3")
+
+	w := postTrustedJSON(fx.handler, apiPathWorkspaceRepositorySources, map[string]any{
+		"mode": "default",
+		"repositories": []map[string]any{{
+			"repo_key": "service",
+			"identity": fx.wireIdentity(repo),
+		}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("sources status = %d body=%s; want 200", w.Code, w.Body.String())
+	}
+	var resp RepositorySourcesResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&resp); err != nil {
+		t.Fatalf("decode sources response: %v", err)
+	}
+	if len(resp.Repositories) != 1 {
+		t.Fatalf("repositories = %#v; want one", resp.Repositories)
+	}
+	got := resp.Repositories[0]
+	if got.RepoKey != "service" || got.Mode != RepositorySourceModeDefault || got.Kind != Branch || got.Branch != "release/2026/q3" {
+		t.Errorf("source = %#v; want service default branch release/2026/q3", got)
+	}
+	if want := fx.gitIn(repo, "rev-parse", "refs/heads/release/2026/q3"); got.ObservedSha != want {
+		t.Errorf("observed_sha = %q; want %q", got.ObservedSha, want)
+	}
+	if got.Identity.Path != repo {
+		t.Errorf("identity = %#v; want server-resolved repository identity", got.Identity)
+	}
+}
+
 func TestWorkspaceRepositoryInitializePreservesExactCatalogKey(t *testing.T) {
 	fx := newInitializeFixture(t)
 	repo := fx.unbornClone("spaced-key-path", "main")

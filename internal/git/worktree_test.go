@@ -15,6 +15,8 @@
 package git
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -315,11 +317,59 @@ func TestDefaultBranchPreferRemoteOverLocal(t *testing.T) {
 
 	// Set origin/HEAD to point to origin/main
 	runGit(t, localDir, "remote", "set-head", "origin", "main")
+	runGit(t, localDir, "branch", "main", "origin/main")
 
 	got := DefaultBranch(localDir)
 	if got != "main" {
 		t.Errorf("expected remote default branch %q to take precedence, got %q", "main", got)
 	}
+}
+
+func TestInspectLocalSource(t *testing.T) {
+	t.Run("default keeps full slash branch and resolves local commit", func(t *testing.T) {
+		repo := testutil.InitGitRepo(t)
+		runGit(t, repo, "branch", "release/2026/q3")
+		runGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release/2026/q3")
+
+		got, err := InspectLocalSource(context.Background(), repo, LocalSourceModeDefault)
+		if err != nil {
+			t.Fatalf("InspectLocalSource(default): %v", err)
+		}
+		if got.Kind != LocalSourceBranch || got.Branch != "release/2026/q3" {
+			t.Errorf("InspectLocalSource(default) source = %#v; want branch release/2026/q3", got)
+		}
+		if want := gitOutput(t, repo, "rev-parse", "refs/heads/release/2026/q3"); got.Commit != want {
+			t.Errorf("InspectLocalSource(default).Commit = %q; want %q", got.Commit, want)
+		}
+	})
+
+	t.Run("default refuses missing selected local branch despite cached remote ref", func(t *testing.T) {
+		repo := testutil.InitGitRepo(t)
+		runGit(t, repo, "update-ref", "refs/remotes/origin/release/2026/q3", "HEAD")
+		runGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release/2026/q3")
+
+		_, err := InspectLocalSource(context.Background(), repo, LocalSourceModeDefault)
+		if !errors.Is(err, ErrLocalSourceMissing) {
+			t.Fatalf("InspectLocalSource(default) error = %v; want ErrLocalSourceMissing", err)
+		}
+		if got := DefaultBranch(repo); got != "" {
+			t.Errorf("DefaultBranch() = %q; want empty for missing nominated local branch", got)
+		}
+	})
+
+	t.Run("current reports detached HEAD commit", func(t *testing.T) {
+		repo := testutil.InitGitRepo(t)
+		want := gitOutput(t, repo, "rev-parse", "HEAD")
+		runGit(t, repo, "checkout", "--detach", want)
+
+		got, err := InspectLocalSource(context.Background(), repo, LocalSourceModeCurrent)
+		if err != nil {
+			t.Fatalf("InspectLocalSource(current): %v", err)
+		}
+		if got.Kind != LocalSourceDetached || got.Branch != "" || got.Commit != want {
+			t.Errorf("InspectLocalSource(current) = %#v; want detached commit %q", got, want)
+		}
+	})
 }
 
 func TestResetToBaseLocal(t *testing.T) {

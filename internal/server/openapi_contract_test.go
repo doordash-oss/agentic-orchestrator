@@ -627,6 +627,7 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: apiPathWorkspaceRepositoriesInit, mutation: true},
 		{method: httpMethodPost, path: apiPathWorkspaceRepositoriesCreate, mutation: true},
 		{method: httpMethodPost, path: apiPathWorkspaceRepositoriesInitialize, mutation: true},
+		{method: httpMethodPost, path: apiPathWorkspaceRepositorySources, mutation: true},
 		{method: httpMethodPost, path: apiPathWorkspaceClone, mutation: true},
 		{method: httpMethodGet, path: apiPathWorkspaceClone},
 		{method: httpMethodGet, path: apiPathWorkspaceClone + "/{operation_id}"},

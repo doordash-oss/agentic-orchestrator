@@ -43,6 +43,8 @@ import {
   type CreateFeatureInput,
   type CreateFeatureResult,
   type CreationDefaults,
+  type RepositorySourcesRequest,
+  type RepositorySourcesResult,
   type CreationFileKind,
   type CreationFileSearchRequest,
   type CreationFileSearchResult,
@@ -204,6 +206,7 @@ export interface IpcServices {
   ): string;
   cancelSessionOutput(subscriptionId: string): boolean;
   getCreationDefaults(): Promise<CreationDefaults>;
+  inspectRepositorySources(request: RepositorySourcesRequest): Promise<RepositorySourcesResult>;
   pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
   uploadCreationFiles(
     kind: CreationFileKind,
@@ -412,6 +415,8 @@ export function registerIpcHandlers(
       cancelled: services.cancelSessionOutput(request.subscriptionId),
     }),
     [IPC_CHANNELS.creationDefaults]: () => services.getCreationDefaults(),
+    [IPC_CHANNELS.creationSources]: (_event, request: RepositorySourcesRequest) =>
+      services.inspectRepositorySources(request),
     [IPC_CHANNELS.creationPickFiles]: (_event, kind: CreationFileKind) =>
       services.pickCreationFiles(kind),
     [IPC_CHANNELS.creationUploadFiles]: (

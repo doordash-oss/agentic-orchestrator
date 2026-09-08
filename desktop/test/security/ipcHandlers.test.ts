@@ -202,6 +202,17 @@ function makeServices(): IpcServices {
         defaults: { models: [], effort: [], useCurrentBranch: false },
       }),
     ),
+    inspectRepositorySources: vi.fn(
+      async (request: Parameters<IpcServices['inspectRepositorySources']>[0]) => ({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          observedSha: 'a'.repeat(40),
+        })),
+      }),
+    ),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
     uploadCreationFiles: vi.fn(() => Promise.resolve({ results: [] })),
     readClipboardImage: vi.fn(() => Promise.resolve({ paths: [] })),

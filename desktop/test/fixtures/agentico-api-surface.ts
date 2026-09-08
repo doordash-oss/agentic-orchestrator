@@ -73,6 +73,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'importDroppedCreationFiles',
   'initRepository',
   'initializeRepository',
+  'inspectRepositorySources',
   'installUpdateNow',
   'installUpdateWhenIdle',
   'launchRebaseChild',

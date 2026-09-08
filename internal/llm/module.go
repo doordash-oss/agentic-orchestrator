@@ -14,9 +14,13 @@
 
 package llm
 
-import "go.uber.org/fx"
+import (
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"go.uber.org/fx"
+)
 
 // Module provides the LLM provider registry via fx.
 var Module = fx.Module("llm",
 	fx.Provide(NewRegistry),
+	fx.Invoke(func(r *Registry, cfg *config.Config) { r.SetModelRecommendations(cfg.ModelRecommendations) }),
 )

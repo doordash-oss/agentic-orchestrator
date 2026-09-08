@@ -611,9 +611,10 @@ func TestManagedConfig_BuiltinOverridesWhenEmpty(t *testing.T) {
 
 // --- Task 6: conservative effort mapping ---
 
-func TestEffortMapping_StableForSupportedBackend(t *testing.T) {
+func TestEffortMapping_StableForDiscoveredVariant(t *testing.T) {
 	state := t.TempDir()
 	p := New()
+	p.SetModelCatalog([]llm.ModelInfo{{ID: "openai/gpt-5", EffortVariants: map[llm.EffortLevel]map[string]any{llm.EffortHigh: {"reasoningEffort": "high"}}}})
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:       "openai/gpt-5",
 		StateDir:    state,
@@ -647,31 +648,6 @@ func TestEffortMapping_OmittedForUnsupportedBackend(t *testing.T) {
 		cfg := readManagedConfigFile(t, env)
 		if len(cfg.Provider) != 0 {
 			t.Errorf("model %q left an effort/provider key behind: %v", model, cfg.Provider)
-		}
-	}
-}
-
-func TestEffortMapping_PureFunctionParity(t *testing.T) {
-	cases := []struct {
-		backend string
-		level   llm.EffortLevel
-		want    string
-		ok      bool
-	}{
-		{"openai/gpt-5", llm.EffortLow, "low", true},
-		{"openai/gpt-5", llm.EffortMedium, "medium", true},
-		{"openai/gpt-5", llm.EffortHigh, "high", true},
-		{"openai/gpt-5", llm.EffortXHigh, "high", true},
-		{"openai/gpt-5", llm.EffortMax, "high", true},
-		{"openai/gpt-5", "", "", false},
-		{"anthropic/claude-sonnet-4-5", llm.EffortHigh, "", false},
-		{"ollama/llama3.1:8b", llm.EffortHigh, "", false},
-		{"bareword", llm.EffortHigh, "", false},
-	}
-	for _, tc := range cases {
-		got, ok := reasoningEffortFor(tc.backend, tc.level)
-		if got != tc.want || ok != tc.ok {
-			t.Errorf("reasoningEffortFor(%q,%q) = (%q,%v), want (%q,%v)", tc.backend, tc.level, got, ok, tc.want, tc.ok)
 		}
 	}
 }

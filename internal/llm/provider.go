@@ -153,7 +153,7 @@ type SessionUsageReconciler interface {
 
 // CatalogProvider exposes the model catalog populated by discovery.
 // Providers implementing this interface allow the Registry to perform
-// category-based model selection from the live catalog.
+// capability-based model selection from the live catalog.
 type CatalogProvider interface {
 	ModelCatalog() []ModelInfo
 }
@@ -163,6 +163,13 @@ type CatalogProvider interface {
 // fall back to CatalogProvider/default catalogs when it fails.
 type CatalogDiscoverer interface {
 	DiscoverModelCatalog(ctx context.Context) ([]ModelInfo, error)
+}
+
+// CatalogRefreshPolicy is implemented by providers whose catalog depends on
+// local configuration independently of CLI version. Version-keyed caches are
+// fallback evidence for these providers, not a substitute for discovery.
+type CatalogRefreshPolicy interface {
+	RefreshCatalogOnStartup() bool
 }
 
 // ModelDiscoveryReporter receives models as soon as a provider discovers them.

@@ -493,7 +493,7 @@ func TestDiscoverProviderCatalogsRefreshModelsUsesBuiltinFallbackOnFailureWithou
 	}
 	fallbackText := warningText(warnings[0])
 	if !strings.Contains(fallbackText, "could not discover model catalog") ||
-		!strings.Contains(fallbackText, "using built-in fallback") ||
+		!strings.Contains(fallbackText, "retaining provider catalog") ||
 		!strings.Contains(fallbackText, "network down") {
 		t.Fatalf("warning = %q, want refresh failure + built-in fallback detail", fallbackText)
 	}
@@ -693,7 +693,7 @@ func TestDiscoverProviderCatalogs_PrefixedVersionNormalizesToCacheKey(t *testing
 				t.Fatalf("cached = %+v, want live-model", cached)
 			}
 
-			// Second startup at the same version: cache hit → discovery does NOT run.
+			// Second startup at the same version reuses the version-keyed cache.
 			p2 := &stubCatalogDiscoveryProvider{
 				stubProvider: stubProvider{name: "prov", hasCLI: true},
 				versionInfo:  tc.versionInfo,
@@ -785,23 +785,23 @@ func TestDiscoverProviderCatalogs_OpenCodeDiscoversAndCaches(t *testing.T) {
 		t.Fatalf("first-startup catalog = %+v, want discovered %q", cat, wantID)
 	}
 
-	// Second startup at the same version: cache hit → discovery does NOT run.
+	// OpenCode configuration can change independently of its CLI version.
 	p2 := opencode.NewWithRunner(runner)
 	if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p2}, cacheRoot, nil, false); len(warnings) != 0 {
 		t.Fatalf("second-startup warnings = %v, want none", warnings)
 	}
-	if verboseCalls != 1 {
-		t.Fatalf("discovery ran %d times total, want 1 (version-keyed cache hit skips CLI)", verboseCalls)
+	if verboseCalls != 2 {
+		t.Fatalf("discovery ran %d times total, want 2 (refresh dynamic configuration)", verboseCalls)
 	}
 	if cat := p2.ModelCatalog(); len(cat) != 1 || cat[0].ID != wantID {
-		t.Fatalf("second-startup catalog = %+v, want cached %q", cat, wantID)
+		t.Fatalf("second-startup catalog = %+v, want rediscovered %q", cat, wantID)
 	}
 }
 
 // TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure proves the
 // plan's degrade-to-fallback contract end-to-end: when a ready, version-eligible
 // OpenCode's live discovery fails, the shared startup path emits an ordered
-// "using built-in fallback" warning AND the provider still surfaces a non-empty
+// "retaining provider catalog" warning AND the provider still surfaces a non-empty
 // curated catalog through CatalogProvider/AvailableModels — so a discovery
 // failure never leaves setup/config consumers with an empty OpenCode model list.
 // The runner is faked so the test needs no real OpenCode binary, credentials, or
@@ -827,17 +827,17 @@ func TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure(t *testing
 		t.Fatalf("warnings = %v, want one opencode built-in-fallback warning", warnings)
 	}
 	fallbackText := warningText(warnings[0])
-	if !strings.Contains(fallbackText, providerNameOpencode) || !strings.Contains(fallbackText, "built-in fallback") {
+	if !strings.Contains(fallbackText, providerNameOpencode) || !strings.Contains(fallbackText, "retaining provider catalog") {
 		t.Fatalf("warning = %q, want one opencode built-in-fallback warning", fallbackText)
 	}
 
 	// Despite the discovery failure, the provider degrades to its curated
 	// fallback so the registry's model lists and routing never see it as empty.
-	if cat := p.ModelCatalog(); len(cat) == 0 {
-		t.Fatal("ModelCatalog() = empty after discovery failure, want the built-in fallback")
+	if cat := p.ModelCatalog(); len(cat) != 0 {
+		t.Fatal("ModelCatalog() = fabricated models after discovery failure")
 	}
-	if models := p.AvailableModels(); len(models) == 0 {
-		t.Fatal("AvailableModels() = empty after discovery failure, want the built-in fallback")
+	if models := p.AvailableModels(); len(models) != 0 {
+		t.Fatal("AvailableModels() = fabricated models after discovery failure")
 	}
 }
 

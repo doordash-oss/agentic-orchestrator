@@ -66,12 +66,15 @@ func cacheableVersion(version string) bool {
 	return versionTokenPattern.MatchString(version)
 }
 
+const providerCatalogSchemaVersion = 2
+
 type providerCatalogCacheFile struct {
-	Source       string          `json:"source,omitempty"`
-	Provider     string          `json:"provider"`
-	Version      string          `json:"version"`
-	DiscoveredAt time.Time       `json:"discovered_at"`
-	Models       []llm.ModelInfo `json:"models"`
+	Source        string          `json:"source,omitempty"`
+	SchemaVersion int             `json:"schema_version"`
+	Provider      string          `json:"provider"`
+	Version       string          `json:"version"`
+	DiscoveredAt  time.Time       `json:"discovered_at"`
+	Models        []llm.ModelInfo `json:"models"`
 }
 
 func providerCatalogCachePath(cacheRoot, provider, version string) string {
@@ -100,7 +103,7 @@ func loadProviderCatalogCacheFile(cacheRoot, provider, version string) (provider
 	if err := json.Unmarshal(data, &cached); err != nil {
 		return providerCatalogCacheFile{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if cached.Provider != provider || cached.Version != version {
+	if cached.SchemaVersion != providerCatalogSchemaVersion || cached.Provider != provider || cached.Version != version {
 		return providerCatalogCacheFile{}, fmt.Errorf("cache metadata mismatch in %s", path)
 	}
 	if cached.Source != providerCatalogSource(provider) {
@@ -135,21 +138,22 @@ func saveProviderCatalogCache(cacheRoot, provider, version string, models []llm.
 		return fmt.Errorf("creating model catalog cache dir: %w", err)
 	}
 	payload := providerCatalogCacheFile{
-		Source:       providerCatalogSource(provider),
-		Provider:     provider,
-		Version:      version,
-		DiscoveredAt: time.Now().UTC(),
-		Models:       models,
+		Source:        providerCatalogSource(provider),
+		SchemaVersion: providerCatalogSchemaVersion,
+		Provider:      provider,
+		Version:       version,
+		DiscoveredAt:  time.Now().UTC(),
+		Models:        models,
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal model catalog cache: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write model catalog cache: %w", err)
 	}
-	return nil
+	return os.Chmod(path, 0o600)
 }
 
 func safeCacheSegment(s string) string {

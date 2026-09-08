@@ -2519,7 +2519,7 @@ func stubProviderCLIs(t *testing.T, names ...string) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func TestKBBuild_FallsBackToCostEfficientDefault(t *testing.T) {
+func TestKBBuild_FallsBackToRecommendedDefault(t *testing.T) {
 	stubProviderCLIs(t, "claude", "codex")
 	dir := t.TempDir()
 	eventCh := make(chan any, 10)
@@ -2527,6 +2527,7 @@ func TestKBBuild_FallsBackToCostEfficientDefault(t *testing.T) {
 	store := feature.NewStore(dir)
 	pr := NewPhaseRunner(sm, store, dir)
 	pr.Registry = newRegistryWithProviders()
+	pr.Registry.SetModelRecommendations(map[string][]string{"kb_build": {"claude:sonnet[200K]"}})
 
 	var capturedModel string
 	pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {

@@ -86,6 +86,14 @@ type ReviewModelRanker interface {
 	ReviewPreferenceBand(model ModelInfo) (int, bool)
 }
 
+// RoleModelRecommender is implemented by providers that know their own model
+// families well enough to nominate defaults per phase role. Entries are the
+// provider's own catalog IDs or aliases, most preferred first. Configured
+// model_recommendations always take precedence over these nominations.
+type RoleModelRecommender interface {
+	RecommendedModels(role PhaseRole) []string
+}
+
 // NativeToollessReviewer is implemented only by providers whose automatic-
 // review launch and protocol have been audited to expose no native tool,
 // question, child-session, customization, or persistence surface. General
@@ -153,7 +161,7 @@ type SessionUsageReconciler interface {
 
 // CatalogProvider exposes the model catalog populated by discovery.
 // Providers implementing this interface allow the Registry to perform
-// category-based model selection from the live catalog.
+// capability-based model selection from the live catalog.
 type CatalogProvider interface {
 	ModelCatalog() []ModelInfo
 }
@@ -163,6 +171,13 @@ type CatalogProvider interface {
 // fall back to CatalogProvider/default catalogs when it fails.
 type CatalogDiscoverer interface {
 	DiscoverModelCatalog(ctx context.Context) ([]ModelInfo, error)
+}
+
+// CatalogRefreshPolicy is implemented by providers whose catalog depends on
+// local configuration independently of CLI version. Version-keyed caches are
+// fallback evidence for these providers, not a substitute for discovery.
+type CatalogRefreshPolicy interface {
+	RefreshCatalogOnStartup() bool
 }
 
 // ModelDiscoveryReporter receives models as soon as a provider discovers them.

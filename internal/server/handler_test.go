@@ -1202,8 +1202,8 @@ func TestModelCatalogIncludesChatUtilityEligibility(t *testing.T) {
 	}
 
 	chatModels := body.PhaseProviderModels[string(llm.PhaseChat)][providerCodex]
-	if len(chatModels) != 1 || chatModels[0] != modelGPT54Mini {
-		t.Fatalf("chat utility models = %+v, want discovered balanced utility model", chatModels)
+	if len(chatModels) != 2 || chatModels[0] != modelGPT54 || chatModels[1] != modelGPT54Mini {
+		t.Fatalf("chat utility models = %+v, want both compatible models regardless of category", chatModels)
 	}
 }
 

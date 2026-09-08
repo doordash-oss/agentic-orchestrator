@@ -17,6 +17,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1953,5 +1954,47 @@ func TestShouldInterruptRunningOnStartup(t *testing.T) {
 				t.Fatalf("shouldInterruptRunningOnStartup() = %t, want %t", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestClaudeCatalogCacheInvalidatesInferenceDiscovery(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	models := []llm.ModelInfo{{ID: "sonnet"}}
+	if err := saveProviderCatalogCache(root, "claude", "2.1.263", models); err != nil {
+		t.Fatal(err)
+	}
+	path := providerCatalogCachePath(root, "claude", "2.1.263")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old map[string]any
+	if err := json.Unmarshal(data, &old); err != nil {
+		t.Fatal(err)
+	}
+	delete(old, "source")
+	data, err = json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadProviderCatalogCache(root, "claude", "2.1.263"); err == nil {
+		t.Fatal("accepted old inference catalog")
+	}
+	provider := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "claude", hasCLI: true},
+		versionInfo:  "2.1.263",
+		discovered:   []llm.ModelInfo{{ID: "fable"}},
+	}
+	discoverProviderCatalogs(context.Background(), []llm.LLMProvider{provider}, root, nil, false)
+	if provider.discoveries != 1 || len(provider.catalog) != 1 || provider.catalog[0].ID != "fable" {
+		t.Fatalf("cache was not refreshed: %+v", provider)
+	}
+	cached, err := loadProviderCatalogCache(root, "claude", "2.1.263")
+	if err != nil || len(cached) != 1 || cached[0].ID != "fable" {
+		t.Fatalf("cached=%+v err=%v", cached, err)
 	}
 }

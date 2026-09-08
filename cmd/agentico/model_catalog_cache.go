@@ -67,6 +67,7 @@ func cacheableVersion(version string) bool {
 }
 
 type providerCatalogCacheFile struct {
+	Source       string          `json:"source,omitempty"`
 	Provider     string          `json:"provider"`
 	Version      string          `json:"version"`
 	DiscoveredAt time.Time       `json:"discovered_at"`
@@ -102,6 +103,9 @@ func loadProviderCatalogCacheFile(cacheRoot, provider, version string) (provider
 	if cached.Provider != provider || cached.Version != version {
 		return providerCatalogCacheFile{}, fmt.Errorf("cache metadata mismatch in %s", path)
 	}
+	if cached.Source != providerCatalogSource(provider) {
+		return providerCatalogCacheFile{}, fmt.Errorf("model catalog discovery source changed")
+	}
 	if len(cached.Models) == 0 {
 		return providerCatalogCacheFile{}, fmt.Errorf("empty model catalog in %s", path)
 	}
@@ -131,6 +135,7 @@ func saveProviderCatalogCache(cacheRoot, provider, version string, models []llm.
 		return fmt.Errorf("creating model catalog cache dir: %w", err)
 	}
 	payload := providerCatalogCacheFile{
+		Source:       providerCatalogSource(provider),
 		Provider:     provider,
 		Version:      version,
 		DiscoveredAt: time.Now().UTC(),
@@ -171,4 +176,12 @@ func safeCacheSegment(s string) string {
 		return "unknown"
 	}
 	return b.String()
+}
+
+// A change in discovery semantics must invalidate same-CLI-version caches.
+func providerCatalogSource(provider string) string {
+	if provider == "claude" {
+		return "sdk-initialize"
+	}
+	return ""
 }

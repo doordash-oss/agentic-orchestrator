@@ -415,3 +415,38 @@ func decodeBodyMap(t *testing.T, resp *http.Response) map[string]any {
 	}
 	return out
 }
+
+type pricedSessionView struct {
+	*fakeSessionView
+	result *llm.ResultMessage
+}
+
+func (s *pricedSessionView) Cost() *llm.ResultMessage { return s.result }
+
+func TestReconciledCostCanLowerSessionAndRunEstimates(t *testing.T) {
+	t.Parallel()
+	for _, amount := range []float64{0, 0.25} {
+		store, f := seedHistoryFeature(t)
+		if err := store.Modify(f.ID, func(current *feature.Feature) error {
+			current.PhaseCosts = map[string]float64{}
+			current.ActiveTimingKey = "research"
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		sess := &pricedSessionView{fakeSessionView: &fakeSessionView{
+			id: "reconciled", featureID: f.ID, runNumber: 1, phase: feature.PhaseResearch, kind: ports.KindPhase, status: ports.SessionRunning,
+			usage: &llm.Usage{CostUSD: amount, CostSource: "provider_estimate"},
+		}, result: &llm.ResultMessage{TotalCostUSD: 2}}
+		if got := sessionSummaryDTO(sess).Usage.CostUSD; got != amount {
+			t.Fatalf("session retained old estimate: %v", got)
+		}
+		opts := baseReadHandlerOptions(store)
+		opts.Sessions = fakeSessionManager{views: []ports.SessionView{sess}}
+		body := getJSONMap(t, NewHandler(opts), "/api/v1/features/"+f.ID+"/runs/1")
+		cost := body["run"].(map[string]any)["cost"].(map[string]any)
+		if got := cost["total_usd"].(float64); got != amount {
+			t.Fatalf("run retained old estimate: %v", got)
+		}
+	}
+}

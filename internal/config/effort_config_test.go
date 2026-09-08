@@ -72,7 +72,7 @@ func TestEffortConfigExplicitAutoRoundTrips(t *testing.T) {
 }
 
 func TestEffortConfigEveryExplicitLevelRoundTrips(t *testing.T) {
-	levels := []string{"low", "medium", "high", "xhigh", "max"}
+	levels := []string{"low", "medium", "high", "xhigh", "max", "ultra"}
 	for _, role := range allEffortRoles {
 		for _, level := range levels {
 			t.Run(role+"_"+level, func(t *testing.T) {

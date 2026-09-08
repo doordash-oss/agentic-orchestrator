@@ -487,7 +487,7 @@ func writePhaseMarkdown(t *testing.T, stateDir string, f *feature.Feature, phase
 		t.Fatalf("mkdir phase dir: %v", err)
 	}
 	path := filepath.Join(phaseDir, name)
-	if err := os.WriteFile(path, []byte("# "+phaseKey+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(testutil.PhaseMarkdown(phaseKey)), 0o644); err != nil {
 		t.Fatalf("write phase markdown: %v", err)
 	}
 	return path
@@ -1672,7 +1672,7 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_PhaseDirCreated(t *testing.T
 	}
 	// Write an artifact so registry validation discovers it.
 	artifactPath := filepath.Join(phaseDir, "inquire.md")
-	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
+	if err := os.WriteFile(artifactPath, []byte(testutil.PhaseMarkdown("inquire")), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
 	lc := lifecycleForFeature(f)

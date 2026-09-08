@@ -205,11 +205,13 @@ type Run struct {
 // the phase-level aggregate used by dashboards; this slice preserves the
 // session-level ledger behind that aggregate.
 type SessionCostRecord struct {
-	SessionID     string  `yaml:"session_id"`
-	PhaseKey      string  `yaml:"phase_key"`
-	ObserverPhase string  `yaml:"observer_phase,omitempty"`
-	RepoName      string  `yaml:"repo_name,omitempty"`
-	CostUSD       float64 `yaml:"cost_usd"`
+	SessionID         string  `yaml:"session_id"`
+	PhaseKey          string  `yaml:"phase_key"`
+	ObserverPhase     string  `yaml:"observer_phase,omitempty"`
+	RepoName          string  `yaml:"repo_name,omitempty"`
+	CostUSD           float64 `yaml:"cost_usd"`
+	CostSource        string  `yaml:"cost_source,omitempty"`
+	CostCreditsMicros *int64  `yaml:"cost_credits_micros,omitempty"`
 }
 
 // IsSealed reports whether this run has been sealed (rewound past).

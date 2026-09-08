@@ -323,6 +323,7 @@ const EFFORT_LABELS: Record<EffortLevel, string> = {
   high: 'High',
   xhigh: 'XHigh',
   max: 'Max',
+  ultra: 'Ultra',
 };
 
 function automaticEffort(field: (typeof PHASE_FIELDS)[number], pipeline: string): EffortLevel {

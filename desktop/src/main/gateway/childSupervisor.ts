@@ -114,6 +114,10 @@ export class ChildSupervisor {
     this.ownedSelected = selected;
   }
 
+  getOwnedSelected(): SelectedRuntime | null {
+    return this.ownedSelected;
+  }
+
   markReady(): void {
     this.readySince = this.host.clock();
   }
@@ -140,12 +144,12 @@ export class ChildSupervisor {
   /** Stops the app-owned child (if any). Never touches external processes. */
   async stop(): Promise<void> {
     const child = this.child;
-    if (child === null) {
-      return;
-    }
     // A deliberate stop ends silent supervision: nothing relaunches a child
     // the gateway itself stopped.
     this.ownedSelected = null;
+    if (child === null) {
+      return;
+    }
     if (child.exited) {
       this.release();
       return;
@@ -285,7 +289,7 @@ export class ChildSupervisor {
       .sleeper(delay)
       .then(() => {
         this.recoveryPending = false;
-        if (this.host.isShuttingDown() || this.hasLiveChild()) {
+        if (this.host.isShuttingDown() || this.hasLiveChild() || this.ownedSelected !== selected) {
           return;
         }
         const resolved = this.host.resolveServerBinary();

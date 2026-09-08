@@ -371,3 +371,43 @@ func TestExtractSessionCostNoUsage(t *testing.T) {
 		t.Errorf("Usage = %+v, want zero value", sc.Usage)
 	}
 }
+
+type reconciledCostSession struct {
+	*mocks.MockSessionView
+	snapshot *llm.Usage
+}
+
+func (s *reconciledCostSession) ReconciledUsage(context.Context) *llm.Usage { return s.snapshot }
+
+func TestExtractSessionCostPrefersReconciledSnapshotIncludingZero(t *testing.T) {
+	for _, amount := range []float64{0, 0.125} {
+		base := mocks.NewMockSessionView("cost", "feature")
+		base.CostVal = &llm.ResultMessage{TotalCostUSD: 2}
+		credits := int64(987)
+		sess := &reconciledCostSession{MockSessionView: base, snapshot: &llm.Usage{CostUSD: amount, CostSource: "provider_estimate", CostCreditsMicros: &credits, CacheCreationInputTokens: 42}}
+		got := ExtractSessionCost(sess)
+		if got.TotalCostUSD != amount || got.Usage.CacheCreationInputTokens != 42 || got.Usage.CostCreditsMicros == nil || *got.Usage.CostCreditsMicros != 987 {
+			t.Fatalf("extraction retained provisional price: %+v", got)
+		}
+	}
+}
+
+func TestCreditOnlyCostPersistsWithoutInventingDollars(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	f := &feature.Feature{ID: "credit-only", Name: "credit-only", Status: feature.StatusImplementing, SchemaVersion: feature.SchemaVersionCurrent}
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	credits := int64(42)
+	cost := SessionCost{Usage: llm.Usage{CostSource: "unavailable", CostCreditsMicros: &credits}}
+	if err := accumulateSessionCostToFeatureKey(store, f.ID, "implement", cost, SessionCostMetadata{SessionID: "session"}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.SessionCosts) != 1 || updated.SessionCosts[0].CostUSD != 0 || updated.SessionCosts[0].CostCreditsMicros == nil || *updated.SessionCosts[0].CostCreditsMicros != 42 {
+		t.Fatalf("credit-only ledger: %+v", updated.SessionCosts)
+	}
+}

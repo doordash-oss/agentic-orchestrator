@@ -121,6 +121,12 @@ function makeServices(): IpcServices {
       detail: 'Resolving the selected runtime.',
       ownership: 'none' as const,
     })),
+    startLocalRuntime: vi.fn(() => ({
+      status: 'resolving-runtime' as const,
+      stage: 'resolve-runtime' as const,
+      detail: 'Resolving the selected runtime.',
+      ownership: 'none' as const,
+    })),
     listServers: vi.fn(() => ({ rows: [] })),
     probeServers: vi.fn(() => ({ rows: [] })),
     addRemoteServer: vi.fn(() => Promise.reject(new Error('unused'))),

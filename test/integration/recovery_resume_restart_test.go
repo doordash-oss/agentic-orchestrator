@@ -466,7 +466,7 @@ func TestRecoveryResumeDesignAcrossOrchestratorRestart(t *testing.T) {
 					"read -r _prompt\n"+
 					"echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\""+initSessionID+"\",\"model\":\"model-a\"}'\n"+
 					"cat > \""+filepath.Join(designDir, "design.md")+"\" <<'DESIGN_EOF'\n"+
-					"# Design\n\nRecovered design output.\n"+
+					testutil.DesignDocumentMarkdown+
 					"DESIGN_EOF\n"+
 					testutil.TouchPhaseCompleteInDir(designDir)+"\n"+
 					testutil.JSONLSuccess+"\n")

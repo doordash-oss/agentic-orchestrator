@@ -34,20 +34,21 @@ type SDKMessage struct {
 	OccurredAt time.Time `json:"-"`
 
 	// Exactly one of these is non-nil after unmarshaling, based on Type.
-	Init           *SystemInitMessage      `json:"-"`
-	Assistant      *AssistantMessage       `json:"-"`
-	User           *UserMessage            `json:"-"`
-	Result         *ResultMessage          `json:"-"`
-	ControlRequest *ControlRequestMessage  `json:"-"`
-	Status         *StatusMessage          `json:"-"`
-	ToolProgress   *ToolProgressMessage    `json:"-"`
-	HookStarted    *HookStartedMessage     `json:"-"`
-	HookProgress   *HookProgressMessage    `json:"-"`
-	HookResponse   *HookResponseMessage    `json:"-"`
-	RateLimit      *RateLimitMessage       `json:"-"`
-	Compact        *CompactBoundaryMessage `json:"-"`
-	FileReads      []FileReadEvent         `json:"-"`
-	FileChanges    []FileChangeEvent       `json:"-"`
+	Init              *SystemInitMessage      `json:"-"`
+	Assistant         *AssistantMessage       `json:"-"`
+	User              *UserMessage            `json:"-"`
+	Result            *ResultMessage          `json:"-"`
+	ControlRequest    *ControlRequestMessage  `json:"-"`
+	CompletionRequest *PhaseCompletionRequest `json:"-"`
+	Status            *StatusMessage          `json:"-"`
+	ToolProgress      *ToolProgressMessage    `json:"-"`
+	HookStarted       *HookStartedMessage     `json:"-"`
+	HookProgress      *HookProgressMessage    `json:"-"`
+	HookResponse      *HookResponseMessage    `json:"-"`
+	RateLimit         *RateLimitMessage       `json:"-"`
+	Compact           *CompactBoundaryMessage `json:"-"`
+	FileReads         []FileReadEvent         `json:"-"`
+	FileChanges       []FileChangeEvent       `json:"-"`
 
 	// Provider-normalized subagent (Task tool) lifecycle messages. Claude
 	// emits the corresponding system subtypes natively; other adapters may
@@ -249,6 +250,12 @@ type Usage struct {
 	// session. Providers without live cost telemetry leave it zero; their final
 	// ResultMessage remains authoritative.
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// CostSource distinguishes a local token estimate from a provider estimate
+	// or an unavailable price. Empty preserves other providers' cost semantics.
+	CostSource string `json:"cost_source,omitempty"`
+	// CostCreditsMicros is the provider's credit estimate, when available.
+	// Credits have account-specific value and must not be converted to USD.
+	CostCreditsMicros *int64 `json:"cost_credits_micros,omitempty"`
 
 	// ContextInputTokens is the current context fill (post-compaction)
 	// expressed as input tokens only. Kept for informational purposes;

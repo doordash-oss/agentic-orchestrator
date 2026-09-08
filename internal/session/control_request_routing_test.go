@@ -372,11 +372,15 @@ func TestRespondToAskUser_OnlyClearsMatching(t *testing.T) {
 		t.Error("HasPendingAskUserQuestion should remain true while ask-B is outstanding")
 	}
 
-	// Bonus: make sure RespondToAskUser actually exercises the right
-	// code path even when there's no protocol writer (it should still
-	// update the slot regardless of the subsequent stdin write).
-	_ = s.RespondToAskUser("ask-B", json.RawMessage(`[]`), nil, nil)
-	if got := s.PendingControlRequests(); len(got) != 0 {
-		t.Errorf("RespondToAskUser should have cleared ask-B, got %v", got)
+	// A failed answer write (no subprocess attached here) must leave the
+	// request pending so it can be answered again.
+	if err := s.RespondToAskUser("ask-B", json.RawMessage(`[]`), nil, nil); err == nil {
+		t.Fatal("RespondToAskUser should fail without a provider pipe")
+	}
+	if got := s.PendingControlRequests(); len(got) != 1 || got[0].RequestID != "ask-B" {
+		t.Errorf("RespondToAskUser should keep ask-B pending after a failed write, got %v", got)
+	}
+	if !s.HasPendingAskUserQuestion() {
+		t.Error("HasPendingAskUserQuestion should remain true after a failed write")
 	}
 }

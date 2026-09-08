@@ -300,8 +300,9 @@ func (h *apiHandler) runCostWithActiveSessions(featureID string, run *feature.Ru
 		if sess == nil || sess.FeatureID() != featureID || sessionRunNumber(sess) != run.RunNumber {
 			continue
 		}
-		runningCost := sess.AccumulatedUsage().CostUSD
-		if result := sess.Cost(); result != nil && result.TotalCostUSD > runningCost {
+		usage := sess.AccumulatedUsage()
+		runningCost := usage.CostUSD
+		if result := sess.Cost(); result != nil && usage.CostSource == "" && result.TotalCostUSD > runningCost {
 			runningCost = result.TotalCostUSD
 		}
 		if runningCost <= 0 {

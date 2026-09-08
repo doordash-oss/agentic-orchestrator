@@ -25,6 +25,7 @@ import {
   createUpdateFixtureFetch,
   detectCanInstallInApp,
   detectPackageFormat,
+  fetchBytesStreaming,
 } from '../updates';
 
 const RELEASES_API = 'https://api.github.com/repos/doordash-oss/agentic-orchestrator/releases';
@@ -750,6 +751,127 @@ describe('UpdateCoordinator', () => {
     expect(fs.existsSync(path.join(dir, 'updates', 'v0.2.0'))).toBe(false);
   });
 
+  it('keeps a slow but flowing package download alive past the idle window', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'macos package bytes');
+    const clock = fakeClock();
+    const stream = streamedPackage(fixture, 'Agentico-mac-universal.dmg', 'macos package bytes');
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture: { ...fixture, fetch: stream.fetch },
+      clock,
+    });
+
+    const check = update.checkNow();
+    const controller = await stream.controller();
+    for (const part of stream.parts(4)) {
+      clock.advance(45_000);
+      controller.enqueue(part);
+      await flush();
+    }
+    controller.close();
+
+    await expect(check).resolves.toMatchObject({
+      status: 'ready',
+      targetVersion: '0.2.0',
+      signatureStatus: 'verified',
+    });
+  });
+
+  it('aborts a package download that receives no bytes for the idle window', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'macos package bytes');
+    const clock = fakeClock();
+    const stream = streamedPackage(fixture, 'Agentico-mac-universal.dmg', 'macos package bytes');
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture: { ...fixture, fetch: stream.fetch },
+      clock,
+    });
+
+    const check = update.checkNow();
+    const controller = await stream.controller();
+    controller.enqueue(stream.parts(4)[0]!);
+    await flush();
+    clock.advance(60_000);
+    await flush();
+
+    await expect(check).resolves.toMatchObject({
+      status: 'failed',
+      error: { code: 'E_UPDATE_DOWNLOAD_FAILED' },
+    });
+  });
+
+  it('reports advancing download progress while the package streams', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'macos package bytes');
+    const clock = fakeClock();
+    const stream = streamedPackage(fixture, 'Agentico-mac-universal.dmg', 'macos package bytes');
+    const downloadedBytes: number[] = [];
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture: { ...fixture, fetch: stream.fetch },
+      clock,
+      onStateChanged: (state) => {
+        if (state.status === 'downloading' && state.progress !== undefined) {
+          downloadedBytes.push(state.progress.downloadedBytes);
+        }
+      },
+    });
+
+    const check = update.checkNow();
+    const controller = await stream.controller();
+    for (const part of stream.parts(4)) {
+      clock.advance(1000);
+      controller.enqueue(part);
+      await flush();
+    }
+    controller.close();
+    await expect(check).resolves.toMatchObject({ status: 'ready' });
+
+    const total = Buffer.byteLength('macos package bytes');
+    expect(downloadedBytes[0]).toBe(0);
+    expect(downloadedBytes.length).toBeGreaterThan(2);
+    expect([...downloadedBytes]).toEqual([...downloadedBytes].sort((a, b) => a - b));
+    expect(downloadedBytes[downloadedBytes.length - 1]).toBe(total);
+  });
+
+  it('keeps the total deadline for small metadata fetches', async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'macos package bytes');
+      const hangingFetch: typeof fetch = (input, init) => {
+        if (fetchUrl(input).includes('desktop-release.json')) {
+          return new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('This operation was aborted', 'AbortError')),
+            );
+          });
+        }
+        return fixture.fetch(input, init);
+      };
+      const update = makeCoordinator({
+        platform: 'darwin',
+        arch: 'arm64',
+        packageFormat: 'macos',
+        fixture: { ...fixture, fetch: hangingFetch },
+      });
+
+      const check = update.checkNow();
+      await vi.advanceTimersByTimeAsync(8000);
+      await expect(check).resolves.toMatchObject({
+        status: 'failed',
+        error: { code: 'E_UPDATE_CHECK_FAILED' },
+      });
+      expect(fixture.requestedPackage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('marks a failed install as failed with the canonical install error and redacted diagnostics', async () => {
     const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
     const update = makeCoordinator({
@@ -961,6 +1083,30 @@ describe('createUpdateFixtureFetch', () => {
   });
 });
 
+describe('fetchBytesStreaming', () => {
+  it('aborts a streamed download that exceeds the byte limit mid-stream', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(4));
+        controller.enqueue(new Uint8Array(4));
+        controller.close();
+      },
+    });
+    const fetchImpl: typeof fetch = () => Promise.resolve(new Response(body, { status: 200 }));
+
+    await expect(
+      fetchBytesStreaming(
+        fetchImpl,
+        'https://github.com/doordash-oss/agentic-orchestrator/releases/download/v0.2.0/x',
+        6,
+        60_000,
+        { setTimeout, clearTimeout },
+        () => undefined,
+      ),
+    ).rejects.toThrow('The update response exceeded the size limit.');
+  });
+});
+
 function makeCoordinator({
   platform,
   arch,
@@ -968,6 +1114,7 @@ function makeCoordinator({
   fixture,
   activeWork = { featureCount: 0, amaActive: false, detectionFailed: false },
   canInstallInApp,
+  clock,
   onStateChanged,
   stopActiveWork = vi.fn(() => Promise.resolve({ stopped: true })),
   restart = vi.fn(),
@@ -978,6 +1125,7 @@ function makeCoordinator({
   fixture: SignedFixture;
   activeWork?: { featureCount: number; amaActive: boolean; detectionFailed: boolean };
   canInstallInApp?: boolean;
+  clock?: FakeClock;
   onStateChanged?: (state: ReturnType<UpdateCoordinator['getState']>) => void;
   stopActiveWork?: (active: {
     featureCount: number;
@@ -1000,14 +1148,102 @@ function makeCoordinator({
     userDataDir: dir,
     fetch: fixture.fetch,
     releasePublicKey: createPublicKey(PUBLIC_KEY),
-    now: () => new Date('2026-07-20T10:00:00.000Z'),
-    setTimeout: (() => 1) as unknown as typeof setTimeout,
-    clearTimeout: vi.fn(),
+    now: clock?.now ?? (() => new Date('2026-07-20T10:00:00.000Z')),
+    setTimeout: clock?.setTimeout ?? ((() => 1) as unknown as typeof setTimeout),
+    clearTimeout: clock?.clearTimeout ?? vi.fn(),
     onStateChanged,
     detectActiveWork: vi.fn(() => Promise.resolve(activeWork)),
     stopActiveWork,
     restart,
   });
+}
+
+interface FakeClock {
+  now: () => Date;
+  setTimeout: typeof setTimeout;
+  clearTimeout: typeof clearTimeout;
+  advance(ms: number): void;
+}
+
+function fakeClock(): FakeClock {
+  let nowMs = 0;
+  let nextId = 1;
+  const timers = new Map<number, { at: number; fn: () => void }>();
+  return {
+    now: () => new Date(nowMs),
+    setTimeout: ((fn: () => void, delay: number) => {
+      const id = nextId;
+      nextId += 1;
+      timers.set(id, { at: nowMs + delay, fn });
+      return id;
+    }) as unknown as typeof setTimeout,
+    clearTimeout: ((id: number) => {
+      timers.delete(id);
+    }) as unknown as typeof clearTimeout,
+    advance(ms: number): void {
+      const target = nowMs + ms;
+      for (;;) {
+        const due = [...timers.entries()]
+          .filter(([, timer]) => timer.at <= target)
+          .sort(([, a], [, b]) => a.at - b.at)[0];
+        if (due === undefined) break;
+        nowMs = due[1].at;
+        timers.delete(due[0]);
+        due[1].fn();
+      }
+      nowMs = target;
+    },
+  };
+}
+
+function flush(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+function streamedPackage(
+  fixture: SignedFixture,
+  packageName: string,
+  packageText: string,
+): {
+  fetch: typeof fetch;
+  controller(): Promise<ReadableStreamDefaultController<Uint8Array>>;
+  parts(count: number): Uint8Array[];
+} {
+  const packageBytes = Buffer.from(packageText);
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const streamingFetch: typeof fetch = (input, init) => {
+    if (fetchUrl(input).includes(packageName)) {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+        },
+      });
+      return Promise.resolve(
+        new Response(body, {
+          status: 200,
+          headers: { 'content-length': String(packageBytes.byteLength) },
+        }),
+      );
+    }
+    return fixture.fetch(input, init);
+  };
+  return {
+    fetch: streamingFetch,
+    async controller(): Promise<ReadableStreamDefaultController<Uint8Array>> {
+      while (streamController === undefined) {
+        await flush();
+      }
+      return streamController;
+    },
+    parts(count: number): Uint8Array[] {
+      const size = Math.ceil(packageBytes.byteLength / count);
+      const parts: Uint8Array[] = [];
+      for (let offset = 0; offset < packageBytes.byteLength; offset += size) {
+        parts.push(new Uint8Array(packageBytes.subarray(offset, offset + size)));
+      }
+      return parts;
+    },
+  };
 }
 
 function fetchUrl(input: Parameters<typeof fetch>[0]): string {

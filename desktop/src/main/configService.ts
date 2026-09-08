@@ -160,7 +160,15 @@ function toServerModels(models: PhaseModels): Record<string, string> {
   };
 }
 
-const EFFORT_LEVELS = new Set<EffortLevel>(['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+const EFFORT_LEVELS = new Set<EffortLevel>([
+  'auto',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
+]);
 
 function effortEntry(value: string | undefined): EffortLevel | undefined {
   return value !== undefined && EFFORT_LEVELS.has(value as EffortLevel)

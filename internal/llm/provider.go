@@ -144,6 +144,13 @@ type SessionCostAugmenter interface {
 	AdditionalSessionCost(ctx context.Context) (SessionCostAdjustment, error)
 }
 
+// SessionUsageReconciler supplies a cumulative usage snapshot after waiting for
+// an outstanding provider billing lookup, bounded by ctx. It returns nil when
+// no usage is available. The snapshot replaces, rather than augments, usage.
+type SessionUsageReconciler interface {
+	ReconciledUsage(ctx context.Context) *Usage
+}
+
 // CatalogProvider exposes the model catalog populated by discovery.
 // Providers implementing this interface allow the Registry to perform
 // category-based model selection from the live catalog.
@@ -288,6 +295,9 @@ type ProtocolOpts struct {
 	WritableRoots  []string
 	DSP            bool
 	StateDir       string
+	// StructuredCompletion exposes a harness-validated completion tool for
+	// sessions governed by a phase contract.
+	StructuredCompletion bool
 	// NativeToollessReview selects the provider's audited one-turn reviewer
 	// protocol boundary. Providers that attest NativeToollessReviewer use this
 	// to omit every tool, question, child-session, continuation, and persistent
@@ -298,25 +308,16 @@ type ProtocolOpts struct {
 	// normal new session, so providers that do not resume leave their behavior
 	// unchanged.
 	ResumeSessionID string
-	// Interactive marks a session where a human answers every turn in real time
-	// (e.g. AMA chat), as opposed to an unattended autonomous phase whose
-	// pending questions may be auto-picked by confidence/"(Recommended)"
-	// markers. Providers whose AskUserQuestion support is text-parsed rather
-	// than native (OpenCode, Codex) use this to skip that entire pipeline: it
-	// exists only to imitate Claude's native AskUserQuestion tool-call UX for a
-	// provider that can otherwise only express a question as plain text, and a
-	// human already reading every reply gets no benefit from that imitation —
-	// they can just read the model's question (in whatever shape it naturally
-	// comes) and answer with an ordinary chat message. This also avoids
-	// steering the model into a rigid confidence/exact-3-options template it
-	// would otherwise keep reusing as its default style for the rest of the
-	// conversation.
+	// Interactive marks human-driven chat rather than an orchestrated phase.
+	// Codex omits Agentico phase tools and retains its normal collaboration
+	// instructions; OpenCode skips its text-based question extraction. These
+	// sessions use ordinary chat replies instead of the phase question policy.
 	Interactive bool
 }
 
 // EffortLevel is a provider-agnostic effort/reasoning level that each provider
 // maps to its own CLI-specific naming. The canonical ordered set is
-// low < medium < high < xhigh < max. Not every provider exposes all five;
+// low < medium < high < xhigh < max < ultra. Providers advertise supported levels;
 // each provider's ModelInfo.EffortCapabilities advertises only the levels it
 // supports. Utility sessions can request Low directly; pipeline profiles
 // determine phase effort as Medium → Medium and Large/Moonshot → High.
@@ -328,6 +329,7 @@ const (
 	EffortHigh   EffortLevel = "high"
 	EffortXHigh  EffortLevel = "xhigh"
 	EffortMax    EffortLevel = "max"
+	EffortUltra  EffortLevel = "ultra"
 )
 
 // EffortAuto is the configuration value that means "derive the effective effort
@@ -349,14 +351,14 @@ const (
 // AllEffortLevels is the canonical ordered set of explicit effort levels from
 // lowest to highest, excluding Auto. Providers use this to build
 // EffortCapabilities slices and the resolver uses it for validation.
-var AllEffortLevels = []EffortLevel{EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
+var AllEffortLevels = []EffortLevel{EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax, EffortUltra}
 
 // IsValidExplicitEffort reports whether level is one of the closed set
-// auto|low|medium|high|xhigh|max. It accepts EffortAuto in addition to the five
+// auto|low|medium|high|xhigh|max|ultra. It accepts EffortAuto in addition to the six
 // explicit levels.
 func IsValidExplicitEffort(level EffortLevel) bool {
 	switch level {
-	case EffortAuto, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax:
+	case EffortAuto, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax, EffortUltra:
 		return true
 	}
 	return false
@@ -399,7 +401,7 @@ func EffortCapabilitySupported(capabilities []EffortLevel, level EffortLevel) bo
 
 // MapStandardEffortLevel maps a provider-agnostic EffortLevel to the CLI
 // --effort/model_reasoning_effort value shared by Claude and Codex: low,
-// medium, high, xhigh, max, defaulting to high for unrecognized levels.
+// medium, high, xhigh, max, ultra (Codex), defaulting to high for unrecognized levels.
 func MapStandardEffortLevel(level EffortLevel) string {
 	switch level {
 	case EffortLow:
@@ -412,6 +414,8 @@ func MapStandardEffortLevel(level EffortLevel) string {
 		return "xhigh"
 	case EffortMax:
 		return "max"
+	case EffortUltra:
+		return "ultra"
 	default:
 		return "high" // safe default
 	}

@@ -122,6 +122,12 @@ test('configuration, workspace, and restart journey against the packaged app', a
     expect(optionValues.length).toBeGreaterThan(0);
     const chosenModel = optionValues[0] as string;
     await implementationPicker.selectOption(chosenModel);
+    // The fixture's Claude catalog must not inherit Codex/Astra-only effort.
+    await expect(
+      editor
+        .getByLabel('Implementation effort')
+        .getByRole('option', { name: 'Ultra', exact: true }),
+    ).toHaveCount(0);
     await editor.locator('.config-editor__segment', { hasText: 'High' }).click();
     const researchGate = editor.getByRole('checkbox', { name: /Research review/ });
     const researchGateWasChecked = await researchGate.isChecked();

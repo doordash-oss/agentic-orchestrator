@@ -1613,6 +1613,7 @@ type CreateFeatureMutationRequest struct {
 	Name              string                                  `json:"name"`
 	Pipeline          CreateFeatureMutationRequestPipeline    `json:"pipeline,omitempty"`
 	Repos             []string                                `json:"repos,omitempty"`
+	RepositorySources []RepositorySource                      `json:"repository_sources,omitempty"`
 	RiskLevel         CreateFeatureMutationRequestRiskLevel   `json:"risk_level,omitempty"`
 	UseCurrentBranch  bool                                    `json:"use_current_branch,omitempty"`
 }
@@ -3297,6 +3298,7 @@ type SetupTask struct {
 
 	// Error Canonical error rendering the task's stored failure record; absent when the task has not failed.
 	Error            *Error     `json:"error,omitempty"`
+	ExactSha         string     `json:"exact_sha,omitempty"`
 	Key              string     `json:"key"`
 	Kind             string     `json:"kind"`
 	Label            string     `json:"label,omitempty"`

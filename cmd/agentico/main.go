@@ -1074,6 +1074,10 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 	effort = config.OverlayEffortConfig(effort, req.Effort)
 	pipeline := effectiveCreatePipeline(req.Pipeline, cfg)
 	checkpoints := pipeline.ProjectGates(req.Checkpoints, true).Checkpoints
+	sourceExpectations, err := createSourceExpectations(req.RepositorySources)
+	if err != nil {
+		return serverruntime.CreateFeatureResponse{}, err
+	}
 	f, err := t.orch.CreateFeature(req.Name, req.Description, req.Repos, models, req.ExitCriteria, req.Inquireness, req.Images, feature.CreateOptions{
 		UseCurrentBranch:        req.UseCurrentBranch,
 		UseCurrentBranchPerRepo: req.UseCurrentBranchPerRepo,
@@ -1083,14 +1087,47 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 		QueueSetup:              true,
 		RiskLevel:               req.RiskLevel,
 		Pipeline:                req.Pipeline,
+		SourceExpectations:      sourceExpectations,
+		PinLocalSources:         len(sourceExpectations) > 0,
 	})
 	if err != nil {
+		if errors.Is(err, git.ErrLocalSourceStale) {
+			return serverruntime.CreateFeatureResponse{}, &serverruntime.ActionConflictError{
+				Err: err, Detail: "The selected local source changed. Refresh repository sources and submit again.",
+			}
+		}
 		return serverruntime.CreateFeatureResponse{}, err
 	}
 	if err := t.persistPipelinePreferences(featureRepoNames(f), f.EffectivePipeline(), f.Models, f.Effort, f.Inquireness, f.Checkpoints, true); err != nil {
 		return serverruntime.CreateFeatureResponse{}, err
 	}
 	return serverruntime.CreateFeatureResponse{FeatureID: f.ID, Result: "created"}, nil
+}
+
+func createSourceExpectations(sources []serverruntime.RepositorySource) ([]feature.RepoSourceExpectation, error) {
+	result := make([]feature.RepoSourceExpectation, 0, len(sources))
+	for _, source := range sources {
+		device, err := strconv.ParseUint(source.Identity.Device, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid repository source device for %q: %w", source.RepoKey, err)
+		}
+		inode, err := strconv.ParseUint(source.Identity.Inode, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid repository source inode for %q: %w", source.RepoKey, err)
+		}
+		result = append(result, feature.RepoSourceExpectation{
+			RepoKey: source.RepoKey,
+			Source: git.LocalSourceExpectation{
+				Identity: git.RepoIdentity{
+					Path: source.Identity.Path, CommonDir: source.Identity.CommonDir,
+					Device: device, Inode: inode,
+				},
+				Mode: git.LocalSourceMode(source.Mode), Kind: string(source.Kind),
+				Branch: source.Branch, ObservedCommit: source.ObservedSha,
+			},
+		})
+	}
+	return result, nil
 }
 
 // SetupFeature dispatches server-owned durable setup for a freshly created

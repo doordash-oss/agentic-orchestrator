@@ -26,6 +26,7 @@ import {
   parseServerJson,
   PromptSnapshotResponseSchema,
   ReadinessResponseSchema,
+  RepositorySourcesResponseSchema,
   RepositoryDiffResponseSchema,
   RewindActionResponseSchema,
   ServerFeatureDetailSchema,
@@ -55,6 +56,102 @@ const healthFixture = {
     server_build: { version: 'v0.9.0' },
   },
 };
+
+describe('repository source response contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    common_dir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+
+  it('accepts independent branch and detached sources with full local names and SHAs', () => {
+    const parsed = RepositorySourcesResponseSchema.parse({
+      api_version: 'v1',
+      repositories: [
+        {
+          repo_key: 'repo-a',
+          identity,
+          mode: 'default',
+          kind: 'branch',
+          branch: 'release/2026/q3',
+          observed_sha: 'a'.repeat(40),
+        },
+        {
+          repo_key: 'repo-b',
+          identity: {
+            path: '/work/repo-b',
+            common_dir: '/work/repo-b/.git',
+            device: '3',
+            inode: '4',
+          },
+          mode: 'current',
+          kind: 'detached',
+          observed_sha: 'b'.repeat(64),
+        },
+      ],
+    });
+
+    expect(
+      parsed.repositories.map(({ repo_key, kind, branch, observed_sha }) => ({
+        repo_key,
+        kind,
+        branch,
+        observed_sha,
+      })),
+    ).toStrictEqual([
+      {
+        repo_key: 'repo-a',
+        kind: 'branch',
+        branch: 'release/2026/q3',
+        observed_sha: 'a'.repeat(40),
+      },
+      {
+        repo_key: 'repo-b',
+        kind: 'detached',
+        branch: undefined,
+        observed_sha: 'b'.repeat(64),
+      },
+    ]);
+  });
+
+  it('rejects empty batches, invalid SHAs, and renderer-authority fields', () => {
+    expect(
+      RepositorySourcesResponseSchema.safeParse({ api_version: 'v1', repositories: [] }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourcesResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [
+          {
+            repo_key: 'repo-a',
+            identity,
+            mode: 'current',
+            kind: 'detached',
+            observed_sha: 'not-a-sha',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourcesResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [
+          {
+            repo_key: 'repo-a',
+            identity,
+            mode: 'default',
+            kind: 'branch',
+            branch: 'main',
+            observed_sha: 'a'.repeat(40),
+            path: '/renderer/chosen/path',
+            revision: 'refs/tags/renderer-chosen',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+});
 
 function failure(fn: () => unknown): CanonicalError {
   try {

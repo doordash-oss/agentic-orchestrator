@@ -180,6 +180,12 @@ describe('FeatureService.inspectRepositorySources', () => {
       device: '1',
       inode: '2',
     };
+    const otherIdentity = {
+      path: '/work/space/repo-b',
+      commonDir: '/work/space/repo-b/.git',
+      device: '3',
+      inode: '4',
+    };
     const { service, calls } = makeService(() => ({
       status: 200,
       body: {
@@ -194,8 +200,21 @@ describe('FeatureService.inspectRepositorySources', () => {
               inode: identity.inode,
             },
             mode: 'current',
-            kind: 'detached',
+            kind: 'branch',
+            branch: 'release/2026/q3',
             observed_sha: 'a'.repeat(40),
+          },
+          {
+            repo_key: 'repo-b',
+            identity: {
+              path: otherIdentity.path,
+              common_dir: otherIdentity.commonDir,
+              device: otherIdentity.device,
+              inode: otherIdentity.inode,
+            },
+            mode: 'current',
+            kind: 'detached',
+            observed_sha: 'b'.repeat(40),
           },
         ],
       },
@@ -203,7 +222,10 @@ describe('FeatureService.inspectRepositorySources', () => {
 
     const result = await service.inspectRepositorySources({
       mode: 'current',
-      repositories: [{ repoKey: 'repo-a', identity }],
+      repositories: [
+        { repoKey: 'repo-a', identity },
+        { repoKey: 'repo-b', identity: otherIdentity },
+      ],
     });
 
     expect(calls[0]).toEqual({
@@ -222,6 +244,15 @@ describe('FeatureService.inspectRepositorySources', () => {
                 inode: identity.inode,
               },
             },
+            {
+              repo_key: 'repo-b',
+              identity: {
+                path: otherIdentity.path,
+                common_dir: otherIdentity.commonDir,
+                device: otherIdentity.device,
+                inode: otherIdentity.inode,
+              },
+            },
           ],
         },
       },
@@ -230,8 +261,16 @@ describe('FeatureService.inspectRepositorySources', () => {
       repoKey: 'repo-a',
       identity,
       mode: 'current',
-      kind: 'detached',
+      kind: 'branch',
+      branch: 'release/2026/q3',
       observedSha: 'a'.repeat(40),
+    });
+    expect(result.repositories[1]).toMatchObject({
+      repoKey: 'repo-b',
+      identity: otherIdentity,
+      mode: 'current',
+      kind: 'detached',
+      observedSha: 'b'.repeat(40),
     });
   });
 });

@@ -80,6 +80,15 @@ describe('the creation sheet repository identity reconciliation', () => {
     // duplicate: exactly one checked row for the identity.
     expect(screen.getByRole('checkbox', { name: /root-b\/service/ })).not.toBeChecked();
     expect(screen.getByRole('checkbox', { name: /^widget\b/ })).toBeChecked();
+    await vi.waitFor(() =>
+      expect(mock.api.inspectRepositorySources).toHaveBeenLastCalledWith({
+        mode: 'default',
+        repositories: [
+          { repoKey: 'root-a/service', identity: service },
+          { repoKey: 'widget', identity: unrelated },
+        ],
+      }),
+    );
     const checked = screen
       .getAllByRole('checkbox')
       .filter((element) => (element as HTMLInputElement).checked);
@@ -136,6 +145,12 @@ describe('the creation sheet repository identity reconciliation', () => {
     // Removing the stale selection unblocks the draft.
     await user.click(screen.getByRole('button', { name: 'Remove' }));
     expect(screen.queryByText(/needs reselection/i)).toBeNull();
+    await vi.waitFor(() =>
+      expect(mock.api.inspectRepositorySources).toHaveBeenLastCalledWith({
+        mode: 'default',
+        repositories: [{ repoKey: 'widget', identity: widget }],
+      }),
+    );
     await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     expect(screen.getByRole('heading', { name: 'Define the work' })).toBeVisible();
   });

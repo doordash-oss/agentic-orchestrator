@@ -284,6 +284,19 @@ export class FeatureService {
         ...(validated.description.trim() === '' ? {} : { description: validated.description }),
         repos: validated.repoKeys,
         ...(validated.useCurrentBranch ? { use_current_branch: true } : {}),
+        repository_sources: validated.repositorySources.map((source) => ({
+          repo_key: source.repoKey,
+          identity: {
+            path: source.identity.path,
+            common_dir: source.identity.commonDir,
+            device: source.identity.device,
+            inode: source.identity.inode,
+          },
+          mode: source.mode,
+          kind: source.kind,
+          ...(source.branch === undefined ? {} : { branch: source.branch }),
+          observed_sha: source.observedSha,
+        })),
         images: validated.images,
         attachments: [...validated.attachments, ...repositoryAttachments],
         ...(remote

@@ -311,6 +311,66 @@ func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) 
 	}
 }
 
+func TestManagerCreatePersistsAcceptedSourceAndExactSetupPin(t *testing.T) {
+	repoDir := testutil.InitGitRepo(t)
+	identity, ok := git.ResolveRepoIdentity(repoDir)
+	if !ok {
+		t.Fatal("ResolveRepoIdentity() = false")
+	}
+	observed := featureTestGitOutput(t, repoDir, "rev-parse", "HEAD")
+	testutil.CommitFile(t, repoDir, "advanced.txt", "advanced\n", "advance selected source")
+	accepted := featureTestGitOutput(t, repoDir, "rev-parse", "HEAD")
+
+	store := feature.NewStore(t.TempDir())
+	cfg := config.NewDefault()
+	cfg.Repos["old-key"] = config.RepoConfig{Path: repoDir}
+	mgr := feature.NewManager(store, cfg)
+	mgr.Worktrees = git.NewWorktreeManager(t.TempDir())
+
+	f, err := mgr.Create("Pinned source", "test", []string{"old-key"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+		QueueSetup: true,
+		SourceExpectations: []feature.RepoSourceExpectation{{
+			RepoKey: "old-key",
+			Source: git.LocalSourceExpectation{
+				Identity: identity, Mode: git.LocalSourceModeDefault, Kind: git.LocalSourceBranch,
+				Branch: "main", ObservedCommit: observed,
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if f.Repos[0].Source == nil || f.Repos[0].Source.Commit != accepted || f.Repos[0].Source.Branch != "main" {
+		t.Fatalf("accepted source = %+v, want main at %s", f.Repos[0].Source, accepted)
+	}
+	task := f.Run().Setup.Tasks["worktree:old-key"]
+	if task.StartPoint != accepted || task.ExactSHA != accepted || task.UseCurrentBranch {
+		t.Fatalf("queued source pin = %+v, want exact %s", task, accepted)
+	}
+	later := testutil.CommitFile(t, repoDir, "after-acceptance.txt", "later\n", "move source after acceptance")
+	if err := mgr.RunSetup(f.ID); err != nil {
+		t.Fatalf("RunSetup() error = %v", err)
+	}
+	created, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	worktreeHead := featureTestGitOutput(t, created.Repos[0].WorktreePath, "rev-parse", "HEAD")
+	if worktreeHead != accepted {
+		t.Fatalf("worktree HEAD = %s, want accepted %s (source later moved to %s)", worktreeHead, accepted, later)
+	}
+}
+
+func featureTestGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %s: %v", args, strings.TrimSpace(string(out)), err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func TestManagerRunSetupUsesFeatureIDQualifiedBranchWhenPlainSlugBranchIsCheckedOut(t *testing.T) {
 	repoDir := testutil.InitGitRepo(t)
 	occupiedBranch := "feature/setup-local-conflict"

@@ -89,6 +89,11 @@ test('the creation sheet covers scoped files, initialization, the contract, setu
     await app.page.setViewportSize({ width: 1440, height: 900 });
     await app.page.getByRole('button', { name: 'New feature' }).click();
     await app.page.getByRole('checkbox', { name: /creation-lab/ }).check();
+    await expect(
+      app.page.getByRole('checkbox', { name: /creation-lab.*Source: main/ }),
+    ).toBeChecked();
+    await expect(app.page.getByRole('radio', { name: 'Default branches' })).toBeChecked();
+    await expect(app.page.getByRole('radio', { name: 'Current branches' })).not.toBeChecked();
     await app.page.getByRole('button', { name: 'Browse for folder' }).click();
     await app.page.getByRole('button', { name: 'Use this folder' }).click();
     await expect(app.page.getByText(/holds no git repository yet/i)).toBeVisible();
@@ -99,7 +104,10 @@ test('the creation sheet covers scoped files, initialization, the contract, setu
     await expect(consent).toContainText(emptyRepository);
     await consent.getByRole('button', { name: 'Initialize repository' }).click();
     // A single unambiguous discovery selects itself.
-    await expect(app.page.getByRole('checkbox', { name: /initialized-lab/ })).toBeChecked();
+    await expect(
+      app.page.getByRole('checkbox', { name: /initialized-lab.*Source: main/ }),
+    ).toBeChecked();
+    await expect(app.page.getByText('Source: main')).toHaveCount(2);
     transcript.step(
       'Repositories adopted a folder as a root, consented to server-owned initialization, and observed the rediscovered repository select itself',
     );

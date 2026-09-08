@@ -587,6 +587,10 @@ export const ServerSetupTaskSchema = z.object({
   repo: z.string().optional(),
   status: z.string(),
   branch: z.string().optional(),
+  exact_sha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
   attempt: z.number().int().optional(),
   // Canonical error rendering the task's stored failure record; absent when
   // the task has not failed.

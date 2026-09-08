@@ -3273,6 +3273,12 @@ components:
           maxItems: 24
           items: { type: string }
         use_current_branch: { type: boolean }
+        repository_sources:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/RepositorySource"
         checkpoints:
           $ref: "#/components/schemas/Checkpoints"
         risk_level:
@@ -4444,6 +4450,9 @@ components:
           type: string
         start_point:
           type: string
+        exact_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
         use_current_branch:
           type: boolean
         attempt:

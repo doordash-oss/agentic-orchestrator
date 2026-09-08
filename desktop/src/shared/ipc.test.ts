@@ -73,6 +73,8 @@ import {
   ServerRemoveRequestSchema,
   ServerTokenStatusRequestSchema,
   ServerTokenStatusResultSchema,
+  RepositorySourcesRequestSchema,
+  RepositorySourcesResultSchema,
 } from './ipc';
 import * as ipcModule from './ipc';
 import { assertNoPrototypePollution } from './sanitize';
@@ -84,6 +86,117 @@ const canonicalErrorFixture = {
   summary: 'The connection attempt failed unexpectedly: boom.',
   remediation: { hint: 'Retry.' },
 };
+
+describe('repository source IPC contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    commonDir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+
+  it('accepts structured selectors and independent branch and detached results', () => {
+    expect(
+      RepositorySourcesRequestSchema.parse({
+        mode: 'current',
+        repositories: [
+          { repoKey: 'repo-a', identity },
+          {
+            repoKey: 'repo-b',
+            identity: {
+              path: '/work/repo-b',
+              commonDir: '/work/repo-b/.git',
+              device: '3',
+              inode: '4',
+            },
+          },
+        ],
+      }),
+    ).toStrictEqual({
+      mode: 'current',
+      repositories: [
+        { repoKey: 'repo-a', identity },
+        {
+          repoKey: 'repo-b',
+          identity: {
+            path: '/work/repo-b',
+            commonDir: '/work/repo-b/.git',
+            device: '3',
+            inode: '4',
+          },
+        },
+      ],
+    });
+
+    expect(
+      RepositorySourcesResultSchema.parse({
+        repositories: [
+          {
+            repoKey: 'repo-a',
+            identity,
+            mode: 'default',
+            kind: 'branch',
+            branch: 'release/2026/q3',
+            observedSha: 'a'.repeat(40),
+          },
+          {
+            repoKey: 'repo-b',
+            identity: {
+              path: '/work/repo-b',
+              commonDir: '/work/repo-b/.git',
+              device: '3',
+              inode: '4',
+            },
+            mode: 'current',
+            kind: 'detached',
+            observedSha: 'b'.repeat(40),
+          },
+        ],
+      }).repositories.map(({ repoKey, kind, branch }) => ({ repoKey, kind, branch })),
+    ).toStrictEqual([
+      { repoKey: 'repo-a', kind: 'branch', branch: 'release/2026/q3' },
+      { repoKey: 'repo-b', kind: 'detached', branch: undefined },
+    ]);
+  });
+
+  it('rejects arbitrary revision authority and oversized selection batches', () => {
+    expect(
+      RepositorySourcesRequestSchema.safeParse({
+        mode: 'default',
+        repositories: [
+          {
+            repoKey: 'repo-a',
+            identity,
+            path: '/renderer/chosen/path',
+            revision: 'refs/tags/renderer-chosen',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourcesRequestSchema.safeParse({
+        mode: 'default',
+        repositories: Array.from({ length: 33 }, (_, index) => ({
+          repoKey: `repo-${index}`,
+          identity,
+        })),
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourcesResultSchema.safeParse({
+        repositories: [
+          {
+            repoKey: 'repo-a',
+            identity,
+            mode: 'current',
+            kind: 'detached',
+            observedSha: 'short',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe('module surface', () => {
   it('exports no safe-error schema: the canonical error is the one error shape', () => {

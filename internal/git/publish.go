@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -278,13 +279,59 @@ func CommitAllAndGetHead(worktreePath, message string) (string, error) {
 }
 
 func worktreeMutationLock(worktreePath string) *sync.Mutex {
-	key := filepath.Clean(worktreePath)
+	key := repositoryMutationKey(worktreePath)
 	actual, _ := worktreeMutationLocks.LoadOrStore(key, &sync.Mutex{})
-	return actual.(*sync.Mutex)
+	mu := actual.(*sync.Mutex)
+	worktreeMutationLocks.Store(filepath.Clean(worktreePath), mu)
+	return mu
+}
+
+func repositoryMutationKey(repoPath string) string {
+	if identity, ok := ResolveRepoIdentity(repoPath); ok {
+		return identity.CommonDir
+	}
+	return filepath.Clean(repoPath)
+}
+
+// LockRepositories serializes an operation with Agentico's existing Git
+// mutation guards. Locks are deduplicated by canonical common directory and
+// acquired in lexical order so multi-repository acceptance cannot deadlock.
+func LockRepositories(repoPaths []string) func() {
+	keys := make(map[string]struct{}, len(repoPaths))
+	for _, repoPath := range repoPaths {
+		keys[repositoryMutationKey(repoPath)] = struct{}{}
+	}
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
+	}
+	sort.Strings(ordered)
+	locks := make([]*sync.Mutex, 0, len(ordered))
+	for _, key := range ordered {
+		actual, _ := worktreeMutationLocks.LoadOrStore(key, &sync.Mutex{})
+		mu := actual.(*sync.Mutex)
+		mu.Lock()
+		locks = append(locks, mu)
+	}
+	for _, repoPath := range repoPaths {
+		key := repositoryMutationKey(repoPath)
+		if actual, ok := worktreeMutationLocks.Load(key); ok {
+			worktreeMutationLocks.Store(filepath.Clean(repoPath), actual)
+		}
+	}
+	return func() {
+		for i := len(locks) - 1; i >= 0; i-- {
+			locks[i].Unlock()
+		}
+	}
 }
 
 func worktreeMutationInProgress(worktreePath string) bool {
-	mu := worktreeMutationLock(worktreePath)
+	actual, ok := worktreeMutationLocks.Load(filepath.Clean(worktreePath))
+	if !ok {
+		return false
+	}
+	mu := actual.(*sync.Mutex)
 	if mu.TryLock() {
 		mu.Unlock()
 		return false

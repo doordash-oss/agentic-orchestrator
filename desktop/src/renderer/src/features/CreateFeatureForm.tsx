@@ -1237,6 +1237,8 @@ export function CreateFeatureForm({
           description,
           repoKeys: [...selectedKeys],
           useCurrentBranch,
+          repositorySources:
+            sourceState.phase === 'loaded' ? [...sourceState.value.repositories] : [],
           images: [...images],
           attachments: [...attachments],
           ...(createdImageRefs.length === 0 ? {} : { imageUploads: createdImageRefs }),
@@ -2045,6 +2047,9 @@ export function CreateFeatureForm({
                     key="next-step"
                     type="button"
                     className="sheet__footer-primary"
+                    disabled={
+                      stepIndex === 0 && selectedKeys.length > 0 && sourceState.phase === 'loading'
+                    }
                     onClick={(event) => {
                       // React can reuse this DOM node as the submit button when
                       // the click advances to Contract. Cancel the original

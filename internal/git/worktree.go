@@ -78,6 +78,7 @@ func (w *WorktreeManager) Create(repoPath, featureSlug, repoName, startPoint str
 	if startPoint == "" {
 		startPoint = "HEAD"
 	}
+	exactStart := validFullCommit(startPoint)
 
 	// Prune stale worktrees before creating to avoid conflicts
 	pruneCmd := exec.Command("git", "-C", repoPath, "worktree", "prune")
@@ -100,6 +101,15 @@ func (w *WorktreeManager) Create(repoPath, featureSlug, repoName, startPoint str
 		fbCmd := exec.Command("git", "-C", repoPath, "worktree", "add", wtPath, branch)
 		if _, fbErr := fbCmd.CombinedOutput(); fbErr != nil {
 			return "", fmt.Errorf("creating worktree: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+	}
+	if exactStart {
+		head, headErr := CurrentHeadSHA(wtPath)
+		if headErr != nil {
+			return "", fmt.Errorf("verifying created worktree HEAD: %w", headErr)
+		}
+		if !strings.EqualFold(head, startPoint) {
+			return "", fmt.Errorf("created worktree is at commit %s, want accepted commit %s", head, startPoint)
 		}
 	}
 

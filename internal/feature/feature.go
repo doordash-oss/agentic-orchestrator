@@ -544,12 +544,27 @@ type HelpRequest struct {
 }
 
 type FeatureRepo struct {
-	Name         string `yaml:"name"`
-	Path         string `yaml:"path"`
-	WorktreePath string `yaml:"worktree_path"`
-	Branch       string `yaml:"branch"`
-	BaseBranch   string `yaml:"base_branch,omitempty"`
-	Publishable  *bool  `yaml:"publishable,omitempty"` // nil = publishable (backward compat); *false = no origin remote
+	Name         string              `yaml:"name"`
+	Path         string              `yaml:"path"`
+	WorktreePath string              `yaml:"worktree_path"`
+	Branch       string              `yaml:"branch"`
+	BaseBranch   string              `yaml:"base_branch,omitempty"`
+	Publishable  *bool               `yaml:"publishable,omitempty"` // nil = publishable (backward compat); *false = no origin remote
+	Source       *AcceptedRepoSource `yaml:"source,omitempty"`
+}
+
+// AcceptedRepoSource is the immutable local source accepted for an ordinary
+// feature. It is intentionally distinct from BaseBranch, which remains the
+// publication and merge target.
+type AcceptedRepoSource struct {
+	Mode      string `yaml:"mode"`
+	Kind      string `yaml:"kind"`
+	Branch    string `yaml:"branch,omitempty"`
+	Commit    string `yaml:"commit"`
+	Path      string `yaml:"path"`
+	CommonDir string `yaml:"common_dir"`
+	Device    uint64 `yaml:"device"`
+	Inode     uint64 `yaml:"inode"`
 }
 
 // Feature is the top-level aggregate persisted under

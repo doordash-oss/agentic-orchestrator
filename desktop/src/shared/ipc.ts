@@ -2658,6 +2658,15 @@ export type RepositoryFileRef = z.output<typeof RepositoryFileRefSchema>;
 export const EffortLevelSchema = z.enum(['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 export type EffortLevel = z.output<typeof EffortLevelSchema>;
 
+export const RepositorySourceExpectationSchema = z.strictObject({
+  repoKey: z.string().min(1).max(512),
+  identity: RepositoryIdentitySchema,
+  mode: z.enum(['default', 'current']),
+  kind: z.enum(['branch', 'detached']),
+  branch: z.string().min(1).optional(),
+  observedSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+});
+
 /** The narrow creation input, validated at both IPC boundaries. */
 export const CreateFeatureInputSchema = z.strictObject({
   name: z
@@ -2670,6 +2679,7 @@ export const CreateFeatureInputSchema = z.strictObject({
   repoKeys: z.array(z.string().min(1).max(200)).min(1).max(32),
   /** Branch choice: reuse the current branch instead of a feature branch. */
   useCurrentBranch: z.boolean(),
+  repositorySources: z.array(RepositorySourceExpectationSchema).max(32).default([]),
   /** Native-picker approved inputs; main/server revalidate before reading. */
   images: z.array(AbsolutePathSchema).max(CREATION_IMAGE_LIMIT).default([]),
   attachments: z.array(AbsolutePathSchema).max(CREATION_ATTACHMENT_LIMIT).default([]),
@@ -2806,19 +2816,7 @@ export const RepositorySourcesRequestSchema = z.strictObject({
 export type RepositorySourcesRequest = z.output<typeof RepositorySourcesRequestSchema>;
 
 export const RepositorySourcesResultSchema = z.strictObject({
-  repositories: z
-    .array(
-      z.strictObject({
-        repoKey: z.string().min(1),
-        identity: RepositoryIdentitySchema,
-        mode: z.enum(['default', 'current']),
-        kind: z.enum(['branch', 'detached']),
-        branch: z.string().optional(),
-        observedSha: z.string().regex(/^[0-9a-f]{40,64}$/),
-      }),
-    )
-    .min(1)
-    .max(32),
+  repositories: z.array(RepositorySourceExpectationSchema).min(1).max(32),
 });
 export type RepositorySourcesResult = z.output<typeof RepositorySourcesResultSchema>;
 

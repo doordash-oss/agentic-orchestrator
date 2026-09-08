@@ -17,7 +17,11 @@ limitations under the License.
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ConnectionState } from '../../../shared/ipc';
+import type {
+  ConnectionState,
+  RepositorySourcesRequest,
+  RepositorySourcesResult,
+} from '../../../shared/ipc';
 import {
   creationDefaults,
   installAgenticoMock,
@@ -723,6 +727,224 @@ describe('the creation sheet across its four steps', () => {
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog', { name: 'Discard feature draft' })).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('the creation sheet local source contract', () => {
+  it('shows independent branch and detached sources for every selected repository and in review', async () => {
+    const repoAIdentity = mockRepoIdentity('/work/space/repo-a');
+    const repoBIdentity = mockRepoIdentity('/work/space/repo-b');
+    const detachedSha = 'b'.repeat(40);
+    const mock = installAgenticoMock({
+      defaults: creationDefaults({
+        repositories: [
+          {
+            name: 'repo-a',
+            path: repoAIdentity.path,
+            valid: true,
+            featureReady: true,
+            identity: repoAIdentity,
+          },
+          {
+            name: 'repo-b',
+            path: repoBIdentity.path,
+            valid: true,
+            featureReady: true,
+            identity: repoBIdentity,
+          },
+        ],
+      }),
+    });
+    mock.api.inspectRepositorySources.mockImplementation((request: RepositorySourcesRequest) =>
+      Promise.resolve({
+        repositories: request.repositories.map((repository) =>
+          repository.repoKey === 'repo-a'
+            ? {
+                ...repository,
+                mode: request.mode,
+                kind: 'branch' as const,
+                branch: 'release/2026/q3',
+                observedSha: 'a'.repeat(40),
+              }
+            : {
+                ...repository,
+                mode: request.mode,
+                kind: 'detached' as const,
+                observedSha: detachedSha,
+              },
+        ),
+      }),
+    );
+    const { user } = await renderForm(mock);
+
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await user.click(screen.getByRole('checkbox', { name: /^repo-b\b/ }));
+
+    expect(await screen.findByText('Source: release/2026/q3')).toBeVisible();
+    expect(screen.getByText(`Source: detached ${detachedSha}`)).toBeVisible();
+    expect(mock.api.inspectRepositorySources).toHaveBeenLastCalledWith({
+      mode: 'default',
+      repositories: [
+        { repoKey: 'repo-a', identity: repoAIdentity },
+        { repoKey: 'repo-b', identity: repoBIdentity },
+      ],
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Independent sources');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+
+    expect(
+      screen.getByText('repo-a: release/2026/q3, repo-b: detached ' + detachedSha),
+    ).toBeVisible();
+  });
+
+  it('presents a missing local source and keeps valid repositories usable after deselection', async () => {
+    const goodIdentity = mockRepoIdentity('/work/space/good');
+    const missingIdentity = mockRepoIdentity('/work/space/missing');
+    const mock = installAgenticoMock({
+      defaults: creationDefaults({
+        repositories: [
+          {
+            name: 'good',
+            path: goodIdentity.path,
+            valid: true,
+            featureReady: true,
+            identity: goodIdentity,
+          },
+          {
+            name: 'missing',
+            path: missingIdentity.path,
+            valid: true,
+            featureReady: true,
+            identity: missingIdentity,
+          },
+        ],
+      }),
+    });
+    mock.api.inspectRepositorySources.mockImplementation((request: RepositorySourcesRequest) =>
+      request.repositories.some(({ repoKey }) => repoKey === 'missing')
+        ? Promise.reject(
+            ipcError('repository_source_missing', 'The selected local source is missing.', {
+              title: 'Local source unavailable',
+              remediation: 'Repair the repository or deselect it, then retry.',
+            }),
+          )
+        : Promise.resolve({
+            repositories: request.repositories.map((repository) => ({
+              ...repository,
+              mode: request.mode,
+              kind: 'branch' as const,
+              branch: 'main',
+              observedSha: 'a'.repeat(40),
+            })),
+          }),
+    );
+    const { user } = await renderForm(mock);
+
+    await user.click(screen.getByRole('checkbox', { name: /^good\b/ }));
+    await user.click(screen.getByRole('checkbox', { name: /^missing\b/ }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Local source unavailable');
+    expect(alert).toHaveTextContent('Repair the repository or deselect it, then retry.');
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    expect(screen.getByText(/refresh or reselect repositories/i)).toBeVisible();
+
+    await user.click(screen.getByRole('checkbox', { name: /^missing\b/ }));
+    expect(await screen.findByText('Source: main')).toBeVisible();
+    expect(screen.getByRole('checkbox', { name: /^good\b/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    expect(screen.getByRole('heading', { name: 'Define the work' })).toBeVisible();
+  });
+
+  it('does not let a default-mode reply overwrite a newer current-mode source', async () => {
+    let resolveDefault!: (value: RepositorySourcesResult) => void;
+    const mock = installAgenticoMock();
+    mock.api.inspectRepositorySources.mockImplementation((request: RepositorySourcesRequest) =>
+      request.mode === 'default'
+        ? new Promise<RepositorySourcesResult>((resolve) => {
+            resolveDefault = resolve;
+          })
+        : Promise.resolve({
+            repositories: request.repositories.map((repository) => ({
+              ...repository,
+              mode: 'current' as const,
+              kind: 'branch' as const,
+              branch: 'topic/current/source',
+              observedSha: 'b'.repeat(40),
+            })),
+          }),
+    );
+    const { user } = await renderForm(mock);
+
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await vi.waitFor(() => expect(mock.api.inspectRepositorySources).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'Next: Describe' })).toBeDisabled();
+    await user.click(screen.getByRole('radio', { name: 'Current branches' }));
+    expect(await screen.findByText('Source: topic/current/source')).toBeVisible();
+
+    resolveDefault({
+      repositories: [
+        {
+          repoKey: 'repo-a',
+          identity: mockRepoIdentity('/work/space/repo-a'),
+          mode: 'default',
+          kind: 'branch',
+          branch: 'main',
+          observedSha: 'a'.repeat(40),
+        },
+      ],
+    });
+    await vi.waitFor(() => {
+      expect(screen.getByText('Source: topic/current/source')).toBeVisible();
+      expect(screen.queryByText('Source: main')).toBeNull();
+    });
+  });
+
+  it('does not let a previous server reply overwrite the connected server source', async () => {
+    let resolvePreviousServer!: (value: RepositorySourcesResult) => void;
+    let requestCount = 0;
+    const mock = installAgenticoMock({
+      connection: { ...READY_REMOTE, serverKey: 'server-key-1' },
+    });
+    mock.api.inspectRepositorySources.mockImplementation((request: RepositorySourcesRequest) =>
+      ++requestCount === 1
+        ? new Promise<RepositorySourcesResult>((resolve) => {
+            resolvePreviousServer = resolve;
+          })
+        : Promise.resolve({
+            repositories: request.repositories.map((repository) => ({
+              ...repository,
+              mode: request.mode,
+              kind: 'branch' as const,
+              branch: 'server-two/current',
+              observedSha: 'b'.repeat(40),
+            })),
+          }),
+    );
+    const { user } = await renderForm(mock);
+
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await vi.waitFor(() => expect(mock.api.inspectRepositorySources).toHaveBeenCalledTimes(1));
+    mock.emitConnection({ ...READY_REMOTE, serverKey: 'server-key-2' });
+    expect(await screen.findByText('Source: server-two/current')).toBeVisible();
+
+    resolvePreviousServer({
+      repositories: [
+        {
+          repoKey: 'repo-a',
+          identity: mockRepoIdentity('/work/space/repo-a'),
+          mode: 'default',
+          kind: 'detached',
+          observedSha: 'a'.repeat(40),
+        },
+      ],
+    });
+    await vi.waitFor(() => {
+      expect(screen.getByText('Source: server-two/current')).toBeVisible();
+      expect(screen.queryByText(`Source: detached ${'a'.repeat(40)}`)).toBeNull();
+    });
   });
 });
 

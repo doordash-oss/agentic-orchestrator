@@ -63,6 +63,81 @@ func TestWorktreeCreateAndRemove(t *testing.T) {
 	}
 }
 
+func TestWorktreeCreateRejectsExistingBranchAtDifferentAcceptedCommit(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	accepted := gitOutput(t, repo, "rev-parse", "HEAD")
+	testutil.CommitFile(t, repo, "later.txt", "later\n", "later")
+	runGit(t, repo, "branch", "feature/pinned-mismatch")
+
+	mgr := NewWorktreeManager(t.TempDir())
+	if _, err := mgr.Create(repo, "pinned-mismatch", "repo", accepted); err == nil ||
+		!strings.Contains(err.Error(), "want accepted commit") {
+		t.Fatalf("Create() error = %v, want accepted-commit mismatch", err)
+	}
+}
+
+func TestAcceptLocalSourceAllowsOnlySameBranchFastForward(t *testing.T) {
+	repo := initRepoOnBranch(t, "release/2026/q3")
+	identity, ok := ResolveRepoIdentity(repo)
+	if !ok {
+		t.Fatal("ResolveRepoIdentity() = false")
+	}
+	observed := gitOutput(t, repo, "rev-parse", "HEAD")
+	testutil.CommitFile(t, repo, "next.txt", "next\n", "advance")
+	want := gitOutput(t, repo, "rev-parse", "HEAD")
+
+	accepted, err := AcceptLocalSource(context.Background(), repo, LocalSourceExpectation{
+		Identity:       identity,
+		Mode:           LocalSourceModeCurrent,
+		Kind:           LocalSourceBranch,
+		Branch:         "release/2026/q3",
+		ObservedCommit: observed,
+	})
+	if err != nil {
+		t.Fatalf("AcceptLocalSource() error = %v", err)
+	}
+	if accepted.Commit != want {
+		t.Fatalf("AcceptLocalSource().Commit = %q, want %q", accepted.Commit, want)
+	}
+
+	runGit(t, repo, "checkout", "-b", "other")
+	if _, err := AcceptLocalSource(context.Background(), repo, LocalSourceExpectation{
+		Identity:       identity,
+		Mode:           LocalSourceModeCurrent,
+		Kind:           LocalSourceBranch,
+		Branch:         "release/2026/q3",
+		ObservedCommit: observed,
+	}); !errors.Is(err, ErrLocalSourceStale) {
+		t.Fatalf("AcceptLocalSource() error = %v, want ErrLocalSourceStale", err)
+	}
+}
+
+func TestAcceptLocalSourceRejectsRewindAndDetachedMovement(t *testing.T) {
+	repo := initRepoOnBranch(t, "main")
+	identity, ok := ResolveRepoIdentity(repo)
+	if !ok {
+		t.Fatal("ResolveRepoIdentity() = false")
+	}
+	observed := gitOutput(t, repo, "rev-parse", "HEAD")
+	testutil.CommitFile(t, repo, "later.txt", "later\n", "later")
+	runGit(t, repo, "reset", "--hard", observed)
+	other := gitOutput(t, repo, "rev-parse", "HEAD")
+	if _, err := AcceptLocalSource(context.Background(), repo, LocalSourceExpectation{
+		Identity: identity, Mode: LocalSourceModeCurrent, Kind: LocalSourceBranch,
+		Branch: "main", ObservedCommit: gitOutput(t, repo, "rev-parse", "main@{1}"),
+	}); !errors.Is(err, ErrLocalSourceStale) {
+		t.Fatalf("rewound AcceptLocalSource() error = %v, want ErrLocalSourceStale", err)
+	}
+
+	runGit(t, repo, "checkout", "--detach", other)
+	if _, err := AcceptLocalSource(context.Background(), repo, LocalSourceExpectation{
+		Identity: identity, Mode: LocalSourceModeCurrent, Kind: LocalSourceDetached,
+		ObservedCommit: strings.Repeat("0", 40),
+	}); !errors.Is(err, ErrLocalSourceStale) {
+		t.Fatalf("moved detached AcceptLocalSource() error = %v, want ErrLocalSourceStale", err)
+	}
+}
+
 // TestWorktreeRemoveMaterialFailureReturned pins the cleanup contract the
 // child-integration warning path relies on: when neither `git worktree
 // remove` nor the manual directory fallback can clear the worktree, Remove

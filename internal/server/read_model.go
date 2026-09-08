@@ -1116,6 +1116,7 @@ func setupTaskDTO(task feature.SetupTask) SetupTask {
 		SourcePath:       SafeDisplayText(task.SourcePath, 1000),
 		Branch:           SafeDisplayText(task.Branch, 500),
 		StartPoint:       SafeDisplayText(task.StartPoint, 500),
+		ExactSha:         SafeDisplayText(task.ExactSHA, 64),
 		UseCurrentBranch: task.UseCurrentBranch,
 		Attempt:          task.Attempt,
 		StartedAt:        task.StartedAt,

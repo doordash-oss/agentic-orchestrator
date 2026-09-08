@@ -182,6 +182,7 @@ type CreateFeatureRequest struct {
 	ImageUploads            []string                `json:"image_uploads,omitempty"`
 	UseCurrentBranch        bool                    `json:"use_current_branch,omitempty"`
 	UseCurrentBranchPerRepo map[string]bool         `json:"use_current_branch_per_repo,omitempty"`
+	RepositorySources       []RepositorySource      `json:"repository_sources,omitempty"`
 	Checkpoints             feature.Checkpoints     `json:"checkpoints,omitempty"`
 	Attachments             []string                `json:"attachments,omitempty"`
 	AttachmentUploads       []string                `json:"attachment_uploads,omitempty"`

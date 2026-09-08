@@ -1670,6 +1670,7 @@ export interface components {
             attachments?: string[];
             attachment_uploads?: string[];
             use_current_branch?: boolean;
+            repository_sources?: components["schemas"]["RepositorySource"][];
             checkpoints?: components["schemas"]["Checkpoints"];
             /** @enum {string} */
             risk_level?: "low" | "medium" | "high";
@@ -2163,6 +2164,7 @@ export interface components {
             source_path?: string;
             branch?: string;
             start_point?: string;
+            exact_sha?: string;
             use_current_branch?: boolean;
             attempt?: number;
             /** Format: date-time */

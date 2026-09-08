@@ -15,11 +15,13 @@
 package feature
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -139,6 +141,13 @@ type CreateOptions struct {
 	RiskLevel               RiskLevel
 	Pipeline                PipelineProfile
 	QueueSetup              bool
+	SourceExpectations      []RepoSourceExpectation
+	PinLocalSources         bool
+}
+
+type RepoSourceExpectation struct {
+	RepoKey string
+	Source  git.LocalSourceExpectation
 }
 
 // Re-entrancy / crash recovery:
@@ -195,6 +204,14 @@ func (m *Manager) Create(name, description string, repos []string, models config
 
 	var featureRepos []FeatureRepo
 	allRepos := config.AllRepos(m.Config)
+	expectedByRepo := make(map[string]git.LocalSourceExpectation)
+	if len(opt.SourceExpectations) > 0 {
+		var err error
+		repos, expectedByRepo, err = reconcileSourceExpectations(repos, allRepos, opt.SourceExpectations)
+		if err != nil {
+			return nil, err
+		}
+	}
 	for _, repoName := range repos {
 		rc, ok := allRepos[repoName]
 		if !ok {
@@ -237,6 +254,49 @@ func (m *Manager) Create(name, description string, repos []string, models config
 			slug = baseSlug + "-" + randomSuffix()
 		}
 		workspaceSlug = WorkspaceSlug(slug, id)
+	}
+
+	acceptedCommits := make(map[string]string, len(featureRepos))
+	if opt.PinLocalSources || len(expectedByRepo) > 0 {
+		repoPaths := make([]string, 0, len(featureRepos))
+		for _, repo := range featureRepos {
+			repoPaths = append(repoPaths, repo.Path)
+		}
+		unlockRepos := git.LockRepositories(repoPaths)
+		defer unlockRepos()
+		for i := range featureRepos {
+			repo := &featureRepos[i]
+			identity, ok := git.ResolveRepoIdentity(repo.Path)
+			if !ok {
+				return nil, fmt.Errorf("repo %q is no longer a usable git checkout", repo.Name)
+			}
+			mode := git.LocalSourceModeDefault
+			if opt.UseCurrentBranch {
+				mode = git.LocalSourceModeCurrent
+			}
+			if value, ok := opt.UseCurrentBranchPerRepo[repo.Name]; ok {
+				if value {
+					mode = git.LocalSourceModeCurrent
+				} else {
+					mode = git.LocalSourceModeDefault
+				}
+			}
+			var source git.LocalSource
+			var err error
+			if expected, ok := expectedByRepo[repo.Name]; ok {
+				source, err = git.AcceptLocalSource(context.Background(), repo.Path, expected)
+			} else {
+				source, err = git.InspectLocalSource(context.Background(), repo.Path, mode)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("accepting local source for repo %q: %w", repo.Name, err)
+			}
+			repo.Source = &AcceptedRepoSource{
+				Mode: string(source.Mode), Kind: source.Kind, Branch: source.Branch, Commit: source.Commit,
+				Path: identity.Path, CommonDir: identity.CommonDir, Device: identity.Device, Inode: identity.Inode,
+			}
+			acceptedCommits[repo.Name] = source.Commit
+		}
 	}
 
 	if opt.QueueSetup || m.Worktrees != nil {
@@ -298,6 +358,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		run.Setup = NewActiveSetupState(featureRepos, images, opt.Attachments, now, SetupInitOptions{
 			UseCurrentBranch:        opt.UseCurrentBranch,
 			UseCurrentBranchPerRepo: opt.UseCurrentBranchPerRepo,
+			ExactStartPointPerRepo:  acceptedCommits,
 		})
 	}
 	f.SetRun(run)
@@ -314,13 +375,15 @@ func (m *Manager) Create(name, description string, repos []string, models config
 	// Create worktrees for each repo if worktree manager is configured.
 	if m.Worktrees != nil {
 		for i, fr := range featureRepos {
-			startPoint := fr.BaseBranch
-			useCurrent := opt.UseCurrentBranch
-			if v, ok := opt.UseCurrentBranchPerRepo[fr.Name]; ok {
-				useCurrent = v
-			}
-			if useCurrent {
-				startPoint = "" // empty → HEAD in worktree.Create
+			startPoint := acceptedCommits[fr.Name]
+			if startPoint == "" {
+				startPoint = fr.BaseBranch
+				if opt.UseCurrentBranch {
+					startPoint = ""
+				}
+				if value, ok := opt.UseCurrentBranchPerRepo[fr.Name]; ok && value {
+					startPoint = ""
+				}
 			}
 			wtPath, err := m.Worktrees.Create(fr.Path, workspaceSlug, fr.Name, startPoint)
 			if err != nil {
@@ -381,6 +444,45 @@ func (m *Manager) Create(name, description string, repos []string, models config
 	}
 
 	return f, nil
+}
+
+func reconcileSourceExpectations(repos []string, allRepos map[string]config.RepoConfig, expectations []RepoSourceExpectation) ([]string, map[string]git.LocalSourceExpectation, error) {
+	if len(expectations) != len(repos) {
+		return nil, nil, fmt.Errorf("source expectations must describe every selected repository")
+	}
+	requested := make(map[string]struct{}, len(repos))
+	for _, repo := range repos {
+		requested[repo] = struct{}{}
+	}
+	keys := make([]string, 0, len(allRepos))
+	for key := range allRepos {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	resolvedRepos := make([]string, 0, len(expectations))
+	resolved := make(map[string]git.LocalSourceExpectation, len(expectations))
+	for _, expectation := range expectations {
+		if _, ok := requested[expectation.RepoKey]; !ok {
+			return nil, nil, fmt.Errorf("source expectation for unselected repo %q", expectation.RepoKey)
+		}
+		matched := ""
+		for _, key := range keys {
+			identity, ok := git.ResolveRepoIdentity(allRepos[key].Path)
+			if ok && identity.Equal(expectation.Source.Identity) {
+				matched = key
+				break
+			}
+		}
+		if matched == "" {
+			return nil, nil, fmt.Errorf("selected repo %q was removed or replaced", expectation.RepoKey)
+		}
+		if _, duplicate := resolved[matched]; duplicate {
+			return nil, nil, fmt.Errorf("source expectations resolve to duplicate repo %q", matched)
+		}
+		resolvedRepos = append(resolvedRepos, matched)
+		resolved[matched] = expectation.Source
+	}
+	return resolvedRepos, resolved, nil
 }
 
 func (m *Manager) Get(id string) (*Feature, error) {

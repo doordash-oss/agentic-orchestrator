@@ -43,13 +43,18 @@ there is no per-provider three-model limit. Explicit lack of text output exclude
 a model. Explicit lack of tool calling excludes it from tool-using phases; chat
 can still use it. Missing metadata stays unknown and does not hide a model.
 
-After explicit recommendations, automatic ordering prefers reported technical
-support, then lower positive advertised input-plus-output cost (a reference
-workload of one million tokens each), then larger context, then stable provider
-and model IDs. Missing and zero prices are treated as unknown, not proof of free
-inference. This deterministic fallback is not a model-quality ranking. Configure
-recommendations when quality matters. Native toolless automatic review retains
-its separate provider compatibility and preference policy.
+Ordering has three layers. Configured recommendations come first. Next, a
+provider that knows its own model families (Claude and Codex) nominates its
+balanced model for each role; OpenCode does not nominate, because gateway names
+carry no family meaning. Remaining ties use metadata only: lower positive
+advertised input-plus-output cost (a reference workload of one million tokens
+each), then larger context, then stable provider and model IDs. Missing and zero
+prices are treated as unknown, not proof of free inference, and a model that
+reports capabilities never outranks one that merely lacks metadata. This
+deterministic fallback is not a model-quality ranking. Configure recommendations
+when quality matters, and always for gateway models you want as defaults. Native
+toolless automatic review retains its separate provider compatibility and
+preference policy.
 
 ## Reasoning effort
 

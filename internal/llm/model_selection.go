@@ -32,10 +32,14 @@ func (r *Registry) SetModelRecommendations(preferences map[string][]string) {
 	}
 }
 
+// roleCandidate ranks a model in three layers: configured recommendations,
+// the provider's own nominations, then the metadata fallback in
+// betterRoleCandidate.
 type roleCandidate struct {
-	provider   string
-	model      ModelInfo
-	preference int
+	provider     string
+	model        ModelInfo
+	preference   int
+	providerRank int
 }
 
 func modelEligible(model ModelInfo, role PhaseRole) bool {
@@ -49,57 +53,76 @@ func modelEligible(model ModelInfo, role PhaseRole) bool {
 	return role == PhaseChat || c.ToolCall == nil || *c.ToolCall
 }
 
+func modelMatchesSelector(model ModelInfo, selector string) bool {
+	if strings.EqualFold(selector, model.ID) {
+		return true
+	}
+	return slices.ContainsFunc(model.Aliases, func(alias string) bool { return strings.EqualFold(alias, selector) })
+}
+
+// nominationRank returns the position of the first nomination naming model.
+// Unnominated models, including every model of a provider that nominates
+// nothing, share the lowest rank so nomination list lengths stay comparable
+// across providers.
+func nominationRank(model ModelInfo, nominated []string) int {
+	for i, selector := range nominated {
+		if modelMatchesSelector(model, selector) {
+			return i
+		}
+	}
+	return math.MaxInt
+}
+
 func (r *Registry) roleCandidates(role PhaseRole) []roleCandidate {
 	r.mu.RLock()
 	preferences := slices.Clone(r.recommendations[string(role)])
 	r.mu.RUnlock()
 	var result []roleCandidate
 	for _, p := range r.DetectedProviders() {
+		var nominated []string
+		if recommender, ok := p.(RoleModelRecommender); ok {
+			nominated = recommender.RecommendedModels(role)
+		}
 		for _, model := range catalogForProvider(p) {
 			if model.ID == "" || !modelEligible(model, role) {
 				continue
 			}
-			rank := len(preferences)
-			for i, id := range preferences {
-				provider, backend, ok := strings.Cut(id, ":")
-				if !ok || provider != p.Name() {
-					continue
-				}
-				if strings.EqualFold(backend, model.ID) || slices.ContainsFunc(model.Aliases, func(alias string) bool { return strings.EqualFold(alias, backend) }) {
-					rank = i
-					break
-				}
-			}
-			result = append(result, roleCandidate{p.Name(), model, rank})
+			result = append(result, roleCandidate{
+				provider:     p.Name(),
+				model:        model,
+				preference:   configuredRank(preferences, p.Name(), model),
+				providerRank: nominationRank(model, nominated),
+			})
 		}
 	}
-	sort.SliceStable(result, func(i, j int) bool { return betterRoleCandidate(result[i], result[j], role) })
+	sort.SliceStable(result, func(i, j int) bool { return betterRoleCandidate(result[i], result[j]) })
 	return result
 }
 
-// Fallback ordering is deterministic, not a quality claim: explicit evaluated
-// preferences first, then reported technical support, positive advertised cost
-// for a reference 1M-input/1M-output workload, context, and canonical identity.
+// configuredRank ranks model against the full ordered recommendation list so
+// that positions stay comparable across providers.
+func configuredRank(preferences []string, providerName string, model ModelInfo) int {
+	for i, id := range preferences {
+		provider, backend, ok := strings.Cut(id, ":")
+		if ok && provider == providerName && modelMatchesSelector(model, backend) {
+			return i
+		}
+	}
+	return len(preferences)
+}
+
+// betterRoleCandidate is deterministic, not a quality claim. Configured
+// recommendations win, then provider nominations, then lower positive
+// advertised cost for a reference 1M-input/1M-output workload, then context,
+// then canonical identity. Missing capabilities never rank a model below one
+// that merely reports them: incompatibility is handled by modelEligible.
 // Zero/absent prices are not treated as proof that a gateway model is free.
-func betterRoleCandidate(a, b roleCandidate, role PhaseRole) bool {
+func betterRoleCandidate(a, b roleCandidate) bool {
 	if a.preference != b.preference {
 		return a.preference < b.preference
 	}
-	support := func(m ModelInfo) int {
-		if m.Capabilities == nil {
-			return 0
-		}
-		n := 0
-		if m.Capabilities.TextOutput != nil && *m.Capabilities.TextOutput {
-			n++
-		}
-		if role != PhaseChat && m.Capabilities.ToolCall != nil && *m.Capabilities.ToolCall {
-			n++
-		}
-		return n
-	}
-	if x, y := support(a.model), support(b.model); x != y {
-		return x > y
+	if a.providerRank != b.providerRank {
+		return a.providerRank < b.providerRank
 	}
 	cost := func(m ModelInfo) float64 {
 		if m.Cost == nil || m.Cost.Input < 0 || m.Cost.Output < 0 {

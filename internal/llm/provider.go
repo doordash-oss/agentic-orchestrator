@@ -86,6 +86,14 @@ type ReviewModelRanker interface {
 	ReviewPreferenceBand(model ModelInfo) (int, bool)
 }
 
+// RoleModelRecommender is implemented by providers that know their own model
+// families well enough to nominate defaults per phase role. Entries are the
+// provider's own catalog IDs or aliases, most preferred first. Configured
+// model_recommendations always take precedence over these nominations.
+type RoleModelRecommender interface {
+	RecommendedModels(role PhaseRole) []string
+}
+
 // NativeToollessReviewer is implemented only by providers whose automatic-
 // review launch and protocol have been audited to expose no native tool,
 // question, child-session, customization, or persistence surface. General

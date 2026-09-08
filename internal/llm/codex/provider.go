@@ -376,6 +376,13 @@ func (p *Provider) ModelCatalog() []llm.ModelInfo {
 	return cat
 }
 
+// RecommendedModels nominates the balanced Codex model as the default for
+// every role. Provider-local family knowledge stays out of shared selection
+// code; configured model_recommendations override these nominations.
+func (p *Provider) RecommendedModels(llm.PhaseRole) []string {
+	return []string{"gpt-5.4[272K]", "gpt-5.4"}
+}
+
 // ReviewPreferenceBand ranks Codex review models without leaking model-family
 // naming into shared automatic-review code.
 func (p *Provider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {

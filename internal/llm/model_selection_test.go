@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
 )
 
 func testBool(value bool) *bool { return &value }
@@ -86,5 +88,60 @@ func TestPipelineEffortUsesDeclaredLevels(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("%s -> %s, want %s", tc.configured, got, tc.want)
 		}
+	}
+}
+
+type stubRecommendingProvider struct {
+	stubCatalogProvider
+	recommend func(llm.PhaseRole) []string
+}
+
+func (p *stubRecommendingProvider) RecommendedModels(role llm.PhaseRole) []string {
+	return p.recommend(role)
+}
+
+// builtinProvider wraps a real provider's built-in catalog and nominations in a
+// detectable stub so the test needs no CLI on PATH.
+func builtinProvider(name string, real interface {
+	llm.CatalogProvider
+	llm.RoleModelRecommender
+}) *stubRecommendingProvider {
+	return &stubRecommendingProvider{
+		stubCatalogProvider: stubCatalogProvider{stubProvider: stubProvider{name: name, hasCLI: true}, catalog: real.ModelCatalog()},
+		recommend:           real.RecommendedModels,
+	}
+}
+
+func TestProviderNominationsAreNotOutrankedByRicherMetadata(t *testing.T) {
+	r := llm.NewRegistry()
+	r.Register(builtinProvider("claude", &claude.Provider{}))
+	r.Register(builtinProvider("codex", &codex.Provider{}))
+	defaults := r.CatalogDefaultModels()
+	for role, got := range map[string]string{
+		"inquiry": defaults.Inquiry, "research": defaults.Research, "planning": defaults.Planning,
+		"implementation": defaults.Implementation, "review": defaults.Review, "utilities": defaults.Utilities, "kb_build": defaults.KBBuild,
+	} {
+		if got != "codex:gpt-5.4[272K]" {
+			t.Fatalf("%s default = %q, want the nominated balanced model", role, got)
+		}
+	}
+	if claudeList := r.EligibleModelsForPhase(llm.PhasePlanning)["claude"]; len(claudeList) == 0 || claudeList[0] != "sonnet[200K]" {
+		t.Fatalf("claude eligible order = %v, want nomination first", claudeList)
+	}
+
+	// A gateway catalog that reports capabilities and prices must not displace
+	// nominated defaults merely because the built-in catalogs report neither.
+	gateway := "gateway/cheap-and-fully-described"
+	r.Register(&stubCatalogProvider{stubProvider: stubProvider{name: "opencode", hasCLI: true}, catalog: []llm.ModelInfo{{
+		ID: gateway, ContextWindow: 2_000_000, Cost: &llm.ModelCost{Input: .01, Output: .02},
+		Capabilities: &llm.ModelCapabilities{ToolCall: testBool(true), TextOutput: testBool(true), Reasoning: testBool(true)},
+	}}})
+	if r.CatalogDefaultModels() != defaults {
+		t.Fatalf("metadata-rich gateway changed defaults: %+v", r.CatalogDefaultModels())
+	}
+
+	r.SetModelRecommendations(map[string][]string{"planning": {"opencode:" + gateway}})
+	if got := r.CatalogDefaultModels(); got.Planning != "opencode:"+gateway || got.Implementation != defaults.Implementation {
+		t.Fatalf("configured recommendation not applied per role: %+v", got)
 	}
 }

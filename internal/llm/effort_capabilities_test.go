@@ -24,19 +24,11 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
 )
 
-func TestClaudeCatalogHasEffortCapabilities(t *testing.T) {
+func TestClaudeOfflineCatalogDoesNotInventEffortCapabilities(t *testing.T) {
 	p := &claude.Provider{}
-	catalog := p.ModelCatalog()
-	if len(catalog) == 0 {
-		t.Fatal("expected non-empty Claude catalog")
-	}
-	for _, m := range catalog {
-		if len(m.EffortCapabilities) == 0 {
-			t.Errorf("model %s: expected non-empty EffortCapabilities", m.ID)
-		}
-		want := []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}
-		if !equalEffortLevels(m.EffortCapabilities, want) {
-			t.Errorf("model %s: got %v, want %v", m.ID, m.EffortCapabilities, want)
+	for _, model := range p.ModelCatalog() {
+		if len(model.EffortCapabilities) != 0 {
+			t.Errorf("offline model %s advertises unverified effort levels: %v", model.ID, model.EffortCapabilities)
 		}
 	}
 }
@@ -117,8 +109,8 @@ func TestEffortCapabilitiesForModelViaRegistry(t *testing.T) {
 	reg.Register(opencodeProv)
 
 	caps := llm.EffortCapabilitiesForModel(claudeProv, "sonnet[200K]")
-	if len(caps) != 5 {
-		t.Errorf("claude sonnet[200K]: expected 5 capabilities, got %d", len(caps))
+	if len(caps) != 0 {
+		t.Errorf("offline claude sonnet[200K]: expected Auto-only, got %v", caps)
 	}
 
 	caps = llm.EffortCapabilitiesForModel(codexProv, "gpt-5.4[272K]")

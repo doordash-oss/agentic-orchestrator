@@ -62,6 +62,7 @@ Future<List<Order>> orders = executor.submit(() -> fetchOrders(id));
 ```
 
 Structured concurrency ensures:
+
 - **No thread leaks** — all subtask threads terminate before the scope closes
 - **Automatic cancellation** — when the scope shuts down, remaining subtasks
   are interrupted

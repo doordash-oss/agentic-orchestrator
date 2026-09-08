@@ -2,12 +2,12 @@
 
 ## The Decision Framework
 
-| Mechanism | Use when... |
-|-----------|-------------|
-| Exceptions | Constructors/operators must signal failure; errors propagate deep call chains; failure is rare (<0.1%) |
-| `std::expected<T,E>` | Failure is normal and expected; caller must know *why*; exception-free codebase; performance on failure path matters |
-| `std::optional<T>` | Absence is semantically correct with no error information needed |
-| Error codes | Legacy APIs; C interop; hard real-time/safety-critical contexts |
+| Mechanism            | Use when...                                                                                                          |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Exceptions           | Constructors/operators must signal failure; errors propagate deep call chains; failure is rare (<0.1%)               |
+| `std::expected<T,E>` | Failure is normal and expected; caller must know _why_; exception-free codebase; performance on failure path matters |
+| `std::optional<T>`   | Absence is semantically correct with no error information needed                                                     |
+| Error codes          | Legacy APIs; C interop; hard real-time/safety-critical contexts                                                      |
 
 ## When to Use Exceptions
 

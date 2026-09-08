@@ -689,6 +689,8 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return []string{http.MethodPost}, true
 	case apiPathWorkspaceRepositoriesInit:
 		return []string{http.MethodPost}, true
+	case apiPathWorkspaceRepositoriesInitialize:
+		return []string{http.MethodPost}, true
 	case apiPathUploads:
 		return []string{http.MethodPost}, true
 	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send", "/api/v1/prompts/chat/start", "/api/v1/prompts/chat/end":

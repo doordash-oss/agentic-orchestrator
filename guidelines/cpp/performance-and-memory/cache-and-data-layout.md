@@ -96,6 +96,7 @@ for (int x : l) sum += x;  // Every node at arbitrary heap address
 ```
 
 **When `std::list` IS appropriate:**
+
 - O(1) splice of sublists (`list::splice`)
 - Stable iterators across insertions/deletions
 - LRU caches (move-to-front is O(1))

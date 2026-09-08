@@ -28,28 +28,28 @@ import (
 
 // fakeCloneService is a scripted CloneService for handler tests.
 type fakeCloneService struct {
-	startInput  clone.StartInput
-	startErr    error
-	startRecord clone.Record
-	createInput clone.CreateStartInput
-	createErr   error
+	startInput   clone.StartInput
+	startErr     error
+	startRecord  clone.Record
+	createInput  clone.CreateStartInput
+	createErr    error
 	createRecord clone.Record
-	snapshotID  string
-	snapshotErr error
-	snapshotRec clone.Record
-	listQuery   clone.ListQuery
-	listResult  clone.ListResult
-	cancelID    string
-	cancelErr   error
-	cancelRec   clone.Record
-	cleanupID   string
-	cleanupErr  error
-	cleanupRec  clone.Record
-	retryID     string
-	retryErr    error
-	retryRec    clone.Record
-	recovered   bool
-	shutdown    bool
+	snapshotID   string
+	snapshotErr  error
+	snapshotRec  clone.Record
+	listQuery    clone.ListQuery
+	listResult   clone.ListResult
+	cancelID     string
+	cancelErr    error
+	cancelRec    clone.Record
+	cleanupID    string
+	cleanupErr   error
+	cleanupRec   clone.Record
+	retryID      string
+	retryErr     error
+	retryRec     clone.Record
+	recovered    bool
+	shutdown     bool
 }
 
 func (f *fakeCloneService) Start(_ context.Context, input clone.StartInput) (clone.Record, error) {

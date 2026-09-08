@@ -24,6 +24,7 @@ import type {
   AttentionItem,
   CloneOperation,
   CreateRepositoryResult,
+  InitializeRepositoryResult,
   ConnectionState,
   CreationDefaults,
   DiagnosticsSnapshot,
@@ -222,6 +223,22 @@ export function createRepositoryResult(
   };
 }
 
+/** A minimal explicit-initialization result, as the server returns it. */
+export function initializeRepositoryResult(
+  overrides: Partial<InitializeRepositoryResult> = {},
+): InitializeRepositoryResult {
+  const path = '/work/space/unborn';
+  return {
+    result: 'initialized',
+    repoKey: 'unborn',
+    path,
+    hasHead: true,
+    root: '/work/space',
+    identity: mockRepoIdentity(path),
+    ...overrides,
+  };
+}
+
 /** A parent feature's structured configuration, as the refactor wizard seeds it. */
 export function featureConfigSnapshot(
   overrides: {
@@ -382,6 +399,7 @@ export interface AgenticoMock {
     retryCloneCleanup: ReturnType<typeof vi.fn>;
     retryCloneOperation: ReturnType<typeof vi.fn>;
     createRepository: ReturnType<typeof vi.fn>;
+    initializeRepository: ReturnType<typeof vi.fn>;
     listRepositories: ReturnType<typeof vi.fn>;
     listFeatures: ReturnType<typeof vi.fn>;
     getFeature: ReturnType<typeof vi.fn>;
@@ -482,6 +500,7 @@ export function installAgenticoMock(
     cloneOperations?: CloneOperation[];
     cloneOperationsNextToken?: string;
     createResult?: Partial<CreateRepositoryResult>;
+    initializeResult?: Partial<InitializeRepositoryResult>;
     updates?: UpdateState;
     diagnostics?: DiagnosticsSnapshot;
     platform?: string;
@@ -574,6 +593,9 @@ export function installAgenticoMock(
     ),
     createRepository: vi.fn(() =>
       Promise.resolve(createRepositoryResult(overrides.createResult ?? {})),
+    ),
+    initializeRepository: vi.fn(() =>
+      Promise.resolve(initializeRepositoryResult(overrides.initializeResult ?? {})),
     ),
     listRepositories: vi.fn(() => Promise.resolve(readiness.repositories)),
     listFeatures: vi.fn(() =>

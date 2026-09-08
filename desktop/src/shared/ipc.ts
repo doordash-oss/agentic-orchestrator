@@ -58,6 +58,7 @@ export const IPC_CHANNELS = {
   cloneOperationCleanup: 'agentico:clone:operation-cleanup',
   cloneOperationRetry: 'agentico:clone:operation-retry',
   createRepository: 'agentico:create:repository',
+  initializeRepository: 'agentico:initialize:repository',
   repositoriesList: 'agentico:repositories:list',
   featuresList: 'agentico:features:list',
   featuresGet: 'agentico:features:get',
@@ -1202,6 +1203,39 @@ export const CreateRepositoryResultSchema = z.strictObject({
   identity: RepositoryIdentitySchema.optional(),
 });
 export type CreateRepositoryResult = z.output<typeof CreateRepositoryResultSchema>;
+
+// --- Repository initialization (explicit initial commit for an unborn clone) --
+// A synchronous server-owned operation on an existing repository from the
+// server's current catalog: exactly one empty local initial commit with
+// Agentico's identity, preserving origin and the existing branch, pushing
+// nothing. The selector is compared by the server against its own catalog
+// resolution; the renderer's key, path and identity are never filesystem
+// authority.
+
+export const InitializeRepositoryRequestSchema = z.strictObject({
+  repoKey: z.string().min(1).max(512),
+  // Expected server-resolved identity, revalidated server-side before any
+  // mutation; a mismatch means the repository was replaced.
+  identity: RepositoryIdentitySchema,
+  // Optional expected path; a comparison only, never authority.
+  path: AbsolutePathSchema.optional(),
+  consent: z.literal(true),
+});
+export type InitializeRepositoryRequest = z.output<typeof InitializeRepositoryRequestSchema>;
+
+export const InitializeRepositoryResultSchema = z.strictObject({
+  // "initialized" when this request created the commit; "already_initialized"
+  // when a competing actor had (refresh-only success, no second commit).
+  result: z.enum(['initialized', 'already_initialized']),
+  repoKey: z.string(),
+  path: z.string(),
+  hasHead: z.boolean(),
+  root: z.string(),
+  // Server-resolved identity of the refreshed repository. Adoption selects
+  // by this identity, never by key or path.
+  identity: RepositoryIdentitySchema.optional(),
+});
+export type InitializeRepositoryResult = z.output<typeof InitializeRepositoryResultSchema>;
 
 // --- Features (renderer-facing views of authoritative server snapshots) -----
 // The renderer never receives raw server payloads; the main process maps
@@ -3741,6 +3775,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([CreateRepositoryRequestSchema]),
     response: CreateRepositoryResultSchema,
   },
+  [IPC_CHANNELS.initializeRepository]: {
+    request: z.tuple([InitializeRepositoryRequestSchema]),
+    response: InitializeRepositoryResultSchema,
+  },
   [IPC_CHANNELS.repositoriesList]: {
     request: z.tuple([]),
     response: z.array(RepositoryStateSchema),
@@ -4131,6 +4169,15 @@ export interface AgenticoApi {
    * the server-resolved identity of the published repository.
    */
   createRepository(request: CreateRepositoryRequest): Promise<CreateRepositoryResult>;
+  /**
+   * Creates one empty local initial commit in an existing unborn clone
+   * from the server's current catalog, with Agentico's identity, preserving
+   * the origin remote and the existing branch and pushing nothing. The
+   * result carries the refreshed repository's actual catalog key and
+   * server-resolved identity; `alreadyInitialized` results (a competing
+   * initializer won) are successes too.
+   */
+  initializeRepository(request: InitializeRepositoryRequest): Promise<InitializeRepositoryResult>;
   listRepositories(): Promise<RepositoryState[]>;
   listFeatures(): Promise<FeaturesListResult>;
   getFeature(featureId: string): Promise<FeatureSnapshot>;

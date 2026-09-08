@@ -386,6 +386,24 @@ func (e FeatureConfigInquireness) Valid() bool {
 	}
 }
 
+// Defines values for InitializeRepositoryResponseResult.
+const (
+	AlreadyInitialized InitializeRepositoryResponseResult = "already_initialized"
+	Initialized        InitializeRepositoryResponseResult = "initialized"
+)
+
+// Valid indicates whether the value is a known member of the InitializeRepositoryResponseResult enum.
+func (e InitializeRepositoryResponseResult) Valid() bool {
+	switch e {
+	case AlreadyInitialized:
+		return true
+	case Initialized:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for NeedUserInputVerificationAction.
 const (
 	RETRYAFTERAUTH NeedUserInputVerificationAction = "RETRY_AFTER_AUTH"
@@ -1039,13 +1057,28 @@ func (e CreateWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
 
 // Defines values for InitWorkspaceRepositoryParamsXAgenticoClient.
 const (
-	Local InitWorkspaceRepositoryParamsXAgenticoClient = "local"
+	InitWorkspaceRepositoryParamsXAgenticoClientLocal InitWorkspaceRepositoryParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the InitWorkspaceRepositoryParamsXAgenticoClient enum.
 func (e InitWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case Local:
+	case InitWorkspaceRepositoryParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InitializeWorkspaceRepositoryParamsXAgenticoClient.
+const (
+	InitializeWorkspaceRepositoryParamsXAgenticoClientLocal InitializeWorkspaceRepositoryParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the InitializeWorkspaceRepositoryParamsXAgenticoClient enum.
+func (e InitializeWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case InitializeWorkspaceRepositoryParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -1988,6 +2021,52 @@ type HelpSendResponse struct {
 	Meta       ResponseMeta `json:"meta,omitempty"`
 	Result     string       `json:"result"`
 	SessionID  string       `json:"session_id"`
+}
+
+// InitializeRepositorySchema defines model for InitializeRepositoryRequest.
+type InitializeRepositorySchema struct {
+	// Consent Explicit user consent to create exactly one empty local initial commit using Agentico's identity, preserving the origin remote and the existing branch, without pushing. Must be true.
+	Consent bool `json:"consent"`
+
+	// Identity Expected server-resolved identity of the selected repository. Revalidated against a fresh resolution before any mutation; a mismatch (the repository was replaced) refuses the request.
+	Identity RepositoryIdentity `json:"identity"`
+
+	// Path Optional expected repository path. When present it must match the server-resolved catalog entry; a mismatch refuses the request. Never filesystem authority.
+	Path string `json:"path,omitempty"`
+
+	// RepoKey Collision-safe repository key from the connected server's current catalog. The server resolves this key itself; the key is never filesystem authority. Keys may contain slashes.
+	RepoKey string `json:"repo_key"`
+}
+
+// InitializeRepositoryResponse defines model for InitializeRepositoryResponse.
+type InitializeRepositoryResponse struct {
+	APIVersion string                     `json:"api_version"`
+	Meta       ResponseMeta               `json:"meta,omitempty"`
+	Repository InitializeRepositoryResult `json:"repository"`
+
+	// Result "initialized" when this request created the initial commit; "already_initialized" when HEAD already resolved (a competing initializer or an external commit), a refresh-only success.
+	Result InitializeRepositoryResponseResult `json:"result"`
+}
+
+// InitializeRepositoryResponseResult "initialized" when this request created the initial commit; "already_initialized" when HEAD already resolved (a competing initializer or an external commit), a refresh-only success.
+type InitializeRepositoryResponseResult string
+
+// InitializeRepositoryResult defines model for InitializeRepositoryResult.
+type InitializeRepositoryResult struct {
+	// HasHead Whether the repository has commits. Both result values report true: the repository was either initialized here or was already initialized by another actor.
+	HasHead bool `json:"has_head"`
+
+	// Identity Server-resolved identity of the refreshed repository. Clients select and adopt the repository by this identity, never by key or path.
+	Identity *RepositoryIdentity `json:"identity,omitempty"`
+
+	// Path Absolute path of the initialized repository.
+	Path string `json:"path"`
+
+	// RepoKey Actual collision-safe catalog key computed from workspace discovery after the initial commit, never the requested key.
+	RepoKey string `json:"repo_key"`
+
+	// Root The configured workspace root containing the repository.
+	Root string `json:"root"`
 }
 
 // JSONResponse defines model for JSONResponse.
@@ -3727,6 +3806,15 @@ type InitWorkspaceRepositoryParams struct {
 // InitWorkspaceRepositoryParamsXAgenticoClient defines parameters for InitWorkspaceRepository.
 type InitWorkspaceRepositoryParamsXAgenticoClient string
 
+// InitializeWorkspaceRepositoryParams defines parameters for InitializeWorkspaceRepository.
+type InitializeWorkspaceRepositoryParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient InitializeWorkspaceRepositoryParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// InitializeWorkspaceRepositoryParamsXAgenticoClient defines parameters for InitializeWorkspaceRepository.
+type InitializeWorkspaceRepositoryParamsXAgenticoClient string
+
 // RefreshProviderModelsJSONRequestBody defines body for RefreshProviderModels for application/json ContentType.
 type RefreshProviderModelsJSONRequestBody = ProviderModelRefreshRequest
 
@@ -3804,3 +3892,6 @@ type CreateWorkspaceRepositoryJSONRequestBody = CreateRepositorySchema
 
 // InitWorkspaceRepositoryJSONRequestBody defines body for InitWorkspaceRepository for application/json ContentType.
 type InitWorkspaceRepositoryJSONRequestBody = RepositoryInitSchema
+
+// InitializeWorkspaceRepositoryJSONRequestBody defines body for InitializeWorkspaceRepository for application/json ContentType.
+type InitializeWorkspaceRepositoryJSONRequestBody = InitializeRepositorySchema

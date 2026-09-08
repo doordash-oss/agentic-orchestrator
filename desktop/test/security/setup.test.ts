@@ -144,6 +144,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     retryCloneCleanup: vi.fn(() => Promise.reject(new Error('unused'))),
     retryCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
     createRepository: vi.fn(() => Promise.reject(new Error('unused'))),
+    initializeRepository: vi.fn(() => Promise.reject(new Error('unused'))),
     listRepositories: vi.fn(() => Promise.resolve([])),
     listFeatures: vi.fn(() => Promise.resolve({ features: [], warnings: [] })),
     getFeature: vi.fn(() => Promise.reject(new Error('not_found: feature not found'))),
@@ -363,6 +364,73 @@ describe('setup IPC surface: consent gating', () => {
       rootPath: '/work',
       destination: 'repo',
       idempotencyKey: 'key-12345678',
+      consent: true,
+    });
+  });
+
+  it('rejects repository initialization without consent at the schema layer', async () => {
+    const { handlers, services } = register();
+    const identity = {
+      path: '/work/unborn',
+      commonDir: '/work/unborn/.git',
+      device: '16777234',
+      inode: '4242',
+    };
+    for (const request of [
+      { repoKey: 'unborn', identity, consent: false },
+      { repoKey: 'unborn', identity },
+      { repoKey: 'unborn', identity, consent: 'true' },
+      { repoKey: 'unborn', identity, consent: true, extra: 'field' },
+    ]) {
+      const result = (await handlers.get(IPC_CHANNELS.initializeRepository)!(
+        goodEvent,
+        request,
+      )) as Envelope;
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    }
+    expect(services.initializeRepository).not.toHaveBeenCalled();
+  });
+
+  it('passes a well-formed consenting initialize request through to the service', async () => {
+    const { handlers, services } = register(
+      makeServices({
+        initializeRepository: vi.fn(() =>
+          Promise.resolve({
+            result: 'initialized' as const,
+            repoKey: 'unborn',
+            path: '/work/unborn',
+            hasHead: true,
+            root: '/work',
+            identity: {
+              path: '/work/unborn',
+              commonDir: '/work/unborn/.git',
+              device: '16777234',
+              inode: '4242',
+            },
+          }),
+        ),
+      }),
+    );
+    const result = (await handlers.get(IPC_CHANNELS.initializeRepository)!(goodEvent, {
+      repoKey: 'unborn',
+      identity: {
+        path: '/work/unborn',
+        commonDir: '/work/unborn/.git',
+        device: '16777234',
+        inode: '4242',
+      },
+      consent: true,
+    })) as Envelope;
+    expect(result.ok).toBe(true);
+    expect(services.initializeRepository).toHaveBeenCalledWith({
+      repoKey: 'unborn',
+      identity: {
+        path: '/work/unborn',
+        commonDir: '/work/unborn/.git',
+        device: '16777234',
+        inode: '4242',
+      },
       consent: true,
     });
   });

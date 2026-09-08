@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
@@ -56,9 +57,16 @@ func realRepoScript(h *fakeHandle) {
 	h.finish(RunResult{ExitCode: 0})
 }
 
+func newIdentityFixture(t *testing.T) *serviceFixture {
+	t.Helper()
+	fx := newServiceFixture(t, realRepoScript)
+	fx.waitTimeout = 30 * time.Second
+	return fx
+}
+
 func TestPublicationIdentityBindsTheActuallyPublishedRepository(t *testing.T) {
 	t.Parallel()
-	fx := newServiceFixture(t, realRepoScript)
+	fx := newIdentityFixture(t)
 	rec := fx.start("identity-1")
 	final := fx.waitForState(rec.ID, StateSucceeded)
 
@@ -100,7 +108,7 @@ func TestPublicationIdentityBindsTheActuallyPublishedRepository(t *testing.T) {
 
 func TestPublicationIdentityRefusesReplacementAtTheSamePath(t *testing.T) {
 	t.Parallel()
-	fx := newServiceFixture(t, realRepoScript)
+	fx := newIdentityFixture(t)
 	rec := fx.start("identity-2")
 	final := fx.waitForState(rec.ID, StateSucceeded)
 	if final.Published == nil || final.Published.Identity == nil {
@@ -130,7 +138,7 @@ func TestPublicationIdentityRefusesReplacementAtTheSamePath(t *testing.T) {
 
 func TestPublicationIdentityAbsentForLegacyMarkers(t *testing.T) {
 	t.Parallel()
-	fx := newServiceFixture(t, realRepoScript)
+	fx := newIdentityFixture(t)
 	rec := fx.start("identity-3")
 	final := fx.waitForState(rec.ID, StateSucceeded)
 	dest := filepath.Join(fx.root, "widget")

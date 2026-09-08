@@ -9,15 +9,15 @@
 
 ### Banned Package Names
 
-| Name | Problem | Fix |
-|------|---------|-----|
-| `util` | Meaningless dumping ground | Split into focused packages |
-| `common` | Same | Split by concept |
-| `misc` | Same | Split by concept |
-| `base` | Same | Split by concept |
-| `helper` | Same | Move functions to where they're used |
-| `types` | Too generic | Name for the domain |
-| `interfaces` | Too generic | Define interfaces in consumers |
+| Name         | Problem                    | Fix                                  |
+| ------------ | -------------------------- | ------------------------------------ |
+| `util`       | Meaningless dumping ground | Split into focused packages          |
+| `common`     | Same                       | Split by concept                     |
+| `misc`       | Same                       | Split by concept                     |
+| `base`       | Same                       | Split by concept                     |
+| `helper`     | Same                       | Move functions to where they're used |
+| `types`      | Too generic                | Name for the domain                  |
+| `interfaces` | Too generic                | Define interfaces in consumers       |
 
 > "If you cannot come up with a package name that's a meaningful prefix for the
 > package's contents, the package abstraction boundary may be wrong."
@@ -28,6 +28,7 @@ Everything in a package should relate to a single concept. The standard library
 is the model: `bytes`, `strings`, `http`, `time` — tightly focused packages.
 
 Signs of poor cohesion:
+
 - Package has many unrelated types
 - You can't describe the package in one sentence
 - Types in the package don't interact with each other
@@ -49,6 +50,7 @@ mymodule/
 ```
 
 Use `internal/` for:
+
 - Implementation details of a larger module
 - Packages shared across `cmd/` binaries but not for external use
 - Preventing accidental API surface growth in libraries
@@ -57,13 +59,13 @@ Use `internal/` for:
 
 The official guidance (go.dev/doc/modules/layout) defines patterns, not rules:
 
-| Project Type | Layout |
-|-------------|--------|
-| Single library | All code at root beside `go.mod` |
-| Single binary | `main.go` at root |
-| Library + binary | `cmd/myapp/` for binary, root for library |
-| Multiple binaries | `cmd/app1/`, `cmd/app2/` |
-| Server project | `cmd/server/`, `internal/` for all logic |
+| Project Type      | Layout                                    |
+| ----------------- | ----------------------------------------- |
+| Single library    | All code at root beside `go.mod`          |
+| Single binary     | `main.go` at root                         |
+| Library + binary  | `cmd/myapp/` for binary, root for library |
+| Multiple binaries | `cmd/app1/`, `cmd/app2/`                  |
+| Server project    | `cmd/server/`, `internal/` for all logic  |
 
 ### The /pkg Debate
 

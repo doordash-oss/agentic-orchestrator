@@ -84,6 +84,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		Mutations:                   opts.Mutations,
 		PersistProviderModelCatalog: opts.PersistProviderModelCatalog,
 		InitGitRepository:           opts.InitGitRepository,
+		InitializeGitRepository:     opts.InitializeGitRepository,
 		Clones:                      opts.Clones,
 		Worktrees:                   opts.Worktrees,
 		RuntimePolicy:               policy,

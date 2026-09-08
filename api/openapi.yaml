@@ -509,7 +509,6 @@ paths:
         "409":
           $ref: "#/components/responses/ErrorResponse"
 
-
   # Statically documented form of the rebase child launch action. The server
   # routes the rebase launch through the dynamic /actions/{action} dispatch,
   # so the served URL is exactly /api/v1/features/{feature_id}/actions/rebase;
@@ -1165,6 +1164,49 @@ paths:
         "503":
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/v1/workspace/repositories/initialize:
+    post:
+      operationId: initializeWorkspaceRepository
+      summary: >-
+        Create one empty local initial commit in an existing unborn clone.
+      description: >-
+        Explicit, bounded initialization of a repository that already exists
+        in the connected server's current catalog (typically a successful
+        clone of an empty remote). Requires an explicit consent flag and a
+        structured repository selector with the expected server-resolved
+        identity: the selector is resolved against the current authorized
+        catalog and the identity is revalidated before any mutation, so
+        renderer-supplied keys, paths and identity fields are comparisons,
+        never independent filesystem authority. The operation preserves the
+        repository's origin remotes, its valid symbolic branch (verbatim,
+        including slash-containing names) and every existing file; it stages
+        nothing, runs no hooks, signs nothing and pushes nothing. Staged,
+        unstaged or untracked content and active merge, rebase, cherry-pick
+        or revert state are refused. A repository whose HEAD already
+        resolves (a competing initializer or an external commit) returns a
+        refresh-only success without another commit, even with local
+        changes. The response reports the refreshed repository under its
+        actual collision-safe catalog key and server-resolved identity.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InitializeRepositoryRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/InitializeRepositoryResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/recovery:
     get:
       operationId: getRecoverySnapshot
@@ -1681,6 +1723,14 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/CreateRepositoryResponse"
+    InitializeRepositoryResponse:
+      description: >-
+        Refreshed workspace repository after an explicit initialization
+        (created or already initialized).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/InitializeRepositoryResponse"
     CloneActionResponse:
       description: Authoritative clone operation snapshot after a mutation.
       content:
@@ -2359,6 +2409,81 @@ components:
               type: string
             repository:
               $ref: "#/components/schemas/CreateRepositoryResult"
+    InitializeRepositoryRequest:
+      x-go-name: InitializeRepositorySchema
+      type: object
+      required: [repo_key, identity, consent]
+      properties:
+        repo_key:
+          type: string
+          maxLength: 512
+          description: >-
+            Collision-safe repository key from the connected server's
+            current catalog. The server resolves this key itself; the key
+            is never filesystem authority. Keys may contain slashes.
+        path:
+          type: string
+          maxLength: 4096
+          description: >-
+            Optional expected repository path. When present it must match
+            the server-resolved catalog entry; a mismatch refuses the
+            request. Never filesystem authority.
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+          description: >-
+            Expected server-resolved identity of the selected repository.
+            Revalidated against a fresh resolution before any mutation; a
+            mismatch (the repository was replaced) refuses the request.
+        consent:
+          type: boolean
+          description: >-
+            Explicit user consent to create exactly one empty local initial
+            commit using Agentico's identity, preserving the origin remote
+            and the existing branch, without pushing. Must be true.
+    InitializeRepositoryResult:
+      type: object
+      required: [repo_key, path, has_head, root]
+      properties:
+        repo_key:
+          type: string
+          description: >-
+            Actual collision-safe catalog key computed from workspace
+            discovery after the initial commit, never the requested key.
+        path:
+          type: string
+          description: Absolute path of the initialized repository.
+        has_head:
+          type: boolean
+          description: >-
+            Whether the repository has commits. Both result values report
+            true: the repository was either initialized here or was already
+            initialized by another actor.
+        root:
+          type: string
+          description: The configured workspace root containing the repository.
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            Server-resolved identity of the refreshed repository. Clients
+            select and adopt the repository by this identity, never by key
+            or path.
+    InitializeRepositoryResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [result, repository]
+          properties:
+            result:
+              type: string
+              enum: [initialized, already_initialized]
+              description: >-
+                "initialized" when this request created the initial commit;
+                "already_initialized" when HEAD already resolved (a
+                competing initializer or an external commit), a refresh-only
+                success.
+            repository:
+              $ref: "#/components/schemas/InitializeRepositoryResult"
     CloneStartRequest:
       x-go-name: CloneStartSchema
       type: object

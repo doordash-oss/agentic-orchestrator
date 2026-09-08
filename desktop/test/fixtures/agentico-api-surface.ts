@@ -72,6 +72,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'getWorkspaceDefaults',
   'importDroppedCreationFiles',
   'initRepository',
+  'initializeRepository',
   'installUpdateNow',
   'installUpdateWhenIdle',
   'launchRebaseChild',

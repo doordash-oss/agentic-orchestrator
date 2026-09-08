@@ -13,6 +13,7 @@ void log(std::string_view msg) noexcept;
 ```
 
 **Danger**: never return a `string_view` to a local `std::string`:
+
 ```cpp
 std::string_view danger() {
     std::string tmp = "data";
@@ -25,6 +26,7 @@ C++20 adds `starts_with`, `ends_with`, `contains` on both types.
 ## Small String Optimization (SSO)
 
 Short strings are stored inline (no heap allocation):
+
 - libstdc++ (GCC): 15 chars
 - libc++ (Clang): 22 chars
 - MSVC: 15 chars

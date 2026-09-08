@@ -51,6 +51,7 @@ import {
   type InitRepositoryRequest,
   type CloneStartRequest,
   type CreateRepositoryRequest,
+  type InitializeRepositoryRequest,
   type SettingsOpenRequest,
   type SettingsPatch,
   type ThemePreference,
@@ -213,6 +214,8 @@ const api: AgenticoApi = {
   retryCloneOperation: (operationId: string) => call(IPC_CHANNELS.cloneOperationRetry, operationId),
   createRepository: (request: CreateRepositoryRequest) =>
     call(IPC_CHANNELS.createRepository, request),
+  initializeRepository: (request: InitializeRepositoryRequest) =>
+    call(IPC_CHANNELS.initializeRepository, request),
   listRepositories: () => call(IPC_CHANNELS.repositoriesList),
   listFeatures: () => call(IPC_CHANNELS.featuresList),
   getFeature: (featureId: string) => call(IPC_CHANNELS.featuresGet, featureId),

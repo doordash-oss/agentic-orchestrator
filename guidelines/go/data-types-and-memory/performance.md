@@ -19,18 +19,19 @@ import _ "net/http/pprof"
 ```
 
 Common pprof commands:
+
 - `top` — hottest functions
 - `list FuncName` — annotated source
 - `web` — call graph in browser
 
 ## String Concatenation
 
-| Method | Use When |
-|--------|----------|
-| `+` operator | 2-3 small strings |
-| `fmt.Sprintf` | Formatting with verbs |
+| Method            | Use When                  |
+| ----------------- | ------------------------- |
+| `+` operator      | 2-3 small strings         |
+| `fmt.Sprintf`     | Formatting with verbs     |
 | `strings.Builder` | Building strings in loops |
-| `strings.Join` | Joining a slice |
+| `strings.Join`    | Joining a slice           |
 
 ```go
 // Loop concatenation — use strings.Builder
@@ -111,6 +112,7 @@ func process() {
 
 Passing large structs by pointer avoids copying. But for small structs,
 value receivers can be faster because:
+
 - Values stay on the stack (no heap allocation)
 - Better cache locality
 - No pointer indirection

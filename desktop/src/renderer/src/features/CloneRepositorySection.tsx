@@ -34,6 +34,7 @@ import {
   CloneRepositoryForm,
   serverDescriptor,
   type CloneStartInput,
+  type InitializeOfferController,
 } from './cloneViews';
 
 export function CloneRepositorySection({
@@ -54,6 +55,15 @@ export function CloneRepositorySection({
   const [operationsError, setOperationsError] = useState<CanonicalError | null>(null);
   const [operationsLoaded, setOperationsLoaded] = useState(false);
   const [actionPending, setActionPending] = useState<string | null>(null);
+  // The explicit-initialization offer for an unborn clone success. Not now
+  // hides the offer for that operation only; the repository's catalog row
+  // keeps the later entry point.
+  const [initializePending, setInitializePending] = useState<string | null>(null);
+  const [initializeError, setInitializeError] = useState<{
+    operationId: string;
+    error: CanonicalError;
+  } | null>(null);
+  const [declinedOperations, setDeclinedOperations] = useState<ReadonlySet<string>>(new Set());
   const fetchSeq = useRef(0);
 
   const refreshOperations = useCallback(() => {
@@ -105,6 +115,12 @@ export function CloneRepositorySection({
     previousServerKey.current = serverKey;
     setOperations([]);
     setOperationsLoaded(false);
+    setOperationsError(null);
+    setActionPending(null);
+    setInitializePending(null);
+    setInitializeError(null);
+    setDeclinedOperations(new Set());
+    setAnnouncement(null);
     refreshOperations();
   }, [serverKey, refreshOperations]);
 
@@ -144,6 +160,70 @@ export function CloneRepositorySection({
         setActionPending(null);
         setOperationsError(parseIpcError(e));
       });
+  };
+
+  /**
+   * The explicit initial commit for an unborn clone success. The selector
+   * uses the publication's server-resolved identity; the server revalidates
+   * it against its own catalog resolution. Success (created or
+   * refresh-only) re-reads authoritative readiness and announces; Settings
+   * never opens a feature or selects into any creation draft.
+   */
+  const handleInitialize = (operation: CloneOperation): void => {
+    if (initializePending !== null) return;
+    const published = operation.published;
+    if (published === undefined || published.identity === undefined) return;
+    setInitializePending(operation.id);
+    setInitializeError(null);
+    void window.agentico
+      .initializeRepository({
+        repoKey: published.repoKey,
+        identity: published.identity,
+        path: published.path,
+        consent: true,
+      })
+      .then((result) => {
+        setInitializePending(null);
+        setAnnouncement(
+          result.result === 'initialized'
+            ? `Initialized ${result.repoKey} at ${result.path} on ${serverDescriptor(connection)}. It has one empty initial commit; nothing was pushed.`
+            : `${result.repoKey} already had an initial commit on ${serverDescriptor(connection)}; it is ready for feature work.`,
+        );
+        // Current status comes from the refreshed repository, never from
+        // the historical clone record.
+        void window.agentico
+          .getReadiness()
+          .then(onReadinessChanged)
+          .catch(() => undefined);
+      })
+      .catch((e: unknown) => {
+        setInitializePending(null);
+        const error = parseIpcError(e);
+        if (error.code !== 'E_SERVER_SWITCHED') {
+          setInitializeError({ operationId: operation.id, error });
+          // A rejected transport may mean the response was lost after the
+          // server committed. Reconcile current readiness before another
+          // explicit attempt; never repeat the mutation automatically.
+          void window.agentico
+            .getReadiness()
+            .then(onReadinessChanged)
+            .catch(() => undefined);
+        }
+      });
+  };
+
+  const initializeController = (operation: CloneOperation): InitializeOfferController | null => {
+    if (declinedOperations.has(operation.id)) return null;
+    const published = operation.published;
+    if (published === undefined || published.hasHead || published.identity === undefined) {
+      return null;
+    }
+    return {
+      pending: initializePending === operation.id,
+      error: initializeError?.operationId === operation.id ? initializeError.error : null,
+      onInitialize: () => handleInitialize(operation),
+      onDecline: () => setDeclinedOperations((current) => new Set([...current, operation.id])),
+    };
   };
 
   return (
@@ -191,6 +271,7 @@ export function CloneRepositorySection({
                 serverLabel={serverDescriptor(connection)}
                 actionPending={actionPending}
                 onAction={handleAction}
+                initialize={initializeController(operation)}
               />
             </li>
           ))}
@@ -215,6 +296,17 @@ export function CloneRepositorySection({
           <li>
             Accepted requests are remembered: repeating the same request never starts a second
             clone. Recent history is kept for seven days on the server.
+          </li>
+          <li>
+            Cloning an empty remote succeeds but leaves the repository without commits: Create
+            initial commit offers one empty local commit with Agentico's identity — the origin
+            remote and the branch are kept and nothing is pushed. Not now keeps the action available
+            on the repository's row in the Repositories list.
+          </li>
+          <li>
+            If the clone already holds files (staged, unstaged or untracked), the server refuses so
+            nothing of yours is committed: create the initial commit yourself with git in the
+            repository, then reload the list.
           </li>
         </ul>
       </details>

@@ -30,7 +30,7 @@ limitations under the License.
  * (d) a server switch while root selection is pending is suppressed: the
  *     stale sequence never writes either server's configuration.
  */
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -71,6 +71,27 @@ function gitText(dir: string, ...args: string[]): string {
     encoding: 'utf8',
     env: { ...minimalEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
   }).trim();
+}
+
+/** Probes the in-process HTTP remote without blocking its Node event loop. */
+function remoteRefs(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'git',
+      ['ls-remote', url],
+      {
+        encoding: 'utf8',
+        env: { ...minimalEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+      },
+      (error, stdout) => {
+        if (error !== null) {
+          reject(error);
+          return;
+        }
+        resolve(stdout.trim());
+      },
+    );
+  });
 }
 
 /** Proves the promised shape of a created repository with real git. */
@@ -547,6 +568,7 @@ test('remote create and clone use only the remote configured roots', async ({}, 
     presetWorkspaceRoot: true,
   });
   const populated = await serveGitRemote(world.root, 'prep-remote-src', 2);
+  const empty = await serveGitRemote(world.root, 'prep-empty-src', 0);
   const remote = await startPrepRemoteServer(world);
   const localConfigBefore = fs.readFileSync(world.configPath, 'utf8');
   const remoteConfigBefore = fs.readFileSync(remote.configPath, 'utf8');
@@ -625,9 +647,44 @@ test('remote create and clone use only the remote configured roots', async ({}, 
     );
     transcript.step('remote clone published into the remote root and adopted');
 
+    transcript.section(
+      'Remote empty-remote clone: offer, initialize, adopt — no desktop-path mutation',
+    );
+    await sheet.getByRole('button', { name: /clone a repository/i }).click();
+    await expect(cloneDialog).toBeVisible();
+    await cloneDialog.getByLabel('Repository URL').fill(empty.url);
+    await cloneDialog.getByLabel('Folder name').fill('remote-empty');
+    await cloneDialog.getByRole('button', { name: 'Clone repository' }).click();
+    const unbornOperation = page.locator('.creation-clone__operation', {
+      hasText: 'remote-empty',
+    });
+    await expect(unbornOperation.first()).toContainText('Succeeded', { timeout: 120_000 });
+    await expect(unbornOperation.first()).toContainText(/no commits yet/);
+    const initializeOffer = unbornOperation.first().locator('[data-initialize-offer]');
+    await expect(initializeOffer).toBeVisible();
+    await expect(initializeOffer).toContainText(/one empty local commit/i);
+    await initializeOffer
+      .getByRole('button', { name: 'Create initial commit', exact: true })
+      .click();
+    await expect(cloneDialog).not.toBeVisible({ timeout: 30_000 });
+    const remoteEmptyRow = sheet.locator('.creation-sheet__row', { hasText: 'remote-empty' });
+    await expect(remoteEmptyRow.getByRole('checkbox')).toBeChecked({ timeout: 30_000 });
+    await expect(sheet.getByText('Initialized remote-empty and selected it.')).toBeVisible();
+    // Real git evidence in the remote-owned workspace: one empty Agentico
+    // commit, origin preserved, nothing pushed.
+    const remoteEmptyDir = path.join(remote.root, 'remote-empty');
+    expect(gitText(remoteEmptyDir, 'rev-list', '--count', 'HEAD')).toBe('1');
+    expect(gitText(remoteEmptyDir, 'log', '-1', '--format=%an <%ae> | %cn <%ce> | %s')).toBe(
+      'Agentico <agentico@localhost> | Agentico <agentico@localhost> | Initial commit',
+    );
+    expect(gitText(remoteEmptyDir, 'remote', 'get-url', 'origin')).toBe(empty.url);
+    expect(await remoteRefs(empty.url)).toBe('');
+    transcript.step('remote initialization adopted by identity with server-side git evidence only');
+
     transcript.section("The other server's directories and configuration are untouched");
     expect(fs.existsSync(path.join(world.workspaceRoot, 'remote-made'))).toBe(false);
     expect(fs.existsSync(path.join(world.workspaceRoot, 'remote-clone'))).toBe(false);
+    expect(fs.existsSync(path.join(world.workspaceRoot, 'remote-empty'))).toBe(false);
     expect(fs.readFileSync(world.configPath, 'utf8')).toBe(localConfigBefore);
     expect(fs.readFileSync(remote.configPath, 'utf8')).toBe(remoteConfigBefore);
     transcript.step('no desktop path was transmitted and neither config changed');
@@ -640,6 +697,7 @@ test('remote create and clone use only the remote configured roots', async ({}, 
       await closeApp(ctx.handle).catch(() => undefined);
     }
     populated.close();
+    empty.close();
     await stopRemoteServer(remote);
     destroyWorld(world);
     assertNoLeakedProcesses(world);

@@ -945,6 +945,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspace/repositories/initialize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create one empty local initial commit in an existing unborn clone.
+         * @description Explicit, bounded initialization of a repository that already exists in the connected server's current catalog (typically a successful clone of an empty remote). Requires an explicit consent flag and a structured repository selector with the expected server-resolved identity: the selector is resolved against the current authorized catalog and the identity is revalidated before any mutation, so renderer-supplied keys, paths and identity fields are comparisons, never independent filesystem authority. The operation preserves the repository's origin remotes, its valid symbolic branch (verbatim, including slash-containing names) and every existing file; it stages nothing, runs no hooks, signs nothing and pushes nothing. Staged, unstaged or untracked content and active merge, rebase, cherry-pick or revert state are refused. A repository whose HEAD already resolves (a competing initializer or an external commit) returns a refresh-only success without another commit, even with local changes. The response reports the refreshed repository under its actual collision-safe catalog key and server-resolved identity.
+         */
+        post: operations["initializeWorkspaceRepository"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recovery": {
         parameters: {
             query?: never;
@@ -1307,6 +1327,36 @@ export interface components {
         CreateRepositoryResponse: components["schemas"]["ActionBaseResponse"] & {
             result: string;
             repository: components["schemas"]["CreateRepositoryResult"];
+        };
+        InitializeRepositoryRequest: {
+            /** @description Collision-safe repository key from the connected server's current catalog. The server resolves this key itself; the key is never filesystem authority. Keys may contain slashes. */
+            repo_key: string;
+            /** @description Optional expected repository path. When present it must match the server-resolved catalog entry; a mismatch refuses the request. Never filesystem authority. */
+            path?: string;
+            /** @description Expected server-resolved identity of the selected repository. Revalidated against a fresh resolution before any mutation; a mismatch (the repository was replaced) refuses the request. */
+            identity: components["schemas"]["RepositoryIdentity"];
+            /** @description Explicit user consent to create exactly one empty local initial commit using Agentico's identity, preserving the origin remote and the existing branch, without pushing. Must be true. */
+            consent: boolean;
+        };
+        InitializeRepositoryResult: {
+            /** @description Actual collision-safe catalog key computed from workspace discovery after the initial commit, never the requested key. */
+            repo_key: string;
+            /** @description Absolute path of the initialized repository. */
+            path: string;
+            /** @description Whether the repository has commits. Both result values report true: the repository was either initialized here or was already initialized by another actor. */
+            has_head: boolean;
+            /** @description The configured workspace root containing the repository. */
+            root: string;
+            /** @description Server-resolved identity of the refreshed repository. Clients select and adopt the repository by this identity, never by key or path. */
+            identity?: components["schemas"]["RepositoryIdentity"];
+        };
+        InitializeRepositoryResponse: components["schemas"]["ActionBaseResponse"] & {
+            /**
+             * @description "initialized" when this request created the initial commit; "already_initialized" when HEAD already resolved (a competing initializer or an external commit), a refresh-only success.
+             * @enum {string}
+             */
+            result: "initialized" | "already_initialized";
+            repository: components["schemas"]["InitializeRepositoryResult"];
         };
         CloneStartRequest: {
             /** @description HTTP, HTTPS or SSH remote URL for the clone. Local paths, helper transports, embedded credentials and token-bearing queries or fragments are rejected without echoing secrets. */
@@ -2844,6 +2894,15 @@ export interface components {
                 "application/json": components["schemas"]["CreateRepositoryResponse"];
             };
         };
+        /** @description Refreshed workspace repository after an explicit initialization (created or already initialized). */
+        InitializeRepositoryResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["InitializeRepositoryResponse"];
+            };
+        };
         /** @description Authoritative clone operation snapshot after a mutation. */
         CloneActionResponse: {
             headers: {
@@ -4044,6 +4103,29 @@ export interface operations {
         };
         responses: {
             201: components["responses"]["CreateRepositoryResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
+            503: components["responses"]["ErrorResponse"];
+        };
+    };
+    initializeWorkspaceRepository: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InitializeRepositoryRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["InitializeRepositoryResponse"];
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
             409: components["responses"]["ErrorResponse"];

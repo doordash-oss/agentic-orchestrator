@@ -184,6 +184,9 @@ type serviceFixture struct {
 	svc       *Service
 	hooks     *recordingHooks
 	now       func() time.Time
+	// Per-fixture completion budget. Real-Git scripts need extra headroom
+	// under the full race sweep; in-memory scripts keep the fast default.
+	waitTimeout time.Duration
 }
 
 type recordingHooks struct {
@@ -226,12 +229,13 @@ func newServiceFixture(t *testing.T, script func(h *fakeHandle)) *serviceFixture
 	}
 	stateDir := t.TempDir()
 	fx := &serviceFixture{
-		t:        t,
-		root:     root,
-		stateDir: stateDir,
-		cfg:      &config.Config{WorkspaceRoots: []string{root}},
-		runner:   newFakeRunner(script),
-		hooks:    &recordingHooks{},
+		t:           t,
+		root:        root,
+		stateDir:    stateDir,
+		cfg:         &config.Config{WorkspaceRoots: []string{root}},
+		runner:      newFakeRunner(script),
+		hooks:       &recordingHooks{},
+		waitTimeout: 5 * time.Second,
 	}
 	fx.now = time.Now
 	svc, err := New(Options{
@@ -287,7 +291,7 @@ func (fx *serviceFixture) start(key string) Record {
 // reaches one of the want states.
 func (fx *serviceFixture) waitForState(id string, want ...State) Record {
 	fx.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(fx.waitTimeout)
 	for {
 		rec, err := fx.svc.Snapshot(id)
 		if err != nil {

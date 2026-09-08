@@ -15,6 +15,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -73,6 +74,9 @@ type apiHandler struct {
 	disableHostValidation bool
 	runtimePolicy         string
 	initGitRepository     func(path string) error
+	// initializeGitRepository is the injectable explicit-initialization
+	// adapter; nil means internal/git.InitializeRepository.
+	initializeGitRepository func(context.Context, string) (git.InitializeOutcome, error)
 
 	recoveryMu         sync.Mutex
 	recoverySnapshots  map[string][]ports.RecoveryItem
@@ -113,28 +117,29 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		runtimePolicy = CompatibilityRuntimePolicy
 	}
 	handler := &apiHandler{
-		runtimePolicy:         runtimePolicy,
-		runtime:               opts.Runtime,
-		policy:                opts.LaunchPolicy,
-		startedAt:             startedAt,
-		owner:                 opts.Owner,
-		authToken:             opts.AuthToken,
-		name:                  opts.Name,
-		features:              features,
-		store:                 store,
-		freshness:             opts.Freshness,
-		worktrees:             opts.Worktrees,
-		cfg:                   opts.Config,
-		registry:              opts.Registry,
-		sessions:              opts.Sessions,
-		broker:                newEventBroker(opts.Events, opts.DomainEvents),
-		mutations:             opts.Mutations,
-		uploads:               newUploadStore(opts.Runtime.StateDir),
-		persistProviderModels: opts.PersistProviderModelCatalog,
-		disableHostValidation: opts.DisableHostValidation,
-		initGitRepository:     opts.InitGitRepository,
-		reviewSessionLocks:    newReviewSessionLockSet(),
-		creationResults:       make(map[string]creationResult),
+		runtimePolicy:           runtimePolicy,
+		runtime:                 opts.Runtime,
+		policy:                  opts.LaunchPolicy,
+		startedAt:               startedAt,
+		owner:                   opts.Owner,
+		authToken:               opts.AuthToken,
+		name:                    opts.Name,
+		features:                features,
+		store:                   store,
+		freshness:               opts.Freshness,
+		worktrees:               opts.Worktrees,
+		cfg:                     opts.Config,
+		registry:                opts.Registry,
+		sessions:                opts.Sessions,
+		broker:                  newEventBroker(opts.Events, opts.DomainEvents),
+		mutations:               opts.Mutations,
+		uploads:                 newUploadStore(opts.Runtime.StateDir),
+		persistProviderModels:   opts.PersistProviderModelCatalog,
+		disableHostValidation:   opts.DisableHostValidation,
+		initGitRepository:       opts.InitGitRepository,
+		initializeGitRepository: opts.InitializeGitRepository,
+		reviewSessionLocks:      newReviewSessionLockSet(),
+		creationResults:         make(map[string]creationResult),
 	}
 	if opts.Worktrees != nil {
 		handler.cleanliness = git.NewCleanlinessCache(opts.Worktrees)
@@ -221,6 +226,7 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathReadinessRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleReadinessRefreshRoute }},
 	{apiPathWorkspaceRepositoriesInit, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitRoute }},
 	{apiPathWorkspaceRepositoriesCreate, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryCreateRoute }},
+	{apiPathWorkspaceRepositoriesInitialize, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitializeRoute }},
 	{apiPathWorkspaceClone, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneRoute }},
 	{apiPathWorkspaceClone + "/", func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneOperationRoutes }},
 	{apiPathPrompts, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},

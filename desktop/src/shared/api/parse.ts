@@ -526,6 +526,32 @@ export const CreateRepositoryResponseSchema = z.object({
 
 export type CreateRepositoryResponse = z.output<typeof CreateRepositoryResponseSchema>;
 
+// --- Repository initialization (POST /api/v1/workspace/repositories/initialize)
+// The synchronous explicit-initialization result: the refreshed repository
+// under its actual catalog key and server-resolved identity. Both result
+// values are successes ("already_initialized" is a refresh-only success).
+
+export const InitializeRepositoryResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.enum(['initialized', 'already_initialized']),
+  repository: z.object({
+    repo_key: z.string(),
+    path: z.string(),
+    has_head: z.boolean(),
+    root: z.string(),
+    identity: z
+      .strictObject({
+        path: z.string().min(1).max(4096),
+        common_dir: z.string().min(1).max(4096),
+        device: z.string().regex(/^[0-9]{1,20}$/),
+        inode: z.string().regex(/^[0-9]{1,20}$/),
+      })
+      .optional(),
+  }),
+});
+
+export type InitializeRepositoryResponse = z.output<typeof InitializeRepositoryResponseSchema>;
+
 // --- Features (GET/POST /api/v1/features, GET /api/v1/features/{id}) --------
 // Lenient subsets: z.object tolerates and strips fields this view does not
 // consume yet.

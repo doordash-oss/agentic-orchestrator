@@ -41,6 +41,7 @@ import {
   RETRYABLE_STATES,
   serverDescriptor,
   type CloneStartInput,
+  type InitializeOfferController,
 } from './cloneViews';
 import type { CloneAssociation } from './creationDrafts';
 
@@ -56,6 +57,13 @@ export interface PickerCloneDialogProps {
   onRefresh(): void;
   /** Applies an authoritative readiness snapshot (e.g. after a root addition). */
   onReadinessChanged?(snapshot: ReadinessSnapshot): void;
+  /**
+   * The initialize offer controller for an unborn success, from the owning
+   * sheet (it owns the pending state and the draft adoption). Null when
+   * the offer is not shown (declined, or the publication has no provable
+   * identity).
+   */
+  initializeOffer?: InitializeOfferController | null;
   /** Close detaches the view; the draft and association stay. */
   onClose(): void;
 }
@@ -68,6 +76,7 @@ export function PickerCloneDialog({
   onAssociate,
   onRefresh,
   onReadinessChanged,
+  initializeOffer = null,
   onClose,
 }: PickerCloneDialogProps) {
   const [actionError, setActionError] = useState<CanonicalError | null>(null);
@@ -193,6 +202,7 @@ export function PickerCloneDialog({
               serverLabel={serverDescriptor(connection)}
               actionPending={actionPending}
               onAction={handleAction}
+              initialize={initializeOffer}
             />
           </div>
         ) : null}

@@ -9,6 +9,7 @@ preferred because it also manages import lines.
 favorite." — automated formatting eliminates bikeshedding.
 
 Key formatting rules (handled by gofmt):
+
 - Tabs for indentation, never spaces
 - No line length limit
 - Opening braces on the same line as the control structure (required by Go's
@@ -74,6 +75,7 @@ func OldFoo() { ... }
 ## Line Length
 
 There is no rigid limit. Rules:
+
 - Avoid uncomfortably long lines.
 - Don't wrap lines artificially when longer lines are more readable.
 - If lines are too long, fix the names or semantics, not the line length.

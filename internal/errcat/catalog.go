@@ -122,6 +122,17 @@ const (
 	CloneCleanupPending         Code = "clone_cleanup_pending"
 )
 
+// Repository-initialization codes cover the explicit initialization of an
+// existing unborn clone (one empty local initial commit): selector and
+// identity revalidation, eligibility refusals and execution failures.
+const (
+	InitializeRepositoryNotFound Code = "initialize_repository_not_found"
+	InitializeIdentityStale      Code = "initialize_identity_stale"
+	InitializeContentPresent     Code = "initialize_content_present"
+	InitializeOperationActive    Code = "initialize_operation_in_progress"
+	InitializeUnavailable        Code = "initialize_unavailable"
+)
+
 // Readiness and provider codes.
 const (
 	NotReady                        Code = "not_ready"
@@ -524,9 +535,9 @@ var catalog = map[Code]Entry{
 		Remediation: "Choose a different destination folder name.",
 	},
 	CloneDestinationReserved: {
-		Class:   ClassBlocking,
-		Title:   "Destination reserved",
-		Summary: "Another repository-preparation operation currently holds this destination.",
+		Class:       ClassBlocking,
+		Title:       "Destination reserved",
+		Summary:     "Another repository-preparation operation currently holds this destination.",
 		Remediation: "Wait for the listed operation to finish or cancel it from Settings before retrying.",
 	},
 	CloneDestinationShadowed: {
@@ -619,6 +630,36 @@ var catalog = map[Code]Entry{
 		Title:       "Cleanup pending",
 		Summary:     "The attempt's incomplete data could not yet be proved safe to remove.",
 		Remediation: "Use Retry cleanup in Settings, or ask the server administrator to remove the staged data after confirming it is unused.",
+	},
+	InitializeRepositoryNotFound: {
+		Class:       ClassBlocking,
+		Title:       "Repository not found",
+		Summary:     "No repository with this key exists in the connected server's current catalog.",
+		Remediation: "Reload the repository list on the connected server, then choose the repository again.",
+	},
+	InitializeIdentityStale: {
+		Class:       ClassBlocking,
+		Title:       "Repository changed",
+		Summary:     "The repository under this key is not the one the request expected; it may have been replaced or moved.",
+		Remediation: "Reload the repository list and select the repository again; the replacement keeps its own data.",
+	},
+	InitializeContentPresent: {
+		Class:       ClassNeedsAction,
+		Title:       "Repository has content",
+		Summary:     "The repository has staged, unstaged or untracked files, so the server will not create its initial commit.",
+		Remediation: "Create the initial commit yourself with git in the repository, or move the files aside, then reload the repository list.",
+	},
+	InitializeOperationActive: {
+		Class:       ClassNeedsAction,
+		Title:       "Git operation in progress",
+		Summary:     "A merge, rebase, cherry-pick or revert is in progress in the repository.",
+		Remediation: "Finish or abort that Git operation outside Agentico, then initialize again.",
+	},
+	InitializeUnavailable: {
+		Class:       ClassBlocking,
+		Title:       "Initialization unavailable",
+		Summary:     "The connected server could not safely initialize the repository.",
+		Remediation: "Review the diagnostics on the connected server, then retry from the repository list.",
 	},
 
 	// --- Publish failure codes -------------------------------------------------

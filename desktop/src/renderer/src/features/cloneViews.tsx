@@ -459,19 +459,89 @@ export function CloneRepositoryForm({
 }
 
 /**
+ * The shared consent wording for the explicit initial commit. Both entry
+ * points — the unborn clone-success offer and the later opt-in beside an
+ * unborn catalog row — present exactly this explanation.
+ */
+export const INITIALIZE_CONSENT_COPY =
+  "Create initial commit makes one empty local commit on the repository's current branch using Agentico's identity. The origin remote and the branch are kept, existing files are untouched, and nothing is pushed.";
+
+/**
+ * The controller for one initialize offer: whether an attempt is pending,
+ * its scoped canonical error, and the explicit actions. Clicking Create
+ * initial commit is the explicit consent the wording explains.
+ */
+export interface InitializeOfferController {
+  pending: boolean;
+  error: CanonicalError | null;
+  onInitialize(): void;
+  onDecline(): void;
+}
+
+/**
+ * The shared initialize offer: the consent explanation plus the two
+ * explicit actions. Hosts scope pending/error to the repository action and
+ * decide visibility (an offer declined with Not now is hidden by its host,
+ * never by this component).
+ */
+export function InitializeOffer({
+  idPrefix,
+  controller,
+}: {
+  /** Element-id prefix so mounted offers never collide. */
+  idPrefix: string;
+  controller: InitializeOfferController;
+}) {
+  return (
+    <div className="settings-panel__clone-initialize" data-initialize-offer="">
+      <p className="settings-panel__clone-initialize-copy" id={`${idPrefix}-initialize-copy`}>
+        {INITIALIZE_CONSENT_COPY}
+      </p>
+      {controller.error !== null ? (
+        <ErrorSurface error={controller.error} variant="compact" />
+      ) : null}
+      <div className="settings-panel__clone-initialize-actions">
+        <button
+          type="button"
+          className="settings-panel__clone-action"
+          disabled={controller.pending}
+          aria-describedby={`${idPrefix}-initialize-copy`}
+          onClick={controller.onInitialize}
+        >
+          {controller.pending ? 'Creating…' : 'Create initial commit'}
+        </button>
+        <button
+          type="button"
+          className="settings-panel__clone-action settings-panel__clone-action--secondary"
+          disabled={controller.pending}
+          onClick={controller.onDecline}
+        >
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * One operation's state presentation: destination, state, progress, the
  * published key, failure/cleanup issues, and the live recovery actions.
+ * `initialize` drives the explicit-initialization offer for an unborn
+ * success; the host owns visibility (declined offers pass null).
  */
 export function CloneOperationView({
   operation,
   serverLabel,
   actionPending,
   onAction,
+  initialize = null,
 }: {
   operation: CloneOperation;
   serverLabel: string;
   actionPending: string | null;
   onAction(action: 'cancel' | 'cleanup' | 'retry', operation: CloneOperation): void;
+  /** The initialize offer controller for an unborn success, when offered. */
+  initialize?: InitializeOfferController | null;
 }) {
   return (
     <div className="settings-panel__clone-operation">
@@ -501,6 +571,12 @@ export function CloneOperationView({
             ? ''
             : ' — no commits yet; an initial commit is required before feature use'}
         </p>
+      ) : null}
+      {initialize !== null &&
+      operation.state === 'succeeded' &&
+      operation.published !== undefined &&
+      !operation.published.hasHead ? (
+        <InitializeOffer idPrefix={`operation-${operation.id}`} controller={initialize} />
       ) : null}
       {operation.state === 'cleanup_pending' ? (
         <p className="settings-panel__clone-operation-issue">

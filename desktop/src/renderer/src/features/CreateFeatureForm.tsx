@@ -29,6 +29,7 @@ import {
   type EffortLevel,
   type ReadinessSnapshot,
   type RepositoryFileRef,
+  type RepositoryIdentity,
   type RepositoryState,
   type WorkspaceRootState,
 } from '../../../shared/ipc';
@@ -59,7 +60,9 @@ import {
   type CloneAssociation,
   type CreationDraftState,
   type PendingCreate,
+  type PendingInitialize,
 } from './creationDrafts';
+import { InitializeOffer, type InitializeOfferController } from './cloneViews';
 import { PickerCloneDialog } from './PickerCloneDialog';
 import { PickerCreateDialog } from './PickerCreateDialog';
 import type { CreateRepositoryStartInput } from './createViews';
@@ -265,6 +268,18 @@ export function CreateFeatureForm({
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(
     () => retained?.pendingCreate ?? null,
   );
+  // The picker-initiated explicit initialization this draft is waiting to
+  // adopt, plus the offer affordances scoped to the repository action.
+  const [pendingInitialize, setPendingInitialize] = useState<PendingInitialize | null>(
+    () => retained?.pendingInitialize ?? null,
+  );
+  const [initializeError, setInitializeError] = useState<CanonicalError | null>(null);
+  /** Clone-success offers declined with Not now (hidden per operation). */
+  const [declinedInitializeOperations, setDeclinedInitializeOperations] = useState<
+    ReadonlySet<string>
+  >(new Set());
+  /** The unborn catalog row whose inline later-opt-in offer is expanded. */
+  const [initializeExpandedKey, setInitializeExpandedKey] = useState<string | null>(null);
   // All configured workspace roots (the destination controls filter for
   // clone eligibility themselves).
   const [cloneableRoots, setCloneableRoots] = useState<readonly WorkspaceRootState[]>(
@@ -282,6 +297,7 @@ export function CreateFeatureForm({
   const formErrorRef = useRef<HTMLDivElement | null>(null);
   const catalogRefreshSeq = useRef(0);
   const cloneResolveSeq = useRef(0);
+  const initializeRequestSeq = useRef(0);
 
   // Locality decides how a folder reaches the form: the native directory
   // dialog on a local server (the picker resolves real paths on this
@@ -580,6 +596,7 @@ export function CreateFeatureForm({
       cloneableRoots: [...cloneableRoots],
       createOpen,
       pendingCreate: pendingCreate === null ? null : { ...pendingCreate },
+      pendingInitialize: pendingInitialize === null ? null : { ...pendingInitialize },
     };
   });
   const detachRef = useRef(onDraftDetach);
@@ -651,7 +668,14 @@ export function CreateFeatureForm({
    * adopt a late completion.
    */
   const serverKeyRef = useRef<string | null>(serverKey);
+  const serverGenerationRef = useRef(0);
   useEffect(() => {
+    if (serverKeyRef.current !== serverKey) {
+      serverGenerationRef.current += 1;
+      initializeRequestSeq.current += 1;
+      setPendingInitialize(null);
+      setInitializeError(null);
+    }
     serverKeyRef.current = serverKey;
   }, [serverKey]);
   const handleCreate = useCallback(
@@ -723,6 +747,204 @@ export function CreateFeatureForm({
   }, [pendingCreate, repositories]);
 
   /**
+   * The shared explicit-initialization action, used by both picker entry
+   * points: the unborn clone-success offer and the later opt-in beside an
+   * unborn catalog row. The pending marker is recorded before the request
+   * flies (it also suppresses duplicate actions for that repository); a
+   * completion from another server is discarded silently, and a rejection
+   * is reconciled by a fresh authoritative read — never by repeating the
+   * mutation. Both result values are successes; adoption follows from the
+   * refreshed catalog.
+   */
+  const handleInitialize = useCallback(
+    (target: { repoKey: string; identity: RepositoryIdentity; path: string }) => {
+      const startServerKey = serverKeyRef.current;
+      const startServerGeneration = serverGenerationRef.current;
+      const requestSeq = ++initializeRequestSeq.current;
+      const isCurrentRequest = (): boolean =>
+        requestSeq === initializeRequestSeq.current &&
+        startServerGeneration === serverGenerationRef.current &&
+        startServerKey === serverKeyRef.current;
+      const reconcile = (
+        identity: RepositoryIdentity,
+        resultRepoKey: string,
+        failure: CanonicalError | null,
+      ): void => {
+        void window.agentico.getReadiness().then(
+          (snapshot) => {
+            if (!isCurrentRequest()) return;
+            applyCatalogSnapshot(snapshot);
+            const ready = snapshot.repositories.some(
+              (repo) =>
+                repo.valid &&
+                repo.featureReady &&
+                repo.identity !== undefined &&
+                sameRepoIdentity(repo.identity, identity),
+            );
+            if (ready) {
+              setInitializeError(null);
+              setPendingInitialize({ repoKey: resultRepoKey, identity });
+              return;
+            }
+            setPendingInitialize(null);
+            if (failure !== null) {
+              setInitializeError(failure);
+            } else {
+              setFolderNotice(
+                `Initialized ${resultRepoKey}, but the repository changed or is no longer available. Reselect it from the current list.`,
+              );
+            }
+          },
+          (readError: unknown) => {
+            if (!isCurrentRequest()) return;
+            // The outcome is still uncertain. Keep the identity-bound
+            // marker so another mutation cannot be offered until a later
+            // authoritative catalog refresh can prove adoption.
+            setPendingInitialize({ repoKey: resultRepoKey, identity });
+            setInitializeError(failure ?? parseIpcError(readError));
+          },
+        );
+      };
+      setPendingInitialize({ repoKey: target.repoKey, identity: null });
+      setInitializeError(null);
+      return window.agentico
+        .initializeRepository({
+          repoKey: target.repoKey,
+          identity: target.identity,
+          path: target.path,
+          consent: true,
+        })
+        .then(
+          (result) => {
+            // A completion from another server (or after a remount) is not
+            // this draft's result: the new server's UI stays untouched.
+            if (!isCurrentRequest()) {
+              return result;
+            }
+            if (result.identity !== undefined) {
+              reconcile(result.identity, result.repoKey, null);
+            } else {
+              // No provable identity: visible success, never adopted by
+              // key or path.
+              setPendingInitialize(null);
+              setFolderNotice(
+                `Initialized ${result.repoKey}; select it from the list once it appears.`,
+              );
+            }
+            return result;
+          },
+          (err: unknown) => {
+            if (serverKeyRef.current !== null && isCurrentRequest()) {
+              // The attempt is over for this draft; the canonical
+              // rejection stays scoped to the repository action.
+              const parsed = parseIpcError(err);
+              // A lost response is reconciled through a fresh
+              // authoritative read; the mutation is never repeated
+              // automatically.
+              if (parsed.code !== 'E_SERVER_SWITCHED') {
+                reconcile(target.identity, target.repoKey, parsed);
+              } else {
+                setPendingInitialize(null);
+              }
+            }
+            throw err;
+          },
+        );
+    },
+    [applyCatalogSnapshot],
+  );
+
+  /** Duplicate initialize actions for one repository are suppressed while pending. */
+  const initializeSuppressed = useCallback(
+    (repo: RepositoryState): boolean => {
+      if (pendingInitialize === null) return false;
+      if (pendingInitialize.identity === null) return pendingInitialize.repoKey === repo.name;
+      return (
+        repo.identity !== undefined && sameRepoIdentity(pendingInitialize.identity, repo.identity)
+      );
+    },
+    [pendingInitialize],
+  );
+
+  /**
+   * A picker-initiated initialization adopts into exactly this draft,
+   * once: the pending marker carries the server-resolved identity of the
+   * refreshed repository, and the repository is selected under its current
+   * catalog key only after current readiness proves the same repository
+   * feature-ready. The historical clone record may still report its
+   * publication as unborn — that flag never blocks adoption.
+   */
+  useEffect(() => {
+    if (pendingInitialize === null || pendingInitialize.identity === null) return;
+    const identity = pendingInitialize.identity;
+    const match = repositories.find(
+      (repo) =>
+        repo.valid &&
+        repo.featureReady &&
+        repo.identity !== undefined &&
+        sameRepoIdentity(repo.identity, identity),
+    );
+    if (match === undefined || match.identity === undefined) return;
+    const matchIdentity = match.identity;
+    // Exactly-once is structural: the marker retires with the adoption.
+    setPendingInitialize(null);
+    // The terminal clone association is historical once its repository is
+    // initialized and adopted. Retire it so a later Clone action opens a
+    // fresh form instead of reviving the unborn success card.
+    setCloneAssociation(null);
+    setRepoSelections((current) =>
+      current.some((selection) => sameRepoIdentity(selection.identity, matchIdentity))
+        ? current
+        : [...current, { key: match.name, identity: matchIdentity }],
+    );
+    // A search filter cannot hide the focus target.
+    setRepoQuery('');
+    setFocusRepoKey(match.name);
+    setCloneOpen(false);
+    setInitializeExpandedKey(null);
+    setFolderNotice(`Initialized ${match.name} and selected it.`);
+    setRepoError(null);
+  }, [pendingInitialize, repositories]);
+
+  /**
+   * The initialize offer for the associated unborn clone success. The
+   * historical publication flag drives visibility; the pending state and
+   * the draft adoption stay with this sheet.
+   */
+  const cloneInitializeOffer = useMemo<InitializeOfferController | null>(() => {
+    if (cloneOperation === null || cloneOperation.state !== 'succeeded') return null;
+    const published = cloneOperation.published;
+    if (published === undefined || published.hasHead) return null;
+    const identity = published.identity;
+    if (identity === undefined) return null;
+    if (declinedInitializeOperations.has(cloneOperation.id)) return null;
+    const pending =
+      pendingInitialize !== null &&
+      (pendingInitialize.identity === null
+        ? pendingInitialize.repoKey === published.repoKey
+        : sameRepoIdentity(pendingInitialize.identity, identity));
+    return {
+      pending,
+      error: initializeError,
+      onInitialize: () => {
+        // The rejection is already surfaced as the scoped offer error;
+        // this catch only keeps the discarded promise quiet.
+        void handleInitialize({ repoKey: published.repoKey, identity, path: published.path }).catch(
+          () => undefined,
+        );
+      },
+      onDecline: () =>
+        setDeclinedInitializeOperations((current) => new Set([...current, cloneOperation.id])),
+    };
+  }, [
+    cloneOperation,
+    declinedInitializeOperations,
+    pendingInitialize,
+    initializeError,
+    handleInitialize,
+  ]);
+
+  /**
    * Pending row focus lands only while the picker step is actually visible,
    * so an adoption that completes elsewhere never steals focus.
    */
@@ -730,10 +952,10 @@ export function CreateFeatureForm({
     if (focusRepoKey === null || cloneOpen || createOpen || stepIndex !== 0) return;
     const group = repoGroupRef.current;
     if (group === null) return;
-    const row = group.querySelector(
-      `[data-repo-key="${focusRepoKey}"] .creation-sheet__row-control`,
-    );
-    if (row === null) return;
+    const row = Array.from(group.querySelectorAll<HTMLElement>('[data-repo-key]'))
+      .find((candidate) => candidate.dataset.repoKey === focusRepoKey)
+      ?.querySelector('.creation-sheet__row-control');
+    if (!(row instanceof HTMLInputElement)) return;
     (row as HTMLInputElement).focus();
     setFocusRepoKey(null);
   }, [focusRepoKey, cloneOpen, createOpen, stepIndex, repositories, repoQuery]);
@@ -1295,6 +1517,46 @@ export function CreateFeatureForm({
                                   }}
                                 />
                               </label>
+                              {repo.valid && !repo.featureReady && repo.identity !== undefined ? (
+                                <div className="creation-sheet__row-initialize">
+                                  <button
+                                    type="button"
+                                    className="creation-sheet__button"
+                                    aria-expanded={initializeExpandedKey === repo.name}
+                                    aria-controls={`repo-${encodeURIComponent(repo.name)}-initialize-copy`}
+                                    disabled={initializeSuppressed(repo) || pending}
+                                    onClick={() =>
+                                      setInitializeExpandedKey((current) =>
+                                        current === repo.name ? null : repo.name,
+                                      )
+                                    }
+                                  >
+                                    Create initial commit…
+                                  </button>
+                                  {initializeExpandedKey === repo.name ? (
+                                    <InitializeOffer
+                                      idPrefix={`repo-${encodeURIComponent(repo.name)}`}
+                                      controller={{
+                                        pending: initializeSuppressed(repo),
+                                        error: initializeError,
+                                        onInitialize: () => {
+                                          const identity = repo.identity;
+                                          if (identity === undefined) return;
+                                          // The rejection is already surfaced as the scoped
+                                          // offer error; this catch only keeps the discarded
+                                          // promise quiet.
+                                          void handleInitialize({
+                                            repoKey: repo.name,
+                                            identity,
+                                            path: repo.path,
+                                          }).catch(() => undefined);
+                                        },
+                                        onDecline: () => setInitializeExpandedKey(null),
+                                      }}
+                                    />
+                                  ) : null}
+                                </div>
+                              ) : null}
                             </li>
                           ))}
                           {filteredRepositories.length === 0 &&
@@ -1740,6 +2002,7 @@ export function CreateFeatureForm({
             onAssociate={(association) => setCloneAssociation(association)}
             onRefresh={resolveCloneOperation}
             onReadinessChanged={applyCatalogSnapshot}
+            initializeOffer={cloneInitializeOffer}
             onClose={() => setCloneOpen(false)}
           />
         ) : null}

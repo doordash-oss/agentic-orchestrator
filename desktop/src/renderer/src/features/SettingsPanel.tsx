@@ -33,6 +33,7 @@ import { retryAction, useConnectionState, useTheme } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import { WorkspaceDefaultsPanel } from './ConfigEditor';
 import { CloneRepositorySection } from './CloneRepositorySection';
+import { WorkspaceRepositoriesSection } from './WorkspaceRepositoriesSection';
 import { CreateRepositorySection } from './CreateRepositorySection';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { FieldError } from '../components/FieldError';
@@ -523,6 +524,14 @@ export function SettingsPanel({
 
       {pane === 'workspace-roots' && (
         <CreateRepositorySection
+          readiness={readiness}
+          connection={connection}
+          onReadinessChanged={setReadiness}
+        />
+      )}
+
+      {pane === 'workspace-roots' && (
+        <WorkspaceRepositoriesSection
           readiness={readiness}
           connection={connection}
           onReadinessChanged={setReadiness}

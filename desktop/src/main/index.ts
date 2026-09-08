@@ -59,6 +59,7 @@ import type { RuntimeGateway } from './gateway/runtimeGateway';
 import { FeatureService } from './features';
 import { CloneService } from './cloneService';
 import { CreateService } from './createService';
+import { InitializeService } from './initializeService';
 import { CompletionService } from './completion';
 import { RecoveryService } from './recovery';
 import { BulkService } from './bulk';
@@ -586,6 +587,16 @@ if (!hasSingleInstanceLock) {
     // Repository creation shares the same fencing contract: a creation
     // result from a previous server is never applied to the new one.
     const creates = new CreateService({
+      transport: gateway,
+      identity: () => ({
+        serverKey: gateway.connectedServerKey,
+        generation: gateway.connectionGeneration,
+      }),
+    });
+    // Explicit initialization shares the same fencing contract: an
+    // initialization result from a previous server is never applied to
+    // the new one.
+    const initializes = new InitializeService({
       transport: gateway,
       identity: () => ({
         serverKey: gateway.connectedServerKey,
@@ -1350,6 +1361,7 @@ if (!hasSingleInstanceLock) {
       retryCloneCleanup: (operationId) => clones.retryCloneCleanup(operationId),
       retryCloneOperation: (operationId) => clones.retryCloneOperation(operationId),
       createRepository: (request) => creates.createRepository(request),
+      initializeRepository: (request) => initializes.initializeRepository(request),
       listRepositories: () => setup.listRepositories(),
       listFeatures: () => features.listFeatures(),
       getFeature: (featureId) => features.getFeature(featureId),

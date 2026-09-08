@@ -103,6 +103,12 @@ export interface CreationDraftState {
    * draft never keeps an unresolved in-flight marker.
    */
   pendingCreate: PendingCreate | null;
+  /**
+   * The picker-initiated explicit initialization this draft is waiting to
+   * adopt. `identity` is null while the request is in flight; a restored
+   * draft never keeps an unresolved in-flight marker.
+   */
+  pendingInitialize: PendingInitialize | null;
 }
 
 /**
@@ -114,6 +120,22 @@ export interface CreationDraftState {
 export interface PendingCreate {
   idempotencyKey: string;
   /** Server-resolved identity of the published repository; null in flight. */
+  identity: RepositoryIdentity | null;
+}
+
+/**
+ * The picker-initiated explicit initialization associated with this draft.
+ * The catalog key is recorded before the request flies (it also suppresses
+ * duplicate actions for that repository); the server-resolved identity of
+ * the refreshed repository lands when the response returns, and adoption
+ * (selection by identity) happens exactly once. The historical clone
+ * record may still report its publication as unborn — that flag never
+ * blocks adoption after initialization.
+ */
+export interface PendingInitialize {
+  /** Catalog key at request time; used only to scope in-flight suppression. */
+  repoKey: string;
+  /** Server-resolved identity of the refreshed repository; null in flight. */
   identity: RepositoryIdentity | null;
 }
 
@@ -173,6 +195,16 @@ export function retainableDraft(state: CreationDraftState): CreationDraftState {
         : state.pendingCreate.identity === null
           ? null
           : { ...state.pendingCreate },
+    // An in-flight initialization is dead once its sheet unmounts (the
+    // response closure belongs to the unmounted instance); a resolved
+    // identity is kept so a restored draft can still adopt from the
+    // refreshed catalog.
+    pendingInitialize:
+      state.pendingInitialize === null
+        ? null
+        : state.pendingInitialize.identity === null
+          ? null
+          : { ...state.pendingInitialize },
   };
 }
 
@@ -217,6 +249,7 @@ export function freshCreationDraft(): CreationDraftState {
     cloneAssociation: null,
     createOpen: false,
     pendingCreate: null,
+    pendingInitialize: null,
   };
 }
 

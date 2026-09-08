@@ -23,7 +23,11 @@ limitations under the License.
  * reaches Succeeded → real filesystem/origin/HEAD/publication evidence →
  * closing Settings and reopening rediscovers the operation (no ID known)
  * → readiness reports the published repository as feature-ready → an
- * empty remote clones successfully but stays not feature-ready.
+ * empty remote clones successfully but stays not feature-ready → the
+ * unborn success offers Create initial commit / Not now → declining keeps
+ * the catalog row's later entry point → explicit initialization creates
+ * one empty Agentico commit, preserving the branch and origin without
+ * pushing → readiness flips to feature-ready.
  */
 import fs from 'node:fs';
 import http from 'node:http';
@@ -38,7 +42,7 @@ import {
   type AppHandle,
 } from '../helpers/app';
 import { Transcript } from '../helpers/transcript';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { createWorld, destroyWorld, waitFor } from '../helpers/world';
 import type { Page } from '@playwright/test';
 
@@ -48,6 +52,29 @@ const RUN_NAME = `settings-clone-${
 
 function git(dir: string, ...args: string[]): void {
   execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' });
+}
+
+/** Runs git tolerantly: an unborn HEAD (`rev-parse --verify --quiet`) exits 1. */
+function gitText(dir: string, ...args: string[]): string {
+  const result = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  if (result.status === 1 && result.stdout.trim() === '') return '';
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  }
+  return result.stdout.trim();
+}
+
+/** Probes the in-process HTTP remote without blocking its Node event loop. */
+function remoteRefs(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('git', ['ls-remote', url], { encoding: 'utf8' }, (error, stdout) => {
+      if (error !== null) {
+        reject(error);
+        return;
+      }
+      resolve(stdout.trim());
+    });
+  });
 }
 
 /** A real git repository served over controlled local dumb HTTP. */
@@ -176,6 +203,11 @@ test(
 
       transcript.section('Real filesystem outcomes: history, origin, publication evidence');
       const destination = path.join(world.workspaceRoot, 'widget');
+      await waitFor(
+        () => fs.existsSync(path.join(destination, '.git', 'HEAD')),
+        'published clone filesystem state',
+        30_000,
+      );
       expect(fs.existsSync(path.join(destination, '.git', 'HEAD'))).toBe(true);
       const logCount = execFileSync('git', ['-C', destination, 'rev-list', '--count', 'HEAD'], {
         encoding: 'utf8',
@@ -232,6 +264,80 @@ test(
       expect(emptyRepo?.featureReady).toBe(false);
       transcript.step('empty remote published successfully and stays not feature-ready');
       await evidenceShot(handle, 'settings-clone-empty-remote', reopened);
+
+      transcript.section('The unborn success offers both actions; Not now mutates nothing');
+      const offer = emptyOp.first().locator('[data-initialize-offer]');
+      await expect(offer).toBeVisible();
+      await expect(offer).toContainText(/one empty local commit/i);
+      const unbornDir = path.join(world.workspaceRoot, 'empty-clone');
+      const branchBefore = execFileSync(
+        'git',
+        ['-C', unbornDir, 'symbolic-ref', '--short', 'HEAD'],
+        { encoding: 'utf8' },
+      ).trim();
+      await offer.getByRole('button', { name: 'Not now' }).click();
+      await expect(emptyOp.first().locator('[data-initialize-offer]')).toHaveCount(0);
+      expect(gitText(unbornDir, 'rev-parse', '--verify', '--quiet', 'HEAD')).toBe('');
+      transcript.step('Not now hid the offer without creating a commit');
+
+      transcript.section('The catalog row keeps the later entry point and initializes on demand');
+      const repositoriesRegion = reopened.getByRole('region', { name: 'Repositories' });
+      const emptyRow = repositoriesRegion.locator('li[data-repo-key="empty-clone"]');
+      await expect(emptyRow).toBeVisible({ timeout: 30_000 });
+      await expect(emptyRow).toContainText(/No commits yet/);
+      await emptyRow.getByRole('button', { name: /Create initial commit…/ }).click();
+      const rowOffer = emptyRow.locator('[data-initialize-offer]');
+      await expect(rowOffer).toBeVisible();
+      await expect(rowOffer).toContainText(/one empty local commit/i);
+      await rowOffer.getByRole('button', { name: 'Create initial commit', exact: true }).click();
+      await expect(
+        repositoriesRegion.getByText(/Initialized empty-clone at/, { exact: false }),
+      ).toBeVisible({ timeout: 30_000 });
+
+      transcript.section(
+        'Real git evidence: one Agentico commit, preserved branch and origin, no push',
+      );
+      expect(
+        execFileSync('git', ['-C', unbornDir, 'rev-list', '--count', 'HEAD'], {
+          encoding: 'utf8',
+        }).trim(),
+      ).toBe('1');
+      const identityFormat = '%an <%ae> | %cn <%ce> | %s';
+      expect(
+        execFileSync('git', ['-C', unbornDir, 'log', '-1', `--format=${identityFormat}`], {
+          encoding: 'utf8',
+        }).trim(),
+      ).toBe('Agentico <agentico@localhost> | Agentico <agentico@localhost> | Initial commit');
+      const branchAfter = execFileSync(
+        'git',
+        ['-C', unbornDir, 'symbolic-ref', '--short', 'HEAD'],
+        { encoding: 'utf8' },
+      ).trim();
+      expect(branchAfter).toBe(branchBefore);
+      const emptyOriginUrl = execFileSync('git', ['-C', unbornDir, 'remote', 'get-url', 'origin'], {
+        encoding: 'utf8',
+      }).trim();
+      expect(emptyOriginUrl).toBe(empty.url);
+      // Nothing was pushed: the served remote still advertises no refs.
+      const advertised = await remoteRefs(empty.url);
+      expect(advertised).toBe('');
+      transcript.step(
+        'explicit initialization created exactly one empty Agentico commit, preserved the branch and origin, and pushed nothing',
+      );
+
+      transcript.section('Readiness flips to feature-ready under the same catalog key');
+      const readinessAfterInitialize = await reopened.evaluate(() =>
+        window.agentico.getReadiness(),
+      );
+      const initializedRepo = readinessAfterInitialize.repositories.find(
+        (repo) => repo.name === 'empty-clone',
+      );
+      expect(initializedRepo).toBeDefined();
+      expect(initializedRepo?.valid).toBe(true);
+      expect(initializedRepo?.featureReady).toBe(true);
+      expect(initializedRepo?.identity).toEqual(emptyRepo?.identity);
+      transcript.step('the initialized repository is feature-ready under its current key');
+      await evidenceShot(handle, 'settings-clone-initialized', reopened);
 
       await closeApp(handle);
       handle = null;

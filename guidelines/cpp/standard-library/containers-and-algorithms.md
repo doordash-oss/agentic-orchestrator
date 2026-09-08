@@ -5,14 +5,14 @@
 `std::vector` is the default (Core Guidelines SL.con.2). Use others only with
 a concrete reason:
 
-| Container | Choose when... |
-|-----------|---------------|
-| `vector` | Default; random access; fast iteration |
-| `deque` | Frequent push/pop at both ends |
-| `list` | Stable iterators; LRU cache; splice operations |
-| `map` | Sorted key order; range iteration |
-| `unordered_map` | O(1) average lookup; large datasets |
-| `set`/`unordered_set` | Unique elements; membership testing |
+| Container             | Choose when...                                 |
+| --------------------- | ---------------------------------------------- |
+| `vector`              | Default; random access; fast iteration         |
+| `deque`               | Frequent push/pop at both ends                 |
+| `list`                | Stable iterators; LRU cache; splice operations |
+| `map`                 | Sorted key order; range iteration              |
+| `unordered_map`       | O(1) average lookup; large datasets            |
+| `set`/`unordered_set` | Unique elements; membership testing            |
 
 ### `std::array` Over C Arrays
 

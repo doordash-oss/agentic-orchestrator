@@ -24,12 +24,16 @@ limitations under the License.
  * exactly the initiating draft (selected once, focus restored, filter
  * cleared, draft values kept) → readiness/catalog carry the real identity
  * → an empty remote publishes but stays unborn (visible, unselected) →
- * Escape closes only the clone view → reduced motion is honored.
+ * the unborn success offers Create initial commit / Not now → explicit
+ * initialization adopts the same identity into the still-open draft with
+ * one empty Agentico commit (branch and origin preserved, nothing pushed)
+ * → declining keeps the row's later opt-in, which adopts after the view
+ * closes → Escape closes only the clone view → reduced motion is honored.
  */
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { expect, test, type Page } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
@@ -47,6 +51,19 @@ const RUN_NAME = `picker-clone-${
 
 function git(dir: string, ...args: string[]): void {
   execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' });
+}
+
+/** Probes the in-process HTTP remote without blocking its Node event loop. */
+function remoteRefs(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('git', ['ls-remote', url], { encoding: 'utf8' }, (error, stdout) => {
+      if (error !== null) {
+        reject(error);
+        return;
+      }
+      resolve(stdout.trim());
+    });
+  });
 }
 
 /** A real git repository served over controlled local dumb HTTP. */
@@ -249,6 +266,98 @@ test('picker clone: real remote, identity-safe adoption, unborn result', async (
     await expect(emptyRow.getByRole('checkbox')).not.toBeChecked();
     transcript.step('unborn result stays visible with guidance and is never selected');
     await evidenceShot(handle, 'picker-clone-unborn', page);
+
+    // The clone-success offer initializes the unborn clone and adopts it
+    // into exactly the still-open initiating draft.
+    const offer = emptyOperation.first().locator('[data-initialize-offer]');
+    await expect(offer).toBeVisible();
+    await expect(offer).toContainText(/one empty local commit/i);
+    const unbornDir = path.join(world.workspaceRoot, 'empty-clone');
+    const branchBefore = spawnSync('git', ['-C', unbornDir, 'symbolic-ref', '--short', 'HEAD'], {
+      encoding: 'utf8',
+    }).stdout.trim();
+    await offer.getByRole('button', { name: 'Create initial commit', exact: true }).click();
+
+    await expect(cloneDialogReduced).not.toBeVisible({ timeout: 30_000 });
+    const adoptedRow = sheet.locator('.creation-sheet__row', { hasText: 'empty-clone' });
+    const adoptedCheckbox = adoptedRow.getByRole('checkbox');
+    await expect(adoptedCheckbox).toBeChecked({ timeout: 30_000 });
+    await expect
+      .poll(async () => page.evaluate(() => document.activeElement?.className ?? ''), {
+        timeout: 30_000,
+      })
+      .toContain('creation-sheet__row-control');
+    await expect(sheet.getByText('Initialized empty-clone and selected it.')).toBeVisible();
+    // The earlier adoption and every draft value survived.
+    await expect(widgetCheckbox).toBeChecked();
+    transcript.step('explicit initialization adopted into the initiating draft with row focus');
+
+    // Real git evidence: one empty Agentico commit, preserved branch and
+    // origin, nothing pushed.
+    expect(
+      execFileSync('git', ['-C', unbornDir, 'rev-list', '--count', 'HEAD'], {
+        encoding: 'utf8',
+      }).trim(),
+    ).toBe('1');
+    expect(
+      execFileSync('git', ['-C', unbornDir, 'log', '-1', '--format=%an <%ae> | %cn <%ce> | %s'], {
+        encoding: 'utf8',
+      }).trim(),
+    ).toBe('Agentico <agentico@localhost> | Agentico <agentico@localhost> | Initial commit');
+    const branchAfter = spawnSync('git', ['-C', unbornDir, 'symbolic-ref', '--short', 'HEAD'], {
+      encoding: 'utf8',
+    }).stdout.trim();
+    expect(branchAfter).toBe(branchBefore);
+    expect(
+      execFileSync('git', ['-C', unbornDir, 'remote', 'get-url', 'origin'], {
+        encoding: 'utf8',
+      }).trim(),
+    ).toBe(empty.url);
+    expect(await remoteRefs(empty.url)).toBe('');
+    const readinessAfterInitialize = await page.evaluate(() => window.agentico.getReadiness());
+    const initializedRepo = readinessAfterInitialize.repositories.find(
+      (repo) => repo.name === 'empty-clone',
+    );
+    expect(initializedRepo?.valid).toBe(true);
+    expect(initializedRepo?.featureReady).toBe(true);
+    expect(initializedRepo?.identity).toEqual(emptyRepo?.identity);
+    transcript.step(
+      'initialization created one empty Agentico commit, preserved branch and origin, pushed nothing',
+    );
+
+    // Later opt-in after declining: another unborn clone, decline the
+    // offer, close the view, then initialize from the row action.
+    await sheet.getByRole('button', { name: /clone a repository/i }).click();
+    await cloneFromPicker(page, empty.url, 'declined-clone', world.workspaceRoot);
+    const declinedOperation = page.locator('.creation-clone__operation', {
+      hasText: 'declined-clone',
+    });
+    await expect(declinedOperation.first()).toContainText('Succeeded', { timeout: 120_000 });
+    const declinedOffer = declinedOperation.first().locator('[data-initialize-offer]');
+    await expect(declinedOffer).toBeVisible();
+    await declinedOffer.getByRole('button', { name: 'Not now' }).click();
+    await expect(declinedOperation.first().locator('[data-initialize-offer]')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Close' }).click();
+    await expect(cloneDialogReduced).not.toBeVisible();
+    const declinedRow = sheet.locator('.creation-sheet__row-item', {
+      hasText: 'declined-clone',
+    });
+    await expect(declinedRow).toBeVisible({ timeout: 30_000 });
+    await expect(declinedRow.getByRole('checkbox')).toBeDisabled();
+    await declinedRow.getByRole('button', { name: /Create initial commit…/ }).click();
+    const rowOffer = declinedRow.locator('[data-initialize-offer]');
+    await expect(rowOffer).toBeVisible();
+    await expect(rowOffer).toContainText(/one empty local commit/i);
+    await rowOffer.getByRole('button', { name: 'Create initial commit', exact: true }).click();
+    const declinedCheckbox = declinedRow.getByRole('checkbox');
+    await expect(declinedCheckbox).toBeChecked({ timeout: 30_000 });
+    await expect
+      .poll(async () => page.evaluate(() => document.activeElement?.className ?? ''), {
+        timeout: 30_000,
+      })
+      .toContain('creation-sheet__row-control');
+    await expect(sheet.getByText('Initialized declined-clone and selected it.')).toBeVisible();
+    transcript.step('later opt-in after declining adopted without cloning again');
 
     await closeApp(handle);
     handle = null;

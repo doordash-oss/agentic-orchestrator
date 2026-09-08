@@ -30,27 +30,27 @@ List<String> filtered = names.stream()
 
 ## Choosing a List Implementation
 
-| Implementation | When to Use |
-|---------------|-------------|
-| `ArrayList` | Default choice — O(1) random access, amortized O(1) add |
-| `List.of(...)` | Immutable, known elements at construction |
-| `List.copyOf(collection)` | Immutable copy of existing collection |
-| `LinkedList` | Almost never — ArrayList beats it in practice for most workloads |
-| `CopyOnWriteArrayList` | Concurrent reads, rare writes (listener lists) |
+| Implementation            | When to Use                                                      |
+| ------------------------- | ---------------------------------------------------------------- |
+| `ArrayList`               | Default choice — O(1) random access, amortized O(1) add          |
+| `List.of(...)`            | Immutable, known elements at construction                        |
+| `List.copyOf(collection)` | Immutable copy of existing collection                            |
+| `LinkedList`              | Almost never — ArrayList beats it in practice for most workloads |
+| `CopyOnWriteArrayList`    | Concurrent reads, rare writes (listener lists)                   |
 
 **Rule**: use `ArrayList` as the default mutable list. Use `List.of()` when
 the contents are known upfront and won't change.
 
 ## Choosing a Map Implementation
 
-| Implementation | When to Use |
-|---------------|-------------|
-| `HashMap` | Default choice — O(1) get/put, unordered |
-| `LinkedHashMap` | Insertion-order iteration needed |
-| `TreeMap` | Sorted keys (natural or custom comparator) |
-| `EnumMap` | Keys are enum constants — fastest possible map for enums |
-| `ConcurrentHashMap` | Thread-safe, high concurrency |
-| `Map.of(...)` | Immutable, known entries at construction |
+| Implementation      | When to Use                                              |
+| ------------------- | -------------------------------------------------------- |
+| `HashMap`           | Default choice — O(1) get/put, unordered                 |
+| `LinkedHashMap`     | Insertion-order iteration needed                         |
+| `TreeMap`           | Sorted keys (natural or custom comparator)               |
+| `EnumMap`           | Keys are enum constants — fastest possible map for enums |
+| `ConcurrentHashMap` | Thread-safe, high concurrency                            |
+| `Map.of(...)`       | Immutable, known entries at construction                 |
 
 ```java
 // EnumMap — always use for enum keys
@@ -59,13 +59,13 @@ Map<DayOfWeek, List<Event>> schedule = new EnumMap<>(DayOfWeek.class);
 
 ## Choosing a Set Implementation
 
-| Implementation | When to Use |
-|---------------|-------------|
-| `HashSet` | Default choice — O(1) contains/add |
-| `LinkedHashSet` | Insertion-order iteration needed |
-| `TreeSet` | Sorted elements |
-| `EnumSet` | Elements are enum constants — bit-vector backed, very fast |
-| `Set.of(...)` | Immutable, known elements |
+| Implementation  | When to Use                                                |
+| --------------- | ---------------------------------------------------------- |
+| `HashSet`       | Default choice — O(1) contains/add                         |
+| `LinkedHashSet` | Insertion-order iteration needed                           |
+| `TreeSet`       | Sorted elements                                            |
+| `EnumSet`       | Elements are enum constants — bit-vector backed, very fast |
+| `Set.of(...)`   | Immutable, known elements                                  |
 
 ```java
 // EnumSet — always use for enum flags

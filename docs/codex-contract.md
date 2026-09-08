@@ -53,11 +53,11 @@ Run the live compatibility fixture with an authenticated Codex CLI on `PATH`:
 AGENTIC_CODEX_LIVE=1 go test ./test/e2e -run '^TestCodexContractLive$' -count=1 -timeout=20m -v
 ```
 
-The default model list is `gpt-5.4,gpt-6-astra`. Override it when validating
+The default model list is `gpt-5.4-mini,gpt-6-astra`. Override it when validating
 other available models:
 
 ```bash
-AGENTIC_CODEX_LIVE=1 AGENTIC_CODEX_MODELS='gpt-5.4,gpt-6-astra' \
+AGENTIC_CODEX_LIVE=1 AGENTIC_CODEX_MODELS='gpt-5.4-mini,gpt-6-astra' \
   go test ./test/e2e -run '^TestCodexContractLive$' -count=1 -timeout=20m -v
 ```
 

@@ -56,7 +56,7 @@ func TestCodexContractLive(t *testing.T) {
 	t.Logf("CLI: %s", strings.TrimSpace(string(version)))
 	modelList := os.Getenv("AGENTIC_CODEX_MODELS")
 	if modelList == "" {
-		modelList = "gpt-5.4,gpt-6-astra"
+		modelList = "gpt-5.4-mini,gpt-6-astra"
 	}
 	var models []string
 	for _, model := range strings.Split(modelList, ",") {

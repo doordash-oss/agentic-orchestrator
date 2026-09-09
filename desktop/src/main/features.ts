@@ -173,6 +173,15 @@ const PUBLISH_DESCRIPTION_TIMEOUT_MS = 6 * 60_000;
 const LONG_MUTATION_TIMEOUT_MS = 10 * 60_000;
 const LONG_MUTATION_ACTIONS: ReadonlySet<string> = new Set(['publish', 'merge']);
 
+// Source acceptance and setup serialize with in-flight origin checks on the
+// repositories' shared mutation boundary, so a submit while a check is running
+// legitimately waits out the server's 60-second attempt deadline before it
+// completes. The client allowance covers that coordination plus acceptance,
+// setup work, and response delivery, without weakening the 30-second default
+// for ordinary API calls.
+const COORDINATED_MUTATION_TIMEOUT_MS = 3 * 60_000;
+const COORDINATED_MUTATION_ACTIONS: ReadonlySet<string> = new Set(['setup', 'start', 'restart']);
+
 export class FeatureService {
   private readonly actionFlights = new Map<string, Promise<FeatureActionResult>>();
   private readonly locality: LocalitySource;
@@ -355,6 +364,7 @@ export class FeatureService {
       : await this.deps.resolveRepositoryFiles(validated.repositoryFiles);
     const body = await this.api('/api/v1/features', {
       method: 'POST',
+      timeoutMs: COORDINATED_MUTATION_TIMEOUT_MS,
       body: {
         name: validated.name.trim(),
         ...(validated.description.trim() === '' ? {} : { description: validated.description }),
@@ -418,6 +428,7 @@ export class FeatureService {
     const id = validateWithSchema(featureId, FeatureIdSchema);
     const body = await this.api(`/api/v1/features/${id}/actions/setup`, {
       method: 'POST',
+      timeoutMs: COORDINATED_MUTATION_TIMEOUT_MS,
       body: {},
     });
     const response = validateWithSchema(body, FeatureActionResponseSchema);
@@ -719,6 +730,9 @@ export class FeatureService {
         method: 'POST',
         body: 'body' in input ? input.body : {},
         ...(LONG_MUTATION_ACTIONS.has(input.action) ? { timeoutMs: LONG_MUTATION_TIMEOUT_MS } : {}),
+        ...(COORDINATED_MUTATION_ACTIONS.has(input.action)
+          ? { timeoutMs: COORDINATED_MUTATION_TIMEOUT_MS }
+          : {}),
       });
       const response = validateWithSchema(body, ServerFeatureOperationalActionResponseSchema);
       return {

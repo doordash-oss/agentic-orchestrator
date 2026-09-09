@@ -172,6 +172,49 @@ async function mockDelayedDirectoryPicker(
   );
 }
 
+/**
+ * Builds `remote-behind` inside the given workspace root: a repository whose
+ * local main is two commits behind a real bare origin, so selecting it must
+ * produce a behind origin comparison on whichever server owns that root.
+ */
+function pairRemoteBehindOrigin(world: JourneyWorld, workspaceRoot: string): void {
+  const dir = path.join(workspaceRoot, 'remote-behind');
+  fs.mkdirSync(dir, { recursive: true });
+  gitText(dir, 'init', '--initial-branch=main');
+  gitText(
+    dir,
+    '-c',
+    'user.name=e2e',
+    '-c',
+    'user.email=e2e@example.invalid',
+    'commit',
+    '--allow-empty',
+    '-m',
+    'initial',
+  );
+  const bare = path.join(world.root, 'remote-behind-origin.git');
+  fs.mkdirSync(bare, { recursive: true });
+  gitText(bare, 'init', '--bare');
+  gitText(dir, 'remote', 'add', 'origin', bare);
+  gitText(dir, 'push', '-u', 'origin', 'main');
+  const writer = path.join(world.root, 'remote-behind-writer');
+  gitText(world.root, 'clone', bare, writer);
+  for (const message of ['remote one', 'remote two']) {
+    gitText(
+      writer,
+      '-c',
+      'user.name=e2e',
+      '-c',
+      'user.email=e2e@example.invalid',
+      'commit',
+      '--allow-empty',
+      '-m',
+      message,
+    );
+  }
+  gitText(writer, 'push', 'origin', 'main');
+}
+
 // --- test-owned remote server -------------------------------------------------
 
 interface RemoteTestServer {
@@ -570,6 +613,9 @@ test('remote create and clone use only the remote configured roots', async ({}, 
   const populated = await serveGitRemote(world.root, 'prep-remote-src', 2);
   const empty = await serveGitRemote(world.root, 'prep-empty-src', 0);
   const remote = await startPrepRemoteServer(world);
+  // A repository inside the remote workspace whose origin is two commits
+  // ahead: only the selected remote server can see or check it.
+  pairRemoteBehindOrigin(world, remote.root);
   const localConfigBefore = fs.readFileSync(world.configPath, 'utf8');
   const remoteConfigBefore = fs.readFileSync(remote.configPath, 'utf8');
   const ctx: WorldHandle = { world, handle: null };
@@ -681,10 +727,29 @@ test('remote create and clone use only the remote configured roots', async ({}, 
     expect(await remoteRefs(empty.url)).toBe('');
     transcript.step('remote initialization adopted by identity with server-side git evidence only');
 
+    transcript.section('Origin checks execute against the selected server');
+    // Deselect the adopted rows so the origin evidence is scoped to the one
+    // repository whose origin comparison can only come from the remote.
+    await remoteMadeRow.getByRole('checkbox').uncheck();
+    await remoteCloneRow.getByRole('checkbox').uncheck();
+    await remoteEmptyRow.getByRole('checkbox').uncheck();
+    const behindRow = sheet.locator('.creation-sheet__row', { hasText: 'remote-behind' });
+    await expect(behindRow).toBeVisible({ timeout: 30_000 });
+    await behindRow.getByRole('checkbox').check();
+    await expect(
+      sheet.getByRole('checkbox', {
+        name: /remote-behind.*Origin: 2 commits behind origin\/main/,
+      }),
+    ).toBeVisible({ timeout: 30_000 });
+    transcript.step(
+      'the behind comparison was fetched by the selected remote server from its own workspace',
+    );
+
     transcript.section("The other server's directories and configuration are untouched");
     expect(fs.existsSync(path.join(world.workspaceRoot, 'remote-made'))).toBe(false);
     expect(fs.existsSync(path.join(world.workspaceRoot, 'remote-clone'))).toBe(false);
     expect(fs.existsSync(path.join(world.workspaceRoot, 'remote-empty'))).toBe(false);
+    expect(fs.existsSync(path.join(world.workspaceRoot, 'remote-behind'))).toBe(false);
     expect(fs.readFileSync(world.configPath, 'utf8')).toBe(localConfigBefore);
     expect(fs.readFileSync(remote.configPath, 'utf8')).toBe(remoteConfigBefore);
     transcript.step('no desktop path was transmitted and neither config changed');

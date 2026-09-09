@@ -23,7 +23,7 @@ limitations under the License.
  *   app-owned child  → survives the switch-away, still stopped on quit
  * The journey also pins that no token ever crosses an IPC-visible surface.
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -195,13 +195,54 @@ async function connectionState(handle: AppHandle) {
 
 const FEATURE_NAME = 'Switching Anchor Fixture';
 
+function gitText(dir: string, ...args: string[]): string {
+  return execFileSync('git', ['-C', dir, ...args], {
+    encoding: 'utf8',
+    env: { ...minimalEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+  }).trim();
+}
+
+/**
+ * Pairs a workspace repository with a real bare origin and advances the
+ * remote by two commits, so the selected local source is provably behind.
+ */
+function pairBehindOrigin(world: JourneyWorld, repo: string, name: string): string {
+  const bare = path.join(world.root, `${name}-origin.git`);
+  fs.mkdirSync(bare, { recursive: true });
+  gitText(bare, 'init', '--bare');
+  gitText(repo, 'remote', 'add', 'origin', bare);
+  gitText(repo, 'push', '-u', 'origin', 'main');
+  const writer = path.join(world.root, `${name}-writer`);
+  execFileSync('git', ['clone', bare, writer], {
+    stdio: 'pipe',
+    env: { ...minimalEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+  });
+  for (const message of ['remote one', 'remote two']) {
+    gitText(
+      writer,
+      '-c',
+      'user.name=e2e',
+      '-c',
+      'user.email=e2e@example.invalid',
+      'commit',
+      '--allow-empty',
+      '-m',
+      message,
+    );
+  }
+  gitText(writer, 'push', 'origin', 'main');
+  return bare;
+}
+
 test("two-server switching: A→B→A restores each server's truth and selection", async ({}, testInfo) => {
+  test.setTimeout(360_000);
   const transcript = new Transcript('server-switching', 'In-app two-server switching (packaged)');
   const world = createWorld('server-switching', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
     presetWorkspaceRoot: true,
   });
   createRepo(world, 'switch-lab', { commit: true });
+  pairBehindOrigin(world, createRepo(world, 'origin-lab', { commit: true }), 'origin-lab');
   const servers: TestServer[] = [];
   let handle: AppHandle | null = null;
   try {
@@ -378,6 +419,46 @@ test("two-server switching: A→B→A restores each server's truth and selection
     await restoredSheet.getByRole('button', { name: 'Discard draft' }).click();
     await expect(handle.page.getByRole('dialog', { name: 'New feature' })).toHaveCount(0);
     transcript.step('explicit discard retired the restored draft');
+
+    transcript.section('Origin checks are answered by the connected server only');
+    // alpha's own coordinator fetches and reports the behind comparison.
+    await handle.page.getByRole('button', { name: 'New feature' }).click();
+    const alphaOriginSheet = handle.page.getByRole('dialog', { name: 'New feature' });
+    await alphaOriginSheet.getByRole('checkbox', { name: /origin-lab/ }).check();
+    await expect(
+      alphaOriginSheet.getByRole('checkbox', {
+        name: /origin-lab.*Origin: 2 commits behind origin\/main/,
+      }),
+    ).toBeVisible({ timeout: 30_000 });
+    await alphaOriginSheet.getByRole('button', { name: 'Cancel' }).click();
+    await alphaOriginSheet.getByRole('button', { name: 'Discard draft' }).click();
+    await expect(handle.page.getByRole('dialog', { name: 'New feature' })).toHaveCount(0);
+
+    // beta is a separate server process with its own coordinator: the same
+    // selection must be answered by beta's own fresh attempt, never by a
+    // stale reply left over from alpha.
+    await openSwitcher(handle, 'alpha');
+    await handle.page.getByRole('option', { name: /beta at .+ — Available/ }).click();
+    await waitFor(
+      async () => {
+        const state = await connectionState(handle!);
+        return state.status === 'ready' && state.serverName === 'beta';
+      },
+      'the switch to beta for the origin check',
+      60_000,
+    );
+    await handle.page.getByRole('button', { name: 'New feature' }).click();
+    const betaOriginSheet = handle.page.getByRole('dialog', { name: 'New feature' });
+    await betaOriginSheet.getByRole('checkbox', { name: /origin-lab/ }).check();
+    await expect(
+      betaOriginSheet.getByRole('checkbox', {
+        name: /origin-lab.*Origin: 2 commits behind origin\/main/,
+      }),
+    ).toBeVisible({ timeout: 30_000 });
+    await betaOriginSheet.getByRole('button', { name: 'Cancel' }).click();
+    await betaOriginSheet.getByRole('button', { name: 'Discard draft' }).click();
+    await expect(handle.page.getByRole('dialog', { name: 'New feature' })).toHaveCount(0);
+    transcript.step('each connected server answered the origin check from its own coordinator');
 
     persistAppLogs(handle, 'server-switching-app');
     transcript.write(testInfo);

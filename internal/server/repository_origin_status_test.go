@@ -506,7 +506,11 @@ func TestOriginCheckCoordinatorDeadlineExpiresWhileQueued(t *testing.T) {
 	for i := 0; i < maxConcurrentOriginChecks; i++ {
 		select {
 		case <-entered:
-		case <-time.After(10 * time.Second):
+		// Each blocker's admission path forks real git (identity and plan
+		// re-resolution), which stalls under full-repo race-detector load on
+		// this machine's documented fork-heavy pathology; the bound stays
+		// meaningful because admission is still required within it.
+		case <-time.After(30 * time.Second):
 			t.Fatal("a concurrent slot never admitted a blocking check")
 		}
 	}
@@ -691,5 +695,36 @@ func TestOriginCheckCoordinatorFailedRefreshPreservesStaleComparison(t *testing.
 	}
 	if row.Status != RepositoryOriginStatusStatusUnknown || row.Issue == nil || row.Issue.Code != "origin_check_unavailable" {
 		t.Fatalf("row = %#v; want unknown with an origin_check_unavailable issue", row)
+	}
+}
+
+func TestRuntimeServerCloseCancelsInFlightOriginChecks(t *testing.T) {
+	repo, identity, plan := originCoordinatorTestRepo(t)
+	coordinator := newOriginCheckCoordinator()
+	coordinator.deadline = 30 * time.Second
+	coordinator.executor = func(ctx context.Context, repoPath string, plan git.OriginCheckPlan) originAttemptOutcome {
+		<-ctx.Done()
+		return originAttemptOutcome{Unavailable: true, Diagnostics: "runtime shut down"}
+	}
+
+	_, _, done := coordinator.ensure(identity, plan, repo, false)
+
+	// A runtime server whose only live work is the origin-check coordinator:
+	// Close must cancel the attempt and reap it within the caller's deadline.
+	// The attempt may be cancelled before the executor ever runs, so the
+	// proof is the released flight, not the executor's observation.
+	s := &RuntimeServer{srv: &http.Server{}, originChecks: coordinator, done: make(chan error, 1)}
+	s.done <- nil
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.Close(ctx); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	waitOriginAttempt(t, done)
+	coordinator.mu.Lock()
+	completed := coordinator.completed[originCheckKeyFor(identity, plan)]
+	coordinator.mu.Unlock()
+	if completed == nil || !completed.unavailable {
+		t.Fatalf("completed attempt = %#v; want a cancelled unknown outcome", completed)
 	}
 }

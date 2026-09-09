@@ -16,6 +16,7 @@ limitations under the License.
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import { closeApp, evidenceShot, launchApp, setTheme, type AppHandle } from '../helpers/app';
@@ -285,6 +286,234 @@ test('current-branch creation continues offline at the accepted slash branch com
     );
   } finally {
     if (handle !== undefined) await closeApp(handle);
+    transcript.write(testInfo);
+    destroyWorld(world);
+  }
+});
+
+/**
+ * Pairs a repository with a real bare origin and advances the remote by two
+ * commits, so the selected local source is provably behind its origin.
+ */
+function pairBehindOrigin(world: { root: string }, repo: string, name: string): string {
+  const bare = path.join(world.root, `${name}-origin.git`);
+  fs.mkdirSync(bare, { recursive: true });
+  gitText(bare, 'init', '--bare');
+  gitText(repo, 'remote', 'add', 'origin', bare);
+  gitText(repo, 'push', '-u', 'origin', 'main');
+  const writer = path.join(world.root, `${name}-writer`);
+  execFileSync('git', ['clone', bare, writer], {
+    stdio: 'pipe',
+    env: { ...minimalEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+  });
+  for (const message of ['remote one', 'remote two']) {
+    gitText(
+      writer,
+      '-c',
+      'user.name=e2e',
+      '-c',
+      'user.email=e2e@example.invalid',
+      'commit',
+      '--allow-empty',
+      '-m',
+      message,
+    );
+  }
+  gitText(writer, 'push', 'origin', 'main');
+  return bare;
+}
+
+test('origin checks report behind, retry fresh, keep stale evidence, and continue from the local source', async ({}, testInfo) => {
+  const world = createWorld('origin-behind-creation', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+  });
+  const repo = createRepo(world, 'origin-lab', { commit: true });
+  const bare = pairBehindOrigin(world, repo, 'origin-lab');
+  const originSha = gitText(bare, 'rev-parse', 'refs/heads/main');
+  const acceptedCommit = gitText(repo, 'rev-parse', 'HEAD');
+  if (originSha === acceptedCommit) {
+    throw new Error('fixture did not place the local source behind origin');
+  }
+  const transcript = new Transcript('origin-behind-creation', 'Origin-check warning continuation');
+  let handle: AppHandle | undefined;
+  try {
+    handle = await launchApp(world, testInfo, { traceName: 'origin-behind-creation' });
+    const app = handle;
+    await app.page.getByRole('button', { name: 'New feature' }).click();
+    const sheet = app.page.getByRole('dialog', { name: 'New feature' });
+    await sheet.getByRole('checkbox', { name: /origin-lab/ }).check();
+    // Selection triggers the automatic check; the row reports the real
+    // behind comparison against the freshly fetched origin.
+    await expect(
+      sheet.getByRole('checkbox', { name: /origin-lab.*Origin: 2 commits behind origin\/main/ }),
+    ).toBeVisible({ timeout: 30_000 });
+
+    // Check again is a fresh attempt: the row passes through checking
+    // before the completed result returns.
+    await sheet.getByRole('button', { name: 'Check again' }).click();
+    await expect(sheet.getByText('Origin check still running…')).toBeVisible({ timeout: 10_000 });
+    await expect(
+      sheet.getByRole('checkbox', { name: /origin-lab.*Origin: 2 commits behind origin\/main/ }),
+    ).toBeVisible({ timeout: 30_000 });
+
+    // The review step names the local branch and the consequence.
+    await sheet.getByRole('button', { name: 'Next: Describe' }).click();
+    await app.page.locator('#feature-name').fill('Origin behind continuation');
+    await sheet.getByRole('button', { name: 'Next: Depth' }).click();
+    await sheet.getByRole('button', { name: 'Next: Contract' }).click();
+    await expect(
+      sheet.getByText(
+        'origin-lab: main is 2 commits behind origin/main; the feature will start from the local source.',
+      ),
+    ).toBeVisible();
+    transcript.step('the behind warning explained the local continuation in review');
+
+    // A failed recheck preserves the earlier comparison as explicitly stale.
+    await sheet.getByRole('button', { name: 'Back' }).click();
+    await sheet.getByRole('button', { name: 'Back' }).click();
+    await sheet.getByRole('button', { name: 'Back' }).click();
+    gitText(repo, 'remote', 'set-url', 'origin', path.join(world.root, 'missing-origin.git'));
+    await sheet.getByRole('button', { name: 'Check again' }).click();
+    await expect(
+      sheet.getByRole('checkbox', {
+        name: /origin-lab.*Origin check unavailable — creation continues from the local source/,
+      }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(sheet.getByText(/Earlier comparison: 2 commits behind \(stale\)\./)).toBeVisible();
+    transcript.step('the failed recheck kept the earlier comparison as stale evidence');
+
+    // Navigation through the warnings preserved the draft, and creation
+    // continues from the accepted local commit without an acknowledgement.
+    await sheet.getByRole('button', { name: 'Next: Describe' }).click();
+    await expect(app.page.locator('#feature-name')).toHaveValue('Origin behind continuation');
+    await sheet.getByRole('button', { name: 'Next: Depth' }).click();
+    await sheet.getByRole('button', { name: 'Next: Contract' }).click();
+    await expect(
+      sheet.getByText(
+        'origin-lab: the origin check could not complete; the feature will start from main. An earlier comparison (2 commits behind) is preserved but stale.',
+      ),
+    ).toBeVisible();
+    await sheet.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
+    await sheet.getByRole('button', { name: 'Create', exact: true }).click();
+
+    const cockpit = app.page.getByLabel('Feature Origin behind continuation');
+    await expect(cockpit).toBeVisible({ timeout: 30_000 });
+    await expect(cockpit.getByText('Ready to start').first()).toBeVisible({ timeout: 60_000 });
+    await waitFor(
+      () => durableFeatureIds(world.stateDir).length === 1,
+      'the origin continuation feature id',
+    );
+    const featureId = durableFeatureIds(world.stateDir)[0]!;
+    const featureYaml = fs.readFileSync(
+      path.join(world.stateDir, featureId, 'feature.yaml'),
+      'utf8',
+    );
+    const runYaml = fs.readFileSync(
+      path.join(world.stateDir, featureId, 'runs', 'run-001', 'run.yaml'),
+      'utf8',
+    );
+    const storedCommits = parseFeatureRepoField(featureYaml, /^\s+commit:\s*(.+?)\s*$/);
+    const worktree = parseFeatureRepos(featureYaml)['origin-lab']!;
+    expect(storedCommits['origin-lab']).toBe(acceptedCommit);
+    expect(runYaml).toContain(`exact_sha: ${acceptedCommit}`);
+    expect(gitText(worktree, 'rev-parse', 'HEAD')).toBe(acceptedCommit);
+    expect(gitText(repo, 'branch', '--show-current')).toBe('main');
+    expect(gitText(repo, 'status', '--porcelain')).toBe('');
+    transcript.step(
+      'creation continued at the accepted local commit despite the failed origin check',
+    );
+  } finally {
+    if (handle !== undefined) await closeApp(handle);
+    transcript.write(testInfo);
+    destroyWorld(world);
+  }
+});
+
+test('creation continues from the local source while an origin check is still running', async ({}, testInfo) => {
+  const world = createWorld('origin-running-creation', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+  });
+  const repo = createRepo(world, 'running-lab', { commit: true });
+  pairBehindOrigin(world, repo, 'running-lab');
+  const acceptedCommit = gitText(repo, 'rev-parse', 'HEAD');
+  // Origin answers never arrive: the transport accepts connections and then
+  // stays silent, so the automatic check remains in flight well past submit.
+  const hangingServer = http.createServer(() => {
+    /* deliberately never responds */
+  });
+  const listening = new Promise<void>((resolve) =>
+    hangingServer.once('listening', () => resolve()),
+  );
+  hangingServer.listen(0, '127.0.0.1');
+  await listening;
+  const address = hangingServer.address();
+  const port = typeof address === 'object' && address !== null ? address.port : 0;
+  gitText(
+    repo,
+    'remote',
+    'set-url',
+    'origin',
+    `http://127.0.0.1:${String(port)}/running-origin.git`,
+  );
+  const transcript = new Transcript(
+    'origin-running-creation',
+    'Continuation during a running check',
+  );
+  let handle: AppHandle | undefined;
+  try {
+    handle = await launchApp(world, testInfo, { traceName: 'origin-running-creation' });
+    const app = handle;
+    await app.page.getByRole('button', { name: 'New feature' }).click();
+    const sheet = app.page.getByRole('dialog', { name: 'New feature' });
+    await sheet.getByRole('checkbox', { name: /running-lab/ }).check();
+    await expect(sheet.getByText('Origin check still running…')).toBeVisible({ timeout: 30_000 });
+
+    // Walk to review while the check is still in flight: the pending origin
+    // check never gates any step.
+    await sheet.getByRole('button', { name: 'Next: Describe' }).click();
+    await app.page.locator('#feature-name').fill('Origin running continuation');
+    await sheet.getByRole('button', { name: 'Next: Depth' }).click();
+    await sheet.getByRole('button', { name: 'Next: Contract' }).click();
+    await expect(
+      sheet.getByText('running-lab: origin check still running; the feature will start from main.'),
+    ).toBeVisible();
+    await sheet.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
+    await sheet.getByRole('button', { name: 'Create', exact: true }).click();
+
+    const cockpit = app.page.getByLabel('Feature Origin running continuation');
+    // Acceptance serializes with the in-flight check on the repository's
+    // mutation boundary, so submission waits out the server's 60-second
+    // attempt deadline before it completes; the client allowance covers the
+    // deadline plus response delivery.
+    await expect(cockpit).toBeVisible({ timeout: 90_000 });
+    await expect(cockpit.getByText('Ready to start').first()).toBeVisible({ timeout: 60_000 });
+    await waitFor(
+      () => durableFeatureIds(world.stateDir).length === 1,
+      'the running-check feature id',
+    );
+    const featureId = durableFeatureIds(world.stateDir)[0]!;
+    const featureYaml = fs.readFileSync(
+      path.join(world.stateDir, featureId, 'feature.yaml'),
+      'utf8',
+    );
+    const runYaml = fs.readFileSync(
+      path.join(world.stateDir, featureId, 'runs', 'run-001', 'run.yaml'),
+      'utf8',
+    );
+    const storedCommits = parseFeatureRepoField(featureYaml, /^\s+commit:\s*(.+?)\s*$/);
+    const worktree = parseFeatureRepos(featureYaml)['running-lab']!;
+    expect(storedCommits['running-lab']).toBe(acceptedCommit);
+    expect(runYaml).toContain(`exact_sha: ${acceptedCommit}`);
+    expect(gitText(worktree, 'rev-parse', 'HEAD')).toBe(acceptedCommit);
+    transcript.step(
+      'submission proceeded while the check was still running and pinned the accepted local commit',
+    );
+  } finally {
+    if (handle !== undefined) await closeApp(handle);
+    hangingServer.closeAllConnections();
+    hangingServer.close();
     transcript.write(testInfo);
     destroyWorld(world);
   }

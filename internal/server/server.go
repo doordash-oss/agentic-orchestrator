@@ -28,14 +28,15 @@ import (
 )
 
 type RuntimeServer struct {
-	baseURL   string
-	policy    string
-	wildcard  bool
-	startedAt time.Time
-	srv       *http.Server
-	broker    *eventBroker
-	clones    CloneService
-	done      chan error
+	baseURL      string
+	policy       string
+	wildcard     bool
+	startedAt    time.Time
+	srv          *http.Server
+	broker       *eventBroker
+	clones       CloneService
+	originChecks *originCheckCoordinator
+	done         chan error
 }
 
 func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
@@ -118,14 +119,15 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		go cloneSweepLoop(ctx, handler.clones)
 	}
 	s := &RuntimeServer{
-		baseURL:   baseURL,
-		policy:    policy,
-		wildcard:  res.Wildcard,
-		startedAt: startedAt,
-		srv:       httpServer,
-		broker:    handler.broker,
-		clones:    handler.clones,
-		done:      make(chan error, 1),
+		baseURL:      baseURL,
+		policy:       policy,
+		wildcard:     res.Wildcard,
+		startedAt:    startedAt,
+		srv:          httpServer,
+		broker:       handler.broker,
+		clones:       handler.clones,
+		originChecks: handler.originChecks,
+		done:         make(chan error, 1),
 	}
 	go func() {
 		err := httpServer.Serve(ln)
@@ -205,6 +207,22 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 	if s.clones != nil {
 		cloneErr = s.clones.Shutdown(ctx)
 	}
+	// Origin-check attempts cancel alongside clone shutdown so in-flight
+	// fetches and their Git process trees are reaped within the caller's
+	// deadline; the coordinator's own attempt deadline bounds the remainder.
+	var originErr error
+	if s.originChecks != nil {
+		originDone := make(chan struct{})
+		go func() {
+			s.originChecks.Shutdown()
+			close(originDone)
+		}()
+		select {
+		case <-originDone:
+		case <-ctx.Done():
+			originErr = ctx.Err()
+		}
+	}
 	shutdownErr := srv.Shutdown(ctx)
 	var serveErr error
 	select {
@@ -212,7 +230,7 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 	case <-ctx.Done():
 		serveErr = ctx.Err()
 	}
-	return errors.Join(cloneErr, shutdownErr, serveErr)
+	return errors.Join(cloneErr, originErr, shutdownErr, serveErr)
 }
 
 // cloneSweepLoop prunes expired clone records once at startup and hourly

@@ -458,6 +458,7 @@ describe('FeatureService.createFeature', () => {
     expect(calls[0]?.init).toEqual(
       expect.objectContaining({
         method: 'POST',
+        timeoutMs: 3 * 60_000,
         body: expect.objectContaining({ name: 'Search revamp', repos: ['repo-a'] }),
       }),
     );
@@ -626,6 +627,9 @@ describe('FeatureService.dispatchSetup', () => {
     expect(result).toEqual({ result: 'setup_started' });
     expect(calls[0]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/setup');
     expect(calls[0]?.init?.method).toBe('POST');
+    // Setup serializes with in-flight origin checks on the server, so its
+    // client allowance covers the coordinated-mutation bound.
+    expect(calls[0]?.init?.timeoutMs).toBe(3 * 60_000);
   });
 
   it('rejects id shapes that could smuggle path segments, without a request', async () => {
@@ -673,6 +677,7 @@ describe('FeatureService.dispatchAction', () => {
     await expect(second).resolves.toStrictEqual(await first);
     expect(request).toHaveBeenCalledWith(`/api/v1/features/${input.featureId}/actions/start`, {
       method: 'POST',
+      timeoutMs: 3 * 60_000,
       body: {},
     });
   });
@@ -802,12 +807,27 @@ describe('FeatureService.dispatchAction', () => {
   it('keeps the ordinary bound for short lifecycle actions', async () => {
     const { service, calls } = makeService(() => ({
       status: 200,
-      body: { api_version: 'v1', feature_id: 'abcd1234ef567890', result: 'started' },
+      body: { api_version: 'v1', feature_id: 'abcd1234ef567890', result: 'paused' },
     }));
 
-    await service.dispatchAction({ featureId: 'abcd1234ef567890', action: 'start' });
+    await service.dispatchAction({ featureId: 'abcd1234ef567890', action: 'pause-stop' });
 
     expect(calls[0]?.init?.timeoutMs).toBeUndefined();
+  });
+
+  it('carries the coordinated bound for actions that serialize with origin checks', async () => {
+    // Setup and start run source acceptance or setup work, which waits out
+    // an in-flight origin check's server-side attempt deadline.
+    for (const action of ['setup', 'start', 'restart'] as const) {
+      const { service, calls } = makeService(() => ({
+        status: 200,
+        body: { api_version: 'v1', feature_id: 'abcd1234ef567890', result: 'started' },
+      }));
+
+      await service.dispatchAction({ featureId: 'abcd1234ef567890', action });
+
+      expect(calls[0]?.init?.timeoutMs).toBe(3 * 60_000);
+    }
   });
 
   it('retains the single-flight entry after a request timeout so no duplicate publish is issued', async () => {
@@ -898,6 +918,7 @@ describe('FeatureService.dispatchAction', () => {
     expect(calls[0]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/restart');
     expect(calls[0]?.init).toStrictEqual({
       method: 'POST',
+      timeoutMs: 3 * 60_000,
       body: {
         max_iterations_delta: 10,
         max_plan_iterations_delta: 2,

@@ -33,6 +33,8 @@ import {
   FeatureActionResultSchema,
   RepositoryDiffResultSchema,
   RecoveryItemViewSchema,
+  applyShellPatch,
+  ShellPatchSchema,
   SettingsPatchSchema,
   SettingsSchema,
   FeatureActionRequestSchema,
@@ -1584,5 +1586,24 @@ describe('UpdateStateSchema canonical error presence', () => {
     expect(
       UpdateStateSchema.safeParse({ ...base, status: 'failed', error: canonicalError }).success,
     ).toBe(true);
+  });
+});
+
+describe('sidebar width preferences', () => {
+  it('accepts bounded widths and preserves them through unrelated shell updates', () => {
+    const resized = applyShellPatch(
+      defaultShellPrefs(),
+      ShellPatchSchema.parse({ sidebarWidth: 370 }),
+    );
+    expect(applyShellPatch(resized, { sidebarCollapsed: true }).sidebarWidth).toBe(370);
+    expect(SettingsSchema.parse({ ...defaultSettings(), shell: resized }).shell.sidebarWidth).toBe(
+      370,
+    );
+  });
+
+  it('rejects invalid widths at the settings boundary', () => {
+    for (const sidebarWidth of [199, 521, 260.5, NaN, Infinity, '300']) {
+      expect(SettingsPatchSchema.safeParse({ shell: { sidebarWidth } }).success).toBe(false);
+    }
   });
 });

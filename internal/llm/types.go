@@ -20,9 +20,14 @@ import (
 )
 
 // ModelInfo represents discovered metadata for a single model.
-// Pricing is handled at runtime by each provider's rate table (e.g. codex/rates.go),
-// not stored in discovery metadata.
+// Advertised pricing is optional metadata; runtime accounting remains provider-owned.
 type ModelInfo struct {
+	Capabilities *ModelCapabilities `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+	Cost         *ModelCost         `yaml:"cost,omitempty" json:"cost,omitempty"`
+	// EffortVariants contains the exact provider options for each supported level.
+	// It is persisted in the internal catalog cache, never exposed through REST.
+	EffortVariants map[EffortLevel]map[string]any `yaml:"effort_variants,omitempty" json:"effort_variants,omitempty"`
+
 	ID            string   `yaml:"id"`                // Selectable model name, e.g. "opus[200K]", "gpt-5.4[1M]"
 	DisplayName   string   `yaml:"display_name"`      // Human-readable name
 	ContextWindow int      `yaml:"context_window"`    // Max tokens
@@ -31,9 +36,23 @@ type ModelInfo struct {
 	// EffortCapabilities is the ordered list of semantically distinct effort
 	// levels the provider can honor for this model, from lowest to highest.
 	// Empty means the model has no explicit effort control and is Auto-only.
-	// Semantic aliases (e.g. an OpenCode max that executes identically to high)
-	// are collapsed so the API never advertises duplicate semantics.
+	// Variants with identical option maps are collapsed so the API does not
+	// advertise duplicate settings. Distinct high and max variants stay distinct.
 	EffortCapabilities []EffortLevel `yaml:"effort_capabilities,omitempty" json:"effort_capabilities,omitempty"`
+}
+
+// ModelCapabilities records technical support, never inferred model quality.
+// Nil fields mean unreported; an explicit false can exclude an incompatible model.
+type ModelCapabilities struct {
+	ToolCall   *bool `yaml:"tool_call,omitempty" json:"tool_call,omitempty"`
+	TextOutput *bool `yaml:"text_output,omitempty" json:"text_output,omitempty"`
+	Reasoning  *bool `yaml:"reasoning,omitempty" json:"reasoning,omitempty"`
+}
+
+// ModelCost records advertised USD per million tokens. Nil means unknown.
+type ModelCost struct {
+	Input  float64 `yaml:"input" json:"input"`
+	Output float64 `yaml:"output" json:"output"`
 }
 
 // ContextWindowLabel formats a token window for compact model IDs.
@@ -125,103 +144,4 @@ func AppendUniqueAlias(aliases []string, id, alias string) []string {
 // overridden at runtime, either from provider CLI discovery or from tests.
 type CatalogEnricher interface {
 	SetModelCatalog(models []ModelInfo)
-}
-
-// categoryRank maps category strings to a sort rank (higher = more capable).
-var categoryRank = map[string]int{
-	"capable":  3,
-	"balanced": 2,
-	"cheap":    1,
-}
-
-// TopModelIDs returns the IDs of the top n models from catalog, ranked by category.
-// Models with unknown categories are ranked lowest. If catalog has <= n entries,
-// all IDs are returned in category order.
-func TopModelIDs(catalog []ModelInfo, n int) []string {
-	if len(catalog) <= n {
-		ids := make([]string, len(catalog))
-		for i, m := range catalog {
-			ids[i] = m.ID
-		}
-		return ids
-	}
-
-	// Sort a copy by category rank descending, preserving original order as tiebreaker.
-	type ranked struct {
-		rank int
-		idx  int
-		id   string
-	}
-	items := make([]ranked, len(catalog))
-	for i, m := range catalog {
-		items[i] = ranked{rank: categoryRank[m.Category], idx: i, id: m.ID}
-	}
-	// Simple selection: pick top n by rank (stable by original index).
-	for i := range n {
-		best := i
-		for j := i + 1; j < len(items); j++ {
-			if items[j].rank > items[best].rank ||
-				(items[j].rank == items[best].rank && items[j].idx < items[best].idx) {
-				best = j
-			}
-		}
-		items[i], items[best] = items[best], items[i]
-	}
-
-	ids := make([]string, n)
-	for i := range n {
-		ids[i] = items[i].id
-	}
-	return ids
-}
-
-// mostCapableFrom returns the most capable model from the catalog.
-// Selection: highest categoryRank, ties broken by largest ContextWindow.
-// Returns false if the catalog is empty.
-func mostCapableFrom(catalog []ModelInfo) (ModelInfo, bool) {
-	if len(catalog) == 0 {
-		return ModelInfo{}, false
-	}
-	best := catalog[0]
-	bestRank := categoryRank[best.Category]
-	for _, m := range catalog[1:] {
-		r := categoryRank[m.Category]
-		if r > bestRank || (r == bestRank && m.ContextWindow > best.ContextWindow) {
-			best = m
-			bestRank = r
-		}
-	}
-	return best, true
-}
-
-// balancedFrom returns a balanced-category model from the catalog.
-// If no model has category "balanced", returns the model closest to rank 2.
-// Returns false if the catalog is empty or all models are unranked.
-func balancedFrom(catalog []ModelInfo) (ModelInfo, bool) {
-	// First try exact match
-	for _, m := range catalog {
-		if m.Category == "balanced" {
-			return m, true
-		}
-	}
-	// Fallback: closest to rank 2
-	var best ModelInfo
-	bestDist := -1
-	found := false
-	for _, m := range catalog {
-		r := categoryRank[m.Category]
-		if r == 0 {
-			continue
-		}
-		dist := r - 2
-		if dist < 0 {
-			dist = -dist
-		}
-		if !found || dist < bestDist {
-			best = m
-			bestDist = dist
-			found = true
-		}
-	}
-	return best, found
 }

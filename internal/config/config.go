@@ -25,6 +25,11 @@ import (
 )
 
 type Config struct {
+	// ModelRecommendations is a startup-only, ordered preference list per phase.
+	// Entries are exact provider:model IDs or aliases from the discovered catalog.
+	// It guides new defaults without replacing explicit defaults.models selections.
+	ModelRecommendations map[string][]string `yaml:"model_recommendations,omitempty"`
+
 	Defaults        DefaultsConfig            `yaml:"defaults"`
 	Repos           map[string]RepoConfig     `yaml:"repos"`
 	WorkspaceRoots  []string                  `yaml:"workspace_roots,omitempty"`
@@ -285,6 +290,9 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	if err := validateModelRecommendations(cfg.ModelRecommendations); err != nil {
+		return nil, err
 	}
 	applyDefaults(&cfg)
 	return &cfg, nil
@@ -557,4 +565,24 @@ func overlayModelConfig(base, override ModelConfig) ModelConfig {
 		base.AutomaticReview = override.AutomaticReview
 	}
 	return base
+}
+
+// validateModelRecommendations rejects typos instead of silently falling back
+// to an unrelated model. Missing catalog entries remain valid fallbacks: access
+// and live model availability are resolved after discovery.
+func validateModelRecommendations(preferences map[string][]string) error {
+	for role, models := range preferences {
+		switch role {
+		case "inquiry", "research", "planning", "implementation", "review", "chat", "kb_build":
+		default:
+			return fmt.Errorf("model_recommendations: unknown phase %q", role)
+		}
+		for _, model := range models {
+			provider, id, ok := strings.Cut(model, ":")
+			if !ok || strings.TrimSpace(provider) == "" || strings.TrimSpace(id) == "" || strings.TrimSpace(model) != model {
+				return fmt.Errorf("model_recommendations.%s: expected provider:model selector", role)
+			}
+		}
+	}
+	return nil
 }

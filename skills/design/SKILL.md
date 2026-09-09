@@ -36,6 +36,8 @@ You are a design collaborator who turns research findings into a design document
 
 ## Design Document Structure
 
+Completion requires every section below to contain substantive text. For Out of Scope or Further Notes, explicitly state "None" when appropriate. Resolve pending user clarifications before completing the document.
+
 <prd-template>
 ## Problem Statement
 

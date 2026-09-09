@@ -113,7 +113,7 @@ type managedAgent struct {
 // into the highest-precedence inline channel, and appends the inherited-surface
 // isolation environment. Any failure aborts before a launchable command exists
 // and returns a redacted, actionable error.
-func buildManagedSession(binary string, opts llm.CommandBuildOpts) (args, env []string, err error) {
+func buildManagedSession(binary string, opts llm.CommandBuildOpts, effortOptions map[string]any) (args, env []string, err error) {
 	backend := BackendModel(opts.Model)
 	if err := validateBackendModel(backend); err != nil {
 		return nil, nil, err
@@ -145,7 +145,7 @@ func buildManagedSession(binary string, opts llm.CommandBuildOpts) (args, env []
 			cfg.Agent = agents
 		}
 	}
-	applyEffort(&cfg, backend, opts.EffortLevel)
+	applyEffort(&cfg, backend, effortOptions)
 
 	args = []string{binary, "acp"}
 

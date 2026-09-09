@@ -20,8 +20,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
 // OpenCode permission/tool keys verified against the installed CLI. Unlisted
@@ -486,62 +484,19 @@ func convertAgents(agentsJSON string, dangerouslySkipPerms bool, workDir string,
 // session's permission request cannot be answered over ACP.
 var openCodeBuiltinSubagents = []string{"general", "explore"}
 
-// effortSupportedProviders names the OpenCode backend providers that expose a
-// stable, documented reasoning-effort control ("reasoningEffort"). Effort is
-// mapped only for these; any other backend leaves no effort key behind rather
-// than guessing an unsupported control.
-var effortSupportedProviders = map[string]bool{"openai": true}
-
-// reasoningEffortFor maps an Agentico effort level to OpenCode's documented
-// reasoningEffort value for backends that support it. The second result is false
-// when the level is empty or the backend has no stable reasoning control, in
-// which case no effort config is emitted.
-func reasoningEffortFor(backend string, level llm.EffortLevel) (string, bool) {
-	provider, _, ok := splitBackend(backend)
-	if !ok || !effortSupportedProviders[provider] {
-		return "", false
+// applyEffort merges the discovered variant's exact model options. Provider
+// names never imply effort support; unsupported/Auto selections emit nothing.
+func applyEffort(cfg *managedConfig, backend string, options map[string]any) {
+	if len(options) == 0 {
+		return
 	}
-	switch level {
-	case llm.EffortLow:
-		return "low", true
-	case llm.EffortMedium:
-		return "medium", true
-	case llm.EffortHigh:
-		return "high", true
-	case llm.EffortXHigh, llm.EffortMax:
-		// OpenAI reasoning effort tops out at "high"; map the two highest
-		// Agentico levels to it rather than inventing an unsupported value.
-		return "high", true
-	default:
-		return "", false
-	}
-}
-
-// applyEffort sets the model-scoped reasoningEffort option for the selected
-// backend when (and only when) OpenCode exposes a stable reasoning control for
-// it. The option is added under the specific provider/model so it merges
-// additively over the user's provider config without clobbering credentials.
-func applyEffort(cfg *managedConfig, backend string, level llm.EffortLevel) {
-	value, ok := reasoningEffortFor(backend, level)
+	provider, model, ok := splitBackend(backend)
 	if !ok {
 		return
 	}
-	provider, model, hasModel := splitBackend(backend)
-	if !hasModel {
-		return
-	}
-	if cfg.Provider == nil {
-		cfg.Provider = make(map[string]any, 1)
-	}
-	cfg.Provider[provider] = map[string]any{
-		"models": map[string]any{
-			model: map[string]any{
-				"options": map[string]any{
-					"reasoningEffort": value,
-				},
-			},
-		},
-	}
+	cfg.Provider = map[string]any{provider: map[string]any{
+		"models": map[string]any{model: map[string]any{"options": options}},
+	}}
 }
 
 // splitBackend splits a "provider/model" backend id into its provider and model

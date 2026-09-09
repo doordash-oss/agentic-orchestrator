@@ -548,6 +548,31 @@ func TestGoldenSnapshots(t *testing.T) {
 			},
 		},
 		{
+			name: "codex_design_system_rolespec",
+			render: func() string {
+				return RoleSystemPrompt(RoleSystemInput{
+					OutputRoots:        []OutputRootView{{Name: "phase_dir", Path: "/state/feat-x/run-1/design"}},
+					SkillPath:          "/skills/design/SKILL.md",
+					SubagentsAvailable: true,
+					CompletionTool:     "complete_phase",
+					ArtifactPreflight:  "$AGENTICO_BIN validate-artifacts --phase design --dir /state/feat-x/run-1/design",
+					AskingClause:       "## Asking Questions\n\nUse ask_user with three confidence-scored options.",
+				})
+			},
+		},
+		{
+			name: "codex_implement_system_rolespec",
+			render: func() string {
+				return RoleSystemPrompt(RoleSystemInput{
+					OutputRoots:         []OutputRootView{{Name: "iteration_dir", Path: "/state/feat-x/run-1/implement/iteration-01"}},
+					SkillPath:           "/skills/implement/SKILL.md",
+					CompletionTool:      "complete_phase",
+					RetryOutcomeAllowed: true,
+					AskingClause:        "## Asking Questions\n\nUse ask_user with three confidence-scored options.",
+				})
+			},
+		},
+		{
 			name: "summary_user",
 			render: func() string {
 				return SummaryUserPrompt(SummaryUserInput{

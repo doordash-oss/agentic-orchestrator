@@ -103,7 +103,9 @@ type SandboxPolicy struct {
 
 // ThreadResumeParams holds parameters for thread/resume.
 type ThreadResumeParams struct {
-	ThreadID string `json:"threadId"`
+	ThreadID              string                 `json:"threadId"`
+	DeveloperInstructions *string                `json:"developerInstructions,omitempty"`
+	Config                map[string]interface{} `json:"config,omitempty"`
 }
 
 // ThreadStartResult is the response to thread/start and thread/resume.
@@ -123,25 +125,12 @@ type Thread struct {
 
 // TurnStartParams holds parameters for turn/start.
 type TurnStartParams struct {
-	ThreadID          string             `json:"threadId"`
-	Input             []InputItem        `json:"input"`
-	Model             string             `json:"model,omitempty"`
-	Effort            string             `json:"effort,omitempty"`
-	ApprovalPolicy    string             `json:"approvalPolicy,omitempty"`
-	SandboxPolicy     *SandboxPolicy     `json:"sandboxPolicy,omitempty"`
-	CollaborationMode *CollaborationMode `json:"collaborationMode,omitempty"`
-}
-
-// CollaborationMode specifies the collaboration mode for a turn.
-type CollaborationMode struct {
-	Mode     string                `json:"mode"`
-	Settings CollaborationSettings `json:"settings"`
-}
-
-// CollaborationSettings holds settings within a collaboration mode.
-type CollaborationSettings struct {
-	Model                 string  `json:"model"`
-	DeveloperInstructions *string `json:"developer_instructions,omitempty"`
+	ThreadID       string         `json:"threadId"`
+	Input          []InputItem    `json:"input"`
+	Model          string         `json:"model,omitempty"`
+	Effort         string         `json:"effort,omitempty"`
+	ApprovalPolicy string         `json:"approvalPolicy,omitempty"`
+	SandboxPolicy  *SandboxPolicy `json:"sandboxPolicy,omitempty"`
 }
 
 // InputItem is a single input in a turn/start request.
@@ -362,36 +351,6 @@ type FileChange struct {
 type FileChangeKind struct {
 	Type     string `json:"type,omitempty"`
 	MovePath string `json:"move_path,omitempty"`
-}
-
-// --- tool/requestUserInput (inbound) ---
-
-// UserInputRequestParams holds the params for tool/requestUserInput server requests.
-type UserInputRequestParams struct {
-	ThreadID  string          `json:"threadId"`
-	TurnID    string          `json:"turnId"`
-	Questions []InputQuestion `json:"questions"`
-}
-
-// InputQuestion is a single question in a tool/requestUserInput request.
-type InputQuestion struct {
-	ID      string   `json:"id"`
-	Type    string   `json:"type"`
-	Label   string   `json:"label"`
-	Options []string `json:"options,omitempty"`
-}
-
-// --- Response types (outbound) ---
-
-// AskUserAnswer is a single answer in the response to tool/requestUserInput.
-type AskUserAnswer struct {
-	QuestionID string `json:"questionId"`
-	Value      string `json:"value"`
-}
-
-// AskUserResult is the result sent in response to a tool/requestUserInput request.
-type AskUserResult struct {
-	Answers []AskUserAnswer `json:"answers"`
 }
 
 // ApprovalDecision is the result sent in response to an approval request.

@@ -333,11 +333,18 @@ func comparisonOutcome(status git.OriginCheckStatus) originAttemptOutcome {
 	}}
 }
 
+// originCoordinatorWaitBound bounds every wait for executor admission or
+// attempt completion in this file. Admission paths fork real git (identity
+// and plan re-resolution), which can stall far past tens of seconds when the
+// whole repository runs under the race detector on a loaded runner; the
+// bound only guards against a coordinator that never admits or completes.
+const originCoordinatorWaitBound = 5 * time.Minute
+
 func waitOriginAttempt(t *testing.T, done <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(originCoordinatorWaitBound):
 		t.Fatal("origin check attempt did not complete")
 	}
 }
@@ -449,7 +456,7 @@ func TestOriginCheckCoordinatorCapsConcurrencyAtFour(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		select {
 		case <-entered:
-		case <-time.After(10 * time.Second):
+		case <-time.After(originCoordinatorWaitBound):
 			t.Fatal("a concurrent slot never admitted a check")
 		}
 	}
@@ -462,7 +469,7 @@ func TestOriginCheckCoordinatorCapsConcurrencyAtFour(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		select {
 		case <-entered:
-		case <-time.After(10 * time.Second):
+		case <-time.After(originCoordinatorWaitBound):
 			t.Fatal("the queued checks never ran after release")
 		}
 	}
@@ -479,7 +486,11 @@ func TestOriginCheckCoordinatorCapsConcurrencyAtFour(t *testing.T) {
 func TestOriginCheckCoordinatorDeadlineExpiresWhileQueued(t *testing.T) {
 	coordinator := newOriginCheckCoordinator()
 	defer coordinator.Shutdown()
-	coordinator.deadline = 150 * time.Millisecond
+	// The blockers claim their slots under a deadline that tolerates loaded
+	// scheduling: a tight bound here can expire the blockers themselves
+	// "before running" on a race-detector-loaded runner, leaving no slot
+	// occupied for the queued attempt to wait behind.
+	coordinator.deadline = 30 * time.Second
 
 	blockers := make([]struct {
 		path     string
@@ -507,14 +518,20 @@ func TestOriginCheckCoordinatorDeadlineExpiresWhileQueued(t *testing.T) {
 	for i := 0; i < maxConcurrentOriginChecks; i++ {
 		select {
 		case <-entered:
-		// Each blocker's admission path forks real git (identity and plan
-		// re-resolution), which stalls under full-repo race-detector load on
-		// this machine's documented fork-heavy pathology; the bound stays
-		// meaningful because admission is still required within it.
-		case <-time.After(30 * time.Second):
+		// Admission is goroutine scheduling plus an in-process mutex, but a
+		// race-detector-loaded runner can still stall it far past tens of
+		// seconds; the shared bound stays meaningful because admission is
+		// still required within it.
+		case <-time.After(originCoordinatorWaitBound):
 			t.Fatal("a concurrent slot never admitted a blocking check")
 		}
 	}
+
+	// Every slot is provably held by a blocker inside the executor (the
+	// entered handshake orders the blockers' deadline reads before this
+	// write), so the tight per-attempt deadline now applies only to the
+	// queued attempt waiting behind them.
+	coordinator.deadline = 150 * time.Millisecond
 
 	// Every slot is held, so this attempt can only wait; its deadline expires
 	// before it is ever admitted.
@@ -539,7 +556,10 @@ func TestOriginCheckCoordinatorDeadlineExpiresWhileRunning(t *testing.T) {
 	repo, identity, plan := originCoordinatorTestRepo(t)
 	coordinator := newOriginCheckCoordinator()
 	defer coordinator.Shutdown()
-	coordinator.deadline = 150 * time.Millisecond
+	// Wide enough that a race-detector-loaded runner admits the attempt
+	// before the bound expires (the timeout must land while it runs, not
+	// before it), while still exercising the bounded running-expiry path.
+	coordinator.deadline = 5 * time.Second
 	coordinator.executor = func(ctx context.Context, repoPath string, plan git.OriginCheckPlan) originAttemptOutcome {
 		<-ctx.Done()
 		return originAttemptOutcome{Unavailable: true, Diagnostics: "interrupted"}
@@ -572,7 +592,7 @@ func TestOriginCheckCoordinatorShutdownReleasesAttempts(t *testing.T) {
 	_, _, done := coordinator.ensure(identity, plan, repo, false)
 	select {
 	case <-entered:
-	case <-time.After(10 * time.Second):
+	case <-time.After(originCoordinatorWaitBound):
 		coordinator.mu.Lock()
 		completed := coordinator.completed[originCheckKeyFor(identity, plan)]
 		flightActive := false
@@ -587,7 +607,7 @@ func TestOriginCheckCoordinatorShutdownReleasesAttempts(t *testing.T) {
 	go coordinator.Shutdown()
 	select {
 	case <-shutdown:
-	case <-time.After(10 * time.Second):
+	case <-time.After(originCoordinatorWaitBound):
 		t.Fatal("shutdown never cancelled the in-flight attempt")
 	}
 	waitOriginAttempt(t, done)
@@ -637,7 +657,7 @@ func TestOriginCheckCoordinatorSerializesLinkedWorktrees(t *testing.T) {
 	_, _, doneLinked := coordinator.ensure(linkedIdentity, linkedPlan, linked, false)
 	select {
 	case <-entered:
-	case <-time.After(10 * time.Second):
+	case <-time.After(originCoordinatorWaitBound):
 		t.Fatal("the first linked-worktree check never ran")
 	}
 	// The second check shares the common directory: it can only enter after
@@ -645,7 +665,7 @@ func TestOriginCheckCoordinatorSerializesLinkedWorktrees(t *testing.T) {
 	close(release)
 	select {
 	case <-entered:
-	case <-time.After(10 * time.Second):
+	case <-time.After(originCoordinatorWaitBound):
 		t.Fatal("the second linked-worktree check never ran after the lock released")
 	}
 	waitOriginAttempt(t, doneMain)

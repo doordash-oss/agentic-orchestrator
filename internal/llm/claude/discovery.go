@@ -16,263 +16,227 @@ package claude
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"io"
+	"os"
+	"os/exec"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm/clirun"
 )
 
-const (
-	claudeModelProbePrompt       = "Return exactly: OK"
-	claudeModelProbeMaxBudgetUSD = "0.05"
-	claudeModelProbeAttempts     = 2
-)
+const catalogRequestID = "agentico-model-catalog"
 
-// DiscoverModelCatalog resolves Agentic's curated Claude selectors against the
-// live CLI by probing each one with a tiny `claude --model <selector> -p` request
-// and reading the resolved model + context window back from the stream-json
-// output.
-//
-// Probing is the only mechanism used because Claude Code exposes no
-// machine-readable model catalog command, and probing is the only
-// provider-agnostic way to learn what `--model <selector>` actually resolves to on
-// this machine (selectors resolve to different concrete models on the Anthropic
-// API vs. Bedrock/Vertex/Foundry). Any selector whose probe is skipped — e.g. when
-// ctx is cancelled partway through — keeps its hardcoded fallback catalog
-// metadata as a fallback.
+// DiscoverModelCatalog reads the same initialization catalog exposed by the
+// Agent SDK's supportedModels(). No user message or inference request is sent.
 func (p *Provider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, error) {
 	return p.DiscoverModelCatalogWithProgress(ctx, nil)
 }
 
-// DiscoverModelCatalogWithProgress resolves Claude selectors concurrently and
-// reports each successful probe as soon as it completes. The final catalog is
-// still returned in the curated selector order so model defaults stay stable.
 func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
-	runner := p.runner
-	if runner == nil {
-		runner = clirun.DefaultRunner()
-	}
-	binary := p.cliBinary()
-
-	candidates := claudeModelProbeCandidates()
-	results := make([]claudeModelProbeResult, len(candidates))
-	var wg sync.WaitGroup
-	var reportMu sync.Mutex
-	reported := make(map[string]bool, len(candidates))
-	wg.Add(len(candidates))
-	for i, candidate := range candidates {
-		go func(i int, candidate claudeModelProbeCandidate) {
-			defer wg.Done()
-			if err := ctx.Err(); err != nil {
-				results[i] = claudeModelProbeResult{candidate: candidate, err: err}
-				return
-			}
-			resolved, contextWindow, err := probeClaudeModel(ctx, runner, binary, candidate)
-			if err != nil {
-				results[i] = claudeModelProbeResult{candidate: candidate, err: err}
-				return
-			}
-
-			info := claudeModelInfoFromProbe(candidate, contextWindow, resolved)
-			results[i] = claudeModelProbeResult{candidate: candidate, info: info}
-			reportClaudeModelDiscovery(report, info, &reportMu, reported)
-		}(i, candidate)
-	}
-	wg.Wait()
-
-	models := make([]llm.ModelInfo, 0, len(candidates))
-	var failures []string
-	var canceled []claudeModelProbeCandidate
-	for _, result := range results {
-		if result.err != nil {
-			if errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded) {
-				canceled = append(canceled, result.candidate)
-			} else {
-				failures = append(failures, fmt.Sprintf("%s: %v", result.candidate.Selector, result.err))
-			}
-			continue
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, p.cliBinary(), "-p", "--input-format", "stream-json",
+		"--output-format", "stream-json", "--verbose", "--safe-mode", "--no-session-persistence")
+	// Discovery must not load project customizations or inherit nested-session
+	// detection. Authentication and backend configuration remain with the CLI.
+	cmd.Env = make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "CLAUDECODE=") {
+			cmd.Env = append(cmd.Env, entry)
 		}
-		models = appendClaudeModelInfo(models, result.info)
 	}
-	if len(canceled) > 0 && len(models) > 0 {
-		models = appendClaudeFallbacks(models, canceled)
+	cmd.WaitDelay = time.Second
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("Claude catalog stdin: %w", err)
 	}
-
-	if len(models) == 0 {
-		if len(failures) == 0 {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			if len(canceled) > 0 {
-				return nil, fmt.Errorf("no Claude model probes succeeded before cancellation")
-			}
+	defer stdin.Close()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("Claude catalog stdout: %w", err)
+	}
+	defer stdout.Close()
+	stopClosing := context.AfterFunc(ctx, func() { _ = stdout.Close() })
+	defer stopClosing()
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start Claude catalog initialization: %w", err)
+	}
+	// The CLI waits for more input after initialization. Stop and reap it on
+	// success as well as on malformed output, EOF, and cancellation.
+	defer func() { cancel(); _ = cmd.Wait() }()
+	request := llm.NewInitializeRequest()
+	request.RequestID = catalogRequestID
+	request.Request.Hooks = nil
+	if err := json.NewEncoder(stdin).Encode(request); err != nil {
+		return nil, fmt.Errorf("send Claude catalog initialization: %w", err)
+	}
+	models, err := readClaudeModelCatalog(stdout)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if report != nil {
+		for _, model := range models {
+			report(model)
 		}
-		return nil, fmt.Errorf("no Claude model probes succeeded: %s", strings.Join(failures, "; "))
 	}
 	return models, nil
 }
 
-type claudeModelProbeResult struct {
-	candidate claudeModelProbeCandidate
-	info      llm.ModelInfo
-	err       error
+type claudeCatalogModel struct {
+	Value                 string            `json:"value"`
+	ResolvedModel         string            `json:"resolvedModel"`
+	DisplayName           string            `json:"displayName"`
+	SupportsEffort        bool              `json:"supportsEffort"`
+	SupportedEffortLevels []llm.EffortLevel `json:"supportedEffortLevels"`
 }
 
-func reportClaudeModelDiscovery(report llm.ModelDiscoveryReporter, info llm.ModelInfo, mu *sync.Mutex, reported map[string]bool) {
-	if report == nil {
-		return
-	}
-	key := strings.ToLower(info.ID)
-	mu.Lock()
-	if reported[key] {
-		mu.Unlock()
-		return
-	}
-	reported[key] = true
-	mu.Unlock()
-	report(info)
-}
-
-func probeClaudeModel(ctx context.Context, runner clirun.CommandRunner, binary string, candidate claudeModelProbeCandidate) (string, int, error) {
-	var lastErr error
-	for range claudeModelProbeAttempts {
-		if err := ctx.Err(); err != nil {
-			return "", 0, err
-		}
-		out, err := runner(ctx, binary, claudeModelProbeArgs(candidate.Selector), nil)
-		if err != nil {
-			if ctx.Err() != nil {
-				return "", 0, ctx.Err()
-			}
-			lastErr = err
-			continue
-		}
-
-		resolved, contextWindow, err := parseClaudeModelProbe(candidate.Selector, out)
-		if err == nil {
-			return resolved, contextWindow, nil
-		}
-		if ctx.Err() != nil {
-			return "", 0, ctx.Err()
-		}
-		lastErr = err
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("probe for %s failed", candidate.Selector)
-	}
-	return "", 0, lastErr
-}
-
-func appendClaudeFallbacks(models []llm.ModelInfo, candidates []claudeModelProbeCandidate) []llm.ModelInfo {
-	for _, candidate := range candidates {
-		models = appendClaudeModelInfo(models, claudeModelInfoFromProbe(candidate, candidate.FallbackContextWindow, ""))
-	}
-	return models
-}
-
-func appendClaudeModelInfo(models []llm.ModelInfo, info llm.ModelInfo) []llm.ModelInfo {
-	for i := range models {
-		if !strings.EqualFold(models[i].ID, info.ID) {
-			continue
-		}
-		if info.ContextWindow > 0 {
-			models[i].ContextWindow = info.ContextWindow
-		}
-		for _, alias := range info.Aliases {
-			models[i].Aliases = appendClaudeAlias(models[i].Aliases, models[i].ID, alias)
-		}
-		return models
-	}
-	return append(models, info)
-}
-
-func claudeModelProbeArgs(model string) []string {
-	return []string{
-		"--model", model,
-		"--verbose",
-		"-p", claudeModelProbePrompt,
-		"--output-format", "stream-json",
-		"--tools", "",
-		"--no-session-persistence",
-		"--max-budget-usd", claudeModelProbeMaxBudgetUSD,
-	}
-}
-
-func parseClaudeModelProbe(requestedModel string, out []byte) (string, int, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-
-	var resolvedModel string
-	var contextWindow int
+func readClaudeModelCatalog(reader io.Reader) ([]llm.ModelInfo, error) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
-		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 {
+		var message struct {
+			Type     string `json:"type"`
+			Response struct {
+				RequestID string `json:"request_id"`
+				Subtype   string `json:"subtype"`
+				Response  struct {
+					Models []claudeCatalogModel `json:"models"`
+				} `json:"response"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
+			return nil, fmt.Errorf("invalid Claude initialization JSON: %w", err)
+		}
+		if message.Type != "control_response" || message.Response.RequestID != catalogRequestID {
 			continue
 		}
-		var msg llm.SDKMessage
-		if err := json.Unmarshal(line, &msg); err != nil {
-			continue
+		if message.Response.Subtype != "success" {
+			// Do not expose arbitrary provider text, which can contain credentials.
+			return nil, fmt.Errorf("Claude catalog initialization was rejected")
 		}
-		if msg.Init != nil && msg.Init.Model != "" {
-			resolvedModel = msg.Init.Model
-		}
-		if msg.Assistant != nil {
-			if msg.Assistant.Message.Model != "" {
-				resolvedModel = msg.Assistant.Message.Model
-			}
-			if msg.Assistant.Message.Usage != nil && msg.Assistant.Message.Usage.ContextWindow > 0 {
-				contextWindow = msg.Assistant.Message.Usage.ContextWindow
-			}
-		}
-		if msg.Result != nil {
-			if msg.Result.Usage != nil && msg.Result.Usage.ContextWindow > 0 {
-				contextWindow = msg.Result.Usage.ContextWindow
-			}
-			if len(msg.Result.ModelUsage) == 1 && resolvedModel == "" {
-				for model := range msg.Result.ModelUsage {
-					resolvedModel = model
-				}
-			}
-			if window := contextWindowForResolvedModel(resolvedModel, msg.Result.ModelUsage); window > 0 {
-				contextWindow = window
-			}
-		}
+		return claudeModelsFromInitialization(message.Response.Response.Models)
 	}
 	if err := scanner.Err(); err != nil {
-		return "", 0, fmt.Errorf("scan Claude probe output for %s: %w", requestedModel, err)
+		return nil, fmt.Errorf("read Claude initialization: %w", err)
 	}
-	if resolvedModel == "" && contextWindow == 0 {
-		return "", 0, fmt.Errorf("probe for %s did not include model metadata", requestedModel)
-	}
-	return resolvedModel, contextWindow, nil
+	return nil, fmt.Errorf("Claude exited before returning its model catalog")
 }
 
-func contextWindowForResolvedModel(resolvedModel string, usage map[string]llm.ModelUsageEntry) int {
-	if len(usage) == 0 {
-		return 0
-	}
-	if resolvedModel != "" {
-		if entry, ok := usage[resolvedModel]; ok && entry.ContextWindow > 0 {
-			return entry.ContextWindow
+func claudeModelsFromInitialization(raw []claudeCatalogModel) ([]llm.ModelInfo, error) {
+	models := make([]llm.ModelInfo, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for _, model := range raw {
+		selector := strings.TrimSpace(model.Value)
+		if selector == "" {
+			return nil, fmt.Errorf("Claude catalog contains a model without a selector")
 		}
-		for model, entry := range usage {
-			if strings.EqualFold(model, resolvedModel) && entry.ContextWindow > 0 {
-				return entry.ContextWindow
+		// These are routing policies, not individual models for an Agentico phase.
+		if selector == "default" || selector == "opusplan" {
+			continue
+		}
+		key := strings.ToLower(selector)
+		if seen[key] {
+			return nil, fmt.Errorf("Claude catalog contains duplicate model selectors")
+		}
+		seen[key] = true
+		window := llm.ParseModelContextWindow(selector)
+		id := selector
+		if window > 0 {
+			id = llm.ModelWithContextWindow(llm.StripModelContextWindow(selector), window)
+		}
+		name := strings.TrimSpace(model.DisplayName)
+		if name == "" {
+			name = selector
+		}
+		info := llm.ModelInfo{ID: id, DisplayName: name, ContextWindow: window,
+			Category: claudeModelCategory(model.ResolvedModel + " " + selector)}
+		// The first alias is always the exact CLI selector, even when only its
+		// casing differs from the display ID. BuildCommand must use this value.
+		info.Aliases = []string{selector}
+		info.Aliases = llm.AppendUniqueAlias(info.Aliases, id, model.ResolvedModel)
+		if model.SupportsEffort {
+			for _, level := range llm.AllEffortLevels {
+				for _, supported := range model.SupportedEffortLevels {
+					if level == supported {
+						info.EffortCapabilities = append(info.EffortCapabilities, level)
+						break
+					}
+				}
+			}
+		}
+		models = append(models, info)
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("Claude initialization returned no selectable models")
+	}
+	// Expose a family alias only when it identifies exactly one advertised
+	// entry. Never collapse independently selectable versions of a model.
+	for i := range models {
+		family := claudeModelFamily(models[i].ID)
+		if family == "" {
+			continue
+		}
+		unique := true
+		for j := range models {
+			if i != j && claudeModelFamily(models[j].ID) == family {
+				unique = false
+				break
+			}
+		}
+		if unique {
+			models[i].Aliases = llm.AppendUniqueAlias(models[i].Aliases, models[i].ID, family)
+			if models[i].ContextWindow > 0 {
+				models[i].Aliases = llm.AppendUniqueAlias(models[i].Aliases, models[i].ID, llm.ModelWithContextWindow(family, models[i].ContextWindow))
 			}
 		}
 	}
-	if len(usage) == 1 {
-		for _, entry := range usage {
-			if entry.ContextWindow > 0 {
-				return entry.ContextWindow
+	// A resolved ID can also be an independently advertised, pinned selector.
+	// Exact selectors own their names; aliases must not shadow another entry.
+	for i := range models {
+		aliases := models[i].Aliases[:1]
+		for _, alias := range models[i].Aliases[1:] {
+			conflict := false
+			for j := range models {
+				if i != j && (strings.EqualFold(alias, models[j].ID) || strings.EqualFold(alias, models[j].Aliases[0])) {
+					conflict = true
+					break
+				}
+			}
+			if !conflict {
+				aliases = append(aliases, alias)
 			}
 		}
+		models[i].Aliases = aliases
 	}
-	return 0
+	return models, nil
+}
+
+func claudeModelFamily(model string) string {
+	model = strings.TrimPrefix(strings.ToLower(llm.StripModelContextWindow(model)), "claude-")
+	for _, family := range []string{"fable", "opus", "sonnet", "haiku"} {
+		if model == family || strings.HasPrefix(model, family+"-") {
+			return family
+		}
+	}
+	return ""
+}
+
+func claudeModelCategory(model string) string {
+	switch model = strings.ToLower(model); {
+	case strings.Contains(model, "haiku"):
+		return "cheap"
+	case strings.Contains(model, "sonnet"):
+		return "balanced"
+	case strings.Contains(model, "opus"), strings.Contains(model, "fable"):
+		return "capable"
+	default:
+		return ""
+	}
 }

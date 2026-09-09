@@ -109,7 +109,11 @@ while true; do sleep 1; done
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	// The shim's fork+write can lag several seconds when the whole package
+	// tree runs in parallel (the fast suite spawns every package's tests at
+	// once); the bound only guards against a shim that never records, so it
+	// stays generous while the happy path still exits on first observation.
+	deadline := time.Now().Add(30 * time.Second)
 	var childPID int
 	for time.Now().Before(deadline) {
 		if data, err := os.ReadFile(childPIDFile); err == nil {

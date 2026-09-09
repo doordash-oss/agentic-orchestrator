@@ -34,7 +34,7 @@ var designerRoleSpec = RoleSpec{
 		singleShotPhaseDirOutputRoot("Design phase artifact directory."),
 	},
 	Artifacts: []RoleArtifactSpec{
-		phaseMarkdownRoleArtifact("design markdown artifact"),
+		phaseMarkdownRoleArtifact("design markdown artifact", ValidatorDesignDocument),
 	},
 	ReadOnlyOutsideRoots: true,
 }

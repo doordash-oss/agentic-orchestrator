@@ -111,14 +111,14 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
     // Refresh moved to the stage bar's trailing side when the transcript shed
     // its frame, so it is cockpit chrome now, not a control inside the region.
     await cockpit.getByRole('button', { name: 'Refresh current run inspection' }).click();
-    // The fixture can finish between the Start response and this assertion;
-    // the current-run contract remains inspectable in either live or freshly
-    // completed state, while Context proves the authoritative preview loaded.
-    // Context now lives in the phase rail above the stage area, not inside
-    // the "Current run inspection" region itself.
-    await expect(cockpit.locator('.phase-rail__trio').getByText(/Context/)).toBeVisible({
+    // The phase rail exposes authoritative run timing even when the selected
+    // model's initialization metadata does not report a context limit. This
+    // fixture emits no usage metadata, so no Context percentage can be shown.
+    const metrics = cockpit.locator('.phase-rail__trio');
+    await expect(metrics.getByText('Elapsed', { exact: true })).toBeVisible({
       timeout: 60_000,
     });
+    await expect(metrics.getByText('Context', { exact: true })).toHaveCount(0);
     // The phase log exists for the whole active run. A provider session log is
     // phase-dependent and may not exist yet while the first phase is starting.
     // Files is a top-level stage-bar segment now, not a control inside the

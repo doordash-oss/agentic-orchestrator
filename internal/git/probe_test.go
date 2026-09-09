@@ -140,12 +140,31 @@ func TestInspectCleanlinessTimeoutIsNotClean(t *testing.T) {
 func TestProbeTimeoutKillsProcessGroup(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
 	stubGit(t, "sleep 30 &\necho $! > "+pidFile+"\nwait\n")
+	// On a loaded runner the stub's fork+exec can outlag the one-second probe
+	// bound, so the group kill lands before the stub ever records its
+	// descendant. A wider bound still exercises the timeout's process-group
+	// reap while giving the stub real time to start and write the pid file.
+	wider := ProbeTimeout
+	ProbeTimeout = 10 * time.Second
+	t.Cleanup(func() { ProbeTimeout = wider })
 
 	if _, timedOut, err := runProbe("status"); !timedOut {
 		t.Fatalf("runProbe() timedOut = false, err = %v; want timeout", err)
 	}
 
-	raw, err := os.ReadFile(pidFile)
+	// The stub's exec can lag past the one-second probe bound when the whole
+	// package tree runs its tests in parallel, so the pid file may appear only
+	// after runProbe has already returned; poll for it instead of reading once.
+	var raw []byte
+	err := error(nil)
+	readDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(readDeadline) {
+		raw, err = os.ReadFile(pidFile)
+		if err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if err != nil {
 		t.Fatalf("read child pid: %v", err)
 	}

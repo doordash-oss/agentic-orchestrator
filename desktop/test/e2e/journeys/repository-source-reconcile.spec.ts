@@ -590,6 +590,163 @@ test('a mid-update server switch leaves the outcome unknown until returning to t
   }
 });
 
+test('a mid-update explicit bundled-runtime selection leaves the outcome unknown until returning to the originating server reconciles it', async ({}, testInfo) => {
+  const world = createWorld('repository-source-reconcile-bundled', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+  });
+  const proxy = startSlowOriginProxy(world);
+  const { repo, bare } = pairUnoccupiedBehindOrigin(world, 'reconcile-bundled-lab');
+  // The dumb-HTTP origin needs the server info files after the last push.
+  gitText(bare, 'update-server-info');
+  gitText(repo, 'remote', 'set-url', 'origin', await proxy.urlFor('reconcile-bundled-lab'));
+  const staleSha = gitText(repo, 'rev-parse', 'refs/heads/main');
+  const originSha = gitText(bare, 'rev-parse', 'refs/heads/main');
+  if (originSha === staleSha) {
+    throw new Error('fixture did not place the unoccupied source behind origin');
+  }
+
+  const transcript = new Transcript(
+    'repository-source-reconcile-bundled',
+    'Uncertain update outcome across an explicit bundled-runtime selection (packaged app, real servers)',
+  );
+  const servers: TestServer[] = [];
+  let handle: AppHandle | undefined;
+  try {
+    const alpha = startTestServer(world, 'alpha', 'runtime-alpha');
+    servers.push(alpha);
+    await waitFor(() => discoveryAt(alpha.runtimeDir) !== null, 'alpha discovery', 30_000);
+    await waitFor(() => readRegistry(world).length === 1, 'one registry entry', 30_000);
+
+    handle = await launchApp(world, testInfo, {
+      traceName: 'repository-source-reconcile-bundled',
+    });
+    const app = handle;
+    // A single registry entry attaches silently: no startup picker appears,
+    // so the journey starts already connected to alpha.
+    await expect(app.page.getByRole('listbox', { name: /running agentico servers/i })).toHaveCount(
+      0,
+    );
+    await waitFor(
+      async () => {
+        const state = await connectionState(app);
+        return state.status === 'ready' && state.serverName === 'alpha';
+      },
+      'alpha attach',
+      90_000,
+    );
+
+    await app.page.getByRole('button', { name: 'New feature' }).click();
+    const sheet = app.page.getByRole('dialog', { name: 'New feature' });
+    await sheet.getByRole('checkbox', { name: /reconcile-bundled-lab/ }).check();
+    await expect(
+      sheet.getByRole('checkbox', {
+        name: /reconcile-bundled-lab.*Origin: 2 commits behind origin\/main/,
+      }),
+    ).toBeVisible({ timeout: 30_000 });
+    const row = sheet.locator('.creation-sheet__row-item', { hasText: 'reconcile-bundled-lab' });
+    transcript.step('alpha showed the behind comparison through the controllable origin');
+
+    // The barrier: the update's fresh fetch is delayed mid-flight, and the
+    // user explicitly selects the bundled runtime before its response can
+    // arrive — the same transition the Settings "Start This machine" action
+    // and the footer switcher's Start row drive.
+    await proxy.setSlow(true);
+    await row.getByRole('button', { name: 'Update from origin' }).click();
+    await proxy.waitForDelayedInfoRefs();
+    await app.page.evaluate(() => {
+      const api = window.agentico as unknown as {
+        startLocalRuntime(): Promise<unknown>;
+      };
+      return api.startLocalRuntime();
+    });
+    await waitFor(
+      async () => {
+        const state = await connectionState(app);
+        return state.status === 'ready' && state.ownership === 'app-owned';
+      },
+      'the bundled runtime to start and take the connection mid-update',
+      90_000,
+    );
+    const onBundled = await connectionState(app);
+    expect(onBundled.status === 'ready' && onBundled.kind).toBe('local');
+    expect(onBundled.connectedRuntimeDir).not.toBe(alpha.runtimeDir);
+    transcript.step('the bundled runtime was selected while the update was still in flight');
+
+    // The update completed on alpha behind the transition: the branch really
+    // advanced, and the late response was discarded instead of authorizing
+    // the new connection, so only alpha's own reconciliation may report it.
+    await waitFor(
+      () => gitText(repo, 'rev-parse', 'refs/heads/main') === originSha,
+      'the switched-away update to complete on alpha',
+      30_000,
+    );
+    expect(gitText(repo, 'symbolic-ref', '--quiet', 'HEAD')).toBe('refs/heads/work');
+    await proxy.setSlow(false);
+
+    // The bundled server's creation view never sees or settles alpha's
+    // uncertainty, and the repository is never adopted into its draft.
+    if ((await app.page.getByRole('dialog', { name: 'New feature' }).count()) === 0) {
+      await app.page.getByRole('button', { name: 'New feature' }).click();
+    }
+    await expect(app.page.getByRole('dialog', { name: 'New feature' })).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(
+      app.page.getByRole('dialog', { name: 'New feature' }).getByText(/result of updating main/),
+    ).toHaveCount(0);
+    transcript.step("the bundled server's sheet never saw alpha's unknown outcome");
+
+    // Returning to alpha replays the record and reconciles it there: the
+    // settlement proves the update completed and restores acceptance.
+    const alphaKey = await serverKeyFor(app, 'alpha');
+    await app.page.evaluate((serverKey) => {
+      const api = window.agentico as unknown as {
+        switchConnectionServer(request: { serverKey: string }): Promise<unknown>;
+      };
+      return api.switchConnectionServer({ serverKey });
+    }, alphaKey);
+    await waitFor(
+      async () => {
+        const state = await connectionState(app);
+        return state.status === 'ready' && state.serverName === 'alpha';
+      },
+      'alpha re-attach',
+      90_000,
+    );
+    const restored = app.page.getByRole('dialog', { name: 'New feature' });
+    await expect(restored).toBeVisible({ timeout: 60_000 });
+    await expect(
+      restored.getByText(
+        new RegExp(
+          `Reconciled main on alpha: the update completed \\(now at ${originSha.slice(0, 7)}\\)\\.`,
+        ),
+      ),
+    ).toBeVisible({ timeout: 60_000 });
+    await evidenceShot(app, 'repository-source-reconcile-bundled-target-present');
+    transcript.step('returning to alpha reconciled the outcome to the completed update');
+
+    // The reconciled source is acceptable again: submission is restored.
+    await restored.getByRole('button', { name: 'Next: Describe' }).click();
+    await app.page.locator('#feature-name').fill('Bundled-switch reconciled source');
+    await restored.getByRole('button', { name: 'Next: Depth' }).click();
+    await restored.getByRole('button', { name: 'Next: Contract' }).click();
+    await restored.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
+    await expect(restored.getByRole('button', { name: 'Create', exact: true })).toBeEnabled();
+    expect(gitText(repo, 'rev-parse', 'refs/heads/main')).toBe(originSha);
+    expect(gitText(repo, 'symbolic-ref', '--quiet', 'HEAD')).toBe('refs/heads/work');
+    transcript.step('the reconciled source restored submission on the originating server');
+  } finally {
+    if (handle !== undefined) await closeApp(handle);
+    for (const server of servers) {
+      if (server.proc.exitCode === null) server.proc.kill('SIGKILL');
+    }
+    proxy.stop();
+    transcript.write(testInfo);
+    destroyWorld(world);
+  }
+});
+
 test('a mid-update server switch on the original checkout reconciles the completed fast-forward and creation pins the advanced tip', async ({}, testInfo) => {
   const world = createWorld('repository-source-reconcile-original', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },

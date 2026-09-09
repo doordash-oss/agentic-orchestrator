@@ -86,6 +86,14 @@ type ReviewModelRanker interface {
 	ReviewPreferenceBand(model ModelInfo) (int, bool)
 }
 
+// RoleModelRecommender is implemented by providers that know their own model
+// families well enough to nominate defaults per phase role. Entries are the
+// provider's own catalog IDs or aliases, most preferred first. Configured
+// model_recommendations always take precedence over these nominations.
+type RoleModelRecommender interface {
+	RecommendedModels(role PhaseRole) []string
+}
+
 // NativeToollessReviewer is implemented only by providers whose automatic-
 // review launch and protocol have been audited to expose no native tool,
 // question, child-session, customization, or persistence surface. General
@@ -153,7 +161,7 @@ type SessionUsageReconciler interface {
 
 // CatalogProvider exposes the model catalog populated by discovery.
 // Providers implementing this interface allow the Registry to perform
-// category-based model selection from the live catalog.
+// capability-based model selection from the live catalog.
 type CatalogProvider interface {
 	ModelCatalog() []ModelInfo
 }
@@ -163,6 +171,13 @@ type CatalogProvider interface {
 // fall back to CatalogProvider/default catalogs when it fails.
 type CatalogDiscoverer interface {
 	DiscoverModelCatalog(ctx context.Context) ([]ModelInfo, error)
+}
+
+// CatalogRefreshPolicy is implemented by providers whose catalog depends on
+// local configuration independently of CLI version. Version-keyed caches are
+// fallback evidence for these providers, not a substitute for discovery.
+type CatalogRefreshPolicy interface {
+	RefreshCatalogOnStartup() bool
 }
 
 // ModelDiscoveryReporter receives models as soon as a provider discovers them.
@@ -295,6 +310,9 @@ type ProtocolOpts struct {
 	WritableRoots  []string
 	DSP            bool
 	StateDir       string
+	// StructuredCompletion exposes a harness-validated completion tool for
+	// sessions governed by a phase contract.
+	StructuredCompletion bool
 	// NativeToollessReview selects the provider's audited one-turn reviewer
 	// protocol boundary. Providers that attest NativeToollessReviewer use this
 	// to omit every tool, question, child-session, continuation, and persistent
@@ -305,19 +323,10 @@ type ProtocolOpts struct {
 	// normal new session, so providers that do not resume leave their behavior
 	// unchanged.
 	ResumeSessionID string
-	// Interactive marks a session where a human answers every turn in real time
-	// (e.g. AMA chat), as opposed to an unattended autonomous phase whose
-	// pending questions may be auto-picked by confidence/"(Recommended)"
-	// markers. Providers whose AskUserQuestion support is text-parsed rather
-	// than native (OpenCode, Codex) use this to skip that entire pipeline: it
-	// exists only to imitate Claude's native AskUserQuestion tool-call UX for a
-	// provider that can otherwise only express a question as plain text, and a
-	// human already reading every reply gets no benefit from that imitation —
-	// they can just read the model's question (in whatever shape it naturally
-	// comes) and answer with an ordinary chat message. This also avoids
-	// steering the model into a rigid confidence/exact-3-options template it
-	// would otherwise keep reusing as its default style for the rest of the
-	// conversation.
+	// Interactive marks human-driven chat rather than an orchestrated phase.
+	// Codex omits Agentico phase tools and retains its normal collaboration
+	// instructions; OpenCode skips its text-based question extraction. These
+	// sessions use ordinary chat replies instead of the phase question policy.
 	Interactive bool
 }
 

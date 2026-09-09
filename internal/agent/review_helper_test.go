@@ -16,6 +16,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -24,6 +26,8 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -87,6 +91,9 @@ func TestRunReadOnlyReviewHelper_UsesBoundedHelperArtifactHandler(t *testing.T) 
 	}
 	if !strings.Contains(got.SystemPrompt, helperDir) {
 		t.Fatalf("SystemPrompt missing helper dir %q:\n%s", helperDir, got.SystemPrompt)
+	}
+	if !strings.Contains(got.SystemPrompt, "Ask at most one blocking question.") {
+		t.Fatalf("helper without a registry discarded its injected asking clause:\n%s", got.SystemPrompt)
 	}
 	if !strings.Contains(got.SystemPrompt, "The harness owns the durable completion receipt") {
 		t.Fatalf("SystemPrompt missing harness-owned receipt rule:\n%s", got.SystemPrompt)
@@ -394,5 +401,101 @@ func requirePermissionDecision(t *testing.T, handler ports.PermissionHandler, to
 	}
 	if decision.Behavior != want {
 		t.Fatalf("CanUseTool(%s, %s).Behavior = %q, want %q; reason=%q", toolName, input, decision.Behavior, want, decision.Reason)
+	}
+}
+
+func TestReviewHelpersUseActualModelProtocol(t *testing.T) {
+	t.Parallel()
+	for _, live := range []bool{false, true} {
+		for _, tt := range []struct {
+			name, model, inheritedTool string
+			wantTool                   bool
+		}{
+			{name: "claude planner codex reviewer", model: "gpt-6-astra", wantTool: true},
+			{name: "codex planner claude reviewer", model: "opus", inheritedTool: "complete_phase"},
+		} {
+			t.Run(fmt.Sprintf("%s/live=%t", tt.name, live), func(t *testing.T) {
+				t.Parallel()
+				registry := llm.NewRegistry()
+				registry.Register(&claude.Provider{})
+				registry.Register(&codex.Provider{})
+				root := t.TempDir()
+				stop := errors.New("stop after capturing helper launch")
+				var captured BuildSessionOpts
+				pr := &PhaseRunner{Registry: registry, StateDir: root, BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+					captured = opts
+					return nil, nil, nil, stop
+				}}
+				cfg := ReviewHelperConfig{
+					SessionID: "review-model-protocol", Model: tt.model, Prompt: "Review repository behavior.",
+					Phase: feature.PhaseReview, Role: RoleImplementationReviewCraft,
+					WorkDir: root, HelperIterDir: root, FeedbackPath: filepath.Join(root, "review-feedback.md"),
+					CompletionTool: tt.inheritedTool, CompletionAskingClause: "PARENT PROVIDER ASKING CONTRACT",
+				}
+				var err error
+				if live {
+					_, err = pr.RunLiveRunReviewHelper(context.Background(), cfg)
+				} else {
+					_, err = pr.RunReadOnlyReviewHelper(context.Background(), cfg)
+				}
+				if !errors.Is(err, stop) {
+					t.Fatalf("helper error = %v, want capture stop", err)
+				}
+				if captured.Model != tt.model || !captured.CompletionProtocol {
+					t.Fatalf("wrong helper launch: model=%q completion=%v", captured.Model, captured.CompletionProtocol)
+				}
+				if got := strings.Contains(captured.SystemPrompt, "call `complete_phase`"); got != tt.wantTool {
+					t.Fatalf("structured completion=%v, want %v:\n%s", got, tt.wantTool, captured.SystemPrompt)
+				}
+				if got := strings.Contains(captured.SystemPrompt, "<agentico-outcome>"); got == tt.wantTool {
+					t.Fatalf("wrong outcome transport:\n%s", captured.SystemPrompt)
+				}
+				if strings.Contains(captured.SystemPrompt, "PARENT PROVIDER ASKING CONTRACT") || !strings.Contains(captured.SystemPrompt, pr.askingQuestionsClauseForModel(tt.model)) {
+					t.Fatalf("helper inherited parent question protocol:\n%s", captured.SystemPrompt)
+				}
+			})
+		}
+	}
+}
+
+func TestPlanValidatorUsesReviewProviderProtocol(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		planner, reviewer string
+		wantTool          bool
+	}{
+		{planner: "opus", reviewer: "gpt-6-astra", wantTool: true},
+		{planner: "gpt-6-astra", reviewer: "opus"},
+	} {
+		t.Run(tt.planner+" to "+tt.reviewer, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			registry := llm.NewRegistry()
+			registry.Register(&claude.Provider{})
+			registry.Register(&codex.Provider{})
+			parent := &PhaseRunner{Registry: registry}
+			f := &feature.Feature{ID: "mixed-provider-plan"}
+			f.Models.Planning, f.Models.Review = tt.planner, tt.reviewer
+			var captured BuildSessionOpts
+			cfg := PlanLoopConfig{
+				Registry: registry, Feature: f, StateDir: root, WorkDir: root,
+				AskingClause:   parent.askingQuestionsClauseForModel(tt.planner),
+				CompletionTool: parent.completionToolForModel(tt.planner),
+				BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+					captured = opts
+					return nil, nil, nil, errors.New("stop after validator launch capture")
+				},
+			}
+			_, _, _, _ = runSpecializedPlanValidation(cfg, mocks.NewMockSessionManager(), 1, root, filepath.Join(root, "plan.md"), validatorDomain{Name: "Architecture", Template: "validate-roadmap-architecture"}, observe.SpanContext{})
+			if captured.Model != tt.reviewer {
+				t.Fatalf("model=%q, want %q", captured.Model, tt.reviewer)
+			}
+			if got := strings.Contains(captured.SystemPrompt, "call `complete_phase`"); got != tt.wantTool {
+				t.Fatalf("validator inherited planner completion transport:\n%s", captured.SystemPrompt)
+			}
+			if !strings.Contains(captured.SystemPrompt, parent.askingQuestionsClauseForModel(tt.reviewer)) {
+				t.Fatalf("validator inherited planner asking contract:\n%s", captured.SystemPrompt)
+			}
+		})
 	}
 }

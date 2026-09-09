@@ -34,20 +34,21 @@ type SDKMessage struct {
 	OccurredAt time.Time `json:"-"`
 
 	// Exactly one of these is non-nil after unmarshaling, based on Type.
-	Init           *SystemInitMessage      `json:"-"`
-	Assistant      *AssistantMessage       `json:"-"`
-	User           *UserMessage            `json:"-"`
-	Result         *ResultMessage          `json:"-"`
-	ControlRequest *ControlRequestMessage  `json:"-"`
-	Status         *StatusMessage          `json:"-"`
-	ToolProgress   *ToolProgressMessage    `json:"-"`
-	HookStarted    *HookStartedMessage     `json:"-"`
-	HookProgress   *HookProgressMessage    `json:"-"`
-	HookResponse   *HookResponseMessage    `json:"-"`
-	RateLimit      *RateLimitMessage       `json:"-"`
-	Compact        *CompactBoundaryMessage `json:"-"`
-	FileReads      []FileReadEvent         `json:"-"`
-	FileChanges    []FileChangeEvent       `json:"-"`
+	Init              *SystemInitMessage      `json:"-"`
+	Assistant         *AssistantMessage       `json:"-"`
+	User              *UserMessage            `json:"-"`
+	Result            *ResultMessage          `json:"-"`
+	ControlRequest    *ControlRequestMessage  `json:"-"`
+	CompletionRequest *PhaseCompletionRequest `json:"-"`
+	Status            *StatusMessage          `json:"-"`
+	ToolProgress      *ToolProgressMessage    `json:"-"`
+	HookStarted       *HookStartedMessage     `json:"-"`
+	HookProgress      *HookProgressMessage    `json:"-"`
+	HookResponse      *HookResponseMessage    `json:"-"`
+	RateLimit         *RateLimitMessage       `json:"-"`
+	Compact           *CompactBoundaryMessage `json:"-"`
+	FileReads         []FileReadEvent         `json:"-"`
+	FileChanges       []FileChangeEvent       `json:"-"`
 
 	// Provider-normalized subagent (Task tool) lifecycle messages. Claude
 	// emits the corresponding system subtypes natively; other adapters may

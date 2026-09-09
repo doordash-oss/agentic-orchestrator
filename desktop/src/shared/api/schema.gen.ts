@@ -1005,6 +1005,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspace/repositories/update-source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fast-forward one unoccupied selected source branch from origin.
+         * @description Advances exactly one catalog-authorized selected local branch to a freshly fetched origin commit, only by a proved fast-forward and only when the branch is absent from every worktree checkout, including the original checkout. The request binds the displayed repository identity, shared branch mode, resolved local branch and origin mapping, expected local and fetched origin SHAs, and the observed checkout HEAD; every expectation is revalidated under canonical common-directory coordination before the expected-old-value compare-and-swap. Changed expectations return a typed stale result with a freshly resolved status; missing or replaced repositories require reselection. The mutation never checks out, resets, rebases, merges, forces, stashes, cleans, stages, pushes, or runs hooks, and never deletes or breaks Git ref/index locks. Renderer-supplied identity is an expectation, never authority to mutate an arbitrary path.
+         */
+        post: operations["updateWorkspaceRepositorySource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recovery": {
         parameters: {
             query?: never;
@@ -1462,7 +1482,11 @@ export interface components {
             /** @description Advisory eligibility for a future branch update; never authorization for a mutation. Present when a fresh comparison exists or the comparison is unavailable. */
             update_eligible?: boolean;
             /** @description Observed advisory reasons a future update is not defined or not safe. */
-            update_blockers?: ("local_not_behind" | "dirty_target_checkout" | "git_operation_in_progress" | "branch_checked_out_in_worktree" | "comparison_unavailable")[];
+            update_blockers?: ("local_not_behind" | "dirty_target_checkout" | "git_operation_in_progress" | "branch_checked_out_in_worktree" | "branch_checked_out_in_original_checkout" | "comparison_unavailable")[];
+            /** @description Observed checkout HEAD reference: the full symbolic ref (refs/heads/...) or the literal "detached". Present when the checkout HEAD resolved; binds Update requests to the observed checkout identity. */
+            checkout_head_ref?: string;
+            /** @description Observed checkout HEAD commit. Present when the checkout HEAD resolves to a commit. */
+            checkout_head_sha?: string;
         };
         OriginComparison: {
             /** @enum {string} */
@@ -1477,6 +1501,53 @@ export interface components {
         };
         RepositoryOriginStatusResponse: components["schemas"]["ActionBaseResponse"] & {
             repositories: components["schemas"]["RepositoryOriginStatus"][];
+        };
+        RepositoryUpdateSourceRequest: {
+            repo_key: string;
+            identity: components["schemas"]["RepositoryIdentity"];
+            /** @enum {string} */
+            mode: "default" | "current";
+            /** @description Expected full local branch name as displayed by the origin comparison. A comparison against the server-resolved selection, never ref authority. */
+            branch: string;
+            /** @description Expected mapped origin branch as displayed by the origin comparison, including differently named tracking branches. */
+            origin_branch: string;
+            /** @description Displayed local tip of the selected branch. */
+            expected_local_sha: string;
+            /** @description Displayed fetched origin tip from a completed behind comparison. The update refetches and proves this value is still current before mutating. */
+            expected_origin_sha: string;
+            /** @description Observed checkout HEAD reference at display time: the full symbolic ref (refs/heads/...) or the literal "detached". Binds the update to the observed checkout identity so a checkout switch refuses the mutation even when the selected source is unchanged. */
+            checkout_head_ref: string;
+            /** @description Observed checkout HEAD commit at display time. */
+            checkout_head_sha: string;
+        };
+        RepositoryUpdateSourceResponse: components["schemas"]["ActionBaseResponse"] & {
+            /**
+             * @description updated: the branch advanced by compare-and-swap. already_up_to_date: equality no-op after revalidation. stale: a displayed expectation no longer matches; nothing was mutated.
+             * @enum {string}
+             */
+            result: "updated" | "already_up_to_date" | "stale";
+            /**
+             * @description Typed stale reason; present only for stale results.
+             * @enum {string}
+             */
+            reason?: "checkout_changed" | "source_changed" | "mapping_changed" | "local_tip_changed" | "origin_tip_changed" | "origin_branch_missing" | "not_fast_forward" | "branch_checked_out";
+            /** @description Server-resolved current catalog key. */
+            repo_key: string;
+            identity: components["schemas"]["RepositoryIdentity"];
+            /** @enum {string} */
+            mode: "default" | "current";
+            /** @description Server-resolved full local branch name. */
+            branch: string;
+            /** @description Server-resolved mapped origin branch. */
+            origin_branch: string;
+            /** @description Local tip before the advance; present for updated results. */
+            previous_sha?: string;
+            /** @description Local tip after the attempt; present for updated and already_up_to_date results. */
+            local_sha?: string;
+            /** @description Freshly fetched origin tip proved by this attempt; present when the attempt fetched the mapped branch. */
+            fetched_sha?: string;
+            /** @description Freshly resolved status snapshot for the selected source; present for stale results where the authorized repository still exists. */
+            status?: components["schemas"]["RepositoryOriginStatus"];
         };
         CloneStartRequest: {
             /** @description HTTP, HTTPS or SSH remote URL for the clone. Local paths, helper transports, embedded credentials and token-bearing queries or fragments are rejected without echoing secrets. */
@@ -3046,6 +3117,15 @@ export interface components {
                 "application/json": components["schemas"]["RepositoryOriginStatusResponse"];
             };
         };
+        /** @description Typed outcome of one Update-from-origin attempt: the branch advanced, an equality no-op, or a typed stale refusal with a freshly resolved status snapshot. */
+        RepositoryUpdateSourceResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RepositoryUpdateSourceResponse"];
+            };
+        };
         /** @description Authoritative clone operation snapshot after a mutation. */
         CloneActionResponse: {
             headers: {
@@ -4318,6 +4398,29 @@ export interface operations {
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
             409: components["responses"]["ErrorResponse"];
+        };
+    };
+    updateWorkspaceRepositorySource: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepositoryUpdateSourceRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["RepositoryUpdateSourceResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
+            503: components["responses"]["ErrorResponse"];
         };
     };
     getRecoverySnapshot: {

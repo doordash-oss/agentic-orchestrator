@@ -30,6 +30,7 @@ import type {
   ReadinessSnapshot,
   RecoveryItemView,
   RewindPreviewView,
+  RepositoryUpdateSourceResult,
   RunArtifactView,
   RunArtifactsListResult,
   RunDetailView,
@@ -2091,6 +2092,16 @@ function makeMockApi(
           checkedAt: '2026-09-09T10:00:00.000Z',
         })),
       }),
+    updateRepositorySource: (request) =>
+      Promise.resolve({
+        result: 'already_up_to_date' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
+      } as RepositoryUpdateSourceResult),
     // The creation-sheet scenes need real-looking attachment chips; every
     // other scene keeps the picker inert.
     pickCreationFiles: (kind) =>

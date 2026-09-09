@@ -40,6 +40,7 @@ import {
   RuntimeConfigCreationSchema,
   RepositorySourcesResponseSchema,
   RepositoryOriginStatusResponseSchema,
+  RepositoryUpdateSourceResponseSchema,
   RebaseFeatureResponseSchema,
   RefactorFeatureResponseSchema,
   DiscardChildResponseSchema,
@@ -48,6 +49,7 @@ import {
   ReviewFeedbackSelectionResponseSchema,
   ReviewFeedbackFeatureResponseSchema,
   validateWithSchema,
+  type RepositoryOriginStatusWireResponse,
   type ServerFeatureDetail,
   type ServerOwnedError,
   type ServerRelationshipChild,
@@ -75,6 +77,8 @@ import {
   type RepositoryOriginStatusRequest,
   type RepositoryOriginStatusResult,
   type RepositoryOriginStatusSnapshot,
+  type RepositoryUpdateSourceRequest,
+  type RepositoryUpdateSourceResult,
   type EffortLevel,
   type FeatureSetupView,
   type FeatureSnapshot,
@@ -181,6 +185,13 @@ const LONG_MUTATION_ACTIONS: ReadonlySet<string> = new Set(['publish', 'merge'])
 // for ordinary API calls.
 const COORDINATED_MUTATION_TIMEOUT_MS = 3 * 60_000;
 const COORDINATED_MUTATION_ACTIONS: ReadonlySet<string> = new Set(['setup', 'start', 'restart']);
+
+// The server bounds one Update-from-origin attempt at two minutes, including
+// coordination waits, network work, and the compare-and-swap. The client
+// allowance must exceed that deadline so the server, not the client, owns the
+// typed outcome; anything shorter would surface an ambiguous timeout while the
+// mutation is still running server-side.
+const SOURCE_UPDATE_TIMEOUT_MS = 3 * 60_000;
 
 export class FeatureService {
   private readonly actionFlights = new Map<string, Promise<FeatureActionResult>>();
@@ -296,49 +307,57 @@ export class FeatureService {
       },
     });
     const parsed = validateWithSchema(body, RepositoryOriginStatusResponseSchema);
-    const mapSnapshot = (
-      repository: (typeof parsed.repositories)[number],
-    ): RepositoryOriginStatusSnapshot => ({
-      repoKey: repository.repo_key,
-      identity: {
-        path: repository.identity.path,
-        commonDir: repository.identity.common_dir,
-        device: repository.identity.device,
-        inode: repository.identity.inode,
+    return { repositories: parsed.repositories.map(toOriginStatusSnapshot) };
+  }
+
+  /**
+   * Advances one unoccupied selected source branch from origin through the
+   * server's expected-old-value compare-and-swap. The displayed expectations
+   * cross unchanged; a stale result carries a freshly resolved status
+   * snapshot, and canonical server rejections cross unchanged.
+   */
+  async updateRepositorySource(
+    request: RepositoryUpdateSourceRequest,
+  ): Promise<RepositoryUpdateSourceResult> {
+    const body = await this.api('/api/v1/workspace/repositories/update-source', {
+      method: 'POST',
+      timeoutMs: SOURCE_UPDATE_TIMEOUT_MS,
+      body: {
+        repo_key: request.repoKey,
+        identity: {
+          path: request.identity.path,
+          common_dir: request.identity.commonDir,
+          device: request.identity.device,
+          inode: request.identity.inode,
+        },
+        mode: request.mode,
+        branch: request.branch,
+        origin_branch: request.originBranch,
+        expected_local_sha: request.expectedLocalSha,
+        expected_origin_sha: request.expectedOriginSha,
+        checkout_head_ref: request.checkoutHeadRef,
+        checkout_head_sha: request.checkoutHeadSha,
       },
-      mode: repository.mode,
-      kind: repository.kind,
-      ...(repository.branch === undefined ? {} : { branch: repository.branch }),
-      ...(repository.commit === undefined ? {} : { commit: repository.commit }),
-      ...(repository.local_sha === undefined ? {} : { localSha: repository.local_sha }),
-      ...(repository.origin_branch === undefined ? {} : { originBranch: repository.origin_branch }),
-      ...(repository.fetched_sha === undefined ? {} : { fetchedSha: repository.fetched_sha }),
-      ...(repository.checked_at === undefined ? {} : { checkedAt: repository.checked_at }),
-      status: repository.status,
-      ...(repository.ahead_count === undefined ? {} : { aheadCount: repository.ahead_count }),
-      ...(repository.behind_count === undefined ? {} : { behindCount: repository.behind_count }),
-      ...(repository.issue === undefined ? {} : { issue: repository.issue }),
-      ...(repository.stale_comparison === undefined
-        ? {}
-        : {
-            staleComparison: {
-              status: repository.stale_comparison.status,
-              localSha: repository.stale_comparison.local_sha,
-              fetchedSha: repository.stale_comparison.fetched_sha,
-              originBranch: repository.stale_comparison.origin_branch,
-              aheadCount: repository.stale_comparison.ahead_count,
-              behindCount: repository.stale_comparison.behind_count,
-              checkedAt: repository.stale_comparison.checked_at,
-            },
-          }),
-      ...(repository.update_eligible === undefined
-        ? {}
-        : { updateEligible: repository.update_eligible }),
-      ...(repository.update_blockers === undefined
-        ? {}
-        : { updateBlockers: repository.update_blockers }),
     });
-    return { repositories: parsed.repositories.map(mapSnapshot) };
+    const parsed = validateWithSchema(body, RepositoryUpdateSourceResponseSchema);
+    return {
+      result: parsed.result,
+      ...(parsed.reason === undefined ? {} : { reason: parsed.reason }),
+      repoKey: parsed.repo_key,
+      identity: {
+        path: parsed.identity.path,
+        commonDir: parsed.identity.common_dir,
+        device: parsed.identity.device,
+        inode: parsed.identity.inode,
+      },
+      mode: parsed.mode,
+      branch: parsed.branch,
+      originBranch: parsed.origin_branch,
+      ...(parsed.previous_sha === undefined ? {} : { previousSha: parsed.previous_sha }),
+      ...(parsed.local_sha === undefined ? {} : { localSha: parsed.local_sha }),
+      ...(parsed.fetched_sha === undefined ? {} : { fetchedSha: parsed.fetched_sha }),
+      ...(parsed.status === undefined ? {} : { status: toOriginStatusSnapshot(parsed.status) }),
+    };
   }
 
   /**
@@ -761,6 +780,62 @@ function spreadDefined<K extends string, V extends string | number>(
   value: V | undefined,
 ): Partial<Record<K, V>> {
   return value === undefined || value === '' ? {} : ({ [key]: value } as Record<K, V>);
+}
+
+/**
+ * Maps one validated wire origin-status row (snake_case) to the strict
+ * renderer-facing snapshot (camelCase). Shared by the origin-status check and
+ * the update-source stale-status snapshot so both present one shape.
+ */
+function toOriginStatusSnapshot(
+  repository: RepositoryOriginStatusWireResponse['repositories'][number],
+): RepositoryOriginStatusSnapshot {
+  return {
+    repoKey: repository.repo_key,
+    identity: {
+      path: repository.identity.path,
+      commonDir: repository.identity.common_dir,
+      device: repository.identity.device,
+      inode: repository.identity.inode,
+    },
+    mode: repository.mode,
+    kind: repository.kind,
+    ...(repository.branch === undefined ? {} : { branch: repository.branch }),
+    ...(repository.commit === undefined ? {} : { commit: repository.commit }),
+    ...(repository.local_sha === undefined ? {} : { localSha: repository.local_sha }),
+    ...(repository.origin_branch === undefined ? {} : { originBranch: repository.origin_branch }),
+    ...(repository.fetched_sha === undefined ? {} : { fetchedSha: repository.fetched_sha }),
+    ...(repository.checked_at === undefined ? {} : { checkedAt: repository.checked_at }),
+    status: repository.status,
+    ...(repository.ahead_count === undefined ? {} : { aheadCount: repository.ahead_count }),
+    ...(repository.behind_count === undefined ? {} : { behindCount: repository.behind_count }),
+    ...(repository.issue === undefined ? {} : { issue: repository.issue }),
+    ...(repository.stale_comparison === undefined
+      ? {}
+      : {
+          staleComparison: {
+            status: repository.stale_comparison.status,
+            localSha: repository.stale_comparison.local_sha,
+            fetchedSha: repository.stale_comparison.fetched_sha,
+            originBranch: repository.stale_comparison.origin_branch,
+            aheadCount: repository.stale_comparison.ahead_count,
+            behindCount: repository.stale_comparison.behind_count,
+            checkedAt: repository.stale_comparison.checked_at,
+          },
+        }),
+    ...(repository.update_eligible === undefined
+      ? {}
+      : { updateEligible: repository.update_eligible }),
+    ...(repository.update_blockers === undefined
+      ? {}
+      : { updateBlockers: repository.update_blockers }),
+    ...(repository.checkout_head_ref === undefined
+      ? {}
+      : { checkoutHeadRef: repository.checkout_head_ref }),
+    ...(repository.checkout_head_sha === undefined
+      ? {}
+      : { checkoutHeadSha: repository.checkout_head_sha }),
+  };
 }
 
 /** Maps a server-side comment (snake_case) to the renderer-facing view (camelCase), redacting free-text fields. */

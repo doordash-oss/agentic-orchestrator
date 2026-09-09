@@ -1269,6 +1269,46 @@ paths:
         "409":
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/v1/workspace/repositories/update-source:
+    post:
+      operationId: updateWorkspaceRepositorySource
+      summary: Fast-forward one unoccupied selected source branch from origin.
+      description: >-
+        Advances exactly one catalog-authorized selected local branch to a
+        freshly fetched origin commit, only by a proved fast-forward and only
+        when the branch is absent from every worktree checkout, including
+        the original checkout. The request binds the displayed repository
+        identity, shared branch mode, resolved local branch and origin
+        mapping, expected local and fetched origin SHAs, and the observed
+        checkout HEAD; every expectation is revalidated under canonical
+        common-directory coordination before the expected-old-value
+        compare-and-swap. Changed expectations return a typed stale result
+        with a freshly resolved status; missing or replaced repositories
+        require reselection. The mutation never checks out, resets,
+        rebases, merges, forces, stashes, cleans, stages, pushes, or runs
+        hooks, and never deletes or breaks Git ref/index locks.
+        Renderer-supplied identity is an expectation, never authority to
+        mutate an arbitrary path.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryUpdateSourceRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/RepositoryUpdateSourceResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/recovery:
     get:
       operationId: getRecoverySnapshot
@@ -1805,6 +1845,15 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RepositoryOriginStatusResponse"
+    RepositoryUpdateSourceResponse:
+      description: >-
+        Typed outcome of one Update-from-origin attempt: the branch advanced,
+        an equality no-op, or a typed stale refusal with a freshly resolved
+        status snapshot.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositoryUpdateSourceResponse"
     CloneActionResponse:
       description: Authoritative clone operation snapshot after a mutation.
       content:
@@ -2733,8 +2782,26 @@ components:
                 dirty_target_checkout,
                 git_operation_in_progress,
                 branch_checked_out_in_worktree,
+                branch_checked_out_in_original_checkout,
                 comparison_unavailable,
               ]
+        checkout_head_ref:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: >-
+            Observed checkout HEAD reference: the full symbolic ref
+            (refs/heads/...) or the literal "detached". Present when the
+            checkout HEAD resolved; binds Update requests to the observed
+            checkout identity.
+          x-go-type-skip-optional-pointer: false
+        checkout_head_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: >-
+            Observed checkout HEAD commit. Present when the checkout HEAD
+            resolves to a commit.
+          x-go-type-skip-optional-pointer: false
     OriginComparison:
       type: object
       additionalProperties: false
@@ -2772,6 +2839,140 @@ components:
               maxItems: 32
               items:
                 $ref: "#/components/schemas/RepositoryOriginStatus"
+    RepositoryUpdateSourceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          repo_key,
+          identity,
+          mode,
+          branch,
+          origin_branch,
+          expected_local_sha,
+          expected_origin_sha,
+          checkout_head_ref,
+          checkout_head_sha,
+        ]
+      properties:
+        repo_key:
+          type: string
+          minLength: 1
+          maxLength: 512
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+        mode:
+          type: string
+          enum: [default, current]
+        branch:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: >-
+            Expected full local branch name as displayed by the origin
+            comparison. A comparison against the server-resolved selection,
+            never ref authority.
+        origin_branch:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: >-
+            Expected mapped origin branch as displayed by the origin
+            comparison, including differently named tracking branches.
+        expected_local_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: Displayed local tip of the selected branch.
+        expected_origin_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: >-
+            Displayed fetched origin tip from a completed behind
+            comparison. The update refetches and proves this value is still
+            current before mutating.
+        checkout_head_ref:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: >-
+            Observed checkout HEAD reference at display time: the full
+            symbolic ref (refs/heads/...) or the literal "detached". Binds
+            the update to the observed checkout identity so a checkout
+            switch refuses the mutation even when the selected source is
+            unchanged.
+        checkout_head_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: Observed checkout HEAD commit at display time.
+    RepositoryUpdateSourceResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [result, repo_key, identity, mode, branch, origin_branch]
+          properties:
+            result:
+              type: string
+              enum: [updated, already_up_to_date, stale]
+              description: >-
+                updated: the branch advanced by compare-and-swap.
+                already_up_to_date: equality no-op after revalidation.
+                stale: a displayed expectation no longer matches; nothing
+                was mutated.
+            reason:
+              type: string
+              enum:
+                [
+                  checkout_changed,
+                  source_changed,
+                  mapping_changed,
+                  local_tip_changed,
+                  origin_tip_changed,
+                  origin_branch_missing,
+                  not_fast_forward,
+                  branch_checked_out,
+                ]
+              description: Typed stale reason; present only for stale results.
+            repo_key:
+              type: string
+              description: Server-resolved current catalog key.
+            identity:
+              $ref: "#/components/schemas/RepositoryIdentity"
+              x-go-type-skip-optional-pointer: false
+            mode:
+              type: string
+              enum: [default, current]
+            branch:
+              type: string
+              description: Server-resolved full local branch name.
+            origin_branch:
+              type: string
+              description: Server-resolved mapped origin branch.
+            previous_sha:
+              type: string
+              pattern: "^[0-9a-f]{40,64}$"
+              description: Local tip before the advance; present for updated results.
+              x-go-type-skip-optional-pointer: false
+            local_sha:
+              type: string
+              pattern: "^[0-9a-f]{40,64}$"
+              description: >-
+                Local tip after the attempt; present for updated and
+                already_up_to_date results.
+              x-go-type-skip-optional-pointer: false
+            fetched_sha:
+              type: string
+              pattern: "^[0-9a-f]{40,64}$"
+              description: >-
+                Freshly fetched origin tip proved by this attempt; present
+                when the attempt fetched the mapped branch.
+              x-go-type-skip-optional-pointer: false
+            status:
+              $ref: "#/components/schemas/RepositoryOriginStatus"
+              x-go-type-skip-optional-pointer: false
+              description: >-
+                Freshly resolved status snapshot for the selected source;
+                present for stale results where the authorized repository
+                still exists.
     CloneStartRequest:
       x-go-name: CloneStartSchema
       type: object

@@ -455,63 +455,98 @@ const OriginComparisonWireSchema = z.strictObject({
   checked_at: z.string().min(1),
 });
 
+const RepositoryOriginStatusWireSchema = z.strictObject({
+  repo_key: z.string().min(1),
+  identity: z.strictObject({
+    path: z.string().min(1),
+    common_dir: z.string().min(1),
+    device: z.string().regex(/^[0-9]{1,20}$/),
+    inode: z.string().regex(/^[0-9]{1,20}$/),
+  }),
+  mode: z.enum(['default', 'current']),
+  kind: z.enum(['branch', 'detached']),
+  branch: z.string().optional(),
+  commit: OriginCommitShaSchema.optional(),
+  local_sha: OriginCommitShaSchema.optional(),
+  origin_branch: z.string().optional(),
+  fetched_sha: OriginCommitShaSchema.optional(),
+  checked_at: z.string().optional(),
+  status: z.enum([
+    'checking',
+    'up_to_date',
+    'behind',
+    'ahead',
+    'diverged',
+    'no_origin',
+    'remote_branch_missing',
+    'other_upstream',
+    'detached',
+    'local_base_missing',
+    'unknown',
+  ]),
+  ahead_count: z.number().int().min(0).optional(),
+  behind_count: z.number().int().min(0).optional(),
+  issue: CanonicalErrorSchema.optional(),
+  stale_comparison: OriginComparisonWireSchema.optional(),
+  update_eligible: z.boolean().optional(),
+  update_blockers: z
+    .array(
+      z.enum([
+        'local_not_behind',
+        'dirty_target_checkout',
+        'git_operation_in_progress',
+        'branch_checked_out_in_worktree',
+        'branch_checked_out_in_original_checkout',
+        'comparison_unavailable',
+      ]),
+    )
+    .optional(),
+  checkout_head_ref: z.string().min(1).max(512).optional(),
+  checkout_head_sha: OriginCommitShaSchema.optional(),
+});
+
 export const RepositoryOriginStatusResponseSchema = z.object({
   api_version: z.string(),
-  repositories: z
-    .array(
-      z.strictObject({
-        repo_key: z.string().min(1),
-        identity: z.strictObject({
-          path: z.string().min(1),
-          common_dir: z.string().min(1),
-          device: z.string().regex(/^[0-9]{1,20}$/),
-          inode: z.string().regex(/^[0-9]{1,20}$/),
-        }),
-        mode: z.enum(['default', 'current']),
-        kind: z.enum(['branch', 'detached']),
-        branch: z.string().optional(),
-        commit: OriginCommitShaSchema.optional(),
-        local_sha: OriginCommitShaSchema.optional(),
-        origin_branch: z.string().optional(),
-        fetched_sha: OriginCommitShaSchema.optional(),
-        checked_at: z.string().optional(),
-        status: z.enum([
-          'checking',
-          'up_to_date',
-          'behind',
-          'ahead',
-          'diverged',
-          'no_origin',
-          'remote_branch_missing',
-          'other_upstream',
-          'detached',
-          'local_base_missing',
-          'unknown',
-        ]),
-        ahead_count: z.number().int().min(0).optional(),
-        behind_count: z.number().int().min(0).optional(),
-        issue: CanonicalErrorSchema.optional(),
-        stale_comparison: OriginComparisonWireSchema.optional(),
-        update_eligible: z.boolean().optional(),
-        update_blockers: z
-          .array(
-            z.enum([
-              'local_not_behind',
-              'dirty_target_checkout',
-              'git_operation_in_progress',
-              'branch_checked_out_in_worktree',
-              'comparison_unavailable',
-            ]),
-          )
-          .optional(),
-      }),
-    )
-    .min(1)
-    .max(32),
+  repositories: z.array(RepositoryOriginStatusWireSchema).min(1).max(32),
 });
 
 export type RepositoryOriginStatusWireResponse = z.output<
   typeof RepositoryOriginStatusResponseSchema
+>;
+
+export const RepositoryUpdateSourceResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.enum(['updated', 'already_up_to_date', 'stale']),
+  reason: z
+    .enum([
+      'checkout_changed',
+      'source_changed',
+      'mapping_changed',
+      'local_tip_changed',
+      'origin_tip_changed',
+      'origin_branch_missing',
+      'not_fast_forward',
+      'branch_checked_out',
+    ])
+    .optional(),
+  repo_key: z.string().min(1),
+  identity: z.strictObject({
+    path: z.string().min(1),
+    common_dir: z.string().min(1),
+    device: z.string().regex(/^[0-9]{1,20}$/),
+    inode: z.string().regex(/^[0-9]{1,20}$/),
+  }),
+  mode: z.enum(['default', 'current']),
+  branch: z.string().min(1),
+  origin_branch: z.string().min(1),
+  previous_sha: OriginCommitShaSchema.optional(),
+  local_sha: OriginCommitShaSchema.optional(),
+  fetched_sha: OriginCommitShaSchema.optional(),
+  status: RepositoryOriginStatusWireSchema.optional(),
+});
+
+export type RepositoryUpdateSourceWireResponse = z.output<
+  typeof RepositoryUpdateSourceResponseSchema
 >;
 
 // --- Clone operations (POST/GET /api/v1/workspace/repositories/clone) ------

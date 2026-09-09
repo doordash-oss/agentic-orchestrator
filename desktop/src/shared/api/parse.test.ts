@@ -28,6 +28,7 @@ import {
   ReadinessResponseSchema,
   RepositorySourcesResponseSchema,
   RepositoryOriginStatusResponseSchema,
+  RepositoryUpdateSourceResponseSchema,
   RepositoryDiffResponseSchema,
   RewindActionResponseSchema,
   ServerFeatureDetailSchema,
@@ -234,6 +235,45 @@ describe('repository origin status response contract', () => {
     expect(parsed.repositories[2]?.checked_at).toBeUndefined();
   });
 
+  it('accepts observed checkout HEAD identity on rows', () => {
+    const parsed = RepositoryOriginStatusResponseSchema.parse({
+      api_version: 'v1',
+      repositories: [
+        {
+          repo_key: 'repo-a',
+          identity,
+          mode: 'default',
+          kind: 'branch',
+          branch: 'main',
+          local_sha: 'a'.repeat(40),
+          origin_branch: 'main',
+          status: 'behind',
+          update_eligible: true,
+          checkout_head_ref: 'refs/heads/main',
+          checkout_head_sha: 'a'.repeat(40),
+        },
+      ],
+    });
+    expect(parsed.repositories[0]?.checkout_head_ref).toBe('refs/heads/main');
+    expect(parsed.repositories[0]?.checkout_head_sha).toBe('a'.repeat(40));
+    expect(
+      RepositoryOriginStatusResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [
+          {
+            repo_key: 'repo-a',
+            identity,
+            mode: 'default',
+            kind: 'branch',
+            branch: 'main',
+            status: 'behind',
+            checkout_head_sha: 'not-a-sha',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
   it('rejects invented SHAs, unknown statuses, and renderer-authority fields', () => {
     const base = {
       repo_key: 'repo-a',
@@ -277,6 +317,112 @@ describe('repository origin status response contract', () => {
         })),
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('repository update source response contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    common_dir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+
+  it('accepts an updated result with previous, local, and fetched SHAs', () => {
+    const parsed = RepositoryUpdateSourceResponseSchema.parse({
+      api_version: 'v1',
+      result: 'updated',
+      repo_key: 'repo-a',
+      identity,
+      mode: 'default',
+      branch: 'release/2026/q3',
+      origin_branch: 'upstream-main',
+      previous_sha: 'a'.repeat(40),
+      local_sha: 'c'.repeat(40),
+      fetched_sha: 'c'.repeat(40),
+    });
+    expect(parsed.result).toBe('updated');
+    expect(parsed.reason).toBeUndefined();
+    expect(parsed.status).toBeUndefined();
+    expect(parsed.previous_sha).toBe('a'.repeat(40));
+    expect(parsed.local_sha).toBe('c'.repeat(40));
+    expect(parsed.fetched_sha).toBe('c'.repeat(40));
+  });
+
+  it('accepts a stale refusal carrying a freshly resolved status snapshot', () => {
+    const parsed = RepositoryUpdateSourceResponseSchema.parse({
+      api_version: 'v1',
+      result: 'stale',
+      reason: 'branch_checked_out',
+      repo_key: 'repo-a',
+      identity,
+      mode: 'default',
+      branch: 'release/2026/q3',
+      origin_branch: 'upstream-main',
+      status: {
+        repo_key: 'repo-a',
+        identity,
+        mode: 'default',
+        kind: 'branch',
+        branch: 'release/2026/q3',
+        local_sha: 'a'.repeat(40),
+        origin_branch: 'upstream-main',
+        status: 'behind',
+        ahead_count: 0,
+        behind_count: 3,
+        update_eligible: false,
+        update_blockers: ['branch_checked_out_in_original_checkout'],
+        checkout_head_ref: 'refs/heads/main',
+        checkout_head_sha: 'e'.repeat(40),
+      },
+    });
+    expect(parsed.result).toBe('stale');
+    expect(parsed.reason).toBe('branch_checked_out');
+    expect(parsed.status?.status).toBe('behind');
+    expect(parsed.status?.update_blockers).toEqual(['branch_checked_out_in_original_checkout']);
+    expect(parsed.status?.checkout_head_ref).toBe('refs/heads/main');
+    expect(parsed.status?.checkout_head_sha).toBe('e'.repeat(40));
+  });
+
+  it('rejects invented SHAs, unknown results and reasons, and renderer-authority fields', () => {
+    const base = {
+      repo_key: 'repo-a',
+      identity,
+      mode: 'default' as const,
+      branch: 'main',
+      origin_branch: 'main',
+    };
+    expect(
+      RepositoryUpdateSourceResponseSchema.safeParse({
+        api_version: 'v1',
+        result: 'sideways',
+        ...base,
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryUpdateSourceResponseSchema.safeParse({
+        api_version: 'v1',
+        result: 'stale',
+        reason: 'sideways',
+        ...base,
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryUpdateSourceResponseSchema.safeParse({
+        api_version: 'v1',
+        result: 'updated',
+        ...base,
+        local_sha: 'not-a-sha',
+      }).success,
+    ).toBe(false);
+    const withRendererPath = RepositoryUpdateSourceResponseSchema.safeParse({
+      api_version: 'v1',
+      result: 'updated',
+      ...base,
+      path: '/renderer/chosen/path',
+    });
+    expect(withRendererPath.success).toBe(true);
+    expect(withRendererPath.success && 'path' in withRendererPath.data).toBe(false);
   });
 });
 

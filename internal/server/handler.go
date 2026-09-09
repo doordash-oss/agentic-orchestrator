@@ -87,6 +87,15 @@ type apiHandler struct {
 	// global concurrency cap, and per-attempt deadlines.
 	originChecks *originCheckCoordinator
 
+	// updateSourceDeadline bounds one Update-from-origin attempt end to
+	// end; zero means defaultUpdateSourceDeadline. Injectable for
+	// deterministic deadline tests.
+	updateSourceDeadline time.Duration
+	// updateSourceOptions injects deterministic test controls (runners,
+	// pre-CAS hooks) for Update-from-origin; the zero value uses production
+	// defaults.
+	updateSourceOptions git.SourceUpdateOptions
+
 	// readinessMu guards the cached provider readiness probe results served
 	// by /api/v1/readiness and refreshed by /api/v1/readiness/refresh.
 	readinessMu       sync.Mutex
@@ -146,6 +155,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		reviewSessionLocks:      newReviewSessionLockSet(),
 		creationResults:         make(map[string]creationResult),
 		originChecks:            newOriginCheckCoordinator(),
+		updateSourceDeadline:    defaultUpdateSourceDeadline,
 	}
 	if opts.Worktrees != nil {
 		handler.cleanliness = git.NewCleanlinessCache(opts.Worktrees)
@@ -235,6 +245,7 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathWorkspaceRepositoriesInitialize, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitializeRoute }},
 	{apiPathWorkspaceRepositorySources, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositorySourcesRoute }},
 	{apiPathWorkspaceRepositoryOriginStatus, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryOriginStatusRoute }},
+	{apiPathWorkspaceRepositoryUpdateSource, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryUpdateSourceRoute }},
 	{apiPathWorkspaceClone, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneRoute }},
 	{apiPathWorkspaceClone + "/", func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneOperationRoutes }},
 	{apiPathPrompts, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},

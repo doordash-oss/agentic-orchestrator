@@ -135,6 +135,14 @@ const (
 	InitializeUnavailable        Code = "initialize_unavailable"
 )
 
+// Source-update codes cover the Update-from-origin mutation for one selected
+// source branch. Stale refusals are typed 200 results; this code classifies
+// only attempts that could not prove a safe outcome, including deadline
+// expiry and ambiguous mutation boundaries.
+const (
+	SourceUpdateUnavailable Code = "source_update_unavailable"
+)
+
 // Readiness and provider codes.
 const (
 	NotReady                        Code = "not_ready"
@@ -676,6 +684,12 @@ var catalog = map[Code]Entry{
 		Title:       "Initialization unavailable",
 		Summary:     "The connected server could not safely initialize the repository.",
 		Remediation: "Review the diagnostics on the connected server, then retry from the repository list.",
+	},
+	SourceUpdateUnavailable: {
+		Class:   ClassBlocking,
+		Title:   "Source update unavailable",
+		Summary: "The connected server could not safely complete the branch update; the branch's current state is not proved by this result.",
+		Remediation: "Recheck the repository's origin comparison before retrying; never assume the update was rolled back.",
 	},
 
 	// --- Publish failure codes -------------------------------------------------

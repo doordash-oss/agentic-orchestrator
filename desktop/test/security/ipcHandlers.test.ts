@@ -225,6 +225,17 @@ function makeServices(): IpcServices {
         })),
       }),
     ),
+    updateRepositorySource: vi.fn(
+      async (request: Parameters<IpcServices['updateRepositorySource']>[0]) => ({
+        result: 'already_up_to_date' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
+      }),
+    ),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
     uploadCreationFiles: vi.fn(() => Promise.resolve({ results: [] })),
     readClipboardImage: vi.fn(() => Promise.resolve({ paths: [] })),

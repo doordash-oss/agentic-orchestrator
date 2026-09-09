@@ -275,6 +275,156 @@ describe('FeatureService.inspectRepositorySources', () => {
   });
 });
 
+describe('FeatureService.updateRepositorySource', () => {
+  const identity = {
+    path: '/work/space/repo-a',
+    commonDir: '/work/space/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+  const request = {
+    repoKey: 'repo-a',
+    identity,
+    mode: 'default' as const,
+    branch: 'release/2026/q3',
+    originBranch: 'upstream-main',
+    expectedLocalSha: 'a'.repeat(40),
+    expectedOriginSha: 'c'.repeat(40),
+    checkoutHeadRef: 'refs/heads/main',
+    checkoutHeadSha: 'e'.repeat(40),
+  };
+  const wireIdentity = {
+    path: identity.path,
+    common_dir: identity.commonDir,
+    device: identity.device,
+    inode: identity.inode,
+  };
+
+  it('posts the displayed expectations as the snake_case wire body with the source-update timeout', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        result: 'updated',
+        repo_key: 'repo-a',
+        identity: wireIdentity,
+        mode: 'default',
+        branch: 'release/2026/q3',
+        origin_branch: 'upstream-main',
+        previous_sha: 'a'.repeat(40),
+        local_sha: 'c'.repeat(40),
+        fetched_sha: 'c'.repeat(40),
+      },
+    }));
+
+    const result = await service.updateRepositorySource(request);
+
+    expect(calls[0]).toEqual({
+      path: '/api/v1/workspace/repositories/update-source',
+      init: {
+        method: 'POST',
+        // SOURCE_UPDATE_TIMEOUT_MS: the client allowance must exceed the
+        // server's two-minute attempt deadline.
+        timeoutMs: 3 * 60_000,
+        body: {
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          branch: 'release/2026/q3',
+          origin_branch: 'upstream-main',
+          expected_local_sha: 'a'.repeat(40),
+          expected_origin_sha: 'c'.repeat(40),
+          checkout_head_ref: 'refs/heads/main',
+          checkout_head_sha: 'e'.repeat(40),
+        },
+      },
+    });
+    expect(result).toEqual({
+      result: 'updated',
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default',
+      branch: 'release/2026/q3',
+      originBranch: 'upstream-main',
+      previousSha: 'a'.repeat(40),
+      localSha: 'c'.repeat(40),
+      fetchedSha: 'c'.repeat(40),
+    });
+  });
+
+  it('maps a stale refusal with its freshly resolved status snapshot', async () => {
+    const { service } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        result: 'stale',
+        reason: 'branch_checked_out',
+        repo_key: 'repo-a',
+        identity: wireIdentity,
+        mode: 'default',
+        branch: 'release/2026/q3',
+        origin_branch: 'upstream-main',
+        status: {
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          kind: 'branch',
+          branch: 'release/2026/q3',
+          local_sha: 'a'.repeat(40),
+          origin_branch: 'upstream-main',
+          status: 'behind',
+          ahead_count: 0,
+          behind_count: 3,
+          update_eligible: false,
+          update_blockers: ['branch_checked_out_in_original_checkout'],
+          checkout_head_ref: 'refs/heads/main',
+          checkout_head_sha: 'e'.repeat(40),
+        },
+      },
+    }));
+
+    const result = await service.updateRepositorySource(request);
+
+    expect(result.result).toBe('stale');
+    expect(result.reason).toBe('branch_checked_out');
+    expect(result.previousSha).toBeUndefined();
+    expect(result.status).toEqual({
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default',
+      kind: 'branch',
+      branch: 'release/2026/q3',
+      localSha: 'a'.repeat(40),
+      originBranch: 'upstream-main',
+      status: 'behind',
+      aheadCount: 0,
+      behindCount: 3,
+      updateEligible: false,
+      updateBlockers: ['branch_checked_out_in_original_checkout'],
+      checkoutHeadRef: 'refs/heads/main',
+      checkoutHeadSha: 'e'.repeat(40),
+    });
+  });
+
+  it('passes a canonical 503 source_update_unavailable rejection through unchanged', async () => {
+    const canonical = {
+      code: 'source_update_unavailable',
+      class: 'blocking' as const,
+      title: 'Source update unavailable',
+      summary: 'The update attempt could not be proved complete.',
+    };
+    const { service, calls } = makeService(() => ({
+      status: 503,
+      body: { api_version: 'v1', error: canonical },
+    }));
+
+    await expect(service.updateRepositorySource(request)).rejects.toMatchObject({
+      canonical,
+    });
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe('FeatureService remote-connection submit boundary', () => {
   const created = () => ({
     status: 201,

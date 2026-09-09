@@ -1396,6 +1396,7 @@ if (!hasSingleInstanceLock) {
       getCreationDefaults: () => features.creationDefaults(),
       inspectRepositorySources: (request) => features.inspectRepositorySources(request),
       checkRepositoryOriginStatus: (request) => features.checkRepositoryOriginStatus(request),
+      updateRepositorySource: (request) => features.updateRepositorySource(request),
       pickCreationFiles: (kind) => creationFiles.pickFiles(kind),
       uploadCreationFiles: (kind, paths) => uploads.stageFiles(kind, paths),
       readClipboardImage,

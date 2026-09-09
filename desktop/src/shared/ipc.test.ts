@@ -76,6 +76,8 @@ import {
   RepositorySourcesRequestSchema,
   RepositoryOriginStatusRequestSchema,
   RepositoryOriginStatusResultSchema,
+  RepositoryUpdateSourceRequestSchema,
+  RepositoryUpdateSourceResultSchema,
   RepositorySourcesResultSchema,
 } from './ipc';
 import * as ipcModule from './ipc';
@@ -283,6 +285,97 @@ describe('repository origin status IPC contract', () => {
             commit: 'short',
           },
         ],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('repository update source IPC contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    commonDir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+  const request = {
+    repoKey: 'repo-a',
+    identity,
+    mode: 'default' as const,
+    branch: 'release/2026/q3',
+    originBranch: 'upstream-main',
+    expectedLocalSha: 'a'.repeat(40),
+    expectedOriginSha: 'c'.repeat(40),
+    checkoutHeadRef: 'refs/heads/main',
+    checkoutHeadSha: 'e'.repeat(40),
+  };
+
+  it('accepts one bound update request and rejects invented SHAs or authority fields', () => {
+    expect(RepositoryUpdateSourceRequestSchema.parse(request)).toStrictEqual(request);
+    expect(
+      RepositoryUpdateSourceRequestSchema.safeParse({
+        ...request,
+        expectedOriginSha: 'not-a-sha',
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryUpdateSourceRequestSchema.safeParse({
+        ...request,
+        checkoutHeadRef: '',
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryUpdateSourceRequestSchema.safeParse({
+        ...request,
+        path: '/renderer/chosen/path',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts typed results including a stale status snapshot and rejects unknown reasons', () => {
+    const result = RepositoryUpdateSourceResultSchema.parse({
+      result: 'stale',
+      reason: 'local_tip_changed',
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default',
+      branch: 'release/2026/q3',
+      originBranch: 'upstream-main',
+      status: {
+        repoKey: 'repo-a',
+        identity,
+        mode: 'default',
+        kind: 'branch',
+        branch: 'release/2026/q3',
+        status: 'behind',
+        updateBlockers: ['branch_checked_out_in_original_checkout'],
+        checkoutHeadRef: 'refs/heads/main',
+        checkoutHeadSha: 'e'.repeat(40),
+      },
+    });
+    expect(result.reason).toBe('local_tip_changed');
+    expect(result.status?.updateBlockers).toEqual(['branch_checked_out_in_original_checkout']);
+    expect(result.status?.checkoutHeadRef).toBe('refs/heads/main');
+    expect(result.status?.checkoutHeadSha).toBe('e'.repeat(40));
+    expect(
+      RepositoryUpdateSourceResultSchema.safeParse({
+        result: 'stale',
+        reason: 'sideways',
+        repoKey: 'repo-a',
+        identity,
+        mode: 'default',
+        branch: 'main',
+        originBranch: 'main',
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryUpdateSourceResultSchema.safeParse({
+        result: 'updated',
+        repoKey: 'repo-a',
+        identity,
+        mode: 'default',
+        branch: 'main',
+        originBranch: 'main',
+        localSha: 'not-a-sha',
       }).success,
     ).toBe(false);
   });

@@ -100,6 +100,7 @@ export const IPC_CHANNELS = {
   creationDefaults: 'agentico:creation:defaults',
   creationSources: 'agentico:creation:sources',
   creationOriginStatus: 'agentico:creation:origin-status',
+  creationUpdateSource: 'agentico:creation:update-source',
   creationPickFiles: 'agentico:creation:pick-files',
   creationUploadFiles: 'agentico:creation:upload-files',
   clipboardReadImage: 'agentico:clipboard:read-image',
@@ -2894,9 +2895,15 @@ export const RepositoryOriginStatusSnapshotSchema = z.strictObject({
         'dirty_target_checkout',
         'git_operation_in_progress',
         'branch_checked_out_in_worktree',
+        'branch_checked_out_in_original_checkout',
         'comparison_unavailable',
       ]),
     )
+    .optional(),
+  checkoutHeadRef: z.string().min(1).max(512).optional(),
+  checkoutHeadSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
     .optional(),
 });
 export type RepositoryOriginStatusSnapshot = z.output<typeof RepositoryOriginStatusSnapshotSchema>;
@@ -2905,6 +2912,54 @@ export const RepositoryOriginStatusResultSchema = z.strictObject({
   repositories: z.array(RepositoryOriginStatusSnapshotSchema).min(1).max(32),
 });
 export type RepositoryOriginStatusResult = z.output<typeof RepositoryOriginStatusResultSchema>;
+
+export const RepositoryUpdateSourceRequestSchema = z.strictObject({
+  repoKey: z.string().min(1).max(512),
+  identity: RepositoryIdentitySchema,
+  mode: z.enum(['default', 'current']),
+  branch: z.string().min(1).max(512),
+  originBranch: z.string().min(1).max(512),
+  expectedLocalSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+  expectedOriginSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+  checkoutHeadRef: z.string().min(1).max(512),
+  checkoutHeadSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+});
+export type RepositoryUpdateSourceRequest = z.output<typeof RepositoryUpdateSourceRequestSchema>;
+
+export const RepositoryUpdateSourceResultSchema = z.strictObject({
+  result: z.enum(['updated', 'already_up_to_date', 'stale']),
+  reason: z
+    .enum([
+      'checkout_changed',
+      'source_changed',
+      'mapping_changed',
+      'local_tip_changed',
+      'origin_tip_changed',
+      'origin_branch_missing',
+      'not_fast_forward',
+      'branch_checked_out',
+    ])
+    .optional(),
+  repoKey: z.string().min(1),
+  identity: RepositoryIdentitySchema,
+  mode: z.enum(['default', 'current']),
+  branch: z.string().min(1),
+  originBranch: z.string().min(1),
+  previousSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  localSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  fetchedSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  status: RepositoryOriginStatusSnapshotSchema.optional(),
+});
+export type RepositoryUpdateSourceResult = z.output<typeof RepositoryUpdateSourceResultSchema>;
 
 export const CreationFileKindSchema = z.enum(['image', 'attachment']);
 export type CreationFileKind = z.output<typeof CreationFileKindSchema>;
@@ -3980,6 +4035,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([RepositoryOriginStatusRequestSchema]),
     response: RepositoryOriginStatusResultSchema,
   },
+  [IPC_CHANNELS.creationUpdateSource]: {
+    request: z.tuple([RepositoryUpdateSourceRequestSchema]),
+    response: RepositoryUpdateSourceResultSchema,
+  },
   [IPC_CHANNELS.creationPickFiles]: {
     request: z.tuple([CreationFileKindSchema]),
     response: PickedCreationFilesSchema,
@@ -4327,6 +4386,15 @@ export interface AgenticoApi {
   checkRepositoryOriginStatus(
     request: RepositoryOriginStatusRequest,
   ): Promise<RepositoryOriginStatusResult>;
+  /**
+   * Advances one unoccupied selected source branch from origin through the
+   * server's expected-old-value compare-and-swap. Sends the displayed
+   * expectations unchanged; returns the typed outcome (updated, equality
+   * no-op, or stale with a freshly resolved status snapshot).
+   */
+  updateRepositorySource(
+    request: RepositoryUpdateSourceRequest,
+  ): Promise<RepositoryUpdateSourceResult>;
   pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
   readClipboardImage(): Promise<PickedCreationFiles>;
   importDroppedCreationFiles(kind: CreationFileKind, files: readonly File[]): PickedCreationFiles;

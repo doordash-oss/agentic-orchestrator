@@ -106,6 +106,15 @@ func (h *apiHandler) originStatusRow(ctx context.Context, repoKey string, identi
 	if plan.Mapping != nil {
 		row.OriginBranch = plan.Mapping.Branch
 	}
+	// The observed checkout HEAD binds later Update requests to the
+	// checkout identity the user saw, so a checkout switch refuses the
+	// mutation even when the selected source is unchanged.
+	if head, err := git.ResolveCheckoutHead(ctx, identity.Path, git.OriginCheckOptions{}); err == nil {
+		headRef := head.Ref
+		row.CheckoutHeadRef = &headRef
+		headSHA := head.SHA
+		row.CheckoutHeadSha = &headSHA
+	}
 	if plan.Status != "" {
 		row.Status = RepositoryOriginStatusStatus(plan.Status)
 		checkedAt := time.Now().UTC()

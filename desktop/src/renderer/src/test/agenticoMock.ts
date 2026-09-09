@@ -36,6 +36,7 @@ import type {
   ReadinessSnapshot,
   RepositorySourcesRequest,
   RepositoryOriginStatusRequest,
+  RepositoryUpdateSourceRequest,
   RepositoryIdentity,
   SessionDetail,
   SessionOutputEvent,
@@ -416,6 +417,7 @@ export interface AgenticoMock {
     getCreationDefaults: ReturnType<typeof vi.fn>;
     inspectRepositorySources: ReturnType<typeof vi.fn>;
     checkRepositoryOriginStatus: ReturnType<typeof vi.fn>;
+    updateRepositorySource: ReturnType<typeof vi.fn>;
     pickCreationFiles: ReturnType<typeof vi.fn>;
     uploadCreationFiles: ReturnType<typeof vi.fn>;
     readClipboardImage: ReturnType<typeof vi.fn>;
@@ -672,6 +674,17 @@ export function installAgenticoMock(
           localSha: 'a'.repeat(40),
           status: 'no_origin' as const,
         })),
+      }),
+    ),
+    updateRepositorySource: vi.fn((request: RepositoryUpdateSourceRequest) =>
+      Promise.resolve({
+        result: 'already_up_to_date' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
       }),
     ),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),

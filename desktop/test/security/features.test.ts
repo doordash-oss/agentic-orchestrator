@@ -208,6 +208,17 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
         })),
       }),
     ),
+    updateRepositorySource: vi.fn(
+      async (request: Parameters<IpcServices['updateRepositorySource']>[0]) => ({
+        result: 'already_up_to_date' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
+      }),
+    ),
     loadLocalReviewDraft: vi.fn(() => null),
     saveLocalReviewDraft: vi.fn((request) => ({ ...request, savedAt: '2026-07-16T00:00:00.000Z' })),
     discardLocalReviewDraft: vi.fn(() => false),

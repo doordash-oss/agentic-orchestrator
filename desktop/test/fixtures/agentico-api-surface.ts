@@ -132,6 +132,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'startClone',
   'switchConnectionServer',
   'updateFeatureConfig',
+  'updateRepositorySource',
   'updateReviewFeedbackSelection',
   'updateSettings',
   'updateWorkspaceDefaults',

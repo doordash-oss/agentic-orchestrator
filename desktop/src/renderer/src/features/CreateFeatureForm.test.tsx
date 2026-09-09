@@ -23,6 +23,7 @@ import type {
   RepositoryOriginStatusResult,
   RepositorySourcesRequest,
   RepositorySourcesResult,
+  RepositoryUpdateSourceResult,
 } from '../../../shared/ipc';
 import {
   creationDefaults,
@@ -1323,5 +1324,553 @@ describe('the creation sheet on a remote server', () => {
     await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
     await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
     expect(screen.getByRole('button', { name: 'Create and start' })).toBeEnabled();
+  });
+});
+
+describe('the creation sheet source update contract', () => {
+  function updateableRepositories() {
+    const repoAIdentity = mockRepoIdentity('/work/space/repo-a');
+    const repoBIdentity = mockRepoIdentity('/work/space/repo-b');
+    return {
+      repoAIdentity,
+      repoBIdentity,
+      repositories: [
+        {
+          name: 'repo-a',
+          path: repoAIdentity.path,
+          valid: true,
+          featureReady: true,
+          identity: repoAIdentity,
+        },
+        {
+          name: 'repo-b',
+          path: repoBIdentity.path,
+          valid: true,
+          featureReady: true,
+          identity: repoBIdentity,
+        },
+      ],
+    };
+  }
+
+  function eligibleBehindRow(
+    identity: ReturnType<typeof mockRepoIdentity>,
+    overrides: Record<string, unknown> = {},
+  ) {
+    return {
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default' as const,
+      kind: 'branch' as const,
+      branch: 'main',
+      localSha: 'a'.repeat(40),
+      originBranch: 'main',
+      fetchedSha: 'c'.repeat(40),
+      status: 'behind' as const,
+      behindCount: 2,
+      updateEligible: true,
+      checkoutHeadRef: 'refs/heads/work',
+      checkoutHeadSha: 'b'.repeat(40),
+      ...overrides,
+    };
+  }
+
+  function rowItem(name: string): HTMLElement {
+    const row = screen.getByText(name).closest('li');
+    if (!(row instanceof HTMLElement)) throw new Error(`row ${name} not found`);
+    return row;
+  }
+
+  it('sends the displayed expectations unchanged, guards conflicting actions while active, and refreshes after success', async () => {
+    const { repoAIdentity, repositories } = updateableRepositories();
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories }) });
+    let updateCalls = 0;
+    let resolveUpdate!: (value: RepositoryUpdateSourceResult) => void;
+    mock.api.updateRepositorySource.mockImplementation(
+      () =>
+        new Promise<RepositoryUpdateSourceResult>((resolve) => {
+          updateCalls += 1;
+          resolveUpdate = resolve;
+        }),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            repository.repoKey === 'repo-a'
+              ? eligibleBehindRow(repoAIdentity)
+              : {
+                  ...repository,
+                  mode: request.mode,
+                  kind: 'branch' as const,
+                  branch: 'main',
+                  localSha: 'd'.repeat(40),
+                  status: 'up_to_date' as const,
+                  originBranch: 'main',
+                  fetchedSha: 'd'.repeat(40),
+                },
+          ),
+        }),
+    );
+    const { user } = await renderForm(mock);
+
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await user.click(screen.getByRole('checkbox', { name: /^repo-b\b/ }));
+    expect(await screen.findByText('Origin: 2 commits behind origin/main')).toBeVisible();
+
+    const rowA = within(rowItem('repo-a'));
+    expect(
+      rowA.getByText(
+        'Advances main to origin/main in the original repository on the connected server.',
+      ),
+    ).toBeVisible();
+    await user.click(rowA.getByRole('button', { name: 'Update from origin' }));
+
+    // The displayed expectations crossed unchanged.
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledWith({
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      expectedLocalSha: 'a'.repeat(40),
+      expectedOriginSha: 'c'.repeat(40),
+      checkoutHeadRef: 'refs/heads/work',
+      checkoutHeadSha: 'b'.repeat(40),
+    });
+
+    // Conflicting controls are guarded while the update is active.
+    expect(rowA.getByRole('button', { name: 'Updating…' })).toBeDisabled();
+    expect(rowA.getByRole('button', { name: 'Check again' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: /^repo-a\b/ })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'Default branches' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'Current branches' })).toBeDisabled();
+    // Other rows stay usable, and the action never toggles selection.
+    const rowB = within(rowItem('repo-b'));
+    expect(rowB.getByRole('button', { name: 'Check again' })).toBeEnabled();
+    expect(screen.getByRole('checkbox', { name: /^repo-a\b/ })).toBeChecked();
+    expect(mock.api.createFeature).not.toHaveBeenCalled();
+
+    // Submission waits for the active update.
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Update guards');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    expect(screen.getByRole('button', { name: 'Updating source…' })).toBeDisabled();
+
+    // Back on the repository step, the definitive result lands as a
+    // row-scoped status announcement and releases every guard.
+    await user.click(screen.getByRole('button', { name: 'Repositories' }));
+    resolveUpdate({
+      result: 'updated',
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      previousSha: 'a'.repeat(40),
+      localSha: 'c'.repeat(40),
+      fetchedSha: 'c'.repeat(40),
+    });
+    expect(
+      await screen.findByText(
+        'Updated main to origin/main on the connected server (now at ccccccc).',
+      ),
+    ).toBeVisible();
+    // The announcement is a polite status region, consistent with the picker.
+    expect(within(rowItem('repo-a')).getByRole('status')).toHaveTextContent(
+      'Updated main to origin/main on the connected server (now at ccccccc).',
+    );
+    expect(screen.getByRole('checkbox', { name: /^repo-a\b/ })).toBeEnabled();
+    expect(screen.getByRole('radio', { name: 'Default branches' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    expect(screen.getByRole('button', { name: 'Next: Depth' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    expect(screen.getByRole('button', { name: 'Create and start' })).toBeEnabled();
+
+    // The definitive result refreshed the comparison for this repository.
+    await vi.waitFor(() =>
+      expect(mock.api.checkRepositoryOriginStatus).toHaveBeenLastCalledWith(
+        expect.objectContaining({ refresh: ['repo-a'] }),
+      ),
+    );
+    // The draft survives the update untouched.
+    await user.click(screen.getByRole('button', { name: 'Describe' }));
+    expect(screen.getByLabelText('Name')).toHaveValue('Update guards');
+    expect(updateCalls).toBe(1);
+  });
+
+  it('never offers the action for unsafe targets and explains them instead', async () => {
+    const { repositories } = updateableRepositories();
+    const mock = installAgenticoMock({
+      connection: { ...READY_REMOTE, serverName: 'lab-server', serverKey: 'server-key-1' },
+      defaults: creationDefaults({ repositories }),
+    });
+    const rows: Record<string, Record<string, unknown>> = {
+      'repo-a': { checkoutHeadRef: 'refs/heads/main' },
+    };
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) => ({
+            ...eligibleBehindRow(repository.identity, rows[repository.repoKey] ?? {}),
+            repoKey: repository.repoKey,
+            identity: repository.identity,
+          })),
+        }),
+    );
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    const rowA = within(rowItem('repo-a'));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    // A clean original-checkout target does not inherit advisory eligibility.
+    expect(rowA.queryByRole('button', { name: 'Update from origin' })).toBeNull();
+    expect(
+      rowA.getByText(
+        'main is checked out in the original repository — updating it from here is unavailable in this phase; update that checkout yourself.',
+      ),
+    ).toBeVisible();
+
+    rows['repo-a'] = {
+      updateEligible: false,
+      updateBlockers: ['branch_checked_out_in_worktree'],
+      checkoutHeadRef: 'refs/heads/work',
+    };
+    await user.click(rowA.getByRole('button', { name: 'Check again' }));
+    expect(
+      await rowA.findByText(
+        "main is checked out in a linked worktree — update that worktree's checkout on lab-server yourself.",
+      ),
+    ).toBeVisible();
+    expect(rowA.queryByRole('button', { name: 'Update from origin' })).toBeNull();
+
+    rows['repo-a'] = { checkoutHeadRef: undefined, checkoutHeadSha: undefined };
+    await user.click(rowA.getByRole('button', { name: 'Check again' }));
+    expect(
+      await rowA.findByText(
+        "main cannot be updated from here — the repository's checkout could not be inspected, so it cannot be proven unoccupied.",
+      ),
+    ).toBeVisible();
+    expect(rowA.queryByRole('button', { name: 'Update from origin' })).toBeNull();
+  });
+
+  it('names the exact local and origin branches and the server in the impact copy', async () => {
+    const { repositories } = updateableRepositories();
+    const mock = installAgenticoMock({
+      connection: { ...READY_REMOTE, serverName: 'lab-server', serverKey: 'server-key-1' },
+      defaults: creationDefaults({ repositories }),
+    });
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+              branch: 'feature/slashy',
+              originBranch: 'tracking-name',
+            }),
+          ),
+        }),
+    );
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    expect(
+      await within(rowItem('repo-a')).findByText(
+        'Advances feature/slashy to origin/tracking-name in the original repository on lab-server.',
+      ),
+    ).toBeVisible();
+  });
+
+  it('treats a typed stale refusal as a warning plus fresh comparison, never an automatic retry', async () => {
+    const { repoAIdentity, repositories } = updateableRepositories();
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories }) });
+    let resolveUpdate!: (value: RepositoryUpdateSourceResult) => void;
+    mock.api.updateRepositorySource.mockImplementation(
+      () =>
+        new Promise<RepositoryUpdateSourceResult>((resolve) => {
+          resolveUpdate = resolve;
+        }),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+            }),
+          ),
+        }),
+    );
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
+
+    resolveUpdate({
+      result: 'stale',
+      reason: 'origin_tip_changed',
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      localSha: 'a'.repeat(40),
+      fetchedSha: 'e'.repeat(40),
+      status: eligibleBehindRow(repoAIdentity, {
+        status: 'behind',
+        behindCount: 3,
+        fetchedSha: 'e'.repeat(40),
+        updateEligible: false,
+        updateBlockers: ['comparison_unavailable'],
+      }),
+    });
+    const rowA = within(rowItem('repo-a'));
+    expect(
+      await rowA.findByText(
+        'main was not updated on the connected server — origin/main moved since the comparison. Check again, then update from the fresh comparison.',
+      ),
+    ).toBeVisible();
+    // The refusal's fresh status row replaced the stale comparison.
+    expect(rowA.getByText('Origin: 3 commits behind origin/main')).toBeVisible();
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
+
+    // An explicit new action uses the newly displayed expectations.
+    await user.click(rowA.getByRole('button', { name: 'Check again' }));
+    mock.api.updateRepositorySource.mockResolvedValue({
+      result: 'already_up_to_date',
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      localSha: 'e'.repeat(40),
+      fetchedSha: 'e'.repeat(40),
+    });
+    const second = within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' });
+    await user.click(second);
+    expect(mock.api.updateRepositorySource).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        expectedOriginSha: 'c'.repeat(40),
+      }),
+    );
+    expect(
+      await within(rowItem('repo-a')).findByText(
+        'main is already at origin/main on the connected server.',
+      ),
+    ).toBeVisible();
+  });
+
+  it('keeps a definitive failure warning visible in review even after a later successful check, without blocking submission', async () => {
+    const { repositories } = updateableRepositories();
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories }) });
+    let checkCalls = 0;
+    mock.api.updateRepositorySource.mockRejectedValue(
+      ipcError(
+        'source_update_unavailable',
+        'The update attempt could not be completed; do not assume it was rolled back.',
+      ),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) => {
+        checkCalls += 1;
+        return Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+              status: checkCalls > 1 ? ('up_to_date' as const) : ('behind' as const),
+              behindCount: checkCalls > 1 ? undefined : 2,
+              updateEligible: checkCalls > 1 ? undefined : true,
+            }),
+          ),
+        });
+      },
+    );
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
+    expect(
+      await within(rowItem('repo-a')).findByText(
+        'main was not updated on the connected server — The update attempt could not be completed; do not assume it was rolled back.',
+      ),
+    ).toBeVisible();
+
+    // A later successful origin check does not clear the failure warning.
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Check again' }));
+    await screen.findByText('Origin: up to date with origin/main');
+    expect(
+      within(rowItem('repo-a')).getByText(/was not updated on the connected server/),
+    ).toBeVisible();
+
+    // The warning reaches the final review and submission stays available.
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Update failure continuation');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    expect(
+      screen.getByText(
+        /main was not updated on the connected server — The update attempt could not be completed/,
+      ),
+    ).toBeVisible();
+    await user.click(screen.getByRole('checkbox', { name: /Start immediately/ }));
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(mock.api.createFeature).toHaveBeenCalled());
+  });
+
+  it('prevents a conflicting action through a common-directory alias row', async () => {
+    // Two catalog entries for one git store: the original checkout and a
+    // linked worktree registered as its own repository row.
+    const originalIdentity = mockRepoIdentity('/work/space/repo-a');
+    const worktreeIdentity = mockRepoIdentity('/work/space/repo-a-worktree', {
+      commonDir: originalIdentity.commonDir,
+      inode: '909',
+    });
+    const mock = installAgenticoMock({
+      defaults: creationDefaults({
+        repositories: [
+          {
+            name: 'repo-a',
+            path: originalIdentity.path,
+            valid: true,
+            featureReady: true,
+            identity: originalIdentity,
+          },
+          {
+            name: 'repo-a-worktree',
+            path: worktreeIdentity.path,
+            valid: true,
+            featureReady: true,
+            identity: worktreeIdentity,
+          },
+        ],
+      }),
+    });
+    let resolveUpdate!: (value: RepositoryUpdateSourceResult) => void;
+    mock.api.updateRepositorySource.mockImplementation(
+      () =>
+        new Promise<RepositoryUpdateSourceResult>((resolve) => {
+          resolveUpdate = resolve;
+        }),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+            }),
+          ),
+        }),
+    );
+    const { user } = await renderForm(mock);
+    await user.click(within(rowItem('repo-a')).getByRole('checkbox'));
+    await user.click(within(rowItem('repo-a-worktree')).getByRole('checkbox'));
+    await screen.findAllByText('Origin: 2 commits behind origin/main');
+
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
+    // The alias row cannot start a second, conflicting action.
+    expect(
+      within(rowItem('repo-a-worktree')).getByRole('button', { name: 'Updating…' }),
+    ).toBeDisabled();
+    expect(
+      within(rowItem('repo-a-worktree')).getByRole('button', { name: 'Check again' }),
+    ).toBeDisabled();
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
+
+    resolveUpdate({
+      result: 'updated',
+      repoKey: 'repo-a',
+      identity: originalIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      previousSha: 'a'.repeat(40),
+      localSha: 'c'.repeat(40),
+      fetchedSha: 'c'.repeat(40),
+    });
+    await waitFor(() =>
+      expect(
+        within(rowItem('repo-a-worktree')).getByRole('button', { name: 'Update from origin' }),
+      ).toBeEnabled(),
+    );
+  });
+
+  it('discards a late update result from another server', async () => {
+    const { repoAIdentity, repositories } = updateableRepositories();
+    const mock = installAgenticoMock({
+      connection: { ...READY_REMOTE, serverKey: 'server-key-1' },
+      defaults: creationDefaults({ repositories }),
+    });
+    let resolveUpdate!: (value: RepositoryUpdateSourceResult) => void;
+    mock.api.updateRepositorySource.mockImplementation(
+      () =>
+        new Promise<RepositoryUpdateSourceResult>((resolve) => {
+          resolveUpdate = resolve;
+        }),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+            }),
+          ),
+        }),
+    );
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
+
+    mock.emitConnection({ ...READY_REMOTE, serverKey: 'server-key-2' });
+    resolveUpdate({
+      result: 'stale',
+      reason: 'local_tip_changed',
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+    });
+    await vi.waitFor(() =>
+      expect(screen.getByRole('checkbox', { name: /^repo-a\b/ })).toBeEnabled(),
+    );
+    expect(screen.queryByText(/was not updated/)).toBeNull();
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
+  });
+
+  it('cannot issue overlapping mutations from duplicate activation', async () => {
+    const { repositories } = updateableRepositories();
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories }) });
+    mock.api.updateRepositorySource.mockImplementation(
+      () => new Promise<RepositoryUpdateSourceResult>(() => undefined),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+            }),
+          ),
+        }),
+    );
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    const button = within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' });
+    await user.click(button);
+    // A duplicate activation before the disabled state renders is a no-op.
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
   });
 });

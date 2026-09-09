@@ -81,6 +81,20 @@ import {
   type RepoSelection,
 } from './repoSelections';
 import {
+  noticeFor,
+  serverLabelFor,
+  sharesCommonDirectory,
+  updateBlockedExplanation,
+  updateErrorText,
+  updateImpactText,
+  updateRefusalText,
+  updateSuccessText,
+  updateTargetFor,
+  withoutNoticesFor,
+  type SourceUpdateAction,
+  type SourceUpdateNotice,
+} from './sourceUpdates';
+import {
   PIPELINES,
   checkpointSummary,
   checkpointsForPipeline,
@@ -396,6 +410,12 @@ export function CreateFeatureForm({
   const [originState, setOriginState] = useState<OriginState>({ phase: 'idle' });
   const [originRefreshRevision, setOriginRefreshRevision] = useState(0);
   const [originPollTick, setOriginPollTick] = useState(0);
+  // The per-row Update from origin action, kept separate from repository
+  // selection and origin comparison state: at most one selected update is
+  // active at a time, and settled outcomes become row-scoped notices that
+  // survive later origin checks through the final review.
+  const [sourceUpdate, setSourceUpdate] = useState<SourceUpdateAction>({ phase: 'idle' });
+  const [updateNotices, setUpdateNotices] = useState<readonly SourceUpdateNotice[]>([]);
   // The nested clone view and its association with this draft, plus the
   // nested create view and its pending adoption.
   const [cloneOpen, setCloneOpen] = useState(() => retained?.cloneOpen ?? false);
@@ -440,6 +460,10 @@ export function CreateFeatureForm({
   const originRequestSeq = useRef(0);
   const originRefreshKeys = useRef<ReadonlySet<string>>(new Set());
   const originContextRef = useRef<string | null>(null);
+  // Synchronous single-flight guard: a second activation of the update
+  // action cannot issue an overlapping mutation before the disabled state
+  // re-renders. Mirrored by the sourceUpdate state for rendering.
+  const sourceUpdateActiveRef = useRef(false);
 
   // Locality decides how a folder reaches the form: the native directory
   // dialog on a local server (the picker resolves real paths on this
@@ -811,12 +835,21 @@ export function CreateFeatureForm({
    */
   const serverKeyRef = useRef<string | null>(serverKey);
   const serverGenerationRef = useRef(0);
+  // The connected server's display name anchors the update impact copy and
+  // refusals to the server that actually owns the repository.
+  const serverLabel = serverLabelFor(connection);
   useEffect(() => {
     if (serverKeyRef.current !== serverKey) {
       serverGenerationRef.current += 1;
       initializeRequestSeq.current += 1;
       setPendingInitialize(null);
       setInitializeError(null);
+      // An in-flight update belongs to the originating server: its late
+      // result is discarded by the request fence, and its notices never
+      // speak for another server's repositories.
+      sourceUpdateActiveRef.current = false;
+      setSourceUpdate({ phase: 'idle' });
+      setUpdateNotices([]);
     }
     serverKeyRef.current = serverKey;
   }, [serverKey]);
@@ -933,6 +966,121 @@ export function CreateFeatureForm({
     originRefreshKeys.current = new Set([...originRefreshKeys.current, repoKey]);
     setOriginRefreshRevision((revision) => revision + 1);
   }, []);
+
+  /**
+   * Splices one server-resolved status row into the loaded origin snapshot,
+   * replacing the row's previous comparison. Used only for a typed stale
+   * refusal, whose fresh status row is the comparison the user should see
+   * next; the mutation itself is never retried automatically.
+   */
+  const mergeOriginStatusRow = useCallback(
+    (repoKey: string, status: RepositoryOriginStatusSnapshot | undefined) => {
+      if (status === undefined) return;
+      setOriginState((current) =>
+        current.phase === 'loaded'
+          ? {
+              phase: 'loaded',
+              value: {
+                repositories: current.value.repositories.map((row) =>
+                  row.repoKey === repoKey ? status : row,
+                ),
+              },
+            }
+          : current,
+      );
+    },
+    [],
+  );
+
+  /**
+   * The per-row Update from origin action. The request carries the displayed
+   * expectations unchanged; a definitive success or no-op refreshes the local
+   * source and the comparison, a typed refusal merges its fresh status row
+   * and leaves a warning for an explicit new action, and a canonical
+   * rejection is preserved as a warning that never blocks submission of a
+   * still-valid local source. A result from another server is discarded.
+   */
+  const requestSourceUpdate = useCallback(
+    (row: RepositoryOriginStatusSnapshot) => {
+      const target = updateTargetFor(row);
+      if (target === null || sourceUpdateActiveRef.current) return;
+      const identity = row.identity;
+      const startServerKey = serverKeyRef.current;
+      const label = serverLabel;
+      sourceUpdateActiveRef.current = true;
+      const settle = (): void => {
+        sourceUpdateActiveRef.current = false;
+      };
+      setSourceUpdate({ phase: 'active', repoKey: row.repoKey, identity });
+      setUpdateNotices((current) => withoutNoticesFor(current, identity));
+      void window.agentico.updateRepositorySource(target.request).then(
+        (result) => {
+          // A completion from another server (or after a remount) is not
+          // this draft's result: the new server's UI stays untouched.
+          if (serverKeyRef.current !== startServerKey) {
+            settle();
+            return;
+          }
+          settle();
+          setSourceUpdate((current) =>
+            current.phase === 'active' && sameRepoIdentity(current.identity, identity)
+              ? { phase: 'idle' }
+              : current,
+          );
+          if (result.result === 'updated' || result.result === 'already_up_to_date') {
+            setUpdateNotices((current) => [
+              ...withoutNoticesFor(current, identity),
+              {
+                repoKey: row.repoKey,
+                identity,
+                tone: 'success',
+                text: updateSuccessText(result, target, label),
+              },
+            ]);
+            // The definitive result refreshes the selected local source and
+            // the comparison; the server's exact-start contract accepts the
+            // updated local SHA on a later submission.
+            setSourceRefreshRevision((revision) => revision + 1);
+            requestOriginRecheck(row.repoKey);
+            return;
+          }
+          setUpdateNotices((current) => [
+            ...withoutNoticesFor(current, identity),
+            {
+              repoKey: row.repoKey,
+              identity,
+              tone: 'warning',
+              text: updateRefusalText(result, target, label),
+            },
+          ]);
+          mergeOriginStatusRow(row.repoKey, result.status);
+        },
+        (err: unknown) => {
+          if (serverKeyRef.current !== startServerKey) {
+            settle();
+            return;
+          }
+          settle();
+          setSourceUpdate((current) =>
+            current.phase === 'active' && sameRepoIdentity(current.identity, identity)
+              ? { phase: 'idle' }
+              : current,
+          );
+          setUpdateNotices((current) => [
+            ...withoutNoticesFor(current, identity),
+            {
+              repoKey: row.repoKey,
+              identity,
+              tone: 'warning',
+              text: updateErrorText(target, parseIpcError(err), label),
+            },
+          ]);
+        },
+      );
+    },
+    [serverLabel, requestOriginRecheck, mergeOriginStatusRow],
+  );
+
   const handleCreate = useCallback(
     (input: CreateRepositoryStartInput) => {
       const startServerKey = serverKeyRef.current;
@@ -1419,7 +1567,10 @@ export function CreateFeatureForm({
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
-    if (pending || uploadsBlocking || state.phase !== 'loaded') return;
+    // A selected source update may still be mutating the branch the feature
+    // would start from; submission waits for it to settle.
+    if (pending || uploadsBlocking || sourceUpdate.phase === 'active' || state.phase !== 'loaded')
+      return;
     if (!validateStep(0)) {
       setStepIndex(0);
       return;
@@ -1746,6 +1897,32 @@ export function CreateFeatureForm({
                                     (row) => row.repoKey === repo.name,
                                   )
                                 : undefined;
+                            // Update availability derives from the displayed
+                            // comparison plus current unoccupied-branch
+                            // eligibility; the advisory flag alone is never
+                            // permission (a clean original-checkout target is
+                            // unavailable in this phase, and an unobservable
+                            // checkout cannot bind the request).
+                            const updateTarget =
+                              originRow === undefined ? null : updateTargetFor(originRow);
+                            const updateBlockedText =
+                              originRow === undefined || updateTarget !== null
+                                ? null
+                                : updateBlockedExplanation(originRow, serverLabel);
+                            // One selected update at a time: the active
+                            // repository's own row and any common-directory
+                            // alias of it (the same git store under another
+                            // catalog entry) cannot start a conflicting
+                            // action through a second row.
+                            const rowUpdateActive =
+                              sourceUpdate.phase === 'active' &&
+                              repo.identity !== undefined &&
+                              (sameRepoIdentity(sourceUpdate.identity, repo.identity) ||
+                                sharesCommonDirectory(sourceUpdate.identity, repo.identity));
+                            const updateNotice =
+                              repo.identity === undefined
+                                ? undefined
+                                : noticeFor(updateNotices, repo.identity);
                             return (
                               <li
                                 key={repo.name}
@@ -1796,7 +1973,9 @@ export function CreateFeatureForm({
                                     className="creation-sheet__row-control"
                                     type="checkbox"
                                     checked={repoSelected}
-                                    disabled={!isSelectableRepository(repo) || pending}
+                                    disabled={
+                                      !isSelectableRepository(repo) || pending || rowUpdateActive
+                                    }
                                     onChange={() => {
                                       if (repo.identity === undefined) return;
                                       const identity = repo.identity;
@@ -1810,6 +1989,13 @@ export function CreateFeatureForm({
                                           )
                                         : [...repoSelections, { key: repo.name, identity }];
                                       setRepoSelections(nextSelections);
+                                      // Deselecting a repository retires its
+                                      // row-scoped update notices with it.
+                                      if (isSelected) {
+                                        setUpdateNotices((current) =>
+                                          withoutNoticesFor(current, identity),
+                                        );
+                                      }
                                       const nextKeys = resolvedSelectionKeys(
                                         reconcileRepoSelections(nextSelections, repositories),
                                       );
@@ -1822,16 +2008,44 @@ export function CreateFeatureForm({
                                 </label>
                                 {originRow !== undefined && originRow.status !== 'checking' ? (
                                   <div className="creation-sheet__row-origin-actions">
+                                    {updateTarget !== null ? (
+                                      <span className="creation-sheet__row-update-copy">
+                                        {updateImpactText(updateTarget, serverLabel)}
+                                      </span>
+                                    ) : updateBlockedText !== null ? (
+                                      <span className="creation-sheet__row-update-copy creation-sheet__row-update-copy--blocked">
+                                        {updateBlockedText}
+                                      </span>
+                                    ) : null}
                                     <button
                                       type="button"
                                       className="creation-sheet__button"
-                                      disabled={pending}
+                                      disabled={pending || rowUpdateActive}
                                       onClick={() => requestOriginRecheck(repo.name)}
                                     >
                                       Check again
                                     </button>
+                                    {updateTarget !== null ? (
+                                      <button
+                                        type="button"
+                                        className="creation-sheet__button"
+                                        disabled={pending || rowUpdateActive}
+                                        onClick={() => requestSourceUpdate(originRow)}
+                                      >
+                                        {rowUpdateActive ? 'Updating…' : 'Update from origin'}
+                                      </button>
+                                    ) : null}
                                   </div>
                                 ) : null}
+                                {updateNotice === undefined ? null : (
+                                  <p
+                                    className="creation-sheet__row-update-notice"
+                                    role="status"
+                                    data-tone={updateNotice.tone}
+                                  >
+                                    {updateNotice.text}
+                                  </p>
+                                )}
                                 {repo.valid && !repo.featureReady && repo.identity !== undefined ? (
                                   <div className="creation-sheet__row-initialize">
                                     <button
@@ -2019,6 +2233,7 @@ export function CreateFeatureForm({
                             type="radio"
                             name="branch"
                             checked={!useCurrentBranch}
+                            disabled={sourceUpdate.phase === 'active'}
                             onChange={() => setUseCurrentBranch(false)}
                           />
                           <span className="creation-sheet__row-name">Default branches</span>
@@ -2028,6 +2243,7 @@ export function CreateFeatureForm({
                             type="radio"
                             name="branch"
                             checked={useCurrentBranch}
+                            disabled={sourceUpdate.phase === 'active'}
                             onChange={() => setUseCurrentBranch(true)}
                           />
                           <span className="creation-sheet__row-name">Current branches</span>
@@ -2044,7 +2260,9 @@ export function CreateFeatureForm({
                         Selected sources are compared with their origin branches automatically.
                         Checks only fetch from origin — they never change your repositories — and
                         creation always starts from the local source, even when a check is still
-                        running or unavailable.
+                        running or unavailable. Update from origin advances one unoccupied branch in
+                        the original repository on the connected server, and only when you choose
+                        it.
                       </p>
                     </fieldset>
                   </section>
@@ -2267,6 +2485,12 @@ export function CreateFeatureForm({
                             : 'Not checked yet'}
                         </dd>
                       </div>
+                      {updateNotices.length > 0 ? (
+                        <div>
+                          <dt>Source updates</dt>
+                          <dd>{updateNotices.map((notice) => notice.text).join(' ')}</dd>
+                        </div>
+                      ) : null}
                       <div>
                         <dt>Describe</dt>
                         <dd>{name}</dd>
@@ -2338,9 +2562,15 @@ export function CreateFeatureForm({
                       key="create-feature"
                       type="submit"
                       className="sheet__footer-primary"
-                      disabled={pending || uploadsBlocking}
+                      disabled={pending || uploadsBlocking || sourceUpdate.phase === 'active'}
                     >
-                      {pending ? 'Creating…' : autoStart ? 'Create and start' : 'Create'}
+                      {pending
+                        ? 'Creating…'
+                        : sourceUpdate.phase === 'active'
+                          ? 'Updating source…'
+                          : autoStart
+                            ? 'Create and start'
+                            : 'Create'}
                     </button>
                   </>
                 )}

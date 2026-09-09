@@ -13850,12 +13850,34 @@ body {
 
 .creation-sheet__row-origin-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   gap: var(--space-2);
   margin-top: var(--space-1);
 }
 
 .creation-sheet__row-origin-hint {
   display: block;
+}
+
+/* The impact line beside the per-row Update from origin action (and the
+   ineligibility explanation when the target is unsafe): quiet secondary
+   copy that lets the buttons stay the row's verbs. */
+.creation-sheet__row-update-copy {
+  flex: 1 1 14rem;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+/* A settled update outcome: one polite status line under the row's actions. */
+.creation-sheet__row-update-notice {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.creation-sheet__row-update-notice[data-tone='success'] {
+  color: var(--ok);
 }
 
 @media (prefers-reduced-motion: reduce) {

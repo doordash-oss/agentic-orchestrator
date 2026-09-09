@@ -32,6 +32,7 @@ import {
   type RepositoryIdentity,
   type RepositoryOriginStatusResult,
   type RepositoryOriginStatusSnapshot,
+  type RepositorySourceReconcileResult,
   type RepositorySourcesResult,
   type RepositoryState,
   type WorkspaceRootState,
@@ -81,18 +82,27 @@ import {
   type RepoSelection,
 } from './repoSelections';
 import {
+  isUncertainUpdateError,
+  isUnsettledReconcileError,
   noticeFor,
+  reconcileErrorText,
+  reconcileNoticeText,
   serverLabelFor,
   sharesCommonDirectory,
+  uncertaintyFor,
+  uncertaintyRequestFor,
   updateBlockedExplanation,
   updateErrorText,
   updateImpactText,
   updateRefusalText,
   updateSuccessText,
   updateTargetFor,
+  updateUncertainText,
   withoutNoticesFor,
+  withoutUncertaintyFor,
   type SourceUpdateAction,
   type SourceUpdateNotice,
+  type SourceUpdateUncertainty,
 } from './sourceUpdates';
 import {
   PIPELINES,
@@ -412,10 +422,23 @@ export function CreateFeatureForm({
   const [originPollTick, setOriginPollTick] = useState(0);
   // The per-row Update from origin action, kept separate from repository
   // selection and origin comparison state: at most one selected update is
-  // active at a time, and settled outcomes become row-scoped notices that
-  // survive later origin checks through the final review.
+  // active at a time, settled outcomes become row-scoped notices that
+  // survive later origin checks through the final review, and an attempt
+  // whose outcome is unknown becomes a retained uncertainty record instead.
   const [sourceUpdate, setSourceUpdate] = useState<SourceUpdateAction>({ phase: 'idle' });
   const [updateNotices, setUpdateNotices] = useState<readonly SourceUpdateNotice[]>([]);
+  // Update attempts whose outcome is unknown (lost responses, timeouts,
+  // server switches, unprovable server results). Each record is keyed by
+  // its originating server; only records for the currently connected
+  // server block or reconcile here, and a retained draft replays them on
+  // remount so returning to the originating server reconciles before its
+  // source can be accepted.
+  const [updateUncertainty, setUpdateUncertainty] = useState<readonly SourceUpdateUncertainty[]>(
+    () => retained?.sourceUpdateUncertainty ?? [],
+  );
+  // One-shot revision for re-triggering settlement reads (Check again on an
+  // uncertain row, or returning to the originating server).
+  const [reconcileRevision, setReconcileRevision] = useState(0);
   // The nested clone view and its association with this draft, plus the
   // nested create view and its pending adoption.
   const [cloneOpen, setCloneOpen] = useState(() => retained?.cloneOpen ?? false);
@@ -464,6 +487,12 @@ export function CreateFeatureForm({
   // action cannot issue an overlapping mutation before the disabled state
   // re-renders. Mirrored by the sourceUpdate state for rendering.
   const sourceUpdateActiveRef = useRef(false);
+  // Monotonic attempt sequence: late callbacks are fenced by attempt as
+  // well as server identity, so a stale generation can never settle or
+  // record for a newer attempt.
+  const sourceUpdateAttemptRef = useRef(0);
+  // Single-flight guard for settlement reads: one reconciliation per form.
+  const reconcileInFlightRef = useRef(false);
 
   // Locality decides how a folder reaches the form: the native directory
   // dialog on a local server (the picker resolves real paths on this
@@ -535,6 +564,54 @@ export function CreateFeatureForm({
     () => repoSelections.filter((_, index) => reconciledSelections[index]?.status === 'unresolved'),
     [repoSelections, reconciledSelections],
   );
+
+  // The sheet's scope server: the first server the live connection settles
+  // on. The form's own connection view starts unresolved (its initial state
+  // precedes the first readiness read), so capturing at first render would
+  // freeze the scope at null and drop every keyed record from the retained
+  // draft; the first non-null server key is the sheet's own scope, and it
+  // never changes for this mount.
+  const [scopeServerKey, setScopeServerKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (serverKey !== null) {
+      setScopeServerKey((current) => current ?? serverKey);
+    }
+  }, [serverKey]);
+  // Uncertainty records that belong to the currently connected server: only
+  // these block here, and only these server's reconciliation can settle
+  // them. Records for other servers stay retained until their server
+  // returns.
+  const activeUncertainty = useMemo(
+    () => updateUncertainty.filter((record) => record.serverKey === serverKey),
+    [updateUncertainty, serverKey],
+  );
+  // The scope server's records in their retainable form, including an
+  // in-flight attempt whose response this sheet may never see: unmounting
+  // mid-attempt leaves the outcome unknown by definition.
+  const scopeUncertainty = useMemo(() => {
+    const scoped = updateUncertainty.filter((record) => record.serverKey === scopeServerKey);
+    if (sourceUpdate.phase !== 'active' || sourceUpdate.record.serverKey !== scopeServerKey) {
+      return scoped;
+    }
+    const record = sourceUpdate.record;
+    return [...withoutUncertaintyFor(scoped, record.identity), record];
+  }, [updateUncertainty, sourceUpdate, scopeServerKey]);
+  // Acceptance waits for every uncertain source among the current
+  // selections (identity or common-directory alias): a branch whose update
+  // outcome is unknown cannot be accepted until it is settled.
+  const uncertainBlocked = useMemo(() => {
+    if (activeUncertainty.length === 0) return false;
+    const selected = reconciledSelections.flatMap((selection) =>
+      selection.status === 'selected' ? [selection.identity] : [],
+    );
+    return activeUncertainty.some((record) =>
+      selected.some(
+        (identity) =>
+          sameRepoIdentity(identity, record.identity) ||
+          sharesCommonDirectory(identity, record.identity),
+      ),
+    );
+  }, [activeUncertainty, reconciledSelections]);
 
   const requestCancel = useCallback(() => {
     if (dirty) {
@@ -763,6 +840,7 @@ export function CreateFeatureForm({
       createOpen,
       pendingCreate: pendingCreate === null ? null : { ...pendingCreate },
       pendingInitialize: pendingInitialize === null ? null : { ...pendingInitialize },
+      sourceUpdateUncertainty: scopeUncertainty.map((record) => ({ ...record })),
     };
   });
   const detachRef = useRef(onDraftDetach);
@@ -845,14 +923,26 @@ export function CreateFeatureForm({
       setPendingInitialize(null);
       setInitializeError(null);
       // An in-flight update belongs to the originating server: its late
-      // result is discarded by the request fence, and its notices never
-      // speak for another server's repositories.
+      // result is discarded by the request fence, so its outcome is unknown
+      // and is retained as a record keyed to that server — never as a
+      // notice that speaks for another server's repositories. The record
+      // replays whenever its server is connected again.
+      if (sourceUpdate.phase === 'active') {
+        const record = sourceUpdate.record;
+        setUpdateUncertainty((records) => [
+          ...withoutUncertaintyFor(records, record.identity),
+          record,
+        ]);
+      }
       sourceUpdateActiveRef.current = false;
       setSourceUpdate({ phase: 'idle' });
       setUpdateNotices([]);
+      // Returning to a server with retained uncertainty re-triggers its
+      // settlement reads.
+      setReconcileRevision((revision) => revision + 1);
     }
     serverKeyRef.current = serverKey;
-  }, [serverKey]);
+  }, [serverKey, sourceUpdate]);
 
   useEffect(() => {
     const repositories = reconciledSelections.flatMap((selection) =>
@@ -993,12 +1083,25 @@ export function CreateFeatureForm({
   );
 
   /**
+   * Records one update attempt as outcome-unknown, keyed to its originating
+   * server and repository identity. At most one unsettled record exists per
+   * repository: a newer attempt for the same repository replaces it.
+   */
+  const recordUncertainty = useCallback((record: SourceUpdateUncertainty) => {
+    setUpdateUncertainty((records) => [...withoutUncertaintyFor(records, record.identity), record]);
+  }, []);
+
+  /**
    * The per-row Update from origin action. The request carries the displayed
    * expectations unchanged; a definitive success or no-op refreshes the local
    * source and the comparison, a typed refusal merges its fresh status row
-   * and leaves a warning for an explicit new action, and a canonical
-   * rejection is preserved as a warning that never blocks submission of a
-   * still-valid local source. A result from another server is discarded.
+   * and leaves a warning for an explicit new action, and a definitive
+   * canonical rejection is preserved as a warning that never blocks
+   * submission of a still-valid local source. A result that never
+   * definitively arrives from the originating server — a lost response, a
+   * timeout, a server switch, or a server that proved nothing either way —
+   * records uncertainty instead: the source stays unacceptable until a
+   * settlement read on that server establishes the branch's state.
    */
   const requestSourceUpdate = useCallback(
     (row: RepositoryOriginStatusSnapshot) => {
@@ -1007,23 +1110,36 @@ export function CreateFeatureForm({
       const identity = row.identity;
       const startServerKey = serverKeyRef.current;
       const label = serverLabel;
+      const record: SourceUpdateUncertainty = {
+        serverKey: startServerKey,
+        repoKey: row.repoKey,
+        identity,
+        mode: target.request.mode,
+        branch: target.branch,
+        originBranch: target.originBranch,
+        expectedLocalSha: target.request.expectedLocalSha,
+        expectedOriginSha: target.request.expectedOriginSha,
+        attempt: ++sourceUpdateAttemptRef.current,
+      };
       sourceUpdateActiveRef.current = true;
       const settle = (): void => {
         sourceUpdateActiveRef.current = false;
       };
-      setSourceUpdate({ phase: 'active', repoKey: row.repoKey, identity });
+      setSourceUpdate({ phase: 'active', record });
       setUpdateNotices((current) => withoutNoticesFor(current, identity));
       void window.agentico.updateRepositorySource(target.request).then(
         (result) => {
           // A completion from another server (or after a remount) is not
-          // this draft's result: the new server's UI stays untouched.
+          // this draft's result: the new server's UI stays untouched, and
+          // the attempt's outcome is unknown on the originating server.
           if (serverKeyRef.current !== startServerKey) {
             settle();
+            recordUncertainty(record);
             return;
           }
           settle();
           setSourceUpdate((current) =>
-            current.phase === 'active' && sameRepoIdentity(current.identity, identity)
+            current.phase === 'active' && current.record.attempt === record.attempt
               ? { phase: 'idle' }
               : current,
           );
@@ -1058,28 +1174,123 @@ export function CreateFeatureForm({
         (err: unknown) => {
           if (serverKeyRef.current !== startServerKey) {
             settle();
+            recordUncertainty(record);
             return;
           }
           settle();
           setSourceUpdate((current) =>
-            current.phase === 'active' && sameRepoIdentity(current.identity, identity)
+            current.phase === 'active' && current.record.attempt === record.attempt
               ? { phase: 'idle' }
               : current,
           );
+          const parsed = parseIpcError(err);
+          if (isUncertainUpdateError(parsed)) {
+            // The server proved nothing either way (or the response never
+            // arrived): never a warning that reads as failure, and never an
+            // assumed rollback — the source is unacceptable until settled.
+            recordUncertainty(record);
+            return;
+          }
           setUpdateNotices((current) => [
             ...withoutNoticesFor(current, identity),
             {
               repoKey: row.repoKey,
               identity,
               tone: 'warning',
-              text: updateErrorText(target, parseIpcError(err), label),
+              text: updateErrorText(target, parsed, label),
             },
           ]);
         },
       );
     },
-    [serverLabel, requestOriginRecheck, mergeOriginStatusRow],
+    [serverLabel, requestOriginRecheck, mergeOriginStatusRow, recordUncertainty],
   );
+
+  /**
+   * Applies one settlement outcome: the record retires (its source is
+   * acceptable again), the observation becomes the row's notice, and a
+   * target or changed observation refreshes the local source and the
+   * comparison for an explicit next action. A settlement never retries the
+   * mutation and never rolls the branch back.
+   */
+  const applyReconcileResult = useCallback(
+    (record: SourceUpdateUncertainty, result: RepositorySourceReconcileResult) => {
+      setUpdateUncertainty((records) => withoutUncertaintyFor(records, record.identity));
+      setUpdateNotices((current) => [
+        ...withoutNoticesFor(current, record.identity),
+        reconcileNoticeText(result, record, serverLabelFor(connection)),
+      ]);
+      if (result.outcome === 'original_tip_remains') {
+        // The displayed comparison is still truthful (nothing moved); only
+        // the local source is re-read so continuation is warning-based.
+        setSourceRefreshRevision((revision) => revision + 1);
+        return;
+      }
+      setSourceRefreshRevision((revision) => revision + 1);
+      requestOriginRecheck(record.repoKey);
+    },
+    [connection, requestOriginRecheck],
+  );
+
+  /**
+   * Applies one settlement refusal: a definitive rejection (a replaced
+   * repository) retires the record as a warning that requires reselection;
+   * anything else — including the server's own unprovability — keeps the
+   * outcome unknown, never a proved failure, and a later trigger (Check
+   * again, reconnect, remount) retries the read.
+   */
+  const applyReconcileError = useCallback(
+    (record: SourceUpdateUncertainty, error: CanonicalError) => {
+      if (!isUnsettledReconcileError(error)) {
+        setUpdateUncertainty((records) => withoutUncertaintyFor(records, record.identity));
+        setUpdateNotices((current) => [
+          ...withoutNoticesFor(current, record.identity),
+          {
+            repoKey: record.repoKey,
+            identity: record.identity,
+            tone: 'warning',
+            text: reconcileErrorText(record, error, serverLabelFor(connection)),
+          },
+        ]);
+      }
+    },
+    [connection],
+  );
+
+  // Settlement reads: one at a time, only for records that belong to the
+  // currently connected server, fenced by that server identity. Failure
+  // keeps the record; nothing here retries automatically — a new trigger
+  // (Check again, a server switch back, a remount) re-runs the effect.
+  useEffect(() => {
+    const pending = updateUncertainty.filter((record) => record.serverKey === serverKey);
+    const record = pending[0];
+    if (record === undefined || reconcileInFlightRef.current) return;
+    const startServerKey = serverKey;
+    reconcileInFlightRef.current = true;
+    const settle = (): void => {
+      reconcileInFlightRef.current = false;
+    };
+    void window.agentico.reconcileSourceUpdate(uncertaintyRequestFor(record)).then(
+      (result) => {
+        // A settlement from another server never applies here; the record
+        // stays unknown until its own server is connected again.
+        if (serverKeyRef.current !== startServerKey) {
+          settle();
+          return;
+        }
+        settle();
+        applyReconcileResult(record, result);
+      },
+      (err: unknown) => {
+        if (serverKeyRef.current !== startServerKey) {
+          settle();
+          return;
+        }
+        settle();
+        applyReconcileError(record, parseIpcError(err));
+      },
+    );
+  }, [updateUncertainty, serverKey, reconcileRevision, applyReconcileResult, applyReconcileError]);
 
   const handleCreate = useCallback(
     (input: CreateRepositoryStartInput) => {
@@ -1568,8 +1779,15 @@ export function CreateFeatureForm({
   const submit = (event: FormEvent): void => {
     event.preventDefault();
     // A selected source update may still be mutating the branch the feature
-    // would start from; submission waits for it to settle.
-    if (pending || uploadsBlocking || sourceUpdate.phase === 'active' || state.phase !== 'loaded')
+    // would start from, and an uncertain one may have mutated it already:
+    // submission waits for the attempt to settle or be reconciled.
+    if (
+      pending ||
+      uploadsBlocking ||
+      sourceUpdate.phase === 'active' ||
+      uncertainBlocked ||
+      state.phase !== 'loaded'
+    )
       return;
     if (!validateStep(0)) {
       setStepIndex(0);
@@ -1917,8 +2135,25 @@ export function CreateFeatureForm({
                             const rowUpdateActive =
                               sourceUpdate.phase === 'active' &&
                               repo.identity !== undefined &&
-                              (sameRepoIdentity(sourceUpdate.identity, repo.identity) ||
-                                sharesCommonDirectory(sourceUpdate.identity, repo.identity));
+                              (sameRepoIdentity(sourceUpdate.record.identity, repo.identity) ||
+                                sharesCommonDirectory(sourceUpdate.record.identity, repo.identity));
+                            // An uncertain attempt on this row's repository
+                            // (or its common-directory alias) blocks a new
+                            // mutation against expectations the settlement
+                            // has not validated; only its own server's
+                            // records reach this sheet.
+                            const rowIdentity = repo.identity;
+                            const rowUncertain =
+                              rowIdentity !== undefined &&
+                              activeUncertainty.some(
+                                (record) =>
+                                  sameRepoIdentity(record.identity, rowIdentity) ||
+                                  sharesCommonDirectory(record.identity, rowIdentity),
+                              );
+                            const rowUncertainRecord =
+                              repo.identity === undefined
+                                ? undefined
+                                : uncertaintyFor(activeUncertainty, repo.identity);
                             const updateNotice =
                               repo.identity === undefined
                                 ? undefined
@@ -2021,7 +2256,14 @@ export function CreateFeatureForm({
                                       type="button"
                                       className="creation-sheet__button"
                                       disabled={pending || rowUpdateActive}
-                                      onClick={() => requestOriginRecheck(repo.name)}
+                                      onClick={() => {
+                                        requestOriginRecheck(repo.name);
+                                        // On an uncertain row, Check again also
+                                        // re-triggers the settlement read.
+                                        if (rowUncertain) {
+                                          setReconcileRevision((revision) => revision + 1);
+                                        }
+                                      }}
                                     >
                                       Check again
                                     </button>
@@ -2029,7 +2271,7 @@ export function CreateFeatureForm({
                                       <button
                                         type="button"
                                         className="creation-sheet__button"
-                                        disabled={pending || rowUpdateActive}
+                                        disabled={pending || rowUpdateActive || rowUncertain}
                                         onClick={() => requestSourceUpdate(originRow)}
                                       >
                                         {rowUpdateActive ? 'Updating…' : 'Update from origin'}
@@ -2037,7 +2279,15 @@ export function CreateFeatureForm({
                                     ) : null}
                                   </div>
                                 ) : null}
-                                {updateNotice === undefined ? null : (
+                                {rowUncertainRecord !== undefined ? (
+                                  <p
+                                    className="creation-sheet__row-update-notice"
+                                    role="status"
+                                    data-tone="warning"
+                                  >
+                                    {updateUncertainText(rowUncertainRecord, serverLabel)}
+                                  </p>
+                                ) : updateNotice === undefined ? null : (
                                   <p
                                     className="creation-sheet__row-update-notice"
                                     role="status"
@@ -2485,10 +2735,17 @@ export function CreateFeatureForm({
                             : 'Not checked yet'}
                         </dd>
                       </div>
-                      {updateNotices.length > 0 ? (
+                      {updateNotices.length > 0 || activeUncertainty.length > 0 ? (
                         <div>
                           <dt>Source updates</dt>
-                          <dd>{updateNotices.map((notice) => notice.text).join(' ')}</dd>
+                          <dd>
+                            {[
+                              ...updateNotices.map((notice) => notice.text),
+                              ...activeUncertainty.map((record) =>
+                                updateUncertainText(record, serverLabel),
+                              ),
+                            ].join(' ')}
+                          </dd>
                         </div>
                       ) : null}
                       <div>
@@ -2562,15 +2819,22 @@ export function CreateFeatureForm({
                       key="create-feature"
                       type="submit"
                       className="sheet__footer-primary"
-                      disabled={pending || uploadsBlocking || sourceUpdate.phase === 'active'}
+                      disabled={
+                        pending ||
+                        uploadsBlocking ||
+                        sourceUpdate.phase === 'active' ||
+                        uncertainBlocked
+                      }
                     >
                       {pending
                         ? 'Creating…'
                         : sourceUpdate.phase === 'active'
                           ? 'Updating source…'
-                          : autoStart
-                            ? 'Create and start'
-                            : 'Create'}
+                          : uncertainBlocked
+                            ? 'Resolving source update…'
+                            : autoStart
+                              ? 'Create and start'
+                              : 'Create'}
                     </button>
                   </>
                 )}

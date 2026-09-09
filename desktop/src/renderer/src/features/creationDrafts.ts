@@ -39,6 +39,7 @@ import type {
 import type { ComposerUploadItem } from './stagedItems';
 import { checkpointsForPipeline, type CheckpointState, type Pipeline } from './runContract';
 import type { RepoSelection } from './repoSelections';
+import type { SourceUpdateUncertainty } from './sourceUpdates';
 import type { EffortLevel } from '../../../shared/ipc';
 import type { PhaseKey } from './ConfigEditor';
 
@@ -109,6 +110,14 @@ export interface CreationDraftState {
    * draft never keeps an unresolved in-flight marker.
    */
   pendingInitialize: PendingInitialize | null;
+  /**
+   * Source-update attempts whose outcome is unknown, keyed by their
+   * originating server (always this draft's server) and repository
+   * identity. They survive navigation and reconnection within the live
+   * session, block acceptance of their source until settled by a
+   * reconciliation on this server, and retire with the draft.
+   */
+  sourceUpdateUncertainty: readonly SourceUpdateUncertainty[];
 }
 
 /**
@@ -250,6 +259,7 @@ export function freshCreationDraft(): CreationDraftState {
     createOpen: false,
     pendingCreate: null,
     pendingInitialize: null,
+    sourceUpdateUncertainty: [],
   };
 }
 

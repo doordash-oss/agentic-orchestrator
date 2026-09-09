@@ -573,6 +573,14 @@ if (!hasSingleInstanceLock) {
       readReadiness: () => setup.getReadiness(),
       resolveRepositoryFiles: (refs) => creationFiles.resolve(refs),
       locality: () => gateway.connectedLocality,
+      // Source updates and their reconciliation are fenced by the connected
+      // server's identity and connection generation: a result crossing a
+      // switch is discarded (an unknown outcome the renderer reconciles)
+      // instead of applied to the new server.
+      identity: () => ({
+        serverKey: gateway.connectedServerKey,
+        generation: gateway.connectionGeneration,
+      }),
     });
     // Clone lifecycle: every call is fenced by the connected server's
     // identity and connection generation so a server switch discards stale
@@ -1397,6 +1405,7 @@ if (!hasSingleInstanceLock) {
       inspectRepositorySources: (request) => features.inspectRepositorySources(request),
       checkRepositoryOriginStatus: (request) => features.checkRepositoryOriginStatus(request),
       updateRepositorySource: (request) => features.updateRepositorySource(request),
+      reconcileSourceUpdate: (request) => features.reconcileSourceUpdate(request),
       pickCreationFiles: (kind) => creationFiles.pickFiles(kind),
       uploadCreationFiles: (kind, paths) => uploads.stageFiles(kind, paths),
       readClipboardImage,

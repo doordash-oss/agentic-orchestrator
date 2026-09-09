@@ -219,6 +219,17 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
         localSha: request.expectedLocalSha,
       }),
     ),
+    reconcileSourceUpdate: vi.fn(
+      async (request: Parameters<IpcServices['reconcileSourceUpdate']>[0]) => ({
+        outcome: 'original_tip_remains' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
+      }),
+    ),
     loadLocalReviewDraft: vi.fn(() => null),
     saveLocalReviewDraft: vi.fn((request) => ({ ...request, savedAt: '2026-07-16T00:00:00.000Z' })),
     discardLocalReviewDraft: vi.fn(() => false),

@@ -108,6 +108,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'readClipboardImage',
   'readRecoveryLog',
   'readReview',
+  'reconcileSourceUpdate',
   'refreshProviderModels',
   'refreshReadiness',
   'removeServer',

@@ -425,6 +425,180 @@ describe('FeatureService.updateRepositorySource', () => {
   });
 });
 
+describe('FeatureService.reconcileSourceUpdate', () => {
+  const identity = {
+    path: '/work/space/repo-a',
+    commonDir: '/work/space/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+  const request = {
+    repoKey: 'repo-a',
+    identity,
+    mode: 'default' as const,
+    branch: 'release/2026/q3',
+    originBranch: 'upstream-main',
+    expectedLocalSha: 'a'.repeat(40),
+    expectedOriginSha: 'c'.repeat(40),
+  };
+  const wireIdentity = {
+    path: identity.path,
+    common_dir: identity.commonDir,
+    device: identity.device,
+    inode: identity.inode,
+  };
+
+  it('posts the attempted binding as the snake_case wire body with the reconcile timeout', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        outcome: 'expected_target_present',
+        repo_key: 'repo-a',
+        identity: wireIdentity,
+        mode: 'default',
+        branch: 'release/2026/q3',
+        origin_branch: 'upstream-main',
+        local_sha: 'c'.repeat(40),
+        selection: {
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          kind: 'branch',
+          branch: 'release/2026/q3',
+          observed_sha: 'c'.repeat(40),
+        },
+      },
+    }));
+
+    const result = await service.reconcileSourceUpdate(request);
+
+    expect(calls[0]).toEqual({
+      path: '/api/v1/workspace/repositories/reconcile-source-update',
+      init: {
+        method: 'POST',
+        // SOURCE_RECONCILE_TIMEOUT_MS: the client allowance must exceed the
+        // server's three-minute settlement deadline.
+        timeoutMs: 4 * 60_000,
+        body: {
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          branch: 'release/2026/q3',
+          origin_branch: 'upstream-main',
+          expected_local_sha: 'a'.repeat(40),
+          expected_origin_sha: 'c'.repeat(40),
+        },
+      },
+    });
+    expect(result).toEqual({
+      outcome: 'expected_target_present',
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default',
+      branch: 'release/2026/q3',
+      originBranch: 'upstream-main',
+      localSha: 'c'.repeat(40),
+      selection: {
+        repoKey: 'repo-a',
+        identity,
+        mode: 'default',
+        kind: 'branch',
+        branch: 'release/2026/q3',
+        observedSha: 'c'.repeat(40),
+      },
+    });
+  });
+
+  it('passes a canonical 503 source_reconcile_unavailable rejection through unchanged', async () => {
+    const canonical = {
+      code: 'source_reconcile_unavailable',
+      class: 'blocking' as const,
+      title: 'Source update outcome unresolved',
+      summary: 'The connected server could not establish the branch state.',
+    };
+    const { service, calls } = makeService(() => ({
+      status: 503,
+      body: { api_version: 'v1', error: canonical },
+    }));
+
+    await expect(service.reconcileSourceUpdate(request)).rejects.toMatchObject({
+      canonical,
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('discards a settlement that crossed a server switch instead of applying it', async () => {
+    let generation = 0;
+    const { service, calls } = makeService(
+      () => ({
+        status: 200,
+        body: {
+          api_version: 'v1',
+          outcome: 'original_tip_remains',
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          branch: 'release/2026/q3',
+          origin_branch: 'upstream-main',
+        },
+      }),
+      () => Promise.resolve([]),
+      {
+        identity: () => ({ serverKey: 'server-key-1', generation }),
+      },
+    );
+
+    // The transport resolves only after the generation bumped (a switch
+    // A → B happened while the settlement was running).
+    const flight = service.reconcileSourceUpdate(request);
+    generation += 1;
+    await expect(flight).rejects.toMatchObject({
+      canonical: { code: 'E_SERVER_SWITCHED' },
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('discards an update result that crossed a server switch, leaving the outcome unknown', async () => {
+    let serverKey: string | null = 'server-key-1';
+    const updateRequest = {
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default' as const,
+      branch: 'release/2026/q3',
+      originBranch: 'upstream-main',
+      expectedLocalSha: 'a'.repeat(40),
+      expectedOriginSha: 'c'.repeat(40),
+      checkoutHeadRef: 'refs/heads/main',
+      checkoutHeadSha: 'e'.repeat(40),
+    };
+    const { service } = makeService(
+      () => ({
+        status: 200,
+        body: {
+          api_version: 'v1',
+          result: 'updated',
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          branch: 'release/2026/q3',
+          origin_branch: 'upstream-main',
+        },
+      }),
+      () => Promise.resolve([]),
+      {
+        identity: () => ({ serverKey, generation: 0 }),
+      },
+    );
+
+    const flight = service.updateRepositorySource(updateRequest);
+    serverKey = 'server-key-2';
+    await expect(flight).rejects.toMatchObject({
+      canonical: { code: 'E_SERVER_SWITCHED' },
+    });
+  });
+});
+
 describe('FeatureService remote-connection submit boundary', () => {
   const created = () => ({
     status: 201,

@@ -141,6 +141,10 @@ const (
 // expiry and ambiguous mutation boundaries.
 const (
 	SourceUpdateUnavailable Code = "source_update_unavailable"
+	// SourceReconcileUnavailable classifies a reconciliation read that could
+	// not establish the branch's settled state after an uncertain update
+	// attempt. The outcome stays unknown; it is never a proved failure.
+	SourceReconcileUnavailable Code = "source_reconcile_unavailable"
 )
 
 // Readiness and provider codes.
@@ -686,10 +690,16 @@ var catalog = map[Code]Entry{
 		Remediation: "Review the diagnostics on the connected server, then retry from the repository list.",
 	},
 	SourceUpdateUnavailable: {
-		Class:   ClassBlocking,
-		Title:   "Source update unavailable",
-		Summary: "The connected server could not safely complete the branch update; the branch's current state is not proved by this result.",
+		Class:       ClassBlocking,
+		Title:       "Source update unavailable",
+		Summary:     "The connected server could not safely complete the branch update; the branch's current state is not proved by this result.",
 		Remediation: "Recheck the repository's origin comparison before retrying; never assume the update was rolled back.",
+	},
+	SourceReconcileUnavailable: {
+		Class:       ClassBlocking,
+		Title:       "Source update outcome unresolved",
+		Summary:     "The connected server could not establish the branch's state after the update attempt, so the outcome stays unknown.",
+		Remediation: "Reconcile the repository again before accepting it; never assume the update was rolled back.",
 	},
 
 	// --- Publish failure codes -------------------------------------------------

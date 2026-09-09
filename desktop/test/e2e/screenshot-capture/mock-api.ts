@@ -31,6 +31,7 @@ import type {
   RecoveryItemView,
   RewindPreviewView,
   RepositoryUpdateSourceResult,
+  RepositorySourceReconcileResult,
   RunArtifactView,
   RunArtifactsListResult,
   RunDetailView,
@@ -2102,6 +2103,16 @@ function makeMockApi(
         originBranch: request.originBranch,
         localSha: request.expectedLocalSha,
       } as RepositoryUpdateSourceResult),
+    reconcileSourceUpdate: (request) =>
+      Promise.resolve({
+        outcome: 'original_tip_remains' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
+      } as RepositorySourceReconcileResult),
     // The creation-sheet scenes need real-looking attachment chips; every
     // other scene keeps the picker inert.
     pickCreationFiles: (kind) =>

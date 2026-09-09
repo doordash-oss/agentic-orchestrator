@@ -823,6 +823,12 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 	if h.rejectNotReadyForCreation(w, r) {
 		return
 	}
+	// Acceptance serializes with admitted source updates: a selected source
+	// whose update may still mutate waits out that attempt's lifetime first,
+	// so the accepted immutable SHA is captured after the mutation settles.
+	if !h.awaitSourceUpdateSettlement(w, r, req.RepositorySources) {
+		return
+	}
 	resp, err := h.createFeatureOnce(req)
 	if err != nil {
 		writeMutationError(w, err)

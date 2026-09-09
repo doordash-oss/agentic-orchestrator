@@ -30,6 +30,7 @@ import {
   redactText,
   redactedCanonicalError,
   requiresLocalServerError,
+  buildCanonicalError,
 } from '../shared/errors';
 import {
   FeatureActionResponseSchema,
@@ -41,6 +42,7 @@ import {
   RepositorySourcesResponseSchema,
   RepositoryOriginStatusResponseSchema,
   RepositoryUpdateSourceResponseSchema,
+  RepositorySourceReconcileResponseSchema,
   RebaseFeatureResponseSchema,
   RefactorFeatureResponseSchema,
   DiscardChildResponseSchema,
@@ -79,6 +81,8 @@ import {
   type RepositoryOriginStatusSnapshot,
   type RepositoryUpdateSourceRequest,
   type RepositoryUpdateSourceResult,
+  type RepositorySourceReconcileRequest,
+  type RepositorySourceReconcileResult,
   type EffortLevel,
   type FeatureSetupView,
   type FeatureSnapshot,
@@ -112,6 +116,7 @@ import {
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { alwaysLocal, type LocalitySource } from './locality';
 import { serverRequest, type ServerTransport } from './serverClient';
+import type { ServerIdentity, ServerIdentitySource } from './cloneService';
 
 /** The authenticated transport surface the gateway provides. */
 export type FeatureTransport = ServerTransport;
@@ -128,6 +133,14 @@ export interface FeatureServiceDeps {
    * never leak a local path) and forward staged upload references instead.
    */
   locality?: LocalitySource;
+  /**
+   * Captures the connected server identity and gateway generation for
+   * request fencing. When present, the source update and its reconciliation
+   * are fenced: a result that crosses a server switch or a generation bump
+   * is discarded (E_SERVER_SWITCHED) instead of applied to the new server —
+   * for an update, the discard leaves the attempt's outcome unknown.
+   */
+  identity?: ServerIdentitySource;
 }
 
 const PHASE_MODEL_LABELS: ReadonlyArray<readonly [string, string]> = [
@@ -192,6 +205,11 @@ const COORDINATED_MUTATION_ACTIONS: ReadonlySet<string> = new Set(['setup', 'sta
 // typed outcome; anything shorter would surface an ambiguous timeout while the
 // mutation is still running server-side.
 const SOURCE_UPDATE_TIMEOUT_MS = 3 * 60_000;
+
+// The server bounds one reconciliation at three minutes — it must be able
+// to wait out a full two-minute update attempt plus its own reads — so the
+// client allowance exceeds that in turn for the same reason as the update.
+const SOURCE_RECONCILE_TIMEOUT_MS = 4 * 60_000;
 
 export class FeatureService {
   private readonly actionFlights = new Map<string, Promise<FeatureActionResult>>();
@@ -314,12 +332,14 @@ export class FeatureService {
    * Advances one unoccupied selected source branch from origin through the
    * server's expected-old-value compare-and-swap. The displayed expectations
    * cross unchanged; a stale result carries a freshly resolved status
-   * snapshot, and canonical server rejections cross unchanged.
+   * snapshot, and canonical server rejections cross unchanged. The call is
+   * fenced by server identity and connection generation: a result crossing a
+   * switch is discarded, leaving the attempt's outcome unknown.
    */
   async updateRepositorySource(
     request: RepositoryUpdateSourceRequest,
   ): Promise<RepositoryUpdateSourceResult> {
-    const body = await this.api('/api/v1/workspace/repositories/update-source', {
+    const body = await this.fencedCall('/api/v1/workspace/repositories/update-source', {
       method: 'POST',
       timeoutMs: SOURCE_UPDATE_TIMEOUT_MS,
       body: {
@@ -357,6 +377,67 @@ export class FeatureService {
       ...(parsed.local_sha === undefined ? {} : { localSha: parsed.local_sha }),
       ...(parsed.fetched_sha === undefined ? {} : { fetchedSha: parsed.fetched_sha }),
       ...(parsed.status === undefined ? {} : { status: toOriginStatusSnapshot(parsed.status) }),
+    };
+  }
+
+  /**
+   * Settles one uncertain Update-from-origin attempt: the server waits out
+   * the attempt's lifetime, then reads the branch under coordination and
+   * reports the observed state. Fenced like the update itself — a result
+   * crossing a server switch is discarded and the outcome stays unknown.
+   */
+  async reconcileSourceUpdate(
+    request: RepositorySourceReconcileRequest,
+  ): Promise<RepositorySourceReconcileResult> {
+    const body = await this.fencedCall('/api/v1/workspace/repositories/reconcile-source-update', {
+      method: 'POST',
+      timeoutMs: SOURCE_RECONCILE_TIMEOUT_MS,
+      body: {
+        repo_key: request.repoKey,
+        identity: {
+          path: request.identity.path,
+          common_dir: request.identity.commonDir,
+          device: request.identity.device,
+          inode: request.identity.inode,
+        },
+        mode: request.mode,
+        branch: request.branch,
+        origin_branch: request.originBranch,
+        expected_local_sha: request.expectedLocalSha,
+        expected_origin_sha: request.expectedOriginSha,
+      },
+    });
+    const parsed = validateWithSchema(body, RepositorySourceReconcileResponseSchema);
+    return {
+      outcome: parsed.outcome,
+      repoKey: parsed.repo_key,
+      identity: {
+        path: parsed.identity.path,
+        commonDir: parsed.identity.common_dir,
+        device: parsed.identity.device,
+        inode: parsed.identity.inode,
+      },
+      mode: parsed.mode,
+      branch: parsed.branch,
+      originBranch: parsed.origin_branch,
+      ...(parsed.local_sha === undefined ? {} : { localSha: parsed.local_sha }),
+      ...(parsed.selection === undefined
+        ? {}
+        : {
+            selection: {
+              repoKey: parsed.selection.repo_key,
+              identity: {
+                path: parsed.selection.identity.path,
+                commonDir: parsed.selection.identity.common_dir,
+                device: parsed.selection.identity.device,
+                inode: parsed.selection.identity.inode,
+              },
+              mode: parsed.selection.mode,
+              kind: parsed.selection.kind,
+              ...(parsed.selection.branch === undefined ? {} : { branch: parsed.selection.branch }),
+              observedSha: parsed.selection.observed_sha,
+            },
+          }),
     };
   }
 
@@ -741,6 +822,35 @@ export class FeatureService {
    */
   private api(path: string, init?: ApiRequestInit): Promise<unknown> {
     return serverRequest(this.deps.transport, path, init);
+  }
+
+  /**
+   * Runs one transport call fenced by server identity and connection
+   * generation: the identity is captured before the request and compared
+   * after the response, so a switch A → B → A discards late replies from
+   * the old connection rather than applying them to the new server. For the
+   * source update and its reconciliation, a discard is exactly an unknown
+   * outcome — the renderer records it and reconciles later.
+   */
+  private async fencedCall(path: string, init?: ApiRequestInit): Promise<unknown> {
+    const before = this.captureIdentity();
+    const body = await this.api(path, init);
+    const after = this.captureIdentity();
+    if (
+      before.serverKey !== null &&
+      after.serverKey !== null &&
+      (before.serverKey !== after.serverKey || before.generation !== after.generation)
+    ) {
+      throw new CanonicalErrorException(buildCanonicalError('E_SERVER_SWITCHED'));
+    }
+    return body;
+  }
+
+  private captureIdentity(): ServerIdentity {
+    if (this.deps.identity === undefined) {
+      return { serverKey: null, generation: 0 };
+    }
+    return this.deps.identity();
   }
 
   private async runOperationalAction(input: FeatureActionRequest): Promise<FeatureActionResult> {

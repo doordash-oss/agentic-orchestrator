@@ -1025,6 +1025,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspace/repositories/reconcile-source-update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile one uncertain Update-from-origin attempt.
+         * @description Non-mutating settlement read for one Update-from-origin attempt whose response was lost, timed out, or arrived stale. The request repeats the attempted update's displayed binding (repository identity, shared branch mode, local branch, origin mapping, and both expected tips); every value is an expectation for comparison, never authority over which repository or ref is read. The server first waits out the lifetime of any admitted update attempt on the same repository, including one still waiting for common-directory coordination, then reads the current identity, selected source, and the requested branch's tip under that same coordination and reports whether the expected target is present, the original tip remains, the local state changed, or the branch no longer resolves. It never fetches from origin, never infers success from transport completion or a different observed commit, and never mutates anything; a cached origin comparison is never evidence here. Missing or replaced repositories require reselection.
+         */
+        post: operations["reconcileWorkspaceRepositorySourceUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recovery": {
         parameters: {
             query?: never;
@@ -1548,6 +1568,46 @@ export interface components {
             fetched_sha?: string;
             /** @description Freshly resolved status snapshot for the selected source; present for stale results where the authorized repository still exists. */
             status?: components["schemas"]["RepositoryOriginStatus"];
+        };
+        RepositorySourceReconcileRequest: {
+            repo_key: string;
+            identity: components["schemas"]["RepositoryIdentity"];
+            /**
+             * @description Shared branch mode of the attempted update.
+             * @enum {string}
+             */
+            mode: "default" | "current";
+            /** @description The attempted update's expected full local branch name, as displayed by the comparison the update was based on. An expectation for the settlement read, never ref authority. */
+            branch: string;
+            /** @description The attempted update's expected mapped origin branch, including differently named tracking branches. */
+            origin_branch: string;
+            /** @description The local tip displayed before the attempted update; the state whose absence proves the branch moved. */
+            expected_local_sha: string;
+            /** @description The fetched origin tip the attempted update was expected to advance the branch to. */
+            expected_origin_sha: string;
+        };
+        RepositorySourceReconcileResponse: components["schemas"]["ActionBaseResponse"] & {
+            /**
+             * @description expected_target_present: the branch tip is the expected origin SHA. original_tip_remains: the branch tip is still the expected local SHA. local_state_changed: the branch tip is neither expected value. branch_missing: the branch no longer resolves. None of these infer operation success from transport completion.
+             * @enum {string}
+             */
+            outcome: "expected_target_present" | "original_tip_remains" | "local_state_changed" | "branch_missing";
+            /** @description Server-resolved current catalog key. */
+            repo_key: string;
+            identity: components["schemas"]["RepositoryIdentity"];
+            /**
+             * @description The attempted update's shared branch mode, echoed.
+             * @enum {string}
+             */
+            mode: "default" | "current";
+            /** @description The attempted update's expected local branch, echoed. */
+            branch: string;
+            /** @description The attempted update's expected origin branch, echoed. */
+            origin_branch: string;
+            /** @description Observed tip of the requested branch under coordination; present whenever the branch resolves. */
+            local_sha?: string;
+            /** @description Freshly resolved current selection for the shared mode, read under the same coordination; present when a selection resolves. Its observed SHA is the current selection's commit, never evidence about the attempted update. */
+            selection?: components["schemas"]["RepositorySource"];
         };
         CloneStartRequest: {
             /** @description HTTP, HTTPS or SSH remote URL for the clone. Local paths, helper transports, embedded credentials and token-bearing queries or fragments are rejected without echoing secrets. */
@@ -3126,6 +3186,15 @@ export interface components {
                 "application/json": components["schemas"]["RepositoryUpdateSourceResponse"];
             };
         };
+        /** @description Typed settlement of one uncertain Update-from-origin attempt: the observed branch state after the update can no longer mutate, plus the freshly resolved current selection when one resolves. */
+        RepositorySourceReconcileResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RepositorySourceReconcileResponse"];
+            };
+        };
         /** @description Authoritative clone operation snapshot after a mutation. */
         CloneActionResponse: {
             headers: {
@@ -4417,6 +4486,29 @@ export interface operations {
         };
         responses: {
             200: components["responses"]["RepositoryUpdateSourceResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
+            503: components["responses"]["ErrorResponse"];
+        };
+    };
+    reconcileWorkspaceRepositorySourceUpdate: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepositorySourceReconcileRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["RepositorySourceReconcileResponse"];
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
             409: components["responses"]["ErrorResponse"];

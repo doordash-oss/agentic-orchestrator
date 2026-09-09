@@ -96,6 +96,16 @@ type apiHandler struct {
 	// defaults.
 	updateSourceOptions git.SourceUpdateOptions
 
+	// sourceUpdates tracks the lifetime of admitted Update-from-origin
+	// attempts so reconciliation reads and feature acceptance settle before
+	// concluding anything about a repository an admitted attempt may still
+	// mutate.
+	sourceUpdates *sourceUpdateTracker
+	// reconcileSourceDeadline bounds one settlement read end to end,
+	// including waiting out a full admitted update attempt; zero means
+	// defaultReconcileSourceDeadline. Injectable for deterministic tests.
+	reconcileSourceDeadline time.Duration
+
 	// readinessMu guards the cached provider readiness probe results served
 	// by /api/v1/readiness and refreshed by /api/v1/readiness/refresh.
 	readinessMu       sync.Mutex
@@ -156,6 +166,8 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		creationResults:         make(map[string]creationResult),
 		originChecks:            newOriginCheckCoordinator(),
 		updateSourceDeadline:    defaultUpdateSourceDeadline,
+		sourceUpdates:           newSourceUpdateTracker(),
+		reconcileSourceDeadline: defaultReconcileSourceDeadline,
 	}
 	if opts.Worktrees != nil {
 		handler.cleanliness = git.NewCleanlinessCache(opts.Worktrees)
@@ -246,6 +258,7 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathWorkspaceRepositorySources, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositorySourcesRoute }},
 	{apiPathWorkspaceRepositoryOriginStatus, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryOriginStatusRoute }},
 	{apiPathWorkspaceRepositoryUpdateSource, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryUpdateSourceRoute }},
+	{apiPathWorkspaceRepositoryReconcileSourceUpdate, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryReconcileSourceUpdateRoute }},
 	{apiPathWorkspaceClone, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneRoute }},
 	{apiPathWorkspaceClone + "/", func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneOperationRoutes }},
 	{apiPathPrompts, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},

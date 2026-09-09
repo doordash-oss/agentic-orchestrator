@@ -27,6 +27,8 @@ import type {
   CanonicalError,
   RepositoryIdentity,
   RepositoryOriginStatusSnapshot,
+  RepositorySourceReconcileRequest,
+  RepositorySourceReconcileResult,
   RepositoryUpdateSourceRequest,
   RepositoryUpdateSourceResult,
 } from '../../../shared/ipc';
@@ -35,7 +37,79 @@ import { sameRepoIdentity } from './repoSelections';
 /** The row-scoped update action's lifecycle, kept separate from selection
  *  and origin-comparison state. */
 export type SourceUpdateAction =
-  { phase: 'idle' } | { phase: 'active'; repoKey: string; identity: RepositoryIdentity };
+  { phase: 'idle' } | { phase: 'active'; record: SourceUpdateUncertainty };
+
+/**
+ * One Update-from-origin attempt whose outcome is unknown: the response was
+ * lost, timed out, crossed a server switch, or the server proved nothing
+ * either way. The record is keyed by its originating server and repository
+ * identity, survives draft navigation and reconnection within the live
+ * session, and blocks acceptance of its source until a settlement read on
+ * the originating server establishes the branch's state.
+ */
+export interface SourceUpdateUncertainty {
+  /** The server the attempt was sent to; null is a resolving runtime. */
+  serverKey: string | null;
+  repoKey: string;
+  identity: RepositoryIdentity;
+  mode: 'default' | 'current';
+  branch: string;
+  originBranch: string;
+  expectedLocalSha: string;
+  expectedOriginSha: string;
+  /** Monotonic attempt sequence, fencing late callbacks by attempt. */
+  attempt: number;
+}
+
+/**
+ * Canonical codes whose update result proves nothing about the branch: the
+ * server could not prove an outcome, or the response never definitively
+ * arrived from the originating server. These record uncertainty; every
+ * other rejection is a definitive refusal that becomes a warning.
+ */
+const UNCERTAIN_UPDATE_ERROR_CODES: ReadonlySet<string> = new Set([
+  'source_update_unavailable',
+  'E_REQUEST_TIMEOUT',
+  'E_SERVER_SWITCHED',
+  'E_IPC_UNREACHABLE',
+  'E_NOT_CONNECTED',
+  'E_GATEWAY',
+  'E_REMOTE_SERVER_LOST_REPROBING',
+  'E_REMOTE_UNREACHABLE',
+  'E_SERVER_EXITED',
+  'E_EXTERNAL_RUNTIME_UNRESPONSIVE',
+]);
+
+/** True when a rejected update leaves its outcome unknown. */
+export function isUncertainUpdateError(error: CanonicalError): boolean {
+  return UNCERTAIN_UPDATE_ERROR_CODES.has(error.code);
+}
+
+/**
+ * True when a rejected settlement read leaves the outcome unknown: the same
+ * transport-loss codes, plus the server's own unprovability code. A
+ * definitive rejection (a replaced repository, a malformed request) is the
+ * only settlement failure that retires the record.
+ */
+export function isUnsettledReconcileError(error: CanonicalError): boolean {
+  return error.code === 'source_reconcile_unavailable' || isUncertainUpdateError(error);
+}
+
+/** The settlement request for one uncertain attempt: the same displayed
+ *  binding the update carried, unchanged. */
+export function uncertaintyRequestFor(
+  record: SourceUpdateUncertainty,
+): RepositorySourceReconcileRequest {
+  return {
+    repoKey: record.repoKey,
+    identity: record.identity,
+    mode: record.mode,
+    branch: record.branch,
+    originBranch: record.originBranch,
+    expectedLocalSha: record.expectedLocalSha,
+    expectedOriginSha: record.expectedOriginSha,
+  };
+}
 
 /** One settled update outcome a row should announce and the review should
  *  carry: successes confirm the advance; warnings preserve definitive
@@ -221,6 +295,73 @@ export function updateErrorText(
   return `${target.branch} was not updated on ${serverLabel} — ${error.summary}`;
 }
 
+/**
+ * The status line while an attempt's outcome is unknown: names the branch
+ * and the originating server, never claims a failure or rollback, and
+ * states what unblocks acceptance.
+ */
+export function updateUncertainText(record: SourceUpdateUncertainty, serverLabel: string): string {
+  return `The result of updating ${record.branch} on ${serverLabel} is unknown — it will be reconciled on ${serverLabel} before this repository can be accepted.`;
+}
+
+/**
+ * The row's announcement for one settlement outcome: a target observation
+ * is a success; anything else is a warning that never claims the attempt
+ * was rolled back and points at the next explicit action.
+ */
+export function reconcileNoticeText(
+  result: RepositorySourceReconcileResult,
+  record: SourceUpdateUncertainty,
+  serverLabel: string,
+): SourceUpdateNotice {
+  const branch = record.branch;
+  const sha = shortSha(result.localSha);
+  const shaText = sha === null ? '' : ` (now at ${sha})`;
+  switch (result.outcome) {
+    case 'expected_target_present':
+      return {
+        repoKey: record.repoKey,
+        identity: record.identity,
+        tone: 'success',
+        text: `Reconciled ${branch} on ${serverLabel}: the update completed${shaText}.`,
+      };
+    case 'original_tip_remains':
+      return {
+        repoKey: record.repoKey,
+        identity: record.identity,
+        tone: 'warning',
+        text: `Reconciled ${branch} on ${serverLabel}: the update did not complete, and ${branch} is unchanged${shaText}. Check again before updating.`,
+      };
+    case 'local_state_changed':
+      return {
+        repoKey: record.repoKey,
+        identity: record.identity,
+        tone: 'warning',
+        text: `Reconciled ${branch} on ${serverLabel}: it is now at a commit that is neither the tip before the update nor the expected origin tip${shaText}. Check again before updating.`,
+      };
+    default:
+      return {
+        repoKey: record.repoKey,
+        identity: record.identity,
+        tone: 'warning',
+        text: `Reconciled ${branch} on ${serverLabel}: the branch no longer exists. Refresh the repositories and reselect the source.`,
+      };
+  }
+}
+
+/**
+ * The warning when the settlement read itself is definitively refused (a
+ * replaced repository): the server's summary is preserved verbatim and the
+ * source requires reselection.
+ */
+export function reconcileErrorText(
+  record: SourceUpdateUncertainty,
+  error: CanonicalError,
+  serverLabel: string,
+): string {
+  return `Reconciling ${record.branch} on ${serverLabel} — ${error.summary}`;
+}
+
 /** The row's notice, when one belongs to this repository identity. */
 export function noticeFor(
   notices: readonly SourceUpdateNotice[],
@@ -235,4 +376,20 @@ export function withoutNoticesFor(
   identity: RepositoryIdentity,
 ): readonly SourceUpdateNotice[] {
   return notices.filter((notice) => !sameRepoIdentity(notice.identity, identity));
+}
+
+/** The unsettled uncertainty record for one repository identity, when any. */
+export function uncertaintyFor(
+  records: readonly SourceUpdateUncertainty[],
+  identity: RepositoryIdentity,
+): SourceUpdateUncertainty | undefined {
+  return records.find((record) => sameRepoIdentity(record.identity, identity));
+}
+
+/** Records without one repository identity's unsettled entry. */
+export function withoutUncertaintyFor(
+  records: readonly SourceUpdateUncertainty[],
+  identity: RepositoryIdentity,
+): readonly SourceUpdateUncertainty[] {
+  return records.filter((record) => !sameRepoIdentity(record.identity, identity));
 }

@@ -48,6 +48,8 @@ import {
   type RepositoryOriginStatusRequest,
   type RepositoryOriginStatusResult,
   type RepositoryUpdateSourceRequest,
+  type RepositorySourceReconcileRequest,
+  type RepositorySourceReconcileResult,
   type RepositoryUpdateSourceResult,
   type CreationFileKind,
   type CreationFileSearchRequest,
@@ -217,6 +219,9 @@ export interface IpcServices {
   updateRepositorySource(
     request: RepositoryUpdateSourceRequest,
   ): Promise<RepositoryUpdateSourceResult>;
+  reconcileSourceUpdate(
+    request: RepositorySourceReconcileRequest,
+  ): Promise<RepositorySourceReconcileResult>;
   pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
   uploadCreationFiles(
     kind: CreationFileKind,
@@ -431,6 +436,10 @@ export function registerIpcHandlers(
       services.checkRepositoryOriginStatus(request),
     [IPC_CHANNELS.creationUpdateSource]: (_event, request: RepositoryUpdateSourceRequest) =>
       services.updateRepositorySource(request),
+    [IPC_CHANNELS.creationReconcileSourceUpdate]: (
+      _event,
+      request: RepositorySourceReconcileRequest,
+    ) => services.reconcileSourceUpdate(request),
     [IPC_CHANNELS.creationPickFiles]: (_event, kind: CreationFileKind) =>
       services.pickCreationFiles(kind),
     [IPC_CHANNELS.creationUploadFiles]: (

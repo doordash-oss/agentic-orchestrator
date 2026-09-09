@@ -93,6 +93,13 @@ func (h *apiHandler) handleWorkspaceRepositoryUpdateSourceRoute(w http.ResponseW
 		return
 	}
 
+	// The attempt's lifetime is registered before any coordination wait so
+	// reconciliation reads and feature acceptance can wait it out: an
+	// admitted attempt that is still queued, running, or not yet reaped is
+	// never settled by a read of its old local SHA.
+	releaseAttempt := h.sourceUpdates.begin(identity)
+	defer releaseAttempt()
+
 	deadline := h.updateSourceDeadline
 	if deadline <= 0 {
 		deadline = defaultUpdateSourceDeadline

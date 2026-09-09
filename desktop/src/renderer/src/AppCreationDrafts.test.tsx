@@ -18,7 +18,7 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import App from './App';
-import type { ConnectionState } from '../../shared/ipc';
+import type { ConnectionState, RepositoryOriginStatusRequest } from '../../shared/ipc';
 import {
   cloneOperation,
   creationDefaults,
@@ -617,4 +617,69 @@ describe('clone completion reconciles into only the owning server\u2019s draft',
       expect(within(fresh).getByRole('checkbox', { name: /widget/ })).not.toBeChecked();
     },
   );
+});
+
+describe('source-update uncertainty across server switches (App-level)', () => {
+  function behindRowMock(mock: AgenticoMock): void {
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) => ({
+            repoKey: repository.repoKey,
+            identity: repository.identity,
+            mode: 'default' as const,
+            kind: 'branch' as const,
+            branch: 'main',
+            localSha: 'a'.repeat(40),
+            originBranch: 'main',
+            fetchedSha: 'c'.repeat(40),
+            status: 'behind' as const,
+            behindCount: 2,
+            updateEligible: true,
+            checkoutHeadRef: 'refs/heads/work',
+            checkoutHeadSha: 'b'.repeat(40),
+          })),
+        }),
+    );
+  }
+
+  it('retains an in-flight update as uncertainty through a real switch flip and reconciles on return', async () => {
+    const mock = installReady('server-a');
+    // The update never resolves from server-a: its outcome is unknown there.
+    mock.api.updateRepositorySource.mockImplementation(() => new Promise<never>(() => undefined));
+    behindRowMock(mock);
+    render(<App />);
+    const user = userEvent.setup();
+    await openSheet(user);
+    await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    const row = () => {
+      const item = screen.getByText('repo-a').closest('li');
+      if (!(item instanceof HTMLElement)) throw new Error('repo-a row not found');
+      return item;
+    };
+    await user.click(within(row()).getByRole('button', { name: 'Update from origin' }));
+    await within(row()).findByText(/Updating…/);
+
+    // The workspace switches to server-b mid-attempt: the ready tree (and
+    // the sheet) unmount and remount on the new server's shell.
+    emitConnection(mock, readyConnection('server-b'));
+    await expect(screen.queryByRole('form', { name: /create a feature/i })).toBeNull();
+
+    // Server-b's own sheet never shows server-a's uncertainty.
+    await openSheet(user);
+    expect(screen.queryByText(/result of updating main/)).toBeNull();
+    expect(mock.api.reconcileSourceUpdate).not.toHaveBeenCalled();
+
+    // Returning to server-a restores the retained draft with the record and
+    // reconciles it there.
+    emitConnection(mock, readyConnection('server-a'));
+    await screen.findByRole('form', { name: /create a feature/i });
+    await within(row()).findByText(/The result of updating main on server-a is unknown/);
+    await waitFor(() => expect(mock.api.reconcileSourceUpdate).toHaveBeenCalledTimes(1));
+    expect(mock.api.reconcileSourceUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ repoKey: 'repo-a', branch: 'main' }),
+    );
+    await within(row()).findByText(/Reconciled main on server-a: the update did not complete/);
+  });
 });

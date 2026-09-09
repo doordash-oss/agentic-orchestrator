@@ -668,6 +668,66 @@ func (e RepositorySourceMode) Valid() bool {
 	}
 }
 
+// Defines values for RepositorySourceReconcileRequestMode.
+const (
+	RepositorySourceReconcileRequestModeCurrent RepositorySourceReconcileRequestMode = "current"
+	RepositorySourceReconcileRequestModeDefault RepositorySourceReconcileRequestMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourceReconcileRequestMode enum.
+func (e RepositorySourceReconcileRequestMode) Valid() bool {
+	switch e {
+	case RepositorySourceReconcileRequestModeCurrent:
+		return true
+	case RepositorySourceReconcileRequestModeDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositorySourceReconcileResponseMode.
+const (
+	RepositorySourceReconcileResponseModeCurrent RepositorySourceReconcileResponseMode = "current"
+	RepositorySourceReconcileResponseModeDefault RepositorySourceReconcileResponseMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourceReconcileResponseMode enum.
+func (e RepositorySourceReconcileResponseMode) Valid() bool {
+	switch e {
+	case RepositorySourceReconcileResponseModeCurrent:
+		return true
+	case RepositorySourceReconcileResponseModeDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositorySourceReconcileResponseOutcome.
+const (
+	BranchMissing         RepositorySourceReconcileResponseOutcome = "branch_missing"
+	ExpectedTargetPresent RepositorySourceReconcileResponseOutcome = "expected_target_present"
+	LocalStateChanged     RepositorySourceReconcileResponseOutcome = "local_state_changed"
+	OriginalTipRemains    RepositorySourceReconcileResponseOutcome = "original_tip_remains"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourceReconcileResponseOutcome enum.
+func (e RepositorySourceReconcileResponseOutcome) Valid() bool {
+	switch e {
+	case BranchMissing:
+		return true
+	case ExpectedTargetPresent:
+		return true
+	case LocalStateChanged:
+		return true
+	case OriginalTipRemains:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RepositorySourcesRequestMode.
 const (
 	RepositorySourcesRequestModeCurrent RepositorySourcesRequestMode = "current"
@@ -1400,6 +1460,21 @@ func (e CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient) Valid() bool 
 	}
 }
 
+// Defines values for ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient.
+const (
+	ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClientLocal ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient enum.
+func (e ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for InspectWorkspaceRepositorySourcesParamsXAgenticoClient.
 const (
 	InspectWorkspaceRepositorySourcesParamsXAgenticoClientLocal InspectWorkspaceRepositorySourcesParamsXAgenticoClient = "local"
@@ -1417,13 +1492,13 @@ func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
 
 // Defines values for UpdateWorkspaceRepositorySourceParamsXAgenticoClient.
 const (
-	Local UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
+	UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the UpdateWorkspaceRepositorySourceParamsXAgenticoClient enum.
 func (e UpdateWorkspaceRepositorySourceParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case Local:
+	case UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -3117,6 +3192,67 @@ type RepositorySourceKind string
 // RepositorySourceMode defines model for RepositorySource.Mode.
 type RepositorySourceMode string
 
+// RepositorySourceReconcileRequest defines model for RepositorySourceReconcileRequest.
+type RepositorySourceReconcileRequest struct {
+	// Branch The attempted update's expected full local branch name, as displayed by the comparison the update was based on. An expectation for the settlement read, never ref authority.
+	Branch string `json:"branch"`
+
+	// ExpectedLocalSha The local tip displayed before the attempted update; the state whose absence proves the branch moved.
+	ExpectedLocalSha string `json:"expected_local_sha"`
+
+	// ExpectedOriginSha The fetched origin tip the attempted update was expected to advance the branch to.
+	ExpectedOriginSha string `json:"expected_origin_sha"`
+
+	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+	Identity RepositoryIdentity `json:"identity"`
+
+	// Mode Shared branch mode of the attempted update.
+	Mode RepositorySourceReconcileRequestMode `json:"mode"`
+
+	// OriginBranch The attempted update's expected mapped origin branch, including differently named tracking branches.
+	OriginBranch string `json:"origin_branch"`
+	RepoKey      string `json:"repo_key"`
+}
+
+// RepositorySourceReconcileRequestMode Shared branch mode of the attempted update.
+type RepositorySourceReconcileRequestMode string
+
+// RepositorySourceReconcileResponse defines model for RepositorySourceReconcileResponse.
+type RepositorySourceReconcileResponse struct {
+	APIVersion string `json:"api_version"`
+
+	// Branch The attempted update's expected local branch, echoed.
+	Branch string `json:"branch"`
+
+	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+	Identity RepositoryIdentity `json:"identity"`
+
+	// LocalSha Observed tip of the requested branch under coordination; present whenever the branch resolves.
+	LocalSha *string      `json:"local_sha,omitempty"`
+	Meta     ResponseMeta `json:"meta,omitempty"`
+
+	// Mode The attempted update's shared branch mode, echoed.
+	Mode RepositorySourceReconcileResponseMode `json:"mode"`
+
+	// OriginBranch The attempted update's expected origin branch, echoed.
+	OriginBranch string `json:"origin_branch"`
+
+	// Outcome expected_target_present: the branch tip is the expected origin SHA. original_tip_remains: the branch tip is still the expected local SHA. local_state_changed: the branch tip is neither expected value. branch_missing: the branch no longer resolves. None of these infer operation success from transport completion.
+	Outcome RepositorySourceReconcileResponseOutcome `json:"outcome"`
+
+	// RepoKey Server-resolved current catalog key.
+	RepoKey string `json:"repo_key"`
+
+	// Selection Freshly resolved current selection for the shared mode, read under the same coordination; present when a selection resolves. Its observed SHA is the current selection's commit, never evidence about the attempted update.
+	Selection *RepositorySource `json:"selection,omitempty"`
+}
+
+// RepositorySourceReconcileResponseMode The attempted update's shared branch mode, echoed.
+type RepositorySourceReconcileResponseMode string
+
+// RepositorySourceReconcileResponseOutcome expected_target_present: the branch tip is the expected origin SHA. original_tip_remains: the branch tip is still the expected local SHA. local_state_changed: the branch tip is neither expected value. branch_missing: the branch no longer resolves. None of these infer operation success from transport completion.
+type RepositorySourceReconcileResponseOutcome string
+
 // RepositorySourceSelector defines model for RepositorySourceSelector.
 type RepositorySourceSelector struct {
 	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
@@ -4387,6 +4523,15 @@ type CheckWorkspaceRepositoryOriginStatusParams struct {
 // CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient defines parameters for CheckWorkspaceRepositoryOriginStatus.
 type CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient string
 
+// ReconcileWorkspaceRepositorySourceUpdateParams defines parameters for ReconcileWorkspaceRepositorySourceUpdate.
+type ReconcileWorkspaceRepositorySourceUpdateParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient defines parameters for ReconcileWorkspaceRepositorySourceUpdate.
+type ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient string
+
 // InspectWorkspaceRepositorySourcesParams defines parameters for InspectWorkspaceRepositorySources.
 type InspectWorkspaceRepositorySourcesParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -4488,6 +4633,9 @@ type InitializeWorkspaceRepositoryJSONRequestBody = InitializeRepositorySchema
 
 // CheckWorkspaceRepositoryOriginStatusJSONRequestBody defines body for CheckWorkspaceRepositoryOriginStatus for application/json ContentType.
 type CheckWorkspaceRepositoryOriginStatusJSONRequestBody = RepositoryOriginStatusRequest
+
+// ReconcileWorkspaceRepositorySourceUpdateJSONRequestBody defines body for ReconcileWorkspaceRepositorySourceUpdate for application/json ContentType.
+type ReconcileWorkspaceRepositorySourceUpdateJSONRequestBody = RepositorySourceReconcileRequest
 
 // InspectWorkspaceRepositorySourcesJSONRequestBody defines body for InspectWorkspaceRepositorySources for application/json ContentType.
 type InspectWorkspaceRepositorySourcesJSONRequestBody = RepositorySourcesRequest

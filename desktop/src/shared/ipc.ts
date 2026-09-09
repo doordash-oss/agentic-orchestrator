@@ -101,6 +101,7 @@ export const IPC_CHANNELS = {
   creationSources: 'agentico:creation:sources',
   creationOriginStatus: 'agentico:creation:origin-status',
   creationUpdateSource: 'agentico:creation:update-source',
+  creationReconcileSourceUpdate: 'agentico:creation:reconcile-source-update',
   creationPickFiles: 'agentico:creation:pick-files',
   creationUploadFiles: 'agentico:creation:upload-files',
   clipboardReadImage: 'agentico:clipboard:read-image',
@@ -2961,6 +2962,41 @@ export const RepositoryUpdateSourceResultSchema = z.strictObject({
 });
 export type RepositoryUpdateSourceResult = z.output<typeof RepositoryUpdateSourceResultSchema>;
 
+export const RepositorySourceReconcileRequestSchema = z.strictObject({
+  repoKey: z.string().min(1).max(512),
+  identity: RepositoryIdentitySchema,
+  mode: z.enum(['default', 'current']),
+  branch: z.string().min(1).max(512),
+  originBranch: z.string().min(1).max(512),
+  expectedLocalSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+  expectedOriginSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+});
+export type RepositorySourceReconcileRequest = z.output<
+  typeof RepositorySourceReconcileRequestSchema
+>;
+
+export const RepositorySourceReconcileResultSchema = z.strictObject({
+  outcome: z.enum([
+    'expected_target_present',
+    'original_tip_remains',
+    'local_state_changed',
+    'branch_missing',
+  ]),
+  repoKey: z.string().min(1),
+  identity: RepositoryIdentitySchema,
+  mode: z.enum(['default', 'current']),
+  branch: z.string().min(1),
+  originBranch: z.string().min(1),
+  localSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  selection: RepositorySourceExpectationSchema.optional(),
+});
+export type RepositorySourceReconcileResult = z.output<
+  typeof RepositorySourceReconcileResultSchema
+>;
+
 export const CreationFileKindSchema = z.enum(['image', 'attachment']);
 export type CreationFileKind = z.output<typeof CreationFileKindSchema>;
 export const PickedCreationFilesSchema = z.strictObject({
@@ -4039,6 +4075,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([RepositoryUpdateSourceRequestSchema]),
     response: RepositoryUpdateSourceResultSchema,
   },
+  [IPC_CHANNELS.creationReconcileSourceUpdate]: {
+    request: z.tuple([RepositorySourceReconcileRequestSchema]),
+    response: RepositorySourceReconcileResultSchema,
+  },
   [IPC_CHANNELS.creationPickFiles]: {
     request: z.tuple([CreationFileKindSchema]),
     response: PickedCreationFilesSchema,
@@ -4395,6 +4435,16 @@ export interface AgenticoApi {
   updateRepositorySource(
     request: RepositoryUpdateSourceRequest,
   ): Promise<RepositoryUpdateSourceResult>;
+  /**
+   * Settles one uncertain Update-from-origin attempt whose response was
+   * lost, timed out, or arrived stale: the server waits out the attempt's
+   * lifetime, then reads the branch under coordination and reports the
+   * observed state (target present, original tip, changed, or missing). It
+   * never mutates and never fetches from origin.
+   */
+  reconcileSourceUpdate(
+    request: RepositorySourceReconcileRequest,
+  ): Promise<RepositorySourceReconcileResult>;
   pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
   readClipboardImage(): Promise<PickedCreationFiles>;
   importDroppedCreationFiles(kind: CreationFileKind, files: readonly File[]): PickedCreationFiles;

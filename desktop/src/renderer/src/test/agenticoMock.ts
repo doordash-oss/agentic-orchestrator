@@ -37,6 +37,7 @@ import type {
   RepositorySourcesRequest,
   RepositoryOriginStatusRequest,
   RepositoryUpdateSourceRequest,
+  RepositorySourceReconcileRequest,
   RepositoryIdentity,
   SessionDetail,
   SessionOutputEvent,
@@ -418,6 +419,7 @@ export interface AgenticoMock {
     inspectRepositorySources: ReturnType<typeof vi.fn>;
     checkRepositoryOriginStatus: ReturnType<typeof vi.fn>;
     updateRepositorySource: ReturnType<typeof vi.fn>;
+    reconcileSourceUpdate: ReturnType<typeof vi.fn>;
     pickCreationFiles: ReturnType<typeof vi.fn>;
     uploadCreationFiles: ReturnType<typeof vi.fn>;
     readClipboardImage: ReturnType<typeof vi.fn>;
@@ -679,6 +681,17 @@ export function installAgenticoMock(
     updateRepositorySource: vi.fn((request: RepositoryUpdateSourceRequest) =>
       Promise.resolve({
         result: 'already_up_to_date' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
+      }),
+    ),
+    reconcileSourceUpdate: vi.fn((request: RepositorySourceReconcileRequest) =>
+      Promise.resolve({
+        outcome: 'original_tip_remains' as const,
         repoKey: request.repoKey,
         identity: request.identity,
         mode: request.mode,

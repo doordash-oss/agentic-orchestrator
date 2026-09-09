@@ -19,20 +19,30 @@ import type {
   CanonicalError,
   RepositoryIdentity,
   RepositoryOriginStatusSnapshot,
+  RepositorySourceReconcileResult,
   RepositoryUpdateSourceResult,
 } from '../../../shared/ipc';
 import { mockRepoIdentity } from '../test/agenticoMock';
 import {
+  isUncertainUpdateError,
+  isUnsettledReconcileError,
   noticeFor,
+  reconcileErrorText,
+  reconcileNoticeText,
   serverLabelFor,
+  uncertaintyFor,
+  uncertaintyRequestFor,
   updateBlockedExplanation,
   updateErrorText,
   updateImpactText,
   updateRefusalText,
   updateSuccessText,
   updateTargetFor,
+  updateUncertainText,
   withoutNoticesFor,
+  withoutUncertaintyFor,
   type SourceUpdateNotice,
+  type SourceUpdateUncertainty,
 } from './sourceUpdates';
 
 const IDENTITY: RepositoryIdentity = mockRepoIdentity('/work/space/repo-a');
@@ -287,5 +297,166 @@ describe('notice bookkeeping', () => {
     expect(noticeFor(notices, IDENTITY)?.text).toBe('a');
     expect(noticeFor(notices, mockRepoIdentity('/elsewhere', { inode: '1' }))).toBeUndefined();
     expect(withoutNoticesFor(notices, IDENTITY).map((notice) => notice.text)).toStrictEqual(['b']);
+  });
+});
+
+describe('uncertain update outcomes', () => {
+  const record = (overrides: Partial<SourceUpdateUncertainty> = {}): SourceUpdateUncertainty => ({
+    serverKey: 'server-key-1',
+    repoKey: 'repo-a',
+    identity: IDENTITY,
+    mode: 'default',
+    branch: 'main',
+    originBranch: 'main',
+    expectedLocalSha: 'a'.repeat(40),
+    expectedOriginSha: 'c'.repeat(40),
+    attempt: 3,
+    ...overrides,
+  });
+
+  it('classifies transport loss and unprovability as unknown, never definitive refusals', () => {
+    const unknown = [
+      'source_update_unavailable',
+      'E_REQUEST_TIMEOUT',
+      'E_SERVER_SWITCHED',
+      'E_IPC_UNREACHABLE',
+      'E_NOT_CONNECTED',
+      'E_GATEWAY',
+      'E_REMOTE_SERVER_LOST_REPROBING',
+      'E_REMOTE_UNREACHABLE',
+      'E_SERVER_EXITED',
+      'E_EXTERNAL_RUNTIME_UNRESPONSIVE',
+    ];
+    for (const code of unknown) {
+      expect(isUncertainUpdateError({ code } as CanonicalError)).toBe(true);
+    }
+    expect(isUncertainUpdateError({ code: 'invalid_repository' } as CanonicalError)).toBe(false);
+    expect(isUncertainUpdateError({ code: 'bad_request' } as CanonicalError)).toBe(false);
+  });
+
+  it('treats an unprovability refusal of the settlement read itself as still unknown', () => {
+    expect(
+      isUnsettledReconcileError({ code: 'source_reconcile_unavailable' } as CanonicalError),
+    ).toBe(true);
+    expect(isUnsettledReconcileError({ code: 'E_REQUEST_TIMEOUT' } as CanonicalError)).toBe(true);
+    expect(isUnsettledReconcileError({ code: 'invalid_repository' } as CanonicalError)).toBe(false);
+  });
+
+  it('binds the settlement request to the attempted update binding unchanged', () => {
+    expect(uncertaintyRequestFor(record())).toEqual({
+      repoKey: 'repo-a',
+      identity: IDENTITY,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      expectedLocalSha: 'a'.repeat(40),
+      expectedOriginSha: 'c'.repeat(40),
+    });
+  });
+
+  it('announces the unknown outcome without claiming failure or rollback', () => {
+    expect(updateUncertainText(record(), 'Server A')).toBe(
+      'The result of updating main on Server A is unknown — it will be reconciled on Server A before this repository can be accepted.',
+    );
+  });
+});
+
+describe('reconciliation copy', () => {
+  const record = (overrides: Partial<SourceUpdateUncertainty> = {}): SourceUpdateUncertainty => ({
+    serverKey: 'server-key-1',
+    repoKey: 'repo-a',
+    identity: IDENTITY,
+    mode: 'default',
+    branch: 'main',
+    originBranch: 'main',
+    expectedLocalSha: 'a'.repeat(40),
+    expectedOriginSha: 'c'.repeat(40),
+    attempt: 1,
+    ...overrides,
+  });
+
+  function noticeForOutcome(
+    outcome: RepositorySourceReconcileResult['outcome'],
+    localSha?: string,
+  ): SourceUpdateNotice {
+    return reconcileNoticeText(
+      {
+        outcome,
+        repoKey: 'repo-a',
+        identity: IDENTITY,
+        mode: 'default',
+        branch: 'main',
+        originBranch: 'main',
+        ...(localSha === undefined ? {} : { localSha }),
+      },
+      record(),
+      'Server A',
+    );
+  }
+
+  it('confirms a proved target as a success naming the server and tip', () => {
+    const notice = noticeForOutcome('expected_target_present', 'c'.repeat(40));
+    expect(notice.tone).toBe('success');
+    expect(notice.text).toBe('Reconciled main on Server A: the update completed (now at ccccccc).');
+  });
+
+  it('reports the original tip as a warning that never claims a rollback', () => {
+    const notice = noticeForOutcome('original_tip_remains', 'a'.repeat(40));
+    expect(notice.tone).toBe('warning');
+    expect(notice.text).toBe(
+      'Reconciled main on Server A: the update did not complete, and main is unchanged (now at aaaaaaa). Check again before updating.',
+    );
+  });
+
+  it('reports a changed observation without inferring operation success', () => {
+    const notice = noticeForOutcome('local_state_changed', 'd'.repeat(40));
+    expect(notice.tone).toBe('warning');
+    expect(notice.text).toContain('neither the tip before the update nor the expected origin tip');
+    expect(notice.text).toContain('now at ddddddd');
+  });
+
+  it('reports a missing branch as a reselection warning', () => {
+    const notice = noticeForOutcome('branch_missing');
+    expect(notice.tone).toBe('warning');
+    expect(notice.text).toBe(
+      'Reconciled main on Server A: the branch no longer exists. Refresh the repositories and reselect the source.',
+    );
+  });
+
+  it('preserves a definitive settlement refusal summary verbatim', () => {
+    expect(
+      reconcileErrorText(
+        record(),
+        {
+          code: 'invalid_repository',
+          class: 'blocking',
+          title: 'Invalid repository',
+          summary: 'A configured repository path is not a git repository.',
+        },
+        'Server A',
+      ),
+    ).toBe('Reconciling main on Server A — A configured repository path is not a git repository.');
+  });
+});
+
+describe('uncertainty bookkeeping', () => {
+  const record = (path: string, attempt: number): SourceUpdateUncertainty => ({
+    serverKey: 'server-key-1',
+    repoKey: 'repo-a',
+    identity: mockRepoIdentity(path),
+    mode: 'default',
+    branch: 'main',
+    originBranch: 'main',
+    expectedLocalSha: 'a'.repeat(40),
+    expectedOriginSha: 'c'.repeat(40),
+    attempt,
+  });
+
+  it('finds and removes a record by repository identity', () => {
+    const a = record('/work/space/repo-a', 1);
+    const b = record('/work/space/repo-b', 2);
+    expect(uncertaintyFor([a, b], b.identity)).toBe(b);
+    expect(withoutUncertaintyFor([a, b], a.identity)).toEqual([b]);
+    expect(uncertaintyFor([a, b], mockRepoIdentity('/elsewhere'))).toBeUndefined();
   });
 });

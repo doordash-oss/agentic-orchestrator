@@ -24,6 +24,7 @@ import type {
   RepositorySourcesRequest,
   RepositorySourcesResult,
   RepositoryUpdateSourceResult,
+  RepositorySourceReconcileResult,
 } from '../../../shared/ipc';
 import {
   creationDefaults,
@@ -1663,14 +1664,98 @@ describe('the creation sheet source update contract', () => {
     ).toBeVisible();
   });
 
-  it('keeps a definitive failure warning visible in review even after a later successful check, without blocking submission', async () => {
+  it('records an unprovable 503 as outcome unknown, blocks submission until the settlement read, and never retries the mutation', async () => {
+    const { repoAIdentity, repositories } = updateableRepositories();
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories }) });
+    mock.api.updateRepositorySource.mockRejectedValue(
+      ipcError(
+        'source_update_unavailable',
+        'The update attempt could not be completed; do not assume it was rolled back.',
+      ),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+            }),
+          ),
+        }),
+    );
+    let settleReconcile!: (value: RepositorySourceReconcileResult) => void;
+    mock.api.reconcileSourceUpdate.mockImplementation(
+      () =>
+        new Promise<RepositorySourceReconcileResult>((resolve) => {
+          settleReconcile = resolve;
+        }),
+    );
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
+
+    // The outcome is unknown: never a warning that reads as a proved
+    // failure, and no second mutation is issued against the same display.
+    expect(
+      await within(rowItem('repo-a')).findByText(
+        /The result of updating main on the connected server is unknown/,
+      ),
+    ).toBeVisible();
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mock.api.reconcileSourceUpdate).toHaveBeenCalledTimes(1));
+    expect(mock.api.reconcileSourceUpdate).toHaveBeenCalledWith({
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      expectedLocalSha: 'a'.repeat(40),
+      expectedOriginSha: 'c'.repeat(40),
+    });
+
+    // Submission stays blocked while the selected source is unsettled.
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Unknown outcome continuation');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    expect(screen.getByRole('button', { name: 'Resolving source update…' })).toBeDisabled();
+    expect(
+      screen.getByText(/The result of updating main on the connected server is unknown/),
+    ).toBeVisible();
+
+    // The settlement read settles: the update did not complete, and the
+    // still-valid local source restores warning-based continuation.
+    settleReconcile({
+      outcome: 'original_tip_remains',
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      localSha: 'a'.repeat(40),
+    });
+    expect(
+      await screen.findByText(
+        /Reconciled main on the connected server: the update did not complete/,
+      ),
+    ).toBeVisible();
+    await user.click(screen.getByRole('checkbox', { name: /Start immediately/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(mock.api.createFeature).toHaveBeenCalled());
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a definitive rejection warning visible in review even after a later successful check, without blocking submission', async () => {
     const { repositories } = updateableRepositories();
     const mock = installAgenticoMock({ defaults: creationDefaults({ repositories }) });
     let checkCalls = 0;
     mock.api.updateRepositorySource.mockRejectedValue(
       ipcError(
-        'source_update_unavailable',
-        'The update attempt could not be completed; do not assume it was rolled back.',
+        'invalid_repository',
+        'The selected repository is no longer present under the expected identity.',
       ),
     );
     mock.api.checkRepositoryOriginStatus.mockImplementation(
@@ -1695,7 +1780,7 @@ describe('the creation sheet source update contract', () => {
     await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
     expect(
       await within(rowItem('repo-a')).findByText(
-        'main was not updated on the connected server — The update attempt could not be completed; do not assume it was rolled back.',
+        'main was not updated on the connected server — The selected repository is no longer present under the expected identity.',
       ),
     ).toBeVisible();
 
@@ -1713,7 +1798,7 @@ describe('the creation sheet source update contract', () => {
     await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
     expect(
       screen.getByText(
-        /main was not updated on the connected server — The update attempt could not be completed/,
+        /main was not updated on the connected server — The selected repository is no longer present/,
       ),
     ).toBeVisible();
     await user.click(screen.getByRole('checkbox', { name: /Start immediately/ }));
@@ -1872,5 +1957,326 @@ describe('the creation sheet source update contract', () => {
     fireEvent.click(button);
     fireEvent.click(button);
     expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains uncertainty through a server switch and reconciles only after returning to the originating server', async () => {
+    const { repositories } = updateableRepositories();
+    const mock = installAgenticoMock({
+      connection: { ...READY_REMOTE, serverKey: 'server-key-1' },
+      defaults: creationDefaults({ repositories }),
+    });
+    mock.api.updateRepositorySource.mockImplementation(
+      () => new Promise<RepositoryUpdateSourceResult>(() => undefined),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+            }),
+          ),
+        }),
+    );
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
+    await within(rowItem('repo-a')).findByText(/Updating…/);
+
+    // A switch mid-flight fences the result: the outcome is unknown on the
+    // originating server, and the new server's sheet never sees it.
+    mock.emitConnection({ ...READY_REMOTE, serverKey: 'server-key-2' });
+    await vi.waitFor(() =>
+      expect(screen.getByRole('checkbox', { name: /^repo-a\b/ })).toBeEnabled(),
+    );
+    expect(screen.queryByText(/result of updating main/)).toBeNull();
+    expect(mock.api.reconcileSourceUpdate).not.toHaveBeenCalled();
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
+
+    // Returning to the originating server reconciles before its source can
+    // be accepted; the mutation itself is never retried.
+    mock.emitConnection({ ...READY_REMOTE, serverKey: 'server-key-1' });
+    await vi.waitFor(() => expect(mock.api.reconcileSourceUpdate).toHaveBeenCalledTimes(1));
+    expect(mock.api.reconcileSourceUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ repoKey: 'repo-a', branch: 'main' }),
+    );
+    expect(
+      await within(rowItem('repo-a')).findByText(
+        /Reconciled main on the connected server: the update did not complete/,
+      ),
+    ).toBeVisible();
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles an expected target present outcome and refreshes the source and comparison', async () => {
+    const { repoAIdentity, repositories } = updateableRepositories();
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories }) });
+    mock.api.updateRepositorySource.mockRejectedValue(
+      ipcError('E_REQUEST_TIMEOUT', 'The request timed out.'),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+            }),
+          ),
+        }),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+            }),
+          ),
+        }),
+    );
+    mock.api.reconcileSourceUpdate.mockResolvedValue({
+      outcome: 'expected_target_present',
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      localSha: 'c'.repeat(40),
+    });
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    const sourcesBefore = mock.api.inspectRepositorySources.mock.calls.length;
+    const checksBefore = mock.api.checkRepositoryOriginStatus.mock.calls.length;
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
+
+    expect(
+      await within(rowItem('repo-a')).findByText(
+        'Reconciled main on the connected server: the update completed (now at ccccccc).',
+      ),
+    ).toBeVisible();
+    // The settled target refreshes the local source and the comparison for
+    // an explicit next action; the mutation is never retried.
+    await waitFor(() =>
+      expect(mock.api.inspectRepositorySources.mock.calls.length).toBeGreaterThan(sourcesBefore),
+    );
+    await waitFor(() =>
+      expect(mock.api.checkRepositoryOriginStatus.mock.calls.length).toBeGreaterThan(checksBefore),
+    );
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Reconciled target continuation');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    await user.click(screen.getByRole('checkbox', { name: /Start immediately/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+  });
+
+  it('reports a locally changed observation as a warning that needs a fresh explicit action', async () => {
+    const { repoAIdentity, repositories } = updateableRepositories();
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories }) });
+    mock.api.updateRepositorySource.mockRejectedValue(
+      ipcError('E_SERVER_SWITCHED', 'The app switched servers while the request was running.'),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+            }),
+          ),
+        }),
+    );
+    mock.api.reconcileSourceUpdate.mockResolvedValue({
+      outcome: 'local_state_changed',
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      localSha: 'd'.repeat(40),
+    });
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
+
+    expect(
+      await within(rowItem('repo-a')).findByText(
+        /Reconciled main on the connected server: it is now at a commit that is neither the tip before the update nor the expected origin tip/,
+      ),
+    ).toBeVisible();
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
+    // The observation never blocks submission of the still-valid source.
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Locally changed continuation');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    await user.click(screen.getByRole('checkbox', { name: /Start immediately/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+  });
+
+  it('keeps the outcome unknown when the settlement read cannot prove it, retrying only on an explicit trigger', async () => {
+    const { repositories } = updateableRepositories();
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories }) });
+    mock.api.updateRepositorySource.mockRejectedValue(
+      ipcError('E_REQUEST_TIMEOUT', 'The request timed out.'),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+            }),
+          ),
+        }),
+    );
+    let reconcileCalls = 0;
+    mock.api.reconcileSourceUpdate.mockImplementation(() => {
+      reconcileCalls += 1;
+      return Promise.reject(
+        ipcError(
+          'source_reconcile_unavailable',
+          'The connected server could not establish the branch state.',
+        ),
+      );
+    });
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
+
+    expect(
+      await within(rowItem('repo-a')).findByText(
+        /The result of updating main on the connected server is unknown/,
+      ),
+    ).toBeVisible();
+    await vi.waitFor(() => expect(reconcileCalls).toBe(1));
+    // A failed settlement never clears the uncertainty and never loops:
+    // submission stays blocked and nothing retries by itself.
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Unsettled reconciliation');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    expect(screen.getByRole('button', { name: 'Resolving source update…' })).toBeDisabled();
+    expect(reconcileCalls).toBe(1);
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
+
+    // Check again is the explicit trigger for a new settlement attempt.
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Check again' }));
+    await vi.waitFor(() => expect(reconcileCalls).toBe(2));
+  });
+
+  it('retains an unsettled attempt through unmount and reconciles from the retained draft', async () => {
+    const { repoAIdentity, repositories } = updateableRepositories();
+    const mock = installAgenticoMock({
+      defaults: creationDefaults({ repositories }),
+      readiness: readySnapshot({ repositories }),
+    });
+    let resolveUpdate!: (value: RepositoryUpdateSourceResult) => void;
+    mock.api.updateRepositorySource.mockImplementation(
+      () =>
+        new Promise<RepositoryUpdateSourceResult>((resolve) => {
+          resolveUpdate = resolve;
+        }),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+            }),
+          ),
+        }),
+    );
+    let settleReconcile!: (value: RepositorySourceReconcileResult) => void;
+    mock.api.reconcileSourceUpdate.mockImplementation(
+      () =>
+        new Promise<RepositorySourceReconcileResult>((resolve) => {
+          settleReconcile = resolve;
+        }),
+    );
+    const onDraftDetach = vi.fn();
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <CreateFeatureForm onCreated={vi.fn()} onClose={vi.fn()} onDraftDetach={onDraftDetach} />,
+    );
+    await screen.findByRole('button', { name: 'Next: Describe' });
+    await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
+    await within(rowItem('repo-a')).findByText(/Updating…/);
+
+    // Unmounting mid-attempt detaches the draft with the attempt recorded
+    // as outcome-unknown for its server.
+    unmount();
+    expect(onDraftDetach).toHaveBeenCalledTimes(1);
+    const retained = onDraftDetach.mock.calls.at(0)?.[0];
+    expect(retained?.sourceUpdateUncertainty).toHaveLength(1);
+    expect(retained.sourceUpdateUncertainty?.[0]).toEqual(
+      expect.objectContaining({
+        repoKey: 'repo-a',
+        branch: 'main',
+        expectedLocalSha: 'a'.repeat(40),
+        expectedOriginSha: 'c'.repeat(40),
+      }),
+    );
+
+    // A late result from the dead closure never lands anywhere.
+    resolveUpdate({
+      result: 'updated',
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      localSha: 'c'.repeat(40),
+      previousSha: 'a'.repeat(40),
+    });
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
+
+    // Reopening the creation view replays the record and reconciles it.
+    render(
+      <CreateFeatureForm
+        onCreated={vi.fn()}
+        onClose={vi.fn()}
+        retainedDraft={retained}
+        onDraftDetach={vi.fn()}
+      />,
+    );
+    await screen.findByRole('button', { name: 'Next: Describe' });
+    expect(
+      await within(rowItem('repo-a')).findByText(
+        /The result of updating main on the connected server is unknown/,
+      ),
+    ).toBeVisible();
+    await vi.waitFor(() => expect(mock.api.reconcileSourceUpdate).toHaveBeenCalledTimes(1));
+    settleReconcile({
+      outcome: 'original_tip_remains',
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      localSha: 'a'.repeat(40),
+    });
+    expect(
+      await within(rowItem('repo-a')).findByText(
+        /Reconciled main on the connected server: the update did not complete/,
+      ),
+    ).toBeVisible();
   });
 });

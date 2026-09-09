@@ -549,6 +549,46 @@ export type RepositoryUpdateSourceWireResponse = z.output<
   typeof RepositoryUpdateSourceResponseSchema
 >;
 
+export const RepositorySourceReconcileResponseSchema = z.object({
+  api_version: z.string(),
+  outcome: z.enum([
+    'expected_target_present',
+    'original_tip_remains',
+    'local_state_changed',
+    'branch_missing',
+  ]),
+  repo_key: z.string().min(1),
+  identity: z.strictObject({
+    path: z.string().min(1),
+    common_dir: z.string().min(1),
+    device: z.string().regex(/^[0-9]{1,20}$/),
+    inode: z.string().regex(/^[0-9]{1,20}$/),
+  }),
+  mode: z.enum(['default', 'current']),
+  branch: z.string().min(1),
+  origin_branch: z.string().min(1),
+  local_sha: OriginCommitShaSchema.optional(),
+  selection: z
+    .strictObject({
+      repo_key: z.string().min(1),
+      identity: z.strictObject({
+        path: z.string().min(1),
+        common_dir: z.string().min(1),
+        device: z.string().regex(/^[0-9]{1,20}$/),
+        inode: z.string().regex(/^[0-9]{1,20}$/),
+      }),
+      mode: z.enum(['default', 'current']),
+      kind: z.enum(['branch', 'detached']),
+      branch: z.string().optional(),
+      observed_sha: z.string().regex(/^[0-9a-f]{40,64}$/),
+    })
+    .optional(),
+});
+
+export type RepositorySourceReconcileWireResponse = z.output<
+  typeof RepositorySourceReconcileResponseSchema
+>;
+
 // --- Clone operations (POST/GET /api/v1/workspace/repositories/clone) ------
 // Authoritative snapshots from the server-owned clone lifecycle. State,
 // pending outcome and progress come from the durable record, never from

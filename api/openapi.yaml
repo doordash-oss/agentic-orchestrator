@@ -1309,6 +1309,47 @@ paths:
         "503":
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/v1/workspace/repositories/reconcile-source-update:
+    post:
+      operationId: reconcileWorkspaceRepositorySourceUpdate
+      summary: Reconcile one uncertain Update-from-origin attempt.
+      description: >-
+        Non-mutating settlement read for one Update-from-origin attempt whose
+        response was lost, timed out, or arrived stale. The request repeats the
+        attempted update's displayed binding (repository identity, shared
+        branch mode, local branch, origin mapping, and both expected tips);
+        every value is an expectation for comparison, never authority over
+        which repository or ref is read. The server first waits out the
+        lifetime of any admitted update attempt on the same repository,
+        including one still waiting for common-directory coordination, then
+        reads the current identity, selected source, and the requested
+        branch's tip under that same coordination and reports whether the
+        expected target is present, the original tip remains, the local state
+        changed, or the branch no longer resolves. It never fetches from
+        origin, never infers success from transport completion or a different
+        observed commit, and never mutates anything; a cached origin
+        comparison is never evidence here. Missing or replaced repositories
+        require reselection.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositorySourceReconcileRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/RepositorySourceReconcileResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/recovery:
     get:
       operationId: getRecoverySnapshot
@@ -1854,6 +1895,15 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RepositoryUpdateSourceResponse"
+    RepositorySourceReconcileResponse:
+      description: >-
+        Typed settlement of one uncertain Update-from-origin attempt: the
+        observed branch state after the update can no longer mutate, plus the
+        freshly resolved current selection when one resolves.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositorySourceReconcileResponse"
     CloneActionResponse:
       description: Authoritative clone operation snapshot after a mutation.
       content:
@@ -2973,6 +3023,110 @@ components:
                 Freshly resolved status snapshot for the selected source;
                 present for stale results where the authorized repository
                 still exists.
+    RepositorySourceReconcileRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          repo_key,
+          identity,
+          mode,
+          branch,
+          origin_branch,
+          expected_local_sha,
+          expected_origin_sha,
+        ]
+      properties:
+        repo_key:
+          type: string
+          minLength: 1
+          maxLength: 512
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+        mode:
+          type: string
+          enum: [default, current]
+          description: Shared branch mode of the attempted update.
+        branch:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: >-
+            The attempted update's expected full local branch name, as
+            displayed by the comparison the update was based on. An
+            expectation for the settlement read, never ref authority.
+        origin_branch:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: >-
+            The attempted update's expected mapped origin branch, including
+            differently named tracking branches.
+        expected_local_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: >-
+            The local tip displayed before the attempted update; the state
+            whose absence proves the branch moved.
+        expected_origin_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: >-
+            The fetched origin tip the attempted update was expected to
+            advance the branch to.
+    RepositorySourceReconcileResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [outcome, repo_key, identity, mode, branch, origin_branch]
+          properties:
+            outcome:
+              type: string
+              enum:
+                [
+                  expected_target_present,
+                  original_tip_remains,
+                  local_state_changed,
+                  branch_missing,
+                ]
+              description: >-
+                expected_target_present: the branch tip is the expected
+                origin SHA. original_tip_remains: the branch tip is still the
+                expected local SHA. local_state_changed: the branch tip is
+                neither expected value. branch_missing: the branch no longer
+                resolves. None of these infer operation success from
+                transport completion.
+            repo_key:
+              type: string
+              description: Server-resolved current catalog key.
+            identity:
+              $ref: "#/components/schemas/RepositoryIdentity"
+              x-go-type-skip-optional-pointer: false
+            mode:
+              type: string
+              enum: [default, current]
+              description: The attempted update's shared branch mode, echoed.
+            branch:
+              type: string
+              description: The attempted update's expected local branch, echoed.
+            origin_branch:
+              type: string
+              description: The attempted update's expected origin branch, echoed.
+            local_sha:
+              type: string
+              pattern: "^[0-9a-f]{40,64}$"
+              description: >-
+                Observed tip of the requested branch under coordination;
+                present whenever the branch resolves.
+              x-go-type-skip-optional-pointer: false
+            selection:
+              $ref: "#/components/schemas/RepositorySource"
+              x-go-type-skip-optional-pointer: false
+              description: >-
+                Freshly resolved current selection for the shared mode, read
+                under the same coordination; present when a selection
+                resolves. Its observed SHA is the current selection's commit,
+                never evidence about the attempted update.
     CloneStartRequest:
       x-go-name: CloneStartSchema
       type: object

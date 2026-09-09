@@ -985,6 +985,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspace/repositories/origin-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare selected local sources with their origin branches.
+         * @description Resolves structured selectors against the connected server's current authorized repository catalog and reports each repository's typed origin snapshot, scheduling fetch-based checks for sources with an origin mapping. Checks fetch only the mapped origin branch and never change local branches, HEAD, the index, configuration, or working files. Completed results satisfy polling requests for the same resolved source; the refresh list forces a fresh attempt per repository key after a completed result. Renderer-supplied paths, refs, and SHAs are never revision authority.
+         */
+        post: operations["checkWorkspaceRepositoryOriginStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recovery": {
         parameters: {
             query?: never;
@@ -1399,6 +1419,64 @@ export interface components {
         };
         RepositorySourcesResponse: components["schemas"]["ActionBaseResponse"] & {
             repositories: components["schemas"]["RepositorySource"][];
+        };
+        RepositoryOriginStatusRequest: {
+            /** @enum {string} */
+            mode: "default" | "current";
+            repositories: components["schemas"]["RepositorySourceSelector"][];
+            /** @description Repository keys whose completed result must be replaced by a fresh attempt. Absent or in-flight keys are no-ops; a completed result never satisfies a refreshed request. */
+            refresh?: string[];
+        };
+        RepositoryOriginStatus: {
+            repo_key: string;
+            identity: components["schemas"]["RepositoryIdentity"];
+            /** @enum {string} */
+            mode: "default" | "current";
+            /** @enum {string} */
+            kind: "branch" | "detached";
+            /** @description Full local branch name; present for the branch kind. */
+            branch?: string;
+            /** @description Detached commit; present for the detached kind. */
+            commit?: string;
+            /** @description Resolved local commit; present when the source resolved. */
+            local_sha?: string;
+            /** @description Mapped origin branch; present when a mapping resolved. */
+            origin_branch?: string;
+            /** @description Freshly fetched origin commit; present when the current attempt fetched. */
+            fetched_sha?: string;
+            /**
+             * Format: date-time
+             * @description Completion time of the current result; absent while checking.
+             */
+            checked_at?: string;
+            /** @enum {string} */
+            status: "checking" | "up_to_date" | "behind" | "ahead" | "diverged" | "no_origin" | "remote_branch_missing" | "other_upstream" | "detached" | "local_base_missing" | "unknown";
+            /** @description Local-only commits; present for comparison statuses. */
+            ahead_count?: number;
+            /** @description Origin-only commits; present for comparison statuses. */
+            behind_count?: number;
+            /** @description Canonical issue for statuses that carry one. */
+            issue?: components["schemas"]["Error"];
+            /** @description The earlier successful comparison preserved after a failed retry, tied to its original source, SHAs, counts, and timestamp. */
+            stale_comparison?: components["schemas"]["OriginComparison"];
+            /** @description Advisory eligibility for a future branch update; never authorization for a mutation. Present when a fresh comparison exists or the comparison is unavailable. */
+            update_eligible?: boolean;
+            /** @description Observed advisory reasons a future update is not defined or not safe. */
+            update_blockers?: ("local_not_behind" | "dirty_target_checkout" | "git_operation_in_progress" | "branch_checked_out_in_worktree" | "comparison_unavailable")[];
+        };
+        OriginComparison: {
+            /** @enum {string} */
+            status: "up_to_date" | "behind" | "ahead" | "diverged";
+            local_sha: string;
+            fetched_sha: string;
+            origin_branch: string;
+            ahead_count: number;
+            behind_count: number;
+            /** Format: date-time */
+            checked_at: string;
+        };
+        RepositoryOriginStatusResponse: components["schemas"]["ActionBaseResponse"] & {
+            repositories: components["schemas"]["RepositoryOriginStatus"][];
         };
         CloneStartRequest: {
             /** @description HTTP, HTTPS or SSH remote URL for the clone. Local paths, helper transports, embedded credentials and token-bearing queries or fragments are rejected without echoing secrets. */
@@ -2959,6 +3037,15 @@ export interface components {
                 "application/json": components["schemas"]["RepositorySourcesResponse"];
             };
         };
+        /** @description Typed origin snapshots for the selected repositories. */
+        RepositoryOriginStatusResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RepositoryOriginStatusResponse"];
+            };
+        };
         /** @description Authoritative clone operation snapshot after a mutation. */
         CloneActionResponse: {
             headers: {
@@ -4208,6 +4295,28 @@ export interface operations {
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
+        };
+    };
+    checkWorkspaceRepositoryOriginStatus: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepositoryOriginStatusRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["RepositoryOriginStatusResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
             409: components["responses"]["ErrorResponse"];
         };
     };

@@ -1395,6 +1395,7 @@ if (!hasSingleInstanceLock) {
       cancelSessionOutput: (subscriptionId) => sessions.cancel(subscriptionId),
       getCreationDefaults: () => features.creationDefaults(),
       inspectRepositorySources: (request) => features.inspectRepositorySources(request),
+      checkRepositoryOriginStatus: (request) => features.checkRepositoryOriginStatus(request),
       pickCreationFiles: (kind) => creationFiles.pickFiles(kind),
       uploadCreationFiles: (kind, paths) => uploads.stageFiles(kind, paths),
       readClipboardImage,

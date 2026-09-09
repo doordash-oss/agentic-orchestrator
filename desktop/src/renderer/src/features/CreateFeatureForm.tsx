@@ -30,6 +30,8 @@ import {
   type ReadinessSnapshot,
   type RepositoryFileRef,
   type RepositoryIdentity,
+  type RepositoryOriginStatusResult,
+  type RepositoryOriginStatusSnapshot,
   type RepositorySourcesResult,
   type RepositoryState,
   type WorkspaceRootState,
@@ -93,6 +95,123 @@ type SourceState =
   | { phase: 'idle' | 'loading' }
   | { phase: 'loaded'; value: RepositorySourcesResult }
   | { phase: 'error'; error: CanonicalError };
+type OriginState =
+  | { phase: 'idle' }
+  | { phase: 'loaded'; value: RepositoryOriginStatusResult }
+  | { phase: 'error'; error: CanonicalError };
+
+/** One-line origin status for a repository row, including the check time. */
+function originStatusText(snapshot: RepositoryOriginStatusSnapshot): string {
+  const originRef =
+    snapshot.originBranch === undefined ? 'origin' : `origin/${snapshot.originBranch}`;
+  const checked =
+    snapshot.checkedAt === undefined
+      ? ''
+      : ` · checked ${formatOriginCheckTime(snapshot.checkedAt)}`;
+  switch (snapshot.status) {
+    case 'checking':
+      return 'Origin check still running…';
+    case 'up_to_date':
+      return `Origin: up to date with ${originRef}${checked}`;
+    case 'behind':
+      return `Origin: ${originCommitPhrase(snapshot.behindCount)} behind ${originRef}${checked}`;
+    case 'ahead':
+      return `Origin: ${originCommitPhrase(snapshot.aheadCount)} ahead of ${originRef}${checked}`;
+    case 'diverged':
+      return `Origin: diverged from ${originRef} (${originCommitPhrase(
+        snapshot.aheadCount,
+      )} ahead, ${originCommitPhrase(snapshot.behindCount)} behind)${checked}`;
+    case 'no_origin':
+      return `Origin: no origin remote configured${checked}`;
+    case 'remote_branch_missing':
+      return `Origin: ${originRef} no longer exists on the remote${checked}`;
+    case 'other_upstream':
+      return `Origin: tracks a different upstream, not origin${checked}`;
+    case 'detached':
+      return `Origin: detached source — no origin comparison${checked}`;
+    case 'local_base_missing':
+      return `Origin: local source missing — repair the branch or commit, or deselect${checked}`;
+    case 'unknown': {
+      const stale =
+        snapshot.staleComparison === undefined
+          ? ''
+          : ` Earlier comparison: ${originComparisonPhrase(snapshot.staleComparison)} (stale).`;
+      return `Origin check unavailable — creation continues from the local source${checked}.${stale}`;
+    }
+  }
+}
+
+/** Review-facing sentence that names the local source and the consequence. */
+function originReviewText(snapshot: RepositoryOriginStatusSnapshot): string {
+  const source =
+    snapshot.kind === 'detached'
+      ? `detached commit ${snapshot.commit ?? ''}`
+      : (snapshot.branch ?? 'the selected branch');
+  const originRef =
+    snapshot.originBranch === undefined ? 'origin' : `origin/${snapshot.originBranch}`;
+  switch (snapshot.status) {
+    case 'checking':
+      return `${snapshot.repoKey}: origin check still running; the feature will start from ${source}.`;
+    case 'up_to_date':
+      return `${snapshot.repoKey}: ${source} is up to date with ${originRef}.`;
+    case 'behind':
+      return `${snapshot.repoKey}: ${source} is ${originCommitPhrase(
+        snapshot.behindCount,
+      )} behind ${originRef}; the feature will start from the local source.`;
+    case 'ahead':
+      return `${snapshot.repoKey}: ${source} is ${originCommitPhrase(
+        snapshot.aheadCount,
+      )} ahead of ${originRef}; the feature will start from the local source.`;
+    case 'diverged':
+      return `${snapshot.repoKey}: ${source} has diverged from ${originRef}; the feature will start from the local source.`;
+    case 'no_origin':
+      return `${snapshot.repoKey}: no origin remote configured; the feature will start from ${source}.`;
+    case 'remote_branch_missing':
+      return `${snapshot.repoKey}: ${originRef} no longer exists on the remote; the feature will start from ${source}.`;
+    case 'other_upstream':
+      return `${snapshot.repoKey}: ${source} tracks a different upstream, not origin; the feature will start from the local source.`;
+    case 'detached':
+      return `${snapshot.repoKey}: detached source ${snapshot.commit ?? ''} has no origin comparison.`;
+    case 'local_base_missing':
+      return `${snapshot.repoKey}: the local source is missing; repair it or deselect the repository.`;
+    case 'unknown': {
+      const stale =
+        snapshot.staleComparison === undefined
+          ? ''
+          : ` An earlier comparison (${originComparisonPhrase(snapshot.staleComparison)}) is preserved but stale.`;
+      return `${snapshot.repoKey}: the origin check could not complete; the feature will start from ${source}.${stale}`;
+    }
+  }
+}
+
+function originCommitPhrase(count: number | undefined): string {
+  const value = count ?? 0;
+  return `${value} ${value === 1 ? 'commit' : 'commits'}`;
+}
+
+function originComparisonPhrase(comparison: {
+  status: 'up_to_date' | 'behind' | 'ahead' | 'diverged';
+  aheadCount: number;
+  behindCount: number;
+}): string {
+  switch (comparison.status) {
+    case 'up_to_date':
+      return 'up to date';
+    case 'ahead':
+      return `${originCommitPhrase(comparison.aheadCount)} ahead`;
+    case 'diverged':
+      return 'diverged';
+    case 'behind':
+      return `${originCommitPhrase(comparison.behindCount)} behind`;
+  }
+}
+
+function formatOriginCheckTime(checkedAt: string): string {
+  const date = new Date(checkedAt);
+  if (Number.isNaN(date.getTime())) return 'unknown time';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 const EMPTY_REPOSITORIES: readonly RepositoryState[] = [];
 
 const STEPS = ['Repositories', 'Describe', 'Depth', 'Contract'] as const;
@@ -270,6 +389,13 @@ export function CreateFeatureForm({
   );
   const [sourceState, setSourceState] = useState<SourceState>({ phase: 'idle' });
   const [sourceRefreshRevision, setSourceRefreshRevision] = useState(0);
+  // Origin checks are advisory and never gate the sheet: the state holds the
+  // latest server snapshot for the selected sources, a revision drives
+  // one-shot Check-again refreshes, and a poll tick re-requests while any
+  // row is still checking.
+  const [originState, setOriginState] = useState<OriginState>({ phase: 'idle' });
+  const [originRefreshRevision, setOriginRefreshRevision] = useState(0);
+  const [originPollTick, setOriginPollTick] = useState(0);
   // The nested clone view and its association with this draft, plus the
   // nested create view and its pending adoption.
   const [cloneOpen, setCloneOpen] = useState(() => retained?.cloneOpen ?? false);
@@ -311,6 +437,9 @@ export function CreateFeatureForm({
   const cloneResolveSeq = useRef(0);
   const initializeRequestSeq = useRef(0);
   const sourceRequestSeq = useRef(0);
+  const originRequestSeq = useRef(0);
+  const originRefreshKeys = useRef<ReadonlySet<string>>(new Set());
+  const originContextRef = useRef<string | null>(null);
 
   // Locality decides how a folder reaches the form: the native directory
   // dialog on a local server (the picker resolves real paths on this
@@ -729,6 +858,81 @@ export function CreateFeatureForm({
     unresolvedSelections.length,
     useCurrentBranch,
   ]);
+
+  // Origin checks follow the same selection contract as local sources: the
+  // request repeats whenever the selection, shared mode, or server changes,
+  // plus one-shot refreshes (Check again) and poll ticks while rows are still
+  // checking. A selection/mode/server change invalidates the previous
+  // comparisons immediately so a late reply can never label the new
+  // selection; refresh keys are consumed by exactly one request.
+  useEffect(() => {
+    const repositories = reconciledSelections.flatMap((selection) =>
+      selection.status === 'selected'
+        ? [{ repoKey: selection.key, identity: selection.identity }]
+        : [],
+    );
+    const request = ++originRequestSeq.current;
+    if (repositories.length === 0 || unresolvedSelections.length > 0) {
+      originRefreshKeys.current = new Set();
+      originContextRef.current = null;
+      setOriginState({ phase: 'idle' });
+      return;
+    }
+    const contextKey = `${serverKey ?? ''}|${useCurrentBranch ? 'current' : 'default'}|${repositories
+      .map((repository) => repository.repoKey)
+      .sort()
+      .join(',')}`;
+    if (originContextRef.current !== contextKey) {
+      originContextRef.current = contextKey;
+      setOriginState({ phase: 'idle' });
+    }
+    const refresh = [...originRefreshKeys.current];
+    originRefreshKeys.current = new Set();
+    const requestedServer = serverKey;
+    void window.agentico
+      .checkRepositoryOriginStatus({
+        mode: useCurrentBranch ? 'current' : 'default',
+        repositories,
+        ...(refresh.length === 0 ? {} : { refresh }),
+      })
+      .then(
+        (value) => {
+          if (originRequestSeq.current === request && serverKeyRef.current === requestedServer) {
+            setOriginState({ phase: 'loaded', value });
+          }
+        },
+        (error: unknown) => {
+          if (originRequestSeq.current === request && serverKeyRef.current === requestedServer) {
+            setOriginState({ phase: 'error', error: parseIpcError(error) });
+          }
+        },
+      );
+  }, [
+    reconciledSelections,
+    serverKey,
+    unresolvedSelections.length,
+    useCurrentBranch,
+    originRefreshRevision,
+    originPollTick,
+  ]);
+
+  // Poll while any selected row is still checking. The server bounds every
+  // attempt with its own deadline, so polling always stops once rows settle.
+  useEffect(() => {
+    if (originState.phase !== 'loaded') return;
+    if (!originState.value.repositories.some((row) => row.status === 'checking')) return;
+    const timer = setTimeout(() => setOriginPollTick((tick) => tick + 1), 1500);
+    return () => clearTimeout(timer);
+  }, [originState]);
+
+  // Check again queues one repository for the next origin request; the
+  // revision re-runs the effect, which consumes the queue as a one-shot
+  // refresh so the server starts a fresh attempt instead of serving its
+  // completed result.
+  const requestOriginRecheck = useCallback((repoKey: string) => {
+    originRefreshKeys.current = new Set([...originRefreshKeys.current, repoKey]);
+    setOriginRefreshRevision((revision) => revision + 1);
+  }, []);
   const handleCreate = useCallback(
     (input: CreateRepositoryStartInput) => {
       const startServerKey = serverKeyRef.current;
@@ -1525,127 +1729,152 @@ export function CreateFeatureForm({
                               </div>
                             </li>
                           ))}
-                          {filteredRepositories.map((repo) => (
-                            <li
-                              key={repo.name}
-                              className="creation-sheet__row-item"
-                              data-repo-key={repo.name}
-                            >
-                              <label className="creation-sheet__row" data-valid={repo.valid}>
-                                <span className="creation-sheet__row-body">
-                                  <b className="creation-sheet__row-name">{repo.name}</b>
-                                  <code className="creation-sheet__row-path">{repo.path}</code>
-                                  {!repo.valid ? (
-                                    <span className="creation-sheet__row-issue">
-                                      {repo.issue?.summary ?? 'Unavailable'}
-                                    </span>
-                                  ) : !repo.featureReady ? (
-                                    <span className="creation-sheet__row-issue">
-                                      No commits yet — an initial commit is required before feature
-                                      work can start.
-                                    </span>
-                                  ) : repo.identity === undefined ? (
-                                    <span className="creation-sheet__row-issue">
-                                      The server could not resolve this repository's identity, so it
-                                      cannot be selected.
-                                    </span>
-                                  ) : null}
-                                  {sourceState.phase === 'loaded'
-                                    ? sourceState.value.repositories
-                                        .filter((source) => source.repoKey === repo.name)
-                                        .map((source) => (
-                                          <span
-                                            key={source.observedSha}
-                                            className="creation-sheet__row-hint"
-                                          >
-                                            Source:{' '}
-                                            {source.kind === 'detached'
-                                              ? `detached ${source.observedSha}`
-                                              : source.branch}
-                                          </span>
-                                        ))
-                                    : null}
-                                </span>
-                                <input
-                                  className="creation-sheet__row-control"
-                                  type="checkbox"
-                                  checked={
-                                    repo.identity !== undefined &&
-                                    reconciledSelections.some(
-                                      (selection) =>
-                                        selection.status === 'selected' &&
-                                        sameRepoIdentity(
-                                          selection.identity,
-                                          repo.identity as NonNullable<RepositoryState['identity']>,
-                                        ),
-                                    )
-                                  }
-                                  disabled={!isSelectableRepository(repo) || pending}
-                                  onChange={() => {
-                                    if (repo.identity === undefined) return;
-                                    const identity = repo.identity;
-                                    const isSelected = repoSelections.some((selection) =>
-                                      sameRepoIdentity(selection.identity, identity),
-                                    );
-                                    const nextSelections = isSelected
-                                      ? repoSelections.filter(
-                                          (selection) =>
-                                            !sameRepoIdentity(selection.identity, identity),
+                          {filteredRepositories.map((repo) => {
+                            const repoSelected =
+                              repo.identity !== undefined &&
+                              reconciledSelections.some(
+                                (selection) =>
+                                  selection.status === 'selected' &&
+                                  sameRepoIdentity(
+                                    selection.identity,
+                                    repo.identity as NonNullable<RepositoryState['identity']>,
+                                  ),
+                              );
+                            const originRow =
+                              originState.phase === 'loaded' && repoSelected
+                                ? originState.value.repositories.find(
+                                    (row) => row.repoKey === repo.name,
+                                  )
+                                : undefined;
+                            return (
+                              <li
+                                key={repo.name}
+                                className="creation-sheet__row-item"
+                                data-repo-key={repo.name}
+                              >
+                                <label className="creation-sheet__row" data-valid={repo.valid}>
+                                  <span className="creation-sheet__row-body">
+                                    <b className="creation-sheet__row-name">{repo.name}</b>
+                                    <code className="creation-sheet__row-path">{repo.path}</code>
+                                    {!repo.valid ? (
+                                      <span className="creation-sheet__row-issue">
+                                        {repo.issue?.summary ?? 'Unavailable'}
+                                      </span>
+                                    ) : !repo.featureReady ? (
+                                      <span className="creation-sheet__row-issue">
+                                        No commits yet — an initial commit is required before
+                                        feature work can start.
+                                      </span>
+                                    ) : repo.identity === undefined ? (
+                                      <span className="creation-sheet__row-issue">
+                                        The server could not resolve this repository's identity, so
+                                        it cannot be selected.
+                                      </span>
+                                    ) : null}
+                                    {sourceState.phase === 'loaded'
+                                      ? sourceState.value.repositories
+                                          .filter((source) => source.repoKey === repo.name)
+                                          .map((source) => (
+                                            <span
+                                              key={source.observedSha}
+                                              className="creation-sheet__row-hint"
+                                            >
+                                              Source:{' '}
+                                              {source.kind === 'detached'
+                                                ? `detached ${source.observedSha}`
+                                                : source.branch}
+                                            </span>
+                                          ))
+                                      : null}
+                                    {originRow === undefined ? null : (
+                                      <span className="creation-sheet__row-hint creation-sheet__row-origin-hint">
+                                        {originStatusText(originRow)}
+                                      </span>
+                                    )}
+                                  </span>
+                                  <input
+                                    className="creation-sheet__row-control"
+                                    type="checkbox"
+                                    checked={repoSelected}
+                                    disabled={!isSelectableRepository(repo) || pending}
+                                    onChange={() => {
+                                      if (repo.identity === undefined) return;
+                                      const identity = repo.identity;
+                                      const isSelected = repoSelections.some((selection) =>
+                                        sameRepoIdentity(selection.identity, identity),
+                                      );
+                                      const nextSelections = isSelected
+                                        ? repoSelections.filter(
+                                            (selection) =>
+                                              !sameRepoIdentity(selection.identity, identity),
+                                          )
+                                        : [...repoSelections, { key: repo.name, identity }];
+                                      setRepoSelections(nextSelections);
+                                      const nextKeys = resolvedSelectionKeys(
+                                        reconcileRepoSelections(nextSelections, repositories),
+                                      );
+                                      setRepositoryFiles((files) =>
+                                        files.filter((file) => nextKeys.includes(file.repoKey)),
+                                      );
+                                      setRepoError(null);
+                                    }}
+                                  />
+                                </label>
+                                {originRow !== undefined && originRow.status !== 'checking' ? (
+                                  <div className="creation-sheet__row-origin-actions">
+                                    <button
+                                      type="button"
+                                      className="creation-sheet__button"
+                                      disabled={pending}
+                                      onClick={() => requestOriginRecheck(repo.name)}
+                                    >
+                                      Check again
+                                    </button>
+                                  </div>
+                                ) : null}
+                                {repo.valid && !repo.featureReady && repo.identity !== undefined ? (
+                                  <div className="creation-sheet__row-initialize">
+                                    <button
+                                      type="button"
+                                      className="creation-sheet__button"
+                                      aria-expanded={initializeExpandedKey === repo.name}
+                                      aria-controls={`repo-${encodeURIComponent(repo.name)}-initialize-copy`}
+                                      disabled={initializeSuppressed(repo) || pending}
+                                      onClick={() =>
+                                        setInitializeExpandedKey((current) =>
+                                          current === repo.name ? null : repo.name,
                                         )
-                                      : [...repoSelections, { key: repo.name, identity }];
-                                    setRepoSelections(nextSelections);
-                                    const nextKeys = resolvedSelectionKeys(
-                                      reconcileRepoSelections(nextSelections, repositories),
-                                    );
-                                    setRepositoryFiles((files) =>
-                                      files.filter((file) => nextKeys.includes(file.repoKey)),
-                                    );
-                                    setRepoError(null);
-                                  }}
-                                />
-                              </label>
-                              {repo.valid && !repo.featureReady && repo.identity !== undefined ? (
-                                <div className="creation-sheet__row-initialize">
-                                  <button
-                                    type="button"
-                                    className="creation-sheet__button"
-                                    aria-expanded={initializeExpandedKey === repo.name}
-                                    aria-controls={`repo-${encodeURIComponent(repo.name)}-initialize-copy`}
-                                    disabled={initializeSuppressed(repo) || pending}
-                                    onClick={() =>
-                                      setInitializeExpandedKey((current) =>
-                                        current === repo.name ? null : repo.name,
-                                      )
-                                    }
-                                  >
-                                    Create initial commit…
-                                  </button>
-                                  {initializeExpandedKey === repo.name ? (
-                                    <InitializeOffer
-                                      idPrefix={`repo-${encodeURIComponent(repo.name)}`}
-                                      controller={{
-                                        pending: initializeSuppressed(repo),
-                                        error: initializeError,
-                                        onInitialize: () => {
-                                          const identity = repo.identity;
-                                          if (identity === undefined) return;
-                                          // The rejection is already surfaced as the scoped
-                                          // offer error; this catch only keeps the discarded
-                                          // promise quiet.
-                                          void handleInitialize({
-                                            repoKey: repo.name,
-                                            identity,
-                                            path: repo.path,
-                                          }).catch(() => undefined);
-                                        },
-                                        onDecline: () => setInitializeExpandedKey(null),
-                                      }}
-                                    />
-                                  ) : null}
-                                </div>
-                              ) : null}
-                            </li>
-                          ))}
+                                      }
+                                    >
+                                      Create initial commit…
+                                    </button>
+                                    {initializeExpandedKey === repo.name ? (
+                                      <InitializeOffer
+                                        idPrefix={`repo-${encodeURIComponent(repo.name)}`}
+                                        controller={{
+                                          pending: initializeSuppressed(repo),
+                                          error: initializeError,
+                                          onInitialize: () => {
+                                            const identity = repo.identity;
+                                            if (identity === undefined) return;
+                                            // The rejection is already surfaced as the scoped
+                                            // offer error; this catch only keeps the discarded
+                                            // promise quiet.
+                                            void handleInitialize({
+                                              repoKey: repo.name,
+                                              identity,
+                                              path: repo.path,
+                                            }).catch(() => undefined);
+                                          },
+                                          onDecline: () => setInitializeExpandedKey(null),
+                                        }}
+                                      />
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                              </li>
+                            );
+                          })}
                           {filteredRepositories.length === 0 &&
                           unresolvedSelections.length === 0 ? (
                             <li className="creation-sheet__row-item creation-sheet__row-empty">
@@ -1811,6 +2040,12 @@ export function CreateFeatureForm({
                       ) : sourceState.phase === 'error' ? (
                         <ErrorSurface error={sourceState.error} />
                       ) : null}
+                      <p className="creation-sheet__row-hint">
+                        Selected sources are compared with their origin branches automatically.
+                        Checks only fetch from origin — they never change your repositories — and
+                        creation always starts from the local source, even when a check is still
+                        running or unavailable.
+                      </p>
                     </fieldset>
                   </section>
                 ) : null}
@@ -2020,6 +2255,16 @@ export function CreateFeatureForm({
                                 )
                                 .join(', ')
                             : 'Not resolved'}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Origin checks</dt>
+                        <dd>
+                          {originState.phase === 'loaded'
+                            ? originState.value.repositories
+                                .map((row) => originReviewText(row))
+                                .join(' ')
+                            : 'Not checked yet'}
                         </dd>
                       </div>
                       <div>

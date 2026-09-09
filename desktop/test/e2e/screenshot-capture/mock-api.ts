@@ -2078,6 +2078,19 @@ function makeMockApi(
           observedSha: 'a'.repeat(40),
         })),
       }),
+    checkRepositoryOriginStatus: (request) =>
+      Promise.resolve({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          localSha: 'a'.repeat(40),
+          originBranch: 'main',
+          status: 'up_to_date' as const,
+          checkedAt: '2026-09-09T10:00:00.000Z',
+        })),
+      }),
     // The creation-sheet scenes need real-looking attachment chips; every
     // other scene keeps the picker inert.
     pickCreationFiles: (kind) =>

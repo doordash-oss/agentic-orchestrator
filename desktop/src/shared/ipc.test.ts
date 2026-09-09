@@ -74,6 +74,8 @@ import {
   ServerTokenStatusRequestSchema,
   ServerTokenStatusResultSchema,
   RepositorySourcesRequestSchema,
+  RepositoryOriginStatusRequestSchema,
+  RepositoryOriginStatusResultSchema,
   RepositorySourcesResultSchema,
 } from './ipc';
 import * as ipcModule from './ipc';
@@ -191,6 +193,94 @@ describe('repository source IPC contract', () => {
             mode: 'current',
             kind: 'detached',
             observedSha: 'short',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('repository origin status IPC contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    commonDir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+
+  it('accepts selection requests with one-shot refresh keys', () => {
+    expect(
+      RepositoryOriginStatusRequestSchema.parse({
+        mode: 'default',
+        repositories: [{ repoKey: 'repo-a', identity }],
+        refresh: ['repo-a'],
+      }),
+    ).toStrictEqual({
+      mode: 'default',
+      repositories: [{ repoKey: 'repo-a', identity }],
+      refresh: ['repo-a'],
+    });
+    expect(
+      RepositoryOriginStatusRequestSchema.safeParse({
+        mode: 'default',
+        repositories: [{ repoKey: 'repo-a', identity, path: '/renderer/chosen/path' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryOriginStatusRequestSchema.safeParse({
+        mode: 'default',
+        repositories: [{ repoKey: 'repo-a', identity }],
+        refresh: Array.from({ length: 33 }, () => 'repo-a'),
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts typed snapshots and rejects unknown statuses or invented SHAs', () => {
+    expect(
+      RepositoryOriginStatusResultSchema.parse({
+        repositories: [
+          {
+            repoKey: 'repo-a',
+            identity,
+            mode: 'default',
+            kind: 'branch',
+            branch: 'main',
+            localSha: 'a'.repeat(40),
+            originBranch: 'main',
+            status: 'remote_branch_missing',
+            issue: {
+              code: 'origin_branch_missing',
+              class: 'warning',
+              title: 'Origin branch missing',
+              summary: 'The mapped origin branch no longer exists on the remote.',
+            },
+          },
+        ],
+      }).repositories[0],
+    ).toMatchObject({ status: 'remote_branch_missing', originBranch: 'main' });
+    expect(
+      RepositoryOriginStatusResultSchema.safeParse({
+        repositories: [
+          {
+            repoKey: 'repo-a',
+            identity,
+            mode: 'default',
+            kind: 'branch',
+            status: 'sideways',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryOriginStatusResultSchema.safeParse({
+        repositories: [
+          {
+            repoKey: 'repo-a',
+            identity,
+            mode: 'default',
+            kind: 'detached',
+            status: 'detached',
+            commit: 'short',
           },
         ],
       }).success,

@@ -213,6 +213,18 @@ function makeServices(): IpcServices {
         })),
       }),
     ),
+    checkRepositoryOriginStatus: vi.fn(
+      async (request: Parameters<IpcServices['checkRepositoryOriginStatus']>[0]) => ({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          localSha: 'a'.repeat(40),
+          status: 'no_origin' as const,
+        })),
+      }),
+    ),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
     uploadCreationFiles: vi.fn(() => Promise.resolve({ results: [] })),
     readClipboardImage: vi.fn(() => Promise.resolve({ paths: [] })),

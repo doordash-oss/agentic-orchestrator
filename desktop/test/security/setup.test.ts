@@ -182,6 +182,18 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
         })),
       }),
     ),
+    checkRepositoryOriginStatus: vi.fn(
+      async (request: Parameters<IpcServices['checkRepositoryOriginStatus']>[0]) => ({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          localSha: 'a'.repeat(40),
+          status: 'no_origin' as const,
+        })),
+      }),
+    ),
     loadLocalReviewDraft: vi.fn(() => null),
     saveLocalReviewDraft: vi.fn((request) => ({ ...request, savedAt: '2026-07-16T00:00:00.000Z' })),
     discardLocalReviewDraft: vi.fn(() => false),

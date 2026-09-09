@@ -99,6 +99,7 @@ export const IPC_CHANNELS = {
   sessionsOutputCancel: 'agentico:sessions:output-cancel',
   creationDefaults: 'agentico:creation:defaults',
   creationSources: 'agentico:creation:sources',
+  creationOriginStatus: 'agentico:creation:origin-status',
   creationPickFiles: 'agentico:creation:pick-files',
   creationUploadFiles: 'agentico:creation:upload-files',
   clipboardReadImage: 'agentico:clipboard:read-image',
@@ -2822,6 +2823,89 @@ export const RepositorySourcesResultSchema = z.strictObject({
 });
 export type RepositorySourcesResult = z.output<typeof RepositorySourcesResultSchema>;
 
+export const RepositoryOriginStatusRequestSchema = z.strictObject({
+  mode: z.enum(['default', 'current']),
+  repositories: z
+    .array(
+      z.strictObject({
+        repoKey: z.string().min(1).max(512),
+        identity: RepositoryIdentitySchema,
+      }),
+    )
+    .min(1)
+    .max(32),
+  refresh: z.array(z.string().min(1).max(512)).max(32).optional(),
+});
+export type RepositoryOriginStatusRequest = z.output<typeof RepositoryOriginStatusRequestSchema>;
+
+export const OriginComparisonSchema = z.strictObject({
+  status: z.enum(['up_to_date', 'behind', 'ahead', 'diverged']),
+  localSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+  fetchedSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+  originBranch: z.string().min(1),
+  aheadCount: z.number().int().min(0),
+  behindCount: z.number().int().min(0),
+  checkedAt: z.string().min(1),
+});
+export type OriginComparison = z.output<typeof OriginComparisonSchema>;
+
+export const RepositoryOriginStatusSnapshotSchema = z.strictObject({
+  repoKey: z.string().min(1),
+  identity: RepositoryIdentitySchema,
+  mode: z.enum(['default', 'current']),
+  kind: z.enum(['branch', 'detached']),
+  branch: z.string().optional(),
+  commit: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  localSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  originBranch: z.string().optional(),
+  fetchedSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  checkedAt: z.string().optional(),
+  status: z.enum([
+    'checking',
+    'up_to_date',
+    'behind',
+    'ahead',
+    'diverged',
+    'no_origin',
+    'remote_branch_missing',
+    'other_upstream',
+    'detached',
+    'local_base_missing',
+    'unknown',
+  ]),
+  aheadCount: z.number().int().min(0).optional(),
+  behindCount: z.number().int().min(0).optional(),
+  issue: CanonicalErrorSchema.optional(),
+  staleComparison: OriginComparisonSchema.optional(),
+  updateEligible: z.boolean().optional(),
+  updateBlockers: z
+    .array(
+      z.enum([
+        'local_not_behind',
+        'dirty_target_checkout',
+        'git_operation_in_progress',
+        'branch_checked_out_in_worktree',
+        'comparison_unavailable',
+      ]),
+    )
+    .optional(),
+});
+export type RepositoryOriginStatusSnapshot = z.output<typeof RepositoryOriginStatusSnapshotSchema>;
+
+export const RepositoryOriginStatusResultSchema = z.strictObject({
+  repositories: z.array(RepositoryOriginStatusSnapshotSchema).min(1).max(32),
+});
+export type RepositoryOriginStatusResult = z.output<typeof RepositoryOriginStatusResultSchema>;
+
 export const CreationFileKindSchema = z.enum(['image', 'attachment']);
 export type CreationFileKind = z.output<typeof CreationFileKindSchema>;
 export const PickedCreationFilesSchema = z.strictObject({
@@ -3892,6 +3976,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([RepositorySourcesRequestSchema]),
     response: RepositorySourcesResultSchema,
   },
+  [IPC_CHANNELS.creationOriginStatus]: {
+    request: z.tuple([RepositoryOriginStatusRequestSchema]),
+    response: RepositoryOriginStatusResultSchema,
+  },
   [IPC_CHANNELS.creationPickFiles]: {
     request: z.tuple([CreationFileKindSchema]),
     response: PickedCreationFilesSchema,
@@ -4236,6 +4324,9 @@ export interface AgenticoApi {
   onSessionOutput(listener: (event: SessionOutputEvent) => void): () => void;
   getCreationDefaults(): Promise<CreationDefaults>;
   inspectRepositorySources(request: RepositorySourcesRequest): Promise<RepositorySourcesResult>;
+  checkRepositoryOriginStatus(
+    request: RepositoryOriginStatusRequest,
+  ): Promise<RepositoryOriginStatusResult>;
   pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
   readClipboardImage(): Promise<PickedCreationFiles>;
   importDroppedCreationFiles(kind: CreationFileKind, files: readonly File[]): PickedCreationFiles;

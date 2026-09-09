@@ -19,6 +19,8 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   ConnectionState,
+  RepositoryOriginStatusRequest,
+  RepositoryOriginStatusResult,
   RepositorySourcesRequest,
   RepositorySourcesResult,
 } from '../../../shared/ipc';
@@ -1010,6 +1012,230 @@ describe('the creation sheet local source contract', () => {
       expect(screen.getByText('Source: server-two/current')).toBeVisible();
       expect(screen.queryByText(`Source: detached ${'a'.repeat(40)}`)).toBeNull();
     });
+  });
+});
+
+describe('the creation sheet origin check contract', () => {
+  it('shows typed origin statuses per selected row and in review without gating continuation', async () => {
+    const repoAIdentity = mockRepoIdentity('/work/space/repo-a');
+    const repoBIdentity = mockRepoIdentity('/work/space/repo-b');
+    const mock = installAgenticoMock({
+      defaults: creationDefaults({
+        repositories: [
+          {
+            name: 'repo-a',
+            path: repoAIdentity.path,
+            valid: true,
+            featureReady: true,
+            identity: repoAIdentity,
+          },
+          {
+            name: 'repo-b',
+            path: repoBIdentity.path,
+            valid: true,
+            featureReady: true,
+            identity: repoBIdentity,
+          },
+        ],
+      }),
+    });
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            repository.repoKey === 'repo-a'
+              ? {
+                  ...repository,
+                  mode: request.mode,
+                  kind: 'branch' as const,
+                  branch: 'main',
+                  localSha: 'a'.repeat(40),
+                  originBranch: 'main',
+                  status: 'behind' as const,
+                  behindCount: 2,
+                  fetchedSha: 'c'.repeat(40),
+                  updateEligible: true,
+                }
+              : {
+                  ...repository,
+                  mode: request.mode,
+                  kind: 'branch' as const,
+                  branch: 'main',
+                  localSha: 'b'.repeat(40),
+                  status: 'no_origin' as const,
+                },
+          ),
+        }),
+    );
+    const { user } = await renderForm(mock);
+
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await user.click(screen.getByRole('checkbox', { name: /^repo-b\b/ }));
+    expect(await screen.findByText('Origin: 2 commits behind origin/main')).toBeVisible();
+    expect(screen.getByText('Origin: no origin remote configured')).toBeVisible();
+
+    // Origin warnings never gate the repositories step.
+    expect(screen.getByRole('button', { name: 'Next: Describe' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Origin statuses');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+
+    expect(
+      screen.getByText(
+        /repo-a: main is 2 commits behind origin\/main; the feature will start from the local source\./,
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/repo-b: no origin remote configured; the feature will start from main\./),
+    ).toBeVisible();
+  });
+
+  it('polls while a check runs, then serves Check again as a fresh attempt without toggling selection', async () => {
+    let calls = 0;
+    const mock = installAgenticoMock();
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) => {
+        calls += 1;
+        return Promise.resolve({
+          repositories: request.repositories.map((repository) => ({
+            ...repository,
+            mode: request.mode,
+            kind: 'branch' as const,
+            branch: 'main',
+            localSha: 'a'.repeat(40),
+            originBranch: 'main',
+            ...(calls <= 1
+              ? { status: 'checking' as const }
+              : {
+                  status: 'behind' as const,
+                  behindCount: 3,
+                  fetchedSha: 'c'.repeat(40),
+                  checkedAt: '2026-09-09T10:00:00.000Z',
+                }),
+          })),
+        });
+      },
+    );
+    const { user } = await renderForm(mock);
+
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    expect(await screen.findByText('Origin check still running…')).toBeVisible();
+    // A running check never blocks continuation.
+    expect(screen.getByRole('button', { name: 'Next: Describe' })).toBeEnabled();
+
+    await vi.waitFor(() => expect(calls).toBeGreaterThanOrEqual(2), { timeout: 5000 });
+    expect(await screen.findByText(/Origin: 3 commits behind origin\/main/)).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+    await vi.waitFor(() =>
+      expect(mock.api.checkRepositoryOriginStatus).toHaveBeenLastCalledWith(
+        expect.objectContaining({ refresh: ['repo-a'] }),
+      ),
+    );
+    // Check again never toggles the selection.
+    expect(screen.getByRole('checkbox', { name: /^repo-a\b/ })).toBeChecked();
+  });
+
+  it('identifies a preserved earlier comparison as stale after a failed retry', async () => {
+    const mock = installAgenticoMock();
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) => ({
+            ...repository,
+            mode: request.mode,
+            kind: 'branch' as const,
+            branch: 'main',
+            localSha: 'a'.repeat(40),
+            originBranch: 'main',
+            status: 'unknown' as const,
+            staleComparison: {
+              status: 'behind' as const,
+              localSha: 'a'.repeat(40),
+              fetchedSha: 'c'.repeat(40),
+              originBranch: 'main',
+              aheadCount: 0,
+              behindCount: 2,
+              checkedAt: '2026-09-09T09:00:00.000Z',
+            },
+          })),
+        }),
+    );
+    const { user } = await renderForm(mock);
+
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    expect(
+      await screen.findByText(
+        /Origin check unavailable — creation continues from the local source\./,
+      ),
+    ).toBeVisible();
+    expect(screen.getByText(/Earlier comparison: 2 commits behind \(stale\)\./)).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Stale comparison');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    expect(
+      screen.getByText(
+        /repo-a: the origin check could not complete; the feature will start from main\. An earlier comparison \(2 commits behind\) is preserved but stale\./,
+      ),
+    ).toBeVisible();
+  });
+
+  it('invalidates the previous comparison immediately when the shared mode changes', async () => {
+    let resolveCurrent!: (value: RepositoryOriginStatusResult) => void;
+    const mock = installAgenticoMock();
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        request.mode === 'default'
+          ? Promise.resolve({
+              repositories: request.repositories.map((repository) => ({
+                ...repository,
+                mode: request.mode,
+                kind: 'branch' as const,
+                branch: 'main',
+                localSha: 'a'.repeat(40),
+                originBranch: 'main',
+                status: 'behind' as const,
+                behindCount: 2,
+                fetchedSha: 'c'.repeat(40),
+              })),
+            })
+          : new Promise<RepositoryOriginStatusResult>((resolve) => {
+              resolveCurrent = resolve;
+            }),
+    );
+    const { user } = await renderForm(mock);
+
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    expect(await screen.findByText('Origin: 2 commits behind origin/main')).toBeVisible();
+
+    await user.click(screen.getByRole('radio', { name: 'Current branches' }));
+    expect(mock.api.checkRepositoryOriginStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ mode: 'current' }),
+    );
+    // The default-mode comparison is gone immediately; the current-mode
+    // attempt has not replied yet.
+    expect(screen.queryByText('Origin: 2 commits behind origin/main')).toBeNull();
+
+    resolveCurrent({
+      repositories: [
+        {
+          repoKey: 'repo-a',
+          identity: mockRepoIdentity('/work/space/repo-a'),
+          mode: 'current',
+          kind: 'branch',
+          branch: 'topic/current-work',
+          localSha: 'a'.repeat(40),
+          originBranch: 'current-work',
+          status: 'ahead',
+          aheadCount: 1,
+          fetchedSha: 'c'.repeat(40),
+        },
+      ],
+    });
+    expect(await screen.findByText('Origin: 1 commit ahead of origin/current-work')).toBeVisible();
   });
 });
 

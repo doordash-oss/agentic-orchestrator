@@ -27,6 +27,7 @@ import {
   PromptSnapshotResponseSchema,
   ReadinessResponseSchema,
   RepositorySourcesResponseSchema,
+  RepositoryOriginStatusResponseSchema,
   RepositoryDiffResponseSchema,
   RewindActionResponseSchema,
   ServerFeatureDetailSchema,
@@ -148,6 +149,132 @@ describe('repository source response contract', () => {
             revision: 'refs/tags/renderer-chosen',
           },
         ],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('repository origin status response contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    common_dir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+
+  it('accepts typed snapshots with comparisons, stale history, and advisory update state', () => {
+    const parsed = RepositoryOriginStatusResponseSchema.parse({
+      api_version: 'v1',
+      repositories: [
+        {
+          repo_key: 'repo-a',
+          identity,
+          mode: 'default',
+          kind: 'branch',
+          branch: 'release/2026/q3',
+          local_sha: 'a'.repeat(40),
+          origin_branch: 'upstream-main',
+          fetched_sha: 'c'.repeat(40),
+          checked_at: '2026-09-09T10:00:00Z',
+          status: 'behind',
+          ahead_count: 0,
+          behind_count: 2,
+          update_eligible: false,
+          update_blockers: ['dirty_target_checkout'],
+        },
+        {
+          repo_key: 'repo-b',
+          identity: {
+            path: '/work/repo-b',
+            common_dir: '/work/repo-b/.git',
+            device: '3',
+            inode: '4',
+          },
+          mode: 'current',
+          kind: 'detached',
+          commit: 'b'.repeat(40),
+          status: 'unknown',
+          issue: {
+            code: 'origin_check_unavailable',
+            class: 'warning',
+            title: 'Origin check unavailable',
+            summary: 'The local source could not be compared with its origin.',
+          },
+          stale_comparison: {
+            status: 'behind',
+            local_sha: 'b'.repeat(40),
+            fetched_sha: 'd'.repeat(40),
+            origin_branch: 'main',
+            ahead_count: 0,
+            behind_count: 1,
+            checked_at: '2026-09-09T09:00:00Z',
+          },
+        },
+        {
+          repo_key: 'repo-c',
+          identity: {
+            path: '/work/repo-c',
+            common_dir: '/work/repo-c/.git',
+            device: '5',
+            inode: '6',
+          },
+          mode: 'default',
+          kind: 'branch',
+          branch: 'main',
+          local_sha: 'e'.repeat(40),
+          origin_branch: 'main',
+          status: 'checking',
+        },
+      ],
+    });
+    expect(parsed.repositories[0]?.status).toBe('behind');
+    expect(parsed.repositories[0]?.update_blockers).toEqual(['dirty_target_checkout']);
+    expect(parsed.repositories[1]?.stale_comparison?.behind_count).toBe(1);
+    expect(parsed.repositories[1]?.issue?.code).toBe('origin_check_unavailable');
+    expect(parsed.repositories[2]?.checked_at).toBeUndefined();
+  });
+
+  it('rejects invented SHAs, unknown statuses, and renderer-authority fields', () => {
+    const base = {
+      repo_key: 'repo-a',
+      identity,
+      mode: 'default' as const,
+      kind: 'branch' as const,
+      branch: 'main',
+    };
+    expect(
+      RepositoryOriginStatusResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [{ ...base, status: 'sideways' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryOriginStatusResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [{ ...base, status: 'behind', fetched_sha: 'not-a-sha' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryOriginStatusResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [
+          {
+            ...base,
+            status: 'checking',
+            checked_at: '2026-09-09T10:00:00Z',
+            path: '/renderer/path',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryOriginStatusResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: Array.from({ length: 33 }, (_, index) => ({
+          ...base,
+          repo_key: `repo-${index}`,
+          status: 'checking',
+        })),
       }).success,
     ).toBe(false);
   });

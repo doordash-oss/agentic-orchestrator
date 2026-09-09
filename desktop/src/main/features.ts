@@ -39,6 +39,7 @@ import {
   PublishDescriptionResponseSchema,
   RuntimeConfigCreationSchema,
   RepositorySourcesResponseSchema,
+  RepositoryOriginStatusResponseSchema,
   RebaseFeatureResponseSchema,
   RefactorFeatureResponseSchema,
   DiscardChildResponseSchema,
@@ -71,6 +72,9 @@ import {
   type CreationDefaults,
   type RepositorySourcesRequest,
   type RepositorySourcesResult,
+  type RepositoryOriginStatusRequest,
+  type RepositoryOriginStatusResult,
+  type RepositoryOriginStatusSnapshot,
   type EffortLevel,
   type FeatureSetupView,
   type FeatureSnapshot,
@@ -254,6 +258,78 @@ export class FeatureService {
         observedSha: repository.observed_sha,
       })),
     };
+  }
+
+  /**
+   * Reports each selected repository's typed origin snapshot, scheduling
+   * fetch-based checks server-side. Refresh keys force a fresh attempt for
+   * completed results (Check again); polling omits them.
+   */
+  async checkRepositoryOriginStatus(
+    request: RepositoryOriginStatusRequest,
+  ): Promise<RepositoryOriginStatusResult> {
+    const body = await this.api('/api/v1/workspace/repositories/origin-status', {
+      method: 'POST',
+      body: {
+        mode: request.mode,
+        repositories: request.repositories.map((repository) => ({
+          repo_key: repository.repoKey,
+          identity: {
+            path: repository.identity.path,
+            common_dir: repository.identity.commonDir,
+            device: repository.identity.device,
+            inode: repository.identity.inode,
+          },
+        })),
+        ...(request.refresh === undefined || request.refresh.length === 0
+          ? {}
+          : { refresh: request.refresh }),
+      },
+    });
+    const parsed = validateWithSchema(body, RepositoryOriginStatusResponseSchema);
+    const mapSnapshot = (
+      repository: (typeof parsed.repositories)[number],
+    ): RepositoryOriginStatusSnapshot => ({
+      repoKey: repository.repo_key,
+      identity: {
+        path: repository.identity.path,
+        commonDir: repository.identity.common_dir,
+        device: repository.identity.device,
+        inode: repository.identity.inode,
+      },
+      mode: repository.mode,
+      kind: repository.kind,
+      ...(repository.branch === undefined ? {} : { branch: repository.branch }),
+      ...(repository.commit === undefined ? {} : { commit: repository.commit }),
+      ...(repository.local_sha === undefined ? {} : { localSha: repository.local_sha }),
+      ...(repository.origin_branch === undefined ? {} : { originBranch: repository.origin_branch }),
+      ...(repository.fetched_sha === undefined ? {} : { fetchedSha: repository.fetched_sha }),
+      ...(repository.checked_at === undefined ? {} : { checkedAt: repository.checked_at }),
+      status: repository.status,
+      ...(repository.ahead_count === undefined ? {} : { aheadCount: repository.ahead_count }),
+      ...(repository.behind_count === undefined ? {} : { behindCount: repository.behind_count }),
+      ...(repository.issue === undefined ? {} : { issue: repository.issue }),
+      ...(repository.stale_comparison === undefined
+        ? {}
+        : {
+            staleComparison: {
+              status: repository.stale_comparison.status,
+              localSha: repository.stale_comparison.local_sha,
+              fetchedSha: repository.stale_comparison.fetched_sha,
+              originBranch: repository.stale_comparison.origin_branch,
+              aheadCount: repository.stale_comparison.ahead_count,
+              behindCount: repository.stale_comparison.behind_count,
+              checkedAt: repository.stale_comparison.checked_at,
+            },
+          }),
+      ...(repository.update_eligible === undefined
+        ? {}
+        : { updateEligible: repository.update_eligible }),
+      ...(repository.update_blockers === undefined
+        ? {}
+        : { updateBlockers: repository.update_blockers }),
+    });
+    return { repositories: parsed.repositories.map(mapSnapshot) };
   }
 
   /**

@@ -33,6 +33,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'cancelCreationFileSearch',
   'cancelSessionOutput',
   'checkForUpdates',
+  'checkRepositoryOriginStatus',
   'chooseConnectionServer',
   'clearDiagnostics',
   'createFeature',

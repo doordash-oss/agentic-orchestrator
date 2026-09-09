@@ -48,6 +48,7 @@ import {
   type CreationFileKind,
   type CreationFileSearchRequest,
   type RepositorySourcesRequest,
+  type RepositoryOriginStatusRequest,
   type FeatureActionRequest,
   type InitRepositoryRequest,
   type CloneStartRequest,
@@ -259,6 +260,8 @@ const api: AgenticoApi = {
   getCreationDefaults: () => call(IPC_CHANNELS.creationDefaults),
   inspectRepositorySources: (request: RepositorySourcesRequest) =>
     call(IPC_CHANNELS.creationSources, request),
+  checkRepositoryOriginStatus: (request: RepositoryOriginStatusRequest) =>
+    call(IPC_CHANNELS.creationOriginStatus, request),
   pickCreationFiles: (kind: CreationFileKind) => call(IPC_CHANNELS.creationPickFiles, kind),
   uploadCreationFiles: (kind: CreationFileKind, paths: readonly string[]) =>
     call(IPC_CHANNELS.creationUploadFiles, kind, paths),

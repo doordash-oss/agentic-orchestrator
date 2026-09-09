@@ -443,6 +443,77 @@ export const RepositorySourcesResponseSchema = z.object({
 
 export type RepositorySourcesResponse = z.output<typeof RepositorySourcesResponseSchema>;
 
+const OriginCommitShaSchema = z.string().regex(/^[0-9a-f]{40,64}$/);
+
+const OriginComparisonWireSchema = z.strictObject({
+  status: z.enum(['up_to_date', 'behind', 'ahead', 'diverged']),
+  local_sha: OriginCommitShaSchema,
+  fetched_sha: OriginCommitShaSchema,
+  origin_branch: z.string().min(1),
+  ahead_count: z.number().int().min(0),
+  behind_count: z.number().int().min(0),
+  checked_at: z.string().min(1),
+});
+
+export const RepositoryOriginStatusResponseSchema = z.object({
+  api_version: z.string(),
+  repositories: z
+    .array(
+      z.strictObject({
+        repo_key: z.string().min(1),
+        identity: z.strictObject({
+          path: z.string().min(1),
+          common_dir: z.string().min(1),
+          device: z.string().regex(/^[0-9]{1,20}$/),
+          inode: z.string().regex(/^[0-9]{1,20}$/),
+        }),
+        mode: z.enum(['default', 'current']),
+        kind: z.enum(['branch', 'detached']),
+        branch: z.string().optional(),
+        commit: OriginCommitShaSchema.optional(),
+        local_sha: OriginCommitShaSchema.optional(),
+        origin_branch: z.string().optional(),
+        fetched_sha: OriginCommitShaSchema.optional(),
+        checked_at: z.string().optional(),
+        status: z.enum([
+          'checking',
+          'up_to_date',
+          'behind',
+          'ahead',
+          'diverged',
+          'no_origin',
+          'remote_branch_missing',
+          'other_upstream',
+          'detached',
+          'local_base_missing',
+          'unknown',
+        ]),
+        ahead_count: z.number().int().min(0).optional(),
+        behind_count: z.number().int().min(0).optional(),
+        issue: CanonicalErrorSchema.optional(),
+        stale_comparison: OriginComparisonWireSchema.optional(),
+        update_eligible: z.boolean().optional(),
+        update_blockers: z
+          .array(
+            z.enum([
+              'local_not_behind',
+              'dirty_target_checkout',
+              'git_operation_in_progress',
+              'branch_checked_out_in_worktree',
+              'comparison_unavailable',
+            ]),
+          )
+          .optional(),
+      }),
+    )
+    .min(1)
+    .max(32),
+});
+
+export type RepositoryOriginStatusWireResponse = z.output<
+  typeof RepositoryOriginStatusResponseSchema
+>;
+
 // --- Clone operations (POST/GET /api/v1/workspace/repositories/clone) ------
 // Authoritative snapshots from the server-owned clone lifecycle. State,
 // pending outcome and progress come from the durable record, never from

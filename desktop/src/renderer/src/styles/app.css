@@ -13848,6 +13848,16 @@ body {
   margin-top: var(--space-1);
 }
 
+.creation-sheet__row-origin-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.creation-sheet__row-origin-hint {
+  display: block;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .settings-panel__clone-operation,
   .settings-panel__clone-action,

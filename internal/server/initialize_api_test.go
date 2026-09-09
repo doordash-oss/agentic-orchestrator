@@ -260,7 +260,7 @@ func TestWorkspaceRepositorySourcesResolveAuthorizedCatalogSelections(t *testing
 		t.Fatalf("repositories = %#v; want one", resp.Repositories)
 	}
 	got := resp.Repositories[0]
-	if got.RepoKey != "service" || got.Mode != RepositorySourceModeDefault || got.Kind != Branch || got.Branch != "release/2026/q3" {
+	if got.RepoKey != "service" || got.Mode != RepositorySourceModeDefault || got.Kind != RepositorySourceKindBranch || got.Branch != "release/2026/q3" {
 		t.Errorf("source = %#v; want service default branch release/2026/q3", got)
 	}
 	if want := fx.gitIn(repo, "rev-parse", "refs/heads/release/2026/q3"); got.ObservedSha != want {

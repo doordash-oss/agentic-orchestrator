@@ -422,6 +422,30 @@ func (e NeedUserInputVerificationAction) Valid() bool {
 	}
 }
 
+// Defines values for OriginComparisonStatus.
+const (
+	OriginComparisonStatusAhead    OriginComparisonStatus = "ahead"
+	OriginComparisonStatusBehind   OriginComparisonStatus = "behind"
+	OriginComparisonStatusDiverged OriginComparisonStatus = "diverged"
+	OriginComparisonStatusUpToDate OriginComparisonStatus = "up_to_date"
+)
+
+// Valid indicates whether the value is a known member of the OriginComparisonStatus enum.
+func (e OriginComparisonStatus) Valid() bool {
+	switch e {
+	case OriginComparisonStatusAhead:
+		return true
+	case OriginComparisonStatusBehind:
+		return true
+	case OriginComparisonStatusDiverged:
+		return true
+	case OriginComparisonStatusUpToDate:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PermissionAnswerRequestAutoApproveScope.
 const (
 	PermissionAnswerRequestAutoApproveScopeFeature   PermissionAnswerRequestAutoApproveScope = "feature"
@@ -479,18 +503,144 @@ func (e RelationshipChildOutcome) Valid() bool {
 	}
 }
 
+// Defines values for RepositoryOriginStatusKind.
+const (
+	RepositoryOriginStatusKindBranch   RepositoryOriginStatusKind = "branch"
+	RepositoryOriginStatusKindDetached RepositoryOriginStatusKind = "detached"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryOriginStatusKind enum.
+func (e RepositoryOriginStatusKind) Valid() bool {
+	switch e {
+	case RepositoryOriginStatusKindBranch:
+		return true
+	case RepositoryOriginStatusKindDetached:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryOriginStatusMode.
+const (
+	RepositoryOriginStatusModeCurrent RepositoryOriginStatusMode = "current"
+	RepositoryOriginStatusModeDefault RepositoryOriginStatusMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryOriginStatusMode enum.
+func (e RepositoryOriginStatusMode) Valid() bool {
+	switch e {
+	case RepositoryOriginStatusModeCurrent:
+		return true
+	case RepositoryOriginStatusModeDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryOriginStatusStatus.
+const (
+	RepositoryOriginStatusStatusAhead               RepositoryOriginStatusStatus = "ahead"
+	RepositoryOriginStatusStatusBehind              RepositoryOriginStatusStatus = "behind"
+	RepositoryOriginStatusStatusChecking            RepositoryOriginStatusStatus = "checking"
+	RepositoryOriginStatusStatusDetached            RepositoryOriginStatusStatus = "detached"
+	RepositoryOriginStatusStatusDiverged            RepositoryOriginStatusStatus = "diverged"
+	RepositoryOriginStatusStatusLocalBaseMissing    RepositoryOriginStatusStatus = "local_base_missing"
+	RepositoryOriginStatusStatusNoOrigin            RepositoryOriginStatusStatus = "no_origin"
+	RepositoryOriginStatusStatusOtherUpstream       RepositoryOriginStatusStatus = "other_upstream"
+	RepositoryOriginStatusStatusRemoteBranchMissing RepositoryOriginStatusStatus = "remote_branch_missing"
+	RepositoryOriginStatusStatusUnknown             RepositoryOriginStatusStatus = "unknown"
+	RepositoryOriginStatusStatusUpToDate            RepositoryOriginStatusStatus = "up_to_date"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryOriginStatusStatus enum.
+func (e RepositoryOriginStatusStatus) Valid() bool {
+	switch e {
+	case RepositoryOriginStatusStatusAhead:
+		return true
+	case RepositoryOriginStatusStatusBehind:
+		return true
+	case RepositoryOriginStatusStatusChecking:
+		return true
+	case RepositoryOriginStatusStatusDetached:
+		return true
+	case RepositoryOriginStatusStatusDiverged:
+		return true
+	case RepositoryOriginStatusStatusLocalBaseMissing:
+		return true
+	case RepositoryOriginStatusStatusNoOrigin:
+		return true
+	case RepositoryOriginStatusStatusOtherUpstream:
+		return true
+	case RepositoryOriginStatusStatusRemoteBranchMissing:
+		return true
+	case RepositoryOriginStatusStatusUnknown:
+		return true
+	case RepositoryOriginStatusStatusUpToDate:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryOriginStatusUpdateBlockers.
+const (
+	BranchCheckedOutInWorktree RepositoryOriginStatusUpdateBlockers = "branch_checked_out_in_worktree"
+	ComparisonUnavailable      RepositoryOriginStatusUpdateBlockers = "comparison_unavailable"
+	DirtyTargetCheckout        RepositoryOriginStatusUpdateBlockers = "dirty_target_checkout"
+	GitOperationInProgress     RepositoryOriginStatusUpdateBlockers = "git_operation_in_progress"
+	LocalNotBehind             RepositoryOriginStatusUpdateBlockers = "local_not_behind"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryOriginStatusUpdateBlockers enum.
+func (e RepositoryOriginStatusUpdateBlockers) Valid() bool {
+	switch e {
+	case BranchCheckedOutInWorktree:
+		return true
+	case ComparisonUnavailable:
+		return true
+	case DirtyTargetCheckout:
+		return true
+	case GitOperationInProgress:
+		return true
+	case LocalNotBehind:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryOriginStatusRequestMode.
+const (
+	RepositoryOriginStatusRequestModeCurrent RepositoryOriginStatusRequestMode = "current"
+	RepositoryOriginStatusRequestModeDefault RepositoryOriginStatusRequestMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryOriginStatusRequestMode enum.
+func (e RepositoryOriginStatusRequestMode) Valid() bool {
+	switch e {
+	case RepositoryOriginStatusRequestModeCurrent:
+		return true
+	case RepositoryOriginStatusRequestModeDefault:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RepositorySourceKind.
 const (
-	Branch   RepositorySourceKind = "branch"
-	Detached RepositorySourceKind = "detached"
+	RepositorySourceKindBranch   RepositorySourceKind = "branch"
+	RepositorySourceKindDetached RepositorySourceKind = "detached"
 )
 
 // Valid indicates whether the value is a known member of the RepositorySourceKind enum.
 func (e RepositorySourceKind) Valid() bool {
 	switch e {
-	case Branch:
+	case RepositorySourceKindBranch:
 		return true
-	case Detached:
+	case RepositorySourceKindDetached:
 		return true
 	default:
 		return false
@@ -1139,15 +1289,30 @@ func (e InitializeWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient.
+const (
+	CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClientLocal CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient enum.
+func (e CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for InspectWorkspaceRepositorySourcesParamsXAgenticoClient.
 const (
-	Local InspectWorkspaceRepositorySourcesParamsXAgenticoClient = "local"
+	InspectWorkspaceRepositorySourcesParamsXAgenticoClientLocal InspectWorkspaceRepositorySourcesParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the InspectWorkspaceRepositorySourcesParamsXAgenticoClient enum.
 func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case Local:
+	case InspectWorkspaceRepositorySourcesParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -2286,6 +2451,20 @@ type Observability struct {
 	OTelServiceName string `json:"otel_service_name,omitempty"`
 }
 
+// OriginComparison defines model for OriginComparison.
+type OriginComparison struct {
+	AheadCount   int                    `json:"ahead_count"`
+	BehindCount  int                    `json:"behind_count"`
+	CheckedAt    time.Time              `json:"checked_at"`
+	FetchedSha   string                 `json:"fetched_sha"`
+	LocalSha     string                 `json:"local_sha"`
+	OriginBranch string                 `json:"origin_branch"`
+	Status       OriginComparisonStatus `json:"status"`
+}
+
+// OriginComparisonStatus defines model for OriginComparison.Status.
+type OriginComparisonStatus string
+
 // OwnedError defines model for OwnedError.
 type OwnedError struct {
 	// Error Canonical catalog-rendered error.
@@ -2698,6 +2877,83 @@ type RepositoryInitResponse struct {
 	Meta       ResponseMeta        `json:"meta,omitempty"`
 	Repository WorkspaceRepository `json:"repository"`
 	Result     string              `json:"result"`
+}
+
+// RepositoryOriginStatus defines model for RepositoryOriginStatus.
+type RepositoryOriginStatus struct {
+	// AheadCount Local-only commits; present for comparison statuses.
+	AheadCount *int `json:"ahead_count,omitempty"`
+
+	// BehindCount Origin-only commits; present for comparison statuses.
+	BehindCount *int `json:"behind_count,omitempty"`
+
+	// Branch Full local branch name; present for the branch kind.
+	Branch string `json:"branch,omitempty"`
+
+	// CheckedAt Completion time of the current result; absent while checking.
+	CheckedAt *time.Time `json:"checked_at,omitempty"`
+
+	// Commit Detached commit; present for the detached kind.
+	Commit string `json:"commit,omitempty"`
+
+	// FetchedSha Freshly fetched origin commit; present when the current attempt fetched.
+	FetchedSha string `json:"fetched_sha,omitempty"`
+
+	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+	Identity RepositoryIdentity `json:"identity"`
+
+	// Issue Canonical issue for statuses that carry one.
+	Issue *Error                     `json:"issue,omitempty"`
+	Kind  RepositoryOriginStatusKind `json:"kind"`
+
+	// LocalSha Resolved local commit; present when the source resolved.
+	LocalSha string                     `json:"local_sha,omitempty"`
+	Mode     RepositoryOriginStatusMode `json:"mode"`
+
+	// OriginBranch Mapped origin branch; present when a mapping resolved.
+	OriginBranch string `json:"origin_branch,omitempty"`
+	RepoKey      string `json:"repo_key"`
+
+	// StaleComparison The earlier successful comparison preserved after a failed retry, tied to its original source, SHAs, counts, and timestamp.
+	StaleComparison *OriginComparison            `json:"stale_comparison,omitempty"`
+	Status          RepositoryOriginStatusStatus `json:"status"`
+
+	// UpdateBlockers Observed advisory reasons a future update is not defined or not safe.
+	UpdateBlockers []RepositoryOriginStatusUpdateBlockers `json:"update_blockers,omitempty"`
+
+	// UpdateEligible Advisory eligibility for a future branch update; never authorization for a mutation. Present when a fresh comparison exists or the comparison is unavailable.
+	UpdateEligible *bool `json:"update_eligible,omitempty"`
+}
+
+// RepositoryOriginStatusKind defines model for RepositoryOriginStatus.Kind.
+type RepositoryOriginStatusKind string
+
+// RepositoryOriginStatusMode defines model for RepositoryOriginStatus.Mode.
+type RepositoryOriginStatusMode string
+
+// RepositoryOriginStatusStatus defines model for RepositoryOriginStatus.Status.
+type RepositoryOriginStatusStatus string
+
+// RepositoryOriginStatusUpdateBlockers defines model for RepositoryOriginStatus.UpdateBlockers.
+type RepositoryOriginStatusUpdateBlockers string
+
+// RepositoryOriginStatusRequest defines model for RepositoryOriginStatusRequest.
+type RepositoryOriginStatusRequest struct {
+	Mode RepositoryOriginStatusRequestMode `json:"mode"`
+
+	// Refresh Repository keys whose completed result must be replaced by a fresh attempt. Absent or in-flight keys are no-ops; a completed result never satisfies a refreshed request.
+	Refresh      []string                   `json:"refresh,omitempty"`
+	Repositories []RepositorySourceSelector `json:"repositories"`
+}
+
+// RepositoryOriginStatusRequestMode defines model for RepositoryOriginStatusRequest.Mode.
+type RepositoryOriginStatusRequestMode string
+
+// RepositoryOriginStatusResponse defines model for RepositoryOriginStatusResponse.
+type RepositoryOriginStatusResponse struct {
+	APIVersion   string                   `json:"api_version"`
+	Meta         ResponseMeta             `json:"meta,omitempty"`
+	Repositories []RepositoryOriginStatus `json:"repositories"`
 }
 
 // RepositoryPathDTO defines model for RepositoryPathDTO.
@@ -3930,6 +4186,15 @@ type InitializeWorkspaceRepositoryParams struct {
 // InitializeWorkspaceRepositoryParamsXAgenticoClient defines parameters for InitializeWorkspaceRepository.
 type InitializeWorkspaceRepositoryParamsXAgenticoClient string
 
+// CheckWorkspaceRepositoryOriginStatusParams defines parameters for CheckWorkspaceRepositoryOriginStatus.
+type CheckWorkspaceRepositoryOriginStatusParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient defines parameters for CheckWorkspaceRepositoryOriginStatus.
+type CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient string
+
 // InspectWorkspaceRepositorySourcesParams defines parameters for InspectWorkspaceRepositorySources.
 type InspectWorkspaceRepositorySourcesParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -4019,6 +4284,9 @@ type InitWorkspaceRepositoryJSONRequestBody = RepositoryInitSchema
 
 // InitializeWorkspaceRepositoryJSONRequestBody defines body for InitializeWorkspaceRepository for application/json ContentType.
 type InitializeWorkspaceRepositoryJSONRequestBody = InitializeRepositorySchema
+
+// CheckWorkspaceRepositoryOriginStatusJSONRequestBody defines body for CheckWorkspaceRepositoryOriginStatus for application/json ContentType.
+type CheckWorkspaceRepositoryOriginStatusJSONRequestBody = RepositoryOriginStatusRequest
 
 // InspectWorkspaceRepositorySourcesJSONRequestBody defines body for InspectWorkspaceRepositorySources for application/json ContentType.
 type InspectWorkspaceRepositorySourcesJSONRequestBody = RepositorySourcesRequest

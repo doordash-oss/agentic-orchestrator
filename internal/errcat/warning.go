@@ -57,6 +57,13 @@ const (
 	// RepositoryDiffFailed reports a repository whose diff could not be
 	// computed; the git error rides as bounded diagnostics.
 	RepositoryDiffFailed Code = "repository_diff_failed"
+	// OriginCheckUnavailable reports a selected repository whose local source
+	// could not be compared with its origin; creation can continue from the
+	// accepted local source.
+	OriginCheckUnavailable Code = "origin_check_unavailable"
+	// OriginBranchMissing reports a selected repository whose mapped origin
+	// branch was proved missing on the remote by the current check attempt.
+	OriginBranchMissing Code = "origin_branch_missing"
 )
 
 // Orphan-session recovery codes. An orphan session is a recovery item whose

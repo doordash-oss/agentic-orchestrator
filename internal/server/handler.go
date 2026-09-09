@@ -82,6 +82,11 @@ type apiHandler struct {
 	recoverySnapshots  map[string][]ports.RecoveryItem
 	reviewSessionLocks *reviewSessionLockSet
 
+	// originChecks coordinates fetch-based origin checks for selected
+	// repository sources: coalesced attempts, completed snapshots, the
+	// global concurrency cap, and per-attempt deadlines.
+	originChecks *originCheckCoordinator
+
 	// readinessMu guards the cached provider readiness probe results served
 	// by /api/v1/readiness and refreshed by /api/v1/readiness/refresh.
 	readinessMu       sync.Mutex
@@ -140,6 +145,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		initializeGitRepository: opts.InitializeGitRepository,
 		reviewSessionLocks:      newReviewSessionLockSet(),
 		creationResults:         make(map[string]creationResult),
+		originChecks:            newOriginCheckCoordinator(),
 	}
 	if opts.Worktrees != nil {
 		handler.cleanliness = git.NewCleanlinessCache(opts.Worktrees)
@@ -228,6 +234,7 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathWorkspaceRepositoriesCreate, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryCreateRoute }},
 	{apiPathWorkspaceRepositoriesInitialize, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitializeRoute }},
 	{apiPathWorkspaceRepositorySources, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositorySourcesRoute }},
+	{apiPathWorkspaceRepositoryOriginStatus, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryOriginStatusRoute }},
 	{apiPathWorkspaceClone, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneRoute }},
 	{apiPathWorkspaceClone + "/", func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneOperationRoutes }},
 	{apiPathPrompts, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},

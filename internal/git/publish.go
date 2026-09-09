@@ -15,6 +15,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -322,6 +323,26 @@ func LockRepositories(repoPaths []string) func() {
 	return func() {
 		for i := len(locks) - 1; i >= 0; i-- {
 			locks[i].Unlock()
+		}
+	}
+}
+
+// LockRepositoryUntil acquires one repository's mutation lock, bounded by
+// ctx. It uses the same canonical common-directory identity as
+// LockRepositories, so an origin check serializes with feature acceptance,
+// setup, and other guarded mutations; a single-lock acquisition cannot
+// deadlock against a multi-lock holder. The returned unlock must be called
+// when ok is true.
+func LockRepositoryUntil(ctx context.Context, repoPath string) (unlock func(), ok bool) {
+	mu := worktreeMutationLock(repoPath)
+	for {
+		if mu.TryLock() {
+			return mu.Unlock, true
+		}
+		select {
+		case <-ctx.Done():
+			return func() {}, false
+		case <-time.After(50 * time.Millisecond):
 		}
 	}
 }

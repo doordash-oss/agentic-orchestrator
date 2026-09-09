@@ -1237,6 +1237,38 @@ paths:
         "409":
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/v1/workspace/repositories/origin-status:
+    post:
+      operationId: checkWorkspaceRepositoryOriginStatus
+      summary: Compare selected local sources with their origin branches.
+      description: >-
+        Resolves structured selectors against the connected server's current
+        authorized repository catalog and reports each repository's typed
+        origin snapshot, scheduling fetch-based checks for sources with an
+        origin mapping. Checks fetch only the mapped origin branch and never
+        change local branches, HEAD, the index, configuration, or working
+        files. Completed results satisfy polling requests for the same
+        resolved source; the refresh list forces a fresh attempt per
+        repository key after a completed result. Renderer-supplied paths,
+        refs, and SHAs are never revision authority.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryOriginStatusRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/RepositoryOriginStatusResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/recovery:
     get:
       operationId: getRecoverySnapshot
@@ -1767,6 +1799,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RepositorySourcesResponse"
+    RepositoryOriginStatusResponse:
+      description: Typed origin snapshots for the selected repositories.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositoryOriginStatusResponse"
     CloneActionResponse:
       description: Authoritative clone operation snapshot after a mutation.
       content:
@@ -2577,6 +2615,163 @@ components:
               maxItems: 32
               items:
                 $ref: "#/components/schemas/RepositorySource"
+    RepositoryOriginStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, repositories]
+      properties:
+        mode:
+          type: string
+          enum: [default, current]
+        repositories:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/RepositorySourceSelector"
+        refresh:
+          type: array
+          description: >-
+            Repository keys whose completed result must be replaced by a
+            fresh attempt. Absent or in-flight keys are no-ops; a completed
+            result never satisfies a refreshed request.
+          maxItems: 32
+          items:
+            type: string
+            minLength: 1
+            maxLength: 512
+    RepositoryOriginStatus:
+      type: object
+      additionalProperties: false
+      required: [repo_key, identity, mode, kind, status]
+      properties:
+        repo_key:
+          type: string
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+          x-go-type-skip-optional-pointer: false
+        mode:
+          type: string
+          enum: [default, current]
+        kind:
+          type: string
+          enum: [branch, detached]
+        branch:
+          type: string
+          description: Full local branch name; present for the branch kind.
+        commit:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: Detached commit; present for the detached kind.
+        local_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: Resolved local commit; present when the source resolved.
+        origin_branch:
+          type: string
+          description: Mapped origin branch; present when a mapping resolved.
+        fetched_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: Freshly fetched origin commit; present when the current attempt fetched.
+        checked_at:
+          type: string
+          format: date-time
+          description: Completion time of the current result; absent while checking.
+          x-go-type-skip-optional-pointer: false
+        status:
+          type: string
+          enum:
+            [
+              checking,
+              up_to_date,
+              behind,
+              ahead,
+              diverged,
+              no_origin,
+              remote_branch_missing,
+              other_upstream,
+              detached,
+              local_base_missing,
+              unknown,
+            ]
+        ahead_count:
+          type: integer
+          minimum: 0
+          description: Local-only commits; present for comparison statuses.
+          x-go-type-skip-optional-pointer: false
+        behind_count:
+          type: integer
+          minimum: 0
+          description: Origin-only commits; present for comparison statuses.
+          x-go-type-skip-optional-pointer: false
+        issue:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: Canonical issue for statuses that carry one.
+        stale_comparison:
+          $ref: "#/components/schemas/OriginComparison"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            The earlier successful comparison preserved after a failed retry,
+            tied to its original source, SHAs, counts, and timestamp.
+        update_eligible:
+          type: boolean
+          description: >-
+            Advisory eligibility for a future branch update; never
+            authorization for a mutation. Present when a fresh comparison
+            exists or the comparison is unavailable.
+          x-go-type-skip-optional-pointer: false
+        update_blockers:
+          type: array
+          description: Observed advisory reasons a future update is not defined or not safe.
+          items:
+            type: string
+            enum:
+              [
+                local_not_behind,
+                dirty_target_checkout,
+                git_operation_in_progress,
+                branch_checked_out_in_worktree,
+                comparison_unavailable,
+              ]
+    OriginComparison:
+      type: object
+      additionalProperties: false
+      required:
+        [status, local_sha, fetched_sha, origin_branch, ahead_count, behind_count, checked_at]
+      properties:
+        status:
+          type: string
+          enum: [up_to_date, behind, ahead, diverged]
+        local_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+        fetched_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+        origin_branch:
+          type: string
+        ahead_count:
+          type: integer
+          minimum: 0
+        behind_count:
+          type: integer
+          minimum: 0
+        checked_at:
+          type: string
+          format: date-time
+    RepositoryOriginStatusResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [repositories]
+          properties:
+            repositories:
+              type: array
+              maxItems: 32
+              items:
+                $ref: "#/components/schemas/RepositoryOriginStatus"
     CloneStartRequest:
       x-go-name: CloneStartSchema
       type: object

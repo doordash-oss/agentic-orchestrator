@@ -36,6 +36,7 @@ const (
 const (
 	Conflict              Code = "conflict"
 	LocalSourceStale      Code = "local_source_stale"
+	LocalBaseMissing      Code = "local_base_missing"
 	PublishRemoteDiverged Code = "publish_remote_diverged"
 	PublishRemoteChanged  Code = "publish_remote_changed"
 	PipelineMismatch      Code = "pipeline_mismatch"
@@ -437,6 +438,13 @@ var catalog = map[Code]Entry{
 		Blocks:      []Block{BlockRepositories},
 		Summary:     "A selected local repository source changed after it was reviewed.",
 		Remediation: "Review the refreshed local source, then submit the feature again.",
+	},
+	LocalBaseMissing: {
+		Class:       ClassNeedsAction,
+		Title:       "Local source missing",
+		Blocks:      []Block{BlockRepositories},
+		Summary:     "A selected repository's local source is missing or has no commits.",
+		Remediation: "Restore the branch or commit locally, or deselect the repository before continuing.",
 	},
 	PublishRemoteDiverged: {
 		Class:  ClassNeedsAction,
@@ -1409,6 +1417,26 @@ var catalog = map[Code]Entry{
 			return warningRepoSummary(p, "Computing the diff for %s failed.")
 		},
 		Remediation: "Retry the diff; the git error is in the details.",
+	},
+	OriginCheckUnavailable: {
+		Class:   ClassWarning,
+		Title:   "Origin check unavailable",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A selected repository's local source could not be compared with its origin.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "The local source for %s could not be compared with its origin.")
+		},
+		Remediation: "Retry the origin check or continue from the local source; this warning does not mean the local source is up to date.",
+	},
+	OriginBranchMissing: {
+		Class:   ClassWarning,
+		Title:   "Origin branch missing",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A selected repository's mapped origin branch no longer exists on the remote.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "The mapped origin branch for %s no longer exists on the remote.")
+		},
+		Remediation: "Restore the origin branch or re-track the local branch; creation can continue from the local source.",
 	},
 
 	// --- Orphan-session recovery codes ---------------------------------------

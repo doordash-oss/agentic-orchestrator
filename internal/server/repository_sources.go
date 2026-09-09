@@ -72,9 +72,9 @@ func (h *apiHandler) handleWorkspaceRepositorySourcesRoute(w http.ResponseWriter
 				errcat.WithDiagnostics(err.Error()))
 			return
 		}
-		kind := Branch
+		kind := RepositorySourceKindBranch
 		if resolved.Kind == git.LocalSourceDetached {
-			kind = Detached
+			kind = RepositorySourceKindDetached
 		}
 		response.Repositories = append(response.Repositories, RepositorySource{
 			RepoKey: key,

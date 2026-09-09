@@ -375,9 +375,9 @@ func mutationRepositorySource(t testing.TB, key, repoPath string, mode gitpkg.Lo
 	if err != nil {
 		t.Fatalf("InspectLocalSource(%q, %q) error = %v", repoPath, mode, err)
 	}
-	kind := serverruntime.Branch
+	kind := serverruntime.RepositorySourceKindBranch
 	if source.Kind == gitpkg.LocalSourceDetached {
-		kind = serverruntime.Detached
+		kind = serverruntime.RepositorySourceKindDetached
 	}
 	return serverruntime.RepositorySource{
 		RepoKey: key,

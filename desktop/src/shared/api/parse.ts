@@ -496,7 +496,9 @@ const RepositoryOriginStatusWireSchema = z.strictObject({
         'dirty_target_checkout',
         'git_operation_in_progress',
         'branch_checked_out_in_worktree',
-        'branch_checked_out_in_original_checkout',
+        'checkout_operation_in_progress',
+        'ignored_path_collision',
+        'checkout_uninspectable',
         'comparison_unavailable',
       ]),
     )
@@ -527,6 +529,10 @@ export const RepositoryUpdateSourceResponseSchema = z.object({
       'origin_branch_missing',
       'not_fast_forward',
       'branch_checked_out',
+      'dirty_checkout',
+      'checkout_operation_in_progress',
+      'ignored_path_collision',
+      'checkout_conflict',
     ])
     .optional(),
   repo_key: z.string().min(1),
@@ -548,6 +554,17 @@ export const RepositoryUpdateSourceResponseSchema = z.object({
 export type RepositoryUpdateSourceWireResponse = z.output<
   typeof RepositoryUpdateSourceResponseSchema
 >;
+
+const RepositorySourceReconcileCheckoutWireSchema = z.strictObject({
+  state: z.enum(['clean', 'dirty', 'operation_in_progress', 'unobserved']),
+  // The server sends an empty head_ref when the checkout HEAD could not be
+  // read; only an absent head_sha (never an empty one) is malformed.
+  head_ref: z.string().max(512).optional(),
+  head_sha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+});
 
 export const RepositorySourceReconcileResponseSchema = z.object({
   api_version: z.string(),
@@ -583,6 +600,7 @@ export const RepositorySourceReconcileResponseSchema = z.object({
       observed_sha: z.string().regex(/^[0-9a-f]{40,64}$/),
     })
     .optional(),
+  checkout: RepositorySourceReconcileCheckoutWireSchema.optional(),
 });
 
 export type RepositorySourceReconcileWireResponse = z.output<

@@ -2896,7 +2896,9 @@ export const RepositoryOriginStatusSnapshotSchema = z.strictObject({
         'dirty_target_checkout',
         'git_operation_in_progress',
         'branch_checked_out_in_worktree',
-        'branch_checked_out_in_original_checkout',
+        'checkout_operation_in_progress',
+        'ignored_path_collision',
+        'checkout_uninspectable',
         'comparison_unavailable',
       ]),
     )
@@ -2939,6 +2941,10 @@ export const RepositoryUpdateSourceResultSchema = z.strictObject({
       'origin_branch_missing',
       'not_fast_forward',
       'branch_checked_out',
+      'dirty_checkout',
+      'checkout_operation_in_progress',
+      'ignored_path_collision',
+      'checkout_conflict',
     ])
     .optional(),
   repoKey: z.string().min(1),
@@ -2970,9 +2976,26 @@ export const RepositorySourceReconcileRequestSchema = z.strictObject({
   originBranch: z.string().min(1).max(512),
   expectedLocalSha: z.string().regex(/^[0-9a-f]{40,64}$/),
   expectedOriginSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+  checkoutHeadRef: z.string().min(1).max(512).optional(),
+  checkoutHeadSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
 });
 export type RepositorySourceReconcileRequest = z.output<
   typeof RepositorySourceReconcileRequestSchema
+>;
+
+export const RepositorySourceReconcileCheckoutSchema = z.strictObject({
+  state: z.enum(['clean', 'dirty', 'operation_in_progress', 'unobserved']),
+  headRef: z.string().max(512).optional(),
+  headSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+});
+export type RepositorySourceReconcileCheckout = z.output<
+  typeof RepositorySourceReconcileCheckoutSchema
 >;
 
 export const RepositorySourceReconcileResultSchema = z.strictObject({
@@ -2992,6 +3015,7 @@ export const RepositorySourceReconcileResultSchema = z.strictObject({
     .regex(/^[0-9a-f]{40,64}$/)
     .optional(),
   selection: RepositorySourceExpectationSchema.optional(),
+  checkout: RepositorySourceReconcileCheckoutSchema.optional(),
 });
 export type RepositorySourceReconcileResult = z.output<
   typeof RepositorySourceReconcileResultSchema

@@ -320,25 +320,60 @@ func TestUpdateSourceFromOriginLinkedWorktreeOccupancyRefusesWithGuidance(t *tes
 	}
 }
 
-func TestUpdateSourceFromOriginOriginalCheckoutOccupancyRefusesEvenClean(t *testing.T) {
-	fx := newUpdateFixture(t)
-	// The checkout itself holds the target branch: unavailable in this
-	// phase even when clean.
-	runGitUpdateTest(t, fx.repo, "checkout", "main")
-	expected := fx.expectation(t)
-	expected.CheckoutHeadRef = "refs/heads/main"
-	expected.CheckoutHeadSHA = gitUpdateSHA(t, fx.repo, "HEAD^{commit}")
+func TestUpdateSourceFromOriginalCheckoutAdvancesBranchIndexAndFiles(t *testing.T) {
+	fx := newOriginalCheckoutFixture(t)
+	expected := fx.originalExpectation(t, LocalSourceModeDefault)
+	keepSHA := func() string {
+		runGitUpdateTest(t, fx.repo, "branch", "keep")
+		return gitUpdateSHA(t, fx.repo, "refs/heads/keep")
+	}()
 
 	outcome, err := UpdateSourceFromOrigin(context.Background(), fx.repo, expected, SourceUpdateOptions{})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonBranchCheckedOut {
-		t.Fatalf("result = %q reason = %q; want stale branch_checked_out", outcome.Result, outcome.Reason)
+	if outcome.Result != SourceUpdateUpdated {
+		t.Fatalf("result = %q reason = %q; want updated", outcome.Result, outcome.Reason)
 	}
-	hasUpdateBlocker(t, outcome.Blockers, UpdateBlockerBranchCheckedOutOriginal)
-	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
-		t.Fatalf("refs/heads/main = %s; want the displayed tip preserved", got)
+	if outcome.PreviousSHA != expected.ExpectedLocalSHA || outcome.LocalSHA != expected.ExpectedOriginSHA {
+		t.Fatalf("outcome SHAs = previous %s local %s; want %s -> %s", outcome.PreviousSHA, outcome.LocalSHA, expected.ExpectedLocalSHA, expected.ExpectedOriginSHA)
+	}
+	// The branch, symbolic HEAD, index, and working files all advanced to
+	// the fetched target.
+	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedOriginSHA {
+		t.Fatalf("refs/heads/main = %s; want the fetched origin tip %s", got, expected.ExpectedOriginSHA)
+	}
+	if got := runGitUpdateTest(t, fx.repo, "symbolic-ref", "--quiet", "HEAD"); got != "refs/heads/main" {
+		t.Fatalf("HEAD = %s; want refs/heads/main", got)
+	}
+	if got := gitUpdateSHA(t, fx.repo, "HEAD^{commit}"); got != expected.ExpectedOriginSHA {
+		t.Fatalf("HEAD commit = %s; want the fetched origin tip", got)
+	}
+	if got := runGitUpdateTest(t, fx.repo, "status", "--porcelain"); got != "" {
+		t.Fatalf("status --porcelain = %q; want a clean checkout", got)
+	}
+	changed, err := os.ReadFile(filepath.Join(fx.repo, "README.md"))
+	if err != nil || string(changed) != "remote edit\n" {
+		t.Fatalf("README.md = %q err=%v; want the target content", changed, err)
+	}
+	added, err := os.ReadFile(filepath.Join(fx.repo, "added.txt"))
+	if err != nil || string(added) != "added remotely\n" {
+		t.Fatalf("added.txt = %q err=%v; want the target content", added, err)
+	}
+	stage := runGitUpdateTest(t, fx.repo, "ls-files", "--stage")
+	if !strings.Contains(stage, "added.txt") {
+		t.Fatalf("ls-files --stage missing the incoming file:\n%s", stage)
+	}
+	// Unrelated refs, the checkout's branch identity, and the origin
+	// configuration are preserved; the fetch refreshed the tracking ref.
+	if got := gitUpdateSHA(t, fx.repo, "refs/heads/keep"); got != keepSHA {
+		t.Fatalf("refs/heads/keep moved to %s; want %s", got, keepSHA)
+	}
+	if got := gitUpdateSHA(t, fx.repo, "refs/remotes/origin/main"); got != expected.ExpectedOriginSHA {
+		t.Fatalf("origin tracking ref = %s; want the fetched tip", got)
+	}
+	if got := runGitUpdateTest(t, fx.repo, "remote", "get-url", "origin"); got != fx.bare {
+		t.Fatalf("origin url = %s; want %s", got, fx.bare)
 	}
 }
 

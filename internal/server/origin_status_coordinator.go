@@ -219,7 +219,10 @@ func (c *originCheckCoordinator) runAttempt(flight *originFlight, identity git.R
 	}
 
 	if outcome.Comparison != nil && plan.Source.Kind == git.LocalSourceBranch {
-		eligible, blockers := c.updateEligibility(repoPath, plan.Source.Branch)
+		// The fresh comparison supplies the advisory ignored-collision range
+		// for an original-checkout holder; eligibility is advisory and the
+		// update revalidates everything at execution.
+		eligible, blockers := c.updateEligibility(repoPath, plan.Source.Branch, outcome.Comparison)
 		updateEligible = &eligible
 		updateBlockers = blockers
 	}
@@ -281,10 +284,10 @@ func (c *originCheckCoordinator) attemptUnderLock(ctx context.Context, identity 
 	return outcome
 }
 
-func (c *originCheckCoordinator) updateEligibility(repoPath, branch string) (bool, []git.UpdateBlocker) {
+func (c *originCheckCoordinator) updateEligibility(repoPath, branch string, comparison *git.OriginComparison) (bool, []git.UpdateBlocker) {
 	ctx, cancel := context.WithTimeout(c.baseCtx, 10*time.Second)
 	defer cancel()
-	return git.ProbeUpdateEligibility(ctx, repoPath, branch, git.OriginCheckOptions{})
+	return git.ProbeUpdateEligibility(ctx, repoPath, branch, comparison, git.OriginCheckOptions{})
 }
 
 func (c *originCheckCoordinator) storeCompletedLocked(key originCheckKey, completed *originCompleted) {

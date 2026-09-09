@@ -165,7 +165,7 @@ func TestWorkspaceRepositoryUpdateSourceStaleOriginTipCarriesFreshStatus(t *test
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
 	}
-	if resp.Result != Stale || resp.Reason != OriginTipChanged {
+	if resp.Result != Stale || resp.Reason != RepositoryUpdateSourceResponseReasonOriginTipChanged {
 		t.Fatalf("result = %q reason = %q; want stale origin_tip_changed", resp.Result, resp.Reason)
 	}
 	if resp.Status == nil || resp.Status.Status != RepositoryOriginStatusStatusBehind {
@@ -182,7 +182,7 @@ func TestWorkspaceRepositoryUpdateSourceStaleOriginTipCarriesFreshStatus(t *test
 	}
 }
 
-func TestWorkspaceRepositoryUpdateSourceOriginalCheckoutTargetRefuses(t *testing.T) {
+func TestWorkspaceRepositoryUpdateSourceFastForwardsOriginalCheckout(t *testing.T) {
 	fx := newInitializeFixture(t)
 	repo, bare := updateSourceFixture(t, fx, "occupied")
 	fx.gitIn(repo, "checkout", "main")
@@ -194,20 +194,78 @@ func TestWorkspaceRepositoryUpdateSourceOriginalCheckoutTargetRefuses(t *testing
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
 	}
-	if resp.Result != Stale || resp.Reason != BranchCheckedOut {
-		t.Fatalf("result = %q reason = %q; want stale branch_checked_out", resp.Result, resp.Reason)
+	if resp.Result != Updated {
+		t.Fatalf("result = %q reason = %q; want updated", resp.Result, resp.Reason)
+	}
+	// The branch, symbolic HEAD, and checkout all advanced to the fetched
+	// target, and the index and working tree stayed consistent with it.
+	if got := fx.gitIn(repo, "rev-parse", "refs/heads/main"); got != body["expected_origin_sha"] {
+		t.Fatalf("refs/heads/main = %s; want the fetched origin tip", got)
+	}
+	if got := fx.gitIn(repo, "symbolic-ref", "--quiet", "HEAD"); got != "refs/heads/main" {
+		t.Fatalf("HEAD = %s; want refs/heads/main", got)
+	}
+	if got := fx.gitIn(repo, "rev-parse", "HEAD^{commit}"); got != body["expected_origin_sha"] {
+		t.Fatalf("HEAD commit = %s; want the fetched origin tip", got)
+	}
+	if got := fx.gitIn(repo, "status", "--porcelain"); got != "" {
+		t.Fatalf("status --porcelain = %q; want a clean checkout", got)
+	}
+}
+
+func TestWorkspaceRepositoryUpdateSourceDirtyOriginalCheckoutRefusesWithFreshStatus(t *testing.T) {
+	fx := newInitializeFixture(t)
+	repo, bare := updateSourceFixture(t, fx, "occupied-dirty")
+	fx.gitIn(repo, "checkout", "main")
+	if err := os.WriteFile(filepath.Join(repo, "local.txt"), []byte("local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body := fx.updateSourceBody(repo, bare)
+	body["checkout_head_ref"] = "refs/heads/main"
+	body["checkout_head_sha"] = fx.gitIn(repo, "rev-parse", "HEAD^{commit}")
+
+	w, resp := fx.updateSource(body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
+	}
+	if resp.Result != Stale || resp.Reason != RepositoryUpdateSourceResponseReasonDirtyCheckout {
+		t.Fatalf("result = %q reason = %q; want stale dirty_checkout", resp.Result, resp.Reason)
 	}
 	blocked := false
 	for _, blocker := range resp.Status.UpdateBlockers {
-		if blocker == RepositoryOriginStatusUpdateBlockers(git.UpdateBlockerBranchCheckedOutOriginal) {
+		if blocker == RepositoryOriginStatusUpdateBlockers(git.UpdateBlockerDirtyTargetCheckout) {
 			blocked = true
 		}
 	}
 	if !blocked {
-		t.Fatalf("status blockers = %v; want branch_checked_out_in_original_checkout", resp.Status.UpdateBlockers)
+		t.Fatalf("status blockers = %v; want dirty_target_checkout", resp.Status.UpdateBlockers)
 	}
 	if got := fx.gitIn(repo, "rev-parse", "refs/heads/main"); got != body["expected_local_sha"] {
 		t.Fatalf("refs/heads/main = %s; want the displayed tip preserved", got)
+	}
+	if got, err := os.ReadFile(filepath.Join(repo, "local.txt")); err != nil || string(got) != "local\n" {
+		t.Fatalf("local.txt = %q err=%v; want the local content preserved", got, err)
+	}
+}
+
+func TestWorkspaceRepositoryOriginStatusMarksEligibleOriginalCheckout(t *testing.T) {
+	fx := newInitializeFixture(t)
+	repo, _ := updateSourceFixture(t, fx, "occupied-eligible")
+	fx.gitIn(repo, "checkout", "main")
+
+	resp := fx.awaitOriginStatus("default", []map[string]any{fx.originStatusSelector("occupied-eligible", repo)}, nil)
+	if len(resp.Repositories) != 1 {
+		t.Fatalf("rows = %d; want 1", len(resp.Repositories))
+	}
+	row := resp.Repositories[0]
+	if row.Status != RepositoryOriginStatusStatusBehind {
+		t.Fatalf("row status = %q; want behind", row.Status)
+	}
+	if row.CheckoutHeadRef == nil || *row.CheckoutHeadRef != "refs/heads/main" {
+		t.Fatalf("row checkout head ref = %v; want refs/heads/main", row.CheckoutHeadRef)
+	}
+	if row.UpdateEligible == nil || !*row.UpdateEligible {
+		t.Fatalf("row eligibility = %v blockers = %v; want an eligible clean original checkout", row.UpdateEligible, row.UpdateBlockers)
 	}
 }
 
@@ -267,7 +325,7 @@ func TestWorkspaceRepositoryUpdateSourceLocalBaseMissingRefusesWithRequestIdenti
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
 	}
-	if resp.Result != Stale || resp.Reason != SourceChanged {
+	if resp.Result != Stale || resp.Reason != RepositoryUpdateSourceResponseReasonSourceChanged {
 		t.Fatalf("result = %q reason = %q; want stale source_changed", resp.Result, resp.Reason)
 	}
 	// A terminal plan leaves the current selection unresolved: the response
@@ -334,7 +392,7 @@ func TestWorkspaceRepositoryUpdateSourceMembershipRaceBeforeCASRefuses(t *testin
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
 	}
-	if resp.Result != Stale || resp.Reason != BranchCheckedOut {
+	if resp.Result != Stale || resp.Reason != RepositoryUpdateSourceResponseReasonBranchCheckedOut {
 		t.Fatalf("result = %q reason = %q; want stale branch_checked_out", resp.Result, resp.Reason)
 	}
 	if got := fx.gitIn(repo, "rev-parse", "refs/heads/main"); got != body["expected_local_sha"] {

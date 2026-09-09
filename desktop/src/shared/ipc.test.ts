@@ -78,6 +78,8 @@ import {
   RepositoryOriginStatusResultSchema,
   RepositoryUpdateSourceRequestSchema,
   RepositoryUpdateSourceResultSchema,
+  RepositorySourceReconcileRequestSchema,
+  RepositorySourceReconcileResultSchema,
   RepositorySourcesResultSchema,
 } from './ipc';
 import * as ipcModule from './ipc';
@@ -347,15 +349,65 @@ describe('repository update source IPC contract', () => {
         kind: 'branch',
         branch: 'release/2026/q3',
         status: 'behind',
-        updateBlockers: ['branch_checked_out_in_original_checkout'],
+        updateBlockers: [
+          'dirty_target_checkout',
+          'checkout_operation_in_progress',
+          'ignored_path_collision',
+          'checkout_uninspectable',
+        ],
         checkoutHeadRef: 'refs/heads/main',
         checkoutHeadSha: 'e'.repeat(40),
       },
     });
     expect(result.reason).toBe('local_tip_changed');
-    expect(result.status?.updateBlockers).toEqual(['branch_checked_out_in_original_checkout']);
+    expect(result.status?.updateBlockers).toEqual([
+      'dirty_target_checkout',
+      'checkout_operation_in_progress',
+      'ignored_path_collision',
+      'checkout_uninspectable',
+    ]);
     expect(result.status?.checkoutHeadRef).toBe('refs/heads/main');
     expect(result.status?.checkoutHeadSha).toBe('e'.repeat(40));
+    // The removed Phase 8 original-checkout blocker must never parse again.
+    expect(
+      RepositoryUpdateSourceResultSchema.safeParse({
+        result: 'stale',
+        reason: 'branch_checked_out',
+        repoKey: 'repo-a',
+        identity,
+        mode: 'default',
+        branch: 'main',
+        originBranch: 'main',
+        status: {
+          repoKey: 'repo-a',
+          identity,
+          mode: 'default',
+          kind: 'branch',
+          branch: 'main',
+          status: 'behind',
+          updateBlockers: ['branch_checked_out_in_original_checkout'],
+        },
+      }).success,
+    ).toBe(false);
+    // The original-checkout safety refusal reasons cross IPC.
+    for (const reason of [
+      'dirty_checkout',
+      'checkout_operation_in_progress',
+      'ignored_path_collision',
+      'checkout_conflict',
+    ]) {
+      expect(
+        RepositoryUpdateSourceResultSchema.safeParse({
+          result: 'stale',
+          reason,
+          repoKey: 'repo-a',
+          identity,
+          mode: 'default',
+          branch: 'main',
+          originBranch: 'main',
+        }).success,
+      ).toBe(true);
+    }
     expect(
       RepositoryUpdateSourceResultSchema.safeParse({
         result: 'stale',
@@ -376,6 +428,87 @@ describe('repository update source IPC contract', () => {
         branch: 'main',
         originBranch: 'main',
         localSha: 'not-a-sha',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts an optional checkout binding on the settlement request and rejects malformed values', () => {
+    const request = {
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default' as const,
+      branch: 'release/2026/q3',
+      originBranch: 'upstream-main',
+      expectedLocalSha: 'a'.repeat(40),
+      expectedOriginSha: 'c'.repeat(40),
+    };
+    // An unoccupied attempt binds no checkout identity.
+    expect(RepositorySourceReconcileRequestSchema.parse(request)).toStrictEqual(request);
+    const originalCheckout = {
+      ...request,
+      checkoutHeadRef: 'refs/heads/release/2026/q3',
+      checkoutHeadSha: 'a'.repeat(40),
+    };
+    expect(RepositorySourceReconcileRequestSchema.parse(originalCheckout)).toStrictEqual(
+      originalCheckout,
+    );
+    expect(
+      RepositorySourceReconcileRequestSchema.safeParse({
+        ...originalCheckout,
+        checkoutHeadRef: '',
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourceReconcileRequestSchema.safeParse({
+        ...originalCheckout,
+        checkoutHeadSha: 'not-a-sha',
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourceReconcileRequestSchema.safeParse({
+        ...originalCheckout,
+        path: '/renderer/chosen/path',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts an observed checkout state on the settlement result and rejects unknown states', () => {
+    const base = {
+      outcome: 'expected_target_present' as const,
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default' as const,
+      branch: 'main',
+      originBranch: 'main',
+      localSha: 'c'.repeat(40),
+    };
+    const result = RepositorySourceReconcileResultSchema.parse({
+      ...base,
+      checkout: { state: 'clean', headRef: 'refs/heads/main', headSha: 'c'.repeat(40) },
+    });
+    expect(result.checkout).toEqual({
+      state: 'clean',
+      headRef: 'refs/heads/main',
+      headSha: 'c'.repeat(40),
+    });
+    // An unoccupied settlement carries no checkout observation.
+    expect(RepositorySourceReconcileResultSchema.parse(base).checkout).toBeUndefined();
+    expect(
+      RepositorySourceReconcileResultSchema.safeParse({
+        ...base,
+        checkout: { state: 'sideways' },
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourceReconcileResultSchema.safeParse({
+        ...base,
+        checkout: { state: 'dirty', headSha: 'not-a-sha' },
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourceReconcileResultSchema.safeParse({
+        ...base,
+        checkout: { state: 'unobserved', path: '/renderer/chosen/path' },
       }).success,
     ).toBe(false);
   });

@@ -37,9 +37,10 @@ import (
 // when many fork-heavy tests run at once.
 
 // reconcileSourceBodyFromUpdate repeats one displayed update binding as the
-// settlement request the renderer sends after losing the update response.
+// settlement request the renderer sends after losing the update response,
+// including the checkout HEAD binding an original-checkout update carried.
 func reconcileSourceBodyFromUpdate(body map[string]any) map[string]any {
-	return map[string]any{
+	reconcile := map[string]any{
 		"repo_key":            body["repo_key"],
 		"identity":            body["identity"],
 		"mode":                body["mode"],
@@ -48,6 +49,13 @@ func reconcileSourceBodyFromUpdate(body map[string]any) map[string]any {
 		"expected_local_sha":  body["expected_local_sha"],
 		"expected_origin_sha": body["expected_origin_sha"],
 	}
+	if ref, ok := body["checkout_head_ref"]; ok {
+		reconcile["checkout_head_ref"] = ref
+	}
+	if sha, ok := body["checkout_head_sha"]; ok {
+		reconcile["checkout_head_sha"] = sha
+	}
+	return reconcile
 }
 
 func (fx *initializeFixture) reconcileSource(body map[string]any) (*httptest.ResponseRecorder, RepositorySourceReconcileResponse) {
@@ -548,4 +556,101 @@ func TestCreateFeatureFailsClosedWhenAdmittedUpdateCannotSettle(t *testing.T) {
 	if w := <-updateDone; w.Code != http.StatusOK {
 		t.Fatalf("update status = %d body=%s", w.Code, w.Body.String())
 	}
+}
+
+
+func TestWorkspaceRepositoryReconcileSourceUpdateObservesOriginalCheckoutCompletion(t *testing.T) {
+	fx := newInitializeFixture(t)
+	repo, bare := updateSourceFixture(t, fx, "occupied-settled")
+	fx.gitIn(repo, "checkout", "main")
+	body := fx.updateSourceBody(repo, bare)
+	body["checkout_head_ref"] = "refs/heads/main"
+	body["checkout_head_sha"] = fx.gitIn(repo, "rev-parse", "HEAD^{commit}")
+
+	if w, _ := fx.updateSource(body); w.Code != http.StatusOK {
+		t.Fatalf("update status = %d body=%s", w.Code, w.Body.String())
+	}
+	w, resp := fx.reconcileSource(reconcileSourceBodyFromUpdate(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("reconcile status = %d body=%s; want 200", w.Code, w.Body.String())
+	}
+	if resp.Outcome != ExpectedTargetPresent {
+		t.Fatalf("outcome = %q; want expected_target_present", resp.Outcome)
+	}
+	// The target tip alone does not prove the whole checkout completed: the
+	// settlement observes the checkout before claiming it.
+	if resp.Checkout == nil || resp.Checkout.State != Clean {
+		t.Fatalf("checkout = %#v; want a clean observed checkout", resp.Checkout)
+	}
+	if resp.Checkout.HeadRef != "refs/heads/main" || resp.Checkout.HeadSha == nil || *resp.Checkout.HeadSha != body["expected_origin_sha"] {
+		t.Fatalf("checkout head = ref %q sha %v; want main at the advanced tip", resp.Checkout.HeadRef, resp.Checkout.HeadSha)
+	}
+	if resp.Selection == nil || resp.Selection.ObservedSha != body["expected_origin_sha"] {
+		t.Fatalf("fresh selection = %#v; want main at the advanced tip", resp.Selection)
+	}
+}
+
+func TestWorkspaceRepositoryReconcileSourceUpdateObservesDirtyOriginalCheckout(t *testing.T) {
+	fx := newInitializeFixture(t)
+	repo, bare := updateSourceFixture(t, fx, "occupied-dirty")
+	fx.gitIn(repo, "checkout", "main")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# Test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fx.gitIn(repo, "add", "README.md")
+	fx.gitIn(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "readme")
+	body := fx.updateSourceBody(repo, bare)
+	body["checkout_head_ref"] = "refs/heads/main"
+	body["checkout_head_sha"] = fx.gitIn(repo, "rev-parse", "HEAD^{commit}")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("local edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	w, resp := fx.reconcileSource(reconcileSourceBodyFromUpdate(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("reconcile status = %d body=%s; want 200", w.Code, w.Body.String())
+	}
+	if resp.Outcome != OriginalTipRemains {
+		t.Fatalf("outcome = %q; want original_tip_remains", resp.Outcome)
+	}
+	// The original tip alone does not prove the files were untouched: a
+	// dirty checkout observation carries truthful guidance, not a
+	// whole-checkout completion claim.
+	if resp.Checkout == nil || resp.Checkout.State != Dirty {
+		t.Fatalf("checkout = %#v; want a dirty observed checkout", resp.Checkout)
+	}
+}
+
+func TestWorkspaceRepositoryReconcileSourceUpdateOmitsCheckoutWithoutBinding(t *testing.T) {
+	fx := newInitializeFixture(t)
+	repo, bare := updateSourceFixture(t, fx, "unoccupied-settled")
+	fx.gitIn(repo, "checkout", "main")
+	body := fx.updateSourceBody(repo, bare)
+
+	// Without the original-checkout binding the settlement reports the tip
+	// only, even though the checkout happens to hold the branch.
+	w, resp := fx.reconcileSource(reconcileSourceBodyFromUpdate(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("reconcile status = %d body=%s; want 200", w.Code, w.Body.String())
+	}
+	if resp.Outcome != OriginalTipRemains {
+		t.Fatalf("outcome = %q; want original_tip_remains", resp.Outcome)
+	}
+	if resp.Checkout != nil {
+		t.Fatalf("checkout = %#v; want no checkout observation for a ref-only binding", resp.Checkout)
+	}
+}
+
+func TestWorkspaceRepositoryReconcileSourceUpdateMalformedCheckoutBindingIsBadRequest(t *testing.T) {
+	fx := newInitializeFixture(t)
+	repo, bare := updateSourceFixture(t, fx, "bad-binding")
+	body := fx.updateSourceBody(repo, bare)
+	reconcile := reconcileSourceBodyFromUpdate(body)
+	reconcile["checkout_head_ref"] = "HEAD"
+
+	w, _ := fx.reconcileSource(reconcile)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s; want 400", w.Code, w.Body.String())
+	}
+	assertCanonicalCode(t, w, "bad_request")
 }

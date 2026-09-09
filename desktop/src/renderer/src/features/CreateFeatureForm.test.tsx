@@ -1502,7 +1502,7 @@ describe('the creation sheet source update contract', () => {
     expect(updateCalls).toBe(1);
   });
 
-  it('never offers the action for unsafe targets and explains them instead', async () => {
+  it('offers the action for an eligible clean original checkout and explains unsafe rows instead', async () => {
     const { repositories } = updateableRepositories();
     const mock = installAgenticoMock({
       connection: { ...READY_REMOTE, serverName: 'lab-server', serverKey: 'server-key-1' },
@@ -1525,14 +1525,40 @@ describe('the creation sheet source update contract', () => {
     await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
     const rowA = within(rowItem('repo-a'));
     await screen.findByText('Origin: 2 commits behind origin/main');
-    // A clean original-checkout target does not inherit advisory eligibility.
-    expect(rowA.queryByRole('button', { name: 'Update from origin' })).toBeNull();
+    // A clean original-checkout target offers the action with
+    // checkout-aware impact copy.
+    expect(rowA.getByRole('button', { name: 'Update from origin' })).toBeEnabled();
     expect(
       rowA.getByText(
-        'main is checked out in the original repository — updating it from here is unavailable in this phase; update that checkout yourself.',
+        'Advances main and its checked-out files in the original repository on lab-server to origin/main.',
       ),
     ).toBeVisible();
 
+    // A dirty original checkout explains the external remediation instead.
+    rows['repo-a'] = {
+      updateEligible: false,
+      updateBlockers: ['dirty_target_checkout'],
+      checkoutHeadRef: 'refs/heads/main',
+    };
+    await user.click(rowA.getByRole('button', { name: 'Check again' }));
+    expect(
+      await rowA.findByText(
+        'main is checked out in the original repository, whose checkout has uncommitted or untracked files — commit or stash them outside Agentico before updating.',
+      ),
+    ).toBeVisible();
+    expect(rowA.queryByRole('button', { name: 'Update from origin' })).toBeNull();
+
+    // An uninspectable checkout does the same.
+    rows['repo-a'] = { updateEligible: false, updateBlockers: ['checkout_uninspectable'] };
+    await user.click(rowA.getByRole('button', { name: 'Check again' }));
+    expect(
+      await rowA.findByText(
+        "The original repository's checkout could not be inspected safely — resolve it outside Agentico, then check again.",
+      ),
+    ).toBeVisible();
+    expect(rowA.queryByRole('button', { name: 'Update from origin' })).toBeNull();
+
+    // A linked-worktree holder still names the worktree's own server.
     rows['repo-a'] = {
       updateEligible: false,
       updateBlockers: ['branch_checked_out_in_worktree'],
@@ -1545,15 +1571,266 @@ describe('the creation sheet source update contract', () => {
       ),
     ).toBeVisible();
     expect(rowA.queryByRole('button', { name: 'Update from origin' })).toBeNull();
+  });
 
-    rows['repo-a'] = { checkoutHeadRef: undefined, checkoutHeadSha: undefined };
-    await user.click(rowA.getByRole('button', { name: 'Check again' }));
+  it('completes an original-checkout update with checkout-aware copy and refreshes the source and comparison', async () => {
+    const { repoAIdentity, repositories } = updateableRepositories();
+    const mock = installAgenticoMock({
+      connection: { ...READY_REMOTE, serverName: 'lab-server', serverKey: 'server-key-1' },
+      defaults: creationDefaults({ repositories }),
+    });
+    mock.api.updateRepositorySource.mockResolvedValue({
+      result: 'updated',
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      previousSha: 'a'.repeat(40),
+      localSha: 'c'.repeat(40),
+      fetchedSha: 'c'.repeat(40),
+    });
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+              checkoutHeadRef: 'refs/heads/main',
+            }),
+          ),
+        }),
+    );
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    const rowA = within(rowItem('repo-a'));
     expect(
-      await rowA.findByText(
-        "main cannot be updated from here — the repository's checkout could not be inspected, so it cannot be proven unoccupied.",
+      rowA.getByText(
+        'Advances main and its checked-out files in the original repository on lab-server to origin/main.',
       ),
     ).toBeVisible();
-    expect(rowA.queryByRole('button', { name: 'Update from origin' })).toBeNull();
+    const sourcesBefore = mock.api.inspectRepositorySources.mock.calls.length;
+    await user.click(rowA.getByRole('button', { name: 'Update from origin' }));
+
+    // The displayed expectations crossed unchanged, bound to the original
+    // checkout's observed HEAD.
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledWith({
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      expectedLocalSha: 'a'.repeat(40),
+      expectedOriginSha: 'c'.repeat(40),
+      checkoutHeadRef: 'refs/heads/main',
+      checkoutHeadSha: 'b'.repeat(40),
+    });
+    expect(
+      await rowA.findByText(
+        'Updated main and its checked-out files to origin/main on lab-server (now at ccccccc).',
+      ),
+    ).toBeVisible();
+    // The definitive result refreshed the local source and the comparison.
+    await waitFor(() =>
+      expect(mock.api.inspectRepositorySources.mock.calls.length).toBeGreaterThan(sourcesBefore),
+    );
+    await waitFor(() =>
+      expect(mock.api.checkRepositoryOriginStatus).toHaveBeenLastCalledWith(
+        expect.objectContaining({ refresh: ['repo-a'] }),
+      ),
+    );
+  });
+
+  it('retains a definitive dirty-checkout refusal through review without blocking creation', async () => {
+    const { repoAIdentity, repositories } = updateableRepositories();
+    const mock = installAgenticoMock({
+      connection: { ...READY_REMOTE, serverName: 'lab-server', serverKey: 'server-key-1' },
+      defaults: creationDefaults({ repositories }),
+    });
+    mock.api.updateRepositorySource.mockResolvedValue({
+      result: 'stale',
+      reason: 'dirty_checkout',
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      status: eligibleBehindRow(repoAIdentity, {
+        status: 'behind',
+        updateEligible: false,
+        updateBlockers: ['dirty_target_checkout'],
+        checkoutHeadRef: 'refs/heads/main',
+      }),
+    });
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+              checkoutHeadRef: 'refs/heads/main',
+            }),
+          ),
+        }),
+    );
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
+    expect(
+      await within(rowItem('repo-a')).findByText(
+        "main was not updated — the original repository's checkout has uncommitted or untracked files. Commit or stash them outside Agentico, then check again.",
+      ),
+    ).toBeVisible();
+    // The refusal's fresh status row carries the advisory blocker too.
+    expect(
+      within(rowItem('repo-a')).getByText(
+        'main is checked out in the original repository, whose checkout has uncommitted or untracked files — commit or stash them outside Agentico before updating.',
+      ),
+    ).toBeVisible();
+
+    // The warning reaches the final review and submission stays available.
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Dirty checkout continuation');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    expect(
+      screen.getByText(/main was not updated — the original repository's checkout has uncommitted/),
+    ).toBeVisible();
+    await user.click(screen.getByRole('checkbox', { name: /Start immediately/ }));
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(mock.api.createFeature).toHaveBeenCalled());
+  });
+
+  it('blocks on an uncertain original-checkout update until a dirty-checkout settlement retires it', async () => {
+    const { repoAIdentity, repositories } = updateableRepositories();
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories }) });
+    mock.api.updateRepositorySource.mockRejectedValue(
+      ipcError(
+        'source_update_unavailable',
+        'The update attempt could not be completed; do not assume it was rolled back.',
+      ),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+              checkoutHeadRef: 'refs/heads/main',
+            }),
+          ),
+        }),
+    );
+    let settleReconcile!: (value: RepositorySourceReconcileResult) => void;
+    mock.api.reconcileSourceUpdate.mockImplementation(
+      () =>
+        new Promise<RepositorySourceReconcileResult>((resolve) => {
+          settleReconcile = resolve;
+        }),
+    );
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
+
+    // The outcome is unknown, including for the checked-out files.
+    expect(
+      await within(rowItem('repo-a')).findByText(
+        /The result of updating main and its checked-out files in the original repository on the connected server is unknown/,
+      ),
+    ).toBeVisible();
+    await waitFor(() => expect(mock.api.reconcileSourceUpdate).toHaveBeenCalledTimes(1));
+    expect(mock.api.reconcileSourceUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        checkoutHeadRef: 'refs/heads/main',
+        checkoutHeadSha: 'b'.repeat(40),
+      }),
+    );
+
+    // Submission stays blocked while the outcome is unknown.
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Original checkout unknown');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    expect(screen.getByRole('button', { name: 'Resolving source update…' })).toBeDisabled();
+
+    // The settlement observes a dirty original checkout: the record
+    // retires with a truthful warning and creation is restored.
+    settleReconcile({
+      outcome: 'expected_target_present',
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      localSha: 'c'.repeat(40),
+      checkout: { state: 'dirty', headRef: 'refs/heads/main', headSha: 'c'.repeat(40) },
+    });
+    expect(
+      await screen.findByText(
+        /Reconciled main on the connected server: the branch advanced to ccccccc, but the original repository's checkout has uncommitted changes/,
+      ),
+    ).toBeVisible();
+    await user.click(screen.getByRole('checkbox', { name: /Start immediately/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(mock.api.createFeature).toHaveBeenCalled());
+    expect(mock.api.updateRepositorySource).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores the success copy and creation after a clean original-checkout settlement', async () => {
+    const { repoAIdentity, repositories } = updateableRepositories();
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories }) });
+    mock.api.updateRepositorySource.mockRejectedValue(
+      ipcError('E_REQUEST_TIMEOUT', 'The request timed out.'),
+    );
+    mock.api.checkRepositoryOriginStatus.mockImplementation(
+      (request: RepositoryOriginStatusRequest) =>
+        Promise.resolve({
+          repositories: request.repositories.map((repository) =>
+            eligibleBehindRow(repository.identity, {
+              repoKey: repository.repoKey,
+              identity: repository.identity,
+              checkoutHeadRef: 'refs/heads/main',
+            }),
+          ),
+        }),
+    );
+    mock.api.reconcileSourceUpdate.mockResolvedValue({
+      outcome: 'expected_target_present',
+      repoKey: 'repo-a',
+      identity: repoAIdentity,
+      mode: 'default',
+      branch: 'main',
+      originBranch: 'main',
+      localSha: 'c'.repeat(40),
+      checkout: { state: 'clean', headRef: 'refs/heads/main', headSha: 'c'.repeat(40) },
+    });
+    const { user } = await renderForm(mock);
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    await screen.findByText('Origin: 2 commits behind origin/main');
+    await user.click(within(rowItem('repo-a')).getByRole('button', { name: 'Update from origin' }));
+
+    // A clean checkout whose HEAD is the observed tip claims the whole
+    // checkout advanced; creation continues from the updated source.
+    expect(
+      await within(rowItem('repo-a')).findByText(
+        'Reconciled main on the connected server: the update completed (now at ccccccc).',
+      ),
+    ).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Clean checkout continuation');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    await user.click(screen.getByRole('checkbox', { name: /Start immediately/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(mock.api.createFeature).toHaveBeenCalled());
   });
 
   it('names the exact local and origin branches and the server in the impact copy', async () => {
@@ -1713,6 +1990,8 @@ describe('the creation sheet source update contract', () => {
       originBranch: 'main',
       expectedLocalSha: 'a'.repeat(40),
       expectedOriginSha: 'c'.repeat(40),
+      checkoutHeadRef: 'refs/heads/work',
+      checkoutHeadSha: 'b'.repeat(40),
     });
 
     // Submission stays blocked while the selected source is unsettled.

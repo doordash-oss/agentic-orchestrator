@@ -29,6 +29,7 @@ import {
   RepositorySourcesResponseSchema,
   RepositoryOriginStatusResponseSchema,
   RepositoryUpdateSourceResponseSchema,
+  RepositorySourceReconcileResponseSchema,
   RepositoryDiffResponseSchema,
   RewindActionResponseSchema,
   ServerFeatureDetailSchema,
@@ -181,7 +182,12 @@ describe('repository origin status response contract', () => {
           ahead_count: 0,
           behind_count: 2,
           update_eligible: false,
-          update_blockers: ['dirty_target_checkout'],
+          update_blockers: [
+            'dirty_target_checkout',
+            'checkout_operation_in_progress',
+            'ignored_path_collision',
+            'checkout_uninspectable',
+          ],
         },
         {
           repo_key: 'repo-b',
@@ -229,7 +235,12 @@ describe('repository origin status response contract', () => {
       ],
     });
     expect(parsed.repositories[0]?.status).toBe('behind');
-    expect(parsed.repositories[0]?.update_blockers).toEqual(['dirty_target_checkout']);
+    expect(parsed.repositories[0]?.update_blockers).toEqual([
+      'dirty_target_checkout',
+      'checkout_operation_in_progress',
+      'ignored_path_collision',
+      'checkout_uninspectable',
+    ]);
     expect(parsed.repositories[1]?.stale_comparison?.behind_count).toBe(1);
     expect(parsed.repositories[1]?.issue?.code).toBe('origin_check_unavailable');
     expect(parsed.repositories[2]?.checked_at).toBeUndefined();
@@ -286,6 +297,19 @@ describe('repository origin status response contract', () => {
       RepositoryOriginStatusResponseSchema.safeParse({
         api_version: 'v1',
         repositories: [{ ...base, status: 'sideways' }],
+      }).success,
+    ).toBe(false);
+    // The removed Phase 8 original-checkout blocker must never parse again.
+    expect(
+      RepositoryOriginStatusResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [
+          {
+            ...base,
+            status: 'behind',
+            update_blockers: ['branch_checked_out_in_original_checkout'],
+          },
+        ],
       }).success,
     ).toBe(false);
     expect(
@@ -371,7 +395,7 @@ describe('repository update source response contract', () => {
         ahead_count: 0,
         behind_count: 3,
         update_eligible: false,
-        update_blockers: ['branch_checked_out_in_original_checkout'],
+        update_blockers: ['branch_checked_out_in_worktree'],
         checkout_head_ref: 'refs/heads/main',
         checkout_head_sha: 'e'.repeat(40),
       },
@@ -379,9 +403,30 @@ describe('repository update source response contract', () => {
     expect(parsed.result).toBe('stale');
     expect(parsed.reason).toBe('branch_checked_out');
     expect(parsed.status?.status).toBe('behind');
-    expect(parsed.status?.update_blockers).toEqual(['branch_checked_out_in_original_checkout']);
+    expect(parsed.status?.update_blockers).toEqual(['branch_checked_out_in_worktree']);
     expect(parsed.status?.checkout_head_ref).toBe('refs/heads/main');
     expect(parsed.status?.checkout_head_sha).toBe('e'.repeat(40));
+  });
+
+  it('accepts the original-checkout safety refusal reasons', () => {
+    for (const reason of [
+      'dirty_checkout',
+      'checkout_operation_in_progress',
+      'ignored_path_collision',
+      'checkout_conflict',
+    ]) {
+      const parsed = RepositoryUpdateSourceResponseSchema.parse({
+        api_version: 'v1',
+        result: 'stale',
+        reason,
+        repo_key: 'repo-a',
+        identity,
+        mode: 'default',
+        branch: 'main',
+        origin_branch: 'main',
+      });
+      expect(parsed.reason).toBe(reason);
+    }
   });
 
   it('rejects invented SHAs, unknown results and reasons, and renderer-authority fields', () => {
@@ -419,6 +464,85 @@ describe('repository update source response contract', () => {
       api_version: 'v1',
       result: 'updated',
       ...base,
+      path: '/renderer/chosen/path',
+    });
+    expect(withRendererPath.success).toBe(true);
+    expect(withRendererPath.success && 'path' in withRendererPath.data).toBe(false);
+  });
+});
+
+describe('repository source reconcile response contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    common_dir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+  const base = {
+    api_version: 'v1',
+    repo_key: 'repo-a',
+    identity,
+    mode: 'default' as const,
+    branch: 'main',
+    origin_branch: 'main',
+  };
+
+  it('accepts an observed checkout state and stays valid without one', () => {
+    const parsed = RepositorySourceReconcileResponseSchema.parse({
+      ...base,
+      outcome: 'expected_target_present',
+      local_sha: 'c'.repeat(40),
+      checkout: {
+        state: 'clean',
+        head_ref: 'refs/heads/main',
+        head_sha: 'c'.repeat(40),
+      },
+    });
+    expect(parsed.checkout?.state).toBe('clean');
+    expect(parsed.checkout?.head_ref).toBe('refs/heads/main');
+    expect(parsed.checkout?.head_sha).toBe('c'.repeat(40));
+    // An unoccupied settlement carries no checkout observation at all.
+    const unoccupied = RepositorySourceReconcileResponseSchema.parse({
+      ...base,
+      outcome: 'original_tip_remains',
+      local_sha: 'a'.repeat(40),
+    });
+    expect(unoccupied.checkout).toBeUndefined();
+  });
+
+  it('rejects unknown checkout states, malformed SHAs, and renderer-authority fields', () => {
+    expect(
+      RepositorySourceReconcileResponseSchema.safeParse({
+        ...base,
+        outcome: 'expected_target_present',
+        checkout: { state: 'sideways' },
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourceReconcileResponseSchema.safeParse({
+        ...base,
+        outcome: 'expected_target_present',
+        checkout: { state: 'dirty', head_sha: 'not-a-sha' },
+      }).success,
+    ).toBe(false);
+    // An empty head_ref is truthful "could not be read"; an empty head_sha
+    // must never appear on the wire.
+    const emptyHeadRef = RepositorySourceReconcileResponseSchema.safeParse({
+      ...base,
+      outcome: 'expected_target_present',
+      checkout: { state: 'unobserved', head_ref: '' },
+    });
+    expect(emptyHeadRef.success).toBe(true);
+    expect(
+      RepositorySourceReconcileResponseSchema.safeParse({
+        ...base,
+        outcome: 'expected_target_present',
+        checkout: { state: 'unobserved', head_sha: '' },
+      }).success,
+    ).toBe(false);
+    const withRendererPath = RepositorySourceReconcileResponseSchema.safeParse({
+      ...base,
+      outcome: 'branch_missing',
       path: '/renderer/chosen/path',
     });
     expect(withRendererPath.success).toBe(true);

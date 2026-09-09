@@ -91,10 +91,17 @@ describe('updateTargetFor', () => {
     });
     expect(target?.branch).toBe('feature/slashy');
     expect(target?.originBranch).toBe('other-name');
+    expect(target?.originalCheckout).toBe(false);
   });
 
-  it('never treats advisory eligibility as permission for a clean original-checkout target', () => {
-    expect(updateTargetFor(behindRow({ checkoutHeadRef: 'refs/heads/main' }))).toBeNull();
+  it('offers an eligible clean original-checkout target, marked as such', () => {
+    const target = updateTargetFor(
+      behindRow({ checkoutHeadRef: 'refs/heads/main', checkoutHeadSha: 'a'.repeat(40) }),
+    );
+    expect(target).not.toBeNull();
+    expect(target?.originalCheckout).toBe(true);
+    expect(target?.request.checkoutHeadRef).toBe('refs/heads/main');
+    expect(target?.request.checkoutHeadSha).toBe('a'.repeat(40));
   });
 
   it('requires an observed checkout identity, a behind comparison, and eligibility', () => {
@@ -118,9 +125,38 @@ describe('updateTargetFor', () => {
 });
 
 describe('updateBlockedExplanation', () => {
-  it('explains a clean original-checkout target as unavailable in this phase', () => {
-    expect(updateBlockedExplanation(behindRow({ checkoutHeadRef: 'refs/heads/main' }), 'lab')).toBe(
-      'main is checked out in the original repository — updating it from here is unavailable in this phase; update that checkout yourself.',
+  it('explains the original-checkout safety blockers with external remediation', () => {
+    expect(
+      updateBlockedExplanation(
+        behindRow({ updateEligible: false, updateBlockers: ['dirty_target_checkout'] }),
+        'lab',
+      ),
+    ).toBe(
+      'main is checked out in the original repository, whose checkout has uncommitted or untracked files — commit or stash them outside Agentico before updating.',
+    );
+    expect(
+      updateBlockedExplanation(
+        behindRow({ updateEligible: false, updateBlockers: ['checkout_operation_in_progress'] }),
+        'lab',
+      ),
+    ).toBe(
+      'A merge, rebase, cherry-pick, or revert is in progress in the original repository — finish or abort it outside Agentico before updating.',
+    );
+    expect(
+      updateBlockedExplanation(
+        behindRow({ updateEligible: false, updateBlockers: ['ignored_path_collision'] }),
+        'lab',
+      ),
+    ).toBe(
+      'Updating would overwrite ignored files or directories in the original repository — move or remove them outside Agentico before updating.',
+    );
+    expect(
+      updateBlockedExplanation(
+        behindRow({ updateEligible: false, updateBlockers: ['checkout_uninspectable'] }),
+        'lab',
+      ),
+    ).toBe(
+      "The original repository's checkout could not be inspected safely — resolve it outside Agentico, then check again.",
     );
   });
 
@@ -135,7 +171,7 @@ describe('updateBlockedExplanation', () => {
     );
   });
 
-  it('explains an uninspectable checkout, a dirty holder, and an in-progress git operation', () => {
+  it('explains an unobservable checkout identity and an in-progress git operation', () => {
     expect(
       updateBlockedExplanation(
         behindRow({
@@ -148,12 +184,6 @@ describe('updateBlockedExplanation', () => {
     ).toBe(
       "main cannot be updated from here — the repository's checkout could not be inspected, so it cannot be proven unoccupied.",
     );
-    expect(
-      updateBlockedExplanation(
-        behindRow({ updateEligible: false, updateBlockers: ['dirty_target_checkout'] }),
-        'lab',
-      ),
-    ).toContain('uncommitted changes');
     expect(
       updateBlockedExplanation(
         behindRow({ updateEligible: false, updateBlockers: ['git_operation_in_progress'] }),
@@ -174,16 +204,29 @@ describe('updateBlockedExplanation', () => {
         'lab',
       ),
     ).toBeNull();
+    expect(
+      updateBlockedExplanation(
+        behindRow({ updateEligible: false, updateBlockers: ['comparison_unavailable'] }),
+        'lab',
+      ),
+    ).toBeNull();
   });
 });
 
 describe('update copy', () => {
   const target = updateTargetFor(behindRow());
   if (target === null) throw new Error('fixture must be eligible');
+  const originalTarget = updateTargetFor(
+    behindRow({ checkoutHeadRef: 'refs/heads/main', checkoutHeadSha: 'a'.repeat(40) }),
+  );
+  if (originalTarget === null) throw new Error('original-checkout fixture must be eligible');
 
   it('names the exact branches, the original repository, and the server in the impact line', () => {
     expect(updateImpactText(target, 'lab-server')).toBe(
       'Advances main to origin/main in the original repository on lab-server.',
+    );
+    expect(updateImpactText(originalTarget, 'lab-server')).toBe(
+      'Advances main and its checked-out files in the original repository on lab-server to origin/main.',
     );
   });
 
@@ -204,6 +247,22 @@ describe('update copy', () => {
         'lab-server',
       ),
     ).toBe('Updated main to origin/main on lab-server (now at ccccccc).');
+    expect(
+      updateSuccessText(
+        {
+          result: 'updated',
+          repoKey: 'repo-a',
+          identity: IDENTITY,
+          mode: 'default',
+          branch: 'main',
+          originBranch: 'main',
+          previousSha: 'a'.repeat(40),
+          localSha: 'ccccccc'.padEnd(40, 'c'),
+        } as RepositoryUpdateSourceResult,
+        originalTarget,
+        'lab-server',
+      ),
+    ).toBe('Updated main and its checked-out files to origin/main on lab-server (now at ccccccc).');
     expect(
       updateSuccessText(
         {
@@ -247,21 +306,23 @@ describe('update copy', () => {
         status: behindRow({
           status: 'up_to_date',
           updateEligible: false,
-          updateBlockers: ['branch_checked_out_in_original_checkout'],
-        }),
-      }),
-    ).toContain('now checked out in the original repository');
-    expect(
-      refusal({
-        reason: 'branch_checked_out',
-        status: behindRow({
-          status: 'up_to_date',
-          updateEligible: false,
           updateBlockers: ['branch_checked_out_in_worktree'],
         }),
       }),
     ).toContain(
       "now checked out in a linked worktree. Update that worktree's checkout on lab-server yourself.",
+    );
+    expect(refusal({ reason: 'dirty_checkout' })).toBe(
+      "main was not updated — the original repository's checkout has uncommitted or untracked files. Commit or stash them outside Agentico, then check again.",
+    );
+    expect(refusal({ reason: 'checkout_operation_in_progress' })).toBe(
+      'main was not updated — a merge, rebase, cherry-pick, or revert is in progress in the original repository. Finish or abort it outside Agentico, then check again.',
+    );
+    expect(refusal({ reason: 'ignored_path_collision' })).toBe(
+      'main was not updated — updating would overwrite ignored files or directories in the original repository. Move or remove them outside Agentico, then check again.',
+    );
+    expect(refusal({ reason: 'checkout_conflict' })).toBe(
+      "main was not updated — the original repository's working tree changed during the update and the attempt refused to touch it. Check again before updating.",
     );
   });
 
@@ -310,6 +371,8 @@ describe('uncertain update outcomes', () => {
     originBranch: 'main',
     expectedLocalSha: 'a'.repeat(40),
     expectedOriginSha: 'c'.repeat(40),
+    checkoutHeadRef: 'refs/heads/work',
+    checkoutHeadSha: 'b'.repeat(40),
     attempt: 3,
     ...overrides,
   });
@@ -351,12 +414,17 @@ describe('uncertain update outcomes', () => {
       originBranch: 'main',
       expectedLocalSha: 'a'.repeat(40),
       expectedOriginSha: 'c'.repeat(40),
+      checkoutHeadRef: 'refs/heads/work',
+      checkoutHeadSha: 'b'.repeat(40),
     });
   });
 
   it('announces the unknown outcome without claiming failure or rollback', () => {
     expect(updateUncertainText(record(), 'Server A')).toBe(
       'The result of updating main on Server A is unknown — it will be reconciled on Server A before this repository can be accepted.',
+    );
+    expect(updateUncertainText(record({ checkoutHeadRef: 'refs/heads/main' }), 'Server A')).toBe(
+      'The result of updating main and its checked-out files in the original repository on Server A is unknown — it will be reconciled on Server A before this repository can be accepted.',
     );
   });
 });
@@ -371,13 +439,22 @@ describe('reconciliation copy', () => {
     originBranch: 'main',
     expectedLocalSha: 'a'.repeat(40),
     expectedOriginSha: 'c'.repeat(40),
+    checkoutHeadRef: 'refs/heads/work',
+    checkoutHeadSha: 'b'.repeat(40),
     attempt: 1,
     ...overrides,
   });
+  // An original-checkout attempt: the settlement observes the checkout too.
+  const originalRecord = (overrides: Partial<SourceUpdateUncertainty> = {}) =>
+    record({ checkoutHeadRef: 'refs/heads/main', ...overrides });
 
   function noticeForOutcome(
     outcome: RepositorySourceReconcileResult['outcome'],
-    localSha?: string,
+    options: {
+      localSha?: string;
+      checkout?: RepositorySourceReconcileResult['checkout'];
+      record?: SourceUpdateUncertainty;
+    } = {},
   ): SourceUpdateNotice {
     return reconcileNoticeText(
       {
@@ -387,29 +464,140 @@ describe('reconciliation copy', () => {
         mode: 'default',
         branch: 'main',
         originBranch: 'main',
-        ...(localSha === undefined ? {} : { localSha }),
+        ...(options.localSha === undefined ? {} : { localSha: options.localSha }),
+        ...(options.checkout === undefined ? {} : { checkout: options.checkout }),
       },
-      record(),
+      options.record ?? record(),
       'Server A',
     );
   }
 
   it('confirms a proved target as a success naming the server and tip', () => {
-    const notice = noticeForOutcome('expected_target_present', 'c'.repeat(40));
+    const notice = noticeForOutcome('expected_target_present', { localSha: 'c'.repeat(40) });
     expect(notice.tone).toBe('success');
     expect(notice.text).toBe('Reconciled main on Server A: the update completed (now at ccccccc).');
   });
 
+  it('confirms a clean matching checkout as a whole-checkout success', () => {
+    for (const checkout of [
+      { state: 'clean' as const },
+      { state: 'clean' as const, headSha: 'c'.repeat(40) },
+    ]) {
+      const notice = noticeForOutcome('expected_target_present', {
+        localSha: 'c'.repeat(40),
+        checkout,
+        record: originalRecord(),
+      });
+      expect(notice.tone).toBe('success');
+      expect(notice.text).toBe(
+        'Reconciled main on Server A: the update completed (now at ccccccc).',
+      );
+    }
+  });
+
+  it('warns when an original-checkout settlement lost the checkout observation', () => {
+    const notice = noticeForOutcome('expected_target_present', {
+      localSha: 'c'.repeat(40),
+      record: originalRecord(),
+    });
+    expect(notice.tone).toBe('warning');
+    expect(notice.text).toBe(
+      "Reconciled main on Server A: the branch advanced to ccccccc, but the original repository's checkout no longer holds it — refresh the repositories and reselect the source.",
+    );
+  });
+
+  it('warns when a clean checkout no longer matches the observed tip', () => {
+    const notice = noticeForOutcome('expected_target_present', {
+      localSha: 'c'.repeat(40),
+      checkout: { state: 'clean', headSha: 'f'.repeat(40) },
+      record: originalRecord(),
+    });
+    expect(notice.tone).toBe('warning');
+    expect(notice.text).toBe(
+      "Reconciled main on Server A: the branch advanced to ccccccc, but the original repository's checkout no longer matches it — refresh the repositories and reselect the source.",
+    );
+  });
+
+  it('warns about uncommitted checkout changes that may include partial update effects', () => {
+    const notice = noticeForOutcome('expected_target_present', {
+      localSha: 'c'.repeat(40),
+      checkout: { state: 'dirty', headRef: 'refs/heads/main', headSha: 'c'.repeat(40) },
+      record: originalRecord(),
+    });
+    expect(notice.tone).toBe('warning');
+    expect(notice.text).toBe(
+      "Reconciled main on Server A: the branch advanced to ccccccc, but the original repository's checkout has uncommitted changes that may include partial update effects — resolve them outside Agentico before relying on its files.",
+    );
+  });
+
+  it('warns about an in-progress git operation in the original repository', () => {
+    const notice = noticeForOutcome('expected_target_present', {
+      localSha: 'c'.repeat(40),
+      checkout: { state: 'operation_in_progress', headRef: 'refs/heads/main' },
+      record: originalRecord(),
+    });
+    expect(notice.tone).toBe('warning');
+    expect(notice.text).toBe(
+      'Reconciled main on Server A: the branch advanced to ccccccc, but a git operation is in progress in the original repository — finish or abort it outside Agentico before relying on its files.',
+    );
+  });
+
+  it('warns when the original checkout could not be inspected', () => {
+    const notice = noticeForOutcome('expected_target_present', {
+      localSha: 'c'.repeat(40),
+      checkout: { state: 'unobserved' },
+      record: originalRecord(),
+    });
+    expect(notice.tone).toBe('warning');
+    expect(notice.text).toBe(
+      "Reconciled main on Server A: the branch advanced to ccccccc, but the original repository's checkout could not be inspected — resolve it outside Agentico before relying on its files.",
+    );
+  });
+
   it('reports the original tip as a warning that never claims a rollback', () => {
-    const notice = noticeForOutcome('original_tip_remains', 'a'.repeat(40));
+    const notice = noticeForOutcome('original_tip_remains', { localSha: 'a'.repeat(40) });
     expect(notice.tone).toBe('warning');
     expect(notice.text).toBe(
       'Reconciled main on Server A: the update did not complete, and main is unchanged (now at aaaaaaa). Check again before updating.',
     );
+    const cleanCheckout = noticeForOutcome('original_tip_remains', {
+      localSha: 'a'.repeat(40),
+      checkout: { state: 'clean', headRef: 'refs/heads/main', headSha: 'a'.repeat(40) },
+      record: originalRecord(),
+    });
+    expect(cleanCheckout.text).toBe(
+      'Reconciled main on Server A: the update did not complete, and main is unchanged (now at aaaaaaa). Check again before updating.',
+    );
+  });
+
+  it('reports an unchanged tip with dirty checkout changes as a warning needing external resolution', () => {
+    const notice = noticeForOutcome('original_tip_remains', {
+      localSha: 'a'.repeat(40),
+      checkout: { state: 'dirty', headRef: 'refs/heads/main', headSha: 'a'.repeat(40) },
+      record: originalRecord(),
+    });
+    expect(notice.tone).toBe('warning');
+    expect(notice.text).toBe(
+      "Reconciled main on Server A: the update did not complete, and main is unchanged (now at aaaaaaa), but the original repository's checkout has uncommitted changes that may include partial update effects — resolve them outside Agentico, then check again.",
+    );
+  });
+
+  it('reports an unchanged tip with an operation in progress or unobserved checkout as needing attention', () => {
+    for (const state of ['operation_in_progress', 'unobserved'] as const) {
+      const notice = noticeForOutcome('original_tip_remains', {
+        localSha: 'a'.repeat(40),
+        checkout: { state },
+        record: originalRecord(),
+      });
+      expect(notice.tone).toBe('warning');
+      expect(notice.text).toBe(
+        "Reconciled main on Server A: the update did not complete, and main is unchanged (now at aaaaaaa), but the original repository's checkout needs attention outside Agentico — resolve it, then check again.",
+      );
+    }
   });
 
   it('reports a changed observation without inferring operation success', () => {
-    const notice = noticeForOutcome('local_state_changed', 'd'.repeat(40));
+    const notice = noticeForOutcome('local_state_changed', { localSha: 'd'.repeat(40) });
     expect(notice.tone).toBe('warning');
     expect(notice.text).toContain('neither the tip before the update nor the expected origin tip');
     expect(notice.text).toContain('now at ddddddd');
@@ -449,6 +637,8 @@ describe('uncertainty bookkeeping', () => {
     originBranch: 'main',
     expectedLocalSha: 'a'.repeat(40),
     expectedOriginSha: 'c'.repeat(40),
+    checkoutHeadRef: 'refs/heads/work',
+    checkoutHeadSha: 'b'.repeat(40),
     attempt,
   });
 

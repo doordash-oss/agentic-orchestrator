@@ -17,11 +17,13 @@ limitations under the License.
 /**
  * Pure presentation and request-building logic for the per-row "Update from
  * origin" action in the creation sheet. Availability is derived from a
- * successful behind comparison plus current unoccupied-branch eligibility —
- * the advisory `updateEligible` flag alone is never permission: a branch
- * whose own repository has it checked out (even clean) is unavailable in
- * this phase, and a row whose checkout identity could not be observed can
- * never bind the compare-and-swap request.
+ * successful behind comparison plus current eligibility — the advisory
+ * `updateEligible` flag alone is never permission, and a row whose checkout
+ * identity could not be observed can never bind the request. Two update
+ * paths share one action: an unoccupied branch moves only its ref through
+ * the compare-and-swap path, while a branch held only by the original
+ * checkout also advances that repository's index and working files after
+ * the server proves the checkout clean and safe to fast-forward.
  */
 import type {
   CanonicalError,
@@ -57,6 +59,10 @@ export interface SourceUpdateUncertainty {
   originBranch: string;
   expectedLocalSha: string;
   expectedOriginSha: string;
+  /** The observed checkout HEAD reference the attempt bound to (refs/heads/... or detached). */
+  checkoutHeadRef: string;
+  /** The observed checkout HEAD commit the attempt bound to. */
+  checkoutHeadSha: string;
   /** Monotonic attempt sequence, fencing late callbacks by attempt. */
   attempt: number;
 }
@@ -108,6 +114,8 @@ export function uncertaintyRequestFor(
     originBranch: record.originBranch,
     expectedLocalSha: record.expectedLocalSha,
     expectedOriginSha: record.expectedOriginSha,
+    checkoutHeadRef: record.checkoutHeadRef,
+    checkoutHeadSha: record.checkoutHeadSha,
   };
 }
 
@@ -121,11 +129,13 @@ export interface SourceUpdateNotice {
   text: string;
 }
 
-/** The exact displayed expectations the compare-and-swap request binds. */
+/** The exact displayed expectations the update request binds. */
 export interface SourceUpdateTarget {
   request: RepositoryUpdateSourceRequest;
   branch: string;
   originBranch: string;
+  /** True when the branch is held only by the row's own original checkout. */
+  originalCheckout: boolean;
 }
 
 const FALLBACK_SERVER_LABEL = 'the connected server';
@@ -155,9 +165,10 @@ export function serverLabelFor(connection: { status: string; serverName?: string
 /**
  * A row can be updated only when a successful behind comparison is displayed
  * with every expectation the server binds (branch, mapping, both tips, and
- * the observed checkout identity) and the target branch is unoccupied: the
- * advisory eligibility never covers a branch checked out in the row's own
- * repository, which the mutation refuses in this phase even when clean.
+ * the observed checkout identity) and current eligibility holds. An
+ * unoccupied branch and a branch held only by the row's own original
+ * checkout are both eligible; the server revalidates eligibility and the
+ * checkout's safety at execution.
  */
 export function updateTargetFor(row: RepositoryOriginStatusSnapshot): SourceUpdateTarget | null {
   if (row.status !== 'behind') return null;
@@ -166,7 +177,6 @@ export function updateTargetFor(row: RepositoryOriginStatusSnapshot): SourceUpda
   if (row.branch === undefined || row.originBranch === undefined) return null;
   if (row.localSha === undefined || row.fetchedSha === undefined) return null;
   if (row.checkoutHeadRef === undefined || row.checkoutHeadSha === undefined) return null;
-  if (row.checkoutHeadRef === `refs/heads/${row.branch}`) return null;
   return {
     request: {
       repoKey: row.repoKey,
@@ -181,41 +191,51 @@ export function updateTargetFor(row: RepositoryOriginStatusSnapshot): SourceUpda
     },
     branch: row.branch,
     originBranch: row.originBranch,
+    originalCheckout: row.checkoutHeadRef === `refs/heads/${row.branch}`,
   };
 }
 
 /**
  * Why a behind target cannot be updated from here, or null when there is
- * nothing truthful to add (the comparison line already says it). Order
- * matters: a clean original-checkout holder emits no advisory blocker at
- * all, so the checkout identity is checked before the blockers.
+ * nothing truthful to add (the comparison line already says it). The
+ * server-reported advisory blockers name the concrete unsafe state; an
+ * unobservable checkout identity is the remaining local explanation.
  */
 export function updateBlockedExplanation(
   row: RepositoryOriginStatusSnapshot,
   serverLabel: string,
 ): string | null {
   if (row.status !== 'behind' || row.kind !== 'branch' || row.branch === undefined) return null;
-  if (row.checkoutHeadRef === undefined || row.checkoutHeadSha === undefined) {
-    return `${row.branch} cannot be updated from here — the repository's checkout could not be inspected, so it cannot be proven unoccupied.`;
-  }
-  if (row.checkoutHeadRef === `refs/heads/${row.branch}`) {
-    return `${row.branch} is checked out in the original repository — updating it from here is unavailable in this phase; update that checkout yourself.`;
-  }
   const blockers = row.updateBlockers ?? [];
   if (blockers.includes('branch_checked_out_in_worktree')) {
     return `${row.branch} is checked out in a linked worktree — update that worktree's checkout on ${serverLabel} yourself.`;
   }
   if (blockers.includes('dirty_target_checkout')) {
-    return `${row.branch} is checked out with uncommitted changes — commit or stash them in that checkout before updating.`;
+    return `${row.branch} is checked out in the original repository, whose checkout has uncommitted or untracked files — commit or stash them outside Agentico before updating.`;
+  }
+  if (blockers.includes('checkout_operation_in_progress')) {
+    return 'A merge, rebase, cherry-pick, or revert is in progress in the original repository — finish or abort it outside Agentico before updating.';
+  }
+  if (blockers.includes('ignored_path_collision')) {
+    return 'Updating would overwrite ignored files or directories in the original repository — move or remove them outside Agentico before updating.';
+  }
+  if (blockers.includes('checkout_uninspectable')) {
+    return "The original repository's checkout could not be inspected safely — resolve it outside Agentico, then check again.";
   }
   if (blockers.includes('git_operation_in_progress')) {
     return `${row.branch} cannot be updated right now — another Agentico git operation is running for this repository. Try again once it finishes.`;
+  }
+  if (row.checkoutHeadRef === undefined || row.checkoutHeadSha === undefined) {
+    return `${row.branch} cannot be updated from here — the repository's checkout could not be inspected, so it cannot be proven unoccupied.`;
   }
   return null;
 }
 
 /** The impact line beside the action: exact names, original repository, server. */
 export function updateImpactText(target: SourceUpdateTarget, serverLabel: string): string {
+  if (target.originalCheckout) {
+    return `Advances ${target.branch} and its checked-out files in the original repository on ${serverLabel} to origin/${target.originBranch}.`;
+  }
   return `Advances ${target.branch} to origin/${target.originBranch} in the original repository on ${serverLabel}.`;
 }
 
@@ -234,6 +254,11 @@ export function updateSuccessText(
     return `${target.branch} is already at origin/${target.originBranch} on ${serverLabel}.`;
   }
   const sha = shortSha(result.localSha);
+  if (target.originalCheckout) {
+    return `Updated ${target.branch} and its checked-out files to origin/${target.originBranch} on ${serverLabel}${
+      sha === null ? '' : ` (now at ${sha})`
+    }.`;
+  }
   return `Updated ${target.branch} to origin/${target.originBranch} on ${serverLabel}${
     sha === null ? '' : ` (now at ${sha})`
   }.`;
@@ -269,14 +294,19 @@ export function updateRefusalText(
       return `${branch} was not updated on ${serverLabel} — it has commits ${originRef} does not have, and only fast-forward updates are supported. Nothing was changed.`;
     case 'branch_checked_out': {
       const blockers = result.status?.updateBlockers ?? [];
-      if (blockers.includes('branch_checked_out_in_original_checkout')) {
-        return `${branch} was not updated — it is now checked out in the original repository, which this phase cannot update. Update that checkout yourself.`;
-      }
       if (blockers.includes('branch_checked_out_in_worktree')) {
         return `${branch} was not updated — it is now checked out in a linked worktree. Update that worktree's checkout on ${serverLabel} yourself.`;
       }
       return `${branch} was not updated — it is now checked out in one of the repository's worktrees, which cannot be updated from here.`;
     }
+    case 'dirty_checkout':
+      return `${branch} was not updated — the original repository's checkout has uncommitted or untracked files. Commit or stash them outside Agentico, then check again.`;
+    case 'checkout_operation_in_progress':
+      return `${branch} was not updated — a merge, rebase, cherry-pick, or revert is in progress in the original repository. Finish or abort it outside Agentico, then check again.`;
+    case 'ignored_path_collision':
+      return `${branch} was not updated — updating would overwrite ignored files or directories in the original repository. Move or remove them outside Agentico, then check again.`;
+    case 'checkout_conflict':
+      return `${branch} was not updated — the original repository's working tree changed during the update and the attempt refused to touch it. Check again before updating.`;
     default:
       return `${branch} was not updated on ${serverLabel} — the displayed expectations no longer match. Check again, then update from the fresh comparison.`;
   }
@@ -301,13 +331,20 @@ export function updateErrorText(
  * states what unblocks acceptance.
  */
 export function updateUncertainText(record: SourceUpdateUncertainty, serverLabel: string): string {
+  if (record.checkoutHeadRef === `refs/heads/${record.branch}`) {
+    return `The result of updating ${record.branch} and its checked-out files in the original repository on ${serverLabel} is unknown — it will be reconciled on ${serverLabel} before this repository can be accepted.`;
+  }
   return `The result of updating ${record.branch} on ${serverLabel} is unknown — it will be reconciled on ${serverLabel} before this repository can be accepted.`;
 }
 
 /**
  * The row's announcement for one settlement outcome: a target observation
- * is a success; anything else is a warning that never claims the attempt
- * was rolled back and points at the next explicit action.
+ * on an unoccupied branch, or on a clean original checkout whose HEAD is
+ * the observed tip, is a success; anything else is a warning that never
+ * claims the attempt was rolled back and points at the next explicit
+ * action. The branch tip alone never proves the original checkout's files
+ * advanced, so an original-checkout settlement only claims whole-checkout
+ * completion from a clean, matching checkout observation.
  */
 export function reconcileNoticeText(
   result: RepositorySourceReconcileResult,
@@ -317,35 +354,78 @@ export function reconcileNoticeText(
   const branch = record.branch;
   const sha = shortSha(result.localSha);
   const shaText = sha === null ? '' : ` (now at ${sha})`;
+  // The outcome guarantees the observed tip; the fallback only guards a
+  // malformed settlement from rendering a null SHA into the copy.
+  const advanced = sha === null ? 'the update completed' : `the branch advanced to ${sha}`;
+  const originalCheckout = record.checkoutHeadRef === `refs/heads/${record.branch}`;
+  const checkout = result.checkout;
+  const success = (text: string): SourceUpdateNotice => ({
+    repoKey: record.repoKey,
+    identity: record.identity,
+    tone: 'success',
+    text,
+  });
+  const warning = (text: string): SourceUpdateNotice => ({
+    repoKey: record.repoKey,
+    identity: record.identity,
+    tone: 'warning',
+    text,
+  });
   switch (result.outcome) {
-    case 'expected_target_present':
-      return {
-        repoKey: record.repoKey,
-        identity: record.identity,
-        tone: 'success',
-        text: `Reconciled ${branch} on ${serverLabel}: the update completed${shaText}.`,
-      };
-    case 'original_tip_remains':
-      return {
-        repoKey: record.repoKey,
-        identity: record.identity,
-        tone: 'warning',
-        text: `Reconciled ${branch} on ${serverLabel}: the update did not complete, and ${branch} is unchanged${shaText}. Check again before updating.`,
-      };
+    case 'expected_target_present': {
+      if (checkout === undefined) {
+        if (originalCheckout) {
+          return warning(
+            `Reconciled ${branch} on ${serverLabel}: ${advanced}, but the original repository's checkout no longer holds it — refresh the repositories and reselect the source.`,
+          );
+        }
+        return success(`Reconciled ${branch} on ${serverLabel}: the update completed${shaText}.`);
+      }
+      if (checkout.state === 'clean') {
+        if (checkout.headSha === undefined || checkout.headSha === result.localSha) {
+          return success(`Reconciled ${branch} on ${serverLabel}: the update completed${shaText}.`);
+        }
+        return warning(
+          `Reconciled ${branch} on ${serverLabel}: ${advanced}, but the original repository's checkout no longer matches it — refresh the repositories and reselect the source.`,
+        );
+      }
+      if (checkout.state === 'dirty') {
+        return warning(
+          `Reconciled ${branch} on ${serverLabel}: ${advanced}, but the original repository's checkout has uncommitted changes that may include partial update effects — resolve them outside Agentico before relying on its files.`,
+        );
+      }
+      if (checkout.state === 'operation_in_progress') {
+        return warning(
+          `Reconciled ${branch} on ${serverLabel}: ${advanced}, but a git operation is in progress in the original repository — finish or abort it outside Agentico before relying on its files.`,
+        );
+      }
+      return warning(
+        `Reconciled ${branch} on ${serverLabel}: ${advanced}, but the original repository's checkout could not be inspected — resolve it outside Agentico before relying on its files.`,
+      );
+    }
+    case 'original_tip_remains': {
+      if (checkout?.state === 'dirty') {
+        return warning(
+          `Reconciled ${branch} on ${serverLabel}: the update did not complete, and ${branch} is unchanged${shaText}, but the original repository's checkout has uncommitted changes that may include partial update effects — resolve them outside Agentico, then check again.`,
+        );
+      }
+      if (checkout?.state === 'operation_in_progress' || checkout?.state === 'unobserved') {
+        return warning(
+          `Reconciled ${branch} on ${serverLabel}: the update did not complete, and ${branch} is unchanged${shaText}, but the original repository's checkout needs attention outside Agentico — resolve it, then check again.`,
+        );
+      }
+      return warning(
+        `Reconciled ${branch} on ${serverLabel}: the update did not complete, and ${branch} is unchanged${shaText}. Check again before updating.`,
+      );
+    }
     case 'local_state_changed':
-      return {
-        repoKey: record.repoKey,
-        identity: record.identity,
-        tone: 'warning',
-        text: `Reconciled ${branch} on ${serverLabel}: it is now at a commit that is neither the tip before the update nor the expected origin tip${shaText}. Check again before updating.`,
-      };
+      return warning(
+        `Reconciled ${branch} on ${serverLabel}: it is now at a commit that is neither the tip before the update nor the expected origin tip${shaText}. Check again before updating.`,
+      );
     default:
-      return {
-        repoKey: record.repoKey,
-        identity: record.identity,
-        tone: 'warning',
-        text: `Reconciled ${branch} on ${serverLabel}: the branch no longer exists. Refresh the repositories and reselect the source.`,
-      };
+      return warning(
+        `Reconciled ${branch} on ${serverLabel}: the branch no longer exists. Refresh the repositories and reselect the source.`,
+      );
   }
 }
 

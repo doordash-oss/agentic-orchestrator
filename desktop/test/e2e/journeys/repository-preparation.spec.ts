@@ -627,6 +627,16 @@ test('remote create and clone use only the remote configured roots', async ({}, 
     });
     const settings = await openSettings(ctx.handle);
     await addRemoteServer(ctx.handle, settings, remote.connectionString);
+    // The auto-switch names the target server before its readiness
+    // handshake completes; the connection settles on ready shortly after.
+    await waitFor(
+      async () => {
+        const state = await connectionState(ctx.handle!);
+        return state.status === 'ready' && state.serverName === REMOTE_NAME;
+      },
+      'the remote connection to become ready',
+      60_000,
+    );
     const onRemote = await connectionState(ctx.handle);
     expect(onRemote.status).toBe('ready');
     if (onRemote.status === 'ready') {

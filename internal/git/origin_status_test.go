@@ -383,7 +383,7 @@ func TestProbeUpdateEligibility(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(repo, "unrelated-dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "topic", OriginCheckOptions{})
+		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "topic", nil, OriginCheckOptions{})
 		if !eligible || len(blockers) != 0 {
 			t.Fatalf("eligible = %v blockers = %v; want eligible with no blockers", eligible, blockers)
 		}
@@ -395,7 +395,7 @@ func TestProbeUpdateEligibility(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "main", OriginCheckOptions{})
+		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "main", nil, OriginCheckOptions{})
 		if eligible || !containsBlocker(blockers, UpdateBlockerDirtyTargetCheckout) {
 			t.Fatalf("eligible = %v blockers = %v; want dirty_target_checkout", eligible, blockers)
 		}
@@ -408,9 +408,74 @@ func TestProbeUpdateEligibility(t *testing.T) {
 		linked := filepath.Join(t.TempDir(), "linked")
 		runGit(t, repo, "worktree", "add", linked, "topic")
 		t.Cleanup(func() { runGit(t, repo, "worktree", "remove", "--force", linked) })
-		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "topic", OriginCheckOptions{})
+		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "topic", nil, OriginCheckOptions{})
 		if eligible || !containsBlocker(blockers, UpdateBlockerBranchCheckedOutInWorktree) {
 			t.Fatalf("eligible = %v blockers = %v; want branch_checked_out_in_worktree", eligible, blockers)
+		}
+	})
+
+	t.Run("clean original checkout is eligible with a compared range", func(t *testing.T) {
+		repo := testutil.InitGitRepo(t)
+		target := runGitUpdateTest(t, repo, "commit-tree", "refs/heads/main^{tree}", "-m", "target")
+		comparison := &OriginComparison{Status: OriginCheckBehind, LocalSHA: gitUpdateSHA(t, repo, "HEAD"), FetchedSHA: target}
+		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "main", comparison, OriginCheckOptions{})
+		if !eligible || len(blockers) != 0 {
+			t.Fatalf("eligible = %v blockers = %v; want an eligible clean original checkout", eligible, blockers)
+		}
+	})
+
+	t.Run("original checkout ignored collision against the compared range is blocked", func(t *testing.T) {
+		repo := testutil.InitGitRepo(t)
+		// A target commit adds incoming.txt; the checkout then returns to
+		// the earlier tip, where an ignored file occupies that path.
+		if err := os.WriteFile(filepath.Join(repo, "incoming.txt"), []byte("target\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, repo, "add", "incoming.txt")
+		runGit(t, repo, "commit", "-m", "target")
+		target := gitUpdateSHA(t, repo, "HEAD")
+		runGit(t, repo, "reset", "--hard", "HEAD~1")
+		excludes := filepath.Join(t.TempDir(), "excludes")
+		if err := os.WriteFile(excludes, []byte("incoming.txt\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, repo, "config", "core.excludesFile", excludes)
+		if err := os.WriteFile(filepath.Join(repo, "incoming.txt"), []byte("precious\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		comparison := &OriginComparison{Status: OriginCheckBehind, LocalSHA: gitUpdateSHA(t, repo, "HEAD"), FetchedSHA: target}
+		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "main", comparison, OriginCheckOptions{})
+		if eligible || !containsBlocker(blockers, UpdateBlockerIgnoredPathCollision) {
+			t.Fatalf("eligible = %v blockers = %v; want ignored_path_collision", eligible, blockers)
+		}
+	})
+
+	t.Run("original checkout git operation in progress is blocked", func(t *testing.T) {
+		repo := testutil.InitGitRepo(t)
+		gitDir := runGitUpdateTest(t, repo, "rev-parse", "--git-dir")
+		if !filepath.IsAbs(gitDir) {
+			gitDir = filepath.Join(repo, gitDir)
+		}
+		if err := os.Mkdir(filepath.Join(gitDir, "rebase-merge"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "main", nil, OriginCheckOptions{})
+		if eligible || !containsBlocker(blockers, UpdateBlockerCheckoutOperationInProgress) {
+			t.Fatalf("eligible = %v blockers = %v; want checkout_operation_in_progress", eligible, blockers)
+		}
+	})
+
+	t.Run("uninspectable checkout is blocked, never assumed safe", func(t *testing.T) {
+		repo := testutil.InitGitRepo(t)
+		options := OriginCheckOptions{Runner: BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+			if len(args) > 0 && args[0] == "status" {
+				return BranchProbeCommandResult{ExitCode: 128, Diagnostics: "status failed"}
+			}
+			return ExecBranchProbeRunner{}.Run(ctx, repoPath, args, diagnosticLimit)
+		})}
+		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "main", nil, options)
+		if eligible || !containsBlocker(blockers, UpdateBlockerCheckoutUninspectable) {
+			t.Fatalf("eligible = %v blockers = %v; want checkout_uninspectable", eligible, blockers)
 		}
 	})
 
@@ -421,7 +486,7 @@ func TestProbeUpdateEligibility(t *testing.T) {
 		mu := worktreeMutationLock(repo)
 		mu.Lock()
 		defer mu.Unlock()
-		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "topic", OriginCheckOptions{})
+		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "topic", nil, OriginCheckOptions{})
 		if eligible || !containsBlocker(blockers, UpdateBlockerGitOperationInProgress) {
 			t.Fatalf("eligible = %v blockers = %v; want git_operation_in_progress", eligible, blockers)
 		}

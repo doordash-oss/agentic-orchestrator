@@ -75,6 +75,18 @@ func (h *apiHandler) handleWorkspaceRepositoryReconcileSourceUpdateRoute(w http.
 			errcat.WithDiagnostics("expected local and origin SHAs must be full hex commit ids"))
 		return
 	}
+	if req.CheckoutHeadRef != nil &&
+		(*req.CheckoutHeadRef == "" || len(*req.CheckoutHeadRef) > 512 ||
+			(*req.CheckoutHeadRef != "detached" && !strings.HasPrefix(*req.CheckoutHeadRef, "refs/heads/"))) {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics("observed checkout HEAD reference must be a full branch ref or detached"))
+		return
+	}
+	if req.CheckoutHeadSha != nil && !validWireCommitSHA(*req.CheckoutHeadSha) {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics("observed checkout HEAD SHA must be a full hex commit id"))
+		return
+	}
 
 	key, identity, ok := h.resolveCatalogSourceSelector(RepositorySourceSelector{RepoKey: req.RepoKey, Identity: req.Identity})
 	if !ok {
@@ -112,7 +124,12 @@ func (h *apiHandler) handleWorkspaceRepositoryReconcileSourceUpdateRoute(w http.
 		return
 	}
 
-	report, err := git.ReconcileSourceUpdateState(ctx, identity.Path, req.Branch, req.ExpectedLocalSha, req.ExpectedOriginSha, git.OriginCheckOptions{})
+	// An attempted update that bound the checkout HEAD to the branch itself
+	// was an original-checkout update: its settlement must observe the
+	// checkout before any whole-checkout completion is claimed. The branch
+	// tip alone never proves the index and files advanced.
+	observeCheckout := req.CheckoutHeadRef != nil && *req.CheckoutHeadRef == "refs/heads/"+req.Branch
+	report, err := git.ReconcileSourceUpdateState(ctx, identity.Path, req.Branch, req.ExpectedLocalSha, req.ExpectedOriginSha, observeCheckout, git.OriginCheckOptions{})
 	if err != nil {
 		writeAPIError(w, http.StatusServiceUnavailable, errcat.SourceReconcileUnavailable,
 			errcat.WithDiagnostics(boundUpdateSourceDiagnostics(err.Error())))
@@ -161,6 +178,17 @@ func (h *apiHandler) reconcileSourceResponse(repoKey string, identity git.RepoId
 	if report.LocalSHA != "" {
 		local := report.LocalSHA
 		resp.LocalSha = &local
+	}
+	if report.Checkout != nil {
+		checkout := RepositorySourceReconcileCheckout{
+			State: RepositorySourceReconcileCheckoutState(report.Checkout.State),
+			HeadRef: report.Checkout.HeadRef,
+		}
+		if report.Checkout.HeadSHA != "" {
+			headSHA := report.Checkout.HeadSHA
+			checkout.HeadSha = &headSHA
+		}
+		resp.Checkout = &checkout
 	}
 	// The current selection is reported only when it resolves; a terminal
 	// plan state (detached, missing base, no origin, other upstream) leaves

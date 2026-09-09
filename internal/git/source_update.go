@@ -75,9 +75,27 @@ const (
 	// or diverged from origin; only a proved fast-forward may advance it.
 	SourceUpdateReasonNotFastForward SourceUpdateReason = "not_fast_forward"
 	// SourceUpdateReasonBranchCheckedOut reports the branch is checked out
-	// in some worktree (the original checkout or a linked worktree); it is
-	// unavailable for a ref-only update in this phase.
+	// in a linked worktree; that worktree's own checkout must be updated
+	// separately. A branch held only by the original catalog checkout is the
+	// eligible original-checkout path, never this refusal.
 	SourceUpdateReasonBranchCheckedOut SourceUpdateReason = "branch_checked_out"
+	// SourceUpdateReasonDirtyCheckout reports the original checkout holding
+	// the branch has staged, unstaged, or untracked content, so a
+	// working-tree-aware fast-forward refuses.
+	SourceUpdateReasonDirtyCheckout SourceUpdateReason = "dirty_checkout"
+	// SourceUpdateReasonCheckoutOperationInProgress reports a merge, rebase,
+	// cherry-pick, or revert — including a sequence between commits — is in
+	// progress in the original checkout.
+	SourceUpdateReasonCheckoutOperationInProgress SourceUpdateReason = "checkout_operation_in_progress"
+	// SourceUpdateReasonIgnoredPathCollision reports an incoming tracked
+	// path of the fast-forward would overwrite ignored files or directories
+	// in the original checkout.
+	SourceUpdateReasonIgnoredPathCollision SourceUpdateReason = "ignored_path_collision"
+	// SourceUpdateReasonCheckoutConflict reports the working-tree-aware
+	// fast-forward itself refused after every pre-mutation check passed, and
+	// the refusal was proved to have left the checkout untouched (typically
+	// a local change that raced the final checks).
+	SourceUpdateReasonCheckoutConflict SourceUpdateReason = "checkout_conflict"
 )
 
 // SourceUpdateOutcome is one update attempt's typed result. For stale
@@ -103,7 +121,7 @@ type SourceUpdateOutcome struct {
 	// Blockers are the observed advisory update blockers for the fresh
 	// status row.
 	Blockers []UpdateBlocker
-	// CheckoutHolders lists the worktree paths holding the branch for
+	// CheckoutHolders lists the linked worktree paths holding the branch for
 	// branch_checked_out refusals.
 	CheckoutHolders []string
 }
@@ -208,22 +226,30 @@ type CheckoutHeadState struct {
 }
 
 // UpdateSourceFromOrigin advances exactly one local branch to a freshly
-// fetched origin commit by an expected-old-value compare-and-swap.
+// fetched origin commit. A branch no checkout holds advances by an
+// expected-old-value compare-and-swap that moves only the ref; a branch held
+// only by the original checkout at repoPath advances through Git's
+// working-tree-aware fast-forward, which moves the branch, symbolic HEAD,
+// index, and tracked working files together; a branch held by any other
+// linked worktree is refused with that worktree's remediation.
 //
 // The caller must already hold the repository's canonical common-directory
 // mutation lock: the update, origin checks, feature acceptance, and setup
 // serialize on that boundary. Agentico coordination does not claim atomic
-// exclusion of arbitrary external Git processes; the CAS old-value check is
-// the final arbiter for the ref itself. The update never checks out, resets,
-// rebases, merges, forces, stashes, cleans, stages, pushes, or runs hooks,
-// never deletes or breaks Git ref/index locks (including old ones), and
-// bounds every subprocess by ctx, reaping processes before returning.
+// exclusion of arbitrary external Git processes; the pre-mutation
+// revalidation and the CAS old-value check are the final arbititors on the
+// ref-only path, and the original-checkout path treats an unprovable
+// mutation-boundary outcome as unavailability for the settlement flow. The
+// update never resets, rebases, forces, stashes, cleans, stages local
+// content, pushes, or runs hooks, never creates merge commits, never deletes
+// or breaks Git ref/index locks (including old ones), and bounds every
+// subprocess by ctx, reaping processes before returning.
 //
 // Stale refusals return an outcome rather than an error: the mutation was
 // refused, not attempted and failed. Unprovable attempts (inspection, fetch,
 // ancestry, or deadline failures, and ambiguous mutation boundaries) return
 // an error wrapping ErrSourceUpdateUnavailable and leave any claim about the
-// ref's final state unproved.
+// repository's final state unproved.
 func UpdateSourceFromOrigin(ctx context.Context, repoPath string, expected SourceUpdateExpectation, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
 	if err := validateSourceUpdateExpectation(expected); err != nil {
 		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
@@ -262,24 +288,51 @@ func UpdateSourceFromOrigin(ctx context.Context, repoPath string, expected Sourc
 	if err != nil {
 		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
 	}
-	if head.Ref != expected.CheckoutHeadRef || !strings.EqualFold(head.SHA, expected.CheckoutHeadSHA) {
-		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonCheckoutChanged, nil, options)
-	}
 
 	checkouts, err := listWorktreeCheckouts(ctx, repoPath, options.OriginCheckOptions)
 	if err != nil {
 		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
 	}
-	if holders := holdersOfBranch(checkouts, expected.Branch); len(holders) > 0 {
+	originalHeld := false
+	var linkedHolders []string
+	for _, holder := range holdersOfBranch(checkouts, expected.Branch) {
+		if sameCheckoutPath(holder, repoPath) {
+			originalHeld = true
+		} else {
+			linkedHolders = append(linkedHolders, holder)
+		}
+	}
+	// A branch held by any other linked worktree is unavailable — even when
+	// that worktree is clean, and even alongside the original checkout: that
+	// worktree's own checkout must be updated separately, and no checkout is
+	// ever switched to make the branch available.
+	if len(linkedHolders) > 0 {
 		outcome, err := staleOutcome(ctx, repoPath, plan, SourceUpdateReasonBranchCheckedOut, nil, options)
 		if err != nil {
 			return SourceUpdateOutcome{}, err
 		}
-		outcome.CheckoutHolders = holders
-		outcome.Blockers = append(outcome.Blockers, checkoutHoldersBlockers(repoPath, holders)...)
+		outcome.CheckoutHolders = linkedHolders
+		for range linkedHolders {
+			outcome.Blockers = append(outcome.Blockers, UpdateBlockerBranchCheckedOutInWorktree)
+		}
 		return outcome, nil
 	}
+	if originalHeld {
+		return updateOriginalCheckout(ctx, repoPath, expected, plan, head, localTip, options)
+	}
+	// Unoccupied branch: the checkout's displayed HEAD is unrelated to the
+	// target branch; a checkout switch since display refuses the mutation.
+	if head.Ref != expected.CheckoutHeadRef || !strings.EqualFold(head.SHA, expected.CheckoutHeadSHA) {
+		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonCheckoutChanged, nil, options)
+	}
+	return updateUnoccupiedBranch(ctx, repoPath, expected, plan, localTip, options)
+}
 
+// updateUnoccupiedBranch advances a branch no checkout holds with an
+// expected-old-value compare-and-swap. Only refs/heads/<branch> moves: the
+// checkout, index, working files, unrelated refs, and the origin
+// configuration are untouched, so unrelated dirty checkout state survives.
+func updateUnoccupiedBranch(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, localTip string, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
 	// The fetch proves the remote branch exists during this attempt; a
 	// cached tracking ref is never current evidence.
 	fetch := FetchOriginBranch(ctx, repoPath, *plan.Mapping, options.OriginCheckOptions)
@@ -370,6 +423,311 @@ func UpdateSourceFromOrigin(ctx context.Context, repoPath string, expected Sourc
 	}, nil
 }
 
+// updateOriginalCheckout advances a branch held only by the original
+// catalog-authorized checkout at repoPath. The update revalidates every
+// displayed expectation, then requires the checkout to be provably safe —
+// clean index, working tree, and no in-progress Git operation, with incoming
+// tracked paths never overwriting ignored content — before Git's
+// working-tree-aware fast-forward moves the branch, symbolic HEAD, index,
+// and tracked working files to the exact freshly verified target with hooks
+// disabled. The mutation is never implemented with reset, rebase, force,
+// stash, clean, push, or local-content staging, Git ref/index locks are
+// respected without being deleted, and an outcome that cannot be proved is
+// reported as unavailability rather than as rollback or success.
+func updateOriginalCheckout(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, head CheckoutHeadState, localTip string, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
+	targetRef := "refs/heads/" + expected.Branch
+	// The displayed checkout HEAD must be the target branch itself: the
+	// binding identifies an original-checkout update, and a display that saw
+	// a different HEAD means the checkout has since switched.
+	if expected.CheckoutHeadRef != targetRef || head.Ref != targetRef {
+		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonCheckoutChanged, nil, options)
+	}
+
+	// The fetch proves the mapped branch exists during this attempt; a
+	// cached tracking ref is never current evidence.
+	fetch := FetchOriginBranch(ctx, repoPath, *plan.Mapping, options.OriginCheckOptions)
+	switch fetch.State {
+	case FetchOriginAbsent:
+		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonOriginBranchMissing, &fetch, options)
+	case FetchOriginUnavailable:
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: nonemptyBranchProbeDiagnostic(fetch.Diagnostics)}
+	}
+	if err := ctx.Err(); err != nil {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "source update deadline expired during fetch"}
+	}
+	if !strings.EqualFold(fetch.SHA, expected.ExpectedOriginSHA) {
+		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonOriginTipChanged, &fetch, options)
+	}
+
+	// Equality is a no-op success once the checkout is consistent with it: a
+	// completed original-checkout replay — the same update already advanced
+	// the branch and checkout to the freshly proved target — is recognized
+	// instead of being treated as an unrelated checkout switch.
+	if strings.EqualFold(localTip, fetch.SHA) {
+		if strings.EqualFold(head.SHA, fetch.SHA) {
+			return SourceUpdateOutcome{
+				Result: SourceUpdateAlreadyUpToDate, LocalSHA: localTip, FetchedSHA: fetch.SHA,
+				Plan: plan,
+			}, nil
+		}
+		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonCheckoutChanged, &fetch, options)
+	}
+	if !strings.EqualFold(localTip, expected.ExpectedLocalSHA) {
+		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonLocalTipChanged, &fetch, options)
+	}
+	if !strings.EqualFold(head.SHA, expected.CheckoutHeadSHA) {
+		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonCheckoutChanged, &fetch, options)
+	}
+
+	fastForward, err := isAncestorOf(ctx, repoPath, localTip, fetch.SHA, options.OriginCheckOptions)
+	if err != nil {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
+	}
+	if !fastForward {
+		outcome, err := staleOutcome(ctx, repoPath, plan, SourceUpdateReasonNotFastForward, &fetch, options)
+		if err != nil {
+			return SourceUpdateOutcome{}, err
+		}
+		outcome.Blockers = append(outcome.Blockers, UpdateBlockerLocalNotBehind)
+		return outcome, nil
+	}
+
+	if stale, err := inspectOriginalCheckoutSafety(ctx, repoPath, plan, localTip, fetch.SHA, &fetch, options); err != nil || stale != nil {
+		if err != nil {
+			return SourceUpdateOutcome{}, err
+		}
+		return *stale, nil
+	}
+
+	if options.BeforeCAS != nil {
+		options.BeforeCAS()
+	}
+	if err := ctx.Err(); err != nil {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "source update deadline expired before the checkout update"}
+	}
+
+	// Final revalidation immediately before the mutation: checkout, tip,
+	// membership, and checkout safety all refuse instead of mutating against
+	// stale expectations.
+	stale, err := revalidateOriginalCheckout(ctx, repoPath, expected, plan, fetch.SHA, &fetch, options)
+	if err != nil {
+		return SourceUpdateOutcome{}, err
+	}
+	if stale != nil {
+		return *stale, nil
+	}
+	return mergeFastForwardCheckout(ctx, repoPath, expected, plan, localTip, fetch.SHA, fetch, options)
+}
+
+// inspectOriginalCheckoutSafety enforces the original-checkout mutation's
+// local safety requirements: no in-progress Git operation, a clean index and
+// working tree including all untracked files, and no incoming tracked path
+// overwriting ignored content. An inspection failure is a failure to prove
+// safety, never evidence of it.
+func inspectOriginalCheckoutSafety(ctx context.Context, repoPath string, plan OriginCheckPlan, localTip, targetSHA string, fetch *FetchOriginBranchResult, options SourceUpdateOptions) (*SourceUpdateOutcome, error) {
+	operation, err := checkoutOperationInProgress(ctx, repoPath, options.OriginCheckOptions)
+	if err != nil {
+		return nil, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
+	}
+	if operation {
+		outcome, err := staleOutcome(ctx, repoPath, plan, SourceUpdateReasonCheckoutOperationInProgress, fetch, options)
+		if err != nil {
+			return nil, err
+		}
+		outcome.Blockers = append(outcome.Blockers, UpdateBlockerCheckoutOperationInProgress)
+		return &outcome, nil
+	}
+	clean, err := checkoutStatusClean(ctx, repoPath, true, options.OriginCheckOptions)
+	if err != nil {
+		return nil, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
+	}
+	if !clean {
+		outcome, err := staleOutcome(ctx, repoPath, plan, SourceUpdateReasonDirtyCheckout, fetch, options)
+		if err != nil {
+			return nil, err
+		}
+		outcome.Blockers = append(outcome.Blockers, UpdateBlockerDirtyTargetCheckout)
+		return &outcome, nil
+	}
+	collision, err := checkoutIgnoredPathCollision(ctx, repoPath, localTip, targetSHA, options.OriginCheckOptions)
+	if err != nil {
+		return nil, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
+	}
+	if collision {
+		outcome, err := staleOutcome(ctx, repoPath, plan, SourceUpdateReasonIgnoredPathCollision, fetch, options)
+		if err != nil {
+			return nil, err
+		}
+		outcome.Blockers = append(outcome.Blockers, UpdateBlockerIgnoredPathCollision)
+		return &outcome, nil
+	}
+	return nil, nil
+}
+
+// revalidateOriginalCheckout re-reads the local tip, checkout HEAD, worktree
+// membership, and checkout safety immediately before the mutation. Any change
+// returns the matching stale refusal; an inspection failure fails closed.
+// The attempt's own plan and fetch result supply the refusal's fresh
+// evidence, so revalidation never performs another network fetch.
+func revalidateOriginalCheckout(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, targetSHA string, fetch *FetchOriginBranchResult, options SourceUpdateOptions) (*SourceUpdateOutcome, error) {
+	localTip, err := readBranchTip(ctx, repoPath, expected.Branch, options.OriginCheckOptions)
+	if err != nil {
+		return nil, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
+	}
+	if !strings.EqualFold(localTip, expected.ExpectedLocalSHA) {
+		return &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: SourceUpdateReasonLocalTipChanged}, nil
+	}
+	head, err := observeCheckoutHead(ctx, repoPath, options.OriginCheckOptions)
+	if err != nil {
+		return nil, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
+	}
+	targetRef := "refs/heads/" + expected.Branch
+	if expected.CheckoutHeadRef != targetRef || head.Ref != targetRef || !strings.EqualFold(head.SHA, expected.CheckoutHeadSHA) {
+		return &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: SourceUpdateReasonCheckoutChanged}, nil
+	}
+	checkouts, err := listWorktreeCheckouts(ctx, repoPath, options.OriginCheckOptions)
+	if err != nil {
+		return nil, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
+	}
+	originalHeld := false
+	var linkedHolders []string
+	for _, holder := range holdersOfBranch(checkouts, expected.Branch) {
+		if sameCheckoutPath(holder, repoPath) {
+			originalHeld = true
+		} else {
+			linkedHolders = append(linkedHolders, holder)
+		}
+	}
+	if len(linkedHolders) > 0 {
+		outcome := &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: SourceUpdateReasonBranchCheckedOut}
+		outcome.CheckoutHolders = linkedHolders
+		for range linkedHolders {
+			outcome.Blockers = append(outcome.Blockers, UpdateBlockerBranchCheckedOutInWorktree)
+		}
+		return outcome, nil
+	}
+	if !originalHeld {
+		return &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: SourceUpdateReasonCheckoutChanged}, nil
+	}
+	return inspectOriginalCheckoutSafety(ctx, repoPath, plan, localTip, targetSHA, fetch, options)
+}
+
+// checkoutMergeArgs is the working-tree-aware fast-forward invocation: only a
+// proved fast-forward may run, automatic stashing and merge commits are
+// disabled, and hooks are disabled by pointing core.hooksPath at a path that
+// can hold no executable hook.
+var checkoutMergeArgs = func(target string) []string {
+	return []string{"-c", "core.hooksPath=/dev/null", "merge", "--ff-only", "--no-edit", "--no-autostash", target}
+}
+
+// mergeFastForwardCheckout performs the original checkout's fast-forward.
+// Lock contention is retried inside the remaining deadline after rechecking
+// membership and safety; Git ref/index locks are never deleted or broken,
+// including old ones. A nonzero result that cannot be proved to have left
+// the checkout untouched is unavailability, never a claimed refusal or
+// rollback.
+func mergeFastForwardCheckout(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, localTip, targetSHA string, fetch FetchOriginBranchResult, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
+	delay := 50 * time.Millisecond
+	for {
+		if err := ctx.Err(); err != nil {
+			return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "source update deadline expired while updating the checkout"}
+		}
+		result := options.updateRefRunner().Run(ctx, repoPath, "", checkoutMergeArgs(targetSHA), options.diagnosticLimit())
+		if result.ExitCode == 0 {
+			if err := ctx.Err(); err != nil {
+				return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "source update deadline expired before the checkout update could be verified"}
+			}
+			return verifyCheckoutFastForward(ctx, repoPath, expected, plan, localTip, targetSHA, options)
+		}
+		if _, contention := lockContention([]byte(result.Stdout + "\n" + result.Diagnostics)); contention {
+			// Bounded lock-contention retry: keep the original expectations
+			// and recheck membership and safety before another attempt. The
+			// lock itself is never removed.
+			stale, err := revalidateOriginalCheckout(ctx, repoPath, expected, plan, targetSHA, &fetch, options)
+			if err != nil {
+				return SourceUpdateOutcome{}, err
+			}
+			if stale != nil {
+				return *stale, nil
+			}
+			if err := ctx.Err(); err != nil {
+				return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "source update deadline expired while waiting for a git lock"}
+			}
+			time.Sleep(delay)
+			if delay < 500*time.Millisecond {
+				delay *= 2
+			}
+			continue
+		}
+		return refusedOrUnknownCheckoutUpdate(ctx, repoPath, expected, plan, fetch, options)
+	}
+}
+
+// verifyCheckoutFastForward proves the completed fast-forward: the branch
+// ref and the checkout's symbolic HEAD equal the exact expected target, and
+// the index and tracked working tree are consistent with it. A failed
+// postcondition is unavailability, never success.
+func verifyCheckoutFastForward(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, localTip, targetSHA string, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
+	finalTip, err := readBranchTip(ctx, repoPath, expected.Branch, options.OriginCheckOptions)
+	if err != nil || !strings.EqualFold(finalTip, targetSHA) {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "the checkout update could not be verified after the mutation"}
+	}
+	head, err := observeCheckoutHead(ctx, repoPath, options.OriginCheckOptions)
+	if err != nil || head.Ref != "refs/heads/"+expected.Branch || !strings.EqualFold(head.SHA, targetSHA) {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "the checkout update could not be verified after the mutation"}
+	}
+	clean, err := checkoutStatusClean(ctx, repoPath, false, options.OriginCheckOptions)
+	if err != nil || !clean {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "the checkout update could not be verified after the mutation"}
+	}
+	return SourceUpdateOutcome{
+		Result: SourceUpdateUpdated, PreviousSHA: localTip, LocalSHA: finalTip, FetchedSHA: targetSHA,
+		Plan: plan,
+	}, nil
+}
+
+// refusedOrUnknownCheckoutUpdate settles a nonzero fast-forward result. The
+// checkout is re-inspected: only a proved untouched state — the branch tip,
+// symbolic HEAD, tracked tree, and operation state all exactly as expected —
+// is a typed refusal; anything else (including a possible partial write or a
+// competing change) is unavailability so the uncertain-update settlement
+// flow owns the outcome.
+func refusedOrUnknownCheckoutUpdate(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, fetch FetchOriginBranchResult, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
+	if err := ctx.Err(); err != nil {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "the checkout update was interrupted before its outcome could be proved"}
+	}
+	currentTip, err := readBranchTip(ctx, repoPath, expected.Branch, options.OriginCheckOptions)
+	if err != nil {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
+	}
+	if !strings.EqualFold(currentTip, expected.ExpectedLocalSHA) {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "the branch tip changed while the checkout update was refused"}
+	}
+	head, err := observeCheckoutHead(ctx, repoPath, options.OriginCheckOptions)
+	if err != nil {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
+	}
+	targetRef := "refs/heads/" + expected.Branch
+	if expected.CheckoutHeadRef != targetRef || head.Ref != targetRef || !strings.EqualFold(head.SHA, expected.CheckoutHeadSHA) {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "the checkout changed while the checkout update was refused"}
+	}
+	clean, err := checkoutStatusClean(ctx, repoPath, false, options.OriginCheckOptions)
+	if err != nil {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
+	}
+	if !clean {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "the working tree changed while the checkout update was refused"}
+	}
+	operation, err := checkoutOperationInProgress(ctx, repoPath, options.OriginCheckOptions)
+	if err != nil {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
+	}
+	if operation {
+		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "a git operation started while the checkout update was refused"}
+	}
+	return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonCheckoutConflict, &fetch, options)
+}
+
 // enrichStaleRefusal fills the fresh snapshot fields of a CAS-layer stale
 // refusal, which carries only its typed reason and observed holders.
 func enrichStaleRefusal(ctx context.Context, repoPath string, refusal SourceUpdateOutcome, plan OriginCheckPlan, fetch *FetchOriginBranchResult, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
@@ -447,10 +805,15 @@ func revalidateBeforeCAS(ctx context.Context, repoPath string, expected SourceUp
 	if err != nil {
 		return nil, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
 	}
-	if holders := holdersOfBranch(checkouts, expected.Branch); len(holders) > 0 {
+	// Only a linked worktree occupant refuses the ref-only update; the
+	// original checkout holding the branch cannot happen here because the
+	// unoccupied path was selected under the same membership list.
+	if linkedHolders := linkedHoldersOfBranch(checkouts, repoPath, expected.Branch); len(linkedHolders) > 0 {
 		outcome := &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: SourceUpdateReasonBranchCheckedOut}
-		outcome.CheckoutHolders = holders
-		outcome.Blockers = checkoutHoldersBlockers(repoPath, holders)
+		outcome.CheckoutHolders = linkedHolders
+		for range linkedHolders {
+			outcome.Blockers = append(outcome.Blockers, UpdateBlockerBranchCheckedOutInWorktree)
+		}
 		return outcome, nil
 	}
 	return nil, nil
@@ -685,25 +1048,17 @@ func holdersOfBranch(checkouts []worktreeCheckout, branch string) []string {
 	return holders
 }
 
-// checkoutHoldersBlockers classifies each holder: the original checkout is
-// unavailable in this phase even when clean; a linked worktree requires
-// updating that worktree separately.
-func checkoutHoldersBlockers(repoPath string, holders []string) []UpdateBlocker {
-	blockers := make([]UpdateBlocker, 0, len(holders))
-	for _, holder := range holders {
-		if sameCheckoutPath(holder, repoPath) {
-			blockers = append(blockers, UpdateBlockerBranchCheckedOutOriginal)
-		} else {
-			blockers = append(blockers, UpdateBlockerBranchCheckedOutInWorktree)
+// linkedHoldersOfBranch returns every checkout path other than the original
+// checkout at repoPath that holds the branch.
+func linkedHoldersOfBranch(checkouts []worktreeCheckout, repoPath, branch string) []string {
+	var linked []string
+	for _, holder := range holdersOfBranch(checkouts, branch) {
+		if !sameCheckoutPath(holder, repoPath) {
+			linked = append(linked, holder)
 		}
 	}
-	return blockers
+	return linked
 }
-
-// UpdateBlockerBranchCheckedOutOriginal reports the selected branch is
-// checked out in the repository's original checkout: unavailable for a
-// ref-only update in this phase, even when clean.
-const UpdateBlockerBranchCheckedOutOriginal UpdateBlocker = "branch_checked_out_in_original_checkout"
 
 // ResolveCheckoutHead exposes the observed checkout HEAD for read-model
 // snapshots that bind Update expectations.

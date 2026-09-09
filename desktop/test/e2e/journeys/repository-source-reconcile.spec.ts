@@ -31,7 +31,13 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
-import { closeApp, evidenceShot, launchApp, type AppHandle } from '../helpers/app';
+import {
+  assertNoLeakedProcesses,
+  closeApp,
+  evidenceShot,
+  launchApp,
+  type AppHandle,
+} from '../helpers/app';
 import { parseFeatureRepoField, parseFeatureRepos } from '../helpers/completionFixture';
 import { bundledServerBinary, packagedExecutable } from '../helpers/packaged';
 import { Transcript } from '../helpers/transcript';
@@ -107,6 +113,58 @@ function pairUnoccupiedBehindOrigin(
       message,
     );
   }
+  gitText(writer, 'push', 'origin', 'main');
+  return { repo, bare };
+}
+
+/**
+ * Pairs a repository with a real bare origin and leaves the default branch
+ * HELD BY THE ORIGINAL CHECKOUT: the checkout stays ON `main`, clean, while
+ * a writer clone advances origin/main by two commits with real file changes
+ * (a rewritten tracked README and a new file extended by the second commit).
+ * Current-mode selection resolves the checked-out branch; default mode still
+ * resolves `main` through origin/HEAD.
+ */
+function pairOccupiedBehindOrigin(
+  world: JourneyWorld,
+  name: string,
+): { repo: string; bare: string } {
+  const repo = createRepo(world, name, { commit: true });
+  const bare = path.join(world.root, `${name}-origin.git`);
+  fs.mkdirSync(bare, { recursive: true });
+  gitText(bare, 'init', '--bare');
+  gitText(repo, 'remote', 'add', 'origin', bare);
+  gitText(repo, 'push', 'origin', 'main');
+  gitText(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  const writer = path.join(world.root, `${name}-writer`);
+  execFileSync('git', ['clone', bare, writer], { stdio: 'pipe', env: HERMETIC_GIT_ENV });
+  // Real file changes, not empty commits: the fast-forward must advance the
+  // checkout's index and working files, and the assertions compare bytes.
+  fs.writeFileSync(path.join(writer, 'README.md'), `# ${name} (advanced by origin)\n`);
+  fs.writeFileSync(path.join(writer, 'remote-notes.txt'), 'remote note one\n');
+  gitText(writer, 'add', '.');
+  gitText(
+    writer,
+    '-c',
+    'user.name=e2e',
+    '-c',
+    'user.email=e2e@example.invalid',
+    'commit',
+    '-m',
+    'remote one',
+  );
+  fs.writeFileSync(path.join(writer, 'remote-notes.txt'), 'remote note one\nremote note two\n');
+  gitText(writer, 'add', '.');
+  gitText(
+    writer,
+    '-c',
+    'user.name=e2e',
+    '-c',
+    'user.email=e2e@example.invalid',
+    'commit',
+    '-m',
+    'remote two',
+  );
   gitText(writer, 'push', 'origin', 'main');
   return { repo, bare };
 }
@@ -527,6 +585,333 @@ test('a mid-update server switch leaves the outcome unknown until returning to t
       if (server.proc.exitCode === null) server.proc.kill('SIGKILL');
     }
     proxy.stop();
+    transcript.write(testInfo);
+    destroyWorld(world);
+  }
+});
+
+test('a mid-update server switch on the original checkout reconciles the completed fast-forward and creation pins the advanced tip', async ({}, testInfo) => {
+  const world = createWorld('repository-source-reconcile-original', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+  });
+  const proxy = startSlowOriginProxy(world);
+  const { repo, bare } = pairOccupiedBehindOrigin(world, 'reconcile-original-lab');
+  // The dumb-HTTP origin needs the server info files after the last push.
+  gitText(bare, 'update-server-info');
+  gitText(repo, 'remote', 'set-url', 'origin', await proxy.urlFor('reconcile-original-lab'));
+  const staleSha = gitText(repo, 'rev-parse', 'refs/heads/main');
+  const originSha = gitText(bare, 'rev-parse', 'refs/heads/main');
+  if (originSha === staleSha) {
+    throw new Error('fixture did not place the original checkout behind origin');
+  }
+
+  const transcript = new Transcript(
+    'repository-source-reconcile-original',
+    'Original-checkout update outcome across a server switch (packaged app, two real servers)',
+  );
+  const servers: TestServer[] = [];
+  let handle: AppHandle | undefined;
+  try {
+    const alpha = startTestServer(world, 'alpha', 'runtime-alpha');
+    const beta = startTestServer(world, 'beta', 'runtime-beta');
+    servers.push(alpha, beta);
+    await waitFor(() => discoveryAt(alpha.runtimeDir) !== null, 'alpha discovery', 30_000);
+    await waitFor(() => discoveryAt(beta.runtimeDir) !== null, 'beta discovery', 30_000);
+    await waitFor(() => readRegistry(world).length === 2, 'two registry entries', 30_000);
+
+    handle = await launchApp(world, testInfo, {
+      traceName: 'repository-source-reconcile-original',
+    });
+    const app = handle;
+    const options = app.page.getByRole('option');
+    await expect(options.filter({ hasText: 'alpha' })).toHaveCount(1, { timeout: 60_000 });
+    await options.filter({ hasText: 'alpha' }).click();
+    await waitFor(
+      async () => (await connectionState(app)).serverName === 'alpha',
+      'alpha attach',
+      60_000,
+    );
+
+    await app.page.getByRole('button', { name: 'New feature' }).click();
+    const sheet = app.page.getByRole('dialog', { name: 'New feature' });
+    await sheet.getByRole('checkbox', { name: /reconcile-original-lab/ }).check();
+    await expect(
+      sheet.getByRole('checkbox', {
+        name: /reconcile-original-lab.*Origin: 2 commits behind origin\/main/,
+      }),
+    ).toBeVisible({ timeout: 30_000 });
+    const row = sheet.locator('.creation-sheet__row-item', { hasText: 'reconcile-original-lab' });
+    // The default-branch source is held only by the original checkout, so the
+    // offered action names the checkout's files, not just the ref.
+    await expect(
+      row.getByText(
+        'Advances main and its checked-out files in the original repository on alpha to origin/main.',
+      ),
+    ).toBeVisible();
+    transcript.step('alpha offered the original-checkout update with its impact copy');
+
+    // The barrier: the update's fresh fetch is delayed mid-flight, and the
+    // workspace switches to beta before its response can arrive.
+    await proxy.setSlow(true);
+    await row.getByRole('button', { name: 'Update from origin' }).click();
+    await proxy.waitForDelayedInfoRefs();
+    const betaKey = await serverKeyFor(app, 'beta');
+    await app.page.evaluate((serverKey) => {
+      const api = window.agentico as unknown as {
+        switchConnectionServer(request: { serverKey: string }): Promise<unknown>;
+      };
+      return api.switchConnectionServer({ serverKey });
+    }, betaKey);
+    await waitFor(
+      async () => (await connectionState(app)).serverName === 'beta',
+      'beta attach mid-update',
+      60_000,
+    );
+    transcript.step(
+      'the workspace switched to beta while the original-checkout update was in flight',
+    );
+
+    // The update completed on alpha behind the switch: the branch AND the
+    // original checkout's HEAD, index, and working files really advanced.
+    await waitFor(
+      () => gitText(repo, 'rev-parse', 'refs/heads/main') === originSha,
+      'the switched-away original-checkout update to complete on alpha',
+      30_000,
+    );
+    expect(gitText(repo, 'symbolic-ref', '--quiet', 'HEAD')).toBe('refs/heads/main');
+    expect(gitText(repo, 'rev-parse', 'HEAD')).toBe(originSha);
+    expect(gitText(repo, 'status', '--porcelain')).toBe('');
+    expect(fs.readFileSync(path.join(repo, 'README.md'), 'utf8')).toBe(
+      '# reconcile-original-lab (advanced by origin)\n',
+    );
+    expect(fs.readFileSync(path.join(repo, 'remote-notes.txt'), 'utf8')).toBe(
+      'remote note one\nremote note two\n',
+    );
+    expect(gitText(repo, 'ls-files', '--stage', '--', 'README.md')).toContain(
+      gitText(repo, 'rev-parse', `${originSha}:README.md`),
+    );
+    expect(gitText(repo, 'diff', '--stat', originSha)).toBe('');
+    await proxy.setSlow(false);
+    transcript.step('the update completed on alpha: branch, HEAD, index, and files all advanced');
+
+    // Beta's creation view never sees or settles alpha's uncertainty.
+    if ((await app.page.getByRole('dialog', { name: 'New feature' }).count()) === 0) {
+      await app.page.getByRole('button', { name: 'New feature' }).click();
+    }
+    await expect(app.page.getByRole('dialog', { name: 'New feature' })).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(
+      app.page
+        .getByRole('dialog', { name: 'New feature' })
+        .getByText(/result of updating main and its checked-out files/),
+    ).toHaveCount(0);
+    transcript.step("beta's sheet never saw alpha's unknown original-checkout outcome");
+
+    // Returning to alpha replays the record and reconciles it there: the
+    // settlement proves the whole checkout advanced and restores acceptance.
+    const alphaKey = await serverKeyFor(app, 'alpha');
+    await app.page.evaluate((serverKey) => {
+      const api = window.agentico as unknown as {
+        switchConnectionServer(request: { serverKey: string }): Promise<unknown>;
+      };
+      return api.switchConnectionServer({ serverKey });
+    }, alphaKey);
+    await waitFor(
+      async () => (await connectionState(app)).serverName === 'alpha',
+      'alpha re-attach',
+      60_000,
+    );
+    const restored = app.page.getByRole('dialog', { name: 'New feature' });
+    await expect(restored).toBeVisible({ timeout: 60_000 });
+    await expect(
+      restored.getByText(
+        new RegExp(
+          `Reconciled main on alpha: the update completed \\(now at ${originSha.slice(0, 7)}\\)\\.`,
+        ),
+      ),
+    ).toBeVisible({ timeout: 60_000 });
+    await evidenceShot(app, 'repository-source-reconcile-original-target-present');
+    transcript.step('returning to alpha reconciled the outcome to the completed update');
+
+    // The reconciled source is acceptable again: the refreshed comparison is
+    // up to date and submission is restored at the advanced tip.
+    await expect(
+      restored.getByRole('checkbox', {
+        name: /reconcile-original-lab.*Origin: up to date with origin\/main/,
+      }),
+    ).toBeVisible({ timeout: 30_000 });
+    await restored.getByRole('button', { name: 'Next: Describe' }).click();
+    await app.page.locator('#feature-name').fill('Original checkout reconciled update');
+    await restored.getByRole('button', { name: 'Next: Depth' }).click();
+    await restored.getByRole('button', { name: 'Next: Contract' }).click();
+    await expect(
+      restored.getByText('reconcile-original-lab: main is up to date with origin/main.'),
+    ).toBeVisible();
+    await expect(
+      restored.getByText(/Reconciled main on alpha: the update completed/),
+    ).toBeVisible();
+    await restored.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
+    await expect(restored.getByRole('button', { name: 'Create', exact: true })).toBeEnabled();
+    await restored.getByRole('button', { name: 'Create', exact: true }).click();
+
+    const cockpit = app.page.getByLabel('Feature Original checkout reconciled update');
+    await expect(cockpit).toBeVisible({ timeout: 30_000 });
+    await expect(cockpit.getByText('Ready to start').first()).toBeVisible({ timeout: 60_000 });
+    await waitFor(
+      () => durableFeatureIds(alpha.stateDir).length === 1,
+      'the original-checkout reconciled feature id',
+    );
+    const featureId = durableFeatureIds(alpha.stateDir)[0]!;
+    const featureYaml = fs.readFileSync(
+      path.join(alpha.stateDir, featureId, 'feature.yaml'),
+      'utf8',
+    );
+    const runYaml = fs.readFileSync(
+      path.join(alpha.stateDir, featureId, 'runs', 'run-001', 'run.yaml'),
+      'utf8',
+    );
+    const storedCommits = parseFeatureRepoField(featureYaml, /^\s+commit:\s*(.+?)\s*$/);
+    const worktree = parseFeatureRepos(featureYaml)['reconcile-original-lab']!;
+    expect(storedCommits['reconcile-original-lab']).toBe(originSha);
+    expect(runYaml).toContain(`exact_sha: ${originSha}`);
+    expect(gitText(worktree, 'rev-parse', 'HEAD')).toBe(originSha);
+    // The original repository stays on main at the advanced tip, clean.
+    expect(gitText(repo, 'branch', '--show-current')).toBe('main');
+    expect(gitText(repo, 'rev-parse', 'HEAD')).toBe(originSha);
+    expect(gitText(repo, 'status', '--porcelain')).toBe('');
+    transcript.step(
+      'the reconciled feature started from the advanced tip with the checkout intact',
+    );
+  } finally {
+    if (handle !== undefined) await closeApp(handle);
+    for (const server of servers) {
+      if (server.proc.exitCode === null) server.proc.kill('SIGKILL');
+    }
+    proxy.stop();
+    assertNoLeakedProcesses(world);
+    transcript.write(testInfo);
+    destroyWorld(world);
+  }
+});
+
+test('an unprovable original-checkout update over a dirty checkout settles to a partial-effects warning and continues at the unchanged tip', async ({}, testInfo) => {
+  const world = createWorld('repository-source-reconcile-dirty', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+  });
+  const { repo, bare } = pairOccupiedBehindOrigin(world, 'reconcile-dirty-lab');
+  const staleSha = gitText(repo, 'rev-parse', 'refs/heads/main');
+  const originSha = gitText(bare, 'rev-parse', 'refs/heads/main');
+  if (originSha === staleSha) {
+    throw new Error('fixture did not place the original checkout behind origin');
+  }
+  const deadPort = await pickDeadPort();
+
+  const transcript = new Transcript(
+    'repository-source-reconcile-dirty',
+    'Dirty original-checkout settlement (packaged app, real bundled server)',
+  );
+  let handle: AppHandle | undefined;
+  try {
+    handle = await launchApp(world, testInfo, { traceName: 'repository-source-reconcile-dirty' });
+    const app = handle;
+    await app.page.getByRole('button', { name: 'New feature' }).click();
+    const sheet = app.page.getByRole('dialog', { name: 'New feature' });
+    await sheet.getByRole('checkbox', { name: /reconcile-dirty-lab/ }).check();
+    await expect(
+      sheet.getByRole('checkbox', {
+        name: /reconcile-dirty-lab.*Origin: 2 commits behind origin\/main/,
+      }),
+    ).toBeVisible({ timeout: 30_000 });
+    const row = sheet.locator('.creation-sheet__row-item', { hasText: 'reconcile-dirty-lab' });
+    transcript.step('the behind original-checkout row offered Update from origin');
+
+    // The comparison was observed while the checkout was clean. The checkout
+    // is dirtied externally (an unstaged tracked edit) and the origin becomes
+    // unreachable before the attempt: the update's fetch cannot prove
+    // anything, so its outcome is unknown, and the settlement read — which
+    // observes the checkout locally — must report the unchanged tip over a
+    // dirty checkout without ever claiming a rollback.
+    fs.writeFileSync(path.join(repo, 'README.md'), '# reconcile-dirty-lab (externally edited)\n');
+    const dirtyStatus = gitText(repo, 'status', '--porcelain');
+    gitText(repo, 'remote', 'set-url', 'origin', `http://127.0.0.1:${deadPort}/dead.git`);
+    await row.getByRole('button', { name: 'Update from origin' }).click();
+
+    await expect(
+      row.getByText(
+        new RegExp(
+          `Reconciled main on .+: the update did not complete, and main is unchanged ` +
+            `\\(now at ${staleSha.slice(0, 7)}\\), but the original repository's checkout has ` +
+            `uncommitted changes that may include partial update effects — resolve them outside ` +
+            `Agentico, then check again\\.`,
+        ),
+      ),
+    ).toBeVisible({ timeout: 60_000 });
+    await evidenceShot(app, 'repository-source-reconcile-dirty-partial-effects');
+    transcript.step('the unprovable attempt settled to a partial-effects warning');
+
+    // Real-git evidence: nothing mutated and the dirty bytes are preserved.
+    expect(gitText(repo, 'rev-parse', 'refs/heads/main')).toBe(staleSha);
+    expect(gitText(repo, 'rev-parse', 'HEAD')).toBe(staleSha);
+    expect(gitText(repo, 'symbolic-ref', '--quiet', 'HEAD')).toBe('refs/heads/main');
+    expect(gitText(repo, 'status', '--porcelain')).toBe(dirtyStatus);
+    expect(fs.readFileSync(path.join(repo, 'README.md'), 'utf8')).toBe(
+      '# reconcile-dirty-lab (externally edited)\n',
+    );
+    transcript.step('the settlement left the unchanged tip and the dirty bytes intact');
+
+    // Warning-based continuation: the still-valid local source is accepted
+    // without an acknowledgement, and the warning persists through review.
+    await sheet.getByRole('button', { name: 'Next: Describe' }).click();
+    await app.page.locator('#feature-name').fill('Dirty settlement continuation');
+    await sheet.getByRole('button', { name: 'Next: Depth' }).click();
+    await sheet.getByRole('button', { name: 'Next: Contract' }).click();
+    await expect(
+      sheet.getByText(
+        'reconcile-dirty-lab: main is 2 commits behind origin/main; the feature will start from the local source.',
+      ),
+    ).toBeVisible();
+    await expect(
+      sheet.getByText(/Reconciled main on .+: the update did not complete/),
+    ).toBeVisible();
+    await sheet.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
+    await sheet.getByRole('button', { name: 'Create', exact: true }).click();
+
+    const cockpit = app.page.getByLabel('Feature Dirty settlement continuation');
+    await expect(cockpit).toBeVisible({ timeout: 30_000 });
+    await expect(cockpit.getByText('Ready to start').first()).toBeVisible({ timeout: 60_000 });
+    await waitFor(
+      () => durableFeatureIds(world.stateDir).length === 1,
+      'the dirty settlement continuation feature id',
+    );
+    const featureId = durableFeatureIds(world.stateDir)[0]!;
+    const featureYaml = fs.readFileSync(
+      path.join(world.stateDir, featureId, 'feature.yaml'),
+      'utf8',
+    );
+    const runYaml = fs.readFileSync(
+      path.join(world.stateDir, featureId, 'runs', 'run-001', 'run.yaml'),
+      'utf8',
+    );
+    const storedCommits = parseFeatureRepoField(featureYaml, /^\s+commit:\s*(.+?)\s*$/);
+    const worktree = parseFeatureRepos(featureYaml)['reconcile-dirty-lab']!;
+    expect(storedCommits['reconcile-dirty-lab']).toBe(staleSha);
+    expect(runYaml).toContain(`exact_sha: ${staleSha}`);
+    expect(gitText(worktree, 'rev-parse', 'HEAD')).toBe(staleSha);
+    // The original repository stays on main at the unchanged tip with its
+    // dirty bytes preserved byte-for-byte.
+    expect(gitText(repo, 'branch', '--show-current')).toBe('main');
+    expect(gitText(repo, 'rev-parse', 'HEAD')).toBe(staleSha);
+    expect(gitText(repo, 'status', '--porcelain')).toBe(dirtyStatus);
+    expect(fs.readFileSync(path.join(repo, 'README.md'), 'utf8')).toBe(
+      '# reconcile-dirty-lab (externally edited)\n',
+    );
+    transcript.step('creation continued at the unchanged tip with the dirty bytes preserved');
+  } finally {
+    if (handle !== undefined) await closeApp(handle);
+    assertNoLeakedProcesses(world);
     transcript.write(testInfo);
     destroyWorld(world);
   }

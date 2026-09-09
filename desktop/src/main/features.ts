@@ -405,6 +405,12 @@ export class FeatureService {
         origin_branch: request.originBranch,
         expected_local_sha: request.expectedLocalSha,
         expected_origin_sha: request.expectedOriginSha,
+        ...(request.checkoutHeadRef === undefined
+          ? {}
+          : { checkout_head_ref: request.checkoutHeadRef }),
+        ...(request.checkoutHeadSha === undefined
+          ? {}
+          : { checkout_head_sha: request.checkoutHeadSha }),
       },
     });
     const parsed = validateWithSchema(body, RepositorySourceReconcileResponseSchema);
@@ -436,6 +442,19 @@ export class FeatureService {
               kind: parsed.selection.kind,
               ...(parsed.selection.branch === undefined ? {} : { branch: parsed.selection.branch }),
               observedSha: parsed.selection.observed_sha,
+            },
+          }),
+      ...(parsed.checkout === undefined
+        ? {}
+        : {
+            checkout: {
+              state: parsed.checkout.state,
+              ...(parsed.checkout.head_ref === undefined
+                ? {}
+                : { headRef: parsed.checkout.head_ref }),
+              ...(parsed.checkout.head_sha === undefined
+                ? {}
+                : { headSha: parsed.checkout.head_sha }),
             },
           }),
     };

@@ -1502,7 +1502,7 @@ export interface components {
             /** @description Advisory eligibility for a future branch update; never authorization for a mutation. Present when a fresh comparison exists or the comparison is unavailable. */
             update_eligible?: boolean;
             /** @description Observed advisory reasons a future update is not defined or not safe. */
-            update_blockers?: ("local_not_behind" | "dirty_target_checkout" | "git_operation_in_progress" | "branch_checked_out_in_worktree" | "branch_checked_out_in_original_checkout" | "comparison_unavailable")[];
+            update_blockers?: ("local_not_behind" | "dirty_target_checkout" | "git_operation_in_progress" | "branch_checked_out_in_worktree" | "checkout_operation_in_progress" | "ignored_path_collision" | "checkout_uninspectable" | "comparison_unavailable")[];
             /** @description Observed checkout HEAD reference: the full symbolic ref (refs/heads/...) or the literal "detached". Present when the checkout HEAD resolved; binds Update requests to the observed checkout identity. */
             checkout_head_ref?: string;
             /** @description Observed checkout HEAD commit. Present when the checkout HEAD resolves to a commit. */
@@ -1542,15 +1542,15 @@ export interface components {
         };
         RepositoryUpdateSourceResponse: components["schemas"]["ActionBaseResponse"] & {
             /**
-             * @description updated: the branch advanced by compare-and-swap. already_up_to_date: equality no-op after revalidation. stale: a displayed expectation no longer matches; nothing was mutated.
+             * @description updated: the branch advanced — by compare-and-swap for an unoccupied branch, or by the working-tree-aware fast-forward for a branch held only by the original checkout. already_up_to_date: equality no-op after revalidation, including a completed original-checkout replay. stale: a displayed expectation no longer matches or the original checkout is not provably safe; nothing was mutated.
              * @enum {string}
              */
             result: "updated" | "already_up_to_date" | "stale";
             /**
-             * @description Typed stale reason; present only for stale results.
+             * @description Typed stale reason; present only for stale results. branch_checked_out names a linked worktree holder. dirty_checkout, checkout_operation_in_progress, and ignored_path_collision are original-checkout safety refusals; checkout_conflict reports a boundary refusal that was proved to have left the checkout untouched.
              * @enum {string}
              */
-            reason?: "checkout_changed" | "source_changed" | "mapping_changed" | "local_tip_changed" | "origin_tip_changed" | "origin_branch_missing" | "not_fast_forward" | "branch_checked_out";
+            reason?: "checkout_changed" | "source_changed" | "mapping_changed" | "local_tip_changed" | "origin_tip_changed" | "origin_branch_missing" | "not_fast_forward" | "branch_checked_out" | "dirty_checkout" | "checkout_operation_in_progress" | "ignored_path_collision" | "checkout_conflict";
             /** @description Server-resolved current catalog key. */
             repo_key: string;
             identity: components["schemas"]["RepositoryIdentity"];
@@ -1585,6 +1585,10 @@ export interface components {
             expected_local_sha: string;
             /** @description The fetched origin tip the attempted update was expected to advance the branch to. */
             expected_origin_sha: string;
+            /** @description The observed checkout HEAD reference the attempted update bound to, as displayed: the full symbolic ref (refs/heads/...) or the literal "detached". Optional; when it is the attempted branch's own ref, the settlement also observes the original checkout's state before any whole-checkout completion is claimed. */
+            checkout_head_ref?: string;
+            /** @description The observed checkout HEAD commit the attempted update bound to. */
+            checkout_head_sha?: string;
         };
         RepositorySourceReconcileResponse: components["schemas"]["ActionBaseResponse"] & {
             /**
@@ -1608,6 +1612,19 @@ export interface components {
             local_sha?: string;
             /** @description Freshly resolved current selection for the shared mode, read under the same coordination; present when a selection resolves. Its observed SHA is the current selection's commit, never evidence about the attempted update. */
             selection?: components["schemas"]["RepositorySource"];
+            /** @description Observed state of the original checkout holding the branch, present only when the attempted update bound the checkout HEAD to the branch itself and the original checkout still holds it. The branch tip alone never proves the index and files advanced; only a clean checkout whose HEAD is the observed tip supports a whole-checkout completion claim. */
+            checkout?: components["schemas"]["RepositorySourceReconcileCheckout"];
+        };
+        RepositorySourceReconcileCheckout: {
+            /**
+             * @description clean: consistent index and tracked working tree with no in-progress Git operation. dirty: staged, unstaged, or inconsistent tracked content, possibly a partial or externally changed checkout. operation_in_progress: a merge, rebase, cherry-pick, or revert is underway. unobserved: the checkout could not be completely inspected; no whole-checkout claim may be based on it.
+             * @enum {string}
+             */
+            state: "clean" | "dirty" | "operation_in_progress" | "unobserved";
+            /** @description Observed checkout HEAD reference; empty when it could not be read. */
+            head_ref?: string;
+            /** @description Observed checkout HEAD commit; empty when it could not be read. */
+            head_sha?: string;
         };
         CloneStartRequest: {
             /** @description HTTP, HTTPS or SSH remote URL for the clone. Local paths, helper transports, embedded credentials and token-bearing queries or fragments are rejected without echoing secrets. */

@@ -95,7 +95,7 @@ const (
 	// defined.
 	UpdateBlockerLocalNotBehind UpdateBlocker = "local_not_behind"
 	// UpdateBlockerDirtyTargetCheckout reports the checkout holding the
-	// selected branch has uncommitted changes.
+	// selected branch has uncommitted changes, including untracked files.
 	UpdateBlockerDirtyTargetCheckout UpdateBlocker = "dirty_target_checkout"
 	// UpdateBlockerGitOperationInProgress reports a Git mutation guarded by
 	// Agentico's common-directory boundary is running for the repository.
@@ -103,6 +103,18 @@ const (
 	// UpdateBlockerBranchCheckedOutInWorktree reports the selected branch is
 	// checked out in a linked worktree.
 	UpdateBlockerBranchCheckedOutInWorktree UpdateBlocker = "branch_checked_out_in_worktree"
+	// UpdateBlockerCheckoutOperationInProgress reports a merge, rebase,
+	// cherry-pick, or revert — including a sequence between commits — is in
+	// progress in the original checkout holding the selected branch.
+	UpdateBlockerCheckoutOperationInProgress UpdateBlocker = "checkout_operation_in_progress"
+	// UpdateBlockerIgnoredPathCollision reports an incoming tracked path of
+	// the fast-forward would overwrite ignored files or directories in the
+	// original checkout holding the selected branch.
+	UpdateBlockerIgnoredPathCollision UpdateBlocker = "ignored_path_collision"
+	// UpdateBlockerCheckoutUninspectable reports the checkout's safety state
+	// could not be inspected; an inspection failure is ineligible, never
+	// evidence of safety.
+	UpdateBlockerCheckoutUninspectable UpdateBlocker = "checkout_uninspectable"
 	// UpdateBlockerComparisonUnavailable reports no fresh comparison exists
 	// to base an update decision on.
 	UpdateBlockerComparisonUnavailable UpdateBlocker = "comparison_unavailable"
@@ -353,23 +365,65 @@ func CompareOriginSource(ctx context.Context, repoPath string, localSHA, fetched
 // ProbeUpdateEligibility reports the advisory update eligibility for one
 // selected branch together with every observed blocker. It must be called
 // outside Agentico's common-directory mutation boundary: the boundary lock
-// itself is one of the observed blockers. Unrelated dirty files in other
-// checkouts never disqualify an unoccupied branch.
-func ProbeUpdateEligibility(ctx context.Context, repoPath, branch string, options OriginCheckOptions) (bool, []UpdateBlocker) {
+// itself is one of the observed blockers. A branch held by the original
+// checkout is eligible only when its checkout is provably safe: clean
+// (including untracked files), free of an in-progress Git operation, and
+// free of ignored-content collisions against the freshly compared range —
+// the optional comparison supplies that range when one exists. Unrelated
+// dirty files in other checkouts never disqualify an unoccupied branch, and
+// an inspection failure is a blocker, never evidence of safety. Eligibility
+// never authorizes a mutation; the update revalidates everything at
+// execution.
+func ProbeUpdateEligibility(ctx context.Context, repoPath, branch string, comparison *OriginComparison, options OriginCheckOptions) (bool, []UpdateBlocker) {
 	blockers := make([]UpdateBlocker, 0, 2)
 	if worktreeMutationInProgress(repoPath) {
 		blockers = append(blockers, UpdateBlockerGitOperationInProgress)
 	}
 	holder, found, err := branchCheckoutHolder(ctx, repoPath, branch, options)
-	if err == nil && found {
+	if err != nil {
+		blockers = append(blockers, UpdateBlockerCheckoutUninspectable)
+	} else if found {
 		if !sameCheckoutPath(holder, repoPath) {
 			blockers = append(blockers, UpdateBlockerBranchCheckedOutInWorktree)
-		} else if checkoutDirty(ctx, holder, options) {
-			blockers = append(blockers, UpdateBlockerDirtyTargetCheckout)
+		} else {
+			blockers = append(blockers, originalCheckoutSafetyBlockers(ctx, repoPath, holder, comparison, options)...)
 		}
 	}
 	sort.Slice(blockers, func(i, j int) bool { return blockers[i] < blockers[j] })
 	return len(blockers) == 0, blockers
+}
+
+// originalCheckoutSafetyBlockers observes the advisory safety blockers of
+// the original checkout holding the selected branch: an in-progress Git
+// operation, uncommitted content including untracked files, and ignored
+// content that the compared fast-forward range would overwrite. Inspection
+// failures are blockers; they never pass as safe.
+func originalCheckoutSafetyBlockers(ctx context.Context, repoPath, holder string, comparison *OriginComparison, options OriginCheckOptions) []UpdateBlocker {
+	var blockers []UpdateBlocker
+	operation, err := checkoutOperationInProgress(ctx, holder, options)
+	if err != nil {
+		return append(blockers, UpdateBlockerCheckoutUninspectable)
+	}
+	if operation {
+		blockers = append(blockers, UpdateBlockerCheckoutOperationInProgress)
+	}
+	clean, err := checkoutStatusClean(ctx, holder, true, options)
+	if err != nil {
+		return append(blockers, UpdateBlockerCheckoutUninspectable)
+	}
+	if !clean {
+		blockers = append(blockers, UpdateBlockerDirtyTargetCheckout)
+	}
+	if comparison != nil && comparison.Status == OriginCheckBehind && validFullCommit(comparison.LocalSHA) && validFullCommit(comparison.FetchedSHA) {
+		collision, err := checkoutIgnoredPathCollision(ctx, holder, comparison.LocalSHA, comparison.FetchedSHA, options)
+		if err != nil {
+			return append(blockers, UpdateBlockerCheckoutUninspectable)
+		}
+		if collision {
+			blockers = append(blockers, UpdateBlockerIgnoredPathCollision)
+		}
+	}
+	return blockers
 }
 
 // branchCheckoutHolder reports the worktree path the branch is checked out
@@ -404,11 +458,6 @@ func sameCheckoutPath(a, b string) bool {
 		return resolvedA == resolvedB
 	}
 	return filepath.Clean(a) == filepath.Clean(b)
-}
-
-func checkoutDirty(ctx context.Context, worktreePath string, options OriginCheckOptions) bool {
-	result := runOriginCommand(ctx, worktreePath, []string{"status", "--porcelain"}, options.commandTimeout(), options)
-	return result.ExitCode == 0 && strings.TrimSpace(result.Stdout) != ""
 }
 
 // runOriginCommand runs one bounded git command for origin checks. A zero

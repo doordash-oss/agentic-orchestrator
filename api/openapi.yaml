@@ -2651,10 +2651,10 @@ components:
               type: string
               enum: [initialized, already_initialized]
               description: >-
-                "initialized" when this request created the initial commit;
-                "already_initialized" when HEAD already resolved (a
-                competing initializer or an external commit), a refresh-only
-                success.
+               "initialized" when this request created the initial commit;
+               "already_initialized" when HEAD already resolved (a
+               competing initializer or an external commit), a refresh-only
+               success.
             repository:
               $ref: "#/components/schemas/InitializeRepositoryResult"
     RepositorySourceSelector:
@@ -2713,7 +2713,7 @@ components:
               type: array
               maxItems: 32
               items:
-                $ref: "#/components/schemas/RepositorySource"
+               $ref: "#/components/schemas/RepositorySource"
     RepositoryOriginStatusRequest:
       type: object
       additionalProperties: false
@@ -2828,12 +2828,14 @@ components:
             type: string
             enum:
               [
-                local_not_behind,
-                dirty_target_checkout,
-                git_operation_in_progress,
-                branch_checked_out_in_worktree,
-                branch_checked_out_in_original_checkout,
-                comparison_unavailable,
+               local_not_behind,
+               dirty_target_checkout,
+               git_operation_in_progress,
+               branch_checked_out_in_worktree,
+               checkout_operation_in_progress,
+               ignored_path_collision,
+               checkout_uninspectable,
+               comparison_unavailable,
               ]
         checkout_head_ref:
           type: string
@@ -2888,7 +2890,7 @@ components:
               type: array
               maxItems: 32
               items:
-                $ref: "#/components/schemas/RepositoryOriginStatus"
+               $ref: "#/components/schemas/RepositoryOriginStatus"
     RepositoryUpdateSourceRequest:
       type: object
       additionalProperties: false
@@ -2964,10 +2966,13 @@ components:
               type: string
               enum: [updated, already_up_to_date, stale]
               description: >-
-                updated: the branch advanced by compare-and-swap.
-                already_up_to_date: equality no-op after revalidation.
-                stale: a displayed expectation no longer matches; nothing
-                was mutated.
+                updated: the branch advanced — by compare-and-swap for an
+                unoccupied branch, or by the working-tree-aware fast-forward
+                for a branch held only by the original checkout.
+                already_up_to_date: equality no-op after revalidation,
+                including a completed original-checkout replay.
+                stale: a displayed expectation no longer matches or the
+                original checkout is not provably safe; nothing was mutated.
             reason:
               type: string
               enum:
@@ -2980,8 +2985,18 @@ components:
                   origin_branch_missing,
                   not_fast_forward,
                   branch_checked_out,
+                  dirty_checkout,
+                  checkout_operation_in_progress,
+                  ignored_path_collision,
+                  checkout_conflict,
                 ]
-              description: Typed stale reason; present only for stale results.
+              description: >-
+                Typed stale reason; present only for stale results.
+                branch_checked_out names a linked worktree holder.
+                dirty_checkout, checkout_operation_in_progress, and
+                ignored_path_collision are original-checkout safety
+                refusals; checkout_conflict reports a boundary refusal that
+                was proved to have left the checkout untouched.
             repo_key:
               type: string
               description: Server-resolved current catalog key.
@@ -3069,11 +3084,27 @@ components:
             The local tip displayed before the attempted update; the state
             whose absence proves the branch moved.
         expected_origin_sha:
-          type: string
-          pattern: "^[0-9a-f]{40,64}$"
-          description: >-
-            The fetched origin tip the attempted update was expected to
-            advance the branch to.
+           type: string
+           pattern: "^[0-9a-f]{40,64}$"
+           description: >-
+             The fetched origin tip the attempted update was expected to
+             advance the branch to.
+        checkout_head_ref:
+           type: string
+           minLength: 1
+           maxLength: 512
+           description: >-
+             The observed checkout HEAD reference the attempted update bound
+             to, as displayed: the full symbolic ref (refs/heads/...) or the
+             literal "detached". Optional; when it is the attempted branch's
+             own ref, the settlement also observes the original checkout's
+             state before any whole-checkout completion is claimed.
+           x-go-type-skip-optional-pointer: false
+        checkout_head_sha:
+           type: string
+           pattern: "^[0-9a-f]{40,64}$"
+           description: The observed checkout HEAD commit the attempted update bound to.
+           x-go-type-skip-optional-pointer: false
     RepositorySourceReconcileResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -3127,6 +3158,43 @@ components:
                 under the same coordination; present when a selection
                 resolves. Its observed SHA is the current selection's commit,
                 never evidence about the attempted update.
+            checkout:
+              $ref: "#/components/schemas/RepositorySourceReconcileCheckout"
+              x-go-type-skip-optional-pointer: false
+              description: >-
+                Observed state of the original checkout holding the branch,
+                present only when the attempted update bound the checkout
+                HEAD to the branch itself and the original checkout still
+                holds it. The branch tip alone never proves the index and
+                files advanced; only a clean checkout whose HEAD is the
+                observed tip supports a whole-checkout completion claim.
+    RepositorySourceReconcileCheckout:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [clean, dirty, operation_in_progress, unobserved]
+          description: >-
+            clean: consistent index and tracked working tree with no
+            in-progress Git operation. dirty: staged, unstaged, or
+            inconsistent tracked content, possibly a partial or externally
+            changed checkout. operation_in_progress: a merge, rebase,
+            cherry-pick, or revert is underway. unobserved: the checkout
+            could not be completely inspected; no whole-checkout claim may
+            be based on it.
+        head_ref:
+          type: string
+          maxLength: 512
+          description: >-
+            Observed checkout HEAD reference; empty when it could not be
+            read.
+        head_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: Observed checkout HEAD commit; empty when it could not be read.
+          x-go-type-skip-optional-pointer: false
     CloneStartRequest:
       x-go-name: CloneStartSchema
       type: object

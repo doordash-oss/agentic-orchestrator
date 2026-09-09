@@ -376,7 +376,7 @@ describe('FeatureService.updateRepositorySource', () => {
           ahead_count: 0,
           behind_count: 3,
           update_eligible: false,
-          update_blockers: ['branch_checked_out_in_original_checkout'],
+          update_blockers: ['branch_checked_out_in_worktree'],
           checkout_head_ref: 'refs/heads/main',
           checkout_head_sha: 'e'.repeat(40),
         },
@@ -400,7 +400,7 @@ describe('FeatureService.updateRepositorySource', () => {
       aheadCount: 0,
       behindCount: 3,
       updateEligible: false,
-      updateBlockers: ['branch_checked_out_in_original_checkout'],
+      updateBlockers: ['branch_checked_out_in_worktree'],
       checkoutHeadRef: 'refs/heads/main',
       checkoutHeadSha: 'e'.repeat(40),
     });
@@ -507,6 +507,57 @@ describe('FeatureService.reconcileSourceUpdate', () => {
         branch: 'release/2026/q3',
         observedSha: 'c'.repeat(40),
       },
+    });
+  });
+
+  it('passes the observed checkout binding through and maps the observed checkout state', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        outcome: 'expected_target_present',
+        repo_key: 'repo-a',
+        identity: wireIdentity,
+        mode: 'default',
+        branch: 'release/2026/q3',
+        origin_branch: 'upstream-main',
+        local_sha: 'c'.repeat(40),
+        checkout: {
+          state: 'clean',
+          head_ref: 'refs/heads/release/2026/q3',
+          head_sha: 'c'.repeat(40),
+        },
+      },
+    }));
+
+    const result = await service.reconcileSourceUpdate({
+      ...request,
+      checkoutHeadRef: 'refs/heads/release/2026/q3',
+      checkoutHeadSha: 'a'.repeat(40),
+    });
+
+    expect(calls[0]).toEqual({
+      path: '/api/v1/workspace/repositories/reconcile-source-update',
+      init: {
+        method: 'POST',
+        timeoutMs: 4 * 60_000,
+        body: {
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          branch: 'release/2026/q3',
+          origin_branch: 'upstream-main',
+          expected_local_sha: 'a'.repeat(40),
+          expected_origin_sha: 'c'.repeat(40),
+          checkout_head_ref: 'refs/heads/release/2026/q3',
+          checkout_head_sha: 'a'.repeat(40),
+        },
+      },
+    });
+    expect(result.checkout).toEqual({
+      state: 'clean',
+      headRef: 'refs/heads/release/2026/q3',
+      headSha: 'c'.repeat(40),
     });
   });
 

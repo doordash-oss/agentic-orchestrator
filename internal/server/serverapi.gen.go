@@ -586,28 +586,34 @@ func (e RepositoryOriginStatusStatus) Valid() bool {
 
 // Defines values for RepositoryOriginStatusUpdateBlockers.
 const (
-	BranchCheckedOutInOriginalCheckout RepositoryOriginStatusUpdateBlockers = "branch_checked_out_in_original_checkout"
-	BranchCheckedOutInWorktree         RepositoryOriginStatusUpdateBlockers = "branch_checked_out_in_worktree"
-	ComparisonUnavailable              RepositoryOriginStatusUpdateBlockers = "comparison_unavailable"
-	DirtyTargetCheckout                RepositoryOriginStatusUpdateBlockers = "dirty_target_checkout"
-	GitOperationInProgress             RepositoryOriginStatusUpdateBlockers = "git_operation_in_progress"
-	LocalNotBehind                     RepositoryOriginStatusUpdateBlockers = "local_not_behind"
+	RepositoryOriginStatusUpdateBlockersBranchCheckedOutInWorktree  RepositoryOriginStatusUpdateBlockers = "branch_checked_out_in_worktree"
+	RepositoryOriginStatusUpdateBlockersCheckoutOperationInProgress RepositoryOriginStatusUpdateBlockers = "checkout_operation_in_progress"
+	RepositoryOriginStatusUpdateBlockersCheckoutUninspectable       RepositoryOriginStatusUpdateBlockers = "checkout_uninspectable"
+	RepositoryOriginStatusUpdateBlockersComparisonUnavailable       RepositoryOriginStatusUpdateBlockers = "comparison_unavailable"
+	RepositoryOriginStatusUpdateBlockersDirtyTargetCheckout         RepositoryOriginStatusUpdateBlockers = "dirty_target_checkout"
+	RepositoryOriginStatusUpdateBlockersGitOperationInProgress      RepositoryOriginStatusUpdateBlockers = "git_operation_in_progress"
+	RepositoryOriginStatusUpdateBlockersIgnoredPathCollision        RepositoryOriginStatusUpdateBlockers = "ignored_path_collision"
+	RepositoryOriginStatusUpdateBlockersLocalNotBehind              RepositoryOriginStatusUpdateBlockers = "local_not_behind"
 )
 
 // Valid indicates whether the value is a known member of the RepositoryOriginStatusUpdateBlockers enum.
 func (e RepositoryOriginStatusUpdateBlockers) Valid() bool {
 	switch e {
-	case BranchCheckedOutInOriginalCheckout:
+	case RepositoryOriginStatusUpdateBlockersBranchCheckedOutInWorktree:
 		return true
-	case BranchCheckedOutInWorktree:
+	case RepositoryOriginStatusUpdateBlockersCheckoutOperationInProgress:
 		return true
-	case ComparisonUnavailable:
+	case RepositoryOriginStatusUpdateBlockersCheckoutUninspectable:
 		return true
-	case DirtyTargetCheckout:
+	case RepositoryOriginStatusUpdateBlockersComparisonUnavailable:
 		return true
-	case GitOperationInProgress:
+	case RepositoryOriginStatusUpdateBlockersDirtyTargetCheckout:
 		return true
-	case LocalNotBehind:
+	case RepositoryOriginStatusUpdateBlockersGitOperationInProgress:
+		return true
+	case RepositoryOriginStatusUpdateBlockersIgnoredPathCollision:
+		return true
+	case RepositoryOriginStatusUpdateBlockersLocalNotBehind:
 		return true
 	default:
 		return false
@@ -662,6 +668,30 @@ func (e RepositorySourceMode) Valid() bool {
 	case RepositorySourceModeCurrent:
 		return true
 	case RepositorySourceModeDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositorySourceReconcileCheckoutState.
+const (
+	Clean               RepositorySourceReconcileCheckoutState = "clean"
+	Dirty               RepositorySourceReconcileCheckoutState = "dirty"
+	OperationInProgress RepositorySourceReconcileCheckoutState = "operation_in_progress"
+	Unobserved          RepositorySourceReconcileCheckoutState = "unobserved"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourceReconcileCheckoutState enum.
+func (e RepositorySourceReconcileCheckoutState) Valid() bool {
+	switch e {
+	case Clean:
+		return true
+	case Dirty:
+		return true
+	case OperationInProgress:
+		return true
+	case Unobserved:
 		return true
 	default:
 		return false
@@ -784,34 +814,46 @@ func (e RepositoryUpdateSourceResponseMode) Valid() bool {
 
 // Defines values for RepositoryUpdateSourceResponseReason.
 const (
-	BranchCheckedOut    RepositoryUpdateSourceResponseReason = "branch_checked_out"
-	CheckoutChanged     RepositoryUpdateSourceResponseReason = "checkout_changed"
-	LocalTipChanged     RepositoryUpdateSourceResponseReason = "local_tip_changed"
-	MappingChanged      RepositoryUpdateSourceResponseReason = "mapping_changed"
-	NotFastForward      RepositoryUpdateSourceResponseReason = "not_fast_forward"
-	OriginBranchMissing RepositoryUpdateSourceResponseReason = "origin_branch_missing"
-	OriginTipChanged    RepositoryUpdateSourceResponseReason = "origin_tip_changed"
-	SourceChanged       RepositoryUpdateSourceResponseReason = "source_changed"
+	RepositoryUpdateSourceResponseReasonBranchCheckedOut            RepositoryUpdateSourceResponseReason = "branch_checked_out"
+	RepositoryUpdateSourceResponseReasonCheckoutChanged             RepositoryUpdateSourceResponseReason = "checkout_changed"
+	RepositoryUpdateSourceResponseReasonCheckoutConflict            RepositoryUpdateSourceResponseReason = "checkout_conflict"
+	RepositoryUpdateSourceResponseReasonCheckoutOperationInProgress RepositoryUpdateSourceResponseReason = "checkout_operation_in_progress"
+	RepositoryUpdateSourceResponseReasonDirtyCheckout               RepositoryUpdateSourceResponseReason = "dirty_checkout"
+	RepositoryUpdateSourceResponseReasonIgnoredPathCollision        RepositoryUpdateSourceResponseReason = "ignored_path_collision"
+	RepositoryUpdateSourceResponseReasonLocalTipChanged             RepositoryUpdateSourceResponseReason = "local_tip_changed"
+	RepositoryUpdateSourceResponseReasonMappingChanged              RepositoryUpdateSourceResponseReason = "mapping_changed"
+	RepositoryUpdateSourceResponseReasonNotFastForward              RepositoryUpdateSourceResponseReason = "not_fast_forward"
+	RepositoryUpdateSourceResponseReasonOriginBranchMissing         RepositoryUpdateSourceResponseReason = "origin_branch_missing"
+	RepositoryUpdateSourceResponseReasonOriginTipChanged            RepositoryUpdateSourceResponseReason = "origin_tip_changed"
+	RepositoryUpdateSourceResponseReasonSourceChanged               RepositoryUpdateSourceResponseReason = "source_changed"
 )
 
 // Valid indicates whether the value is a known member of the RepositoryUpdateSourceResponseReason enum.
 func (e RepositoryUpdateSourceResponseReason) Valid() bool {
 	switch e {
-	case BranchCheckedOut:
+	case RepositoryUpdateSourceResponseReasonBranchCheckedOut:
 		return true
-	case CheckoutChanged:
+	case RepositoryUpdateSourceResponseReasonCheckoutChanged:
 		return true
-	case LocalTipChanged:
+	case RepositoryUpdateSourceResponseReasonCheckoutConflict:
 		return true
-	case MappingChanged:
+	case RepositoryUpdateSourceResponseReasonCheckoutOperationInProgress:
 		return true
-	case NotFastForward:
+	case RepositoryUpdateSourceResponseReasonDirtyCheckout:
 		return true
-	case OriginBranchMissing:
+	case RepositoryUpdateSourceResponseReasonIgnoredPathCollision:
 		return true
-	case OriginTipChanged:
+	case RepositoryUpdateSourceResponseReasonLocalTipChanged:
 		return true
-	case SourceChanged:
+	case RepositoryUpdateSourceResponseReasonMappingChanged:
+		return true
+	case RepositoryUpdateSourceResponseReasonNotFastForward:
+		return true
+	case RepositoryUpdateSourceResponseReasonOriginBranchMissing:
+		return true
+	case RepositoryUpdateSourceResponseReasonOriginTipChanged:
+		return true
+	case RepositoryUpdateSourceResponseReasonSourceChanged:
 		return true
 	default:
 		return false
@@ -3192,10 +3234,31 @@ type RepositorySourceKind string
 // RepositorySourceMode defines model for RepositorySource.Mode.
 type RepositorySourceMode string
 
+// RepositorySourceReconcileCheckout defines model for RepositorySourceReconcileCheckout.
+type RepositorySourceReconcileCheckout struct {
+	// HeadRef Observed checkout HEAD reference; empty when it could not be read.
+	HeadRef string `json:"head_ref,omitempty"`
+
+	// HeadSha Observed checkout HEAD commit; empty when it could not be read.
+	HeadSha *string `json:"head_sha,omitempty"`
+
+	// State clean: consistent index and tracked working tree with no in-progress Git operation. dirty: staged, unstaged, or inconsistent tracked content, possibly a partial or externally changed checkout. operation_in_progress: a merge, rebase, cherry-pick, or revert is underway. unobserved: the checkout could not be completely inspected; no whole-checkout claim may be based on it.
+	State RepositorySourceReconcileCheckoutState `json:"state"`
+}
+
+// RepositorySourceReconcileCheckoutState clean: consistent index and tracked working tree with no in-progress Git operation. dirty: staged, unstaged, or inconsistent tracked content, possibly a partial or externally changed checkout. operation_in_progress: a merge, rebase, cherry-pick, or revert is underway. unobserved: the checkout could not be completely inspected; no whole-checkout claim may be based on it.
+type RepositorySourceReconcileCheckoutState string
+
 // RepositorySourceReconcileRequest defines model for RepositorySourceReconcileRequest.
 type RepositorySourceReconcileRequest struct {
 	// Branch The attempted update's expected full local branch name, as displayed by the comparison the update was based on. An expectation for the settlement read, never ref authority.
 	Branch string `json:"branch"`
+
+	// CheckoutHeadRef The observed checkout HEAD reference the attempted update bound to, as displayed: the full symbolic ref (refs/heads/...) or the literal "detached". Optional; when it is the attempted branch's own ref, the settlement also observes the original checkout's state before any whole-checkout completion is claimed.
+	CheckoutHeadRef *string `json:"checkout_head_ref,omitempty"`
+
+	// CheckoutHeadSha The observed checkout HEAD commit the attempted update bound to.
+	CheckoutHeadSha *string `json:"checkout_head_sha,omitempty"`
 
 	// ExpectedLocalSha The local tip displayed before the attempted update; the state whose absence proves the branch moved.
 	ExpectedLocalSha string `json:"expected_local_sha"`
@@ -3223,6 +3286,9 @@ type RepositorySourceReconcileResponse struct {
 
 	// Branch The attempted update's expected local branch, echoed.
 	Branch string `json:"branch"`
+
+	// Checkout Observed state of the original checkout holding the branch, present only when the attempted update bound the checkout HEAD to the branch itself and the original checkout still holds it. The branch tip alone never proves the index and files advanced; only a clean checkout whose HEAD is the observed tip supports a whole-checkout completion claim.
+	Checkout *RepositorySourceReconcileCheckout `json:"checkout,omitempty"`
 
 	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
 	Identity RepositoryIdentity `json:"identity"`
@@ -3329,13 +3395,13 @@ type RepositoryUpdateSourceResponse struct {
 	// PreviousSha Local tip before the advance; present for updated results.
 	PreviousSha *string `json:"previous_sha,omitempty"`
 
-	// Reason Typed stale reason; present only for stale results.
+	// Reason Typed stale reason; present only for stale results. branch_checked_out names a linked worktree holder. dirty_checkout, checkout_operation_in_progress, and ignored_path_collision are original-checkout safety refusals; checkout_conflict reports a boundary refusal that was proved to have left the checkout untouched.
 	Reason RepositoryUpdateSourceResponseReason `json:"reason,omitempty"`
 
 	// RepoKey Server-resolved current catalog key.
 	RepoKey string `json:"repo_key"`
 
-	// Result updated: the branch advanced by compare-and-swap. already_up_to_date: equality no-op after revalidation. stale: a displayed expectation no longer matches; nothing was mutated.
+	// Result updated: the branch advanced — by compare-and-swap for an unoccupied branch, or by the working-tree-aware fast-forward for a branch held only by the original checkout. already_up_to_date: equality no-op after revalidation, including a completed original-checkout replay. stale: a displayed expectation no longer matches or the original checkout is not provably safe; nothing was mutated.
 	Result RepositoryUpdateSourceResponseResult `json:"result"`
 
 	// Status Freshly resolved status snapshot for the selected source; present for stale results where the authorized repository still exists.
@@ -3345,10 +3411,10 @@ type RepositoryUpdateSourceResponse struct {
 // RepositoryUpdateSourceResponseMode defines model for RepositoryUpdateSourceResponse.Mode.
 type RepositoryUpdateSourceResponseMode string
 
-// RepositoryUpdateSourceResponseReason Typed stale reason; present only for stale results.
+// RepositoryUpdateSourceResponseReason Typed stale reason; present only for stale results. branch_checked_out names a linked worktree holder. dirty_checkout, checkout_operation_in_progress, and ignored_path_collision are original-checkout safety refusals; checkout_conflict reports a boundary refusal that was proved to have left the checkout untouched.
 type RepositoryUpdateSourceResponseReason string
 
-// RepositoryUpdateSourceResponseResult updated: the branch advanced by compare-and-swap. already_up_to_date: equality no-op after revalidation. stale: a displayed expectation no longer matches; nothing was mutated.
+// RepositoryUpdateSourceResponseResult updated: the branch advanced — by compare-and-swap for an unoccupied branch, or by the working-tree-aware fast-forward for a branch held only by the original checkout. already_up_to_date: equality no-op after revalidation, including a completed original-checkout replay. stale: a displayed expectation no longer matches or the original checkout is not provably safe; nothing was mutated.
 type RepositoryUpdateSourceResponseResult string
 
 // Resource defines model for Resource.

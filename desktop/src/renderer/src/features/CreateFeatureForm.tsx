@@ -1119,6 +1119,8 @@ export function CreateFeatureForm({
         originBranch: target.originBranch,
         expectedLocalSha: target.request.expectedLocalSha,
         expectedOriginSha: target.request.expectedOriginSha,
+        checkoutHeadRef: target.request.checkoutHeadRef,
+        checkoutHeadSha: target.request.checkoutHeadSha,
         attempt: ++sourceUpdateAttemptRef.current,
       };
       sourceUpdateActiveRef.current = true;
@@ -2115,12 +2117,6 @@ export function CreateFeatureForm({
                                     (row) => row.repoKey === repo.name,
                                   )
                                 : undefined;
-                            // Update availability derives from the displayed
-                            // comparison plus current unoccupied-branch
-                            // eligibility; the advisory flag alone is never
-                            // permission (a clean original-checkout target is
-                            // unavailable in this phase, and an unobservable
-                            // checkout cannot bind the request).
                             const updateTarget =
                               originRow === undefined ? null : updateTargetFor(originRow);
                             const updateBlockedText =
@@ -2509,10 +2505,15 @@ export function CreateFeatureForm({
                       <p className="creation-sheet__row-hint">
                         Selected sources are compared with their origin branches automatically.
                         Checks only fetch from origin — they never change your repositories — and
-                        creation always starts from the local source, even when a check is still
-                        running or unavailable. Update from origin advances one unoccupied branch in
-                        the original repository on the connected server, and only when you choose
-                        it.
+                        creation always starts from the local source you accept. Update from origin
+                        fast-forwards exactly one branch in the original repository on the connected
+                        server: an unoccupied branch moves only its ref, while a branch checked out
+                        there also advances the repository's files and requires a clean checkout
+                        with no untracked files. Incoming files never overwrite ignored content,
+                        branches checked out in other linked worktrees must be updated in those
+                        worktrees, and ahead or diverged branches are never rewound. Resolve local
+                        work outside Agentico before checking again; a valid local commit can still
+                        be accepted with a warning after a refused update or a failed check.
                       </p>
                     </fieldset>
                   </section>

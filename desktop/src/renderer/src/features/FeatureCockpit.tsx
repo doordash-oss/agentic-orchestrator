@@ -132,6 +132,8 @@ const FOCUSED_COMPLETION_SETTLE_MS = 500;
 
 export interface FeatureCockpitProps {
   featureId: string;
+  /** Immediate, non-durable warnings returned by this feature's creation. */
+  creationWarnings?: readonly CanonicalError[];
   /** Whether this cockpit is the active workspace panel. */
   active?: boolean;
   /** Local presentation hint shown until the authoritative name loads. */
@@ -946,6 +948,7 @@ function CockpitModal({
 
 export function FeatureCockpit({
   featureId,
+  creationWarnings = [],
   titleHint,
   onClose,
   onDeleted,
@@ -2853,6 +2856,14 @@ export function FeatureCockpit({
                   {snapshot.warnings.map((warning, index) => (
                     <ErrorSurface
                       key={`${warning.code}:${index}`}
+                      error={warning}
+                      variant="compact"
+                    />
+                  ))}
+
+                  {creationWarnings.map((warning, index) => (
+                    <ErrorSurface
+                      key={`creation:${warning.code}:${index}`}
                       error={warning}
                       variant="compact"
                     />

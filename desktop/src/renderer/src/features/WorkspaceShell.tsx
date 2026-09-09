@@ -309,6 +309,9 @@ export function WorkspaceShell({
   const pushedUiStateRef = useRef<MainWindowUiState | null>(null);
   const [bulkPreviewRequest, setBulkPreviewRequest] = useState<number | null>(null);
   const [selectedRuns, setSelectedRuns] = useState<Record<string, number | null>>({});
+  const [creationWarnings, setCreationWarnings] = useState<
+    Record<string, readonly CanonicalError[]>
+  >({});
   const [expandedLanes, setExpandedLanes] = useState<Record<Lane, boolean>>({
     failed: true,
     waiting: true,
@@ -989,6 +992,7 @@ export function WorkspaceShell({
               key={selection.featureId}
               active
               featureId={selection.featureId}
+              creationWarnings={creationWarnings[selection.featureId] ?? []}
               titleHint={featureLabel(selection.featureId)}
               onClose={selectOverview}
               onDeleted={handleFeatureDeleted}
@@ -1074,9 +1078,12 @@ export function WorkspaceShell({
           retainedDraft={creationEntry?.state}
           onDraftDetach={(state) => creationDrafts.persist(scopeKey, state)}
           onClose={closeCreation}
-          onCreated={({ featureId }) => {
+          onCreated={({ featureId, warnings }) => {
             // A successful creation retires the draft only after the
             // existing success handling completes.
+            if (warnings !== undefined && warnings.length > 0) {
+              setCreationWarnings((current) => ({ ...current, [featureId]: warnings }));
+            }
             loadList();
             selectFeature(featureId);
             closeCreation();

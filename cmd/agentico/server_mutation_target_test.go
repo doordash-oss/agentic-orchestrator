@@ -1264,8 +1264,10 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 	runtimeDir := t.TempDir()
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	stateDir := filepath.Join(runtimeDir, "features")
+	repoPath := filepath.Join(runtimeDir, testRepoAName)
+	initMutationGitRepo(t, repoPath)
 	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
 	cfg.Defaults.Models = config.ModelConfig{
 		Research:       "default-research",
 		Planning:       testPlanningModelDefault,
@@ -1374,9 +1376,7 @@ func TestServerMutationTargetCreateFeatureResolvesBlankExplicitRepoFromWorkspace
 	stateDir := filepath.Join(runtimeDir, "features")
 	workspaceRoot := filepath.Join(runtimeDir, "workspace")
 	repoPath := filepath.Join(workspaceRoot, "bpfagent")
-	if err := os.MkdirAll(filepath.Join(repoPath, ".git"), 0o755); err != nil {
-		t.Fatalf("create repo fixture: %v", err)
-	}
+	initMutationGitRepo(t, repoPath)
 	cfg := config.NewDefault()
 	cfg.WorkspaceRoots = []string{workspaceRoot}
 	cfg.Repos["bpfagent"] = config.RepoConfig{
@@ -1413,8 +1413,10 @@ func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(
 	runtimeDir := t.TempDir()
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	stateDir := filepath.Join(runtimeDir, "features")
+	repoPath := filepath.Join(runtimeDir, testRepoAName)
+	initMutationGitRepo(t, repoPath)
 	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
 	if err := config.Save(configPath, cfg); err != nil {
 		t.Fatalf("Save config error = %v", err)
 	}

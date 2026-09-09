@@ -1656,7 +1656,10 @@ export interface components {
             discard_child_response?: components["schemas"]["DiscardChildResponse"];
             recovery_action_response?: components["schemas"]["RecoveryActionResponse"];
         };
-        CreateFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
+        CreateFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
+            /** @description Canonical nonblocking warnings from best-effort feature-branch collision checks. They do not assert source freshness or remote branch availability. */
+            warnings?: components["schemas"]["Error"][];
+        };
         CreateFeatureMutationRequest: {
             name: string;
             description?: string;

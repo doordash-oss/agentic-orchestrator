@@ -858,6 +858,71 @@ describe('the creation sheet local source contract', () => {
     expect(screen.getByRole('heading', { name: 'Define the work' })).toBeVisible();
   });
 
+  it('returns a stale submission to source review and refreshes without losing the draft', async () => {
+    let inspections = 0;
+    const mock = installAgenticoMock();
+    mock.api.inspectRepositorySources.mockImplementation((request: RepositorySourcesRequest) => {
+      inspections += 1;
+      return Promise.resolve({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: inspections === 1 ? 'main' : 'release/refreshed',
+          observedSha: (inspections === 1 ? 'a' : 'b').repeat(40),
+        })),
+      });
+    });
+    mock.api.createFeature.mockRejectedValueOnce(
+      ipcError('local_source_stale', 'A selected local repository source changed.', {
+        title: 'Local source changed',
+        remediation: 'Review the refreshed local source, then submit the feature again.',
+      }),
+    );
+    const { onCreated, user } = await renderForm(mock);
+
+    await user.click(screen.getByRole('checkbox', { name: /^repo-a\b/ }));
+    expect(await screen.findByText('Source: main')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Retained stale draft');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    await user.click(screen.getByRole('button', { name: 'Create and start' }));
+
+    expect(await screen.findByRole('heading', { name: 'Choose repositories' })).toBeVisible();
+    expect(await screen.findByText('Source: release/refreshed')).toBeVisible();
+    expect(screen.getByText('Local source changed')).toBeVisible();
+    expect(onCreated).not.toHaveBeenCalled();
+    expect(mock.api.inspectRepositorySources).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    expect(screen.getByLabelText('Name')).toHaveValue('Retained stale draft');
+  });
+
+  it('carries a successful offline-probe warning into the created feature view', async () => {
+    const warning = {
+      code: 'branch_collision_probe_unavailable',
+      class: 'warning' as const,
+      title: 'Remote branch check unavailable',
+      summary: 'The feature branch could not be checked against its origin.',
+    };
+    const mock = installAgenticoMock();
+    mock.api.createFeature.mockResolvedValueOnce({
+      featureId: 'created1234abcdef',
+      warnings: [warning],
+    });
+    const { onCreated, user } = await renderForm(mock);
+    await reachContract(user);
+    await user.click(screen.getByRole('button', { name: 'Create and start' }));
+
+    await waitFor(() =>
+      expect(onCreated).toHaveBeenCalledWith({
+        featureId: 'created1234abcdef',
+        name: 'Search revamp',
+        warnings: [warning],
+      }),
+    );
+  });
+
   it('does not let a default-mode reply overwrite a newer current-mode source', async () => {
     let resolveDefault!: (value: RepositorySourcesResult) => void;
     const mock = installAgenticoMock();

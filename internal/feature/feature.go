@@ -22,6 +22,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 type Phase int
@@ -611,6 +612,10 @@ type Feature struct {
 	// current workspace setting and are never persisted.
 	AutomaticReviewEnabled bool                  `yaml:"-"`
 	AutomaticReviewSource  AutomaticReviewSource `yaml:"-"`
+	// CreationWarnings are transient best-effort origin branch probe warnings
+	// returned by Manager.Create for immediate API projection. They are not
+	// durable feature failures and never imply source freshness.
+	CreationWarnings []git.BranchProbeWarning `yaml:"-"`
 
 	// Parent links this feature to its launch parent (child-owned
 	// relationship identity). Nil for top-level features. Parent-to-child
@@ -649,6 +654,14 @@ type Feature struct {
 	// SchemaVersion is the durable per-feature on-disk-shape marker. Fresh
 	// features are stamped SchemaVersionCurrent at Manager.Create time.
 	SchemaVersion int `yaml:"schema_version,omitempty"`
+
+	// PersistSeq is the store's monotonic save counter, incremented by every
+	// saveUnlocked and stamped onto the companion run file. Readers use it to
+	// detect a feature.yaml/run.yaml interleaved read: a run stamped newer
+	// than the feature record means the reader raced a save between the two
+	// file renames and must re-read the feature. Absent (zero) on records
+	// written before the stamp existed.
+	PersistSeq int64 `yaml:"persist_seq,omitempty"`
 
 	// PendingNeedUserInputPath is the absolute path of the persisted
 	// `need-user-input.yaml` gate artifact when the feature is paused on a

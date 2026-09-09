@@ -1633,6 +1633,9 @@ type CreateFeatureResponse struct {
 	FeatureID  string       `json:"feature_id"`
 	Meta       ResponseMeta `json:"meta,omitempty"`
 	Result     string       `json:"result"`
+
+	// Warnings Canonical nonblocking warnings from best-effort feature-branch collision checks. They do not assert source freshness or remote branch availability.
+	Warnings []Error `json:"warnings,omitempty"`
 }
 
 // CreateRepositorySchema defines model for CreateRepositoryRequest.

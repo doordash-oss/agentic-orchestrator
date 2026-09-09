@@ -1099,6 +1099,7 @@ export const FeatureActionResponseSchema = z.object({
   api_version: z.string(),
   result: z.string(),
   feature_id: z.string(),
+  warnings: z.array(CanonicalErrorSchema).max(32).optional(),
 });
 
 export type FeatureActionResponse = z.output<typeof FeatureActionResponseSchema>;

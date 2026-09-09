@@ -445,6 +445,11 @@ func (s *Store) saveUnlocked(f *Feature) error {
 	if !f.run.IsSealed() {
 		f.syncShadowsToRun()
 	}
+	// The save counter is bumped and mirrored onto the run before either
+	// file is written: readers use it to detect an interleaved read of this
+	// save's two renames (see loadUnlocked).
+	f.PersistSeq++
+	f.run.FeatureSeq = f.PersistSeq
 	data, err := yaml.Marshal(f)
 	if err != nil {
 		return fmt.Errorf("marshaling feature: %w", err)
@@ -542,34 +547,65 @@ func (s *Store) runDirUnlocked(featureID string, runNumber int) string {
 // loadUnlocked reads a feature and its active run from the last committed
 // atomic file renames. It intentionally does not acquire s.mu so read-model
 // endpoints stay responsive while a long Modify closure is in progress.
+//
+// saveUnlocked commits the feature rename before the run rename, so a plain
+// feature-then-run read can interleave between the two renames and observe a
+// newer run under an older feature record (for example setup done while the
+// feature still reports SettingUpWorktrees). The run's FeatureSeq stamp
+// detects exactly that direction: feature.yaml is renamed first, so once a
+// reader has observed a run stamped N, any subsequent feature read carries
+// PersistSeq >= N — one re-read converges, and a run stamped older than (or
+// equal to) the feature record is always a coherent durable view. The
+// opposite skew (feature newer than its run) is a legitimate transient the
+// reader accepts, exactly as before the stamp existed.
 func (s *Store) loadUnlocked(id string) (*Feature, error) {
 	path := filepath.Join(s.BaseDir, id, "feature.yaml")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading feature file: %w", err)
-	}
-	var header struct {
-		SchemaVersion int `yaml:"schema_version"`
-	}
-	if err := yaml.Unmarshal(data, &header); err != nil {
-		return nil, fmt.Errorf("parsing feature file: %w", err)
-	}
-	if header.SchemaVersion != SchemaVersionCurrent {
-		if header.SchemaVersion > 0 && header.SchemaVersion < SchemaVersionCurrent {
-			return nil, fmt.Errorf("feature schema version %d, expected %d: %w", header.SchemaVersion, SchemaVersionCurrent, ErrLegacySchemaVersion)
+	const maxLoadAttempts = 8
+	var featureData, runData []byte
+	for attempt := 1; ; attempt++ {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading feature file: %w", err)
 		}
-		return nil, fmt.Errorf("feature schema version %d, expected %d", header.SchemaVersion, SchemaVersionCurrent)
+		var anchor struct {
+			SchemaVersion int   `yaml:"schema_version"`
+			ActiveRun     int   `yaml:"active_run"`
+			PersistSeq    int64 `yaml:"persist_seq"`
+		}
+		if err := yaml.Unmarshal(data, &anchor); err != nil {
+			return nil, fmt.Errorf("parsing feature file: %w", err)
+		}
+		if anchor.SchemaVersion != SchemaVersionCurrent {
+			if anchor.SchemaVersion > 0 && anchor.SchemaVersion < SchemaVersionCurrent {
+				return nil, fmt.Errorf("feature schema version %d, expected %d: %w", anchor.SchemaVersion, SchemaVersionCurrent, ErrLegacySchemaVersion)
+			}
+			return nil, fmt.Errorf("feature schema version %d, expected %d", anchor.SchemaVersion, SchemaVersionCurrent)
+		}
+		runPath := filepath.Join(s.runDirUnlocked(id, anchor.ActiveRun), "run.yaml")
+		runBytes, err := os.ReadFile(runPath)
+		if err != nil {
+			return nil, fmt.Errorf("loading active run for feature %s: %w", id, err)
+		}
+		var runAnchor struct {
+			FeatureSeq int64 `yaml:"feature_seq"`
+		}
+		if err := yaml.Unmarshal(runBytes, &runAnchor); err != nil {
+			return nil, fmt.Errorf("parsing run file: %w", err)
+		}
+		featureData, runData = data, runBytes
+		if runAnchor.FeatureSeq <= anchor.PersistSeq || attempt >= maxLoadAttempts {
+			break
+		}
 	}
 	var f Feature
-	if err := yaml.Unmarshal(data, &f); err != nil {
+	if err := yaml.Unmarshal(featureData, &f); err != nil {
 		return nil, fmt.Errorf("parsing feature file: %w", err)
 	}
-
-	run, err := s.loadRunUnlocked(id, f.ActiveRun)
-	if err != nil {
-		return nil, fmt.Errorf("loading active run for feature %s: %w", id, err)
+	var run Run
+	if err := yaml.Unmarshal(runData, &run); err != nil {
+		return nil, fmt.Errorf("parsing run file: %w", err)
 	}
-	f.SetRun(run)
+	f.SetRun(&run)
 	return &f, nil
 }
 

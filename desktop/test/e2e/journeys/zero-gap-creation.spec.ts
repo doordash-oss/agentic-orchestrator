@@ -14,12 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import { closeApp, evidenceShot, launchApp, setTheme, type AppHandle } from '../helpers/app';
+import { parseFeatureRepoField, parseFeatureRepos } from '../helpers/completionFixture';
 import { Transcript } from '../helpers/transcript';
-import { createRepo, createWorld, destroyWorld } from '../helpers/world';
+import { createRepo, createWorld, destroyWorld, minimalEnv, waitFor } from '../helpers/world';
 
 const SHOTS = {
   home: 'ready-runtime-home-with-branded-welcome-visible-global-commands-and-no-terminal-1440x900',
@@ -32,12 +34,30 @@ const SHOTS = {
   contract: 'creation-contract-step-with-models-checkpoints-exit-criteria-and-complete-1440x900',
 } as const;
 
+function gitText(dir: string, ...args: string[]): string {
+  return execFileSync('git', ['-C', dir, ...args], {
+    encoding: 'utf8',
+    env: { ...minimalEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+  }).trim();
+}
+
+function durableFeatureIds(stateDir: string): string[] {
+  return fs
+    .readdirSync(stateDir, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isDirectory() && fs.existsSync(path.join(stateDir, entry.name, 'feature.yaml')),
+    )
+    .map((entry) => entry.name);
+}
+
 test('the creation sheet covers scoped files, initialization, the contract, setup, and retry-safe identity', async ({}, testInfo) => {
   const world = createWorld('zero-gap-creation', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
     presetWorkspaceRoot: true,
   });
   const repo = createRepo(world, 'creation-lab', { commit: true });
+  gitText(repo, 'remote', 'add', 'origin', path.join(world.root, 'offline-origin.git'));
   fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
   fs.writeFileSync(path.join(repo, 'src', 'creation-context.md'), '# Creation context\n');
   const image = path.join(world.root, 'brief.png');
@@ -159,14 +179,110 @@ test('the creation sheet covers scoped files, initialization, the contract, setu
     });
     await evidenceShot(app, SHOTS.contract);
     await app.page.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
+    const acceptedCommits = {
+      'creation-lab': gitText(repo, 'rev-parse', 'HEAD'),
+      'initialized-lab': gitText(emptyRepository, 'rev-parse', 'HEAD'),
+    };
     await app.page.getByRole('button', { name: 'Create', exact: true }).click();
 
     const cockpit = app.page.getByLabel('Feature Zero gap creation');
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
-    await expect(cockpit.getByText(/Setting up|Ready to start|Setup failed/).first()).toBeVisible({
-      timeout: 60_000,
+    await expect(cockpit.getByText('Remote branch check unavailable')).toBeVisible();
+    await expect(cockpit.getByText('Ready to start').first()).toBeVisible({ timeout: 60_000 });
+
+    await waitFor(
+      () => durableFeatureIds(world.stateDir).length === 1,
+      'the single durable feature id',
+    );
+    const featureIds = durableFeatureIds(world.stateDir);
+    const featureId = featureIds[0]!;
+    const featureYaml = fs.readFileSync(
+      path.join(world.stateDir, featureId, 'feature.yaml'),
+      'utf8',
+    );
+    const runYaml = fs.readFileSync(
+      path.join(world.stateDir, featureId, 'runs', 'run-001', 'run.yaml'),
+      'utf8',
+    );
+    const storedCommits = parseFeatureRepoField(featureYaml, /^\s+commit:\s*(.+?)\s*$/);
+    const worktrees = parseFeatureRepos(featureYaml);
+    for (const [repoName, acceptedCommit] of Object.entries(acceptedCommits)) {
+      expect(storedCommits[repoName]).toBe(acceptedCommit);
+      expect(runYaml).toContain(`exact_sha: ${acceptedCommit}`);
+      expect(gitText(worktrees[repoName]!, 'rev-parse', 'HEAD')).toBe(acceptedCommit);
+    }
+    transcript.step(
+      'one idempotent authoritative creation persisted both accepted commits and created each worktree at its queued exact SHA',
+    );
+  } finally {
+    if (handle !== undefined) await closeApp(handle);
+    transcript.write(testInfo);
+    destroyWorld(world);
+  }
+});
+
+test('current-branch creation continues offline at the accepted slash branch commit', async ({}, testInfo) => {
+  const world = createWorld('offline-current-creation', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+  });
+  const repo = createRepo(world, 'offline-current-lab', { commit: true });
+  gitText(repo, 'checkout', '-b', 'release/2026/q3');
+  fs.writeFileSync(path.join(repo, 'current.txt'), 'accepted current branch\n');
+  gitText(repo, 'add', '.');
+  gitText(repo, 'commit', '-m', 'Advance current branch');
+  gitText(repo, 'remote', 'add', 'origin', path.join(world.root, 'offline-origin.git'));
+  const acceptedCommit = gitText(repo, 'rev-parse', 'HEAD');
+  const transcript = new Transcript('offline-current-creation', 'Offline current source pin');
+  let handle: AppHandle | undefined;
+  try {
+    handle = await launchApp(world, testInfo, { traceName: 'offline-current-creation' });
+    const app = handle;
+    await app.page.getByRole('button', { name: 'New feature' }).click();
+    await app.page.getByRole('checkbox', { name: /offline-current-lab/ }).check();
+    await app.page.getByRole('radio', { name: 'Current branches' }).click();
+    await expect(
+      app.page.getByRole('checkbox', {
+        name: /offline-current-lab.*Source: release\/2026\/q3/,
+      }),
+    ).toBeChecked();
+    await app.page.getByRole('button', { name: 'Next: Describe' }).click();
+    await app.page.locator('#feature-name').fill('Offline current creation');
+    await app.page.getByRole('button', { name: 'Next: Depth' }).click();
+    await app.page.getByRole('button', { name: 'Next: Contract' }).click();
+    const creationSheet = app.page.getByRole('dialog', { name: 'New feature' });
+    await creationSheet.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
+    await creationSheet.getByRole('button', { name: 'Create', exact: true }).click();
+
+    const cockpit = app.page.getByLabel('Feature Offline current creation');
+    await expect(cockpit.getByText('Remote branch check unavailable')).toBeVisible({
+      timeout: 30_000,
     });
-    transcript.step('one idempotent authoritative creation opened its setup-backed cockpit');
+    await expect(cockpit.getByText('Ready to start').first()).toBeVisible({ timeout: 60_000 });
+    await waitFor(
+      () => durableFeatureIds(world.stateDir).length === 1,
+      'the offline current feature id',
+    );
+    const featureIds = durableFeatureIds(world.stateDir);
+    const featureId = featureIds[0]!;
+    const featureYaml = fs.readFileSync(
+      path.join(world.stateDir, featureId, 'feature.yaml'),
+      'utf8',
+    );
+    const runYaml = fs.readFileSync(
+      path.join(world.stateDir, featureId, 'runs', 'run-001', 'run.yaml'),
+      'utf8',
+    );
+    const storedCommits = parseFeatureRepoField(featureYaml, /^\s+commit:\s*(.+?)\s*$/);
+    const worktree = parseFeatureRepos(featureYaml)['offline-current-lab']!;
+    expect(storedCommits['offline-current-lab']).toBe(acceptedCommit);
+    expect(runYaml).toContain(`exact_sha: ${acceptedCommit}`);
+    expect(gitText(worktree, 'rev-parse', 'HEAD')).toBe(acceptedCommit);
+    expect(gitText(repo, 'branch', '--show-current')).toBe('release/2026/q3');
+    expect(gitText(repo, 'status', '--porcelain')).toBe('');
+    transcript.step(
+      'the unavailable origin stayed nonblocking while current mode pinned the full slash branch commit and left its checkout untouched',
+    );
   } finally {
     if (handle !== undefined) await closeApp(handle);
     transcript.write(testInfo);

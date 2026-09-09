@@ -326,7 +326,12 @@ export class FeatureService {
       },
     });
     const response = validateWithSchema(body, FeatureActionResponseSchema);
-    return { featureId: validateWithSchema(response.feature_id, FeatureIdSchema) };
+    return {
+      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
+      ...(response.warnings === undefined
+        ? {}
+        : { warnings: response.warnings.map(redactedCanonicalError) }),
+    };
   }
 
   /**

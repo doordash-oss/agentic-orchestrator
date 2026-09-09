@@ -471,6 +471,37 @@ describe('FeatureService.createFeature', () => {
     );
   });
 
+  it('returns canonical nonblocking branch-probe warnings with diagnostics redacted', async () => {
+    const { service } = makeService(() => ({
+      status: 201,
+      body: {
+        api_version: 'v1',
+        result: 'created',
+        feature_id: 'abcd1234ef567890',
+        warnings: [
+          {
+            code: 'branch_collision_probe_unavailable',
+            class: 'warning',
+            title: 'Remote branch check unavailable',
+            summary: 'The branch could not be checked against its origin.',
+            diagnostics: 'offline at /Users/x/private/repo',
+            context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+          },
+        ],
+      },
+    }));
+
+    const result = await service.createFeature(input);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings?.[0]).toMatchObject({
+      code: 'branch_collision_probe_unavailable',
+      class: 'warning',
+      context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+    });
+    expect(result.warnings?.[0]?.diagnostics).toContain('[path]');
+    expect(result.warnings?.[0]?.diagnostics).not.toContain('/Users/x');
+  });
+
   it('posts explicit per-phase effort without materializing untouched defaults', async () => {
     const { service, calls } = makeService(() => ({
       status: 201,

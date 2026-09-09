@@ -3239,6 +3239,17 @@ components:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          properties:
+            warnings:
+              type: array
+              maxItems: 32
+              items:
+                $ref: "#/components/schemas/Error"
+              description: >-
+                Canonical nonblocking warnings from best-effort feature-branch
+                collision checks. They do not assert source freshness or remote
+                branch availability.
     CreateFeatureMutationRequest:
       type: object
       additionalProperties: false

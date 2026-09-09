@@ -35,6 +35,7 @@ const (
 // Mutation and action-conflict codes.
 const (
 	Conflict              Code = "conflict"
+	LocalSourceStale      Code = "local_source_stale"
 	PublishRemoteDiverged Code = "publish_remote_diverged"
 	PublishRemoteChanged  Code = "publish_remote_changed"
 	PipelineMismatch      Code = "pipeline_mismatch"
@@ -429,6 +430,13 @@ var catalog = map[Code]Entry{
 		Blocks:      []Block{BlockRepositories},
 		Summary:     "The request conflicts with the current state of the feature.",
 		Remediation: "Refresh the feature and retry.",
+	},
+	LocalSourceStale: {
+		Class:       ClassNeedsAction,
+		Title:       "Local source changed",
+		Blocks:      []Block{BlockRepositories},
+		Summary:     "A selected local repository source changed after it was reviewed.",
+		Remediation: "Review the refreshed local source, then submit the feature again.",
 	},
 	PublishRemoteDiverged: {
 		Class:  ClassNeedsAction,
@@ -1304,6 +1312,16 @@ var catalog = map[Code]Entry{
 	// --- Warning codes ------------------------------------------------------
 	// One code per distinct remediation, all warning class with no action
 	// references: a warning never blocks progress and never gates a lane.
+	BranchCollisionProbeUnavailable: {
+		Class:   ClassWarning,
+		Title:   "Remote branch check unavailable",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "The feature branch could not be checked against an origin; creation continued from the accepted local source.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "The feature branch for %s could not be checked against its origin; creation continued from the accepted local source.")
+		},
+		Remediation: "Verify the remote branch is available before publishing; this warning does not mean the local source is up to date.",
+	},
 	EffortCapabilityDrift: {
 		Class:   ClassWarning,
 		Title:   "Effort not supported by model",

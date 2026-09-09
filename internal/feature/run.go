@@ -82,6 +82,13 @@ type Run struct {
 	RunNumber int        `yaml:"run_number"`
 	StartedAt *time.Time `yaml:"started_at,omitempty"`
 
+	// FeatureSeq is the PersistSeq of the feature save that last wrote this
+	// file through saveUnlocked. Run-only writes (seal, fork skeletons,
+	// SaveRun paths) leave it at its last stamped value or zero, so a value
+	// strictly newer than the feature record's PersistSeq can only mean a
+	// reader interleaved a joint save between its feature and run reads.
+	FeatureSeq int64 `yaml:"feature_seq,omitempty"`
+
 	// Setup tracks first-run preparation before any phase session starts.
 	Setup *SetupState `yaml:"setup,omitempty"`
 

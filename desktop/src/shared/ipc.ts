@@ -2727,6 +2727,8 @@ export type CreateFeatureInput = z.input<typeof CreateFeatureInputSchema>;
 
 export const CreateFeatureResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
+  /** Canonical nonblocking warnings from best-effort remote collision probes. */
+  warnings: z.array(CanonicalErrorSchema).max(32).optional(),
 });
 
 export type CreateFeatureResult = z.output<typeof CreateFeatureResultSchema>;

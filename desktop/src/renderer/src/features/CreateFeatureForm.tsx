@@ -160,7 +160,11 @@ function plural(count: number, one: string, many: string): string {
 }
 
 export interface CreateFeatureFormProps {
-  onCreated(created: { featureId: string; name: string }): void;
+  onCreated(created: {
+    featureId: string;
+    name: string;
+    warnings?: readonly CanonicalError[];
+  }): void;
   /** Cancel/Escape after any confirmation: the sheet closes, draft discarded. */
   onClose(): void;
   /**
@@ -265,6 +269,7 @@ export function CreateFeatureForm({
     () => retained?.catalogRefreshError ?? null,
   );
   const [sourceState, setSourceState] = useState<SourceState>({ phase: 'idle' });
+  const [sourceRefreshRevision, setSourceRefreshRevision] = useState(0);
   // The nested clone view and its association with this draft, plus the
   // nested create view and its pending adoption.
   const [cloneOpen, setCloneOpen] = useState(() => retained?.cloneOpen ?? false);
@@ -328,7 +333,7 @@ export function CreateFeatureForm({
     retiredRef.current = true;
   }, []);
   const handleCreated = useCallback(
-    (created: { featureId: string; name: string }) => {
+    (created: { featureId: string; name: string; warnings?: readonly CanonicalError[] }) => {
       retire();
       onCreated(created);
     },
@@ -717,7 +722,13 @@ export function CreateFeatureForm({
           }
         },
       );
-  }, [reconciledSelections, serverKey, unresolvedSelections.length, useCurrentBranch]);
+  }, [
+    reconciledSelections,
+    serverKey,
+    sourceRefreshRevision,
+    unresolvedSelections.length,
+    useCurrentBranch,
+  ]);
   const handleCreate = useCallback(
     (input: CreateRepositoryStartInput) => {
       const startServerKey = serverKeyRef.current;
@@ -1280,9 +1291,20 @@ export function CreateFeatureForm({
             /* cockpit owns retry */
           }
         }
-        handleCreated({ featureId: created.featureId, name: name.trim() });
+        handleCreated({
+          featureId: created.featureId,
+          name: name.trim(),
+          ...(created.warnings === undefined ? {} : { warnings: created.warnings }),
+        });
       } catch (err) {
         const parsed = parseIpcError(err);
+        if (parsed.code === 'local_source_stale') {
+          setStepIndex(0);
+          setRepoError(null);
+          setFormError(parsed);
+          setSourceRefreshRevision((revision) => revision + 1);
+          return;
+        }
         // An unresolved repository-file reference keeps the editable draft
         // and surfaces where the reference chips are visible.
         if (parsed.code === 'E_REPOSITORY_FILE_UNRESOLVED') {

@@ -98,8 +98,12 @@ while true; do sleep 1; done
 	}
 	childPIDFile := filepath.Join(dir, "child.pid")
 	handle, err := NewRealRunner(gitShim).Start(RunSpec{
-		Remote:   "https://example.com/acme/widget.git",
-		Staging:  filepath.Join(dir, "staging"),
+		Remote:  "https://example.com/acme/widget.git",
+		Staging: filepath.Join(dir, "staging"),
+		// The shim only forks the pipe-holding descendant when it is told
+		// where to record the child's pid; without this the test would
+		// observe no tree to terminate.
+		Env:      []string{"FAKE_CHILD_PID=" + childPIDFile},
 		Deadline: time.Minute,
 	})
 	if err != nil {
@@ -117,7 +121,12 @@ while true; do sleep 1; done
 		time.Sleep(10 * time.Millisecond)
 	}
 	if childPID == 0 {
-		t.Skip("child pid file never appeared")
+		// Skipping here would silently retire the process-tree guarantee and
+		// leave the shim's process group orphaned, since Terminate is never
+		// reached.
+		handle.Terminate()
+		handle.Wait()
+		t.Fatal("the git shim never recorded its descendant's pid; the process-tree guarantee is unverified")
 	}
 
 	done := make(chan RunResult, 1)

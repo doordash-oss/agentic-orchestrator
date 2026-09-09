@@ -98,12 +98,17 @@ func originCheckKeyFor(identity git.RepoIdentity, plan git.OriginCheckPlan) orig
 type originCompleted struct {
 	comparison     *git.OriginComparison
 	absent         bool
-	unavailable    bool
 	diagnostics    string
 	checkedAt      time.Time
 	stale          *git.OriginComparison
 	updateEligible *bool
 	updateBlockers []git.UpdateBlocker
+}
+
+// unavailable reports the third outcome: neither a comparison nor a
+// confirmed-absent origin, i.e. the attempt failed or timed out.
+func (c *originCompleted) unavailable() bool {
+	return c.comparison == nil && !c.absent
 }
 
 type originFlight struct {
@@ -180,7 +185,7 @@ func (c *originCheckCoordinator) ensure(identity git.RepoIdentity, plan git.Orig
 		// A refreshed attempt invalidates the completed result immediately:
 		// while the fresh attempt runs, polls must report checking, never
 		// serve the superseded result as current.
-		delete(c.completed, key)
+		c.deleteCompletedLocked(key)
 	}
 	c.wg.Add(1)
 	go c.runAttempt(flight, identity, plan, repoPath, priorSuccess, priorStale)
@@ -241,7 +246,6 @@ func (c *originCheckCoordinator) runAttempt(flight *originFlight, identity git.R
 	case outcome.Absent:
 		completed.absent = true
 	default:
-		completed.unavailable = true
 		completed.diagnostics = outcome.Diagnostics
 		// A failed retry preserves the last successful comparison as
 		// explicitly stale, tied to its own SHAs, counts, and timestamp.
@@ -290,6 +294,11 @@ func (c *originCheckCoordinator) updateEligibility(repoPath, branch string, comp
 	return git.ProbeUpdateEligibility(ctx, repoPath, branch, comparison, git.OriginCheckOptions{})
 }
 
+// storeCompletedLocked and deleteCompletedLocked are the only writers of
+// `completed` and `completedOrder`, so the invariant "the order mirrors the
+// map, once per key, oldest first" is maintained in one place. Deleting the
+// map entry without dropping the key from the order would let the next store
+// append a duplicate, and eviction would then discard a live snapshot.
 func (c *originCheckCoordinator) storeCompletedLocked(key originCheckKey, completed *originCompleted) {
 	if _, exists := c.completed[key]; !exists {
 		c.completedOrder = append(c.completedOrder, key)
@@ -299,6 +308,19 @@ func (c *originCheckCoordinator) storeCompletedLocked(key originCheckKey, comple
 		oldest := c.completedOrder[0]
 		c.completedOrder = c.completedOrder[1:]
 		delete(c.completed, oldest)
+	}
+}
+
+func (c *originCheckCoordinator) deleteCompletedLocked(key originCheckKey) {
+	if _, exists := c.completed[key]; !exists {
+		return
+	}
+	delete(c.completed, key)
+	for index, retained := range c.completedOrder {
+		if retained == key {
+			c.completedOrder = append(c.completedOrder[:index], c.completedOrder[index+1:]...)
+			return
+		}
 	}
 }
 

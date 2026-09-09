@@ -17,6 +17,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -525,7 +526,7 @@ func TestOriginCheckCoordinatorDeadlineExpiresWhileQueued(t *testing.T) {
 	coordinator.mu.Lock()
 	completed := coordinator.completed[key]
 	coordinator.mu.Unlock()
-	if completed == nil || !completed.unavailable || completed.diagnostics != "origin check timed out before running" {
+	if completed == nil || !completed.unavailable() || completed.diagnostics != "origin check timed out before running" {
 		t.Fatalf("queued result = %#v; want a deadline-expired unknown", completed)
 	}
 	if completed.stale != nil {
@@ -550,7 +551,7 @@ func TestOriginCheckCoordinatorDeadlineExpiresWhileRunning(t *testing.T) {
 	coordinator.mu.Lock()
 	completed := coordinator.completed[key]
 	coordinator.mu.Unlock()
-	if completed == nil || !completed.unavailable || completed.diagnostics != "origin check timed out" {
+	if completed == nil || !completed.unavailable() || completed.diagnostics != "origin check timed out" {
 		t.Fatalf("running result = %#v; want a deadline-expired unknown", completed)
 	}
 }
@@ -678,7 +679,7 @@ func TestOriginCheckCoordinatorFailedRefreshPreservesStaleComparison(t *testing.
 	coordinator.mu.Lock()
 	completed := coordinator.completed[key]
 	coordinator.mu.Unlock()
-	if completed == nil || !completed.unavailable {
+	if completed == nil || !completed.unavailable() {
 		t.Fatalf("retry result = %#v; want an unknown outcome", completed)
 	}
 	if completed.stale == nil || completed.stale.Status != git.OriginCheckBehind {
@@ -724,7 +725,47 @@ func TestRuntimeServerCloseCancelsInFlightOriginChecks(t *testing.T) {
 	coordinator.mu.Lock()
 	completed := coordinator.completed[originCheckKeyFor(identity, plan)]
 	coordinator.mu.Unlock()
-	if completed == nil || !completed.unavailable {
+	if completed == nil || !completed.unavailable() {
 		t.Fatalf("completed attempt = %#v; want a cancelled unknown outcome", completed)
+	}
+}
+
+// A refresh deletes the completed snapshot so polls report checking; the
+// deletion must also drop the key from the retention order. Otherwise the
+// next store appends the key a second time and, once the order overflows,
+// eviction deletes a key that is still live — discarding a fresh snapshot
+// while its duplicate keeps a retention slot.
+func TestOriginCheckRetentionOrderSurvivesRefreshes(t *testing.T) {
+	coordinator := newOriginCheckCoordinator()
+	defer coordinator.Shutdown()
+
+	key := func(name string) originCheckKey {
+		return originCheckKey{commonDir: name, branch: "main"}
+	}
+	refreshed := key("refreshed")
+	for i := 0; i < maxRetainedOriginChecks; i++ {
+		coordinator.storeCompletedLocked(refreshed, &originCompleted{absent: true})
+		coordinator.deleteCompletedLocked(refreshed)
+	}
+	coordinator.storeCompletedLocked(refreshed, &originCompleted{absent: true})
+	if len(coordinator.completedOrder) != 1 {
+		t.Fatalf("retention order after %d refreshes = %d entries; want 1", maxRetainedOriginChecks, len(coordinator.completedOrder))
+	}
+
+	// Fill the remaining slots, then overflow by one: only the genuinely
+	// oldest key is evicted and every retained key still has a snapshot.
+	for i := 0; i < maxRetainedOriginChecks; i++ {
+		coordinator.storeCompletedLocked(key(fmt.Sprintf("repo-%d", i)), &originCompleted{absent: true})
+	}
+	if coordinator.completed[refreshed] != nil {
+		t.Fatalf("the refreshed key survived %d newer stores; want it evicted as the oldest", maxRetainedOriginChecks)
+	}
+	if len(coordinator.completedOrder) != maxRetainedOriginChecks || len(coordinator.completed) != maxRetainedOriginChecks {
+		t.Fatalf("retained %d ordered keys and %d snapshots; want %d of each", len(coordinator.completedOrder), len(coordinator.completed), maxRetainedOriginChecks)
+	}
+	for _, retained := range coordinator.completedOrder {
+		if coordinator.completed[retained] == nil {
+			t.Fatalf("retention order holds %#v with no snapshot; the order and the map disagree", retained)
+		}
 	}
 }

@@ -10666,7 +10666,7 @@ body {
   white-space: pre;
   border: 1px solid var(--hairline);
   border-radius: var(--bench-radius-control);
-  background: var(--sunken);
+  background: var(--raised);
   padding: var(--space-2);
   font-family: var(--bench-font-mono);
   font-size: 11px;
@@ -10784,7 +10784,7 @@ body {
 .review-feedback-diff {
   border: 1px solid var(--hairline);
   border-radius: var(--bench-radius-control);
-  background: var(--sunken);
+  background: var(--raised);
 }
 
 .review-feedback-diff__pre {
@@ -13629,7 +13629,8 @@ body {
 /* --- Clone repository section (Settings workspace-roots pane) ------------- */
 .settings-panel__section-subtitle {
   margin: var(--space-5) 0 var(--space-1);
-  font-size: var(--font-size-md);
+  color: var(--text);
+  font: 600 14px var(--bench-font-text);
 }
 
 .settings-panel__clone-form {
@@ -13646,7 +13647,7 @@ body {
 }
 
 .settings-panel__clone-field label {
-  font-weight: var(--font-weight-medium);
+  font-weight: 600;
 }
 
 .settings-panel__clone-field input,
@@ -13678,14 +13679,14 @@ body {
 
 .settings-panel__clone-no-roots {
   margin: 0;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 /* The destination-root row: the ordered root selector beside the native
    folder chooser (local servers only). */
 .settings-panel__clone-root-row {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   gap: var(--space-2);
 }
 
@@ -13720,18 +13721,18 @@ body {
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
-  font-weight: var(--font-weight-medium);
+  font-weight: 600;
   cursor: pointer;
 }
 
 .settings-panel__clone-preview {
   margin: 0;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .settings-panel__clone-empty {
   margin: var(--space-2) 0;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .settings-panel__clone-operations {
@@ -13744,8 +13745,8 @@ body {
 }
 
 .settings-panel__clone-operation {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline);
+  border-radius: var(--bench-radius-card);
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
@@ -13760,28 +13761,28 @@ body {
 }
 
 .settings-panel__clone-operation-path code {
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .settings-panel__clone-operation-state {
   margin-left: auto;
-  font-weight: var(--font-weight-medium);
+  font-weight: 600;
 }
 
 .settings-panel__clone-operation-state.is-succeeded {
-  color: var(--status-ready, var(--text-primary));
+  color: var(--ok);
 }
 
 .settings-panel__clone-operation-state.is-failed,
 .settings-panel__clone-operation-state.is-interrupted,
 .settings-panel__clone-operation-state.is-cleanup_pending {
-  color: var(--status-degraded, var(--text-primary));
+  color: var(--bad);
 }
 
 .settings-panel__clone-operation-progress,
 .settings-panel__clone-operation-issue {
   margin: 0;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .settings-panel__clone-operation-actions {
@@ -13790,15 +13791,33 @@ body {
 }
 
 .settings-panel__clone-action {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  padding: var(--space-1) var(--space-3);
-  background: var(--surface-raised);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: 5px var(--space-3);
+  background: var(--content);
+  color: var(--text);
+  font: 600 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.settings-panel__clone-action:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.settings-panel__clone-action:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.settings-panel__clone-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .settings-panel__clone-help {
   margin-top: var(--space-4);
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .settings-panel__clone-help ul {
@@ -13811,8 +13830,8 @@ body {
 }
 
 .settings-panel__clone-initialize {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline);
+  border-radius: var(--bench-radius-card);
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
@@ -13821,7 +13840,7 @@ body {
 
 .settings-panel__clone-initialize-copy {
   margin: 0;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .settings-panel__clone-initialize-actions {
@@ -13843,8 +13862,8 @@ body {
 }
 
 .settings-panel__repository {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline);
+  border-radius: var(--bench-radius-card);
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
@@ -13865,22 +13884,29 @@ body {
 }
 
 .settings-panel__repository-name {
-  font-weight: var(--font-weight-medium);
+  font-weight: 600;
 }
 
 .settings-panel__repository-path {
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .settings-panel__repository-issue {
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .creation-sheet__row-initialize {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: var(--space-2);
   margin-top: var(--space-1);
+}
+
+/* Inside a picker row the offer explanation is hint copy, not body copy:
+   it sits under a 13px row title beside 12px hints. */
+.creation-sheet__row-initialize .settings-panel__clone-initialize-copy {
+  font: 12px var(--bench-font-text);
 }
 
 .creation-sheet__row-origin-actions {
@@ -13971,7 +13997,7 @@ body {
 
 .creation-clone__help {
   margin: var(--space-3) 0 0;
-  color: var(--ink-2);
+  color: var(--muted);
   font-size: 12px;
 }
 

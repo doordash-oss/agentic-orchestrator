@@ -131,6 +131,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'setThemePreference',
   'startChat',
   'startClone',
+  'startLocalRuntime',
   'switchConnectionServer',
   'updateFeatureConfig',
   'updateRepositorySource',

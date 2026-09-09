@@ -979,15 +979,10 @@ func TestSendUserMessage_CodexProvider_SendsTurnStart(t *testing.T) {
 		Method  string `json:"method"`
 		ID      int    `json:"id"`
 		Params  struct {
-			CollaborationMode struct {
-				Mode     string `json:"mode"`
-				Settings struct {
-					Model                 string  `json:"model"`
-					DeveloperInstructions *string `json:"developer_instructions"`
-				} `json:"settings"`
-			} `json:"collaborationMode"`
-			ThreadID string `json:"threadId"`
-			Input    []struct {
+			Model             string          `json:"model"`
+			CollaborationMode json.RawMessage `json:"collaborationMode"`
+			ThreadID          string          `json:"threadId"`
+			Input             []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"input"`
@@ -1003,8 +998,8 @@ func TestSendUserMessage_CodexProvider_SendsTurnStart(t *testing.T) {
 	if req.Method != "turn/start" {
 		t.Errorf("method = %q, want %q", req.Method, "turn/start")
 	}
-	if req.Params.CollaborationMode.Mode != "default" {
-		t.Errorf("collaborationMode.mode = %q, want %q", req.Params.CollaborationMode.Mode, "default")
+	if len(req.Params.CollaborationMode) != 0 || req.Params.Model != "gpt-5.4" {
+		t.Fatalf("turn must select model without replacing developer instructions: %s", data)
 	}
 	if req.Params.ThreadID != "thread-send-msg" {
 		t.Errorf("threadId = %q, want %q", req.Params.ThreadID, "thread-send-msg")
@@ -1021,12 +1016,14 @@ func TestRespondToAskUser_CodexProvider_SendsCodexFormat(t *testing.T) {
 	pr, pw := io.Pipe()
 
 	codexProto := codex.NewProtocol(llm.ProtocolOpts{
-		Model: "gpt-5.4",
+		Model:       "gpt-5.4",
+		Interactive: true,
 	})
 	codexProto.SetStdin(pw)
-	codexProto.SetQuestionIDsForTest(map[string]string{
-		"Which DB?": "q1",
-	})
+	codexProto.SetThreadIDForTest("thread-questions")
+	if _, err := codexProto.ParseLine([]byte(`{"id":42,"method":"item/tool/requestUserInput","params":{"threadId":"thread-questions","turnId":"turn-1","itemId":"ask-1","isBlocking":true,"questions":[{"id":"q1","header":"DB","question":"Which DB?","options":[{"label":"PostgreSQL","description":"Relational"}]}]}}`)); err != nil {
+		t.Fatal(err)
+	}
 
 	s := &Session{
 		protocol: codexProto,
@@ -1061,9 +1058,8 @@ func TestRespondToAskUser_CodexProvider_SendsCodexFormat(t *testing.T) {
 		JSONRPC string `json:"jsonrpc"`
 		ID      int    `json:"id"`
 		Result  struct {
-			Answers []struct {
-				QuestionID string `json:"questionId"`
-				Value      string `json:"value"`
+			Answers map[string]struct {
+				Answers []string `json:"answers"`
 			} `json:"answers"`
 		} `json:"result"`
 	}
@@ -1080,11 +1076,8 @@ func TestRespondToAskUser_CodexProvider_SendsCodexFormat(t *testing.T) {
 	if len(resp.Result.Answers) != 1 {
 		t.Fatalf("answers length = %d, want 1", len(resp.Result.Answers))
 	}
-	if resp.Result.Answers[0].QuestionID != "q1" {
-		t.Errorf("questionId = %q, want %q", resp.Result.Answers[0].QuestionID, "q1")
-	}
-	if resp.Result.Answers[0].Value != "PostgreSQL" {
-		t.Errorf("value = %q, want %q", resp.Result.Answers[0].Value, "PostgreSQL")
+	if got := resp.Result.Answers["q1"].Answers; len(got) != 1 || got[0] != "PostgreSQL" {
+		t.Fatalf("answers = %+v", resp.Result.Answers)
 	}
 
 	// Verify qaLog has the Q&A pair

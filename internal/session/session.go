@@ -120,13 +120,17 @@ type Session struct {
 	// resultSeq counts terminal Result records. Monotonic, so waiters can tell
 	// a new result from the one they already classified.
 	resultSeq uint64
-	// rootCompletionIntent is replaced by each final root-assistant message
-	// and cleared whenever a new root turn starts. Child task output can never
-	// mutate it.
+	// rootCompletionIntent records recognized outcomes from final root prose
+	// for providers without structured completion. Only the harness clears a
+	// valid outcome; child task output can never mutate it.
 	rootCompletionIntent llm.CompletionIntent
 	// rootOutcomeCh coalesces "a committable root outcome is recorded" wake-ups
 	// so waiters commit on the outcome itself, not on the terminal Result.
 	rootOutcomeCh chan struct{}
+	// A single outstanding request is sufficient: parallel completion calls
+	// are rejected while the coordinator adjudicates the first one.
+	phaseCompletionRequests chan llm.PhaseCompletionRequest
+	pendingPhaseCompletion  *llm.PhaseCompletionRequest
 
 	// statusCh carries the SDK-derived session lifecycle status:
 	// "SUCCESS" / "API_ERROR" / "FAILED" (see resultSubtypeToStatus).
@@ -651,6 +655,7 @@ func NewSession(id, featureID string, phase feature.Phase) *Session {
 		status:                    SessionRunning,
 		statusCh:                  make(chan string, 1),
 		rootOutcomeCh:             make(chan struct{}, 1),
+		phaseCompletionRequests:   make(chan llm.PhaseCompletionRequest, 1),
 		attachCh:                  make(chan llm.SDKMessage, 100),
 		criticalAttachSendTimeout: criticalAttachSendTimeout,
 		controlCh:                 make(chan llm.SDKMessage, 1024),
@@ -1039,6 +1044,12 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 			}
 			if s.watchdog != nil {
 				s.watchdog.Observe(msg)
+			}
+			if msg.CompletionRequest != nil {
+				if err := s.routePhaseCompletionRequest(msg); err != nil {
+					log.Printf("session %s: completion request: %v", s.id, err)
+				}
+				continue
 			}
 
 			// Handle init message to capture model
@@ -1674,10 +1685,89 @@ func (s *Session) RootCompletionIntent() llm.CompletionIntent {
 	return s.rootCompletionIntent
 }
 
+// UsesStructuredCompletion reports whether this session's phase outcomes
+// arrive through an explicit provider tool instead of assistant prose.
+func (s *Session) UsesStructuredCompletion() bool {
+	protocol, ok := s.protocol.(llm.StructuredCompletionProtocol)
+	return ok && protocol.UsesStructuredCompletion()
+}
+
+// PhaseCompletionRequests is buffered so requests arriving immediately after
+// startup can wait for the coordinator without blocking provider stdout.
+func (s *Session) PhaseCompletionRequests() <-chan llm.PhaseCompletionRequest {
+	if !s.UsesStructuredCompletion() {
+		return nil
+	}
+	return s.phaseCompletionRequests
+}
+
+func (s *Session) routePhaseCompletionRequest(msg llm.SDKMessage) error {
+	protocol, ok := s.protocol.(llm.StructuredCompletionProtocol)
+	if !ok || !protocol.UsesStructuredCompletion() {
+		return fmt.Errorf("structured completion is not enabled")
+	}
+	request := *msg.CompletionRequest
+	if !msg.Origin.IsRoot() {
+		return protocol.RespondToCompletion(request.RequestID, false, "Only the root agent may complete the phase.")
+	}
+	if !request.Intent.Valid() {
+		return protocol.RespondToCompletion(request.RequestID, false, "Provide a valid completion outcome: success or retry.")
+	}
+	s.mu.Lock()
+	if s.pendingPhaseCompletion != nil {
+		s.mu.Unlock()
+		return protocol.RespondToCompletion(request.RequestID, false, "A completion request is already being validated. Wait for its result.")
+	}
+	s.pendingPhaseCompletion = &request
+	select {
+	case s.phaseCompletionRequests <- request:
+		s.mu.Unlock()
+		return nil
+	default:
+		s.pendingPhaseCompletion = nil
+		s.mu.Unlock()
+		return protocol.RespondToCompletion(request.RequestID, false, "A completion request is already queued. Wait for its result.")
+	}
+}
+
+// RespondToPhaseCompletion returns the coordinator's decision to the provider.
+// Accepted requests do not become prose outcomes: the coordinator already
+// owns their commit and shutdown, and must send this response before stopping.
+func (s *Session) RespondToPhaseCompletion(requestID string, accepted bool, message string) error {
+	protocol, ok := s.protocol.(llm.StructuredCompletionProtocol)
+	if !ok || !protocol.UsesStructuredCompletion() {
+		return fmt.Errorf("structured completion is not enabled")
+	}
+	s.mu.Lock()
+	request := s.pendingPhaseCompletion
+	if request == nil || request.RequestID != requestID {
+		s.mu.Unlock()
+		return fmt.Errorf("completion request %q is not pending", requestID)
+	}
+	// Release the answered request before the provider can observe its result.
+	// A corrected request can arrive while the response write is returning.
+	s.pendingPhaseCompletion = nil
+	s.mu.Unlock()
+	if err := protocol.RespondToCompletion(requestID, accepted, message); err != nil {
+		s.mu.Lock()
+		// Preserve a newer request if the provider received the response even
+		// though the transport ultimately reported an error.
+		if s.pendingPhaseCompletion == nil {
+			s.pendingPhaseCompletion = request
+		}
+		s.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
 // observeCompletionIntent tracks only final root-assistant text. A child task
 // may repeat the system prompt or emit completion-like text, but its origin
 // prevents that output from authorizing the phase.
 func (s *Session) observeCompletionIntent(msg llm.SDKMessage) {
+	if s.UsesStructuredCompletion() {
+		return
+	}
 	if msg.Assistant == nil || msg.Subtype == "partial" || !msg.Origin.IsRoot() {
 		return
 	}
@@ -1746,14 +1836,55 @@ func (s *Session) RespondToControl(requestID string, allow bool, reason string) 
 // from the control request input; answers maps question text to the response;
 // annotations carries optional per-question notes/preview that ride in the
 // Claude Agent SDK `annotations` field of `updatedInput`.
+//
+// The request is released before the write so a follow-up question the
+// provider sends on receipt is not mistaken for the answered one. A rejected
+// write restores the request so it can be answered again.
 func (s *Session) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
+	s.mu.Lock()
+	answered := s.findPendingControlRequestLocked(requestID)
+	priorStatus := s.status
+	s.mu.Unlock()
 	s.captureAskUserResponse(requestID, questions, answers, annotations, nil)
-	s.appendAskUserMessages(questions, answers, nil)
 
+	var err error
 	if s.protocol != nil {
-		return s.protocol.RespondToAskUser(requestID, questions, answers, annotations)
+		err = s.protocol.RespondToAskUser(requestID, questions, answers, annotations)
+	} else {
+		err = s.writeJSON(llm.NewAskUserResponse(requestID, questions, answers, annotations))
 	}
-	return s.writeJSON(llm.NewAskUserResponse(requestID, questions, answers, annotations))
+	if err != nil {
+		s.restoreAskUserRequest(answered, priorStatus, askUserAnswerKeysInPresentedOrder(questions, answers))
+		return err
+	}
+	s.appendAskUserMessages(questions, answers, nil)
+	return nil
+}
+
+// restoreAskUserRequest undoes captureAskUserResponse after the provider
+// rejected the answer, unless a newer request with the same ID has arrived.
+func (s *Session) restoreAskUserRequest(answered *llm.ControlRequestMessage, priorStatus SessionStatus, keys []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if answered != nil && s.findPendingControlRequestLocked(answered.RequestID) == nil {
+		s.recordPendingControlRequestLocked(answered)
+	}
+	if n := len(s.qaLog) - len(keys); n >= 0 && len(keys) > 0 {
+		matches := true
+		for i, q := range keys {
+			if s.qaLog[n+i].Question != q {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			s.qaLog = s.qaLog[:n]
+		}
+	}
+	s.hasUnansweredQuestion = s.hasPendingAskUserQuestionLocked()
+	if s.hasUnansweredQuestion && priorStatus == SessionWaitingHelp && s.status == SessionRunning {
+		s.setStatusLocked(SessionWaitingHelp)
+	}
 }
 
 func (s *Session) respondToAskUserAutoPicked(requestID string, questions json.RawMessage, answers map[string]string, confidenceByQuestion map[string]float64) error {

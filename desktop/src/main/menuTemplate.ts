@@ -41,6 +41,12 @@ export interface MenuTemplateDeps {
   showWindow(): void;
   quit(): void;
   route(event: AppRouteEvent): void;
+  /**
+   * Starts (or attaches to) the app's own bundled runtime and switches to it.
+   * A main-process action, not a route: it must stay reachable from a
+   * connection error state, where no renderer route target exists.
+   */
+  startLocalRuntime(): void;
   adjustZoom(delta: number): void;
   setZoom(factor: number): void;
 }
@@ -158,6 +164,13 @@ export function buildApplicationMenuTemplate(deps: MenuTemplateDeps): MenuItemCo
           click: () => deps.route({ target: 'settings', settingsSection: 'updates' }),
         },
         routedItem('global.switch-server', deps, { enabled: uiState.runtimeReady }),
+        {
+          // Always enabled: this is the escape hatch back to the local
+          // runtime from a remote connection or a failed link launch.
+          id: 'global.start-local-runtime',
+          label: 'Start bundled runtime',
+          click: () => deps.startLocalRuntime(),
+        },
         routedItem('global.attention', deps),
         routedItem('global.ama', deps),
         routedItem('global.bulk', deps),

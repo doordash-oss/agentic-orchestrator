@@ -265,6 +265,13 @@ func (p *Provider) ModelCatalog() []llm.ModelInfo {
 	return cat
 }
 
+// RecommendedModels nominates the balanced Claude family as the default for
+// every role. Provider-local family knowledge stays out of shared selection
+// code; configured model_recommendations override these nominations.
+func (p *Provider) RecommendedModels(llm.PhaseRole) []string {
+	return []string{"sonnet[200K]", "sonnet"}
+}
+
 // ReviewPreferenceBand ranks Claude review models without leaking model-family
 // naming into shared automatic-review code.
 func (p *Provider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
@@ -303,95 +310,18 @@ func (p *Provider) CLIVersion() (string, error) {
 	return clirun.ParseVersionOutput(out)
 }
 
-type claudeModelProbeCandidate struct {
-	Family                string
-	Selector              string
-	DisplayName           string
-	Category              string
-	FallbackContextWindow int
-}
-
-func claudeModelProbeCandidates() []claudeModelProbeCandidate {
-	return []claudeModelProbeCandidate{
-		{Family: "fable", Selector: "fable", DisplayName: "Claude Fable 5", FallbackContextWindow: 1_000_000, Category: "capable"},
-		{Family: "opus", Selector: "opus", DisplayName: "Claude Opus", FallbackContextWindow: 200_000, Category: "capable"},
-		{Family: "opus", Selector: "opus[1m]", DisplayName: "Claude Opus", FallbackContextWindow: 1_000_000, Category: "capable"},
-		{Family: "sonnet", Selector: "sonnet", DisplayName: "Claude Sonnet", FallbackContextWindow: 200_000, Category: "balanced"},
-		{Family: "sonnet", Selector: "sonnet[1m]", DisplayName: "Claude Sonnet", FallbackContextWindow: 1_000_000, Category: "balanced"},
-		{Family: "haiku", Selector: "haiku", DisplayName: "Claude Haiku", FallbackContextWindow: 200_000, Category: "cheap"},
-	}
-}
-
-func claudeModelInfoFromProbe(candidate claudeModelProbeCandidate, contextWindow int, resolved string) llm.ModelInfo {
-	if contextWindow <= 0 {
-		contextWindow = candidate.FallbackContextWindow
-	}
-	id := candidate.Family
-	displayName := candidate.DisplayName
-	if label := llm.ContextWindowLabel(contextWindow); label != "" {
-		id = candidate.Family + "[" + label + "]"
-		displayName = candidate.DisplayName + " (" + label + ")"
-	}
-	info := llm.ModelInfo{
-		ID:            id,
-		DisplayName:   displayName,
-		ContextWindow: contextWindow,
-		Category:      candidate.Category,
-		// All Claude models support the full effort range via --effort:
-		// low, medium, high, xhigh, max. Each is semantically distinct.
-		EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax},
-	}
-	info.Aliases = appendClaudeAlias(info.Aliases, info.ID, candidate.Selector)
-	info.Aliases = appendClaudeAlias(info.Aliases, info.ID, resolved)
-	return info
-}
-
-func appendClaudeAlias(aliases []string, id, alias string) []string {
-	alias = strings.TrimSpace(alias)
-	if alias == "" || alias == id {
-		return aliases
-	}
-	for _, existing := range aliases {
-		if existing == alias {
-			return aliases
-		}
-	}
-	if !strings.EqualFold(alias, id) {
-		for _, existing := range aliases {
-			if strings.EqualFold(existing, alias) {
-				return aliases
-			}
-		}
-	}
-	return append(aliases, alias)
-}
-
-// defaultModelInfos returns Agentic's curated Claude Code model catalog.
-//
-// Runtime startup tries to refresh these with DiscoverModelCatalog; they are
-// the offline fallback when probing fails. Entries carry no concrete-version
-// alias (e.g. claude-opus-4-8) because what an alias resolves to is
-// provider-dependent (Anthropic API vs Bedrock/Vertex/Foundry) and drifts over
-// time — a hardcoded version is a frequently-wrong guess. The probe sets the
-// resolved model when it runs. Claude exposes no machine-readable model catalog,
-// so the offline fallback has to keep curated probe selectors and context
-// windows.
-//
-// Context-window sources (verified 2026-06-09):
-//   - https://platform.claude.com/docs/en/about-claude/models/overview
-//   - https://code.claude.com/docs/en/model-config
-//   - https://platform.claude.com/docs/en/about-claude/models/introducing-claude-fable-5-and-claude-mythos-5
-//
-// The 200K base windows for opus/sonnet were confirmed empirically from
-// auto-compact thresholds observed in live Claude Code sessions
-// (compaction at ~167K on --model opus ≈ 83% of 200K).
+// defaultModelInfos supplies offline routing defaults when initialization and
+// the persisted catalog are unavailable. Discovery never filters through this
+// list, and these hints never claim to be CLI-reported capabilities.
 func (p *Provider) defaultModelInfos() []llm.ModelInfo {
-	candidates := claudeModelProbeCandidates()
-	models := make([]llm.ModelInfo, 0, len(candidates))
-	for _, candidate := range candidates {
-		models = append(models, claudeModelInfoFromProbe(candidate, candidate.FallbackContextWindow, ""))
+	return []llm.ModelInfo{
+		{ID: "fable[1M]", DisplayName: "Claude Fable (1M)", ContextWindow: 1_000_000, Aliases: []string{"fable"}, Category: "capable"},
+		{ID: "opus[200K]", DisplayName: "Claude Opus (200K)", ContextWindow: 200_000, Aliases: []string{"opus"}, Category: "capable"},
+		{ID: "opus[1M]", DisplayName: "Claude Opus (1M)", ContextWindow: 1_000_000, Aliases: []string{"opus[1m]"}, Category: "capable"},
+		{ID: "sonnet[200K]", DisplayName: "Claude Sonnet (200K)", ContextWindow: 200_000, Aliases: []string{"sonnet"}, Category: "balanced"},
+		{ID: "sonnet[1M]", DisplayName: "Claude Sonnet (1M)", ContextWindow: 1_000_000, Aliases: []string{"sonnet[1m]"}, Category: "balanced"},
+		{ID: "haiku[200K]", DisplayName: "Claude Haiku (200K)", ContextWindow: 200_000, Aliases: []string{"haiku"}, Category: "cheap"},
 	}
-	return models
 }
 
 // --- Command building helpers ---
@@ -478,20 +408,10 @@ func (p *Provider) claudeCLIModel(model string) string {
 }
 
 func claudeCLIModelForCatalogEntry(entry llm.ModelInfo) string {
-	for _, alias := range entry.Aliases {
-		if isStableClaudeCLISelector(alias) {
-			return alias
-		}
-	}
-	if isStableClaudeCLISelector(entry.ID) {
-		return entry.ID
+	if len(entry.Aliases) > 0 {
+		return entry.Aliases[0]
 	}
 	return entry.ID
-}
-
-func isStableClaudeCLISelector(model string) bool {
-	model = strings.TrimSpace(model)
-	return model != "" && !strings.HasPrefix(strings.ToLower(model), "claude-")
 }
 
 func applyStreamingOpts(args []string, opts llm.CommandBuildOpts) []string {

@@ -58,6 +58,32 @@ test('workspace sidebar: pointer, keyboard, ⌘2-9, and collapse against the pac
     });
     transcript.step('app launched and reached the ready workspace');
 
+    transcript.section('Resize the sidebar with pointer and keyboard');
+    const divider = handle.page.getByRole('separator', { name: 'Resize sidebar' });
+    const sidebar = handle.page.locator('nav.sidebar');
+    const grip = await divider.boundingBox();
+    if (!grip) throw new Error('Sidebar resize handle has no bounds');
+    await handle.page.mouse.move(grip.x + grip.width / 2, grip.y + 100);
+    await handle.page.mouse.down();
+    await handle.page.mouse.move(grip.x + grip.width / 2 + 100, grip.y + 100, { steps: 10 });
+    await handle.page.mouse.up();
+    await expect(sidebar).toHaveCSS('width', '360px');
+    await divider.press('ArrowRight');
+    await expect(sidebar).toHaveCSS('width', '370px');
+    await divider.press('Home');
+    await expect(sidebar).toHaveCSS('width', '200px');
+    await divider.press('End');
+    await expect(sidebar).toHaveCSS('width', '520px');
+    await divider.dblclick();
+    await expect(sidebar).toHaveCSS('width', '260px');
+    await divider.press('ArrowRight');
+    await expect
+      .poll(
+        async () =>
+          (await handle!.page.evaluate(() => window.agentico.getSettings())).shell.sidebarWidth,
+      )
+      .toBe(270);
+
     transcript.section('Create three features — they land together in the At rest lane');
     const names = ['Sidebar Alpha', 'Sidebar Beta', 'Sidebar Gamma'];
     for (const name of names) {
@@ -182,6 +208,7 @@ test('workspace sidebar: pointer, keyboard, ⌘2-9, and collapse against the pac
     });
     const restoredSettings = await handle.page.evaluate(() => window.agentico.getSettings());
     expect(restoredSettings.shell.sidebarCollapsed).toBe(true);
+    expect(restoredSettings.shell.sidebarWidth).toBe(270);
     transcript.step('relaunch against the same state dir restored the explicit collapse');
 
     // Un-collapse before the narrow-viewport check so the breakpoint's own
@@ -199,6 +226,7 @@ test('workspace sidebar: pointer, keyboard, ⌘2-9, and collapse against the pac
 
     await setWindowSize(handle, 1440, 900);
     await expect(handle.page.locator('nav.sidebar')).toHaveAttribute('data-collapsed', 'false');
+    await expect(handle.page.locator('nav.sidebar')).toHaveCSS('width', '270px');
     transcript.step(
       'narrow-viewport auto-collapse was purely visual and re-expanded above the breakpoint',
     );

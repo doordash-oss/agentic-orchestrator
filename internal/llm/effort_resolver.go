@@ -19,7 +19,7 @@ package llm
 // effective effort and an auto|explicit source.
 //
 //   - When configured is empty or EffortAuto, the pipeline effort is used with
-//     source auto. This preserves current pipeline behavior.
+//     source auto, adjusted to a supported level when capabilities are known.
 //   - When configured is an explicit level (low|medium|high|xhigh|max|ultra) and the model
 //     supports it, the configured value is used unchanged with source explicit.
 //   - When configured is explicit but the model no longer supports it
@@ -31,12 +31,12 @@ package llm
 //     auto, matching the "Auto-only" behavior for models without effort control.
 func ResolveEffort(configured EffortLevel, capabilities []EffortLevel, pipelineEffort EffortLevel) (EffortLevel, EffortSource) {
 	if configured == "" || configured == EffortAuto {
-		return pipelineEffort, EffortSourceAuto
+		return supportedPipelineEffort(capabilities, pipelineEffort), EffortSourceAuto
 	}
 	if EffortCapabilitySupported(capabilities, configured) {
 		return configured, EffortSourceExplicit
 	}
-	return pipelineEffort, EffortSourceAuto
+	return supportedPipelineEffort(capabilities, pipelineEffort), EffortSourceAuto
 }
 
 // ResolveEffortFromString is a convenience wrapper that accepts the string form
@@ -62,4 +62,30 @@ func EffortDrifted(configured EffortLevel, capabilities []EffortLevel) bool {
 		return false
 	}
 	return !EffortCapabilitySupported(capabilities, configured)
+}
+
+// supportedPipelineEffort chooses the first declared level at or above the
+// pipeline request, or the highest declared level when the request exceeds it.
+// The returned level is also the one recorded in session telemetry.
+func supportedPipelineEffort(capabilities []EffortLevel, requested EffortLevel) EffortLevel {
+	if len(capabilities) == 0 || EffortCapabilitySupported(capabilities, requested) {
+		return requested
+	}
+	reached := false
+	var highest EffortLevel
+	for _, level := range AllEffortLevels {
+		if level == requested {
+			reached = true
+		}
+		if EffortCapabilitySupported(capabilities, level) {
+			highest = level
+			if reached {
+				return level
+			}
+		}
+	}
+	if highest != "" {
+		return highest
+	}
+	return requested
 }

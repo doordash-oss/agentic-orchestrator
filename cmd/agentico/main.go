@@ -781,6 +781,9 @@ func catalogWarning(providerName, diagnostics string) startupWarning {
 func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discoverer llm.CatalogDiscoverer, enricher llm.CatalogEnricher, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []startupWarning {
 	var warnings []startupWarning
 	providerName := p.Name()
+	if policy, ok := p.(llm.CatalogRefreshPolicy); ok && policy.RefreshCatalogOnStartup() {
+		refreshModels = true
+	}
 	reportModel := func(model llm.ModelInfo) {
 		if report != nil {
 			report(providerName, model)
@@ -835,7 +838,7 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 			return append(warnings, fallback...)
 		}
 		warnings = append(warnings, catalogWarning(providerName,
-			fmt.Sprintf("could not discover model catalog; using built-in fallback: %v", err),
+			fmt.Sprintf("could not discover model catalog; retaining provider catalog: %v", err),
 		))
 		return warnings
 	}
@@ -844,7 +847,7 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 			return append(warnings, fallback...)
 		}
 		warnings = append(warnings, catalogWarning(providerName,
-			"discovered empty model catalog; using built-in fallback",
+			"discovered empty model catalog; retaining provider catalog",
 		))
 		return warnings
 	}
@@ -3231,27 +3234,37 @@ func fileExists(path string) bool {
 // Used when --providers limits which providers are registered.
 func remapUnresolvableModels(cfg *config.Config, registry *llm.Registry) {
 	m := &cfg.Defaults.Models
-	fallback := registry.MostCapableModel("")
-
-	remap := func(field *string) {
-		if *field == "" || fallback == "" {
-			if *field == "" && fallback != "" {
-				*field = fallback
+	fallbacks := registry.CatalogDefaultModels()
+	// Preserve compatibility with providers that only advertise model IDs.
+	hasCatalog := false
+	for _, provider := range registry.DetectedProviders() {
+		if cp, ok := provider.(llm.CatalogProvider); ok && len(cp.ModelCatalog()) > 0 {
+			hasCatalog = true
+			break
+		}
+	}
+	remap := func(field *string, fallback string) {
+		if fallback == "" && !hasCatalog {
+			if models := registry.AvailableModels(); len(models) > 0 {
+				fallback = models[0]
 			}
+		}
+		if fallback == "" {
 			return
 		}
-		if _, _, err := registry.ResolveModel(*field); err != nil {
+		if *field == "" {
+			*field = fallback
+		} else if _, _, err := registry.ResolveModel(*field); err != nil {
 			*field = fallback
 		}
 	}
-
-	remap(&m.Inquiry)
-	remap(&m.Research)
-	remap(&m.Planning)
-	remap(&m.Implementation)
-	remap(&m.Review)
-	remap(&m.Utilities)
-	remap(&m.KBBuild)
+	remap(&m.Inquiry, fallbacks.Inquiry)
+	remap(&m.Research, fallbacks.Research)
+	remap(&m.Planning, fallbacks.Planning)
+	remap(&m.Implementation, fallbacks.Implementation)
+	remap(&m.Review, fallbacks.Review)
+	remap(&m.Utilities, fallbacks.Utilities)
+	remap(&m.KBBuild, fallbacks.KBBuild)
 }
 
 // shouldPersistCatalogDefaults reports whether catalog-derived model defaults

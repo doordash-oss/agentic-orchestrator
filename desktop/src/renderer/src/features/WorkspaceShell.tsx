@@ -34,6 +34,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type Dispatch,
   type SetStateAction,
 } from 'react';
@@ -62,6 +63,7 @@ import { runFeatureCommand, toggleActiveInspector } from './featureCommands';
 import { parseIpcError } from '../wizard/ipcError';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { isEditingShortcutTarget } from '../components/CommandPalette';
+import { SidebarResizeHandle } from './SidebarResizeHandle';
 import { CreateFeatureForm } from './CreateFeatureForm';
 import { useCreationDrafts, useCreationDraftEntry } from './creationDrafts';
 import { FeatureCockpit } from './FeatureCockpit';
@@ -224,6 +226,7 @@ export function WorkspaceShell({
   amaUnread?: boolean;
 }) {
   // null while the local shell prefs are being restored.
+  const [sidebarPreviewWidth, setSidebarPreviewWidth] = useState<number | null>(null);
   const [shell, setShell] = useState<ShellPrefs | null>(null);
   // A purely visual auto-collapse below ~700px: it never writes
   // `shell.sidebarCollapsed` (only the toolbar button and ⌘⌃S do that), so
@@ -864,10 +867,16 @@ export function WorkspaceShell({
   return (
     <section
       className="workspace"
+      style={
+        {
+          '--sidebar-width': `${sidebarPreviewWidth ?? shell?.sidebarWidth ?? 260}px`,
+        } as CSSProperties
+      }
       aria-label="Workspace"
       data-sidebar-collapsed={effectiveSidebarCollapsed}
     >
       <nav
+        id="feature-sidebar"
         className="sidebar"
         aria-label="Feature sidebar"
         data-collapsed={effectiveSidebarCollapsed}
@@ -942,6 +951,16 @@ export function WorkspaceShell({
             ) : null}
           </button>
         </div>
+        {!effectiveSidebarCollapsed && (
+          <SidebarResizeHandle
+            width={shell?.sidebarWidth ?? 260}
+            onPreview={setSidebarPreviewWidth}
+            onCommit={(sidebarWidth) => {
+              setSidebarPreviewWidth(null);
+              persistPatch({ sidebarWidth });
+            }}
+          />
+        )}
       </nav>
 
       <div className="content-column">

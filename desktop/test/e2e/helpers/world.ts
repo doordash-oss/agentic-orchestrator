@@ -69,6 +69,39 @@ export interface WorldOptions {
 
 const STUB_VERSION = '2.99.0 (Claude Code)';
 
+// Initialization metadata is shared by every scenario, just as it is in Claude.
+const STUB_MODEL_CATALOG = JSON.stringify({
+  models: [
+    {
+      value: 'opus[1m]',
+      resolvedModel: 'claude-opus-4-8',
+      displayName: 'Opus',
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+    },
+    {
+      value: 'claude-fable-5-1[1m]',
+      resolvedModel: 'claude-fable-5-1',
+      displayName: 'Fable',
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+    },
+    {
+      value: 'sonnet',
+      resolvedModel: 'claude-sonnet-4-6',
+      displayName: 'Sonnet',
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high'],
+    },
+    {
+      value: 'haiku',
+      resolvedModel: 'claude-haiku-4-5',
+      displayName: 'Haiku',
+      supportsEffort: false,
+    },
+  ],
+});
+
 /** Counts authoritative workflow provider sessions recorded by the stub CLI. */
 export function providerInvocationCount(logPath: string): number {
   try {
@@ -137,8 +170,8 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
  * The provider-CLI stub. Speaks exactly the surface the server probes:
  *   --version            → a supported version string
  *   auth status --json   → the JSON in the auth-state file
- * Everything else (e.g. model-catalog probes) fails fast; the server then
- * falls back to its curated model catalog for detected providers.
+ *   stream initialize    → a model catalog, before any user prompt
+ * Workflow activity starts only after the next input (the user prompt).
  */
 function writeStubCli(
   stubPath: string,
@@ -166,15 +199,19 @@ function writeStubCli(
     '    exit 0',
     '    ;;',
     'esac',
+    'is_stream=0',
+    'for arg in "$@"; do',
+    '  if [ "$arg" = "--input-format" ]; then is_stream=1; fi',
+    'done',
+    'if [ "$is_stream" -ne 1 ]; then exit 1; fi',
+    'IFS= read -r _agentico_init || exit 1',
+    `request_id=$(printf '%s\\n' "$_agentico_init" | sed -n 's/.*"request_id" *: *"\\([^"]*\\)".*/\\1/p')`,
+    '[ -n "$request_id" ] || exit 1',
+    `printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":%s}}\\n' "$request_id" '${STUB_MODEL_CATALOG}'`,
+    // Discovery stops here; only real sessions send a user prompt.
+    'IFS= read -r _agentico_prompt || exit 1',
     ...(rebaseProvider
       ? [
-          'is_stream=0',
-          'for arg in "$@"; do',
-          '  if [ "$arg" = "--input-format" ]; then is_stream=1; fi',
-          'done',
-          'if [ "$is_stream" -ne 1 ]; then exit 1; fi',
-          'IFS= read -r _agentico_init || exit 1',
-          'IFS= read -r _agentico_prompt || exit 1',
           '_context=$(printf "%s\\n" "$@" "$_agentico_prompt")',
           `printf 'rebase-session\\n' >> "${providerInvocationLog}"`,
           'write_approved_review() {',
@@ -396,11 +433,6 @@ function writeStubCli(
       : []),
     ...(workflowProvider
       ? [
-          'is_stream=0',
-          'for arg in "$@"; do',
-          '  if [ "$arg" = "--input-format" ]; then is_stream=1; fi',
-          'done',
-          'if [ "$is_stream" -ne 1 ]; then exit 1; fi',
           `printf 'session\\n' >> "${providerInvocationLog}"`,
           `echo '{"type":"system","subtype":"init","session_id":"e2e-workflow-session"}'`,
           `echo '{"type":"assistant","subtype":"partial","message":{"role":"assistant","content":[{"type":"text","text":"Backfill ready: inspecting the isolated workspace."}]}}'`,
@@ -436,14 +468,7 @@ function writeStubCli(
       : []),
     ...(attentionProvider
       ? [
-          'is_stream=0',
-          'for arg in "$@"; do',
-          '  if [ "$arg" = "--input-format" ]; then is_stream=1; fi',
-          'done',
-          'if [ "$is_stream" -ne 1 ]; then exit 1; fi',
           `printf 'attention-session\\n' >> "${providerInvocationLog}"`,
-          'IFS= read -r _agentico_init || exit 1',
-          'IFS= read -r _agentico_prompt || exit 1',
           `printf 'initial:%s\\n' "$_agentico_prompt" >> "${providerInvocationLog}"`,
           'emit_request() {',
           '  _json="$1"',
@@ -486,13 +511,6 @@ function writeStubCli(
     // Bounded utility helpers (e.g. Publish PR-description generation) reach
     // every world's stub. Serve them deterministically so publish flows can
     // generate a title/body without a real provider.
-    'is_stream=0',
-    'for arg in "$@"; do',
-    '  if [ "$arg" = "--input-format" ]; then is_stream=1; fi',
-    'done',
-    'if [ "$is_stream" -ne 1 ]; then exit 1; fi',
-    'IFS= read -r _agentico_init || exit 1',
-    'IFS= read -r _agentico_prompt || exit 1',
     'case "$_agentico_prompt" in',
     '  *"Generate PR Description"*)',
     `    echo '{"type":"system","subtype":"init","session_id":"e2e-publish-description"}'`,

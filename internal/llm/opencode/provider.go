@@ -17,11 +17,8 @@
 // model catalog discovered from the local CLI through the same catalog,
 // discovery, context-window, and cost interfaces the other providers use, so
 // its backend models participate in routing, provider-grouped model lists, and
-// as a co-equal default selection. When live discovery has not yet
-// run, fails, or returns nothing, the provider degrades to a curated built-in
-// fallback catalog (the CatalogProvider/default-catalog path the shared startup
-// discovery relies on), so a ready OpenCode never advertises an empty model
-// list; a discovered or cached catalog overrides the fallback. Backend models
+// as a co-equal default selection. A failed refresh can use a previously
+// discovered cache with a warning; no accessible backend is invented. Models
 // are always expressed in OpenCode's native "provider/model" form: the
 // "opencode:" routing prefix and Agentico's "[<window>]" context-window suffix
 // are both stripped before a model string is handed to the CLI.
@@ -141,8 +138,7 @@ func (p *Provider) SupportsNativeToollessReview() bool { return true }
 // An explicit "opencode:" routing prefix always matches when a backend model
 // follows it (the bare prefix "opencode:" with no backend is not a valid
 // selection). A bare model string matches only when it names an entry in the
-// effective catalog — the discovered catalog, or the curated fallback when
-// discovery has not populated one — by canonical id or alias. The fallback ids
+// effective catalog — a discovered or cached catalog — by canonical id or alias. Catalog IDs
 // are slash-form "provider/model" values, so a ready OpenCode never captures a
 // bare name (e.g. "sonnet", "gpt-5.4") meant for another provider.
 func (p *Provider) MatchesModel(model string) bool {
@@ -159,7 +155,7 @@ func (p *Provider) catalogContains(model string) bool {
 	if model == "" {
 		return false
 	}
-	for _, entry := range p.catalogOrFallback() {
+	for _, entry := range p.catalogSnapshot() {
 		if strings.EqualFold(entry.ID, model) {
 			return true
 		}
@@ -178,11 +174,9 @@ func (p *Provider) DetectCLI() bool {
 	return err == nil
 }
 
-// AvailableModels returns the effective catalog's model ids: the discovered
-// catalog's ids, or the curated fallback's ids when discovery has not populated
-// one, so a ready OpenCode always contributes selectable models.
+// AvailableModels returns only discovered or cached model IDs.
 func (p *Provider) AvailableModels() []string {
-	cat := p.catalogOrFallback()
+	cat := p.catalogSnapshot()
 	ids := make([]string, len(cat))
 	for i, m := range cat {
 		ids[i] = m.ID
@@ -210,7 +204,7 @@ func (p *Provider) AvailableModels() []string {
 // none of which mutates the user's global OpenCode configuration. Any build
 // failure aborts before a launchable command exists. See buildManagedSession.
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
-	return buildManagedSession(p.cliBinary(), opts)
+	return buildManagedSession(p.cliBinary(), opts, p.effortOptions(opts.Model, opts.EffortLevel))
 }
 
 // validateBackendModel reports whether a stripped OpenCode backend model is a
@@ -340,7 +334,7 @@ func (p *Provider) EnvVarsToExclude() []string { return nil }
 // ComputeCost computes token cost from the pricing parsed during catalog
 // discovery. When pricing was exposed for the model in a stable numeric shape it
 // is applied (per million tokens); otherwise — unknown model, no pricing, or a
-// catalog loaded from cache (which does not carry pricing) — it returns 0 so the
+// a catalog without advertised pricing — it returns 0 so the
 // session falls back to the cost OpenCode reports over ACP without corrupting
 // usage summaries.
 func (p *Provider) ComputeCost(model string, inputTokens, outputTokens int64) float64 {
@@ -374,8 +368,7 @@ func (p *Provider) lookupRate(model string) (modelRate, bool) {
 }
 
 // ContextWindowForModel returns the context window for a model from the
-// effective catalog (discovered, or the curated fallback when discovery has not
-// populated one), matching by canonical id or alias (so suffixed ids, unsuffixed
+// discovered or cached catalog, matching by canonical id or alias (so suffixed IDs, unsuffixed
 // aliases, and the canonicalized form of an explicit "opencode:" selection all
 // resolve). It returns 0 only when no catalog metadata exists for the model,
 // which callers treat as "unknown" without corrupting behavior.
@@ -388,7 +381,7 @@ func (p *Provider) ContextWindowForModel(model string) int {
 	}
 	suffixWindow := llm.ParseModelContextWindow(model)
 	strippedModel := strings.TrimSpace(llm.StripModelContextWindow(model))
-	for _, entry := range p.catalogOrFallback() {
+	for _, entry := range p.catalogSnapshot() {
 		if entry.ContextWindow <= 0 {
 			continue
 		}
@@ -407,143 +400,42 @@ func (p *Provider) ContextWindowForModel(model string) int {
 	return 0
 }
 
-// ModelCatalog returns a copy of the effective model catalog: the discovered
-// catalog, or the curated built-in fallback when discovery has not populated one
-// (the degrade-to-fallback path the shared startup discovery relies on when
-// discovery errors or yields an empty catalog). Implementing llm.CatalogProvider
-// lets the registry route bare slash-form ids and aliases through normal catalog
-// matching and surface OpenCode under its own provider group in model lists once
-// it is ready, even before — or when — live discovery is unavailable.
+// ModelCatalog returns an isolated snapshot of discovered or cached metadata.
+// No models or capabilities are fabricated when discovery is unavailable.
 func (p *Provider) ModelCatalog() []llm.ModelInfo {
-	cat := p.catalogOrFallback()
-	out := make([]llm.ModelInfo, len(cat))
-	copy(out, cat)
-	return out
+	return p.catalogSnapshot()
 }
 
-// ReviewPreferenceBand ranks OpenCode review models without leaking backend
-// model-family naming into shared automatic-review code.
+// ReviewPreferenceBand admits discovered text models for native toolless
+// review without guessing quality or cost from family names.
 func (p *Provider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
-	switch {
-	case reviewModelMatchesHint(model, "haiku"):
-		return 0, true
-	case reviewModelMatchesHint(model, "flash"):
-		return 1, true
-	case model.Category == "cheap":
-		return 2, true
-	default:
-		return 0, false
-	}
+	return 0, model.Capabilities == nil || model.Capabilities.TextOutput == nil || *model.Capabilities.TextOutput
 }
 
-func reviewModelMatchesHint(model llm.ModelInfo, hint string) bool {
-	if strings.Contains(strings.ToLower(model.ID), hint) {
-		return true
-	}
-	for _, alias := range model.Aliases {
-		if strings.Contains(strings.ToLower(alias), hint) {
-			return true
-		}
-	}
-	return false
-}
-
-// catalogOrFallback returns the discovered catalog when present, otherwise the
-// curated offline fallback. The discovered catalog is replaced wholesale by
-// SetModelCatalog, so copying the slice header under the read lock and iterating
-// it after unlocking is safe.
-func (p *Provider) catalogOrFallback() []llm.ModelInfo {
+func (p *Provider) catalogSnapshot() []llm.ModelInfo {
 	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		return fallbackModelInfos()
-	}
-	return cat
+	defer p.mu.RUnlock()
+	return cloneCatalog(p.catalog)
 }
 
-// fallbackBackendModel is one curated offline-fallback entry: a backend
-// "provider/model" id, a human display name, and the model's context window in
-// tokens. Categories are derived deterministically by categoryForModel — the
-// same heuristic applied to discovered models — rather than hardcoded.
-type fallbackBackendModel struct {
-	backendID   string
-	displayName string
-	window      int
-}
+// RefreshCatalogOnStartup prevents a CLI-version cache from hiding changes to
+// user-defined provider models or variants. A failed refresh can use a stale
+// cache with the startup warning, but no model catalog is fabricated.
+func (p *Provider) RefreshCatalogOnStartup() bool { return true }
 
-// fallbackBackendModels is Agentico's curated OpenCode catalog. It is used only
-// when live discovery from the local CLI has not run, failed, or returned
-// nothing, so a ready OpenCode never advertises an empty model list; a
-// successful discovery (or a version-keyed cache load) replaces it entirely.
-//
-// OpenCode is a meta-provider whose real model set is user-configuration
-// specific, so this list cannot be exhaustive or guaranteed-accessible — it is a
-// small, widely-available cross-provider set spanning the cheap/balanced/capable
-// categories that role selection needs, mirroring how the other providers keep
-// an offline fallback. Context windows are public, well-known values; pricing is
-// intentionally omitted (the fallback carries no rates, so ComputeCost returns 0
-// and real cost flows over ACP).
-func fallbackBackendModels() []fallbackBackendModel {
-	return []fallbackBackendModel{
-		{"anthropic/claude-opus-4-1", "Claude Opus 4.1", 200_000},
-		{"anthropic/claude-sonnet-4-5", "Claude Sonnet 4.5", 200_000},
-		{"anthropic/claude-haiku-4-5", "Claude Haiku 4.5", 200_000},
-		{"openai/gpt-5", "GPT-5", 400_000},
-		{"openai/gpt-5-mini", "GPT-5 Mini", 400_000},
-		{"google/gemini-2.5-pro", "Gemini 2.5 Pro", 1_000_000},
-		{"google/gemini-2.5-flash", "Gemini 2.5 Flash", 1_000_000},
-	}
-}
-
-// fallbackModelInfos builds the curated fallback catalog, normalizing each entry
-// exactly like discovery (suffixed id + unsuffixed alias when the window is
-// known, deterministic category) so fallback and discovered catalogs are
-// interchangeable to every downstream consumer.
-func fallbackModelInfos() []llm.ModelInfo {
-	defs := fallbackBackendModels()
-	models := make([]llm.ModelInfo, 0, len(defs))
-	for _, d := range defs {
-		info := llm.ModelInfo{
-			ID:            d.backendID,
-			DisplayName:   d.displayName,
-			ContextWindow: d.window,
-			Category:      categoryForModel(d.backendID, d.displayName),
-		}
-		if label := llm.ContextWindowLabel(d.window); label != "" {
-			info.ID = llm.ModelWithContextWindow(d.backendID, d.window)
-			info.DisplayName = d.displayName + " (" + label + ")"
-			info.Aliases = llm.AppendUniqueAlias(info.Aliases, info.ID, d.backendID)
-		}
-		info.EffortCapabilities = effortCapabilitiesForBackend(d.backendID)
-		models = append(models, info)
-	}
-	return models
-}
-
-// SetModelCatalog installs a discovered (or cached, or test-supplied) model
-// catalog. It implements llm.CatalogEnricher, the seam the startup discovery
-// path uses after running discovery or loading the version-keyed cache. It does
-// not touch the pricing table: discovery populates pricing directly before this
-// is called, and a catalog loaded from cache legitimately carries no pricing.
+// SetModelCatalog installs an isolated metadata snapshot and restores its
+// advertised pricing, including when the catalog was loaded from cache.
 func (p *Provider) SetModelCatalog(models []llm.ModelInfo) {
 	p.mu.Lock()
-	p.catalog = models
-	p.mu.Unlock()
-}
-
-// effortCapabilitiesForBackend returns the ordered, semantically distinct
-// effort levels for an OpenCode backend model. Only the "openai" backend
-// provider exposes a stable reasoningEffort control; its maximum (max) maps to
-// "high" — the same value high produces — so max is a semantic alias and is
-// collapsed from the advertised capabilities. Other backend providers have no
-// stable effort control and remain Auto-only (empty capabilities).
-func effortCapabilitiesForBackend(backendID string) []llm.EffortLevel {
-	provider, _, ok := strings.Cut(backendID, "/")
-	if !ok || !effortSupportedProviders[provider] {
-		return nil
+	p.catalog = cloneCatalog(models)
+	p.rates = make(map[string]modelRate)
+	for _, m := range models {
+		if m.Cost != nil {
+			p.rates[strings.ToLower(m.ID)] = modelRate{inputPerMToken: m.Cost.Input, outputPerMToken: m.Cost.Output}
+			p.rates[strings.ToLower(BackendModel(m.ID))] = modelRate{inputPerMToken: m.Cost.Input, outputPerMToken: m.Cost.Output}
+		}
 	}
-	return []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh}
+	p.mu.Unlock()
 }
 
 // setRates replaces the discovered pricing table. Called by discovery before the

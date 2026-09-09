@@ -24,19 +24,11 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
 )
 
-func TestClaudeCatalogHasEffortCapabilities(t *testing.T) {
+func TestClaudeOfflineCatalogDoesNotInventEffortCapabilities(t *testing.T) {
 	p := &claude.Provider{}
-	catalog := p.ModelCatalog()
-	if len(catalog) == 0 {
-		t.Fatal("expected non-empty Claude catalog")
-	}
-	for _, m := range catalog {
-		if len(m.EffortCapabilities) == 0 {
-			t.Errorf("model %s: expected non-empty EffortCapabilities", m.ID)
-		}
-		want := []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}
-		if !equalEffortLevels(m.EffortCapabilities, want) {
-			t.Errorf("model %s: got %v, want %v", m.ID, m.EffortCapabilities, want)
+	for _, model := range p.ModelCatalog() {
+		if len(model.EffortCapabilities) != 0 {
+			t.Errorf("offline model %s advertises unverified effort levels: %v", model.ID, model.EffortCapabilities)
 		}
 	}
 }
@@ -61,49 +53,12 @@ func TestCodexCatalogHasEffortCapabilities(t *testing.T) {
 	}
 }
 
-func TestOpenCodeFallbackCatalogEffortCapabilities(t *testing.T) {
+func TestOpenCodeUndiscoveredModelsAreAutoOnly(t *testing.T) {
 	p := opencode.New()
-	catalog := p.ModelCatalog()
-	if len(catalog) == 0 {
-		t.Fatal("expected non-empty OpenCode fallback catalog")
-	}
-	for _, m := range catalog {
-		backendID := llm.StripModelContextWindow(m.ID)
-		provider, _, ok := splitBackend(backendID)
-		if !ok {
-			continue
+	for _, id := range []string{"openai/gpt-5", "portkey/custom"} {
+		if len(llm.EffortCapabilitiesForModel(p, id)) != 0 {
+			t.Fatal("effort support requires discovery")
 		}
-		if provider == "openai" {
-			want := []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh}
-			if !equalEffortLevels(m.EffortCapabilities, want) {
-				t.Errorf("openai model %s: got %v, want %v (max collapsed to high)", m.ID, m.EffortCapabilities, want)
-			}
-		} else {
-			if len(m.EffortCapabilities) != 0 {
-				t.Errorf("non-openai model %s: expected empty EffortCapabilities (Auto-only), got %v", m.ID, m.EffortCapabilities)
-			}
-		}
-	}
-}
-
-func TestOpenCodeMaxCollapsedToHigh(t *testing.T) {
-	p := opencode.New()
-	catalog := p.ModelCatalog()
-	found := false
-	for _, m := range catalog {
-		backendID := llm.StripModelContextWindow(m.ID)
-		provider, _, ok := splitBackend(backendID)
-		if ok && provider == "openai" {
-			found = true
-			for _, cap := range m.EffortCapabilities {
-				if cap == llm.EffortMax {
-					t.Errorf("openai model %s: EffortMax should be collapsed (executes identically to high), but was advertised", m.ID)
-				}
-			}
-		}
-	}
-	if !found {
-		t.Fatal("expected at least one openai model in fallback catalog")
 	}
 }
 
@@ -117,8 +72,8 @@ func TestEffortCapabilitiesForModelViaRegistry(t *testing.T) {
 	reg.Register(opencodeProv)
 
 	caps := llm.EffortCapabilitiesForModel(claudeProv, "sonnet[200K]")
-	if len(caps) != 5 {
-		t.Errorf("claude sonnet[200K]: expected 5 capabilities, got %d", len(caps))
+	if len(caps) != 0 {
+		t.Errorf("offline claude sonnet[200K]: expected Auto-only, got %v", caps)
 	}
 
 	caps = llm.EffortCapabilitiesForModel(codexProv, "gpt-5.4[272K]")
@@ -127,8 +82,8 @@ func TestEffortCapabilitiesForModelViaRegistry(t *testing.T) {
 	}
 
 	caps = llm.EffortCapabilitiesForModel(opencodeProv, "openai/gpt-5[400K]")
-	if len(caps) != 3 {
-		t.Errorf("opencode openai/gpt-5[400K]: expected 3 capabilities (max collapsed), got %d", len(caps))
+	if len(caps) != 0 {
+		t.Errorf("undiscovered OpenCode model must be Auto-only, got %d", len(caps))
 	}
 
 	caps = llm.EffortCapabilitiesForModel(opencodeProv, "anthropic/claude-sonnet-4-5[200K]")

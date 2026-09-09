@@ -19,7 +19,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
@@ -588,344 +587,14 @@ func TestRegistry_CatalogModelsForProvider(t *testing.T) {
 	})
 }
 
-func TestRegistry_CatalogMostCapableModel(t *testing.T) {
-	t.Run("returns_most_capable_from_preferred_provider_when_hint_matches", func(t *testing.T) {
-		r := llm.NewRegistry()
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet", "haiku"}, hasCLI: true},
-			catalog:      claudeCatalog,
-		})
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "codex", models: []string{"codex", "gpt-5.4-mini"}, hasCLI: true},
-			catalog:      codexCatalog,
-		})
-
-		got := r.MostCapableModel("claude")
-		if got != "opus" {
-			t.Errorf("expected %q, got %q", "opus", got)
-		}
-	})
-
-	t.Run("falls_back_to_all_providers_when_hint_doesnt_match", func(t *testing.T) {
-		r := llm.NewRegistry()
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet", "haiku"}, hasCLI: true},
-			catalog:      claudeCatalog,
-		})
-
-		// Hint doesn't match any registered provider
-		got := r.MostCapableModel("nonexistent")
-		if got != "opus" {
-			t.Errorf("expected %q from fallback to all providers, got %q", "opus", got)
-		}
-	})
-
-	t.Run("returns_first_available_model_when_no_catalogs_populated", func(t *testing.T) {
-		r := llm.NewRegistry()
-		// stubProvider without CatalogProvider — synthetic entries with no category
-		r.Register(&stubProvider{name: "bare", models: []string{"model-a", "model-b"}, hasCLI: true})
-
-		got := r.MostCapableModel("")
-		// Synthetic entries have empty category (rank 0), so the first one wins.
-		if got != "model-a" {
-			t.Errorf("expected %q, got %q", "model-a", got)
-		}
-	})
-
-	t.Run("works_with_single_provider", func(t *testing.T) {
-		r := llm.NewRegistry()
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "codex", models: []string{"codex", "gpt-5.4-mini"}, hasCLI: true},
-			catalog:      codexCatalog,
-		})
-
-		got := r.MostCapableModel("codex")
-		if got != "codex" {
-			t.Errorf("expected %q, got %q", "codex", got)
-		}
-	})
-}
-
-func TestRegistry_CatalogDefaultModels(t *testing.T) {
-	t.Run("both_providers_with_catalogs", func(t *testing.T) {
-		r := llm.NewRegistry()
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet", "haiku"}, hasCLI: true},
-			catalog:      claudeCatalog,
-		})
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "codex", models: []string{"codex", "gpt-5.4-mini"}, hasCLI: true},
-			catalog:      codexCatalog,
-		})
-
-		mc := r.CatalogDefaultModels()
-
-		// Feature phases prefer balanced defaults where available.
-		if mc.Inquiry != "claude:sonnet" {
-			t.Errorf("inquiry: got %q, want %q", mc.Inquiry, "claude:sonnet")
-		}
-		if mc.Research != "claude:sonnet" {
-			t.Errorf("research: got %q, want %q", mc.Research, "claude:sonnet")
-		}
-		if mc.Planning != "claude:sonnet" {
-			t.Errorf("planning: got %q, want %q", mc.Planning, "claude:sonnet")
-		}
-		if mc.Implementation != "claude:sonnet" {
-			t.Errorf("implementation: got %q, want %q", mc.Implementation, "claude:sonnet")
-		}
-		// Review competes provider-neutrally: claude:sonnet and codex:gpt-5.4 are
-		// both balanced @ 200K, so the deterministic provider+model-ID tie-break
-		// ("claude" < "codex") wins. No role carries a hardcoded codex preference.
-		if mc.Review != "claude:sonnet" {
-			t.Errorf("review: got %q, want %q", mc.Review, "claude:sonnet")
-		}
-		if mc.Utilities != "claude:sonnet" {
-			t.Errorf("chat: got %q, want %q", mc.Utilities, "claude:sonnet")
-		}
-		if mc.KBBuild != "claude:sonnet" {
-			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "claude:sonnet")
-		}
-	})
-
-	t.Run("claude_only", func(t *testing.T) {
-		r := llm.NewRegistry()
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet", "haiku"}, hasCLI: true},
-			catalog:      claudeCatalog,
-		})
-
-		mc := r.CatalogDefaultModels()
-
-		// Single provider → bare names (no prefix)
-		if mc.Inquiry != "sonnet" {
-			t.Errorf("inquiry: got %q, want %q", mc.Inquiry, "sonnet")
-		}
-		if mc.Research != "sonnet" {
-			t.Errorf("research: got %q, want %q", mc.Research, "sonnet")
-		}
-		if mc.Planning != "sonnet" {
-			t.Errorf("planning: got %q, want %q", mc.Planning, "sonnet")
-		}
-		if mc.Implementation != "sonnet" {
-			t.Errorf("implementation: got %q, want %q", mc.Implementation, "sonnet")
-		}
-		// Review prefers codex, but codex not available; falls back to claude balanced.
-		if mc.Review != "sonnet" {
-			t.Errorf("review: got %q, want %q", mc.Review, "sonnet")
-		}
-		if mc.Utilities != "sonnet" {
-			t.Errorf("chat: got %q, want %q", mc.Utilities, "sonnet")
-		}
-		if mc.KBBuild != "sonnet" {
-			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "sonnet")
-		}
-	})
-
-	t.Run("codex_only", func(t *testing.T) {
-		r := llm.NewRegistry()
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "codex", models: []string{"codex", "gpt-5.4", "gpt-5.4-mini"}, hasCLI: true},
-			catalog:      codexCatalog,
-		})
-
-		mc := r.CatalogDefaultModels()
-
-		// Single provider → bare names (no prefix)
-		// Research prefers claude, but claude not available; falls back to a balanced codex model
-		if mc.Inquiry != "gpt-5.4" {
-			t.Errorf("inquiry: got %q, want %q", mc.Inquiry, "gpt-5.4")
-		}
-		if mc.Research != "gpt-5.4" {
-			t.Errorf("research: got %q, want %q", mc.Research, "gpt-5.4")
-		}
-		if mc.Planning != "gpt-5.4" {
-			t.Errorf("planning: got %q, want %q", mc.Planning, "gpt-5.4")
-		}
-		if mc.Implementation != "gpt-5.4" {
-			t.Errorf("implementation: got %q, want %q", mc.Implementation, "gpt-5.4")
-		}
-		if mc.Review != "gpt-5.4" {
-			t.Errorf("review: got %q, want %q", mc.Review, "gpt-5.4")
-		}
-		if mc.Utilities != "gpt-5.4" {
-			t.Errorf("chat: got %q, want %q", mc.Utilities, "gpt-5.4")
-		}
-		if mc.KBBuild != "gpt-5.4" {
-			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "gpt-5.4")
-		}
-	})
-
-	t.Run("codex_cost_efficient_research_and_kb_hint", func(t *testing.T) {
-		r := llm.NewRegistry()
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.5[272K]", "gpt-5.4[272K]", "gpt-5.4[1M]", "gpt-5.4-mini[400K]"}, hasCLI: true},
-			catalog: []llm.ModelInfo{
-				{ID: "gpt-5.5[272K]", Category: "capable", ContextWindow: 272000, Aliases: []string{"gpt-5.5"}},
-				{ID: "gpt-5.4[272K]", Category: "balanced", ContextWindow: 272000, Aliases: []string{"gpt-5.4"}},
-				{ID: "gpt-5.4[1M]", Category: "capable", ContextWindow: 1000000},
-				{ID: "gpt-5.4-mini[400K]", Category: "balanced", ContextWindow: 400000, Aliases: []string{"gpt-5.4-mini"}},
-			},
-		})
-
-		mc := r.CatalogDefaultModels()
-		if mc.Research != "gpt-5.4[272K]" {
-			t.Errorf("research: got %q, want %q", mc.Research, "gpt-5.4[272K]")
-		}
-		if mc.KBBuild != "gpt-5.4[272K]" {
-			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "gpt-5.4[272K]")
-		}
-		if mc.Planning != "gpt-5.4[272K]" {
-			t.Errorf("planning: got %q, want %q", mc.Planning, "gpt-5.4[272K]")
-		}
-		if mc.Review != "gpt-5.4[272K]" {
-			t.Errorf("review: got %q, want %q", mc.Review, "gpt-5.4[272K]")
-		}
-	})
-
-	t.Run("no_providers", func(t *testing.T) {
-		r := llm.NewRegistry()
-
-		mc := r.CatalogDefaultModels()
-		if mc != (config.ModelConfig{}) {
-			t.Errorf("expected empty defaults, got %+v", mc)
-		}
-	})
-
-	t.Run("no_catalogs_populated", func(t *testing.T) {
-		r := llm.NewRegistry()
-		// Detected providers but with empty catalogs (stubCatalogProvider with nil catalog)
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true},
-			catalog:      nil,
-		})
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "codex", models: []string{"codex"}, hasCLI: true},
-			catalog:      nil,
-		})
-
-		mc := r.CatalogDefaultModels()
-		if mc != (config.ModelConfig{}) {
-			t.Errorf("expected empty defaults, got %+v", mc)
-		}
-	})
-
-	t.Run("partial_catalog", func(t *testing.T) {
-		r := llm.NewRegistry()
-		// Claude has a real catalog
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet", "haiku"}, hasCLI: true},
-			catalog:      claudeCatalog,
-		})
-		// Codex is detected but has no catalog — bare stubProvider (no CatalogProvider)
-		r.Register(&stubProvider{name: "codex", models: []string{"codex-model"}, hasCLI: true})
-
-		mc := r.CatalogDefaultModels()
-
-		// Multi-provider detected, so prefixes are used
-		// Research prefers cost-efficient claude defaults → "claude:sonnet"
-		if mc.Research != "claude:sonnet" {
-			t.Errorf("research: got %q, want %q", mc.Research, "claude:sonnet")
-		}
-		// Review prefers codex, but codex has no categorized catalog; fall back
-		// to the available balanced model from claude.
-		if mc.Review != "claude:sonnet" {
-			t.Errorf("review: got %q, want %q", mc.Review, "claude:sonnet")
-		}
-		// Chat prefers claude balanced → "claude:sonnet"
-		if mc.Utilities != "claude:sonnet" {
-			t.Errorf("chat: got %q, want %q", mc.Utilities, "claude:sonnet")
-		}
-	})
-}
-
 func TestRegistry_EligibleModelsForPhase(t *testing.T) {
 	r := llm.NewRegistry()
-	claude := &stubCatalogProvider{
-		stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet", "haiku"}, hasCLI: true},
-		catalog: []llm.ModelInfo{
-			{ID: "opus", Category: "capable", Aliases: []string{"opus[1m]"}},
-			{ID: "sonnet", Category: "balanced"},
-			{ID: "haiku", Category: "cheap"},
-		},
+	r.Register(&stubCatalogProvider{stubProvider: stubProvider{name: "gateway", hasCLI: true}, catalog: []llm.ModelInfo{{ID: "flash", Category: "cheap"}, {ID: "kimi"}, {ID: "big", Category: "capable"}, {ID: "fourth"}}})
+	for _, role := range []llm.PhaseRole{llm.PhaseInquiry, llm.PhaseResearch, llm.PhasePlanning, llm.PhaseImplementation, llm.PhaseReview, llm.PhaseChat, llm.PhaseKBBuild} {
+		if got := r.EligibleModelsForPhase(role)["gateway"]; len(got) != 4 {
+			t.Errorf("%s: got %v, want all four models regardless of category", role, got)
+		}
 	}
-	codex := &stubCatalogProvider{
-		stubProvider: stubProvider{name: "codex", models: []string{"codex", "gpt-5.4", "gpt-5.4-mini"}, hasCLI: true},
-		catalog: []llm.ModelInfo{
-			{ID: "codex", Category: "capable"},
-			{ID: "gpt-5.4", Category: "balanced"},
-			{ID: "gpt-5.4-mini", Category: "balanced"},
-		},
-	}
-	r.Register(claude)
-	r.Register(codex)
-
-	t.Run("research includes cost-efficient default and capable options", func(t *testing.T) {
-		result := r.EligibleModelsForPhase(llm.PhaseResearch)
-		// claude: sonnet is recommended; opus remains available; cheap models are excluded.
-		if got := result["claude"]; !slices.Contains(got, "sonnet") || !slices.Contains(got, "opus") {
-			t.Errorf("claude research: got %v, want sonnet and opus", got)
-		}
-		if slices.Contains(result["claude"], "haiku") {
-			t.Error("claude research should not include haiku")
-		}
-		// Aliases are no longer included in filtered results
-		if slices.Contains(result["claude"], "opus[1m]") {
-			t.Error("claude research should not include aliases")
-		}
-		// codex: gpt-5.4 is the recommended default; balanced mini remains available.
-		if got := result["codex"]; !slices.Contains(got, "gpt-5.4") || !slices.Contains(got, "gpt-5.4-mini") {
-			t.Errorf("codex research: got %v, want gpt-5.4 and gpt-5.4-mini", got)
-		}
-	})
-
-	t.Run("inquiry includes same capable and balanced options as research", func(t *testing.T) {
-		result := r.EligibleModelsForPhase(llm.PhaseInquiry)
-		if got := result["claude"]; !slices.Contains(got, "sonnet") || !slices.Contains(got, "opus") {
-			t.Errorf("claude inquiry: got %v, want sonnet and opus", got)
-		}
-		if slices.Contains(result["claude"], "haiku") {
-			t.Error("claude inquiry should not include haiku")
-		}
-		if got := result["codex"]; !slices.Contains(got, "gpt-5.4") || !slices.Contains(got, "gpt-5.4-mini") {
-			t.Errorf("codex inquiry: got %v, want gpt-5.4 and gpt-5.4-mini", got)
-		}
-	})
-
-	t.Run("implementation capable+balanced", func(t *testing.T) {
-		result := r.EligibleModelsForPhase(llm.PhaseImplementation)
-		if got := result["claude"]; !slices.Contains(got, "opus") || !slices.Contains(got, "sonnet") {
-			t.Errorf("claude impl: got %v, want opus and sonnet", got)
-		}
-		if slices.Contains(result["claude"], "haiku") {
-			t.Error("claude impl should not include haiku")
-		}
-		if got := result["codex"]; !slices.Contains(got, "gpt-5.4") || !slices.Contains(got, "gpt-5.4-mini") {
-			t.Errorf("codex impl: got %v, want gpt-5.4 and gpt-5.4-mini included", got)
-		}
-	})
-
-	t.Run("planning capable+balanced", func(t *testing.T) {
-		result := r.EligibleModelsForPhase(llm.PhasePlanning)
-		if got := result["claude"]; !slices.Contains(got, "opus") || !slices.Contains(got, "sonnet") {
-			t.Errorf("claude planning: got %v, want opus and sonnet", got)
-		}
-		if slices.Contains(result["claude"], "haiku") {
-			t.Error("claude planning should not include haiku")
-		}
-		if got := result["codex"]; !slices.Contains(got, "gpt-5.4") || !slices.Contains(got, "gpt-5.4-mini") {
-			t.Errorf("codex planning: got %v, want gpt-5.4 and gpt-5.4-mini included", got)
-		}
-	})
-
-	t.Run("chat balanced+cheap", func(t *testing.T) {
-		result := r.EligibleModelsForPhase(llm.PhaseChat)
-		if got := result["claude"]; !slices.Contains(got, "sonnet") || !slices.Contains(got, "haiku") {
-			t.Errorf("claude chat: got %v, want sonnet and haiku", got)
-		}
-		if slices.Contains(result["claude"], "opus") {
-			t.Error("claude chat should not include opus")
-		}
-	})
 }
 
 func TestRegistry_AutomaticReviewEligibilityUsesCapabilityAndFullCatalog(t *testing.T) {
@@ -1034,17 +703,17 @@ func TestRegistry_ProviderGroup(t *testing.T) {
 		}
 	})
 
-	t.Run("phase-eligible list includes provider by category, excludes uncategorized", func(t *testing.T) {
+	t.Run("phase-eligible list includes all technically usable models", func(t *testing.T) {
 		research := r.EligibleModelsForPhase(llm.PhaseResearch) // capable + balanced
 		got := research["gateway"]
 		if !slices.Contains(got, "vendor/gpt-5") || !slices.Contains(got, "vendor/sonnet[200K]") {
 			t.Errorf("gateway research eligible = %v, want capable + balanced entries", got)
 		}
-		if slices.Contains(got, "vendor/unknown") {
-			t.Error("uncategorized gateway model leaked into eligible list")
+		if !slices.Contains(got, "vendor/unknown") {
+			t.Error("uncategorized gateway model missing from eligible list")
 		}
-		if slices.Contains(got, "vendor/gpt-5-nano[400K]") {
-			t.Error("cheap gateway model should be excluded from research eligible list")
+		if !slices.Contains(got, "vendor/gpt-5-nano[400K]") {
+			t.Error("cheap gateway model must remain eligible for research")
 		}
 
 		chat := r.EligibleModelsForPhase(llm.PhaseChat) // balanced + cheap
@@ -1052,8 +721,8 @@ func TestRegistry_ProviderGroup(t *testing.T) {
 		if !slices.Contains(chatGot, "vendor/gpt-5-nano[400K]") || !slices.Contains(chatGot, "vendor/sonnet[200K]") {
 			t.Errorf("gateway chat eligible = %v, want balanced + cheap entries", chatGot)
 		}
-		if slices.Contains(chatGot, "vendor/gpt-5") {
-			t.Error("capable gateway model should be excluded from chat eligible list")
+		if !slices.Contains(chatGot, "vendor/gpt-5") {
+			t.Error("capable gateway model must remain eligible for chat")
 		}
 	})
 

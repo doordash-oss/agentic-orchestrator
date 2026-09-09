@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -30,12 +31,20 @@ import (
 // USD per million tokens (models.dev convention); pointer fields distinguish an
 // explicitly-zero value from an absent one.
 type openCodeVerboseModel struct {
-	ID         string              `json:"id"`
-	ProviderID string              `json:"providerID"`
-	Name       string              `json:"name"`
-	Status     string              `json:"status"`
-	Cost       *openCodeModelCost  `json:"cost"`
-	Limit      *openCodeModelLimit `json:"limit"`
+	ID           string `json:"id"`
+	ProviderID   string `json:"providerID"`
+	Name         string `json:"name"`
+	Capabilities *struct {
+		ToolCall  *bool `json:"toolcall"`
+		Reasoning *bool `json:"reasoning"`
+		Output    struct {
+			Text *bool `json:"text"`
+		} `json:"output"`
+	} `json:"capabilities"`
+	Variants map[string]map[string]any `json:"variants"`
+	Status   string                    `json:"status"`
+	Cost     *openCodeModelCost        `json:"cost"`
+	Limit    *openCodeModelLimit       `json:"limit"`
 }
 
 type openCodeModelCost struct {
@@ -169,11 +178,15 @@ func parseOpenCodeModels(out []byte) ([]llm.ModelInfo, map[string]modelRate, err
 		}
 
 		info := llm.ModelInfo{
-			ID:                 id,
-			DisplayName:        display,
-			ContextWindow:      window,
-			Category:           categoryForModel(id, display),
-			EffortCapabilities: effortCapabilitiesForBackend(id),
+			ID:            id,
+			DisplayName:   display,
+			ContextWindow: window,
+		}
+		if meta != nil {
+			if c := meta.Capabilities; c != nil {
+				info.Capabilities = &llm.ModelCapabilities{ToolCall: c.ToolCall, TextOutput: c.Output.Text, Reasoning: c.Reasoning}
+			}
+			info.EffortVariants, info.EffortCapabilities = discoverEffortVariants(meta.Variants)
 		}
 		// A valid window promotes the id to the suffixed form and keeps the bare
 		// backend id reachable as an alias (backward compatibility); an unknown
@@ -184,7 +197,8 @@ func parseOpenCodeModels(out []byte) ([]llm.ModelInfo, map[string]modelRate, err
 			info.Aliases = llm.AppendUniqueAlias(info.Aliases, info.ID, id)
 		}
 
-		if meta != nil && meta.Cost != nil && meta.Cost.Input != nil && meta.Cost.Output != nil {
+		if meta != nil && meta.Cost != nil && meta.Cost.Input != nil && meta.Cost.Output != nil && validPrice(*meta.Cost.Input) && validPrice(*meta.Cost.Output) {
+			info.Cost = &llm.ModelCost{Input: *meta.Cost.Input, Output: *meta.Cost.Output}
 			rate := modelRate{inputPerMToken: *meta.Cost.Input, outputPerMToken: *meta.Cost.Output}
 			rates[strings.ToLower(info.ID)] = rate
 			rates[strings.ToLower(id)] = rate
@@ -372,39 +386,4 @@ func displayNameFromBackendID(id string) string {
 	return id
 }
 
-// Deterministic category tokens. Matching is substring-based on the lowercased
-// "id name" text and ordered: a shrink token (mini/small) demotes an otherwise
-// capable family to balanced, and cheap tokens win outright. Unrecognized models
-// return "" (unknown). The buckets only need to be stable and let selection run;
-// Provider-neutral discovery owns default ranking.
-var (
-	cheapModelTokens     = []string{"nano", "haiku", "flash", "lite", "tiny", "embed"}
-	balancedShrinkTokens = []string{"mini", "small"}
-	capableModelTokens   = []string{"opus", "gpt-5", "-pro", "ultra", "-max", "405b", "reasoner", "deepseek-r"}
-	balancedModelTokens  = []string{"sonnet", "gpt-4", "claude-3", "gemini", "llama", "mistral", "qwen", "gemma", "glm", "grok", "deepseek", "codex", "command"}
-)
-
-func categoryForModel(id, displayName string) string {
-	s := strings.ToLower(id + " " + displayName)
-	switch {
-	case containsAnyToken(s, cheapModelTokens):
-		return "cheap"
-	case containsAnyToken(s, balancedShrinkTokens):
-		return "balanced"
-	case containsAnyToken(s, capableModelTokens):
-		return "capable"
-	case containsAnyToken(s, balancedModelTokens):
-		return "balanced"
-	default:
-		return ""
-	}
-}
-
-func containsAnyToken(s string, tokens []string) bool {
-	for _, t := range tokens {
-		if strings.Contains(s, t) {
-			return true
-		}
-	}
-	return false
-}
+func validPrice(value float64) bool { return value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0) }

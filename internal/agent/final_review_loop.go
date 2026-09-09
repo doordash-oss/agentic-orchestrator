@@ -454,6 +454,7 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	cfg.ReviewEffectiveEffort = sessionConfig.EffectiveEffort
 	cfg.ReviewEffortSource = sessionConfig.EffortSource
 	cfg.AskingClause = sessionConfig.AskingClause
+	cfg.CompletionTool = sessionConfig.CompletionTool
 
 	feedbackPath := filepath.Join(iterDir, "review-feedback.md")
 	_ = os.Remove(feedbackPath)
@@ -608,6 +609,7 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		LogPath:                filepath.Join(axisDir, "review-output.txt"),
 		SystemPromptPrefix:     "final-review-" + axisSlug,
 		CompletionAskingClause: cfg.AskingClause,
+		CompletionTool:         cfg.CompletionTool,
 		EffortLevel:            finalReviewAxisEffortLevel(cfg),
 		EffectiveEffort:        finalReviewAxisEffectiveEffort(cfg),
 		EffortSource:           finalReviewAxisEffortSource(cfg),
@@ -703,6 +705,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	cfg.ImplEffectiveEffort = sessionConfig.EffectiveEffort
 	cfg.ImplEffortSource = sessionConfig.EffortSource
 	cfg.AskingClause = sessionConfig.AskingClause
+	cfg.CompletionTool = sessionConfig.CompletionTool
 
 	feedbackPath := filepath.Join(iterDir, "review-feedback.md")
 	intent := resolvePromptIntent(cfg.Feature)
@@ -721,12 +724,13 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	_ = os.WriteFile(filepath.Join(iterDir, "fix-prompt.md"), []byte(prompt), 0o644)
 
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:          FinalReviewFixerRoleSpec(),
-		IterationDir:  iterDir,
-		SkillsDir:     cfg.SkillsDir,
-		GuidelinesDir: cfg.GuidelinesDir,
-		KBInfos:       cfg.KBInfos,
-		AskingClause:  cfg.AskingClause,
+		Spec:           FinalReviewFixerRoleSpec(),
+		IterationDir:   iterDir,
+		SkillsDir:      cfg.SkillsDir,
+		GuidelinesDir:  cfg.GuidelinesDir,
+		KBInfos:        cfg.KBInfos,
+		AskingClause:   cfg.AskingClause,
+		CompletionTool: cfg.CompletionTool,
 	})
 
 	RemoveCompletionReceipt(iterDir)

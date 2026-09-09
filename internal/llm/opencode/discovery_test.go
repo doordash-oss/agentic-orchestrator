@@ -113,8 +113,8 @@ func TestDiscover_VerboseSuccess(t *testing.T) {
 	if sonnet.DisplayName != "Claude Sonnet 4.5 (200K)" {
 		t.Errorf("sonnet DisplayName = %q, want %q", sonnet.DisplayName, "Claude Sonnet 4.5 (200K)")
 	}
-	if sonnet.Category != "balanced" {
-		t.Errorf("sonnet Category = %q, want balanced", sonnet.Category)
+	if sonnet.Category != "" {
+		t.Errorf("sonnet Category = %q, want no name-derived category", sonnet.Category)
 	}
 	if !slices.Contains(sonnet.Aliases, "anthropic/claude-sonnet-4-5") {
 		t.Errorf("sonnet aliases = %v, want unsuffixed backend id preserved", sonnet.Aliases)
@@ -124,8 +124,8 @@ func TestDiscover_VerboseSuccess(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing suffixed nano id; got %+v", models)
 	}
-	if nano.Category != "cheap" {
-		t.Errorf("nano Category = %q, want cheap", nano.Category)
+	if nano.Category != "" {
+		t.Errorf("nano Category = %q, want no name-derived category", nano.Category)
 	}
 
 	// Pricing parsed from cost.{input,output} (USD per 1M tokens) drives
@@ -244,8 +244,8 @@ func TestDiscover_AcceptsPortkeyFireworksBackendID(t *testing.T) {
 	if models[0].DisplayName != "glm-5p2" {
 		t.Fatalf("DisplayName = %q, want glm-5p2", models[0].DisplayName)
 	}
-	if models[0].Category != "balanced" {
-		t.Fatalf("Category = %q, want balanced", models[0].Category)
+	if models[0].Category != "" {
+		t.Fatalf("Category = %q, want no name-derived category", models[0].Category)
 	}
 }
 

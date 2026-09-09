@@ -134,6 +134,13 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
       ownership: 'external' as const,
       kind: 'remote' as const,
     })),
+    startLocalRuntime: vi.fn(() => ({
+      status: 'ready' as const,
+      stage: 'ready' as const,
+      detail: 'ok',
+      ownership: 'external' as const,
+      kind: 'remote' as const,
+    })),
     listServers: vi.fn(() => ({ rows: [] })),
     probeServers: vi.fn(() => ({ rows: [] })),
     addRemoteServer: vi.fn(() => Promise.reject(new Error('unused'))),

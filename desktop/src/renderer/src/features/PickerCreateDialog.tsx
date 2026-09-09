@@ -26,13 +26,14 @@ limitations under the License.
  * server and still adopts; the draft is never discarded. Escape is
  * handled here, never by the enclosing sheet.
  */
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import type {
   ConnectionState,
   CreateRepositoryResult,
   ReadinessSnapshot,
   WorkspaceRootState,
 } from '../../../shared/ipc';
+import { useModalDismiss } from '../components/useModalDismiss';
 import { serverDescriptor } from './cloneViews';
 import { CreateRepositoryForm, type CreateRepositoryStartInput } from './createViews';
 
@@ -55,10 +56,11 @@ export function PickerCreateDialog({
   onClose,
 }: PickerCreateDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    dialogRef.current?.focus();
-  }, []);
+  // The nested dialog owns its full focus lifecycle: initial focus, Tab
+  // containment, Escape, and restoration to the invoking control on close.
+  // useModalDismiss also suspends nothing here — it is the deepest modal,
+  // so its trap is always active while this view exists.
+  useModalDismiss(dialogRef, onClose);
 
   return (
     <div className="impact-dialog__backdrop creation-clone__backdrop">
@@ -69,12 +71,6 @@ export function PickerCreateDialog({
         aria-modal="true"
         aria-label="Create a repository"
         tabIndex={-1}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.stopPropagation();
-            onClose();
-          }
-        }}
       >
         <h2>Create a repository</h2>
         <p className="creation-clone__desc">

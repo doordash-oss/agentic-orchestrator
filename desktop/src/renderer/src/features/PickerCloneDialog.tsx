@@ -25,9 +25,10 @@ limitations under the License.
  * association stays with the draft, and background completion still adopts.
  * Escape is handled here, never by the enclosing sheet.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { parseIpcError } from '../wizard/ipcError';
+import { useModalDismiss } from '../components/useModalDismiss';
 import type {
   CanonicalError,
   CloneOperation,
@@ -83,10 +84,9 @@ export function PickerCloneDialog({
   const [actionPending, setActionPending] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    dialogRef.current?.focus();
-  }, []);
+  // The nested dialog owns its full focus lifecycle: initial focus, Tab
+  // containment, Escape, and restoration to the invoking control on close.
+  useModalDismiss(dialogRef, onClose);
 
   const handleStart = (input: CloneStartInput): Promise<void> => {
     // Record the association before the flight: a lost acceptance is
@@ -171,12 +171,6 @@ export function PickerCloneDialog({
         aria-modal="true"
         aria-label="Clone a repository"
         tabIndex={-1}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.stopPropagation();
-            onClose();
-          }
-        }}
       >
         <h2>Clone a repository</h2>
         <p className="creation-clone__desc">

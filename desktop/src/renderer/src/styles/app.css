@@ -13652,6 +13652,28 @@ body {
 .settings-panel__clone-field input,
 .settings-panel__clone-field select {
   width: 100%;
+  font-family: var(--bench-font-text);
+  font-size: 14px;
+  color: var(--text);
+  background: var(--content);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+}
+
+.settings-panel__clone-field input:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+.settings-panel__clone-field input[aria-invalid='true'] {
+  border-color: var(--bad);
+}
+
+.settings-panel__clone-consent input {
+  width: auto;
+  margin: 0;
 }
 
 .settings-panel__clone-no-roots {
@@ -13677,8 +13699,21 @@ body {
 }
 
 .settings-panel__clone-choose {
+  font-family: var(--bench-font-text);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
   flex: 0 0 auto;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.settings-panel__clone-choose:hover:not(:disabled) {
+  border-color: var(--accent);
 }
 
 .settings-panel__clone-consent {

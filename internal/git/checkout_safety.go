@@ -24,8 +24,10 @@ import (
 
 // checkoutSafetyOutputBound bounds the captured stdout of checkout-safety
 // inspections (status, diff, ls-files). It exceeds the diagnostic limit
-// because these outputs are parsed, not displayed; a repository whose
-// inspection output reaches the bound fails closed instead of silently
+// because these outputs are parsed, not displayed. One extra byte is
+// captured beyond the bound so that a buffer filled exactly at a NUL record
+// boundary is distinguishable from a genuinely complete result; output
+// reaching bound+1 is proven overflow and fails closed instead of silently
 // truncating a path list and missing a collision.
 const checkoutSafetyOutputBound = 1 << 20
 
@@ -135,25 +137,25 @@ func checkoutIgnoredPathCollision(ctx context.Context, repoPath, oldSHA, newSHA 
 
 // boundedZOutput runs one NUL-record git command whose stdout is parsed, not
 // displayed. The captured bound exceeds the diagnostic limit so realistic
-// path lists are complete; output that reaches the bound mid-record proves
-// truncation and fails closed.
+// path lists are complete. One extra byte is captured beyond the bound so
+// that a buffer filled exactly at a NUL record boundary is distinguishable
+// from a genuinely complete result: any capture larger than the bound proves
+// the git output itself was larger and fails closed.
 func boundedZOutput(ctx context.Context, repoPath string, args []string, options OriginCheckOptions) (string, error) {
 	safety := options
-	if safety.DiagnosticLimit < checkoutSafetyOutputBound {
-		safety.DiagnosticLimit = checkoutSafetyOutputBound
+	if safety.DiagnosticLimit < checkoutSafetyOutputBound+1 {
+		safety.DiagnosticLimit = checkoutSafetyOutputBound + 1
 	}
 	result := runOriginCommand(ctx, repoPath, args, options.commandTimeout(), safety)
 	if result.ExitCode != 0 {
 		return "", fmt.Errorf("inspecting the checkout (%s): %s", args[0], nonemptyBranchProbeDiagnostic(result.Diagnostics))
 	}
 	output := result.Stdout
-	if len(output) > 0 {
-		if len(output) >= checkoutSafetyOutputBound && !strings.HasSuffix(output, "\x00") {
-			return "", fmt.Errorf("inspecting the checkout (%s): the result exceeded the bounded output size", args[0])
-		}
-		if !strings.HasSuffix(output, "\x00") {
-			return "", fmt.Errorf("inspecting the checkout (%s): the result was truncated", args[0])
-		}
+	if len(output) > checkoutSafetyOutputBound {
+		return "", fmt.Errorf("inspecting the checkout (%s): the result exceeded the bounded output size", args[0])
+	}
+	if len(output) > 0 && !strings.HasSuffix(output, "\x00") {
+		return "", fmt.Errorf("inspecting the checkout (%s): the result was truncated", args[0])
 	}
 	return output, nil
 }

@@ -2994,6 +2994,8 @@ export function defaultNotificationPrefs(): NotificationPrefs {
  * ('__settings__') is dropped by the migration chain in settings.ts and must
  * never be stored in this map.
  */
+export const SidebarWidthSchema = z.number().int().min(200).max(520);
+
 export const ShellPrefsSchema = z.strictObject({
   featureByServer: z
     .record(z.string().min(1).max(64), FeatureIdSchema)
@@ -3001,6 +3003,7 @@ export const ShellPrefsSchema = z.strictObject({
       message: `featureByServer must not exceed ${String(MAX_KNOWN_SERVERS)} entries`,
     }),
   sidebarCollapsed: z.boolean(),
+  sidebarWidth: SidebarWidthSchema.optional(),
 });
 
 export type ShellPrefs = z.output<typeof ShellPrefsSchema>;
@@ -3018,6 +3021,7 @@ export function defaultShellPrefs(): ShellPrefs {
 export const ShellPatchSchema = z
   .strictObject({
     sidebarCollapsed: z.boolean().optional(),
+    sidebarWidth: SidebarWidthSchema.optional(),
     setActiveFeature: z
       .strictObject({
         serverKey: z.string().min(1).max(64),
@@ -3025,9 +3029,15 @@ export const ShellPatchSchema = z
       })
       .optional(),
   })
-  .refine((patch) => patch.sidebarCollapsed !== undefined || patch.setActiveFeature !== undefined, {
-    message: 'shell patch must carry sidebarCollapsed and/or setActiveFeature',
-  });
+  .refine(
+    (patch) =>
+      patch.sidebarCollapsed !== undefined ||
+      patch.sidebarWidth !== undefined ||
+      patch.setActiveFeature !== undefined,
+    {
+      message: 'shell patch must carry sidebarCollapsed, sidebarWidth, or setActiveFeature',
+    },
+  );
 
 export type ShellPatch = z.output<typeof ShellPatchSchema>;
 
@@ -3052,6 +3062,9 @@ export function applyShellPatch(current: ShellPrefs, patch: ShellPatch): ShellPr
   return {
     featureByServer,
     sidebarCollapsed: patch.sidebarCollapsed ?? current.sidebarCollapsed,
+    ...((patch.sidebarWidth ?? current.sidebarWidth) !== undefined
+      ? { sidebarWidth: patch.sidebarWidth ?? current.sidebarWidth }
+      : {}),
   };
 }
 

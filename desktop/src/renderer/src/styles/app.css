@@ -4826,7 +4826,7 @@ body {
   min-height: 0;
   flex: 1;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: min(var(--sidebar-width, 260px), 50vw) minmax(0, 1fr);
   background: var(--content);
 }
 
@@ -4840,6 +4840,7 @@ body {
 /* The translucent Bench source list: a pinned Overview row above five
  * disclosable lane sections. Built on the Bench material/hairline token set. */
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -13624,4 +13625,28 @@ body {
   margin: 0;
   color: var(--bad);
   font-size: 12px;
+}
+
+.sidebar__resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -4px;
+  width: 8px;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+  -webkit-app-region: no-drag;
+}
+
+.sidebar__resize-handle:hover,
+.sidebar__resize-handle:focus-visible,
+.sidebar__resize-handle[data-resizing='true'] {
+  background: var(--material-edge);
+  outline: none;
+}
+
+.workspace:has(.sidebar__resize-handle[data-resizing='true']) {
+  user-select: none;
+  cursor: col-resize;
 }

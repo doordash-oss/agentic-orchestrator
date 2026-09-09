@@ -18,7 +18,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { CanonicalErrorException } from '../../shared/errors';
 import type { ApiRequestInit, HttpResult } from '../gateway/runtimeGateway';
 import { CreateService } from '../createService';
-import type { ServerIdentity, ServerIdentitySource } from '../cloneService';
+import type { ServerIdentity, ServerIdentitySource } from '../serverFence';
 
 interface Call {
   path: string;

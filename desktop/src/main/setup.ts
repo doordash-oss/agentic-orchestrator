@@ -36,7 +36,12 @@ import {
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
 import { assertLocalConnection, alwaysLocal, type LocalitySource } from './locality';
-import type { ServerIdentity, ServerIdentitySource } from './cloneService';
+import {
+  assertSameServer,
+  captureServerIdentity,
+  type ServerIdentity,
+  type ServerIdentitySource,
+} from './serverFence';
 
 /** The authenticated transport surface the gateway provides. */
 export type SetupTransport = ServerTransport;
@@ -215,10 +220,7 @@ export class SetupService {
   }
 
   private captureIdentity(): ServerIdentity {
-    if (this.deps.identity === undefined) {
-      return { serverKey: null, generation: 0 };
-    }
-    return this.deps.identity();
+    return captureServerIdentity(this.deps.identity);
   }
 
   /**
@@ -227,14 +229,7 @@ export class SetupService {
    * stale results must never authorize or select a root on the new one.
    */
   private assertSameServer(before: ServerIdentity): void {
-    const after = this.captureIdentity();
-    if (
-      before.serverKey !== null &&
-      after.serverKey !== null &&
-      (before.serverKey !== after.serverKey || before.generation !== after.generation)
-    ) {
-      throw new CanonicalErrorException(buildCanonicalError('E_SERVER_SWITCHED'));
-    }
+    assertSameServer(before, this.deps.identity);
   }
 }
 

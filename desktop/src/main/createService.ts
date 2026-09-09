@@ -36,7 +36,7 @@ import {
 } from '../shared/ipc';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
-import type { ServerIdentity, ServerIdentitySource } from './cloneService';
+import { fencedServerRequest, type ServerIdentitySource } from './serverFence';
 
 const CREATE_PATH = '/api/v1/workspace/repositories/create';
 
@@ -82,30 +82,12 @@ export class CreateService {
   }
 
   /**
-   * Runs one transport call fenced by server identity and connection
-   * generation: the identity is captured before the request and compared
-   * after the response, so a switch A → B → A discards late replies from
-   * the old connection rather than applying them to the new server.
+   * Runs one transport call fenced by the shared server-identity policy, so
+   * a stale reply from a previous connection is discarded instead of applied
+   * to the new server.
    */
-  private async fencedCall(path: string, init?: ApiRequestInit): Promise<unknown> {
-    const before = this.captureIdentity();
-    const body = await this.api(path, init);
-    const after = this.captureIdentity();
-    if (
-      before.serverKey !== null &&
-      after.serverKey !== null &&
-      (before.serverKey !== after.serverKey || before.generation !== after.generation)
-    ) {
-      throw new CanonicalErrorException(buildCanonicalError('E_SERVER_SWITCHED'));
-    }
-    return body;
-  }
-
-  private captureIdentity(): ServerIdentity {
-    if (this.deps.identity === undefined) {
-      return { serverKey: null, generation: 0 };
-    }
-    return this.deps.identity();
+  private fencedCall(path: string, init?: ApiRequestInit): Promise<unknown> {
+    return fencedServerRequest(this.deps.transport, this.deps.identity, path, init);
   }
 }
 

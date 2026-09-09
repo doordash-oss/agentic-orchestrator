@@ -40,18 +40,11 @@ import {
 } from '../shared/ipc';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
+import { fencedServerRequest, type ServerIdentitySource } from './serverFence';
 
 const CLONE_BASE = '/api/v1/workspace/repositories/clone';
 const CLONE_LIST_LIMIT = 200;
 const OPERATION_ID_PATTERN = /^[a-z0-9-]{1,64}$/;
-
-/** Identity of the connected server, captured for request fencing. */
-export interface ServerIdentity {
-  serverKey: string | null;
-  generation: number;
-}
-
-export type ServerIdentitySource = () => ServerIdentity;
 
 export interface CloneServiceDeps {
   transport: ServerTransport;
@@ -141,30 +134,12 @@ export class CloneService {
   }
 
   /**
-   * Runs one transport call fenced by server identity and connection
-   * generation: the identity is captured before the request and compared
-   * after the response, so a switch A → B → A discards late replies from
-   * the old connection rather than updating the new server's view.
+   * Runs one transport call fenced by the shared server-identity policy, so
+   * a stale reply from a previous connection is discarded instead of applied
+   * to the new server.
    */
-  private async fencedCall(path: string, init?: ApiRequestInit): Promise<unknown> {
-    const before = this.captureIdentity();
-    const body = await this.api(path, init);
-    const after = this.captureIdentity();
-    if (
-      before.serverKey !== null &&
-      after.serverKey !== null &&
-      (before.serverKey !== after.serverKey || before.generation !== after.generation)
-    ) {
-      throw new CanonicalErrorException(buildCanonicalError('E_SERVER_SWITCHED'));
-    }
-    return body;
-  }
-
-  private captureIdentity(): ServerIdentity {
-    if (this.deps.identity === undefined) {
-      return { serverKey: null, generation: 0 };
-    }
-    return this.deps.identity();
+  private fencedCall(path: string, init?: ApiRequestInit): Promise<unknown> {
+    return fencedServerRequest(this.deps.transport, this.deps.identity, path, init);
   }
 }
 

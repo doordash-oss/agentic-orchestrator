@@ -13915,6 +13915,24 @@ body {
   color: var(--ok);
 }
 
+/* The trailing row affordances — origin actions, update notices, and the
+   initialize offer — are siblings of the padded `.creation-sheet__row`
+   label (interactive controls cannot live inside a label), so they carry
+   the row's own horizontal padding to sit on its grid line, and the last
+   of them closes the row with the same bottom padding. */
+.creation-sheet__row-origin-actions,
+.creation-sheet__row-update-notice,
+.creation-sheet__row-initialize {
+  padding-right: var(--space-3);
+  padding-left: var(--space-3);
+}
+
+.creation-sheet__row-origin-actions:last-child,
+.creation-sheet__row-update-notice:last-child,
+.creation-sheet__row-initialize:last-child {
+  padding-bottom: var(--space-3);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .settings-panel__clone-operation,
   .settings-panel__clone-action,

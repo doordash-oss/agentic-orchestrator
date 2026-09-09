@@ -435,50 +435,103 @@ func (s *Service) Start(ctx context.Context, input StartInput) (Record, error) {
 	destinationPath := filepath.Join(root.Resolved, input.Destination)
 	fp := inputFingerprint(input.Remote, root.Resolved, input.Destination)
 
+	rec, replayed, err := s.acceptOperation(acceptRequest{
+		kind:             KindClone,
+		root:             root,
+		destination:      input.Destination,
+		destinationPath:  destinationPath,
+		idempotencyKey:   input.IdempotencyKey,
+		inputFingerprint: fp,
+		remoteURL:        RedactRemote(input.Remote),
+	})
+	if err != nil {
+		return Record{}, err
+	}
+	if replayed {
+		return rec, nil
+	}
+	s.spawnWorker(rec)
+	return rec.Snapshot(), nil
+}
+
+// acceptRequest is one durable-acceptance request. Only the kind and the
+// kind-specific remote fields differ between a clone start and a create;
+// everything else about accepting an operation is identical, so both
+// boundaries share acceptOperation.
+type acceptRequest struct {
+	kind             string
+	root             resolvedRoot
+	destination      string
+	destinationPath  string
+	idempotencyKey   string
+	inputFingerprint string
+	// remoteURL is the already-redacted clone remote, recorded verbatim.
+	// Kinds without a remote leave it empty.
+	remoteURL string
+	// replayRequiresSameKind makes an idempotency-key replay against a
+	// record of another kind a conflict rather than a replay. Fingerprint
+	// spaces are disjoint across kinds today, so this only matters if that
+	// ever stops holding.
+	replayRequiresSameKind bool
+}
+
+// acceptOperation runs the reservation critical section shared by clone
+// start and create: idempotency replay, destination reservation,
+// destination-safety checks, owned staging creation and durable acceptance.
+// It holds startMu for the whole section so concurrent acceptances of either
+// kind cannot double-reserve a destination, and it returns before any git
+// execution — from here on the durable accepted record holds the
+// destination reservation.
+//
+// A true second result means the returned record is a retained prior attempt
+// replayed for its idempotency key, whatever its state, not a fresh
+// acceptance the caller should drive.
+func (s *Service) acceptOperation(req acceptRequest) (Record, bool, error) {
 	s.startMu.Lock()
 	defer s.startMu.Unlock()
 
-	if existing, ok := s.store.getByIdempotencyKey(input.IdempotencyKey); ok {
-		if existing.InputFingerprint == fp {
-			return existing, nil
+	if existing, ok := s.store.getByIdempotencyKey(req.idempotencyKey); ok {
+		sameKind := !req.replayRequiresSameKind || recordKind(&existing) == req.kind
+		if sameKind && existing.InputFingerprint == req.inputFingerprint {
+			return existing, true, nil
 		}
-		return Record{}, serviceError(CodeIdempotencyConflict, "idempotency key was already used with different input")
+		return Record{}, false, serviceError(CodeIdempotencyConflict, "idempotency key was already used with different input")
 	}
-	if holder, ok := s.store.reservation(destinationPath); ok {
-		return Record{}, serviceError(CodeDestinationReserved, "destination is reserved by operation "+holder.ID)
+	if holder, ok := s.store.reservation(req.destinationPath); ok {
+		return Record{}, false, serviceError(CodeDestinationReserved, "destination is reserved by operation "+holder.ID)
 	}
-	if _, err := os.Lstat(destinationPath); err == nil {
-		return Record{}, serviceError(CodeDestinationExists, "destination already exists")
+	if _, err := os.Lstat(req.destinationPath); err == nil {
+		return Record{}, false, serviceError(CodeDestinationExists, "destination already exists")
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return Record{}, serviceError(CodeInternal, "inspect destination")
+		return Record{}, false, serviceError(CodeInternal, "inspect destination")
 	}
 	for name := range s.config().Repos {
-		if name == input.Destination {
-			return Record{}, serviceError(CodeDestinationShadowed, "an explicit repository registration already uses this name")
+		if name == req.destination {
+			return Record{}, false, serviceError(CodeDestinationShadowed, "an explicit repository registration already uses this name")
 		}
 	}
 
-	id := newID(KindClone)
+	id := newID(req.kind)
 	nonce := newNonce()
-	handle, err := openRootHandle(root.Resolved)
+	handle, err := openRootHandle(req.root.Resolved)
 	if err != nil {
-		return Record{}, serviceError(CodeInternal, "open root")
+		return Record{}, false, serviceError(CodeInternal, "open root")
 	}
-	staging := stagingNameFor(KindClone, id)
+	staging := stagingNameFor(req.kind, id)
 	if _, err := handle.root.Lstat(staging); err == nil {
 		handle.Close()
-		return Record{}, serviceError(CodeInternal, "staging path collision")
+		return Record{}, false, serviceError(CodeInternal, "staging path collision")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		handle.Close()
-		return Record{}, serviceError(CodeInternal, "inspect staging path")
+		return Record{}, false, serviceError(CodeInternal, "inspect staging path")
 	}
 	if err := handle.root.Mkdir(staging, 0o700); err != nil {
 		handle.Close()
-		return Record{}, serviceError(CodeInternal, "create staging")
+		return Record{}, false, serviceError(CodeInternal, "create staging")
 	}
 	marker, err := json.Marshal(ownershipMarker{
 		OperationID: id, Nonce: nonce,
-		RootDevice: root.Identity.Device, RootInode: root.Identity.Inode,
+		RootDevice: req.root.Identity.Device, RootInode: req.root.Identity.Inode,
 		CreatedAt: s.now().UTC(),
 	})
 	if err == nil {
@@ -489,37 +542,37 @@ func (s *Service) Start(ctx context.Context, input StartInput) (Record, error) {
 		// releases only the staging we just created and still own.
 		_ = handle.root.RemoveAll(staging)
 		handle.Close()
-		return Record{}, serviceError(CodeInternal, "write staging ownership marker")
+		return Record{}, false, serviceError(CodeInternal, "write staging ownership marker")
 	}
 	handle.Close()
 
 	now := s.now().UTC()
 	rec := Record{
 		ID:               id,
-		Kind:             KindClone,
-		IdempotencyKey:   input.IdempotencyKey,
-		InputFingerprint: fp,
-		RemoteURL:        RedactRemote(input.Remote),
-		RootPath:         root.Configured,
-		RootResolved:     root.Resolved,
-		RootDevice:       root.Identity.Device,
-		RootInode:        root.Identity.Inode,
-		Destination:      input.Destination,
-		DestinationPath:  destinationPath,
-		StagingPath:      filepath.Join(root.Resolved, staging),
+		Kind:             req.kind,
+		IdempotencyKey:   req.idempotencyKey,
+		InputFingerprint: req.inputFingerprint,
+		RemoteURL:        req.remoteURL,
+		RootPath:         req.root.Configured,
+		RootResolved:     req.root.Resolved,
+		RootDevice:       req.root.Identity.Device,
+		RootInode:        req.root.Identity.Inode,
+		Destination:      req.destination,
+		DestinationPath:  req.destinationPath,
+		StagingPath:      filepath.Join(req.root.Resolved, staging),
 		OwnershipNonce:   nonce,
 		State:            StateAccepted,
 		Stage:            StagePreparing,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
-	// Durable acceptance precedes any git process.
+	// Durable acceptance precedes any git process: a crash between here and
+	// publication is recoverable.
 	if err := s.save(&rec); err != nil {
 		s.releaseFreshStaging(&rec)
-		return Record{}, serviceError(CodeInternal, "persist accepted operation")
+		return Record{}, false, serviceError(CodeInternal, "persist accepted operation")
 	}
-	s.spawnWorker(rec)
-	return rec.Snapshot(), nil
+	return rec, false, nil
 }
 
 // releaseFreshStaging removes staging this process just created inside its

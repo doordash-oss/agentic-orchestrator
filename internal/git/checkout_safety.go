@@ -20,6 +20,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // checkoutSafetyOutputBound bounds the captured stdout of checkout-safety
@@ -99,8 +101,11 @@ func checkoutStatusClean(ctx context.Context, repoPath string, untrackedAll bool
 // path, an incoming path needs an ignored entry's parent location, or an
 // ignored entry is nested where an incoming path must be a file or directory
 // — covering nested paths, file/directory conflicts, and symlink collision
-// shapes. Non-conflicting ignored content elsewhere is allowed and never
-// rewritten by this check's caller. Inspection failures fail closed.
+// shapes. Paths are compared as the worktree's filesystem resolves them, so
+// spellings that differ only by letter case or Unicode normalization on a
+// folding filesystem still collide. Non-conflicting ignored content elsewhere
+// is allowed and never rewritten by this check's caller. Inspection failures
+// fail closed.
 func checkoutIgnoredPathCollision(ctx context.Context, repoPath, oldSHA, newSHA string, options OriginCheckOptions) (bool, error) {
 	ignored, err := boundedZOutput(ctx, repoPath, []string{"ls-files", "--others", "--ignored", "--exclude-standard", "-z"}, options)
 	if err != nil {
@@ -109,7 +114,6 @@ func checkoutIgnoredPathCollision(ctx context.Context, repoPath, oldSHA, newSHA 
 	if len(ignored) == 0 {
 		return false, nil
 	}
-	ignoredPaths := strings.Split(strings.TrimSuffix(ignored, "\x00"), "\x00")
 	incoming, err := boundedZOutput(ctx, repoPath, []string{"diff", "--name-only", "--no-renames", "--diff-filter=AMCT", "-z", oldSHA, newSHA}, options)
 	if err != nil {
 		return false, err
@@ -117,22 +121,126 @@ func checkoutIgnoredPathCollision(ctx context.Context, repoPath, oldSHA, newSHA 
 	if len(incoming) == 0 {
 		return false, nil
 	}
+	folding, err := checkoutPathFoldingFor(ctx, repoPath, options)
+	if err != nil {
+		return false, err
+	}
+	var ignoredKeys []string
+	for _, ignoredPath := range strings.Split(strings.TrimSuffix(ignored, "\x00"), "\x00") {
+		if ignoredPath == "" {
+			continue
+		}
+		ignoredKeys = append(ignoredKeys, folding.key(ignoredPath))
+	}
 	for _, path := range strings.Split(strings.TrimSuffix(incoming, "\x00"), "\x00") {
 		if path == "" {
 			continue
 		}
-		for _, ignoredPath := range ignoredPaths {
-			if ignoredPath == "" {
-				continue
-			}
-			if ignoredPath == path ||
-				strings.HasPrefix(ignoredPath, path+"/") ||
-				strings.HasPrefix(path, ignoredPath+"/") {
+		key := folding.key(path)
+		for _, ignoredKey := range ignoredKeys {
+			if ignoredKey == key ||
+				strings.HasPrefix(ignoredKey, key+"/") ||
+				strings.HasPrefix(key, ignoredKey+"/") {
 				return true, nil
 			}
 		}
 	}
 	return false, nil
+}
+
+// checkoutPathFolding records how the worktree's filesystem collapses
+// distinct path spellings onto one directory entry. Comparing raw bytes is
+// not enough: on the case-insensitive, Unicode-precomposing filesystems
+// macOS uses by default, an ignored entry and an incoming tracked path that
+// differ only by letter case or by Unicode normalization occupy the same
+// entry, and the checkout that follows this check treats ignored content as
+// expendable.
+type checkoutPathFolding struct {
+	foldCase   bool
+	precompose bool
+}
+
+// key maps a path to the identity its filesystem gives it, so spellings that
+// name the same entry compare equal. Folding more aggressively than the
+// filesystem does can only make this advisory check refuse an update; it can
+// never let an overwrite through, so the safe direction is to over-match.
+func (folding checkoutPathFolding) key(path string) string {
+	if folding.precompose {
+		path = norm.NFC.String(path)
+	}
+	if folding.foldCase {
+		path = strings.ToLower(path)
+	}
+	return path
+}
+
+// checkoutPathFoldingFor reads the worktree's recorded path-folding
+// properties. Git writes core.ignorecase and core.precomposeunicode when the
+// repository is created, after probing the filesystem itself. An absent
+// core.ignorecase is not assumed to mean case-sensitive — assuming that
+// wrongly is exactly what overwrites ignored local files — so the filesystem
+// is probed instead. Any inspection failure fails closed.
+func checkoutPathFoldingFor(ctx context.Context, repoPath string, options OriginCheckOptions) (checkoutPathFolding, error) {
+	folding := checkoutPathFolding{}
+	ignoreCase, err := checkoutBoolConfig(ctx, repoPath, "core.ignorecase", options)
+	if err != nil {
+		return checkoutPathFolding{}, err
+	}
+	if ignoreCase == "" {
+		probed, probeErr := checkoutFilesystemFoldsCase(repoPath)
+		if probeErr != nil {
+			return checkoutPathFolding{}, probeErr
+		}
+		folding.foldCase = probed
+	} else {
+		folding.foldCase = ignoreCase == "true"
+	}
+	precompose, err := checkoutBoolConfig(ctx, repoPath, "core.precomposeunicode", options)
+	if err != nil {
+		return checkoutPathFolding{}, err
+	}
+	folding.precompose = precompose == "true"
+	return folding, nil
+}
+
+// checkoutBoolConfig reads one boolean repository config value, returning ""
+// for an unset key so callers can tell absence from a recorded false. A
+// value Git does not render as a boolean, or any other failure, is an
+// inspection failure rather than a default.
+func checkoutBoolConfig(ctx context.Context, repoPath, key string, options OriginCheckOptions) (string, error) {
+	result := runOriginCommand(ctx, repoPath, []string{"config", "--type=bool", "--get", key}, options.commandTimeout(), options)
+	switch {
+	case result.ExitCode == 0:
+		value := strings.TrimSpace(result.Stdout)
+		if value != "true" && value != "false" {
+			return "", fmt.Errorf("reading %s configuration: unexpected value %q", key, value)
+		}
+		return value, nil
+	case result.ExitCode == 1:
+		return "", nil
+	default:
+		return "", fmt.Errorf("reading %s configuration: %s", key, nonemptyBranchProbeDiagnostic(result.Diagnostics))
+	}
+}
+
+// checkoutFilesystemFoldsCase reports whether repoPath's filesystem resolves
+// one directory entry under differently cased names. It only reads: the
+// worktree's always-present .git entry is looked up again under a
+// case-swapped name and the two results are compared by identity, so the
+// probe never writes to the worktree it is inspecting.
+func checkoutFilesystemFoldsCase(repoPath string) (bool, error) {
+	info, err := os.Lstat(filepath.Join(repoPath, ".git"))
+	if err != nil {
+		return false, fmt.Errorf("probing the worktree filesystem for case folding: %v", err)
+	}
+	swapped, err := os.Lstat(filepath.Join(repoPath, ".GIT"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("probing the worktree filesystem for case folding: %v", err)
+	}
+	return os.SameFile(info, swapped), nil
 }
 
 // boundedZOutput runs one NUL-record git command whose stdout is parsed, not

@@ -16,7 +16,6 @@ package clone
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -74,107 +73,25 @@ func (s *Service) Create(ctx context.Context, input CreateStartInput) (Record, e
 	// fingerprint: clone remotes are validated non-empty.
 	fp := inputFingerprint("", root.Resolved, input.Destination)
 
-	// The reservation critical section mirrors a clone start: it covers
-	// idempotency, reservation, staging and durable acceptance, then ends
-	// before any git execution. The durable accepted record holds the
-	// destination reservation from here on.
-	s.startMu.Lock()
-
-	if existing, ok := s.store.getByIdempotencyKey(input.IdempotencyKey); ok {
-		s.startMu.Unlock()
-		if recordKind(&existing) != KindCreate || existing.InputFingerprint != fp {
-			return Record{}, serviceError(CodeIdempotencyConflict, "idempotency key was already used with different input")
-		}
+	rec, replayed, err := s.acceptOperation(acceptRequest{
+		kind:             KindCreate,
+		root:             root,
+		destination:      input.Destination,
+		destinationPath:  destinationPath,
+		idempotencyKey:   input.IdempotencyKey,
+		inputFingerprint: fp,
+		// A create replay must not be satisfied by a clone record.
+		replayRequiresSameKind: true,
+	})
+	if err != nil {
+		return Record{}, err
+	}
+	if replayed {
 		// Replay returns the retained record whatever its state: a
 		// succeeded record replays its published result; anything else is
 		// mapped by the server layer onto a truthful unavailable error.
-		return existing, nil
+		return rec, nil
 	}
-	if holder, ok := s.store.reservation(destinationPath); ok {
-		s.startMu.Unlock()
-		return Record{}, serviceError(CodeDestinationReserved, "destination is reserved by operation "+holder.ID)
-	}
-	if _, err := os.Lstat(destinationPath); err == nil {
-		s.startMu.Unlock()
-		return Record{}, serviceError(CodeDestinationExists, "destination already exists")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		s.startMu.Unlock()
-		return Record{}, serviceError(CodeInternal, "inspect destination")
-	}
-	for name := range s.config().Repos {
-		if name == input.Destination {
-			s.startMu.Unlock()
-			return Record{}, serviceError(CodeDestinationShadowed, "an explicit repository registration already uses this name")
-		}
-	}
-
-	id := newID(KindCreate)
-	nonce := newNonce()
-	handle, err := openRootHandle(root.Resolved)
-	if err != nil {
-		s.startMu.Unlock()
-		return Record{}, serviceError(CodeInternal, "open root")
-	}
-	staging := stagingNameFor(KindCreate, id)
-	if _, err := handle.root.Lstat(staging); err == nil {
-		handle.Close()
-		s.startMu.Unlock()
-		return Record{}, serviceError(CodeInternal, "staging path collision")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		handle.Close()
-		s.startMu.Unlock()
-		return Record{}, serviceError(CodeInternal, "inspect staging path")
-	}
-	if err := handle.root.Mkdir(staging, 0o700); err != nil {
-		handle.Close()
-		s.startMu.Unlock()
-		return Record{}, serviceError(CodeInternal, "create staging")
-	}
-	marker, err := json.Marshal(ownershipMarker{
-		OperationID: id, Nonce: nonce,
-		RootDevice: root.Identity.Device, RootInode: root.Identity.Inode,
-		CreatedAt: s.now().UTC(),
-	})
-	if err == nil {
-		err = handle.root.WriteFile(filepath.Join(staging, ownershipMarkerName), marker, 0o600)
-	}
-	if err != nil {
-		// Persistence failure of the ownership marker starts no git and
-		// releases only the staging this process just created and owns.
-		_ = handle.root.RemoveAll(staging)
-		handle.Close()
-		s.startMu.Unlock()
-		return Record{}, serviceError(CodeInternal, "write staging ownership marker")
-	}
-	handle.Close()
-
-	now := s.now().UTC()
-	rec := Record{
-		ID:               id,
-		Kind:             KindCreate,
-		IdempotencyKey:   input.IdempotencyKey,
-		InputFingerprint: fp,
-		RootPath:         root.Configured,
-		RootResolved:     root.Resolved,
-		RootDevice:       root.Identity.Device,
-		RootInode:        root.Identity.Inode,
-		Destination:      input.Destination,
-		DestinationPath:  destinationPath,
-		StagingPath:      filepath.Join(root.Resolved, staging),
-		OwnershipNonce:   nonce,
-		State:            StateAccepted,
-		Stage:            StagePreparing,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}
-	// Durable acceptance precedes any git execution, exactly like a clone
-	// start: a crash between here and publication is recoverable.
-	if err := s.save(&rec); err != nil {
-		s.releaseFreshStaging(&rec)
-		s.startMu.Unlock()
-		return Record{}, serviceError(CodeInternal, "persist accepted operation")
-	}
-	s.startMu.Unlock()
 	s.runCreateOperation(ctx, &rec)
 	out, ok := s.store.get(rec.ID)
 	if !ok {

@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { useModalDismiss } from './useModalDismiss';
 
@@ -75,6 +75,46 @@ it('preserves focus when an open modal rerenders with a new close callback', () 
 
   expect(screen.getByText('Refreshes: 1')).toBeVisible();
   expect(refresh).toHaveFocus();
+});
+
+it('includes a select in the focus trap so it takes initial focus and wraps', () => {
+  render(<SelectFirstTrapHarness />);
+  const select = screen.getByRole('combobox', { name: 'Destination root' });
+  const close = screen.getByRole('button', { name: 'Close' });
+
+  expect(select).toHaveFocus();
+
+  fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+  expect(close).toHaveFocus();
+
+  fireEvent.keyDown(window, { key: 'Tab' });
+  expect(select).toHaveFocus();
+});
+
+it('leaves focus with an owner that claimed it while the modal closed', async () => {
+  render(<AdoptionHarness />);
+  const opener = screen.getByRole('button', { name: 'Clone a repository…' });
+  opener.focus();
+  fireEvent.click(opener);
+  fireEvent.click(await screen.findByRole('button', { name: 'Adopt' }));
+
+  const row = screen.getByRole('textbox', { name: 'Adopted repository' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  expect(row).toHaveFocus();
+});
+
+it('restores the invoking control when the modal closes without a new focus owner', async () => {
+  render(<AdoptionHarness />);
+  const opener = screen.getByRole('button', { name: 'Clone a repository…' });
+  opener.focus();
+  fireEvent.click(opener);
+  await screen.findByRole('dialog');
+
+  fireEvent.keyDown(window, { key: 'Escape' });
+
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  await waitFor(() => expect(opener).toHaveFocus());
 });
 
 function NestedModalHarness({
@@ -161,5 +201,62 @@ function OuterFirstFocusTrapHarness() {
         <button type="button">Nested last action</button>
       </div>
     </section>
+  );
+}
+
+function SelectFirstTrapHarness() {
+  const ref = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => undefined, []);
+  useModalDismiss(ref, close);
+
+  return (
+    <div ref={ref} role="dialog" aria-modal="true" aria-label="Select trap" tabIndex={-1}>
+      <select aria-label="Destination root">
+        <option value="a">A</option>
+        <option value="b">B</option>
+      </select>
+      <button type="button">Choose folder…</button>
+      <button type="button">Close</button>
+    </div>
+  );
+}
+
+function AdoptionHarness() {
+  const [open, setOpen] = useState(false);
+  const [focusRow, setFocusRow] = useState(false);
+  const rowRef = useRef<HTMLInputElement>(null);
+  const adopt = useCallback(() => {
+    setOpen(false);
+    setFocusRow(true);
+  }, []);
+  // Mirrors the picker: the adopted row is focused from an effect in the same
+  // commit that unmounts the dialog, so it races the hook's deferred restore.
+  useEffect(() => {
+    if (!focusRow || open) return;
+    rowRef.current?.focus();
+    setFocusRow(false);
+  }, [focusRow, open]);
+
+  return (
+    <div>
+      <input ref={rowRef} aria-label="Adopted repository" />
+      <button type="button" onClick={() => setOpen(true)}>
+        Clone a repository…
+      </button>
+      {open ? <AdoptionDialog onClose={() => setOpen(false)} onAdopt={adopt} /> : null}
+    </div>
+  );
+}
+
+function AdoptionDialog({ onClose, onAdopt }: { onClose(): void; onAdopt(): void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useModalDismiss(ref, onClose);
+
+  return (
+    <div ref={ref} role="dialog" aria-modal="true" aria-label="Adoption dialog" tabIndex={-1}>
+      <button type="button" onClick={onAdopt}>
+        Adopt
+      </button>
+    </div>
   );
 }

@@ -16,7 +16,8 @@ limitations under the License.
 
 import { describe, expect, it } from 'vitest';
 import type { ApiRequestInit, HttpResult } from '../gateway/runtimeGateway';
-import { CloneService, type ServerIdentitySource } from '../cloneService';
+import { CloneService } from '../cloneService';
+import type { ServerIdentity, ServerIdentitySource } from '../serverFence';
 import { CanonicalErrorException } from '../../shared/errors';
 
 interface Call {
@@ -190,6 +191,22 @@ describe('CloneService request fencing', () => {
       () => identity,
     );
     await expect(service.getCloneOperation('clone-0123456789abcdef')).rejects.toMatchObject({
+      canonical: { code: 'E_SERVER_SWITCHED' },
+    });
+  });
+
+  it('discards a response that landed while no connection reported an identity', async () => {
+    // An unattributable reply must never update the newly attached server:
+    // absent identity is a distinct identity, not a wildcard.
+    let identity: ServerIdentity = { serverKey: null, generation: 7 };
+    const { service } = makeService(
+      () => {
+        identity = { serverKey: 'server-a', generation: 8 };
+        return { status: 200, body: cloneActionBody() };
+      },
+      () => identity,
+    );
+    await expect(service.listCloneOperations()).rejects.toMatchObject({
       canonical: { code: 'E_SERVER_SWITCHED' },
     });
   });

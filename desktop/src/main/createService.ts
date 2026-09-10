@@ -105,6 +105,7 @@ export function toCreateRepositoryResult(dto: CreateRepositoryResponse): CreateR
       commonDir: dto.repository.identity.common_dir,
       device: dto.repository.identity.device,
       inode: dto.repository.identity.inode,
+      birthTime: dto.repository.identity.birth_time,
     };
   }
   return result;

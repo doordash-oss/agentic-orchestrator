@@ -93,7 +93,7 @@ function pairUnoccupiedBehindOrigin(
   const repo = createRepo(world, name, { commit: true });
   const bare = path.join(world.root, `${name}-origin.git`);
   fs.mkdirSync(bare, { recursive: true });
-  gitText(bare, 'init', '--bare');
+  gitText(bare, 'init', '--bare', '--initial-branch=main');
   gitText(repo, 'remote', 'add', 'origin', bare);
   gitText(repo, 'push', 'origin', 'main');
   gitText(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
@@ -132,7 +132,7 @@ function pairOccupiedBehindOrigin(
   const repo = createRepo(world, name, { commit: true });
   const bare = path.join(world.root, `${name}-origin.git`);
   fs.mkdirSync(bare, { recursive: true });
-  gitText(bare, 'init', '--bare');
+  gitText(bare, 'init', '--bare', '--initial-branch=main');
   gitText(repo, 'remote', 'add', 'origin', bare);
   gitText(repo, 'push', 'origin', 'main');
   gitText(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');

@@ -365,6 +365,7 @@ func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 					CommonDir: identity.CommonDir,
 					Device:    git.FormatIdentityDevice(identity.Device),
 					Inode:     git.FormatIdentityInode(identity.Inode),
+					BirthTime: identity.BirthTime,
 				}
 			}
 		} else {

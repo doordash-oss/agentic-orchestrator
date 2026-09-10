@@ -30,10 +30,11 @@ type sourceUpdateKey struct {
 	commonDir string
 	device    uint64
 	inode     uint64
+	birthTime string
 }
 
 func sourceUpdateKeyFor(identity git.RepoIdentity) sourceUpdateKey {
-	return sourceUpdateKey{commonDir: identity.CommonDir, device: identity.Device, inode: identity.Inode}
+	return sourceUpdateKey{commonDir: identity.CommonDir, device: identity.Device, inode: identity.Inode, birthTime: identity.BirthTime}
 }
 
 // sourceUpdateTracker records the lifetime of admitted Update-from-origin

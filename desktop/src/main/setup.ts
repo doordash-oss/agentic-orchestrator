@@ -277,6 +277,7 @@ export function toReadinessSnapshot(server: ReadinessResponse): ReadinessSnapsho
               commonDir: repository.identity.common_dir,
               device: repository.identity.device,
               inode: repository.identity.inode,
+              birthTime: repository.identity.birth_time,
             },
           }),
     })),

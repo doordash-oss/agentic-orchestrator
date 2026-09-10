@@ -209,7 +209,7 @@ function gitText(dir: string, ...args: string[]): string {
 function pairBehindOrigin(world: JourneyWorld, repo: string, name: string): string {
   const bare = path.join(world.root, `${name}-origin.git`);
   fs.mkdirSync(bare, { recursive: true });
-  gitText(bare, 'init', '--bare');
+  gitText(bare, 'init', '--bare', '--initial-branch=main');
   gitText(repo, 'remote', 'add', 'origin', bare);
   gitText(repo, 'push', '-u', 'origin', 'main');
   const writer = path.join(world.root, `${name}-writer`);

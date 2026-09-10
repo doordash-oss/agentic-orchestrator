@@ -1364,6 +1364,8 @@ export interface components {
             device: string;
             /** @description Inode of the Git common directory, as decimal text. */
             inode: string;
+            /** @description Filesystem creation time of the Git common directory, when available, distinguishing reused inodes. Omitted on filesystems without birth-time support. */
+            birth_time?: string;
         };
         RepositoryInitRequest: {
             /** @description Absolute directory to initialize, confined to a configured workspace root. May not yet exist; an existing directory must be empty and not already a git repository. */

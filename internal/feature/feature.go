@@ -566,6 +566,7 @@ type AcceptedRepoSource struct {
 	CommonDir string `yaml:"common_dir"`
 	Device    uint64 `yaml:"device"`
 	Inode     uint64 `yaml:"inode"`
+	BirthTime string `yaml:"birth_time,omitempty"`
 }
 
 // Feature is the top-level aggregate persisted under

@@ -23,8 +23,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 // IdentityProbeTimeout bounds ResolveRepoIdentity invocations.
@@ -36,13 +34,16 @@ var IdentityProbeTimeout = 5 * time.Second
 // distinguishable from their main checkout. Device and Inode pin the Git
 // common directory itself: replacing a checkout, or replacing the Git
 // repository at the same path, invalidates the prior identity instead of
-// silently adopting the replacement. Ordinary commits, branch checkouts,
-// discovery refreshes and reconnects leave the identity unchanged.
+// silently adopting the replacement. BirthTime, when the filesystem exposes
+// it, also distinguishes replacements that reuse the deleted directory's inode.
+// Ordinary commits, branch checkouts, discovery refreshes and reconnects leave
+// the identity unchanged.
 type RepoIdentity struct {
 	Path      string
 	CommonDir string
 	Device    uint64
 	Inode     uint64
+	BirthTime string
 }
 
 // Equal reports whether two identities describe the same repository
@@ -83,15 +84,16 @@ func ResolveRepoIdentity(dir string) (RepoIdentity, bool) {
 	if commonDir == "" {
 		return RepoIdentity{}, false
 	}
-	var stat unix.Stat_t
-	if err := unix.Stat(commonDir, &stat); err != nil {
+	device, inode, birthTime, err := StatRepoDirectory(commonDir)
+	if err != nil {
 		return RepoIdentity{}, false
 	}
 	return RepoIdentity{
 		Path:      toplevel,
 		CommonDir: commonDir,
-		Device:    uint64(stat.Dev),
-		Inode:     uint64(stat.Ino),
+		Device:    device,
+		Inode:     inode,
+		BirthTime: birthTime,
 	}, true
 }
 

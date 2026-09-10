@@ -20,11 +20,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
 
-	"golang.org/x/sys/unix"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 // spawnWorker starts the worker goroutine for an accepted operation.
@@ -496,15 +495,15 @@ func (s *Service) marshalPublicationMarker(cur *Record) ([]byte, error) {
 // the publication without provable identity rather than guessing.
 func stagedPublicationIdentity(cur *Record) *PublicationIdentity {
 	workGit := filepath.Join(cur.StagingPath, stagingWorkDir, ".git")
-	var stat unix.Stat_t
-	if err := unix.Stat(workGit, &stat); err != nil {
+	device, inode, birthTime, err := git.StatRepoDirectory(workGit)
+	if err != nil {
 		return nil
 	}
+	// Publication moves the checkout but preserves the Git directory's full
+	// filesystem identity, including its creation time.
 	dest := filepath.Clean(cur.DestinationPath)
-	return &PublicationIdentity{
-		Path:      dest,
-		CommonDir: filepath.Join(dest, ".git"),
-		Device:    strconv.FormatUint(uint64(stat.Dev), 10),
-		Inode:     strconv.FormatUint(uint64(stat.Ino), 10),
-	}
+	return wirePublicationIdentity(git.RepoIdentity{
+		Path: dest, CommonDir: filepath.Join(dest, ".git"),
+		Device: device, Inode: inode, BirthTime: birthTime,
+	})
 }

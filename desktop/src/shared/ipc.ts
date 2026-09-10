@@ -715,6 +715,8 @@ export const RepositoryIdentitySchema = z.strictObject({
   device: z.string().regex(/^[0-9]{1,20}$/),
   /** Inode of the Git common directory, as decimal text. */
   inode: z.string().regex(/^[0-9]{1,20}$/),
+  /** Directory creation time, when supported, to detect reused inodes. */
+  birthTime: z.string().max(64).optional(),
 });
 
 export type RepositoryIdentity = z.output<typeof RepositoryIdentitySchema>;
@@ -726,7 +728,11 @@ export type RepositoryIdentity = z.output<typeof RepositoryIdentitySchema>;
  */
 export function sameRepositoryIdentity(a: RepositoryIdentity, b: RepositoryIdentity): boolean {
   return (
-    a.path === b.path && a.commonDir === b.commonDir && a.device === b.device && a.inode === b.inode
+    a.path === b.path &&
+    a.commonDir === b.commonDir &&
+    a.device === b.device &&
+    a.inode === b.inode &&
+    (a.birthTime ?? '') === (b.birthTime ?? '')
   );
 }
 

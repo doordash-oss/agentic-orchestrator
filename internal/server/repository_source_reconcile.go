@@ -170,7 +170,7 @@ func (h *apiHandler) reconcileSourceResponse(repoKey string, identity git.RepoId
 	resp := &RepositorySourceReconcileResponse{
 		Outcome:      RepositorySourceReconcileResponseOutcome(report.State),
 		RepoKey:      repoKey,
-		Identity:     RepositoryIdentity{Path: identity.Path, CommonDir: identity.CommonDir, Device: git.FormatIdentityDevice(identity.Device), Inode: git.FormatIdentityInode(identity.Inode)},
+		Identity:     RepositoryIdentity{Path: identity.Path, CommonDir: identity.CommonDir, Device: git.FormatIdentityDevice(identity.Device), Inode: git.FormatIdentityInode(identity.Inode), BirthTime: identity.BirthTime},
 		Mode:         RepositorySourceReconcileResponseMode(req.Mode),
 		Branch:       req.Branch,
 		OriginBranch: req.OriginBranch,
@@ -181,7 +181,7 @@ func (h *apiHandler) reconcileSourceResponse(repoKey string, identity git.RepoId
 	}
 	if report.Checkout != nil {
 		checkout := RepositorySourceReconcileCheckout{
-			State: RepositorySourceReconcileCheckoutState(report.Checkout.State),
+			State:   RepositorySourceReconcileCheckoutState(report.Checkout.State),
 			HeadRef: report.Checkout.HeadRef,
 		}
 		if report.Checkout.HeadSHA != "" {

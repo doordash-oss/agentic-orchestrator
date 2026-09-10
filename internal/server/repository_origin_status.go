@@ -90,6 +90,7 @@ func (h *apiHandler) originStatusRow(ctx context.Context, repoKey string, identi
 		Identity: RepositoryIdentity{
 			Path: identity.Path, CommonDir: identity.CommonDir,
 			Device: git.FormatIdentityDevice(identity.Device), Inode: git.FormatIdentityInode(identity.Inode),
+			BirthTime: identity.BirthTime,
 		},
 		Mode: RepositoryOriginStatusMode(plan.Source.Mode),
 	}

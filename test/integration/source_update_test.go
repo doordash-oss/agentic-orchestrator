@@ -126,6 +126,7 @@ func wireSelector(t *testing.T, repo string) map[string]any {
 			"common_dir": identity.CommonDir,
 			"device":     git.FormatIdentityDevice(identity.Device),
 			"inode":      git.FormatIdentityInode(identity.Inode),
+			"birth_time": identity.BirthTime,
 		},
 	}
 }

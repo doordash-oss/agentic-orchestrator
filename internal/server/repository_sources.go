@@ -81,6 +81,7 @@ func (h *apiHandler) handleWorkspaceRepositorySourcesRoute(w http.ResponseWriter
 			Identity: RepositoryIdentity{
 				Path: identity.Path, CommonDir: identity.CommonDir,
 				Device: git.FormatIdentityDevice(identity.Device), Inode: git.FormatIdentityInode(identity.Inode),
+				BirthTime: identity.BirthTime,
 			},
 			Mode: RepositorySourceMode(resolved.Mode), Kind: kind,
 			Branch: resolved.Branch, ObservedSha: resolved.Commit,

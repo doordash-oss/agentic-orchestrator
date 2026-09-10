@@ -186,6 +186,7 @@ export function toCloneOperation(dto: CloneOperationDTO): CloneOperation {
               commonDir: dto.published.identity.common_dir,
               device: dto.published.identity.device,
               inode: dto.published.identity.inode,
+              birthTime: dto.published.identity.birth_time,
             },
           }),
     };

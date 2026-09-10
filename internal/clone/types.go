@@ -143,6 +143,7 @@ type PublicationIdentity struct {
 	CommonDir string `json:"common_dir"`
 	Device    string `json:"device"`
 	Inode     string `json:"inode"`
+	BirthTime string `json:"birth_time,omitempty"`
 }
 
 // Publication is the durable evidence of a successful atomic publication.
@@ -150,11 +151,11 @@ type PublicationIdentity struct {
 // after publication, never the requested folder name. Identity binds the
 // publication to the repository that was actually published.
 type Publication struct {
-	RepoKey     string                `json:"repo_key"`
-	Path        string                `json:"path"`
-	HasHead     bool                  `json:"has_head"`
-	PublishedAt time.Time             `json:"published_at"`
-	Identity    *PublicationIdentity  `json:"identity,omitempty"`
+	RepoKey     string               `json:"repo_key"`
+	Path        string               `json:"path"`
+	HasHead     bool                 `json:"has_head"`
+	PublishedAt time.Time            `json:"published_at"`
+	Identity    *PublicationIdentity `json:"identity,omitempty"`
 }
 
 // ProcessInfo records the spawned worker identity. PID alone is never
@@ -174,8 +175,8 @@ type Record struct {
 	// Kind separates clone operations from create operations; both share
 	// this record shape, reservation space and publication boundary. Empty
 	// means a legacy clone record.
-	Kind             string    `json:"kind,omitempty"`
-	IdempotencyKey   string    `json:"idempotency_key"`
+	Kind             string `json:"kind,omitempty"`
+	IdempotencyKey   string `json:"idempotency_key"`
 	InputFingerprint string `json:"input_fingerprint"`
 	RemoteURL        string `json:"remote_url"`
 	RootPath         string `json:"root_path"`

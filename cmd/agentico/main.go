@@ -1155,7 +1155,7 @@ func createSourceExpectations(sources []serverruntime.RepositorySource) ([]featu
 			Source: git.LocalSourceExpectation{
 				Identity: git.RepoIdentity{
 					Path: source.Identity.Path, CommonDir: source.Identity.CommonDir,
-					Device: device, Inode: inode,
+					Device: device, Inode: inode, BirthTime: source.Identity.BirthTime,
 				},
 				Mode: git.LocalSourceMode(source.Mode), Kind: string(source.Kind),
 				Branch: source.Branch, ObservedCommit: source.ObservedSha,

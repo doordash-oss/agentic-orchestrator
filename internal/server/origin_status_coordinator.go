@@ -71,6 +71,7 @@ type originCheckKey struct {
 	commonDir     string
 	device        uint64
 	inode         uint64
+	birthTime     string
 	mode          git.LocalSourceMode
 	kind          string
 	branch        string
@@ -83,6 +84,7 @@ func originCheckKeyFor(identity git.RepoIdentity, plan git.OriginCheckPlan) orig
 		commonDir: identity.CommonDir,
 		device:    identity.Device,
 		inode:     identity.Inode,
+		birthTime: identity.BirthTime,
 		mode:      plan.Source.Mode,
 		kind:      plan.Source.Kind,
 		branch:    plan.Source.Branch,

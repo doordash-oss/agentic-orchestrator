@@ -2475,6 +2475,10 @@ components:
           type: string
           pattern: "^[0-9]{1,20}$"
           description: Inode of the Git common directory, as decimal text.
+        birth_time:
+          type: string
+          maxLength: 64
+          description: Filesystem creation time of the Git common directory, when available, distinguishing reused inodes. Omitted on filesystems without birth-time support.
     RepositoryInitRequest:
       x-go-name: RepositoryInitSchema
       type: object

@@ -124,11 +124,16 @@ test('the creation sheet covers scoped files, initialization, the contract, setu
     const consent = app.page.getByRole('dialog', { name: 'Initialize a new repository?' });
     await expect(consent).toContainText(emptyRepository);
     await consent.getByRole('button', { name: 'Initialize repository' }).click();
-    // A single unambiguous discovery selects itself.
+    // Initialization honors the host's default branch; discovery must show that branch.
+    const initializedBranch = gitText(emptyRepository, 'branch', '--show-current');
     await expect(
-      app.page.getByRole('checkbox', { name: /initialized-lab.*Source: main/ }),
+      app.page.getByRole('checkbox', {
+        name: new RegExp(`initialized-lab.*Source: ${initializedBranch}`),
+      }),
     ).toBeChecked();
-    await expect(app.page.getByText('Source: main')).toHaveCount(2);
+    await expect(app.page.getByText(`Source: ${initializedBranch}`, { exact: true })).toHaveCount(
+      initializedBranch === 'main' ? 2 : 1,
+    );
     transcript.step(
       'Repositories adopted a folder as a root, consented to server-owned initialization, and observed the rediscovered repository select itself',
     );
@@ -231,7 +236,16 @@ test('current-branch creation continues offline at the accepted slash branch com
   gitText(repo, 'checkout', '-b', 'release/2026/q3');
   fs.writeFileSync(path.join(repo, 'current.txt'), 'accepted current branch\n');
   gitText(repo, 'add', '.');
-  gitText(repo, 'commit', '-m', 'Advance current branch');
+  gitText(
+    repo,
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.invalid',
+    'commit',
+    '-m',
+    'Advance current branch',
+  );
   gitText(repo, 'remote', 'add', 'origin', path.join(world.root, 'offline-origin.git'));
   const acceptedCommit = gitText(repo, 'rev-parse', 'HEAD');
   const transcript = new Transcript('offline-current-creation', 'Offline current source pin');
@@ -298,7 +312,7 @@ test('current-branch creation continues offline at the accepted slash branch com
 function pairBehindOrigin(world: { root: string }, repo: string, name: string): string {
   const bare = path.join(world.root, `${name}-origin.git`);
   fs.mkdirSync(bare, { recursive: true });
-  gitText(bare, 'init', '--bare');
+  gitText(bare, 'init', '--bare', '--initial-branch=main');
   gitText(repo, 'remote', 'add', 'origin', bare);
   gitText(repo, 'push', '-u', 'origin', 'main');
   const writer = path.join(world.root, `${name}-writer`);

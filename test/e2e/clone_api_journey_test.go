@@ -75,6 +75,7 @@ type wireIdentity struct {
 	CommonDir string `json:"common_dir"`
 	Device    string `json:"device"`
 	Inode     string `json:"inode"`
+	BirthTime string `json:"birth_time,omitempty"`
 }
 
 // repositoryIdentity reads the readiness identity of a named repository.

@@ -386,6 +386,7 @@ func mutationRepositorySource(t testing.TB, key, repoPath string, mode gitpkg.Lo
 			CommonDir: identity.CommonDir,
 			Device:    gitpkg.FormatIdentityDevice(identity.Device),
 			Inode:     gitpkg.FormatIdentityInode(identity.Inode),
+			BirthTime: identity.BirthTime,
 		},
 		Mode: serverruntime.RepositorySourceMode(source.Mode), Kind: kind,
 		Branch: source.Branch, ObservedSha: source.Commit,

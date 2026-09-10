@@ -242,6 +242,7 @@ func originStatusRequest(t testing.TB, repoKey, repoPath string) serverruntime.R
 				CommonDir: identity.CommonDir,
 				Device:    gitpkg.FormatIdentityDevice(identity.Device),
 				Inode:     gitpkg.FormatIdentityInode(identity.Inode),
+				BirthTime: identity.BirthTime,
 			},
 		}},
 	}

@@ -75,6 +75,7 @@ export class InitializeService {
           common_dir: validated.identity.commonDir,
           device: validated.identity.device,
           inode: validated.identity.inode,
+          birth_time: validated.identity.birthTime,
         },
         ...(validated.path !== undefined ? { path: validated.path } : {}),
         consent: true,
@@ -120,6 +121,7 @@ export function toInitializeRepositoryResult(
       commonDir: dto.repository.identity.common_dir,
       device: dto.repository.identity.device,
       inode: dto.repository.identity.inode,
+      birthTime: dto.repository.identity.birth_time,
     };
   }
   return result;

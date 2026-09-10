@@ -3077,6 +3077,9 @@ type RepositoryDiffResponse struct {
 
 // RepositoryIdentity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
 type RepositoryIdentity struct {
+	// BirthTime Filesystem creation time of the Git common directory, when available, distinguishing reused inodes. Omitted on filesystems without birth-time support.
+	BirthTime string `json:"birth_time,omitempty"`
+
 	// CommonDir Resolved Git common directory. Linked worktrees share it with their main checkout but differ in path.
 	CommonDir string `json:"common_dir"`
 

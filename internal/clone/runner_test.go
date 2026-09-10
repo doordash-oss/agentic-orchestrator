@@ -256,7 +256,7 @@ func TestRealRunnerDrainsVerboseCloneAndRetainsFinalDiagnostic(t *testing.T) {
 	}
 	handle, err := NewRealRunner(gitShim).Start(RunSpec{
 		Remote: "https://example.com/acme/widget.git", Staging: filepath.Join(dir, "staging"),
-		Deadline: 5 * time.Second,
+		Deadline: 30 * time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)

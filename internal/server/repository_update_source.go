@@ -172,7 +172,7 @@ func (h *apiHandler) updateSourceResponse(repoKey string, identity git.RepoIdent
 	resp := &RepositoryUpdateSourceResponse{
 		Result:       RepositoryUpdateSourceResponseResult(outcome.Result),
 		RepoKey:      repoKey,
-		Identity:     RepositoryIdentity{Path: identity.Path, CommonDir: identity.CommonDir, Device: git.FormatIdentityDevice(identity.Device), Inode: git.FormatIdentityInode(identity.Inode)},
+		Identity:     RepositoryIdentity{Path: identity.Path, CommonDir: identity.CommonDir, Device: git.FormatIdentityDevice(identity.Device), Inode: git.FormatIdentityInode(identity.Inode), BirthTime: identity.BirthTime},
 		Mode:         mode,
 		Branch:       branch,
 		OriginBranch: originBranch,
@@ -210,6 +210,7 @@ func (h *apiHandler) updateStaleStatusRow(repoKey string, identity git.RepoIdent
 		Identity: RepositoryIdentity{
 			Path: identity.Path, CommonDir: identity.CommonDir,
 			Device: git.FormatIdentityDevice(identity.Device), Inode: git.FormatIdentityInode(identity.Inode),
+			BirthTime: identity.BirthTime,
 		},
 		Mode:   RepositoryOriginStatusMode(req.Mode),
 		Branch: req.Branch,

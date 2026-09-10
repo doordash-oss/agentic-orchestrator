@@ -409,6 +409,7 @@ export const ReadinessResponseSchema = z.object({
             common_dir: z.string().min(1).max(4096),
             device: z.string().regex(/^[0-9]{1,20}$/),
             inode: z.string().regex(/^[0-9]{1,20}$/),
+            birth_time: z.string().max(64).optional(),
           })
           .optional(),
       }),
@@ -430,6 +431,7 @@ export const RepositorySourcesResponseSchema = z.object({
           common_dir: z.string().min(1),
           device: z.string().regex(/^[0-9]{1,20}$/),
           inode: z.string().regex(/^[0-9]{1,20}$/),
+          birth_time: z.string().max(64).optional(),
         }),
         mode: z.enum(['default', 'current']),
         kind: z.enum(['branch', 'detached']),
@@ -462,6 +464,7 @@ const RepositoryOriginStatusWireSchema = z.strictObject({
     common_dir: z.string().min(1),
     device: z.string().regex(/^[0-9]{1,20}$/),
     inode: z.string().regex(/^[0-9]{1,20}$/),
+    birth_time: z.string().max(64).optional(),
   }),
   mode: z.enum(['default', 'current']),
   kind: z.enum(['branch', 'detached']),
@@ -541,6 +544,7 @@ export const RepositoryUpdateSourceResponseSchema = z.object({
     common_dir: z.string().min(1),
     device: z.string().regex(/^[0-9]{1,20}$/),
     inode: z.string().regex(/^[0-9]{1,20}$/),
+    birth_time: z.string().max(64).optional(),
   }),
   mode: z.enum(['default', 'current']),
   branch: z.string().min(1),
@@ -580,6 +584,7 @@ export const RepositorySourceReconcileResponseSchema = z.object({
     common_dir: z.string().min(1),
     device: z.string().regex(/^[0-9]{1,20}$/),
     inode: z.string().regex(/^[0-9]{1,20}$/),
+    birth_time: z.string().max(64).optional(),
   }),
   mode: z.enum(['default', 'current']),
   branch: z.string().min(1),
@@ -593,6 +598,7 @@ export const RepositorySourceReconcileResponseSchema = z.object({
         common_dir: z.string().min(1),
         device: z.string().regex(/^[0-9]{1,20}$/),
         inode: z.string().regex(/^[0-9]{1,20}$/),
+        birth_time: z.string().max(64).optional(),
       }),
       mode: z.enum(['default', 'current']),
       kind: z.enum(['branch', 'detached']),
@@ -651,6 +657,7 @@ export const CloneOperationDTOSchema = z.object({
           common_dir: z.string().min(1).max(4096),
           device: z.string().regex(/^[0-9]{1,20}$/),
           inode: z.string().regex(/^[0-9]{1,20}$/),
+          birth_time: z.string().max(64).optional(),
         })
         .optional(),
     })
@@ -707,6 +714,7 @@ export const CreateRepositoryResponseSchema = z.object({
         common_dir: z.string().min(1).max(4096),
         device: z.string().regex(/^[0-9]{1,20}$/),
         inode: z.string().regex(/^[0-9]{1,20}$/),
+        birth_time: z.string().max(64).optional(),
       })
       .optional(),
   }),
@@ -733,6 +741,7 @@ export const InitializeRepositoryResponseSchema = z.object({
         common_dir: z.string().min(1).max(4096),
         device: z.string().regex(/^[0-9]{1,20}$/),
         inode: z.string().regex(/^[0-9]{1,20}$/),
+        birth_time: z.string().max(64).optional(),
       })
       .optional(),
   }),

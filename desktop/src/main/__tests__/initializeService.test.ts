@@ -42,6 +42,7 @@ function initializeBody(
         common_dir: '/work/space/unborn/.git',
         device: '16777234',
         inode: '4242',
+        birth_time: '1725960000:123',
       },
       ...overrides,
     },
@@ -75,6 +76,7 @@ const identity = {
   commonDir: '/work/space/unborn/.git',
   device: '16777234',
   inode: '4242',
+  birthTime: '1725960000:123',
 };
 
 const validRequest = {
@@ -102,6 +104,7 @@ describe('InitializeService.initializeRepository', () => {
               common_dir: '/work/space/unborn/.git',
               device: '16777234',
               inode: '4242',
+              birth_time: '1725960000:123',
             },
             consent: true,
           },

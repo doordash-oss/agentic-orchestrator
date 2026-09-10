@@ -97,6 +97,7 @@ func createRepositoryResultDTO(rec clone.Record) CreateRepositoryResult {
 			CommonDir: rec.Published.Identity.CommonDir,
 			Device:    rec.Published.Identity.Device,
 			Inode:     rec.Published.Identity.Inode,
+			BirthTime: rec.Published.Identity.BirthTime,
 		}
 	}
 	return dto

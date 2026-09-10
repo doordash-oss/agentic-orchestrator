@@ -340,7 +340,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 			}
 			repo.Source = &AcceptedRepoSource{
 				Mode: string(source.Mode), Kind: source.Kind, Branch: source.Branch, Commit: source.Commit,
-				Path: identity.Path, CommonDir: identity.CommonDir, Device: identity.Device, Inode: identity.Inode,
+				Path: identity.Path, CommonDir: identity.CommonDir, Device: identity.Device, Inode: identity.Inode, BirthTime: identity.BirthTime,
 			}
 			acceptedCommits[repo.Name] = source.Commit
 		}

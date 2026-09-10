@@ -98,6 +98,10 @@ describe('repository identity contract at the security boundary', () => {
     expect(sameRepositoryIdentity(base, identity('/repo/a', '1'))).toBe(true);
     expect(sameRepositoryIdentity(base, identity('/repo/a', '2'))).toBe(false);
     expect(sameRepositoryIdentity(base, { ...base, path: '/repo/b' })).toBe(false);
+    expect(
+      sameRepositoryIdentity({ ...base, birthTime: '1:2' }, { ...base, birthTime: '2:3' }),
+    ).toBe(false);
+    expect(sameRepositoryIdentity(base, { ...base, birthTime: '1:2' })).toBe(false);
   });
 });
 

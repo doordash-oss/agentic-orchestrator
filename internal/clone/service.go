@@ -354,10 +354,10 @@ type ownershipMarker struct {
 // staged repository's .git directory before the atomic rename, so a crash
 // between rename and the success write can be reconciled later.
 type publicationMarker struct {
-	OperationID string                `json:"operation_id"`
-	Nonce       string                `json:"nonce"`
-	PublishedAt time.Time             `json:"published_at"`
-	Identity    *PublicationIdentity  `json:"identity,omitempty"`
+	OperationID string               `json:"operation_id"`
+	Nonce       string               `json:"nonce"`
+	PublishedAt time.Time            `json:"published_at"`
+	Identity    *PublicationIdentity `json:"identity,omitempty"`
 }
 
 const (
@@ -667,7 +667,7 @@ func publicationIdentityEqual(pinned *PublicationIdentity, fresh git.RepoIdentit
 	return pinned.Path == fresh.Path &&
 		pinned.CommonDir == fresh.CommonDir &&
 		pinned.Device == strconv.FormatUint(fresh.Device, 10) &&
-		pinned.Inode == strconv.FormatUint(fresh.Inode, 10)
+		pinned.Inode == strconv.FormatUint(fresh.Inode, 10) && pinned.BirthTime == fresh.BirthTime
 }
 
 func wirePublicationIdentity(identity git.RepoIdentity) *PublicationIdentity {
@@ -676,6 +676,7 @@ func wirePublicationIdentity(identity git.RepoIdentity) *PublicationIdentity {
 		CommonDir: identity.CommonDir,
 		Device:    strconv.FormatUint(identity.Device, 10),
 		Inode:     strconv.FormatUint(identity.Inode, 10),
+		BirthTime: identity.BirthTime,
 	}
 }
 

@@ -160,6 +160,7 @@ func (h *apiHandler) handleWorkspaceRepositoryInitializeRoute(w http.ResponseWri
 				CommonDir: freshIdentity.CommonDir,
 				Device:    git.FormatIdentityDevice(freshIdentity.Device),
 				Inode:     git.FormatIdentityInode(freshIdentity.Inode),
+				BirthTime: freshIdentity.BirthTime,
 			},
 		},
 	}
@@ -228,7 +229,7 @@ func sameWireIdentity(expected RepositoryIdentity, resolved git.RepoIdentity) bo
 	return expected.Path == resolved.Path &&
 		expected.CommonDir == resolved.CommonDir &&
 		expected.Device == git.FormatIdentityDevice(resolved.Device) &&
-		expected.Inode == git.FormatIdentityInode(resolved.Inode)
+		expected.Inode == git.FormatIdentityInode(resolved.Inode) && expected.BirthTime == resolved.BirthTime
 }
 
 // writeInitializeError maps the git adapter's distinguished eligibility

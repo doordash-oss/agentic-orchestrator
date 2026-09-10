@@ -194,7 +194,7 @@ function pairRemoteBehindOrigin(world: JourneyWorld, workspaceRoot: string): voi
   );
   const bare = path.join(world.root, 'remote-behind-origin.git');
   fs.mkdirSync(bare, { recursive: true });
-  gitText(bare, 'init', '--bare');
+  gitText(bare, 'init', '--bare', '--initial-branch=main');
   gitText(dir, 'remote', 'add', 'origin', bare);
   gitText(dir, 'push', '-u', 'origin', 'main');
   const writer = path.join(world.root, 'remote-behind-writer');
@@ -369,7 +369,23 @@ async function addRemoteServer(handle: AppHandle, settings: Page, connectionStri
   await selectSettingsPane(settings, 'Servers');
   const pasteField = settings.getByRole('textbox', { name: /add a remote server/i });
   await pasteField.fill(connectionString);
+  const keychain = await handle.app.evaluate(({ safeStorage }) =>
+    safeStorage.isEncryptionAvailable(),
+  );
   await settings.getByRole('button', { name: 'Probe and connect' }).click();
+  if (!keychain) {
+    // The real backend refuses persistence without a keychain. Assert that
+    // refusal, then mark the dependent cross-server journey unavailable.
+    await expect(settings.getByText(/OS keychain on this machine is unavailable/)).toBeVisible({
+      timeout: 60_000,
+    });
+    const preferences = await handle.page.evaluate(() => window.agentico.getSettings());
+    expect(preferences.servers.known.filter((entry) => entry.kind === 'remote')).toEqual([]);
+    test.skip(
+      true,
+      'OS keychain unavailable: remote persistence is required for this server-switch journey',
+    );
+  }
   await expect(settings.getByText('Server added; switching to it now.')).toBeVisible({
     timeout: 60_000,
   });

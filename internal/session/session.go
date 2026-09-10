@@ -1547,7 +1547,17 @@ func (s *Session) tryAutoPickAskUser(req *llm.ControlRequestMessage) bool {
 		confidenceByQuestion[selection.Question] = selection.Confidence
 	}
 	if err := s.respondToAskUserAutoPicked(req.RequestID, req.Request.Input, decision.Answers, confidenceByQuestion); err != nil {
-		return false
+		// The answer could not be delivered — the provider's stdin is
+		// closed (broken pipe), so the session that asked the question is
+		// gone and nothing will ever consume a pending gate for it. The
+		// auto-pick decision was already made, so record it locally to
+		// keep the QA log faithful, and treat the request as handled:
+		// falling through would register a pending root question that
+		// outlives its session and flips the run to a phantom
+		// "user input requested after exit" failure.
+		s.captureAskUserResponse(req.RequestID, req.Request.Input, decision.Answers, nil, confidenceByQuestion)
+		s.appendAskUserMessages(req.Request.Input, decision.Answers, confidenceByQuestion)
+		return true
 	}
 
 	if s.askUserAutoPick.OnQuestionAutoPicked != nil {

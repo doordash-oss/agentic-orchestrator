@@ -557,6 +557,16 @@ export function CloneOperationView({
           {STATE_LABELS[operation.state]}
         </span>
       </div>
+      {ACTIVE_STATES.includes(operation.state) ? (
+        <div
+          className="settings-panel__clone-progress-bar"
+          role="progressbar"
+          aria-label={`Clone progress for ${operation.destination}`}
+          aria-valuetext={operation.progress || STATE_LABELS[operation.state]}
+        >
+          <span />
+        </div>
+      ) : null}
       {operation.stage !== undefined && ACTIVE_STATES.includes(operation.state) ? (
         <p className="settings-panel__clone-operation-progress" role="status">
           {operation.progress !== undefined && operation.progress !== ''

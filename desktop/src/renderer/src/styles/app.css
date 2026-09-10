@@ -13780,6 +13780,38 @@ body {
   color: var(--bad);
 }
 
+.settings-panel__clone-progress-bar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 15%, var(--content));
+}
+
+.settings-panel__clone-progress-bar > span {
+  display: block;
+  width: 35%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  animation: clone-progress 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes clone-progress {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(185%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-panel__clone-progress-bar > span {
+    animation: none;
+    margin-inline: auto;
+  }
+}
+
 .settings-panel__clone-operation-progress,
 .settings-panel__clone-operation-issue {
   margin: 0;

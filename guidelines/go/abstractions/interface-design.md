@@ -70,13 +70,13 @@ need one method.
 
 The standard library demonstrates the pattern:
 
-| Interface | Methods | Power |
-|-----------|---------|-------|
-| `io.Reader` | 1 | Composes into everything |
-| `io.Writer` | 1 | Composes into everything |
-| `io.Closer` | 1 | Composes freely |
-| `fmt.Stringer` | 1 | Universal string representation |
-| `error` | 1 | Universal error handling |
+| Interface      | Methods | Power                           |
+| -------------- | ------- | ------------------------------- |
+| `io.Reader`    | 1       | Composes into everything        |
+| `io.Writer`    | 1       | Composes into everything        |
+| `io.Closer`    | 1       | Composes freely                 |
+| `fmt.Stringer` | 1       | Universal string representation |
+| `error`        | 1       | Universal error handling        |
 
 Compose larger interfaces from smaller ones:
 

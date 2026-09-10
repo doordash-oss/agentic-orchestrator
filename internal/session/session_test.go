@@ -401,11 +401,14 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 		&SessionOpts{
 			ProviderName: "test-provider",
 			Watchdog: &ports.SessionWatchdogConfig{
-				PendingToolIdleTimeout:    25 * time.Millisecond,
-				TurnCompletionIdleTimeout: 100 * time.Millisecond,
+				// This test verifies the completed→result lifecycle, not a
+				// near-deadline race. Leave enough per-test headroom for the
+				// scripted process to be scheduled under the full race sweep.
+				PendingToolIdleTimeout:    250 * time.Millisecond,
+				TurnCompletionIdleTimeout: 500 * time.Millisecond,
 				PollInterval:              5 * time.Millisecond,
 			},
-			ResultShutdownGrace: 20 * time.Millisecond,
+			ResultShutdownGrace: 100 * time.Millisecond,
 		},
 	)
 	if err != nil {
@@ -417,7 +420,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 		if status != "SUCCESS" {
 			t.Fatalf("StatusCh = %q, want SUCCESS", status)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for success status")
 	}
 }

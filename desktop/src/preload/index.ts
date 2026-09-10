@@ -47,8 +47,15 @@ import {
   type CreateFeatureInput,
   type CreationFileKind,
   type CreationFileSearchRequest,
+  type RepositorySourcesRequest,
+  type RepositoryOriginStatusRequest,
+  type RepositoryUpdateSourceRequest,
+  type RepositorySourceReconcileRequest,
   type FeatureActionRequest,
   type InitRepositoryRequest,
+  type CloneStartRequest,
+  type CreateRepositoryRequest,
+  type InitializeRepositoryRequest,
   type SettingsOpenRequest,
   type SettingsPatch,
   type ThemePreference,
@@ -203,6 +210,17 @@ const api: AgenticoApi = {
   reorderWorkspaceRoots: (paths: string[]) => call(IPC_CHANNELS.workspaceReorderRoots, paths),
   initRepository: (request: InitRepositoryRequest) =>
     call(IPC_CHANNELS.workspaceInitRepository, request),
+  startClone: (request: CloneStartRequest) => call(IPC_CHANNELS.cloneStart, request),
+  getCloneOperation: (operationId: string) => call(IPC_CHANNELS.cloneOperationGet, operationId),
+  listCloneOperations: () => call(IPC_CHANNELS.cloneOperationsList),
+  cancelCloneOperation: (operationId: string) =>
+    call(IPC_CHANNELS.cloneOperationCancel, operationId),
+  retryCloneCleanup: (operationId: string) => call(IPC_CHANNELS.cloneOperationCleanup, operationId),
+  retryCloneOperation: (operationId: string) => call(IPC_CHANNELS.cloneOperationRetry, operationId),
+  createRepository: (request: CreateRepositoryRequest) =>
+    call(IPC_CHANNELS.createRepository, request),
+  initializeRepository: (request: InitializeRepositoryRequest) =>
+    call(IPC_CHANNELS.initializeRepository, request),
   listRepositories: () => call(IPC_CHANNELS.repositoriesList),
   listFeatures: () => call(IPC_CHANNELS.featuresList),
   getFeature: (featureId: string) => call(IPC_CHANNELS.featuresGet, featureId),
@@ -243,6 +261,14 @@ const api: AgenticoApi = {
     };
   },
   getCreationDefaults: () => call(IPC_CHANNELS.creationDefaults),
+  inspectRepositorySources: (request: RepositorySourcesRequest) =>
+    call(IPC_CHANNELS.creationSources, request),
+  checkRepositoryOriginStatus: (request: RepositoryOriginStatusRequest) =>
+    call(IPC_CHANNELS.creationOriginStatus, request),
+  updateRepositorySource: (request: RepositoryUpdateSourceRequest) =>
+    call(IPC_CHANNELS.creationUpdateSource, request),
+  reconcileSourceUpdate: (request: RepositorySourceReconcileRequest) =>
+    call(IPC_CHANNELS.creationReconcileSourceUpdate, request),
   pickCreationFiles: (kind: CreationFileKind) => call(IPC_CHANNELS.creationPickFiles, kind),
   uploadCreationFiles: (kind: CreationFileKind, paths: readonly string[]) =>
     call(IPC_CHANNELS.creationUploadFiles, kind, paths),

@@ -10667,7 +10667,7 @@ body {
   white-space: pre;
   border: 1px solid var(--hairline);
   border-radius: var(--bench-radius-control);
-  background: var(--sunken);
+  background: var(--raised);
   padding: var(--space-2);
   font-family: var(--bench-font-mono);
   font-size: 11px;
@@ -10785,7 +10785,7 @@ body {
 .review-feedback-diff {
   border: 1px solid var(--hairline);
   border-radius: var(--bench-radius-control);
-  background: var(--sunken);
+  background: var(--raised);
 }
 
 .review-feedback-diff__pre {
@@ -13625,6 +13625,398 @@ body {
   margin: 0;
   color: var(--bad);
   font-size: 12px;
+}
+
+/* --- Clone repository section (Settings workspace-roots pane) ------------- */
+.settings-panel__section-subtitle {
+  margin: var(--space-5) 0 var(--space-1);
+  color: var(--text);
+  font: 600 14px var(--bench-font-text);
+}
+
+.settings-panel__clone-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 32rem;
+}
+
+.settings-panel__clone-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.settings-panel__clone-field label {
+  font-weight: 600;
+}
+
+.settings-panel__clone-field input,
+.settings-panel__clone-field select {
+  width: 100%;
+  font-family: var(--bench-font-text);
+  font-size: 14px;
+  color: var(--text);
+  background: var(--content);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+}
+
+.settings-panel__clone-field input:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+.settings-panel__clone-field input[aria-invalid='true'] {
+  border-color: var(--bad);
+}
+
+.settings-panel__clone-consent input {
+  width: auto;
+  margin: 0;
+}
+
+.settings-panel__clone-no-roots {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* The destination-root row: the ordered root selector beside the native
+   folder chooser (local servers only). */
+.settings-panel__clone-root-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.settings-panel__clone-root-row select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.settings-panel__clone-no-roots + .settings-panel__clone-choose {
+  flex: 1 1 auto;
+}
+
+.settings-panel__clone-choose {
+  font-family: var(--bench-font-text);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  flex: 0 0 auto;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.settings-panel__clone-choose:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.settings-panel__clone-consent {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-panel__clone-preview {
+  margin: 0;
+  color: var(--muted);
+}
+
+.settings-panel__clone-empty {
+  margin: var(--space-2) 0;
+  color: var(--muted);
+}
+
+.settings-panel__clone-operations {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-panel__clone-operation {
+  border: 1px solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-panel__clone-operation-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.settings-panel__clone-operation-path code {
+  color: var(--muted);
+}
+
+.settings-panel__clone-operation-state {
+  margin-left: auto;
+  font-weight: 600;
+}
+
+.settings-panel__clone-operation-state.is-succeeded {
+  color: var(--ok);
+}
+
+.settings-panel__clone-operation-state.is-failed,
+.settings-panel__clone-operation-state.is-interrupted,
+.settings-panel__clone-operation-state.is-cleanup_pending {
+  color: var(--bad);
+}
+
+.settings-panel__clone-operation-progress,
+.settings-panel__clone-operation-issue {
+  margin: 0;
+  color: var(--muted);
+}
+
+.settings-panel__clone-operation-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.settings-panel__clone-action {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: 5px var(--space-3);
+  background: var(--content);
+  color: var(--text);
+  font: 600 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.settings-panel__clone-action:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.settings-panel__clone-action:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.settings-panel__clone-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-panel__clone-help {
+  margin-top: var(--space-4);
+  color: var(--muted);
+}
+
+.settings-panel__clone-help ul {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+}
+
+.settings-panel__clone-announcement {
+  margin-top: var(--space-3);
+}
+
+.settings-panel__clone-initialize {
+  border: 1px solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-panel__clone-initialize-copy {
+  margin: 0;
+  color: var(--muted);
+}
+
+.settings-panel__clone-initialize-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.settings-panel__clone-action--secondary {
+  background: transparent;
+}
+
+.settings-panel__repositories {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-panel__repository {
+  border: 1px solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-panel__repository-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.settings-panel__repository-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.settings-panel__repository-name {
+  font-weight: 600;
+}
+
+.settings-panel__repository-path {
+  color: var(--muted);
+}
+
+.settings-panel__repository-issue {
+  color: var(--muted);
+}
+
+.creation-sheet__row-initialize {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+/* Inside a picker row the offer explanation is hint copy, not body copy:
+   it sits under a 13px row title beside 12px hints. */
+.creation-sheet__row-initialize .settings-panel__clone-initialize-copy {
+  font: 12px var(--bench-font-text);
+}
+
+.creation-sheet__row-origin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.creation-sheet__row-origin-hint {
+  display: block;
+}
+
+/* The impact line beside the per-row Update from origin action (and the
+   ineligibility explanation when the target is unsafe): quiet secondary
+   copy that lets the buttons stay the row's verbs. */
+.creation-sheet__row-update-copy {
+  flex: 1 1 14rem;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+/* A settled update outcome: one polite status line under the row's actions. */
+.creation-sheet__row-update-notice {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.creation-sheet__row-update-notice[data-tone='success'] {
+  color: var(--ok);
+}
+
+/* The trailing row affordances — origin actions, update notices, and the
+   initialize offer — are siblings of the padded `.creation-sheet__row`
+   label (interactive controls cannot live inside a label), so they carry
+   the row's own horizontal padding to sit on its grid line, and the last
+   of them closes the row with the same bottom padding. */
+.creation-sheet__row-origin-actions,
+.creation-sheet__row-update-notice,
+.creation-sheet__row-initialize {
+  padding-right: var(--space-3);
+  padding-left: var(--space-3);
+}
+
+.creation-sheet__row-origin-actions:last-child,
+.creation-sheet__row-update-notice:last-child,
+.creation-sheet__row-initialize:last-child {
+  padding-bottom: var(--space-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-panel__clone-operation,
+  .settings-panel__clone-action,
+  .settings-panel__clone-initialize,
+  .settings-panel__repository,
+  .settings-panel__clone-choose {
+    transition: none;
+  }
+}
+
+/* --- Creation sheet: nested clone view -------------------------------------- */
+
+.creation-clone {
+  width: min(560px, 100%);
+  max-height: min(72vh, 640px);
+  overflow: auto;
+  animation: creation-clone-enter 160ms ease-out;
+}
+
+.creation-clone h2 {
+  margin: 0 0 var(--space-2);
+  font-family: var(--bench-font-text);
+  font-size: 20px;
+}
+
+.creation-clone__desc {
+  margin: 0 0 var(--space-4);
+}
+
+.creation-clone__operation {
+  margin: var(--space-4) 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+.creation-clone__help {
+  margin: var(--space-3) 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@keyframes creation-clone-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .creation-clone {
+    animation: none;
+  }
 }
 
 .sidebar__resize-handle {

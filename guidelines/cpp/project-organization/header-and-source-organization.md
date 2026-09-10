@@ -19,6 +19,7 @@ The most widely adopted community specification for C++ project structure:
 ### Two Header Placement Strategies
 
 **Separate** — public headers in `include/`, private in `src/`:
+
 ```
 include/mylib/connection.hpp        # Public API
 src/mylib/connection.cpp
@@ -26,6 +27,7 @@ src/mylib/connection_impl.hpp       # Private — not installed
 ```
 
 **Merged** — everything in `src/` (internal tools, header-only libs):
+
 ```
 src/mylib/connection.hpp
 src/mylib/connection.cpp
@@ -98,11 +100,11 @@ Widget& Widget::operator=(Widget&&) noexcept = default;
 
 ## Core Guidelines: Source Files
 
-| Rule | Guideline |
-|------|-----------|
-| SF.5 | `.cpp` must include its own `.h` first |
-| SF.7 | Never `using namespace` at global scope in headers |
-| SF.8 | All headers must have include guards |
-| SF.10 | Do not rely on transitively included names (IWYU) |
-| SF.11 | Headers must be self-contained |
+| Rule  | Guideline                                                     |
+| ----- | ------------------------------------------------------------- |
+| SF.5  | `.cpp` must include its own `.h` first                        |
+| SF.7  | Never `using namespace` at global scope in headers            |
+| SF.8  | All headers must have include guards                          |
+| SF.10 | Do not rely on transitively included names (IWYU)             |
+| SF.11 | Headers must be self-contained                                |
 | SF.22 | Use anonymous namespaces in `.cpp` for internal-only entities |

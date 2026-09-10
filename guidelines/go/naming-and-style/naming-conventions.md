@@ -5,14 +5,14 @@
 Variable name length is proportional to scope distance. The further from its
 declaration a name is used, the more descriptive it must be.
 
-| Scope | Style | Examples |
-|-------|-------|---------|
-| Loop index | Single letter | `i`, `j`, `k` |
-| Method receiver | 1-2 letters | `c` for Client, `s` for Server |
-| Local variable | Short | `buf`, `err`, `ctx`, `req` |
-| Function parameter | Descriptive if ambiguous | `timeout`, `path`, `userID` |
-| Package-level | Descriptive | `maxRetries`, `defaultTimeout` |
-| Exported | Self-documenting | `ErrNotFound`, `DefaultClient` |
+| Scope              | Style                    | Examples                       |
+| ------------------ | ------------------------ | ------------------------------ |
+| Loop index         | Single letter            | `i`, `j`, `k`                  |
+| Method receiver    | 1-2 letters              | `c` for Client, `s` for Server |
+| Local variable     | Short                    | `buf`, `err`, `ctx`, `req`     |
+| Function parameter | Descriptive if ambiguous | `timeout`, `path`, `userID`    |
+| Package-level      | Descriptive              | `maxRetries`, `defaultTimeout` |
+| Exported           | Self-documenting         | `ErrNotFound`, `DefaultClient` |
 
 ## Package Names
 
@@ -28,6 +28,7 @@ declaration a name is used, the more descriptive it must be.
 boundary is wrong.
 
 **Transformation example:**
+
 ```go
 // Bad:
 package util
@@ -63,12 +64,12 @@ func (c *Client) Close() error { ... }
 
 Single-method interfaces append `-er` to the method name:
 
-| Method | Interface |
-|--------|-----------|
-| `Read` | `Reader` |
-| `Write` | `Writer` |
-| `Close` | `Closer` |
-| `String` | `Stringer` |
+| Method   | Interface   |
+| -------- | ----------- |
+| `Read`   | `Reader`    |
+| `Write`  | `Writer`    |
+| `Close`  | `Closer`    |
+| `String` | `Stringer`  |
 | `Format` | `Formatter` |
 
 Honor canonical signatures from the standard library — if your method is called
@@ -78,13 +79,13 @@ Honor canonical signatures from the standard library — if your method is calle
 
 Initialisms and acronyms maintain consistent case throughout a name:
 
-| Correct | Wrong |
-|---------|-------|
-| `URL`, `url` | `Url` |
-| `ServeHTTP` | `ServeHttp` |
-| `userID` | `userId` |
+| Correct          | Wrong            |
+| ---------------- | ---------------- |
+| `URL`, `url`     | `Url`            |
+| `ServeHTTP`      | `ServeHttp`      |
+| `userID`         | `userId`         |
 | `xmlHTTPRequest` | `xmlHttpRequest` |
-| `appID` | `appId` |
+| `appID`          | `appId`          |
 
 ## Constants
 

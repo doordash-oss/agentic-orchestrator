@@ -24,10 +24,18 @@ limitations under the License.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
+  type CloneOperation,
   type CreationDefaults,
   type EffortLevel,
+  type ReadinessSnapshot,
   type RepositoryFileRef,
+  type RepositoryIdentity,
+  type RepositoryOriginStatusResult,
+  type RepositoryOriginStatusSnapshot,
+  type RepositorySourceReconcileResult,
+  type RepositorySourcesResult,
   type RepositoryState,
+  type WorkspaceRootState,
 } from '../../../shared/ipc';
 import { ConsentDialog } from '../components/wizard/ConsentDialog';
 import { ErrorSurface } from '../components/ErrorSurface';
@@ -51,8 +59,51 @@ import {
   useModelCatalogue,
   type PhaseKey,
 } from './ConfigEditor';
+import {
+  retainableDraft,
+  type CloneAssociation,
+  type CreationDraftState,
+  type PendingCreate,
+  type PendingInitialize,
+} from './creationDrafts';
+import { InitializeOffer, type InitializeOfferController } from './cloneViews';
+import { PickerCloneDialog } from './PickerCloneDialog';
+import { PickerCreateDialog } from './PickerCreateDialog';
+import type { CreateRepositoryStartInput } from './createViews';
 import { DescriptionComposer } from './DescriptionComposer';
 import { fieldForCreationError } from './featureView';
+import {
+  hasUnresolvedSelection,
+  isSelectableRepository,
+  reconcileRepoSelections,
+  reconcileRepositoryFiles,
+  resolvedSelectionKeys,
+  sameRepoIdentity,
+  type RepoSelection,
+} from './repoSelections';
+import {
+  isUncertainUpdateError,
+  isUnsettledReconcileError,
+  noticeFor,
+  reconcileErrorText,
+  reconcileNoticeText,
+  serverLabelFor,
+  sharesCommonDirectory,
+  uncertaintyFor,
+  uncertaintyRequestFor,
+  updateBlockedExplanation,
+  updateErrorText,
+  updateImpactText,
+  updateRefusalText,
+  updateSuccessText,
+  updateTargetFor,
+  updateUncertainText,
+  withoutNoticesFor,
+  withoutUncertaintyFor,
+  type SourceUpdateAction,
+  type SourceUpdateNotice,
+  type SourceUpdateUncertainty,
+} from './sourceUpdates';
 import {
   PIPELINES,
   checkpointSummary,
@@ -64,6 +115,128 @@ import {
 } from './runContract';
 
 type DefaultsState = LoadState<{ phase: 'loaded'; defaults: CreationDefaults }>;
+type SourceState =
+  | { phase: 'idle' | 'loading' }
+  | { phase: 'loaded'; value: RepositorySourcesResult }
+  | { phase: 'error'; error: CanonicalError };
+type OriginState =
+  | { phase: 'idle' }
+  | { phase: 'loaded'; value: RepositoryOriginStatusResult }
+  | { phase: 'error'; error: CanonicalError };
+
+/** One-line origin status for a repository row, including the check time. */
+function originStatusText(snapshot: RepositoryOriginStatusSnapshot): string {
+  const originRef =
+    snapshot.originBranch === undefined ? 'origin' : `origin/${snapshot.originBranch}`;
+  const checked =
+    snapshot.checkedAt === undefined
+      ? ''
+      : ` · checked ${formatOriginCheckTime(snapshot.checkedAt)}`;
+  switch (snapshot.status) {
+    case 'checking':
+      return 'Origin check still running…';
+    case 'up_to_date':
+      return `Origin: up to date with ${originRef}${checked}`;
+    case 'behind':
+      return `Origin: ${originCommitPhrase(snapshot.behindCount)} behind ${originRef}${checked}`;
+    case 'ahead':
+      return `Origin: ${originCommitPhrase(snapshot.aheadCount)} ahead of ${originRef}${checked}`;
+    case 'diverged':
+      return `Origin: diverged from ${originRef} (${originCommitPhrase(
+        snapshot.aheadCount,
+      )} ahead, ${originCommitPhrase(snapshot.behindCount)} behind)${checked}`;
+    case 'no_origin':
+      return `Origin: no origin remote configured${checked}`;
+    case 'remote_branch_missing':
+      return `Origin: ${originRef} no longer exists on the remote${checked}`;
+    case 'other_upstream':
+      return `Origin: tracks a different upstream, not origin${checked}`;
+    case 'detached':
+      return `Origin: detached source — no origin comparison${checked}`;
+    case 'local_base_missing':
+      return `Origin: local source missing — repair the branch or commit, or deselect${checked}`;
+    case 'unknown': {
+      const stale =
+        snapshot.staleComparison === undefined
+          ? ''
+          : ` Earlier comparison: ${originComparisonPhrase(snapshot.staleComparison)} (stale).`;
+      return `Origin check unavailable — creation continues from the local source${checked}.${stale}`;
+    }
+  }
+}
+
+/** Review-facing sentence that names the local source and the consequence. */
+function originReviewText(snapshot: RepositoryOriginStatusSnapshot): string {
+  const source =
+    snapshot.kind === 'detached'
+      ? `detached commit ${snapshot.commit ?? ''}`
+      : (snapshot.branch ?? 'the selected branch');
+  const originRef =
+    snapshot.originBranch === undefined ? 'origin' : `origin/${snapshot.originBranch}`;
+  switch (snapshot.status) {
+    case 'checking':
+      return `${snapshot.repoKey}: origin check still running; the feature will start from ${source}.`;
+    case 'up_to_date':
+      return `${snapshot.repoKey}: ${source} is up to date with ${originRef}.`;
+    case 'behind':
+      return `${snapshot.repoKey}: ${source} is ${originCommitPhrase(
+        snapshot.behindCount,
+      )} behind ${originRef}; the feature will start from the local source.`;
+    case 'ahead':
+      return `${snapshot.repoKey}: ${source} is ${originCommitPhrase(
+        snapshot.aheadCount,
+      )} ahead of ${originRef}; the feature will start from the local source.`;
+    case 'diverged':
+      return `${snapshot.repoKey}: ${source} has diverged from ${originRef}; the feature will start from the local source.`;
+    case 'no_origin':
+      return `${snapshot.repoKey}: no origin remote configured; the feature will start from ${source}.`;
+    case 'remote_branch_missing':
+      return `${snapshot.repoKey}: ${originRef} no longer exists on the remote; the feature will start from ${source}.`;
+    case 'other_upstream':
+      return `${snapshot.repoKey}: ${source} tracks a different upstream, not origin; the feature will start from the local source.`;
+    case 'detached':
+      return `${snapshot.repoKey}: detached source ${snapshot.commit ?? ''} has no origin comparison.`;
+    case 'local_base_missing':
+      return `${snapshot.repoKey}: the local source is missing; repair it or deselect the repository.`;
+    case 'unknown': {
+      const stale =
+        snapshot.staleComparison === undefined
+          ? ''
+          : ` An earlier comparison (${originComparisonPhrase(snapshot.staleComparison)}) is preserved but stale.`;
+      return `${snapshot.repoKey}: the origin check could not complete; the feature will start from ${source}.${stale}`;
+    }
+  }
+}
+
+function originCommitPhrase(count: number | undefined): string {
+  const value = count ?? 0;
+  return `${value} ${value === 1 ? 'commit' : 'commits'}`;
+}
+
+function originComparisonPhrase(comparison: {
+  status: 'up_to_date' | 'behind' | 'ahead' | 'diverged';
+  aheadCount: number;
+  behindCount: number;
+}): string {
+  switch (comparison.status) {
+    case 'up_to_date':
+      return 'up to date';
+    case 'ahead':
+      return `${originCommitPhrase(comparison.aheadCount)} ahead`;
+    case 'diverged':
+      return 'diverged';
+    case 'behind':
+      return `${originCommitPhrase(comparison.behindCount)} behind`;
+  }
+}
+
+function formatOriginCheckTime(checkedAt: string): string {
+  const date = new Date(checkedAt);
+  if (Number.isNaN(date.getTime())) return 'unknown time';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+const EMPTY_REPOSITORIES: readonly RepositoryState[] = [];
 
 const STEPS = ['Repositories', 'Describe', 'Depth', 'Contract'] as const;
 type Step = (typeof STEPS)[number];
@@ -130,53 +303,196 @@ function plural(count: number, one: string, many: string): string {
 }
 
 export interface CreateFeatureFormProps {
-  onCreated(created: { featureId: string; name: string }): void;
+  onCreated(created: {
+    featureId: string;
+    name: string;
+    warnings?: readonly CanonicalError[];
+  }): void;
   /** Cancel/Escape after any confirmation: the sheet closes, draft discarded. */
   onClose(): void;
+  /**
+   * The server's retained draft, when the sheet remounts after a connection
+   * flip or server switch. Every user-owned value rehydrates from it; only
+   * the catalog is refreshed. Absent for a fresh draft.
+   */
+  retainedDraft?: CreationDraftState;
+  /**
+   * Captures the live draft when the sheet unmounts without being retired
+   * (a disconnect or server switch). Retirement paths (explicit discard,
+   * successful creation) never call it. Absent in standalone renders.
+   */
+  onDraftDetach?(state: CreationDraftState): void;
 }
 
-export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps) {
-  const [state, setState] = useState<DefaultsState>({ phase: 'loading' });
-  const [stepIndex, setStepIndex] = useState(0);
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [repoKeys, setRepoKeys] = useState<readonly string[]>([]);
-  const [repoQuery, setRepoQuery] = useState('');
-  const [useCurrentBranch, setUseCurrentBranch] = useState(false);
-  const [pipeline, setPipeline] = useState<Pipeline>('medium');
-  const [checkpoints, setCheckpoints] = useState<CheckpointState>(checkpointsForPipeline('medium'));
-  const [modelChoices, setModelChoices] = useState<Partial<Record<PhaseKey, string>>>({});
-  const [effortChoices, setEffortChoices] = useState<Partial<Record<PhaseKey, EffortLevel>>>({});
-  const [riskLevel, setRiskLevel] = useState<'low' | 'medium' | 'high'>('medium');
-  const [inquireness, setInquireness] = useState<'none' | 'medium' | 'high'>('medium');
-  const [exitCriteria, setExitCriteria] = useState('');
-  const [images, setImages] = useState<readonly string[]>([]);
-  const [attachments, setAttachments] = useState<readonly string[]>([]);
-  const [imageUploads, setImageUploads] = useState<readonly ComposerUploadItem[]>([]);
-  const [attachmentUploads, setAttachmentUploads] = useState<readonly ComposerUploadItem[]>([]);
-  const [repositoryFiles, setRepositoryFiles] = useState<readonly RepositoryFileRef[]>([]);
-  const [autoStart, setAutoStart] = useState(true);
-  const [folderCandidate, setFolderCandidate] = useState<string | null>(null);
+export function CreateFeatureForm({
+  onCreated,
+  onClose,
+  retainedDraft,
+  onDraftDetach,
+}: CreateFeatureFormProps) {
+  // A retained draft rehydrates every user-owned value; only in-flight
+  // work (a submission, a folder probe) resets, and the mount effect
+  // refreshes the catalog instead of re-applying server defaults.
+  const retained = retainedDraft;
+  const [state, setState] = useState<DefaultsState>(() =>
+    retained ? retained.defaultsState : { phase: 'loading' },
+  );
+  const [stepIndex, setStepIndex] = useState(() => retained?.stepIndex ?? 0);
+  const [name, setName] = useState(() => retained?.name ?? '');
+  const [description, setDescription] = useState(() => retained?.description ?? '');
+  // Selections are bound to the server-resolved repository identity captured
+  // at selection time; the catalog refresh reconciles them by identity so a
+  // rename moves a selection to its current key while a removed or replaced
+  // repository surfaces as needing reselection.
+  const [repoSelections, setRepoSelections] = useState<readonly RepoSelection[]>(
+    () => retained?.repoSelections ?? [],
+  );
+  const [repoQuery, setRepoQuery] = useState(() => retained?.repoQuery ?? '');
+  const [useCurrentBranch, setUseCurrentBranch] = useState(
+    () => retained?.useCurrentBranch ?? false,
+  );
+  const [pipeline, setPipeline] = useState<Pipeline>(() => retained?.pipeline ?? 'medium');
+  const [checkpoints, setCheckpoints] = useState<CheckpointState>(
+    () => retained?.checkpoints ?? checkpointsForPipeline('medium'),
+  );
+  const [modelChoices, setModelChoices] = useState<Partial<Record<PhaseKey, string>>>(
+    () => retained?.modelChoices ?? {},
+  );
+  const [effortChoices, setEffortChoices] = useState<Partial<Record<PhaseKey, EffortLevel>>>(
+    () => retained?.effortChoices ?? {},
+  );
+  const [riskLevel, setRiskLevel] = useState<'low' | 'medium' | 'high'>(
+    () => retained?.riskLevel ?? 'medium',
+  );
+  const [inquireness, setInquireness] = useState<'none' | 'medium' | 'high'>(
+    () => retained?.inquireness ?? 'medium',
+  );
+  const [exitCriteria, setExitCriteria] = useState(() => retained?.exitCriteria ?? '');
+  const [images, setImages] = useState<readonly string[]>(() => retained?.images ?? []);
+  const [attachments, setAttachments] = useState<readonly string[]>(
+    () => retained?.attachments ?? [],
+  );
+  const [imageUploads, setImageUploads] = useState<readonly ComposerUploadItem[]>(
+    () => retained?.imageUploads ?? [],
+  );
+  const [attachmentUploads, setAttachmentUploads] = useState<readonly ComposerUploadItem[]>(
+    () => retained?.attachmentUploads ?? [],
+  );
+  const [repositoryFiles, setRepositoryFiles] = useState<readonly RepositoryFileRef[]>(
+    () => retained?.repositoryFiles ?? [],
+  );
+  const [autoStart, setAutoStart] = useState(() => retained?.autoStart ?? true);
+  const [folderCandidate, setFolderCandidate] = useState<string | null>(
+    () => retained?.folderCandidate ?? null,
+  );
   /** Set once a candidate is a configured root that holds no repository. */
-  const [folderHoldsNoRepository, setFolderHoldsNoRepository] = useState(false);
-  const [folderNotice, setFolderNotice] = useState('');
-  const [workspaceRoots, setWorkspaceRoots] = useState<readonly string[]>([]);
-  const [consentOpen, setConsentOpen] = useState(false);
-  const [discardOpen, setDiscardOpen] = useState(false);
+  const [folderHoldsNoRepository, setFolderHoldsNoRepository] = useState(
+    () => retained?.folderHoldsNoRepository ?? false,
+  );
+  const [folderNotice, setFolderNotice] = useState(() => retained?.folderNotice ?? '');
+  const [workspaceRoots, setWorkspaceRoots] = useState<readonly string[]>(
+    () => retained?.workspaceRoots ?? [],
+  );
+  const [consentOpen, setConsentOpen] = useState(() => retained?.consentOpen ?? false);
+  const [discardOpen, setDiscardOpen] = useState(() => retained?.discardOpen ?? false);
   const [folderPending, setFolderPending] = useState(false);
   /** Typed path + its inline rejection, only ever used on remote servers. */
-  const [folderDraft, setFolderDraft] = useState('');
-  const [folderError, setFolderError] = useState<string | null>(null);
+  const [folderDraft, setFolderDraft] = useState(() => retained?.folderDraft ?? '');
+  const [folderError, setFolderError] = useState<string | null>(
+    () => retained?.folderError ?? null,
+  );
   const [pending, setPending] = useState(false);
-  const [nameError, setNameError] = useState<string | null>(null);
-  const [repoError, setRepoError] = useState<string | null>(null);
-  const [formError, setFormError] = useState<CanonicalError | null>(null);
+  const [nameError, setNameError] = useState<string | null>(() => retained?.nameError ?? null);
+  const [repoError, setRepoError] = useState<string | null>(() => retained?.repoError ?? null);
+  const [formError, setFormError] = useState<CanonicalError | null>(
+    () => retained?.formError ?? null,
+  );
+  /** A failed catalog refresh never becomes an authoritative empty catalog. */
+  const [catalogRefreshError, setCatalogRefreshError] = useState<CanonicalError | null>(
+    () => retained?.catalogRefreshError ?? null,
+  );
+  const [sourceState, setSourceState] = useState<SourceState>({ phase: 'idle' });
+  const [sourceRefreshRevision, setSourceRefreshRevision] = useState(0);
+  // Origin checks are advisory and never gate the sheet: the state holds the
+  // latest server snapshot for the selected sources, a revision drives
+  // one-shot Check-again refreshes, and a poll tick re-requests while any
+  // row is still checking.
+  const [originState, setOriginState] = useState<OriginState>({ phase: 'idle' });
+  const [originRefreshRevision, setOriginRefreshRevision] = useState(0);
+  const [originPollTick, setOriginPollTick] = useState(0);
+  // The per-row Update from origin action, kept separate from repository
+  // selection and origin comparison state: at most one selected update is
+  // active at a time, settled outcomes become row-scoped notices that
+  // survive later origin checks through the final review, and an attempt
+  // whose outcome is unknown becomes a retained uncertainty record instead.
+  const [sourceUpdate, setSourceUpdate] = useState<SourceUpdateAction>({ phase: 'idle' });
+  const [updateNotices, setUpdateNotices] = useState<readonly SourceUpdateNotice[]>([]);
+  // Update attempts whose outcome is unknown (lost responses, timeouts,
+  // server switches, unprovable server results). Each record is keyed by
+  // its originating server; only records for the currently connected
+  // server block or reconcile here, and a retained draft replays them on
+  // remount so returning to the originating server reconciles before its
+  // source can be accepted.
+  const [updateUncertainty, setUpdateUncertainty] = useState<readonly SourceUpdateUncertainty[]>(
+    () => retained?.sourceUpdateUncertainty ?? [],
+  );
+  // One-shot revision for re-triggering settlement reads (Check again on an
+  // uncertain row, or returning to the originating server).
+  const [reconcileRevision, setReconcileRevision] = useState(0);
+  // The nested clone view and its association with this draft, plus the
+  // nested create view and its pending adoption.
+  const [cloneOpen, setCloneOpen] = useState(() => retained?.cloneOpen ?? false);
+  const [cloneAssociation, setCloneAssociation] = useState<CloneAssociation | null>(
+    () => retained?.cloneAssociation ?? null,
+  );
+  const [createOpen, setCreateOpen] = useState(() => retained?.createOpen ?? false);
+  const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(
+    () => retained?.pendingCreate ?? null,
+  );
+  // The picker-initiated explicit initialization this draft is waiting to
+  // adopt, plus the offer affordances scoped to the repository action.
+  const [pendingInitialize, setPendingInitialize] = useState<PendingInitialize | null>(
+    () => retained?.pendingInitialize ?? null,
+  );
+  const [initializeError, setInitializeError] = useState<CanonicalError | null>(null);
+  /** Clone-success offers declined with Not now (hidden per operation). */
+  const [declinedInitializeOperations, setDeclinedInitializeOperations] = useState<
+    ReadonlySet<string>
+  >(new Set());
+  /** The unborn catalog row whose inline later-opt-in offer is expanded. */
+  const [initializeExpandedKey, setInitializeExpandedKey] = useState<string | null>(null);
+  // All configured workspace roots (the destination controls filter for
+  // clone eligibility themselves).
+  const [cloneableRoots, setCloneableRoots] = useState<readonly WorkspaceRootState[]>(
+    () => retained?.cloneableRoots ?? [],
+  );
+  /** Authoritative snapshot of the associated clone operation. */
+  const [cloneOperation, setCloneOperation] = useState<CloneOperation | null>(null);
+  /** The repository row awaiting focus once the picker step is visible. */
+  const [focusRepoKey, setFocusRepoKey] = useState<string | null>(null);
   const catalogue = useModelCatalogue();
-  const creationKey = useRef(crypto.randomUUID());
+  const creationKey = useRef(retained?.creationKey ?? crypto.randomUUID());
   const sheetRef = useRef<HTMLDivElement | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
   const repoGroupRef = useRef<HTMLFieldSetElement | null>(null);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
+  const catalogRefreshSeq = useRef(0);
+  const cloneResolveSeq = useRef(0);
+  const initializeRequestSeq = useRef(0);
+  const sourceRequestSeq = useRef(0);
+  const originRequestSeq = useRef(0);
+  const originRefreshKeys = useRef<ReadonlySet<string>>(new Set());
+  const originContextRef = useRef<string | null>(null);
+  // Synchronous single-flight guard: a second activation of the update
+  // action cannot issue an overlapping mutation before the disabled state
+  // re-renders. Mirrored by the sourceUpdate state for rendering.
+  const sourceUpdateActiveRef = useRef(false);
+  // Monotonic attempt sequence: late callbacks are fenced by attempt as
+  // well as server identity, so a stale generation can never settle or
+  // record for a newer attempt.
+  const sourceUpdateAttemptRef = useRef(0);
+  // Single-flight guard for settlement reads: one reconciliation per form.
+  const reconcileInFlightRef = useRef(false);
 
   // Locality decides how a folder reaches the form: the native directory
   // dialog on a local server (the picker resolves real paths on this
@@ -192,23 +508,118 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
     isBlockingStagedItem(item, serverKey),
   );
 
+  // Retirement marks the two deliberate exits (explicit discard, successful
+  // creation); any other unmount is a detach that captures the draft.
+  const retiredRef = useRef(false);
+  const retire = useCallback(() => {
+    retiredRef.current = true;
+  }, []);
+  const handleCreated = useCallback(
+    (created: { featureId: string; name: string; warnings?: readonly CanonicalError[] }) => {
+      retire();
+      onCreated(created);
+    },
+    [onCreated, retire],
+  );
+  const handleClose = useCallback(() => {
+    retire();
+    onClose();
+  }, [onClose, retire]);
+
   /** Unsaved work worth confirming before it is thrown away. */
   const dirty =
     name.trim() !== '' ||
     description !== '' ||
-    repoKeys.length > 0 ||
+    repoSelections.length > 0 ||
     images.length > 0 ||
     attachments.length > 0 ||
     imageUploads.length > 0 ||
     attachmentUploads.length > 0;
+
+  // Catalog + reconciled selections. `repositories` is the current catalog;
+  // reconciliation by identity is derived so every catalog change (initial
+  // load, folder adoption, SSE refresh) re-reconciles selections without
+  // touching any other draft value.
+  const loadedDefaultsEarly = state.phase === 'loaded' ? state.defaults : null;
+  const repositories = loadedDefaultsEarly?.repositories ?? EMPTY_REPOSITORIES;
+  const reconciledSelections = useMemo(
+    () => reconcileRepoSelections(repoSelections, repositories),
+    [repoSelections, repositories],
+  );
+  const selectedKeys = useMemo(
+    () => resolvedSelectionKeys(reconciledSelections),
+    [reconciledSelections],
+  );
+  /** Resolved selections as the identity-bound @-mention search scope. */
+  const searchRepositories = useMemo(
+    () =>
+      reconciledSelections.flatMap((selection) =>
+        selection.status === 'selected'
+          ? [{ key: selection.key, identity: selection.identity }]
+          : [],
+      ),
+    [reconciledSelections],
+  );
+  const unresolvedSelections = useMemo(
+    () => repoSelections.filter((_, index) => reconciledSelections[index]?.status === 'unresolved'),
+    [repoSelections, reconciledSelections],
+  );
+
+  // The sheet's scope server: the first server the live connection settles
+  // on. The form's own connection view starts unresolved (its initial state
+  // precedes the first readiness read), so capturing at first render would
+  // freeze the scope at null and drop every keyed record from the retained
+  // draft; the first non-null server key is the sheet's own scope, and it
+  // never changes for this mount.
+  const [scopeServerKey, setScopeServerKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (serverKey !== null) {
+      setScopeServerKey((current) => current ?? serverKey);
+    }
+  }, [serverKey]);
+  // Uncertainty records that belong to the currently connected server: only
+  // these block here, and only these server's reconciliation can settle
+  // them. Records for other servers stay retained until their server
+  // returns.
+  const activeUncertainty = useMemo(
+    () => updateUncertainty.filter((record) => record.serverKey === serverKey),
+    [updateUncertainty, serverKey],
+  );
+  // The scope server's records in their retainable form, including an
+  // in-flight attempt whose response this sheet may never see: unmounting
+  // mid-attempt leaves the outcome unknown by definition.
+  const scopeUncertainty = useMemo(() => {
+    const scoped = updateUncertainty.filter((record) => record.serverKey === scopeServerKey);
+    if (sourceUpdate.phase !== 'active' || sourceUpdate.record.serverKey !== scopeServerKey) {
+      return scoped;
+    }
+    const record = sourceUpdate.record;
+    return [...withoutUncertaintyFor(scoped, record.identity), record];
+  }, [updateUncertainty, sourceUpdate, scopeServerKey]);
+  // Acceptance waits for every uncertain source among the current
+  // selections (identity or common-directory alias): a branch whose update
+  // outcome is unknown cannot be accepted until it is settled.
+  const uncertainBlocked = useMemo(() => {
+    if (activeUncertainty.length === 0) return false;
+    const selected = reconciledSelections.flatMap((selection) =>
+      selection.status === 'selected' ? [selection.identity] : [],
+    );
+    return activeUncertainty.some((record) =>
+      selected.some(
+        (identity) =>
+          sameRepoIdentity(identity, record.identity) ||
+          sharesCommonDirectory(identity, record.identity),
+      ),
+    );
+  }, [activeUncertainty, reconciledSelections]);
 
   const requestCancel = useCallback(() => {
     if (dirty) {
       setDiscardOpen(true);
       return;
     }
-    onClose();
-  }, [dirty, onClose]);
+    handleClose();
+  }, [dirty, handleClose]);
 
   // Escape routes to the same Cancel path; the hook's nested-dialog bail
   // leaves Escape to the consent and discard dialogs while either is open.
@@ -220,6 +631,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
       .getCreationDefaults()
       .then((defaults) => {
         setState({ phase: 'loaded', defaults });
+        setCloneableRoots(defaults.workspaceRoots);
         setUseCurrentBranch(defaults.defaults.useCurrentBranch);
         if (isPipeline(defaults.defaults.pipeline)) {
           setPipeline(defaults.defaults.pipeline);
@@ -230,7 +642,940 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
       .catch((err: unknown) => setState({ phase: 'error', error: parseIpcError(err) }));
   }, []);
 
-  useEffect(loadInitialDefaults, [loadInitialDefaults]);
+  /**
+   * Applies one authoritative readiness snapshot to the live draft: the
+   * catalog (and with it every selection) reconciles by identity, attachment
+   * references follow their repositories, and the destination controls see
+   * the fresh root list — all without resetting any draft value.
+   */
+  const applyCatalogSnapshot = useCallback((snapshot: ReadinessSnapshot) => {
+    setState((current) =>
+      current.phase === 'loaded'
+        ? {
+            phase: 'loaded',
+            defaults: { ...current.defaults, repositories: [...snapshot.repositories] },
+          }
+        : current,
+    );
+    // Attachment references follow their repository's current key by
+    // identity; their relative paths and the description text are kept.
+    setRepositoryFiles((files) => [...reconcileRepositoryFiles(files, snapshot.repositories)]);
+    setCloneableRoots(snapshot.workspaceRoots);
+    setWorkspaceRoots(snapshot.workspaceRoots.map((root) => root.path));
+  }, []);
+
+  /**
+   * Discovery refreshes reconcile the catalog (and with it every selection)
+   * by identity, without resetting any draft value. Requests are fenced by
+   * sequence so a stale reply cannot masquerade as a newer catalog, and a
+   * failed refresh keeps the last authoritative catalog instead of adopting
+   * an empty one.
+   */
+  const refreshCatalog = useCallback(() => {
+    const seq = ++catalogRefreshSeq.current;
+    void window.agentico
+      .getReadiness()
+      .then((snapshot) => {
+        if (seq !== catalogRefreshSeq.current) return;
+        setCatalogRefreshError(null);
+        applyCatalogSnapshot(snapshot);
+      })
+      .catch((err: unknown) => {
+        if (seq !== catalogRefreshSeq.current) return;
+        setCatalogRefreshError(parseIpcError(err));
+      });
+  }, [applyCatalogSnapshot]);
+
+  useEffect(() => {
+    const unsub = window.agentico.onAppEvent((event) => {
+      if (event.type !== 'invalidated') return;
+      // Any runtime configuration change can reshape discovery (roots,
+      // explicit registrations, clone publication); a resync replays the
+      // whole stream, so the catalog is re-read then too.
+      if (event.kind === 'resync' || event.kind.startsWith('config')) refreshCatalog();
+    });
+    return unsub;
+  }, [refreshCatalog]);
+
+  /**
+   * Resolves the draft's associated clone operation from the authoritative
+   * server state: by id when the start was observed, otherwise by
+   * idempotency key (a lost acceptance). Late replies cannot replace a
+   * newer snapshot, and a failed refresh never drops the association.
+   */
+  const resolveCloneOperation = useCallback(() => {
+    const association = cloneAssociationRef.current;
+    if (association === null) {
+      setCloneOperation(null);
+      return;
+    }
+    // While the start request itself is in flight, a keyed lookup must not
+    // conclude anything: the server may simply not have accepted yet.
+    if (association.operationId === null && association.startInFlight) return;
+    const seq = ++cloneResolveSeq.current;
+    const found: Promise<CloneOperation | null | 'unavailable'> =
+      association.operationId !== null
+        ? window.agentico
+            .getCloneOperation(association.operationId)
+            .catch(() => 'unavailable' as const)
+        : window.agentico
+            .listCloneOperations()
+            .then(
+              (list) =>
+                list.operations.find(
+                  (candidate) => candidate.idempotencyKey === association.idempotencyKey,
+                ) ?? null,
+            )
+            .catch(() => 'unavailable' as const);
+    void found.then((snapshot) => {
+      if (seq !== cloneResolveSeq.current) return;
+      if (snapshot === 'unavailable') return;
+      if (snapshot === null) {
+        if (association.operationId === null) {
+          // A keyed lookup that found nothing proves no operation was ever
+          // accepted: the association is stale, not in flight.
+          setCloneAssociation(null);
+          setCloneOperation(null);
+          return;
+        }
+        // A known-id lookup that misses this instant keeps the last known
+        // snapshot: the operation is merely unavailable right now.
+        return;
+      }
+      if (association.operationId === null) {
+        // A lost acceptance recovered by idempotency key: persist the
+        // operation id so later refreshes resolve directly.
+        setCloneAssociation({
+          idempotencyKey: association.idempotencyKey,
+          operationId: snapshot.id,
+          adopted: association.adopted,
+          startInFlight: false,
+        });
+      }
+      setCloneOperation(snapshot);
+    });
+  }, []);
+
+  // The association is tracked whether or not the clone view is open:
+  // background completion adopts into this draft from any wizard step,
+  // across Close, and after a restore — but only while the draft lives.
+  const cloneAssociationRef = useRef(cloneAssociation);
+  useEffect(() => {
+    cloneAssociationRef.current = cloneAssociation;
+  }, [cloneAssociation]);
+  useEffect(() => {
+    if (cloneAssociation === null) {
+      setCloneOperation(null);
+      return;
+    }
+    resolveCloneOperation();
+    const unsub = window.agentico.onAppEvent((event) => {
+      if (event.type !== 'invalidated') return;
+      if (
+        event.kind === 'resync' ||
+        event.kind.startsWith('clone.') ||
+        event.kind.startsWith('config')
+      ) {
+        resolveCloneOperation();
+      }
+    });
+    return unsub;
+  }, [cloneAssociation, resolveCloneOperation]);
+
+  // A restored draft re-reads its catalog before applying anything
+  // asynchronous; a fresh draft loads its creation defaults once. Server
+  // defaults are never re-applied over a restored draft's user-owned values.
+  useEffect(() => {
+    if (retained?.restored === true && retained.defaultsState.phase === 'loaded') {
+      refreshCatalog();
+      return;
+    }
+    // The load identity is the mount itself: a restored draft never
+    // re-applies defaults, and no later render re-triggers the load.
+    loadInitialDefaults();
+  }, []);
+
+  // The live draft is captured on every render so an unmount that is not a
+  // retirement (a disconnect or a server switch) retains the whole draft.
+  const snapshotRef = useRef<CreationDraftState | null>(null);
+  useEffect(() => {
+    snapshotRef.current = {
+      restored: true,
+      creationKey: creationKey.current,
+      defaultsState: state,
+      stepIndex,
+      name,
+      description,
+      repoSelections: [...repoSelections],
+      repoQuery,
+      useCurrentBranch,
+      pipeline,
+      checkpoints,
+      modelChoices,
+      effortChoices,
+      riskLevel,
+      inquireness,
+      exitCriteria,
+      images: [...images],
+      attachments: [...attachments],
+      imageUploads: [...imageUploads],
+      attachmentUploads: [...attachmentUploads],
+      repositoryFiles: [...repositoryFiles],
+      autoStart,
+      folderCandidate,
+      folderHoldsNoRepository,
+      folderNotice,
+      workspaceRoots: [...workspaceRoots],
+      consentOpen,
+      discardOpen,
+      folderDraft,
+      folderError,
+      nameError,
+      repoError,
+      formError,
+      catalogRefreshError,
+      cloneOpen,
+      cloneAssociation: cloneAssociation === null ? null : { ...cloneAssociation },
+      cloneableRoots: [...cloneableRoots],
+      createOpen,
+      pendingCreate: pendingCreate === null ? null : { ...pendingCreate },
+      pendingInitialize: pendingInitialize === null ? null : { ...pendingInitialize },
+      sourceUpdateUncertainty: scopeUncertainty.map((record) => ({ ...record })),
+    };
+  });
+  const detachRef = useRef(onDraftDetach);
+  useEffect(() => {
+    detachRef.current = onDraftDetach;
+  }, [onDraftDetach]);
+  useEffect(
+    () => () => {
+      if (retiredRef.current || snapshotRef.current === null) return;
+      // A detach only retains the draft when a store is listening.
+      detachRef.current?.(retainableDraft(snapshotRef.current));
+    },
+    [],
+  );
+
+  /**
+   * A usable clone success adopts into exactly this draft, once: the
+   * published identity is selected under its current catalog key after the
+   * catalog has refreshed to include it. An unborn result or a publication
+   * without provable identity stays visible without selection, and nothing
+   * is adopted by a key or path fallback.
+   */
+  useEffect(() => {
+    if (cloneOperation === null || cloneOperation.state !== 'succeeded') return;
+    if (cloneAssociation === null || cloneAssociation.adopted) return;
+    // Only the draft's own associated operation adopts: a snapshot that
+    // belongs to another draft or to Settings stays visible without ever
+    // selecting anything here.
+    if (cloneOperation.idempotencyKey !== cloneAssociation.idempotencyKey) return;
+    const published = cloneOperation.published;
+    if (published === undefined || !published.hasHead || published.identity === undefined) return;
+    const identity = published.identity;
+    // Adoption requires the succeeded snapshot plus the repository still
+    // being the published one and feature-ready: stream completion alone,
+    // a replacement, or an unborn result never selects anything.
+    const match = repositories.find(
+      (repo) =>
+        repo.valid &&
+        repo.featureReady &&
+        repo.identity !== undefined &&
+        sameRepoIdentity(repo.identity, identity),
+    );
+    if (match === undefined || match.identity === undefined) return;
+    const matchIdentity = match.identity;
+    // The association has served its purpose: retiring it with the adoption
+    // makes the exactly-once guarantee structural — no later invalidation
+    // can reselect, and the clone view is free to start a fresh clone.
+    setCloneAssociation(null);
+    setRepoSelections((current) =>
+      current.some((selection) => sameRepoIdentity(selection.identity, matchIdentity))
+        ? current
+        : [...current, { key: match.name, identity: matchIdentity }],
+    );
+    // A search filter cannot hide the focus target.
+    setRepoQuery('');
+    setFocusRepoKey(match.name);
+    setCloneOpen(false);
+    setFolderNotice(`Cloned ${match.name} and selected it.`);
+    setRepoError(null);
+  }, [cloneOperation, cloneAssociation, repositories]);
+
+  /**
+   * A picker-initiated creation adopts into exactly this draft, once: the
+   * pending marker is recorded before the request flies, and once the
+   * server-resolved identity returns, the repository is selected under its
+   * current catalog key after the catalog has refreshed to include it. A
+   * result without provable identity never selects anything, and a
+   * discarded draft (or a server switch that remounts the sheet) can never
+   * adopt a late completion.
+   */
+  const serverKeyRef = useRef<string | null>(serverKey);
+  const serverGenerationRef = useRef(0);
+  // The connected server's display name anchors the update impact copy and
+  // refusals to the server that actually owns the repository.
+  const serverLabel = serverLabelFor(connection);
+  useEffect(() => {
+    if (serverKeyRef.current !== serverKey) {
+      serverGenerationRef.current += 1;
+      initializeRequestSeq.current += 1;
+      setPendingInitialize(null);
+      setInitializeError(null);
+      // An in-flight update belongs to the originating server: its late
+      // result is discarded by the request fence, so its outcome is unknown
+      // and is retained as a record keyed to that server — never as a
+      // notice that speaks for another server's repositories. The record
+      // replays whenever its server is connected again.
+      if (sourceUpdate.phase === 'active') {
+        const record = sourceUpdate.record;
+        setUpdateUncertainty((records) => [
+          ...withoutUncertaintyFor(records, record.identity),
+          record,
+        ]);
+      }
+      sourceUpdateActiveRef.current = false;
+      setSourceUpdate({ phase: 'idle' });
+      setUpdateNotices([]);
+      // Returning to a server with retained uncertainty re-triggers its
+      // settlement reads.
+      setReconcileRevision((revision) => revision + 1);
+    }
+    serverKeyRef.current = serverKey;
+  }, [serverKey, sourceUpdate]);
+
+  useEffect(() => {
+    const repositories = reconciledSelections.flatMap((selection) =>
+      selection.status === 'selected'
+        ? [{ repoKey: selection.key, identity: selection.identity }]
+        : [],
+    );
+    const request = ++sourceRequestSeq.current;
+    if (repositories.length === 0 || unresolvedSelections.length > 0) {
+      setSourceState({ phase: 'idle' });
+      return;
+    }
+    const requestedServer = serverKey;
+    setSourceState({ phase: 'loading' });
+    void window.agentico
+      .inspectRepositorySources({
+        mode: useCurrentBranch ? 'current' : 'default',
+        repositories,
+      })
+      .then(
+        (value) => {
+          if (sourceRequestSeq.current === request && serverKeyRef.current === requestedServer) {
+            setSourceState({ phase: 'loaded', value });
+          }
+        },
+        (error: unknown) => {
+          if (sourceRequestSeq.current === request && serverKeyRef.current === requestedServer) {
+            setSourceState({ phase: 'error', error: parseIpcError(error) });
+          }
+        },
+      );
+  }, [
+    reconciledSelections,
+    serverKey,
+    sourceRefreshRevision,
+    unresolvedSelections.length,
+    useCurrentBranch,
+  ]);
+
+  // Origin checks follow the same selection contract as local sources: the
+  // request repeats whenever the selection, shared mode, or server changes,
+  // plus one-shot refreshes (Check again) and poll ticks while rows are still
+  // checking. A selection/mode/server change invalidates the previous
+  // comparisons immediately so a late reply can never label the new
+  // selection; refresh keys are consumed by exactly one request.
+  useEffect(() => {
+    const repositories = reconciledSelections.flatMap((selection) =>
+      selection.status === 'selected'
+        ? [{ repoKey: selection.key, identity: selection.identity }]
+        : [],
+    );
+    const request = ++originRequestSeq.current;
+    if (repositories.length === 0 || unresolvedSelections.length > 0) {
+      originRefreshKeys.current = new Set();
+      originContextRef.current = null;
+      setOriginState({ phase: 'idle' });
+      return;
+    }
+    const contextKey = `${serverKey ?? ''}|${useCurrentBranch ? 'current' : 'default'}|${repositories
+      .map((repository) => repository.repoKey)
+      .sort()
+      .join(',')}`;
+    if (originContextRef.current !== contextKey) {
+      originContextRef.current = contextKey;
+      setOriginState({ phase: 'idle' });
+    }
+    const refresh = [...originRefreshKeys.current];
+    originRefreshKeys.current = new Set();
+    const requestedServer = serverKey;
+    void window.agentico
+      .checkRepositoryOriginStatus({
+        mode: useCurrentBranch ? 'current' : 'default',
+        repositories,
+        ...(refresh.length === 0 ? {} : { refresh }),
+      })
+      .then(
+        (value) => {
+          if (originRequestSeq.current === request && serverKeyRef.current === requestedServer) {
+            setOriginState({ phase: 'loaded', value });
+          }
+        },
+        (error: unknown) => {
+          if (originRequestSeq.current === request && serverKeyRef.current === requestedServer) {
+            setOriginState({ phase: 'error', error: parseIpcError(error) });
+          }
+        },
+      );
+  }, [
+    reconciledSelections,
+    serverKey,
+    unresolvedSelections.length,
+    useCurrentBranch,
+    originRefreshRevision,
+    originPollTick,
+  ]);
+
+  // Poll while any selected row is still checking. The server bounds every
+  // attempt with its own deadline, so polling always stops once rows settle.
+  useEffect(() => {
+    if (originState.phase !== 'loaded') return;
+    if (!originState.value.repositories.some((row) => row.status === 'checking')) return;
+    const timer = setTimeout(() => setOriginPollTick((tick) => tick + 1), 1500);
+    return () => clearTimeout(timer);
+  }, [originState]);
+
+  // Check again queues one repository for the next origin request; the
+  // revision re-runs the effect, which consumes the queue as a one-shot
+  // refresh so the server starts a fresh attempt instead of serving its
+  // completed result.
+  const requestOriginRecheck = useCallback((repoKey: string) => {
+    originRefreshKeys.current = new Set([...originRefreshKeys.current, repoKey]);
+    setOriginRefreshRevision((revision) => revision + 1);
+  }, []);
+
+  /**
+   * Splices one server-resolved status row into the loaded origin snapshot,
+   * replacing the row's previous comparison. Used only for a typed stale
+   * refusal, whose fresh status row is the comparison the user should see
+   * next; the mutation itself is never retried automatically.
+   */
+  const mergeOriginStatusRow = useCallback(
+    (repoKey: string, status: RepositoryOriginStatusSnapshot | undefined) => {
+      if (status === undefined) return;
+      setOriginState((current) =>
+        current.phase === 'loaded'
+          ? {
+              phase: 'loaded',
+              value: {
+                repositories: current.value.repositories.map((row) =>
+                  row.repoKey === repoKey ? status : row,
+                ),
+              },
+            }
+          : current,
+      );
+    },
+    [],
+  );
+
+  /**
+   * Records one update attempt as outcome-unknown, keyed to its originating
+   * server and repository identity. At most one unsettled record exists per
+   * repository: a newer attempt for the same repository replaces it.
+   */
+  const recordUncertainty = useCallback((record: SourceUpdateUncertainty) => {
+    setUpdateUncertainty((records) => [...withoutUncertaintyFor(records, record.identity), record]);
+  }, []);
+
+  /**
+   * The per-row Update from origin action. The request carries the displayed
+   * expectations unchanged; a definitive success or no-op refreshes the local
+   * source and the comparison, a typed refusal merges its fresh status row
+   * and leaves a warning for an explicit new action, and a definitive
+   * canonical rejection is preserved as a warning that never blocks
+   * submission of a still-valid local source. A result that never
+   * definitively arrives from the originating server — a lost response, a
+   * timeout, a server switch, or a server that proved nothing either way —
+   * records uncertainty instead: the source stays unacceptable until a
+   * settlement read on that server establishes the branch's state.
+   */
+  const requestSourceUpdate = useCallback(
+    (row: RepositoryOriginStatusSnapshot) => {
+      const target = updateTargetFor(row);
+      if (target === null || sourceUpdateActiveRef.current) return;
+      const identity = row.identity;
+      const startServerKey = serverKeyRef.current;
+      const label = serverLabel;
+      const record: SourceUpdateUncertainty = {
+        serverKey: startServerKey,
+        repoKey: row.repoKey,
+        identity,
+        mode: target.request.mode,
+        branch: target.branch,
+        originBranch: target.originBranch,
+        expectedLocalSha: target.request.expectedLocalSha,
+        expectedOriginSha: target.request.expectedOriginSha,
+        checkoutHeadRef: target.request.checkoutHeadRef,
+        checkoutHeadSha: target.request.checkoutHeadSha,
+        attempt: ++sourceUpdateAttemptRef.current,
+      };
+      sourceUpdateActiveRef.current = true;
+      const settle = (): void => {
+        sourceUpdateActiveRef.current = false;
+      };
+      setSourceUpdate({ phase: 'active', record });
+      setUpdateNotices((current) => withoutNoticesFor(current, identity));
+      void window.agentico.updateRepositorySource(target.request).then(
+        (result) => {
+          // A completion from another server (or after a remount) is not
+          // this draft's result: the new server's UI stays untouched, and
+          // the attempt's outcome is unknown on the originating server.
+          if (serverKeyRef.current !== startServerKey) {
+            settle();
+            recordUncertainty(record);
+            return;
+          }
+          settle();
+          setSourceUpdate((current) =>
+            current.phase === 'active' && current.record.attempt === record.attempt
+              ? { phase: 'idle' }
+              : current,
+          );
+          if (result.result === 'updated' || result.result === 'already_up_to_date') {
+            setUpdateNotices((current) => [
+              ...withoutNoticesFor(current, identity),
+              {
+                repoKey: row.repoKey,
+                identity,
+                tone: 'success',
+                text: updateSuccessText(result, target, label),
+              },
+            ]);
+            // The definitive result refreshes the selected local source and
+            // the comparison; the server's exact-start contract accepts the
+            // updated local SHA on a later submission.
+            setSourceRefreshRevision((revision) => revision + 1);
+            requestOriginRecheck(row.repoKey);
+            return;
+          }
+          setUpdateNotices((current) => [
+            ...withoutNoticesFor(current, identity),
+            {
+              repoKey: row.repoKey,
+              identity,
+              tone: 'warning',
+              text: updateRefusalText(result, target, label),
+            },
+          ]);
+          mergeOriginStatusRow(row.repoKey, result.status);
+        },
+        (err: unknown) => {
+          if (serverKeyRef.current !== startServerKey) {
+            settle();
+            recordUncertainty(record);
+            return;
+          }
+          settle();
+          setSourceUpdate((current) =>
+            current.phase === 'active' && current.record.attempt === record.attempt
+              ? { phase: 'idle' }
+              : current,
+          );
+          const parsed = parseIpcError(err);
+          if (isUncertainUpdateError(parsed)) {
+            // The server proved nothing either way (or the response never
+            // arrived): never a warning that reads as failure, and never an
+            // assumed rollback — the source is unacceptable until settled.
+            recordUncertainty(record);
+            return;
+          }
+          setUpdateNotices((current) => [
+            ...withoutNoticesFor(current, identity),
+            {
+              repoKey: row.repoKey,
+              identity,
+              tone: 'warning',
+              text: updateErrorText(target, parsed, label),
+            },
+          ]);
+        },
+      );
+    },
+    [serverLabel, requestOriginRecheck, mergeOriginStatusRow, recordUncertainty],
+  );
+
+  /**
+   * Applies one settlement outcome: the record retires (its source is
+   * acceptable again), the observation becomes the row's notice, and a
+   * target or changed observation refreshes the local source and the
+   * comparison for an explicit next action. A settlement never retries the
+   * mutation and never rolls the branch back.
+   */
+  const applyReconcileResult = useCallback(
+    (record: SourceUpdateUncertainty, result: RepositorySourceReconcileResult) => {
+      setUpdateUncertainty((records) => withoutUncertaintyFor(records, record.identity));
+      setUpdateNotices((current) => [
+        ...withoutNoticesFor(current, record.identity),
+        reconcileNoticeText(result, record, serverLabelFor(connection)),
+      ]);
+      if (result.outcome === 'original_tip_remains') {
+        // The displayed comparison is still truthful (nothing moved); only
+        // the local source is re-read so continuation is warning-based.
+        setSourceRefreshRevision((revision) => revision + 1);
+        return;
+      }
+      setSourceRefreshRevision((revision) => revision + 1);
+      requestOriginRecheck(record.repoKey);
+    },
+    [connection, requestOriginRecheck],
+  );
+
+  /**
+   * Applies one settlement refusal: a definitive rejection (a replaced
+   * repository) retires the record as a warning that requires reselection;
+   * anything else — including the server's own unprovability — keeps the
+   * outcome unknown, never a proved failure, and a later trigger (Check
+   * again, reconnect, remount) retries the read.
+   */
+  const applyReconcileError = useCallback(
+    (record: SourceUpdateUncertainty, error: CanonicalError) => {
+      if (!isUnsettledReconcileError(error)) {
+        setUpdateUncertainty((records) => withoutUncertaintyFor(records, record.identity));
+        setUpdateNotices((current) => [
+          ...withoutNoticesFor(current, record.identity),
+          {
+            repoKey: record.repoKey,
+            identity: record.identity,
+            tone: 'warning',
+            text: reconcileErrorText(record, error, serverLabelFor(connection)),
+          },
+        ]);
+      }
+    },
+    [connection],
+  );
+
+  // Settlement reads: one at a time, only for records that belong to the
+  // currently connected server, fenced by that server identity. Failure
+  // keeps the record; nothing here retries automatically — a new trigger
+  // (Check again, a server switch back, a remount) re-runs the effect.
+  useEffect(() => {
+    const pending = updateUncertainty.filter((record) => record.serverKey === serverKey);
+    const record = pending[0];
+    if (record === undefined || reconcileInFlightRef.current) return;
+    const startServerKey = serverKey;
+    reconcileInFlightRef.current = true;
+    const settle = (): void => {
+      reconcileInFlightRef.current = false;
+    };
+    void window.agentico.reconcileSourceUpdate(uncertaintyRequestFor(record)).then(
+      (result) => {
+        // A settlement from another server never applies here; the record
+        // stays unknown until its own server is connected again.
+        if (serverKeyRef.current !== startServerKey) {
+          settle();
+          return;
+        }
+        settle();
+        applyReconcileResult(record, result);
+      },
+      (err: unknown) => {
+        if (serverKeyRef.current !== startServerKey) {
+          settle();
+          return;
+        }
+        settle();
+        applyReconcileError(record, parseIpcError(err));
+      },
+    );
+  }, [updateUncertainty, serverKey, reconcileRevision, applyReconcileResult, applyReconcileError]);
+
+  const handleCreate = useCallback(
+    (input: CreateRepositoryStartInput) => {
+      const startServerKey = serverKeyRef.current;
+      // The marker precedes the flight: a lost response still adopts from
+      // the refreshed catalog, and closing the view never discards it.
+      setPendingCreate({ idempotencyKey: input.idempotencyKey, identity: null });
+      return window.agentico.createRepository(input).then(
+        (result) => {
+          // A completion from another server (or after a remount) is not
+          // this draft's result: the new server's UI stays untouched.
+          if (serverKeyRef.current !== startServerKey) {
+            return result;
+          }
+          if (result.identity !== undefined) {
+            setPendingCreate({ idempotencyKey: input.idempotencyKey, identity: result.identity });
+          } else {
+            // No provable identity (a replayed success whose destination
+            // was replaced): visible success, never adopted by key or path.
+            setPendingCreate(null);
+            setFolderNotice(`Created ${result.repoKey}; select it from the list once it appears.`);
+          }
+          // The catalog refresh reconciles the new repository (and every
+          // selection) by identity; adoption follows from it.
+          refreshCatalog();
+          return result;
+        },
+        (err: unknown) => {
+          if (serverKeyRef.current !== null && serverKeyRef.current === startServerKey) {
+            // The attempt is over for this draft; the form keeps its
+            // inputs and shows the canonical rejection.
+            setPendingCreate(null);
+          }
+          throw err;
+        },
+      );
+    },
+    [refreshCatalog],
+  );
+
+  useEffect(() => {
+    if (pendingCreate === null || pendingCreate.identity === null) return;
+    const identity = pendingCreate.identity;
+    // Adoption requires the published repository to still be the published
+    // one and feature-ready in the authoritative catalog.
+    const match = repositories.find(
+      (repo) =>
+        repo.valid &&
+        repo.featureReady &&
+        repo.identity !== undefined &&
+        sameRepoIdentity(repo.identity, identity),
+    );
+    if (match === undefined || match.identity === undefined) return;
+    const matchIdentity = match.identity;
+    // Exactly-once is structural: the marker retires with the adoption.
+    setPendingCreate(null);
+    setRepoSelections((current) =>
+      current.some((selection) => sameRepoIdentity(selection.identity, matchIdentity))
+        ? current
+        : [...current, { key: match.name, identity: matchIdentity }],
+    );
+    // A search filter cannot hide the focus target.
+    setRepoQuery('');
+    setFocusRepoKey(match.name);
+    setCreateOpen(false);
+    setFolderNotice(`Created ${match.name} and selected it.`);
+    setRepoError(null);
+  }, [pendingCreate, repositories]);
+
+  /**
+   * The shared explicit-initialization action, used by both picker entry
+   * points: the unborn clone-success offer and the later opt-in beside an
+   * unborn catalog row. The pending marker is recorded before the request
+   * flies (it also suppresses duplicate actions for that repository); a
+   * completion from another server is discarded silently, and a rejection
+   * is reconciled by a fresh authoritative read — never by repeating the
+   * mutation. Both result values are successes; adoption follows from the
+   * refreshed catalog.
+   */
+  const handleInitialize = useCallback(
+    (target: { repoKey: string; identity: RepositoryIdentity; path: string }) => {
+      const startServerKey = serverKeyRef.current;
+      const startServerGeneration = serverGenerationRef.current;
+      const requestSeq = ++initializeRequestSeq.current;
+      const isCurrentRequest = (): boolean =>
+        requestSeq === initializeRequestSeq.current &&
+        startServerGeneration === serverGenerationRef.current &&
+        startServerKey === serverKeyRef.current;
+      const reconcile = (
+        identity: RepositoryIdentity,
+        resultRepoKey: string,
+        failure: CanonicalError | null,
+      ): void => {
+        void window.agentico.getReadiness().then(
+          (snapshot) => {
+            if (!isCurrentRequest()) return;
+            applyCatalogSnapshot(snapshot);
+            const ready = snapshot.repositories.some(
+              (repo) =>
+                repo.valid &&
+                repo.featureReady &&
+                repo.identity !== undefined &&
+                sameRepoIdentity(repo.identity, identity),
+            );
+            if (ready) {
+              setInitializeError(null);
+              setPendingInitialize({ repoKey: resultRepoKey, identity });
+              return;
+            }
+            setPendingInitialize(null);
+            if (failure !== null) {
+              setInitializeError(failure);
+            } else {
+              setFolderNotice(
+                `Initialized ${resultRepoKey}, but the repository changed or is no longer available. Reselect it from the current list.`,
+              );
+            }
+          },
+          (readError: unknown) => {
+            if (!isCurrentRequest()) return;
+            // The outcome is still uncertain. Keep the identity-bound
+            // marker so another mutation cannot be offered until a later
+            // authoritative catalog refresh can prove adoption.
+            setPendingInitialize({ repoKey: resultRepoKey, identity });
+            setInitializeError(failure ?? parseIpcError(readError));
+          },
+        );
+      };
+      setPendingInitialize({ repoKey: target.repoKey, identity: null });
+      setInitializeError(null);
+      return window.agentico
+        .initializeRepository({
+          repoKey: target.repoKey,
+          identity: target.identity,
+          path: target.path,
+          consent: true,
+        })
+        .then(
+          (result) => {
+            // A completion from another server (or after a remount) is not
+            // this draft's result: the new server's UI stays untouched.
+            if (!isCurrentRequest()) {
+              return result;
+            }
+            if (result.identity !== undefined) {
+              reconcile(result.identity, result.repoKey, null);
+            } else {
+              // No provable identity: visible success, never adopted by
+              // key or path.
+              setPendingInitialize(null);
+              setFolderNotice(
+                `Initialized ${result.repoKey}; select it from the list once it appears.`,
+              );
+            }
+            return result;
+          },
+          (err: unknown) => {
+            if (serverKeyRef.current !== null && isCurrentRequest()) {
+              // The attempt is over for this draft; the canonical
+              // rejection stays scoped to the repository action.
+              const parsed = parseIpcError(err);
+              // A lost response is reconciled through a fresh
+              // authoritative read; the mutation is never repeated
+              // automatically.
+              if (parsed.code !== 'E_SERVER_SWITCHED') {
+                reconcile(target.identity, target.repoKey, parsed);
+              } else {
+                setPendingInitialize(null);
+              }
+            }
+            throw err;
+          },
+        );
+    },
+    [applyCatalogSnapshot],
+  );
+
+  /** Duplicate initialize actions for one repository are suppressed while pending. */
+  const initializeSuppressed = useCallback(
+    (repo: RepositoryState): boolean => {
+      if (pendingInitialize === null) return false;
+      if (pendingInitialize.identity === null) return pendingInitialize.repoKey === repo.name;
+      return (
+        repo.identity !== undefined && sameRepoIdentity(pendingInitialize.identity, repo.identity)
+      );
+    },
+    [pendingInitialize],
+  );
+
+  /**
+   * A picker-initiated initialization adopts into exactly this draft,
+   * once: the pending marker carries the server-resolved identity of the
+   * refreshed repository, and the repository is selected under its current
+   * catalog key only after current readiness proves the same repository
+   * feature-ready. The historical clone record may still report its
+   * publication as unborn — that flag never blocks adoption.
+   */
+  useEffect(() => {
+    if (pendingInitialize === null || pendingInitialize.identity === null) return;
+    const identity = pendingInitialize.identity;
+    const match = repositories.find(
+      (repo) =>
+        repo.valid &&
+        repo.featureReady &&
+        repo.identity !== undefined &&
+        sameRepoIdentity(repo.identity, identity),
+    );
+    if (match === undefined || match.identity === undefined) return;
+    const matchIdentity = match.identity;
+    // Exactly-once is structural: the marker retires with the adoption.
+    setPendingInitialize(null);
+    // The terminal clone association is historical once its repository is
+    // initialized and adopted. Retire it so a later Clone action opens a
+    // fresh form instead of reviving the unborn success card.
+    setCloneAssociation(null);
+    setRepoSelections((current) =>
+      current.some((selection) => sameRepoIdentity(selection.identity, matchIdentity))
+        ? current
+        : [...current, { key: match.name, identity: matchIdentity }],
+    );
+    // A search filter cannot hide the focus target.
+    setRepoQuery('');
+    setFocusRepoKey(match.name);
+    setCloneOpen(false);
+    setInitializeExpandedKey(null);
+    setFolderNotice(`Initialized ${match.name} and selected it.`);
+    setRepoError(null);
+  }, [pendingInitialize, repositories]);
+
+  /**
+   * The initialize offer for the associated unborn clone success. The
+   * historical publication flag drives visibility; the pending state and
+   * the draft adoption stay with this sheet.
+   */
+  const cloneInitializeOffer = useMemo<InitializeOfferController | null>(() => {
+    if (cloneOperation === null || cloneOperation.state !== 'succeeded') return null;
+    const published = cloneOperation.published;
+    if (published === undefined || published.hasHead) return null;
+    const identity = published.identity;
+    if (identity === undefined) return null;
+    if (declinedInitializeOperations.has(cloneOperation.id)) return null;
+    const pending =
+      pendingInitialize !== null &&
+      (pendingInitialize.identity === null
+        ? pendingInitialize.repoKey === published.repoKey
+        : sameRepoIdentity(pendingInitialize.identity, identity));
+    return {
+      pending,
+      error: initializeError,
+      onInitialize: () => {
+        // The rejection is already surfaced as the scoped offer error;
+        // this catch only keeps the discarded promise quiet.
+        void handleInitialize({ repoKey: published.repoKey, identity, path: published.path }).catch(
+          () => undefined,
+        );
+      },
+      onDecline: () =>
+        setDeclinedInitializeOperations((current) => new Set([...current, cloneOperation.id])),
+    };
+  }, [
+    cloneOperation,
+    declinedInitializeOperations,
+    pendingInitialize,
+    initializeError,
+    handleInitialize,
+  ]);
+
+  /**
+   * Pending row focus lands only while the picker step is actually visible,
+   * so an adoption that completes elsewhere never steals focus.
+   */
+  useEffect(() => {
+    if (focusRepoKey === null || cloneOpen || createOpen || stepIndex !== 0) return;
+    const group = repoGroupRef.current;
+    if (group === null) return;
+    const row = Array.from(group.querySelectorAll<HTMLElement>('[data-repo-key]'))
+      .find((candidate) => candidate.dataset.repoKey === focusRepoKey)
+      ?.querySelector('.creation-sheet__row-control');
+    if (!(row instanceof HTMLInputElement)) return;
+    (row as HTMLInputElement).focus();
+    setFocusRepoKey(null);
+  }, [focusRepoKey, cloneOpen, createOpen, stepIndex, repositories, repoQuery]);
+
   // Field errors are announced by moving focus to the control that must
   // change — from an effect, so a submit-time error that first has to jump
   // back to an earlier step focuses the field once that step has rendered.
@@ -278,7 +1623,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
   /** Adopts a snapshot's workspace view and selects whatever it discovered. */
   const adoptSnapshot = (snapshot: {
     repositories: readonly RepositoryState[];
-    workspaceRoots: readonly { path: string }[];
+    workspaceRoots: readonly WorkspaceRootState[];
   }): readonly RepositoryState[] => {
     setState((current) =>
       current.phase === 'loaded'
@@ -288,6 +1633,8 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
           }
         : current,
     );
+    setRepositoryFiles((files) => [...reconcileRepositoryFiles(files, snapshot.repositories)]);
+    setCloneableRoots(snapshot.workspaceRoots);
     setWorkspaceRoots(snapshot.workspaceRoots.map((root) => root.path));
     return snapshot.repositories;
   };
@@ -295,8 +1642,14 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
   /** An unambiguous discovery selects itself; several stay for the user. */
   const selectDiscovered = (discovered: readonly RepositoryState[]): void => {
     const only = discovered.length === 1 ? discovered[0] : undefined;
-    if (only === undefined) return;
-    setRepoKeys((current) => (current.includes(only.name) ? current : [...current, only.name]));
+    if (only === undefined || !isSelectableRepository(only)) return;
+    const identity = only.identity;
+    if (identity === undefined) return;
+    setRepoSelections((current) =>
+      current.some((selection) => sameRepoIdentity(selection.identity, identity))
+        ? current
+        : [...current, { key: only.name, identity }],
+    );
     setRepoError(null);
   };
 
@@ -333,11 +1686,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
           : `Added a workspace root holding ${discovered.length} repositories.`,
       );
     } catch (err) {
-      // On a remote server the typed path's fate is the form's own affair:
-      // the server's rejection stays next to the field, not in the sheet's
-      // global alert.
-      if (remoteServer) setFolderError(parseIpcError(err).summary);
-      else setFormError(parseIpcError(err));
+      setFormError(parseIpcError(err));
     } finally {
       setFolderPending(false);
     }
@@ -375,7 +1724,6 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
       const initialized = repositoriesWithin(adoptSnapshot(snapshot), folder);
       selectDiscovered(initialized);
       setFolderCandidate(null);
-      setFolderDraft('');
       setFolderHoldsNoRepository(false);
       setFolderNotice(
         initialized.length === 0
@@ -383,8 +1731,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
           : `Initialized ${initialized[0]?.name} and selected it.`,
       );
     } catch (err) {
-      if (remoteServer) setFolderError(parseIpcError(err).summary);
-      else setFormError(parseIpcError(err));
+      setFormError(parseIpcError(err));
       if (!parentAlreadyRoot) {
         await window.agentico
           .removeWorkspaceRoot(parent)
@@ -400,9 +1747,25 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
   const validateStep = (index: number): boolean => {
     setNameError(null);
     setRepoError(null);
-    if (index === 0 && repoKeys.length === 0) {
-      setRepoError('Select at least one repository.');
-      return false;
+    if (index === 0) {
+      if (hasUnresolvedSelection(reconciledSelections)) {
+        setRepoError(
+          'Resolve or remove the repositories marked as needing reselection before continuing.',
+        );
+        return false;
+      }
+      if (selectedKeys.length === 0) {
+        setRepoError('Select at least one repository.');
+        return false;
+      }
+      if (sourceState.phase !== 'loaded') {
+        setRepoError(
+          sourceState.phase === 'loading'
+            ? 'Wait for the selected repository sources to finish loading.'
+            : 'Refresh or reselect repositories whose local source could not be resolved.',
+        );
+        return false;
+      }
     }
     if (index === 1 && name.trim() === '') {
       setNameError('Enter a feature name.');
@@ -417,7 +1780,17 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
-    if (pending || uploadsBlocking || state.phase !== 'loaded') return;
+    // A selected source update may still be mutating the branch the feature
+    // would start from, and an uncertain one may have mutated it already:
+    // submission waits for the attempt to settle or be reconciled.
+    if (
+      pending ||
+      uploadsBlocking ||
+      sourceUpdate.phase === 'active' ||
+      uncertainBlocked ||
+      state.phase !== 'loaded'
+    )
+      return;
     if (!validateStep(0)) {
       setStepIndex(0);
       return;
@@ -448,8 +1821,10 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
         const created = await window.agentico.createFeature({
           name: name.trim(),
           description,
-          repoKeys: [...repoKeys],
+          repoKeys: [...selectedKeys],
           useCurrentBranch,
+          repositorySources:
+            sourceState.phase === 'loaded' ? [...sourceState.value.repositories] : [],
           images: [...images],
           attachments: [...attachments],
           ...(createdImageRefs.length === 0 ? {} : { imageUploads: createdImageRefs }),
@@ -491,9 +1866,27 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
             /* cockpit owns retry */
           }
         }
-        onCreated({ featureId: created.featureId, name: name.trim() });
+        handleCreated({
+          featureId: created.featureId,
+          name: name.trim(),
+          ...(created.warnings === undefined ? {} : { warnings: created.warnings }),
+        });
       } catch (err) {
         const parsed = parseIpcError(err);
+        if (parsed.code === 'local_source_stale') {
+          setStepIndex(0);
+          setRepoError(null);
+          setFormError(parsed);
+          setSourceRefreshRevision((revision) => revision + 1);
+          return;
+        }
+        // An unresolved repository-file reference keeps the editable draft
+        // and surfaces where the reference chips are visible.
+        if (parsed.code === 'E_REPOSITORY_FILE_UNRESOLVED') {
+          setStepIndex(1);
+          setFormError(parsed);
+          return;
+        }
         const field = fieldForCreationError(parsed);
         if (field === 'name') {
           setStepIndex(1);
@@ -508,8 +1901,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
     })();
   };
 
-  const loadedDefaults = state.phase === 'loaded' ? state.defaults : null;
-  const repositories = loadedDefaults?.repositories ?? [];
+  const loadedDefaults = loadedDefaultsEarly;
   const filteredRepositories = useMemo(() => {
     const query = repoQuery.trim().toLowerCase();
     if (query === '') return repositories;
@@ -628,6 +2020,13 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                     <h2 id="creation-repositories" className="creation-sheet__heading">
                       Choose repositories
                     </h2>
+                    {catalogRefreshError !== null ? (
+                      <ErrorSurface
+                        error={catalogRefreshError}
+                        variant="compact"
+                        localAction={retryAction(refreshCatalog)}
+                      />
+                    ) : null}
                     {repositories.length > 0 ? (
                       <label className="creation-sheet__field">
                         <span className="creation-sheet__field-label">Search repositories</span>
@@ -655,45 +2054,289 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                           ? 'No repositories yet'
                           : 'Fresh workspace discovery'}
                       </legend>
-                      {repositories.length === 0 ? (
+                      {repositories.length === 0 && unresolvedSelections.length === 0 ? (
                         <p className="creation-sheet__group-desc">
                           Point Agentico at a folder below: an existing repository, a folder that
                           holds several, or an empty folder to start something new.
                         </p>
                       ) : (
                         <ul className="creation-sheet__rows">
-                          {filteredRepositories.map((repo) => (
-                            <li key={repo.name} className="creation-sheet__row-item">
-                              <label className="creation-sheet__row" data-valid={repo.valid}>
+                          {unresolvedSelections.map((selection) => (
+                            <li
+                              key={`unresolved:${selection.key}`}
+                              className="creation-sheet__row-item"
+                            >
+                              <div
+                                className="creation-sheet__row"
+                                data-valid={false}
+                                data-unresolved="true"
+                              >
                                 <span className="creation-sheet__row-body">
-                                  <b className="creation-sheet__row-name">{repo.name}</b>
-                                  <code className="creation-sheet__row-path">{repo.path}</code>
-                                  {!repo.valid ? (
-                                    <span className="creation-sheet__row-issue">
-                                      {repo.issue?.summary ?? 'Unavailable'}
-                                    </span>
-                                  ) : null}
+                                  <b className="creation-sheet__row-name">{selection.key}</b>
+                                  <span className="creation-sheet__row-issue">
+                                    Needs reselection — this repository is no longer available on
+                                    the server. Reselect it below, or remove it.
+                                  </span>
                                 </span>
-                                <input
-                                  className="creation-sheet__row-control"
-                                  type="checkbox"
-                                  checked={repoKeys.includes(repo.name)}
-                                  disabled={!repo.valid || pending}
-                                  onChange={() => {
-                                    const nextRepoKeys = repoKeys.includes(repo.name)
-                                      ? repoKeys.filter((item) => item !== repo.name)
-                                      : [...repoKeys, repo.name];
-                                    setRepoKeys(nextRepoKeys);
+                                <button
+                                  type="button"
+                                  className="creation-sheet__row-control creation-sheet__button"
+                                  disabled={pending}
+                                  onClick={() => {
+                                    setRepoSelections((current) =>
+                                      current.filter(
+                                        (item) =>
+                                          !sameRepoIdentity(item.identity, selection.identity),
+                                      ),
+                                    );
                                     setRepositoryFiles((files) =>
-                                      files.filter((file) => nextRepoKeys.includes(file.repoKey)),
+                                      files.filter((file) => file.repoKey !== selection.key),
                                     );
                                     setRepoError(null);
                                   }}
-                                />
-                              </label>
+                                >
+                                  Remove
+                                </button>
+                              </div>
                             </li>
                           ))}
-                          {filteredRepositories.length === 0 ? (
+                          {filteredRepositories.map((repo) => {
+                            const repoSelected =
+                              repo.identity !== undefined &&
+                              reconciledSelections.some(
+                                (selection) =>
+                                  selection.status === 'selected' &&
+                                  sameRepoIdentity(
+                                    selection.identity,
+                                    repo.identity as NonNullable<RepositoryState['identity']>,
+                                  ),
+                              );
+                            const originRow =
+                              originState.phase === 'loaded' && repoSelected
+                                ? originState.value.repositories.find(
+                                    (row) => row.repoKey === repo.name,
+                                  )
+                                : undefined;
+                            const updateTarget =
+                              originRow === undefined ? null : updateTargetFor(originRow);
+                            const updateBlockedText =
+                              originRow === undefined || updateTarget !== null
+                                ? null
+                                : updateBlockedExplanation(originRow, serverLabel);
+                            // One selected update at a time: the active
+                            // repository's own row and any common-directory
+                            // alias of it (the same git store under another
+                            // catalog entry) cannot start a conflicting
+                            // action through a second row.
+                            const rowUpdateActive =
+                              sourceUpdate.phase === 'active' &&
+                              repo.identity !== undefined &&
+                              (sameRepoIdentity(sourceUpdate.record.identity, repo.identity) ||
+                                sharesCommonDirectory(sourceUpdate.record.identity, repo.identity));
+                            // An uncertain attempt on this row's repository
+                            // (or its common-directory alias) blocks a new
+                            // mutation against expectations the settlement
+                            // has not validated; only its own server's
+                            // records reach this sheet.
+                            const rowIdentity = repo.identity;
+                            const rowUncertain =
+                              rowIdentity !== undefined &&
+                              activeUncertainty.some(
+                                (record) =>
+                                  sameRepoIdentity(record.identity, rowIdentity) ||
+                                  sharesCommonDirectory(record.identity, rowIdentity),
+                              );
+                            const rowUncertainRecord =
+                              repo.identity === undefined
+                                ? undefined
+                                : uncertaintyFor(activeUncertainty, repo.identity);
+                            const updateNotice =
+                              repo.identity === undefined
+                                ? undefined
+                                : noticeFor(updateNotices, repo.identity);
+                            return (
+                              <li
+                                key={repo.name}
+                                className="creation-sheet__row-item"
+                                data-repo-key={repo.name}
+                              >
+                                <label className="creation-sheet__row" data-valid={repo.valid}>
+                                  <span className="creation-sheet__row-body">
+                                    <b className="creation-sheet__row-name">{repo.name}</b>
+                                    <code className="creation-sheet__row-path">{repo.path}</code>
+                                    {!repo.valid ? (
+                                      <span className="creation-sheet__row-issue">
+                                        {repo.issue?.summary ?? 'Unavailable'}
+                                      </span>
+                                    ) : !repo.featureReady ? (
+                                      <span className="creation-sheet__row-issue">
+                                        No commits yet — an initial commit is required before
+                                        feature work can start.
+                                      </span>
+                                    ) : repo.identity === undefined ? (
+                                      <span className="creation-sheet__row-issue">
+                                        The server could not resolve this repository's identity, so
+                                        it cannot be selected.
+                                      </span>
+                                    ) : null}
+                                    {sourceState.phase === 'loaded'
+                                      ? sourceState.value.repositories
+                                          .filter((source) => source.repoKey === repo.name)
+                                          .map((source) => (
+                                            <span
+                                              key={source.observedSha}
+                                              className="creation-sheet__row-hint"
+                                            >
+                                              Source:{' '}
+                                              {source.kind === 'detached'
+                                                ? `detached ${source.observedSha}`
+                                                : source.branch}
+                                            </span>
+                                          ))
+                                      : null}
+                                    {originRow === undefined ? null : (
+                                      <span className="creation-sheet__row-hint creation-sheet__row-origin-hint">
+                                        {originStatusText(originRow)}
+                                      </span>
+                                    )}
+                                  </span>
+                                  <input
+                                    className="creation-sheet__row-control"
+                                    type="checkbox"
+                                    checked={repoSelected}
+                                    disabled={
+                                      !isSelectableRepository(repo) || pending || rowUpdateActive
+                                    }
+                                    onChange={() => {
+                                      if (repo.identity === undefined) return;
+                                      const identity = repo.identity;
+                                      const isSelected = repoSelections.some((selection) =>
+                                        sameRepoIdentity(selection.identity, identity),
+                                      );
+                                      const nextSelections = isSelected
+                                        ? repoSelections.filter(
+                                            (selection) =>
+                                              !sameRepoIdentity(selection.identity, identity),
+                                          )
+                                        : [...repoSelections, { key: repo.name, identity }];
+                                      setRepoSelections(nextSelections);
+                                      // Deselecting a repository retires its
+                                      // row-scoped update notices with it.
+                                      if (isSelected) {
+                                        setUpdateNotices((current) =>
+                                          withoutNoticesFor(current, identity),
+                                        );
+                                      }
+                                      const nextKeys = resolvedSelectionKeys(
+                                        reconcileRepoSelections(nextSelections, repositories),
+                                      );
+                                      setRepositoryFiles((files) =>
+                                        files.filter((file) => nextKeys.includes(file.repoKey)),
+                                      );
+                                      setRepoError(null);
+                                    }}
+                                  />
+                                </label>
+                                {originRow !== undefined && originRow.status !== 'checking' ? (
+                                  <div className="creation-sheet__row-origin-actions">
+                                    {updateTarget !== null ? (
+                                      <span className="creation-sheet__row-update-copy">
+                                        {updateImpactText(updateTarget, serverLabel)}
+                                      </span>
+                                    ) : updateBlockedText !== null ? (
+                                      <span className="creation-sheet__row-update-copy creation-sheet__row-update-copy--blocked">
+                                        {updateBlockedText}
+                                      </span>
+                                    ) : null}
+                                    <button
+                                      type="button"
+                                      className="creation-sheet__button"
+                                      disabled={pending || rowUpdateActive}
+                                      onClick={() => {
+                                        requestOriginRecheck(repo.name);
+                                        // On an uncertain row, Check again also
+                                        // re-triggers the settlement read.
+                                        if (rowUncertain) {
+                                          setReconcileRevision((revision) => revision + 1);
+                                        }
+                                      }}
+                                    >
+                                      Check again
+                                    </button>
+                                    {updateTarget !== null ? (
+                                      <button
+                                        type="button"
+                                        className="creation-sheet__button"
+                                        disabled={pending || rowUpdateActive || rowUncertain}
+                                        onClick={() => requestSourceUpdate(originRow)}
+                                      >
+                                        {rowUpdateActive ? 'Updating…' : 'Update from origin'}
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                                {rowUncertainRecord !== undefined ? (
+                                  <p
+                                    className="creation-sheet__row-update-notice"
+                                    role="status"
+                                    data-tone="warning"
+                                  >
+                                    {updateUncertainText(rowUncertainRecord, serverLabel)}
+                                  </p>
+                                ) : updateNotice === undefined ? null : (
+                                  <p
+                                    className="creation-sheet__row-update-notice"
+                                    role="status"
+                                    data-tone={updateNotice.tone}
+                                  >
+                                    {updateNotice.text}
+                                  </p>
+                                )}
+                                {repo.valid && !repo.featureReady && repo.identity !== undefined ? (
+                                  <div className="creation-sheet__row-initialize">
+                                    <button
+                                      type="button"
+                                      className="creation-sheet__button"
+                                      aria-expanded={initializeExpandedKey === repo.name}
+                                      aria-controls={`repo-${encodeURIComponent(repo.name)}-initialize-copy`}
+                                      disabled={initializeSuppressed(repo) || pending}
+                                      onClick={() =>
+                                        setInitializeExpandedKey((current) =>
+                                          current === repo.name ? null : repo.name,
+                                        )
+                                      }
+                                    >
+                                      Create initial commit…
+                                    </button>
+                                    {initializeExpandedKey === repo.name ? (
+                                      <InitializeOffer
+                                        idPrefix={`repo-${encodeURIComponent(repo.name)}`}
+                                        controller={{
+                                          pending: initializeSuppressed(repo),
+                                          error: initializeError,
+                                          onInitialize: () => {
+                                            const identity = repo.identity;
+                                            if (identity === undefined) return;
+                                            // The rejection is already surfaced as the scoped
+                                            // offer error; this catch only keeps the discarded
+                                            // promise quiet.
+                                            void handleInitialize({
+                                              repoKey: repo.name,
+                                              identity,
+                                              path: repo.path,
+                                            }).catch(() => undefined);
+                                          },
+                                          onDecline: () => setInitializeExpandedKey(null),
+                                        }}
+                                      />
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                              </li>
+                            );
+                          })}
+                          {filteredRepositories.length === 0 &&
+                          unresolvedSelections.length === 0 ? (
                             <li className="creation-sheet__row-item creation-sheet__row-empty">
                               No repositories match “{repoQuery.trim()}”.
                             </li>
@@ -707,13 +2350,13 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                       aria-label="Add a repository to the workspace"
                       {...(repositories.length === 0 ? { 'data-primary': 'true' } : {})}
                     >
-                      <div className="creation-sheet__browser-head">
-                        <h3 className="creation-sheet__browser-title">
-                          {repositories.length === 0
-                            ? 'Add your first repository'
-                            : 'Bring in another folder'}
-                        </h3>
-                        {!remoteServer ? (
+                      {remoteServer ? null : (
+                        <div className="creation-sheet__browser-head">
+                          <h3 className="creation-sheet__browser-title">
+                            {repositories.length === 0
+                              ? 'Add your first repository'
+                              : 'Bring in another folder'}
+                          </h3>
                           <button
                             type="button"
                             className="creation-sheet__button"
@@ -722,8 +2365,8 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                           >
                             Browse for folder
                           </button>
-                        ) : null}
-                      </div>
+                        </div>
+                      )}
                       {remoteServer ? (
                         <div className="creation-sheet__path-entry">
                           <label className="creation-sheet__field">
@@ -802,34 +2445,76 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                         </>
                       ) : (
                         <p className="creation-sheet__browser-hint">
-                          {remoteServer
-                            ? 'The path is validated on the server host; nothing is changed until you confirm an action.'
-                            : 'Choose deliberately; no folder is changed until you confirm an action.'}
+                          {'Choose deliberately; no folder is changed until you confirm an action.'}
                         </p>
                       )}
+                      <div className="creation-sheet__browser-actions">
+                        <button
+                          type="button"
+                          className="creation-sheet__button"
+                          onClick={() => {
+                            setCreateOpen(true);
+                            setFolderNotice('');
+                          }}
+                        >
+                          Create a repository…
+                        </button>
+                        <button
+                          type="button"
+                          className="creation-sheet__button"
+                          onClick={() => {
+                            setCloneOpen(true);
+                            setFolderNotice('');
+                          }}
+                        >
+                          Clone a repository…
+                        </button>
+                      </div>
                     </section>
                     <fieldset className="creation-sheet__group">
-                      <legend className="creation-sheet__group-label">Branch</legend>
+                      <legend className="creation-sheet__group-label">Local source</legend>
                       <div className="creation-sheet__rows">
                         <label className="creation-sheet__row creation-sheet__row--choice">
                           <input
                             type="radio"
                             name="branch"
                             checked={!useCurrentBranch}
+                            disabled={sourceUpdate.phase === 'active'}
                             onChange={() => setUseCurrentBranch(false)}
                           />
-                          <span className="creation-sheet__row-name">New feature branch</span>
+                          <span className="creation-sheet__row-name">Default branches</span>
                         </label>
                         <label className="creation-sheet__row creation-sheet__row--choice">
                           <input
                             type="radio"
                             name="branch"
                             checked={useCurrentBranch}
+                            disabled={sourceUpdate.phase === 'active'}
                             onChange={() => setUseCurrentBranch(true)}
                           />
-                          <span className="creation-sheet__row-name">Current branch</span>
+                          <span className="creation-sheet__row-name">Current branches</span>
                         </label>
                       </div>
+                      {sourceState.phase === 'loading' ? (
+                        <p className="creation-sheet__row-hint" role="status">
+                          Resolving local sources…
+                        </p>
+                      ) : sourceState.phase === 'error' ? (
+                        <ErrorSurface error={sourceState.error} />
+                      ) : null}
+                      <p className="creation-sheet__row-hint">
+                        Selected sources are compared with their origin branches automatically.
+                        Checks only fetch from origin — they never change your repositories — and
+                        creation always starts from the local source you accept. Update from origin
+                        fast-forwards exactly one branch in the original repository on the connected
+                        server: an unoccupied branch moves only its ref, while a branch checked out
+                        there also advances the repository's files and requires a clean checkout
+                        with no untracked files. Incoming files never overwrite ignored content,
+                        branches checked out in other linked worktrees must be updated in those
+                        worktrees, and ahead or diverged branches are never rewound. Resolve local
+                        work outside Agentico before checking again; a valid local commit can still
+                        be accepted with a warning after a refused update or a failed check.
+                      </p>
                     </fieldset>
                   </section>
                 ) : null}
@@ -844,7 +2529,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                       label="Description"
                       placeholder="Describe the work. Type @ to reference files in the selected repositories; paste or drop images and files to attach them."
                       value={description}
-                      repoKeys={repoKeys}
+                      searchRepositories={searchRepositories}
                       images={images}
                       attachments={attachments}
                       imageUploads={imageUploads}
@@ -1025,8 +2710,45 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                     <dl className="creation-sheet__summary">
                       <div>
                         <dt>Repositories</dt>
-                        <dd>{repoKeys.join(', ')}</dd>
+                        <dd>{selectedKeys.join(', ')}</dd>
                       </div>
+                      <div>
+                        <dt>Local sources</dt>
+                        <dd>
+                          {sourceState.phase === 'loaded'
+                            ? sourceState.value.repositories
+                                .map((source) =>
+                                  source.kind === 'detached'
+                                    ? `${source.repoKey}: detached ${source.observedSha}`
+                                    : `${source.repoKey}: ${source.branch ?? ''}`,
+                                )
+                                .join(', ')
+                            : 'Not resolved'}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Origin checks</dt>
+                        <dd>
+                          {originState.phase === 'loaded'
+                            ? originState.value.repositories
+                                .map((row) => originReviewText(row))
+                                .join(' ')
+                            : 'Not checked yet'}
+                        </dd>
+                      </div>
+                      {updateNotices.length > 0 || activeUncertainty.length > 0 ? (
+                        <div>
+                          <dt>Source updates</dt>
+                          <dd>
+                            {[
+                              ...updateNotices.map((notice) => notice.text),
+                              ...activeUncertainty.map((record) =>
+                                updateUncertainText(record, serverLabel),
+                              ),
+                            ].join(' ')}
+                          </dd>
+                        </div>
+                      ) : null}
                       <div>
                         <dt>Describe</dt>
                         <dd>{name}</dd>
@@ -1055,7 +2777,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
             {currentStep === 'Contract' && loadedDefaults !== null ? (
               <span className="sheet__footer-note">
                 {plural(checkedCheckpoints, 'checkpoint', 'checkpoints')} ·{' '}
-                {plural(repoKeys.length, 'repository', 'repositories')}
+                {plural(selectedKeys.length, 'repository', 'repositories')}
               </span>
             ) : null}
             {loadedDefaults === null ? null : (
@@ -1074,6 +2796,9 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                     key="next-step"
                     type="button"
                     className="sheet__footer-primary"
+                    disabled={
+                      stepIndex === 0 && selectedKeys.length > 0 && sourceState.phase === 'loading'
+                    }
                     onClick={(event) => {
                       // React can reuse this DOM node as the submit button when
                       // the click advances to Contract. Cancel the original
@@ -1095,9 +2820,22 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                       key="create-feature"
                       type="submit"
                       className="sheet__footer-primary"
-                      disabled={pending || uploadsBlocking}
+                      disabled={
+                        pending ||
+                        uploadsBlocking ||
+                        sourceUpdate.phase === 'active' ||
+                        uncertainBlocked
+                      }
                     >
-                      {pending ? 'Creating…' : autoStart ? 'Create and start' : 'Create'}
+                      {pending
+                        ? 'Creating…'
+                        : sourceUpdate.phase === 'active'
+                          ? 'Updating source…'
+                          : uncertainBlocked
+                            ? 'Resolving source update…'
+                            : autoStart
+                              ? 'Create and start'
+                              : 'Create'}
                     </button>
                   </>
                 )}
@@ -1106,8 +2844,32 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
           </footer>
         </form>
 
+        {cloneOpen ? (
+          <PickerCloneDialog
+            connection={connection}
+            workspaceRoots={cloneableRoots}
+            association={cloneAssociation}
+            operation={cloneOperation}
+            onAssociate={(association) => setCloneAssociation(association)}
+            onRefresh={resolveCloneOperation}
+            onReadinessChanged={applyCatalogSnapshot}
+            initializeOffer={cloneInitializeOffer}
+            onClose={() => setCloneOpen(false)}
+          />
+        ) : null}
+
+        {createOpen ? (
+          <PickerCreateDialog
+            connection={connection}
+            workspaceRoots={cloneableRoots}
+            onCreate={handleCreate}
+            onReadinessChanged={applyCatalogSnapshot}
+            onClose={() => setCreateOpen(false)}
+          />
+        ) : null}
+
         {discardOpen ? (
-          <DiscardDialog onKeepEditing={() => setDiscardOpen(false)} onDiscard={onClose} />
+          <DiscardDialog onKeepEditing={() => setDiscardOpen(false)} onDiscard={handleClose} />
         ) : null}
 
         {consentOpen && folderCandidate !== null ? (

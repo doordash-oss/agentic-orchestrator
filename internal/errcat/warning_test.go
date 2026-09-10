@@ -22,6 +22,7 @@ import (
 // warningCodeList is the closed set of warning codes, pinned by the class
 // and action assertions below.
 var warningCodeList = []Code{
+	BranchCollisionProbeUnavailable,
 	EffortCapabilityDrift,
 	FeatureLoadFailed,
 	ChildCleanupIncomplete,
@@ -43,8 +44,8 @@ var orphanSessionCodeList = []Code{
 // for every warning code: warning class and no action references. A warning
 // never blocks progress, never gates a lane, and never offers an action.
 func TestWarningCodesAreWarningClassWithoutActions(t *testing.T) {
-	if len(warningCodeList) != 9 {
-		t.Fatalf("warning code list has %d entries; want 9", len(warningCodeList))
+	if len(warningCodeList) != 10 {
+		t.Fatalf("warning code list has %d entries; want 10", len(warningCodeList))
 	}
 	for _, code := range warningCodeList {
 		entry, ok := Lookup(code)

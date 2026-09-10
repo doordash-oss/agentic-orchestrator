@@ -3217,16 +3217,16 @@ func TestWaitForPhaseOutcome_RejectsProviderExitWithLiveDelegatedTasks(t *testin
 
 func withPhaseOutcomeReclassifyInterval(t *testing.T, d time.Duration) {
 	t.Helper()
-	prev := phaseOutcomeReclassifyInterval
-	phaseOutcomeReclassifyInterval = d
-	t.Cleanup(func() { phaseOutcomeReclassifyInterval = prev })
+	prev := phaseOutcomeReclassifyInterval.get()
+	phaseOutcomeReclassifyInterval.set(d)
+	t.Cleanup(func() { phaseOutcomeReclassifyInterval.set(prev) })
 }
 
 func withBackgroundTaskStallGrace(t *testing.T, d time.Duration) {
 	t.Helper()
-	prev := backgroundTaskStallGrace
-	backgroundTaskStallGrace = d
-	t.Cleanup(func() { backgroundTaskStallGrace = prev })
+	prev := backgroundTaskStallGrace.get()
+	backgroundTaskStallGrace.set(d)
+	t.Cleanup(func() { backgroundTaskStallGrace.set(prev) })
 }
 
 // TestWaitForPhaseOutcome_ReclassifyTickRecoversDroppedSuccessStatus proves the
@@ -3412,9 +3412,9 @@ func (s *outcomeSignalSession) emitResult(result *llm.ResultMessage) {
 
 func withBackgroundTaskDeferralCeiling(t *testing.T, d time.Duration) {
 	t.Helper()
-	prev := backgroundTaskDeferralCeiling
-	backgroundTaskDeferralCeiling = d
-	t.Cleanup(func() { backgroundTaskDeferralCeiling = prev })
+	prev := backgroundTaskDeferralCeiling.get()
+	backgroundTaskDeferralCeiling.set(d)
+	t.Cleanup(func() { backgroundTaskDeferralCeiling.set(prev) })
 }
 
 // chatterUntil keeps the session's stdout timestamp fresh, appending either

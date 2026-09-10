@@ -298,10 +298,20 @@ test('remote add: paste the connection string, probe, save, auto-switch, remount
     await evidenceShot(handle, 'remote-servers-added', settings);
 
     transcript.section('The workspace auto-switches and remounts against the remote server');
+    // The switch rides several probe states that already carry the remote's
+    // name; only the terminal combination proves the remount, and a loaded
+    // runner can sit in those transitional states for a while.
     await waitFor(
-      async () => (await connectionState(handle!)).serverName === REMOTE_NAME,
+      async () => {
+        const state = await connectionState(handle!);
+        return (
+          state.status === 'ready' &&
+          state.ownership === 'external' &&
+          state.serverName === REMOTE_NAME
+        );
+      },
       'the auto-switch to the remote server',
-      60_000,
+      90_000,
     );
     const switched = await connectionState(handle);
     expect(switched.status).toBe('ready');
@@ -423,10 +433,20 @@ test('remote persistence: relaunch silently reconnects; no token file bytes leak
     await expect(settings.getByText('Server added; switching to it now.')).toBeVisible({
       timeout: 60_000,
     });
+    // The switch rides several probe states that already carry the remote's
+    // name but not its stable key; capture the key only from the terminal
+    // external-ready connection.
     await waitFor(
-      async () => (await connectionState(handle!)).serverName === REMOTE_NAME,
+      async () => {
+        const state = await connectionState(handle!);
+        return (
+          state.status === 'ready' &&
+          state.ownership === 'external' &&
+          state.serverName === REMOTE_NAME
+        );
+      },
       'the auto-switch to the remote server',
-      60_000,
+      90_000,
     );
     const firstSwitched = await connectionState(handle);
     const remoteKey = firstSwitched.serverKey;
@@ -446,6 +466,21 @@ test('remote persistence: relaunch silently reconnects; no token file bytes leak
     await expect(
       handle.page.getByRole('listbox', { name: /running agentico servers/i }),
     ).toHaveCount(0);
+    // A loaded runner can transiently report an app-owned connection (for
+    // example a slow remote probe falling back before the re-probe attaches);
+    // the persistence contract is the terminal external reconnect.
+    await waitFor(
+      async () => {
+        const state = await connectionState(handle!);
+        return (
+          state.status === 'ready' &&
+          state.ownership === 'external' &&
+          state.serverName === REMOTE_NAME
+        );
+      },
+      'the silent reconnect to the last-used remote',
+      90_000,
+    );
     const reconnected = await connectionState(handle);
     expect(reconnected.status).toBe('ready');
     expect(reconnected.ownership).toBe('external');
@@ -605,10 +640,15 @@ test('local↔remote switching: per-server selection and workspace truth restore
     await expect(settings.getByText('Server added; switching to it now.')).toBeVisible({
       timeout: 60_000,
     });
+    // The switch rides several probe states that already carry the remote's
+    // name; only the terminal combination proves the remount.
     await waitFor(
-      async () => (await connectionState(handle!)).serverName === REMOTE_NAME,
+      async () => {
+        const state = await connectionState(handle!);
+        return state.status === 'ready' && state.serverName === REMOTE_NAME;
+      },
       'the auto-switch to the remote server',
-      60_000,
+      90_000,
     );
     const onRemote = await connectionState(handle);
     expect(onRemote.status).toBe('ready');
@@ -645,9 +685,15 @@ test('local↔remote switching: per-server selection and workspace truth restore
     await handle.page
       .getByRole('option', { name: new RegExp(`${localName} at .+ — Available`) })
       .click();
+    // Wait for the switch to COMPLETE: serverName is stamped on the
+    // transitional connecting state too, so the ready status is the
+    // authoritative completion signal.
     await waitFor(
-      async () => (await connectionState(handle!)).serverName === localName,
-      'the switch back to the local server',
+      async () => {
+        const state = await connectionState(handle!);
+        return state.status === 'ready' && state.serverName === localName;
+      },
+      'the switch back to the local server to complete',
       60_000,
     );
     const backOnLocal = await connectionState(handle);
@@ -930,10 +976,20 @@ for (const surface of ['Settings', 'footer'] as const) {
       await expect(settings.getByText('Server added; switching to it now.')).toBeVisible({
         timeout: 60_000,
       });
+      // The switch rides several probe states that already carry the remote's
+      // name but not its stable key; capture the key only from the terminal
+      // external-ready connection.
       await waitFor(
-        async () => (await connectionState(handle!)).serverName === REMOTE_NAME,
+        async () => {
+          const state = await connectionState(handle!);
+          return (
+            state.status === 'ready' &&
+            state.ownership === 'external' &&
+            state.serverName === REMOTE_NAME
+          );
+        },
         'the auto-switch to the remote server',
-        60_000,
+        90_000,
       );
       const remoteKey = (await connectionState(handle)).serverKey;
       // The app-owned child survives the switch-away, so the row reads Running.
@@ -956,6 +1012,21 @@ for (const surface of ['Settings', 'footer'] as const) {
       await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
         timeout: 90_000,
       });
+      // A loaded runner can briefly report the local runtime before the
+      // last-used remote's silent reconnect settles; the contract is the
+      // terminal external connection to the remote.
+      await waitFor(
+        async () => {
+          const state = await connectionState(handle!);
+          return (
+            state.status === 'ready' &&
+            state.ownership === 'external' &&
+            state.serverName === REMOTE_NAME
+          );
+        },
+        'the relaunch reconnect to the last-used remote',
+        90_000,
+      );
       const reconnected = await connectionState(handle);
       expect(reconnected.serverName).toBe(REMOTE_NAME);
       expect(reconnected.ownership).toBe('external');

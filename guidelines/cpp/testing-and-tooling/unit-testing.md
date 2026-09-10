@@ -17,6 +17,7 @@ TEST(ListTest, PopFront) {
 ```
 
 All assertion macros support `<<` for custom diagnostics:
+
 ```cpp
 EXPECT_EQ(result, expected) << "Failed for input: " << input;
 ```
@@ -64,6 +65,7 @@ INSTANTIATE_TEST_SUITE_P(SmallPrimes, PrimeTest,
 ### Death Tests
 
 Name suites ending in `"DeathTest"`:
+
 ```cpp
 TEST(MathDeathTest, DivideByZero) {
     EXPECT_DEATH(Divide(5, 0), "Division by zero");
@@ -139,12 +141,12 @@ TEST_CASE("HTTP client", "[http][integration]") { ... }
 
 ## Test Doubles
 
-| Type | Has Logic | Verifies | Primary Use |
-|------|-----------|----------|-------------|
-| Dummy | No | No | Fill unused parameters |
-| Stub | Minimal | No | Control indirect inputs |
-| Spy | Minimal | After execution | Record calls |
-| Mock | Minimal | Before execution | Pre-specify expected interactions |
-| Fake | Yes | No | Lightweight working replacement |
+| Type  | Has Logic | Verifies         | Primary Use                       |
+| ----- | --------- | ---------------- | --------------------------------- |
+| Dummy | No        | No               | Fill unused parameters            |
+| Stub  | Minimal   | No               | Control indirect inputs           |
+| Spy   | Minimal   | After execution  | Record calls                      |
+| Mock  | Minimal   | Before execution | Pre-specify expected interactions |
+| Fake  | Yes       | No               | Lightweight working replacement   |
 
 Mock at module/layer boundaries, not internal implementation details.

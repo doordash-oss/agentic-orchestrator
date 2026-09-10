@@ -15,12 +15,32 @@
 package git
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
+
+type LocalSourceMode string
+
+const (
+	LocalSourceModeDefault LocalSourceMode = "default"
+	LocalSourceModeCurrent LocalSourceMode = "current"
+	LocalSourceBranch                      = "branch"
+	LocalSourceDetached                    = "detached"
+)
+
+var ErrLocalSourceMissing = errors.New("local source is missing")
+
+type LocalSource struct {
+	Mode   LocalSourceMode
+	Kind   string
+	Branch string
+	Commit string
+}
 
 type WorktreeManager struct {
 	BaseDir string
@@ -58,6 +78,7 @@ func (w *WorktreeManager) Create(repoPath, featureSlug, repoName, startPoint str
 	if startPoint == "" {
 		startPoint = "HEAD"
 	}
+	exactStart := validFullCommit(startPoint)
 
 	// Prune stale worktrees before creating to avoid conflicts
 	pruneCmd := exec.Command("git", "-C", repoPath, "worktree", "prune")
@@ -82,6 +103,15 @@ func (w *WorktreeManager) Create(repoPath, featureSlug, repoName, startPoint str
 			return "", fmt.Errorf("creating worktree: %s: %w", strings.TrimSpace(string(out)), err)
 		}
 	}
+	if exactStart {
+		head, headErr := CurrentHeadSHA(wtPath)
+		if headErr != nil {
+			return "", fmt.Errorf("verifying created worktree HEAD: %w", headErr)
+		}
+		if !strings.EqualFold(head, startPoint) {
+			return "", fmt.Errorf("created worktree is at commit %s, want accepted commit %s", head, startPoint)
+		}
+	}
 
 	return wtPath, nil
 }
@@ -97,35 +127,87 @@ func hasCommits(repoPath string) bool {
 // HEAD, then the local HEAD symref, then falling back to well-known names
 // (main, master).
 func DefaultBranch(repoPath string) string {
-	// Try remote HEAD symref (most reliable for repos with a remote)
-	cmd := readGitCmd(repoPath, "symbolic-ref", "refs/remotes/origin/HEAD")
-	if out, err := cmd.Output(); err == nil {
-		ref := strings.TrimSpace(string(out))
-		// refs/remotes/origin/main → main
-		if parts := strings.Split(ref, "/"); len(parts) > 0 {
-			return parts[len(parts)-1]
+	branch, err := defaultLocalBranch(context.Background(), repoPath)
+	if err != nil {
+		return ""
+	}
+	if _, err := resolveLocalCommit(context.Background(), repoPath, "refs/heads/"+branch); err != nil {
+		return ""
+	}
+	return branch
+}
+
+// InspectLocalSource resolves the exact local commit selected by the shared
+// creation mode. Remote refs can nominate a default branch but can never act
+// as its source; the corresponding refs/heads branch must exist locally.
+func InspectLocalSource(ctx context.Context, repoPath string, mode LocalSourceMode) (LocalSource, error) {
+	source := LocalSource{Mode: mode}
+	switch mode {
+	case LocalSourceModeDefault:
+		branch, err := defaultLocalBranch(ctx, repoPath)
+		if err != nil {
+			return LocalSource{}, err
+		}
+		source.Kind = LocalSourceBranch
+		source.Branch = branch
+		source.Commit, err = resolveLocalCommit(ctx, repoPath, "refs/heads/"+branch)
+		if err != nil {
+			return LocalSource{}, fmt.Errorf("%w: default branch %q does not resolve locally", ErrLocalSourceMissing, branch)
+		}
+	case LocalSourceModeCurrent:
+		if branch, ok := symbolicBranch(ctx, repoPath, "HEAD", "refs/heads/"); ok {
+			source.Kind = LocalSourceBranch
+			source.Branch = branch
+		} else {
+			source.Kind = LocalSourceDetached
+		}
+		commit, err := resolveLocalCommit(ctx, repoPath, "HEAD")
+		if err != nil {
+			return LocalSource{}, fmt.Errorf("%w: current checkout has no commit", ErrLocalSourceMissing)
+		}
+		source.Commit = commit
+	default:
+		return LocalSource{}, fmt.Errorf("unsupported local source mode %q", mode)
+	}
+	return source, nil
+}
+
+func defaultLocalBranch(ctx context.Context, repoPath string) (string, error) {
+	if branch, ok := symbolicBranch(ctx, repoPath, "refs/remotes/origin/HEAD", "refs/remotes/origin/"); ok {
+		return branch, nil
+	}
+	if branch, ok := symbolicBranch(ctx, repoPath, "HEAD", "refs/heads/"); ok {
+		return branch, nil
+	}
+	for _, branch := range []string{"main", "master"} {
+		if _, err := resolveLocalCommit(ctx, repoPath, "refs/heads/"+branch); err == nil {
+			return branch, nil
 		}
 	}
+	return "", ErrLocalSourceMissing
+}
 
-	// Check local HEAD symref — works for any repo regardless of remote
-	cmd = readGitCmd(repoPath, "symbolic-ref", "HEAD")
-	if out, err := cmd.Output(); err == nil {
-		ref := strings.TrimSpace(string(out))
-		// refs/heads/trunk → trunk
-		if parts := strings.Split(ref, "/"); len(parts) > 0 {
-			return parts[len(parts)-1]
-		}
+func symbolicBranch(ctx context.Context, repoPath, ref, prefix string) (string, bool) {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "symbolic-ref", "--quiet", ref)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
 	}
+	branch, ok := strings.CutPrefix(strings.TrimSpace(string(out)), prefix)
+	return branch, ok && branch != ""
+}
 
-	// Fallback: check if main or master branches exist locally
-	for _, name := range []string{"main", "master"} {
-		cmd = readGitCmd(repoPath, "rev-parse", "--verify", name)
-		if err := cmd.Run(); err == nil {
-			return name
-		}
+func resolveLocalCommit(ctx context.Context, repoPath, ref string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
 	}
-
-	return "main"
+	commit := strings.TrimSpace(string(out))
+	if commit == "" {
+		return "", ErrLocalSourceMissing
+	}
+	return commit, nil
 }
 
 // CurrentBranch returns the branch currently checked out in the given repo.

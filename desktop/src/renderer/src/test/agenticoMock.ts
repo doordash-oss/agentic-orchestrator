@@ -22,6 +22,9 @@ import type {
   AppEvent,
   AppRouteEvent,
   AttentionItem,
+  CloneOperation,
+  CreateRepositoryResult,
+  InitializeRepositoryResult,
   ConnectionState,
   CreationDefaults,
   DiagnosticsSnapshot,
@@ -31,6 +34,11 @@ import type {
   FeatureActionRequest,
   FeatureSummaryView,
   ReadinessSnapshot,
+  RepositorySourcesRequest,
+  RepositoryOriginStatusRequest,
+  RepositoryUpdateSourceRequest,
+  RepositorySourceReconcileRequest,
+  RepositoryIdentity,
   SessionDetail,
   SessionOutputEvent,
   SessionSummary,
@@ -126,22 +134,46 @@ export function readySnapshot(overrides: Partial<ReadinessSnapshot> = {}): Readi
     providers: [{ name: 'claude', installed: true, version: '2.1.0', ready: true }],
     models: { available: true, models: ['claude-sonnet-4-5'] },
     configuration: { valid: true },
-    workspaceRoots: [{ path: '/work/space', valid: true }],
-    repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true }],
+    workspaceRoots: [{ path: '/work/space', valid: true, cloneEligible: true }],
+    repositories: [
+      {
+        name: 'repo-a',
+        path: '/work/space/repo-a',
+        valid: true,
+        featureReady: true,
+        identity: mockRepoIdentity('/work/space/repo-a'),
+      },
+    ],
     issues: [],
     ...overrides,
   };
 }
 
+/** Deterministic server-resolved identity for mock repositories. */
+export function mockRepoIdentity(
+  path: string,
+  overrides: Partial<RepositoryIdentity> = {},
+): RepositoryIdentity {
+  return { path, commonDir: `${path}/.git`, device: '16777234', inode: '4242', ...overrides };
+}
+
 /** A minimal, valid creation-defaults payload for form tests. */
 export function creationDefaults(overrides: Partial<CreationDefaults> = {}): CreationDefaults {
   return {
+    workspaceRoots: [{ path: '/work/space', valid: true, cloneEligible: true }],
     repositories: [
-      { name: 'repo-a', path: '/work/space/repo-a', valid: true },
+      {
+        name: 'repo-a',
+        path: '/work/space/repo-a',
+        valid: true,
+        featureReady: true,
+        identity: mockRepoIdentity('/work/space/repo-a'),
+      },
       {
         name: 'repo-b',
         path: '/work/space/repo-b',
         valid: false,
+        featureReady: false,
         issue: {
           code: 'invalid_repository',
           class: 'blocking',
@@ -157,6 +189,56 @@ export function creationDefaults(overrides: Partial<CreationDefaults> = {}): Cre
       effort: [],
       useCurrentBranch: false,
     },
+    ...overrides,
+  };
+}
+
+/** A minimal clone operation snapshot, as the server returns it. */
+export function cloneOperation(overrides: Partial<CloneOperation> = {}): CloneOperation {
+  return {
+    id: 'clone-0123456789abcdef',
+    state: 'running',
+    stage: 'transferring',
+    progress: 'Receiving objects: 50% (1/2)',
+    remoteUrl: 'https://example.com/acme/widget.git',
+    rootPath: '/work/space',
+    destination: 'widget',
+    destinationPath: '/work/space/widget',
+    idempotencyKey: '0192f0c1-8f2a-7c3e-b9d1-3e4f5a6b7c8d',
+    cancelRequested: false,
+    createdAt: '2026-09-04T12:00:00Z',
+    updatedAt: '2026-09-04T12:00:01Z',
+    ...overrides,
+  };
+}
+
+/** A minimal successful create-repository result, as the server returns it. */
+export function createRepositoryResult(
+  overrides: Partial<CreateRepositoryResult> = {},
+): CreateRepositoryResult {
+  const path = '/work/space/created';
+  return {
+    repoKey: 'created',
+    path,
+    hasHead: true,
+    root: '/work/space',
+    identity: mockRepoIdentity(path),
+    ...overrides,
+  };
+}
+
+/** A minimal explicit-initialization result, as the server returns it. */
+export function initializeRepositoryResult(
+  overrides: Partial<InitializeRepositoryResult> = {},
+): InitializeRepositoryResult {
+  const path = '/work/space/unborn';
+  return {
+    result: 'initialized',
+    repoKey: 'unborn',
+    path,
+    hasHead: true,
+    root: '/work/space',
+    identity: mockRepoIdentity(path),
     ...overrides,
   };
 }
@@ -315,6 +397,14 @@ export interface AgenticoMock {
     removeWorkspaceRoot: ReturnType<typeof vi.fn>;
     reorderWorkspaceRoots: ReturnType<typeof vi.fn>;
     initRepository: ReturnType<typeof vi.fn>;
+    startClone: ReturnType<typeof vi.fn>;
+    getCloneOperation: ReturnType<typeof vi.fn>;
+    listCloneOperations: ReturnType<typeof vi.fn>;
+    cancelCloneOperation: ReturnType<typeof vi.fn>;
+    retryCloneCleanup: ReturnType<typeof vi.fn>;
+    retryCloneOperation: ReturnType<typeof vi.fn>;
+    createRepository: ReturnType<typeof vi.fn>;
+    initializeRepository: ReturnType<typeof vi.fn>;
     listRepositories: ReturnType<typeof vi.fn>;
     listFeatures: ReturnType<typeof vi.fn>;
     getFeature: ReturnType<typeof vi.fn>;
@@ -327,6 +417,10 @@ export interface AgenticoMock {
     openSessionOutput: ReturnType<typeof vi.fn>;
     cancelSessionOutput: ReturnType<typeof vi.fn>;
     getCreationDefaults: ReturnType<typeof vi.fn>;
+    inspectRepositorySources: ReturnType<typeof vi.fn>;
+    checkRepositoryOriginStatus: ReturnType<typeof vi.fn>;
+    updateRepositorySource: ReturnType<typeof vi.fn>;
+    reconcileSourceUpdate: ReturnType<typeof vi.fn>;
     pickCreationFiles: ReturnType<typeof vi.fn>;
     uploadCreationFiles: ReturnType<typeof vi.fn>;
     readClipboardImage: ReturnType<typeof vi.fn>;
@@ -411,6 +505,11 @@ export function installAgenticoMock(
     session?: SessionDetail;
     transcript?: SessionTranscript;
     attention?: { items: AttentionItem[] };
+    cloneOperation?: Partial<CloneOperation>;
+    cloneOperations?: CloneOperation[];
+    cloneOperationsNextToken?: string;
+    createResult?: Partial<CreateRepositoryResult>;
+    initializeResult?: Partial<InitializeRepositoryResult>;
     updates?: UpdateState;
     diagnostics?: DiagnosticsSnapshot;
     platform?: string;
@@ -479,6 +578,35 @@ export function installAgenticoMock(
     removeWorkspaceRoot: vi.fn(() => Promise.resolve(readiness)),
     reorderWorkspaceRoots: vi.fn(() => Promise.resolve(readiness)),
     initRepository: vi.fn(() => Promise.resolve(readiness)),
+    startClone: vi.fn(() =>
+      Promise.resolve(cloneOperation(overrides.cloneOperation ?? { state: 'accepted' })),
+    ),
+    getCloneOperation: vi.fn(() =>
+      Promise.resolve(cloneOperation(overrides.cloneOperation ?? { state: 'running' })),
+    ),
+    listCloneOperations: vi.fn(() =>
+      Promise.resolve({
+        operations: overrides.cloneOperations ?? [cloneOperation()],
+        ...(overrides.cloneOperationsNextToken
+          ? { nextPageToken: overrides.cloneOperationsNextToken }
+          : {}),
+      }),
+    ),
+    cancelCloneOperation: vi.fn(() =>
+      Promise.resolve(cloneOperation(overrides.cloneOperation ?? { state: 'cancelling' })),
+    ),
+    retryCloneCleanup: vi.fn(() =>
+      Promise.resolve(cloneOperation(overrides.cloneOperation ?? { state: 'failed' })),
+    ),
+    retryCloneOperation: vi.fn(() =>
+      Promise.resolve(cloneOperation(overrides.cloneOperation ?? { state: 'accepted' })),
+    ),
+    createRepository: vi.fn(() =>
+      Promise.resolve(createRepositoryResult(overrides.createResult ?? {})),
+    ),
+    initializeRepository: vi.fn(() =>
+      Promise.resolve(initializeRepositoryResult(overrides.initializeResult ?? {})),
+    ),
     listRepositories: vi.fn(() => Promise.resolve(readiness.repositories)),
     listFeatures: vi.fn(() =>
       Promise.resolve({
@@ -529,6 +657,51 @@ export function installAgenticoMock(
       return () => sessionOutputListeners.delete(listener);
     }),
     getCreationDefaults: vi.fn(() => Promise.resolve(defaults)),
+    inspectRepositorySources: vi.fn((request: RepositorySourcesRequest) =>
+      Promise.resolve({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          observedSha: 'a'.repeat(40),
+        })),
+      }),
+    ),
+    checkRepositoryOriginStatus: vi.fn((request: RepositoryOriginStatusRequest) =>
+      Promise.resolve({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          localSha: 'a'.repeat(40),
+          status: 'no_origin' as const,
+        })),
+      }),
+    ),
+    updateRepositorySource: vi.fn((request: RepositoryUpdateSourceRequest) =>
+      Promise.resolve({
+        result: 'already_up_to_date' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
+      }),
+    ),
+    reconcileSourceUpdate: vi.fn((request: RepositorySourceReconcileRequest) =>
+      Promise.resolve({
+        outcome: 'original_tip_remains' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
+      }),
+    ),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
     uploadCreationFiles: vi.fn((kind: string, paths: readonly string[]) =>
       Promise.resolve({

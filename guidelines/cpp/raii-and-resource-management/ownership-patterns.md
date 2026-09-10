@@ -52,7 +52,7 @@ queue.enqueue(std::move(task));  // Explicit — clear at call site
 // task is now null
 ```
 
-Pass by value (not `&&`) because passing by value *requires* the move,
+Pass by value (not `&&`) because passing by value _requires_ the move,
 making semantics unambiguous.
 
 ## Factory Functions

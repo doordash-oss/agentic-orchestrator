@@ -2,12 +2,12 @@
 
 ## Choosing the Right Mutex
 
-| Type | Use Case |
-|------|----------|
-| `std::mutex` | General-purpose exclusive access |
-| `std::shared_mutex` | Reader-writer pattern (many readers, few writers) |
+| Type                   | Use Case                                          |
+| ---------------------- | ------------------------------------------------- |
+| `std::mutex`           | General-purpose exclusive access                  |
+| `std::shared_mutex`    | Reader-writer pattern (many readers, few writers) |
 | `std::recursive_mutex` | Same thread may re-enter (usually a design smell) |
-| `std::timed_mutex` | Need to avoid blocking indefinitely |
+| `std::timed_mutex`     | Need to avoid blocking indefinitely               |
 
 ### `std::shared_mutex` — Reader-Writer Pattern
 
@@ -52,12 +52,12 @@ public:
 Never call `lock()`/`unlock()` directly. An exception or early return will
 bypass the unlock, causing a deadlock.
 
-| Guard Type | When to Use |
-|------------|-------------|
-| `std::lock_guard` | Simple exclusive lock, no early unlock needed |
-| `std::scoped_lock` | One or multiple mutexes; **prefer in C++17+** |
+| Guard Type         | When to Use                                              |
+| ------------------ | -------------------------------------------------------- |
+| `std::lock_guard`  | Simple exclusive lock, no early unlock needed            |
+| `std::scoped_lock` | One or multiple mutexes; **prefer in C++17+**            |
 | `std::unique_lock` | Need manual unlock, deferred lock, or condition variable |
-| `std::shared_lock` | Shared (reader) lock for `std::shared_mutex` |
+| `std::shared_lock` | Shared (reader) lock for `std::shared_mutex`             |
 
 ```cpp
 // WRONG: Exception-unsafe

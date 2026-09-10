@@ -117,14 +117,14 @@ assert.Equal(t, 30, user.Age)
 
 ## When to Use What
 
-| Situation | Approach |
-|-----------|----------|
-| Simple interface, 1-2 methods | Hand-written mock |
-| Many tests, complex expectations | testify/mock or gomock |
-| In-process, fast dependency | Use the real implementation |
-| External service (HTTP, DB) | Mock the interface or use httptest/testcontainers |
-| File system | Use `testing/fstest.MapFS` |
-| I/O edge cases | Use `testing/iotest` adversarial readers |
+| Situation                        | Approach                                          |
+| -------------------------------- | ------------------------------------------------- |
+| Simple interface, 1-2 methods    | Hand-written mock                                 |
+| Many tests, complex expectations | testify/mock or gomock                            |
+| In-process, fast dependency      | Use the real implementation                       |
+| External service (HTTP, DB)      | Mock the interface or use httptest/testcontainers |
+| File system                      | Use `testing/fstest.MapFS`                        |
+| I/O edge cases                   | Use `testing/iotest` adversarial readers          |
 
 ## Don't Mock Types You Don't Own
 

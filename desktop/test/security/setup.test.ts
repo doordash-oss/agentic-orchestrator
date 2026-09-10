@@ -144,6 +144,14 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     removeWorkspaceRoot: vi.fn(() => Promise.resolve(snapshot())),
     reorderWorkspaceRoots: vi.fn(() => Promise.resolve(snapshot())),
     initRepository: vi.fn(() => Promise.resolve(snapshot())),
+    startClone: vi.fn(() => Promise.reject(new Error('unused'))),
+    getCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    listCloneOperations: vi.fn(() => Promise.reject(new Error('unused'))),
+    cancelCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    retryCloneCleanup: vi.fn(() => Promise.reject(new Error('unused'))),
+    retryCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    createRepository: vi.fn(() => Promise.reject(new Error('unused'))),
+    initializeRepository: vi.fn(() => Promise.reject(new Error('unused'))),
     listRepositories: vi.fn(() => Promise.resolve([])),
     listFeatures: vi.fn(() => Promise.resolve({ features: [], warnings: [] })),
     getFeature: vi.fn(() => Promise.reject(new Error('not_found: feature not found'))),
@@ -166,7 +174,53 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({
         repositories: [],
+        workspaceRoots: [],
         defaults: { models: [], effort: [], useCurrentBranch: false },
+      }),
+    ),
+    inspectRepositorySources: vi.fn(
+      async (request: Parameters<IpcServices['inspectRepositorySources']>[0]) => ({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          observedSha: 'a'.repeat(40),
+        })),
+      }),
+    ),
+    checkRepositoryOriginStatus: vi.fn(
+      async (request: Parameters<IpcServices['checkRepositoryOriginStatus']>[0]) => ({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          localSha: 'a'.repeat(40),
+          status: 'no_origin' as const,
+        })),
+      }),
+    ),
+    updateRepositorySource: vi.fn(
+      async (request: Parameters<IpcServices['updateRepositorySource']>[0]) => ({
+        result: 'already_up_to_date' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
+      }),
+    ),
+    reconcileSourceUpdate: vi.fn(
+      async (request: Parameters<IpcServices['reconcileSourceUpdate']>[0]) => ({
+        outcome: 'original_tip_remains' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
       }),
     ),
     loadLocalReviewDraft: vi.fn(() => null),
@@ -307,6 +361,131 @@ describe('setup IPC surface: consent gating', () => {
     expect(result.ok).toBe(true);
     expect(services.initRepository).toHaveBeenCalledWith({ path: '/work/repo', consent: true });
   });
+
+  it('rejects repository creation without consent at the schema layer', async () => {
+    const { handlers, services } = register();
+    for (const request of [
+      { rootPath: '/work', destination: 'repo', idempotencyKey: 'key-12345678', consent: false },
+      { rootPath: '/work', destination: 'repo', idempotencyKey: 'key-12345678' },
+      { rootPath: '/work', destination: 'repo', idempotencyKey: 'key-12345678', consent: 'yes' },
+      {
+        rootPath: '/work',
+        destination: 'repo',
+        idempotencyKey: 'key-12345678',
+        consent: true,
+        extra: 1,
+      },
+    ]) {
+      const result = (await handlers.get(IPC_CHANNELS.createRepository)!(
+        goodEvent,
+        request,
+      )) as Envelope;
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    }
+    expect(services.createRepository).not.toHaveBeenCalled();
+  });
+
+  it('passes a well-formed consenting create request through to the service', async () => {
+    const { handlers, services } = register(
+      makeServices({
+        createRepository: vi.fn(() =>
+          Promise.resolve({
+            repoKey: 'repo',
+            path: '/work/repo',
+            hasHead: true,
+            root: '/work',
+            identity: {
+              path: '/work/repo',
+              commonDir: '/work/repo/.git',
+              device: '16777234',
+              inode: '4242',
+            },
+          }),
+        ),
+      }),
+    );
+    const result = (await handlers.get(IPC_CHANNELS.createRepository)!(goodEvent, {
+      rootPath: '/work',
+      destination: 'repo',
+      idempotencyKey: 'key-12345678',
+      consent: true,
+    })) as Envelope;
+    expect(result.ok).toBe(true);
+    expect(services.createRepository).toHaveBeenCalledWith({
+      rootPath: '/work',
+      destination: 'repo',
+      idempotencyKey: 'key-12345678',
+      consent: true,
+    });
+  });
+
+  it('rejects repository initialization without consent at the schema layer', async () => {
+    const { handlers, services } = register();
+    const identity = {
+      path: '/work/unborn',
+      commonDir: '/work/unborn/.git',
+      device: '16777234',
+      inode: '4242',
+    };
+    for (const request of [
+      { repoKey: 'unborn', identity, consent: false },
+      { repoKey: 'unborn', identity },
+      { repoKey: 'unborn', identity, consent: 'true' },
+      { repoKey: 'unborn', identity, consent: true, extra: 'field' },
+    ]) {
+      const result = (await handlers.get(IPC_CHANNELS.initializeRepository)!(
+        goodEvent,
+        request,
+      )) as Envelope;
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    }
+    expect(services.initializeRepository).not.toHaveBeenCalled();
+  });
+
+  it('passes a well-formed consenting initialize request through to the service', async () => {
+    const { handlers, services } = register(
+      makeServices({
+        initializeRepository: vi.fn(() =>
+          Promise.resolve({
+            result: 'initialized' as const,
+            repoKey: 'unborn',
+            path: '/work/unborn',
+            hasHead: true,
+            root: '/work',
+            identity: {
+              path: '/work/unborn',
+              commonDir: '/work/unborn/.git',
+              device: '16777234',
+              inode: '4242',
+            },
+          }),
+        ),
+      }),
+    );
+    const result = (await handlers.get(IPC_CHANNELS.initializeRepository)!(goodEvent, {
+      repoKey: 'unborn',
+      identity: {
+        path: '/work/unborn',
+        commonDir: '/work/unborn/.git',
+        device: '16777234',
+        inode: '4242',
+      },
+      consent: true,
+    })) as Envelope;
+    expect(result.ok).toBe(true);
+    expect(services.initializeRepository).toHaveBeenCalledWith({
+      repoKey: 'unborn',
+      identity: {
+        path: '/work/unborn',
+        commonDir: '/work/unborn/.git',
+        device: '16777234',
+        inode: '4242',
+      },
+      consent: true,
+    });
+  });
 });
 
 describe('setup IPC surface: path validation', () => {
@@ -406,5 +585,69 @@ describe('SetupService transport confinement', () => {
     for (const call of apiRequest.mock.calls as unknown as [string, unknown][]) {
       expect(call[0]).toMatch(/^\/api\/v1\//);
     }
+  });
+});
+
+describe('SetupService locality enforcement on a remote connection', () => {
+  const remoteLocality = () => 'remote' as const;
+
+  function makeRemoteSetupService() {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: {
+          api_version: 'v1',
+          ready: false,
+          providers: [],
+          models: { available: false },
+          configuration: { valid: true },
+          workspace: {
+            roots: [{ path: '/work', valid: true, clone_eligible: true }],
+            repositories: [],
+          },
+        },
+      }),
+    );
+    const pickDirectory = vi.fn(() => Promise.resolve(null));
+    const service = new SetupService({
+      transport: { apiRequest },
+      dialogs: { pickDirectory },
+      locality: remoteLocality,
+    });
+    return { service, apiRequest, pickDirectory };
+  }
+
+  it('addWorkspaceRoot refuses with E_REQUIRES_LOCAL_SERVER before any request or dialog', async () => {
+    const { service, apiRequest } = makeRemoteSetupService();
+    await expect(service.addWorkspaceRoot('/work/new')).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    // A remote server's roots are administrator-owned: the refusal fires
+    // before any remote request, exactly like the native picker.
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it('removeWorkspaceRoot refuses with E_REQUIRES_LOCAL_SERVER and never calls the transport', async () => {
+    const { service, apiRequest } = makeRemoteSetupService();
+    await expect(service.removeWorkspaceRoot('/work/old')).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it('reorderWorkspaceRoots refuses with E_REQUIRES_LOCAL_SERVER and never calls the transport', async () => {
+    const { service, apiRequest } = makeRemoteSetupService();
+    await expect(service.reorderWorkspaceRoots(['/a', '/b'])).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it('pickWorkspaceDirectory refuses with E_REQUIRES_LOCAL_SERVER and never calls the dialog', async () => {
+    const { service, pickDirectory } = makeRemoteSetupService();
+    await expect(service.pickWorkspaceDirectory()).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(pickDirectory).not.toHaveBeenCalled();
   });
 });

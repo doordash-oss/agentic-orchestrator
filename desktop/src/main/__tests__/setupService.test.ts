@@ -54,8 +54,10 @@ function serverReadiness(overrides: Record<string, unknown> = {}): Record<string
     models: { available: false, issue: modelsIssue },
     configuration: { valid: true },
     workspace: {
-      roots: [{ path: '/work/space', valid: true }],
-      repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true }],
+      roots: [{ path: '/work/space', valid: true, clone_eligible: true }],
+      repositories: [
+        { name: 'repo-a', path: '/work/space/repo-a', valid: true, feature_ready: true },
+      ],
     },
     issues: [claudeIssue, modelsIssue],
     ...overrides,
@@ -94,7 +96,9 @@ describe('SetupService.getReadiness', () => {
     expect(snapshot.probedAt).toBe('2026-07-14T10:00:00Z');
     expect(snapshot.providers).toHaveLength(2);
     expect(snapshot.providers[0]?.issue?.remediation?.hint).toBe('claude login');
-    expect(snapshot.workspaceRoots).toEqual([{ path: '/work/space', valid: true }]);
+    expect(snapshot.workspaceRoots).toEqual([
+      { path: '/work/space', valid: true, cloneEligible: true },
+    ]);
     expect(snapshot.repositories[0]?.name).toBe('repo-a');
     expect(snapshot.issues.map((issue) => issue.code)).toEqual([
       'unauthenticated',
@@ -144,8 +148,8 @@ describe('CreationFilesService', () => {
       status: 200,
       body: serverReadiness({
         workspace: {
-          roots: [{ path: root, valid: true }],
-          repositories: [{ name: 'repo-a', path: root, valid: true }],
+          roots: [{ path: root, valid: true, clone_eligible: true }],
+          repositories: [{ name: 'repo-a', path: root, valid: true, feature_ready: true }],
         },
       }),
     }));
@@ -157,7 +161,7 @@ describe('CreationFilesService', () => {
       const requestId = crypto.randomUUID();
       const result = await service.search({
         requestId,
-        repoKeys: ['repo-a'],
+        repositories: [{ key: 'repo-a' }],
         query: 'creation context',
       });
       expect(result.files).toEqual([{ repoKey: 'repo-a', path: 'src/creation-context.md' }]);
@@ -372,7 +376,9 @@ describe('SetupService.listRepositories', () => {
   it('always returns repositories from fresh server discovery', async () => {
     const { service, calls } = makeService(() => ({ status: 200, body: serverReadiness() }));
     const repositories = await service.listRepositories();
-    expect(repositories).toEqual([{ name: 'repo-a', path: '/work/space/repo-a', valid: true }]);
+    expect(repositories).toEqual([
+      { name: 'repo-a', path: '/work/space/repo-a', valid: true, featureReady: true },
+    ]);
     expect(calls.map((call) => call.path)).toEqual(['/api/v1/readiness']);
   });
 });
@@ -402,5 +408,162 @@ describe('SetupService.pickWorkspaceDirectory', () => {
     expect(failure).toBeInstanceOf(CanonicalErrorException);
     expect((failure as CanonicalErrorException).canonical.code).toBe('E_INVALID_PATH');
     expect(JSON.stringify((failure as CanonicalErrorException).canonical)).not.toContain('sneaky');
+  });
+});
+
+describe('SetupService root-mutation fencing', () => {
+  /** A mutable identity source so a test can switch servers mid-sequence. */
+  function makeFencedService(respond: (path: string, init?: ApiRequestInit) => HttpResult): {
+    service: SetupService;
+    calls: Call[];
+    identity: { serverKey: string | null; generation: number };
+  } {
+    const calls: Call[] = [];
+    const identity = { serverKey: 'alpha', generation: 1 };
+    const service = new SetupService({
+      transport: {
+        apiRequest: (path, init) => {
+          calls.push(init === undefined ? { path } : { path, init });
+          return Promise.resolve(respond(path, init));
+        },
+      },
+      dialogs: { pickDirectory: () => Promise.resolve(null) },
+      identity: () => ({ ...identity }),
+    });
+    return { service, calls, identity };
+  }
+
+  const configResponse = { status: 200, body: { api_version: 'v1', workspace_roots: ['/old'] } };
+
+  it('aborts before the write when the server switches between the read and the patch', async () => {
+    const { service, calls, identity } = makeFencedService((path) => {
+      if (path === '/api/v1/config/runtime') {
+        // The switch lands while the config read is in flight.
+        identity.serverKey = 'beta';
+        return configResponse;
+      }
+      return { status: 200, body: serverReadiness() };
+    });
+    await expect(service.addWorkspaceRoot('/work/new')).rejects.toMatchObject({
+      canonical: { code: 'E_SERVER_SWITCHED' },
+    });
+    // The mutation never dispatched: an already switched sequence cannot
+    // write to the new server.
+    expect(calls.some((call) => call.init?.method === 'PATCH')).toBe(false);
+  });
+
+  it('reconciles a failed refresh after a successful save against the same server', async () => {
+    let readinessCalls = 0;
+    const { service, calls } = makeFencedService((path) => {
+      if (path === '/api/v1/config/runtime') return configResponse;
+      if (path === '/api/v1/readiness') {
+        readinessCalls += 1;
+        if (readinessCalls === 1) {
+          return { status: 500, body: { error: { code: 'internal_error' } } };
+        }
+        return { status: 200, body: serverReadiness() };
+      }
+      return { status: 200, body: {} };
+    });
+    const snapshot = await service.addWorkspaceRoot('/work/new');
+    expect(snapshot.workspaceRoots[0]?.path).toBe('/work/space');
+    // The save landed once and the refresh was retried exactly once more.
+    expect(calls.filter((call) => call.init?.method === 'PATCH')).toHaveLength(1);
+    expect(readinessCalls).toBe(2);
+  });
+
+  it('discards the result when the server switches before the refresh lands', async () => {
+    const { service, calls, identity } = makeFencedService((path) => {
+      if (path === '/api/v1/config/runtime') return configResponse;
+      if (path === '/api/v1/readiness') {
+        // The switch lands while the post-save refresh is in flight.
+        identity.serverKey = 'beta';
+        return { status: 200, body: serverReadiness() };
+      }
+      return { status: 200, body: {} };
+    });
+    await expect(service.addWorkspaceRoot('/work/new')).rejects.toMatchObject({
+      canonical: { code: 'E_SERVER_SWITCHED' },
+    });
+    // The save dispatched exactly once and the stale snapshot never
+    // escapes to the new server's UI.
+    expect(calls.filter((call) => call.init?.method === 'PATCH')).toHaveLength(1);
+    expect(calls.at(-1)?.path).toBe('/api/v1/readiness');
+  });
+});
+
+describe('SetupService locality enforcement', () => {
+  function makeRemoteService(
+    respond: (path: string) => HttpResult = () => ({ status: 200, body: serverReadiness() }),
+  ): { service: SetupService; calls: Call[] } {
+    const calls: Call[] = [];
+    const service = new SetupService({
+      transport: {
+        apiRequest: (path, init) => {
+          calls.push(init === undefined ? { path } : { path, init });
+          return Promise.resolve(respond(path));
+        },
+      },
+      dialogs: { pickDirectory: () => Promise.resolve('/work/picked') },
+      locality: () => 'remote',
+    });
+    return { service, calls };
+  }
+
+  it('addWorkspaceRoot throws E_REQUIRES_LOCAL_SERVER before any request or dialog', async () => {
+    const { service, calls } = makeRemoteService((path) =>
+      path === '/api/v1/readiness'
+        ? { status: 200, body: serverReadiness() }
+        : path === '/api/v1/config/runtime'
+          ? { status: 200, body: { api_version: 'v1', workspace_roots: [] } }
+          : { status: 200, body: {} },
+    );
+    await expect(service.addWorkspaceRoot('/work/new')).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    // The guard fires before any remote request: a remote server's roots
+    // are administrator-owned.
+    expect(calls).toHaveLength(0);
+  });
+
+  it('removeWorkspaceRoot throws E_REQUIRES_LOCAL_SERVER without calling the transport', async () => {
+    const { service, calls } = makeRemoteService();
+    await expect(service.removeWorkspaceRoot('/work/old')).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('reorderWorkspaceRoots throws E_REQUIRES_LOCAL_SERVER without calling the transport', async () => {
+    const { service, calls } = makeRemoteService();
+    await expect(service.reorderWorkspaceRoots(['/a', '/b'])).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('pickWorkspaceDirectory throws E_REQUIRES_LOCAL_SERVER without calling the dialog', async () => {
+    const pick = vi.fn(() => Promise.resolve('/work/picked'));
+    const service = new SetupService({
+      transport: {
+        apiRequest: () => Promise.resolve({ status: 200, body: serverReadiness() }),
+      },
+      dialogs: { pickDirectory: pick },
+      locality: () => 'remote',
+    });
+    await expect(service.pickWorkspaceDirectory()).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(pick).not.toHaveBeenCalled();
+  });
+
+  it('initRepository throws E_REQUIRES_LOCAL_SERVER without calling the transport', async () => {
+    const { service, calls } = makeRemoteService();
+    await expect(
+      service.initRepository({ path: '/work/repo', consent: true }),
+    ).rejects.toMatchObject({
+      canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
+    });
+    expect(calls).toHaveLength(0);
   });
 });

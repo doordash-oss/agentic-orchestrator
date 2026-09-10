@@ -30,6 +30,8 @@ import type {
   ReadinessSnapshot,
   RecoveryItemView,
   RewindPreviewView,
+  RepositoryUpdateSourceResult,
+  RepositorySourceReconcileResult,
   RunArtifactView,
   RunArtifactsListResult,
   RunDetailView,
@@ -1284,10 +1286,15 @@ const READY_SNAPSHOT: ReadinessSnapshot = {
   providers: [{ name: 'claude', installed: true, version: '2.1.0', ready: true }],
   models: { available: true, models: ['claude-sonnet-4-5'] },
   configuration: { valid: true },
-  workspaceRoots: [{ path: '/work/space', valid: true }],
+  workspaceRoots: [{ path: '/work/space', valid: true, cloneEligible: true }],
   repositories: [
-    { name: 'signal-lab', path: '/work/space/signal-lab', valid: true },
-    { name: 'orchestrator-core', path: '/work/space/orchestrator-core', valid: true },
+    { name: 'signal-lab', path: '/work/space/signal-lab', valid: true, featureReady: true },
+    {
+      name: 'orchestrator-core',
+      path: '/work/space/orchestrator-core',
+      valid: true,
+      featureReady: true,
+    },
   ],
   issues: [],
 };
@@ -1726,6 +1733,14 @@ function makeMockApi(
     removeWorkspaceRoot: () => Promise.resolve(READY_SNAPSHOT),
     reorderWorkspaceRoots: () => Promise.resolve(READY_SNAPSHOT),
     initRepository: () => Promise.resolve(READY_SNAPSHOT),
+    startClone: () => Promise.reject(new Error('unused')),
+    getCloneOperation: () => Promise.reject(new Error('unused')),
+    listCloneOperations: () => Promise.resolve({ operations: [] }),
+    cancelCloneOperation: () => Promise.reject(new Error('unused')),
+    retryCloneCleanup: () => Promise.reject(new Error('unused')),
+    retryCloneOperation: () => Promise.reject(new Error('unused')),
+    createRepository: () => Promise.reject(new Error('unused')),
+    initializeRepository: () => Promise.reject(new Error('unused')),
     listRepositories: () => Promise.resolve(READY_SNAPSHOT.repositories),
     listFeatures: () =>
       Promise.resolve({
@@ -2047,6 +2062,7 @@ function makeMockApi(
     getCreationDefaults: () =>
       Promise.resolve({
         repositories: READY_SNAPSHOT.repositories!.map((r) => ({ ...r, valid: true })),
+        workspaceRoots: READY_SNAPSHOT.workspaceRoots ?? [],
         defaults: {
           pipeline: 'large',
           inquireness: 'medium',
@@ -2055,6 +2071,49 @@ function makeMockApi(
           useCurrentBranch: false,
         },
       } as CreationDefaults),
+    inspectRepositorySources: (request) =>
+      Promise.resolve({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          observedSha: 'a'.repeat(40),
+        })),
+      }),
+    checkRepositoryOriginStatus: (request) =>
+      Promise.resolve({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          localSha: 'a'.repeat(40),
+          originBranch: 'main',
+          status: 'up_to_date' as const,
+          checkedAt: '2026-09-09T10:00:00.000Z',
+        })),
+      }),
+    updateRepositorySource: (request) =>
+      Promise.resolve({
+        result: 'already_up_to_date' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
+      } as RepositoryUpdateSourceResult),
+    reconcileSourceUpdate: (request) =>
+      Promise.resolve({
+        outcome: 'original_tip_remains' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
+      } as RepositorySourceReconcileResult),
     // The creation-sheet scenes need real-looking attachment chips; every
     // other scene keeps the picker inert.
     pickCreationFiles: (kind) =>

@@ -389,6 +389,8 @@ export const ReadinessResponseSchema = z.object({
         path: z.string(),
         valid: z.boolean(),
         issue: CanonicalErrorSchema.optional(),
+        clone_eligible: z.boolean(),
+        clone_issue: CanonicalErrorSchema.optional(),
       }),
     ),
     repositories: z.array(
@@ -397,6 +399,19 @@ export const ReadinessResponseSchema = z.object({
         path: z.string(),
         valid: z.boolean(),
         issue: CanonicalErrorSchema.optional(),
+        feature_ready: z.boolean(),
+        // Server-resolved repository identity; malformed identity data is
+        // rejected rather than half-parsed, and a missing identity simply
+        // leaves the repository unselectable upstream.
+        identity: z
+          .strictObject({
+            path: z.string().min(1).max(4096),
+            common_dir: z.string().min(1).max(4096),
+            device: z.string().regex(/^[0-9]{1,20}$/),
+            inode: z.string().regex(/^[0-9]{1,20}$/),
+            birth_time: z.string().max(64).optional(),
+          })
+          .optional(),
       }),
     ),
   }),
@@ -404,6 +419,335 @@ export const ReadinessResponseSchema = z.object({
 });
 
 export type ReadinessResponse = z.output<typeof ReadinessResponseSchema>;
+
+export const RepositorySourcesResponseSchema = z.object({
+  api_version: z.string(),
+  repositories: z
+    .array(
+      z.strictObject({
+        repo_key: z.string().min(1),
+        identity: z.strictObject({
+          path: z.string().min(1),
+          common_dir: z.string().min(1),
+          device: z.string().regex(/^[0-9]{1,20}$/),
+          inode: z.string().regex(/^[0-9]{1,20}$/),
+          birth_time: z.string().max(64).optional(),
+        }),
+        mode: z.enum(['default', 'current']),
+        kind: z.enum(['branch', 'detached']),
+        branch: z.string().optional(),
+        observed_sha: z.string().regex(/^[0-9a-f]{40,64}$/),
+      }),
+    )
+    .min(1)
+    .max(32),
+});
+
+export type RepositorySourcesResponse = z.output<typeof RepositorySourcesResponseSchema>;
+
+const OriginCommitShaSchema = z.string().regex(/^[0-9a-f]{40,64}$/);
+
+const OriginComparisonWireSchema = z.strictObject({
+  status: z.enum(['up_to_date', 'behind', 'ahead', 'diverged']),
+  local_sha: OriginCommitShaSchema,
+  fetched_sha: OriginCommitShaSchema,
+  origin_branch: z.string().min(1),
+  ahead_count: z.number().int().min(0),
+  behind_count: z.number().int().min(0),
+  checked_at: z.string().min(1),
+});
+
+const RepositoryOriginStatusWireSchema = z.strictObject({
+  repo_key: z.string().min(1),
+  identity: z.strictObject({
+    path: z.string().min(1),
+    common_dir: z.string().min(1),
+    device: z.string().regex(/^[0-9]{1,20}$/),
+    inode: z.string().regex(/^[0-9]{1,20}$/),
+    birth_time: z.string().max(64).optional(),
+  }),
+  mode: z.enum(['default', 'current']),
+  kind: z.enum(['branch', 'detached']),
+  branch: z.string().optional(),
+  commit: OriginCommitShaSchema.optional(),
+  local_sha: OriginCommitShaSchema.optional(),
+  origin_branch: z.string().optional(),
+  fetched_sha: OriginCommitShaSchema.optional(),
+  checked_at: z.string().optional(),
+  status: z.enum([
+    'checking',
+    'up_to_date',
+    'behind',
+    'ahead',
+    'diverged',
+    'no_origin',
+    'remote_branch_missing',
+    'other_upstream',
+    'detached',
+    'local_base_missing',
+    'unknown',
+  ]),
+  ahead_count: z.number().int().min(0).optional(),
+  behind_count: z.number().int().min(0).optional(),
+  issue: CanonicalErrorSchema.optional(),
+  stale_comparison: OriginComparisonWireSchema.optional(),
+  update_eligible: z.boolean().optional(),
+  update_blockers: z
+    .array(
+      z.enum([
+        'local_not_behind',
+        'dirty_target_checkout',
+        'git_operation_in_progress',
+        'branch_checked_out_in_worktree',
+        'checkout_operation_in_progress',
+        'ignored_path_collision',
+        'checkout_uninspectable',
+        'comparison_unavailable',
+      ]),
+    )
+    .optional(),
+  checkout_head_ref: z.string().min(1).max(512).optional(),
+  checkout_head_sha: OriginCommitShaSchema.optional(),
+});
+
+export const RepositoryOriginStatusResponseSchema = z.object({
+  api_version: z.string(),
+  repositories: z.array(RepositoryOriginStatusWireSchema).min(1).max(32),
+});
+
+export type RepositoryOriginStatusWireResponse = z.output<
+  typeof RepositoryOriginStatusResponseSchema
+>;
+
+export const RepositoryUpdateSourceResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.enum(['updated', 'already_up_to_date', 'stale']),
+  reason: z
+    .enum([
+      'checkout_changed',
+      'source_changed',
+      'mapping_changed',
+      'local_tip_changed',
+      'origin_tip_changed',
+      'origin_branch_missing',
+      'not_fast_forward',
+      'branch_checked_out',
+      'dirty_checkout',
+      'checkout_operation_in_progress',
+      'ignored_path_collision',
+      'checkout_conflict',
+    ])
+    .optional(),
+  repo_key: z.string().min(1),
+  identity: z.strictObject({
+    path: z.string().min(1),
+    common_dir: z.string().min(1),
+    device: z.string().regex(/^[0-9]{1,20}$/),
+    inode: z.string().regex(/^[0-9]{1,20}$/),
+    birth_time: z.string().max(64).optional(),
+  }),
+  mode: z.enum(['default', 'current']),
+  branch: z.string().min(1),
+  origin_branch: z.string().min(1),
+  previous_sha: OriginCommitShaSchema.optional(),
+  local_sha: OriginCommitShaSchema.optional(),
+  fetched_sha: OriginCommitShaSchema.optional(),
+  status: RepositoryOriginStatusWireSchema.optional(),
+});
+
+export type RepositoryUpdateSourceWireResponse = z.output<
+  typeof RepositoryUpdateSourceResponseSchema
+>;
+
+const RepositorySourceReconcileCheckoutWireSchema = z.strictObject({
+  state: z.enum(['clean', 'dirty', 'operation_in_progress', 'unobserved']),
+  // The server sends an empty head_ref when the checkout HEAD could not be
+  // read; only an absent head_sha (never an empty one) is malformed.
+  head_ref: z.string().max(512).optional(),
+  head_sha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+});
+
+export const RepositorySourceReconcileResponseSchema = z.object({
+  api_version: z.string(),
+  outcome: z.enum([
+    'expected_target_present',
+    'original_tip_remains',
+    'local_state_changed',
+    'branch_missing',
+  ]),
+  repo_key: z.string().min(1),
+  identity: z.strictObject({
+    path: z.string().min(1),
+    common_dir: z.string().min(1),
+    device: z.string().regex(/^[0-9]{1,20}$/),
+    inode: z.string().regex(/^[0-9]{1,20}$/),
+    birth_time: z.string().max(64).optional(),
+  }),
+  mode: z.enum(['default', 'current']),
+  branch: z.string().min(1),
+  origin_branch: z.string().min(1),
+  local_sha: OriginCommitShaSchema.optional(),
+  selection: z
+    .strictObject({
+      repo_key: z.string().min(1),
+      identity: z.strictObject({
+        path: z.string().min(1),
+        common_dir: z.string().min(1),
+        device: z.string().regex(/^[0-9]{1,20}$/),
+        inode: z.string().regex(/^[0-9]{1,20}$/),
+        birth_time: z.string().max(64).optional(),
+      }),
+      mode: z.enum(['default', 'current']),
+      kind: z.enum(['branch', 'detached']),
+      branch: z.string().optional(),
+      observed_sha: z.string().regex(/^[0-9a-f]{40,64}$/),
+    })
+    .optional(),
+  checkout: RepositorySourceReconcileCheckoutWireSchema.optional(),
+});
+
+export type RepositorySourceReconcileWireResponse = z.output<
+  typeof RepositorySourceReconcileResponseSchema
+>;
+
+// --- Clone operations (POST/GET /api/v1/workspace/repositories/clone) ------
+// Authoritative snapshots from the server-owned clone lifecycle. State,
+// pending outcome and progress come from the durable record, never from
+// git text or transport completion.
+
+export const CloneOperationDTOSchema = z.object({
+  id: z.string(),
+  state: z.enum([
+    'accepted',
+    'running',
+    'finalizing',
+    'cancelling',
+    'succeeded',
+    'failed',
+    'cancelled',
+    'interrupted',
+    'cleanup_pending',
+  ]),
+  stage: z.string().optional(),
+  progress: z.string().optional(),
+  remote_url: z.string(),
+  root_path: z.string(),
+  destination: z.string(),
+  destination_path: z.string(),
+  idempotency_key: z.string(),
+  pending_outcome: z.enum(['failed', 'cancelled', 'interrupted']).optional(),
+  cancel_requested: z.boolean(),
+  cancel_requested_at: z.string().optional(),
+  cleanup_issue: z.string().optional(),
+  error: CanonicalErrorSchema.optional(),
+  published: z
+    .object({
+      repo_key: z.string(),
+      path: z.string(),
+      has_head: z.boolean(),
+      published_at: z.string(),
+      // Server-resolved identity of the repository actually published;
+      // absent for older records or an unprovable destination.
+      identity: z
+        .strictObject({
+          path: z.string().min(1).max(4096),
+          common_dir: z.string().min(1).max(4096),
+          device: z.string().regex(/^[0-9]{1,20}$/),
+          inode: z.string().regex(/^[0-9]{1,20}$/),
+          birth_time: z.string().max(64).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  terminal_at: z.string().optional(),
+  resolved_at: z.string().optional(),
+});
+
+export type CloneOperationDTO = z.output<typeof CloneOperationDTOSchema>;
+
+export const CloneActionResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.string(),
+  operation: CloneOperationDTOSchema,
+});
+
+export type CloneActionResponse = z.output<typeof CloneActionResponseSchema>;
+
+export const CloneOperationResponseSchema = z.object({
+  api_version: z.string(),
+  operation: CloneOperationDTOSchema,
+});
+
+export type CloneOperationResponse = z.output<typeof CloneOperationResponseSchema>;
+
+export const CloneOperationListResponseSchema = z.object({
+  api_version: z.string(),
+  operations: z.array(CloneOperationDTOSchema),
+  next_page_token: z.string().optional(),
+});
+
+export type CloneOperationListResponse = z.output<typeof CloneOperationListResponseSchema>;
+
+// --- Repository creation (POST /api/v1/workspace/repositories/create) -------
+// The synchronous creation result: the actual collision-safe repository
+// key from discovery and the server-resolved identity of the repository
+// that was published, pinned by the durable publication marker.
+
+export const CreateRepositoryResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.string(),
+  repository: z.object({
+    repo_key: z.string(),
+    path: z.string(),
+    has_head: z.boolean(),
+    root: z.string(),
+    // Absent only for a replayed success whose destination no longer
+    // matches the publication marker; such a result is never adopted.
+    identity: z
+      .strictObject({
+        path: z.string().min(1).max(4096),
+        common_dir: z.string().min(1).max(4096),
+        device: z.string().regex(/^[0-9]{1,20}$/),
+        inode: z.string().regex(/^[0-9]{1,20}$/),
+        birth_time: z.string().max(64).optional(),
+      })
+      .optional(),
+  }),
+});
+
+export type CreateRepositoryResponse = z.output<typeof CreateRepositoryResponseSchema>;
+
+// --- Repository initialization (POST /api/v1/workspace/repositories/initialize)
+// The synchronous explicit-initialization result: the refreshed repository
+// under its actual catalog key and server-resolved identity. Both result
+// values are successes ("already_initialized" is a refresh-only success).
+
+export const InitializeRepositoryResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.enum(['initialized', 'already_initialized']),
+  repository: z.object({
+    repo_key: z.string(),
+    path: z.string(),
+    has_head: z.boolean(),
+    root: z.string(),
+    identity: z
+      .strictObject({
+        path: z.string().min(1).max(4096),
+        common_dir: z.string().min(1).max(4096),
+        device: z.string().regex(/^[0-9]{1,20}$/),
+        inode: z.string().regex(/^[0-9]{1,20}$/),
+        birth_time: z.string().max(64).optional(),
+      })
+      .optional(),
+  }),
+});
+
+export type InitializeRepositoryResponse = z.output<typeof InitializeRepositoryResponseSchema>;
 
 // --- Features (GET/POST /api/v1/features, GET /api/v1/features/{id}) --------
 // Lenient subsets: z.object tolerates and strips fields this view does not
@@ -416,6 +760,10 @@ export const ServerSetupTaskSchema = z.object({
   repo: z.string().optional(),
   status: z.string(),
   branch: z.string().optional(),
+  exact_sha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
   attempt: z.number().int().optional(),
   // Canonical error rendering the task's stored failure record; absent when
   // the task has not failed.
@@ -924,6 +1272,7 @@ export const FeatureActionResponseSchema = z.object({
   api_version: z.string(),
   result: z.string(),
   feature_id: z.string(),
+  warnings: z.array(CanonicalErrorSchema).max(32).optional(),
 });
 
 export type FeatureActionResponse = z.output<typeof FeatureActionResponseSchema>;
@@ -1467,3 +1816,21 @@ void _completionPreflightSubset;
 type RepositoryDiffDTO = components['schemas']['RepositoryDiffResponse'];
 const _repositoryDiffSubset = (value: RepositoryDiffDTO): RepositoryDiffResponse => value;
 void _repositoryDiffSubset;
+type CloneOperationWireDTO = components['schemas']['CloneOperation'];
+const _cloneOperationSubset = (value: CloneOperationWireDTO): CloneOperationDTO => value;
+void _cloneOperationSubset;
+type CloneActionWireDTO = components['schemas']['CloneActionResponse'];
+const _cloneActionSubset = (value: CloneActionWireDTO): CloneActionResponse => value;
+void _cloneActionSubset;
+type CloneOperationResponseWireDTO = components['schemas']['CloneOperationResponse'];
+const _cloneOperationResponseSubset = (
+  value: CloneOperationResponseWireDTO,
+): CloneOperationResponse => value;
+void _cloneOperationResponseSubset;
+type CloneOperationListWireDTO = components['schemas']['CloneOperationListResponse'];
+const _cloneOperationListSubset = (value: CloneOperationListWireDTO): CloneOperationListResponse =>
+  value;
+void _cloneOperationListSubset;
+type CreateRepositoryWireDTO = components['schemas']['CreateRepositoryResponse'];
+const _createRepositorySubset = (value: CreateRepositoryWireDTO): CreateRepositoryResponse => value;
+void _createRepositorySubset;

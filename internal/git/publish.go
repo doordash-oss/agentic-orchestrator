@@ -15,11 +15,13 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -278,13 +280,79 @@ func CommitAllAndGetHead(worktreePath, message string) (string, error) {
 }
 
 func worktreeMutationLock(worktreePath string) *sync.Mutex {
-	key := filepath.Clean(worktreePath)
+	key := repositoryMutationKey(worktreePath)
 	actual, _ := worktreeMutationLocks.LoadOrStore(key, &sync.Mutex{})
-	return actual.(*sync.Mutex)
+	mu := actual.(*sync.Mutex)
+	worktreeMutationLocks.Store(filepath.Clean(worktreePath), mu)
+	return mu
+}
+
+func repositoryMutationKey(repoPath string) string {
+	if identity, ok := ResolveRepoIdentity(repoPath); ok {
+		return identity.CommonDir
+	}
+	return filepath.Clean(repoPath)
+}
+
+// LockRepositories serializes an operation with Agentico's existing Git
+// mutation guards. Locks are deduplicated by canonical common directory and
+// acquired in lexical order so multi-repository acceptance cannot deadlock.
+func LockRepositories(repoPaths []string) func() {
+	keys := make(map[string]struct{}, len(repoPaths))
+	for _, repoPath := range repoPaths {
+		keys[repositoryMutationKey(repoPath)] = struct{}{}
+	}
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
+	}
+	sort.Strings(ordered)
+	locks := make([]*sync.Mutex, 0, len(ordered))
+	for _, key := range ordered {
+		actual, _ := worktreeMutationLocks.LoadOrStore(key, &sync.Mutex{})
+		mu := actual.(*sync.Mutex)
+		mu.Lock()
+		locks = append(locks, mu)
+	}
+	for _, repoPath := range repoPaths {
+		key := repositoryMutationKey(repoPath)
+		if actual, ok := worktreeMutationLocks.Load(key); ok {
+			worktreeMutationLocks.Store(filepath.Clean(repoPath), actual)
+		}
+	}
+	return func() {
+		for i := len(locks) - 1; i >= 0; i-- {
+			locks[i].Unlock()
+		}
+	}
+}
+
+// LockRepositoryUntil acquires one repository's mutation lock, bounded by
+// ctx. It uses the same canonical common-directory identity as
+// LockRepositories, so an origin check serializes with feature acceptance,
+// setup, and other guarded mutations; a single-lock acquisition cannot
+// deadlock against a multi-lock holder. The returned unlock must be called
+// when ok is true.
+func LockRepositoryUntil(ctx context.Context, repoPath string) (unlock func(), ok bool) {
+	mu := worktreeMutationLock(repoPath)
+	for {
+		if mu.TryLock() {
+			return mu.Unlock, true
+		}
+		select {
+		case <-ctx.Done():
+			return func() {}, false
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 func worktreeMutationInProgress(worktreePath string) bool {
-	mu := worktreeMutationLock(worktreePath)
+	actual, ok := worktreeMutationLocks.Load(filepath.Clean(worktreePath))
+	if !ok {
+		return false
+	}
+	mu := actual.(*sync.Mutex)
 	if mu.TryLock() {
 		mu.Unlock()
 		return false

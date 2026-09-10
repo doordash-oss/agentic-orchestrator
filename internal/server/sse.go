@@ -63,6 +63,10 @@ const (
 	// sseEventShutdownUpdated is the event kind for a runtime shutdown
 	// schedule change.
 	sseEventShutdownUpdated = "shutdown.updated"
+	// sseEventCloneUpdated is the snapshot-required event kind for any
+	// clone operation change. Events identify the changed operation; the
+	// authoritative snapshot stays the durable record.
+	sseEventCloneUpdated = "clone.updated"
 	// sseEventStreamReset is the event kind sent when the client's replay
 	// cursor has fallen outside the broker's retained buffer, forcing a full
 	// resync.

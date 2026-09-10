@@ -86,13 +86,13 @@ auto unique = v | std::ranges::to<std::set>();
 
 ## Views vs Owning Ranges
 
-| Views | Owning Ranges |
-|-------|---------------|
-| Non-owning, lazy | Own elements, eager |
-| O(1) copy | O(n) copy |
-| No allocation | Heap allocation |
+| Views                   | Owning Ranges        |
+| ----------------------- | -------------------- |
+| Non-owning, lazy        | Own elements, eager  |
+| O(1) copy               | O(n) copy            |
+| No allocation           | Heap allocation      |
 | Must not outlive source | Independent lifetime |
-| Ideal for pipelines | Ideal for storage |
+| Ideal for pipelines     | Ideal for storage    |
 
 Materialize (via `ranges::to`) when you need persistence, random access by index,
 or multiple independent iterations.

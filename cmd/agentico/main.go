@@ -1077,6 +1077,10 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 	effort = config.OverlayEffortConfig(effort, req.Effort)
 	pipeline := effectiveCreatePipeline(req.Pipeline, cfg)
 	checkpoints := pipeline.ProjectGates(req.Checkpoints, true).Checkpoints
+	sourceExpectations, err := createSourceExpectations(req.RepositorySources)
+	if err != nil {
+		return serverruntime.CreateFeatureResponse{}, err
+	}
 	f, err := t.orch.CreateFeature(req.Name, req.Description, req.Repos, models, req.ExitCriteria, req.Inquireness, req.Images, feature.CreateOptions{
 		UseCurrentBranch:        req.UseCurrentBranch,
 		UseCurrentBranchPerRepo: req.UseCurrentBranchPerRepo,
@@ -1086,14 +1090,79 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 		QueueSetup:              true,
 		RiskLevel:               req.RiskLevel,
 		Pipeline:                req.Pipeline,
+		SourceExpectations:      sourceExpectations,
+		// Every ordinary server creation is accepted against immutable local
+		// commits. Requests from source-aware clients revalidate their displayed
+		// expectations; trusted compatibility callers without expectations use
+		// the same guarded local capture at acceptance time.
+		PinLocalSources: true,
 	})
 	if err != nil {
+		if errors.Is(err, git.ErrLocalSourceStale) {
+			var sourceErr *feature.RepoSourceAcceptanceError
+			var staleErr *git.LocalSourceStaleError
+			var options []errcat.Option
+			if errors.As(err, &sourceErr) && errors.As(err, &staleErr) && staleErr.Refreshed.Commit != "" {
+				options = append(options, errcat.WithRepositories(errcat.CodeRepository{
+					Name: sourceErr.Repo, Branch: staleErr.Refreshed.Branch, ObservedSHA: staleErr.Refreshed.Commit,
+				}))
+			}
+			return serverruntime.CreateFeatureResponse{}, &serverruntime.ActionConflictError{
+				Err: err, Code: errcat.LocalSourceStale,
+				Detail: "The selected local source changed. Refresh repository sources and submit again.", Options: options,
+			}
+		}
 		return serverruntime.CreateFeatureResponse{}, err
 	}
 	if err := t.persistPipelinePreferences(featureRepoNames(f), f.EffectivePipeline(), f.Models, f.Effort, f.Inquireness, f.Checkpoints, true); err != nil {
 		return serverruntime.CreateFeatureResponse{}, err
 	}
-	return serverruntime.CreateFeatureResponse{FeatureID: f.ID, Result: "created"}, nil
+	return serverruntime.CreateFeatureResponse{
+		FeatureID: f.ID, Result: "created", Warnings: wireCreationWarnings(f.CreationWarnings),
+	}, nil
+}
+
+func wireCreationWarnings(warnings []git.BranchProbeWarning) []serverruntime.Error {
+	if len(warnings) == 0 {
+		return nil
+	}
+	result := make([]serverruntime.Error, 0, len(warnings))
+	for _, warning := range warnings {
+		repositories := []errcat.CodeRepository{{Name: warning.Repository, Branch: warning.Branch}}
+		result = append(result, serverruntime.WireCanonicalError(errcat.New(
+			errcat.BranchCollisionProbeUnavailable,
+			errcat.WithRepositories(repositories...),
+			errcat.WithParams(errcat.WarningRepoParams{Repositories: repositories}),
+			errcat.WithDiagnostics(serverruntime.SafeDisplayText(warning.Diagnostics, 300)),
+		)))
+	}
+	return result
+}
+
+func createSourceExpectations(sources []serverruntime.RepositorySource) ([]feature.RepoSourceExpectation, error) {
+	result := make([]feature.RepoSourceExpectation, 0, len(sources))
+	for _, source := range sources {
+		device, err := strconv.ParseUint(source.Identity.Device, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid repository source device for %q: %w", source.RepoKey, err)
+		}
+		inode, err := strconv.ParseUint(source.Identity.Inode, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid repository source inode for %q: %w", source.RepoKey, err)
+		}
+		result = append(result, feature.RepoSourceExpectation{
+			RepoKey: source.RepoKey,
+			Source: git.LocalSourceExpectation{
+				Identity: git.RepoIdentity{
+					Path: source.Identity.Path, CommonDir: source.Identity.CommonDir,
+					Device: device, Inode: inode, BirthTime: source.Identity.BirthTime,
+				},
+				Mode: git.LocalSourceMode(source.Mode), Kind: string(source.Kind),
+				Branch: source.Branch, ObservedCommit: source.ObservedSha,
+			},
+		})
+	}
+	return result, nil
 }
 
 // SetupFeature dispatches server-owned durable setup for a freshly created

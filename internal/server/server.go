@@ -28,13 +28,15 @@ import (
 )
 
 type RuntimeServer struct {
-	baseURL   string
-	policy    string
-	wildcard  bool
-	startedAt time.Time
-	srv       *http.Server
-	broker    *eventBroker
-	done      chan error
+	baseURL      string
+	policy       string
+	wildcard     bool
+	startedAt    time.Time
+	srv          *http.Server
+	broker       *eventBroker
+	clones       CloneService
+	originChecks *originCheckCoordinator
+	done         chan error
 }
 
 func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
@@ -83,6 +85,8 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		Mutations:                   opts.Mutations,
 		PersistProviderModelCatalog: opts.PersistProviderModelCatalog,
 		InitGitRepository:           opts.InitGitRepository,
+		InitializeGitRepository:     opts.InitializeGitRepository,
+		Clones:                      opts.Clones,
 		Worktrees:                   opts.Worktrees,
 		RuntimePolicy:               policy,
 	})
@@ -104,14 +108,26 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		// server lifetime context ends.
 		go handler.uploads.sweepLoop(ctx)
 	}
+	if handler.clones != nil {
+		// Startup reconciliation: restore reservations, recognize published
+		// success, and resolve unfinished attempts before clone starts are
+		// admitted. A reconciliation failure keeps truthful unresolved
+		// records and does not prevent serving.
+		_ = handler.clones.Recover()
+		// Prune resolved terminal clone records past the retention window,
+		// hourly, exactly like upload sweeping.
+		go cloneSweepLoop(ctx, handler.clones)
+	}
 	s := &RuntimeServer{
-		baseURL:   baseURL,
-		policy:    policy,
-		wildcard:  res.Wildcard,
-		startedAt: startedAt,
-		srv:       httpServer,
-		broker:    handler.broker,
-		done:      make(chan error, 1),
+		baseURL:      baseURL,
+		policy:       policy,
+		wildcard:     res.Wildcard,
+		startedAt:    startedAt,
+		srv:          httpServer,
+		broker:       handler.broker,
+		clones:       handler.clones,
+		originChecks: handler.originChecks,
+		done:         make(chan error, 1),
 	}
 	go func() {
 		err := httpServer.Serve(ln)
@@ -185,6 +201,28 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 	if s.broker != nil {
 		s.broker.publish(eventDTOFromDomain(ports.Event{Type: ports.RuntimeShutdownStarted}))
 	}
+	// Graceful clone shutdown runs before HTTP draining so workers stop,
+	// process trees are reaped and owned staging is cleaned within bounds.
+	var cloneErr error
+	if s.clones != nil {
+		cloneErr = s.clones.Shutdown(ctx)
+	}
+	// Origin-check attempts cancel alongside clone shutdown so in-flight
+	// fetches and their Git process trees are reaped within the caller's
+	// deadline; the coordinator's own attempt deadline bounds the remainder.
+	var originErr error
+	if s.originChecks != nil {
+		originDone := make(chan struct{})
+		go func() {
+			s.originChecks.Shutdown()
+			close(originDone)
+		}()
+		select {
+		case <-originDone:
+		case <-ctx.Done():
+			originErr = ctx.Err()
+		}
+	}
 	shutdownErr := srv.Shutdown(ctx)
 	var serveErr error
 	select {
@@ -192,7 +230,23 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 	case <-ctx.Done():
 		serveErr = ctx.Err()
 	}
-	return errors.Join(shutdownErr, serveErr)
+	return errors.Join(cloneErr, originErr, shutdownErr, serveErr)
+}
+
+// cloneSweepLoop prunes expired clone records once at startup and hourly
+// until the server lifetime context ends.
+func cloneSweepLoop(ctx context.Context, clones CloneService) {
+	clones.Sweep()
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			clones.Sweep()
+		}
+	}
 }
 
 func waitForHealth(ctx context.Context, baseURL, token string) error {

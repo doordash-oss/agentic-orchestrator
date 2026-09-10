@@ -509,7 +509,6 @@ paths:
         "409":
           $ref: "#/components/responses/ErrorResponse"
 
-
   # Statically documented form of the rebase child launch action. The server
   # routes the rebase launch through the dynamic /actions/{action} dispatch,
   # so the served URL is exactly /api/v1/features/{feature_id}/actions/rebase;
@@ -1005,6 +1004,352 @@ paths:
         "409":
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/v1/workspace/repositories/clone:
+    post:
+      operationId: startWorkspaceClone
+      summary: Start a server-owned repository clone into a workspace root.
+      description: >-
+        Durably accepts a clone request (idempotency key, input
+        fingerprint, destination reservation and hidden staging) before any
+        git process is spawned, and returns the accepted operation snapshot
+        promptly regardless of transfer duration. Same-key same-input
+        requests return the retained operation; changed-input reuse
+        conflicts. Closing the HTTP request does not own or cancel the
+        worker.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloneStartRequest"
+      responses:
+        "202":
+          $ref: "#/components/responses/CloneActionResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+    get:
+      operationId: listWorkspaceClones
+      summary: List active and recent clone operations.
+      description: >-
+        Bounded, deterministically ordered listing of clone operations:
+        unresolved records (active and cleanup-pending) first, then
+        resolved terminal records by resolution time. A continuation token
+        pages through history; a truncated page is never proof that an
+        operation does not exist.
+      parameters:
+        - $ref: "#/components/parameters/CloneListLimit"
+        - $ref: "#/components/parameters/CloneListAfter"
+      responses:
+        "200":
+          $ref: "#/components/responses/CloneOperationListResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/workspace/repositories/clone/{operation_id}:
+    get:
+      operationId: getWorkspaceClone
+      summary: Read one authoritative clone operation snapshot.
+      parameters:
+        - $ref: "#/components/parameters/CloneOperationID"
+      responses:
+        "200":
+          $ref: "#/components/responses/CloneOperationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/workspace/repositories/clone/{operation_id}/cancel:
+    post:
+      operationId: cancelWorkspaceClone
+      summary: Request explicit cancellation of a clone operation.
+      description: >-
+        Authenticated operation-scoped mutation returning the
+        authoritative snapshot with cancellation requested. It never
+        immediately claims cancelled, is idempotent, and never reclassifies
+        a published success.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+        - $ref: "#/components/parameters/CloneOperationID"
+      responses:
+        "200":
+          $ref: "#/components/responses/CloneActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/workspace/repositories/clone/{operation_id}/cleanup:
+    post:
+      operationId: retryWorkspaceCloneCleanup
+      summary: Retry cleanup for a cleanup-pending clone attempt.
+      description: >-
+        Re-runs the same reconciliation boundary as startup: process
+        liveness and identity, publication evidence, root identity and
+        staging ownership are rechecked before anything is deleted. Never
+        force-deletes or kills based on a PID alone.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+        - $ref: "#/components/parameters/CloneOperationID"
+      responses:
+        "200":
+          $ref: "#/components/responses/CloneActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/workspace/repositories/clone/{operation_id}/retry:
+    post:
+      operationId: retryWorkspaceClone
+      summary: Start a deliberate fresh retry of a terminal clone attempt.
+      description: >-
+        Available only for failed, cancelled or interrupted operations with
+        completed cleanup. Creates a new operation with a new idempotency
+        key, retains the predecessor's history, and revalidates current
+        authorization and destination conditions.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+        - $ref: "#/components/parameters/CloneOperationID"
+      responses:
+        "202":
+          $ref: "#/components/responses/CloneActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/workspace/repositories/create:
+    post:
+      operationId: createWorkspaceRepository
+      summary: Create a new feature-ready repository inside a workspace root.
+      description: >-
+        Creates a repository as a new child folder of a configured
+        workspace root. Requires an explicit consent flag acknowledging one
+        empty initial commit on the main branch using Agentico's identity,
+        with no origin remote and no push. Shares the clone destination
+        protections: child-name validation, canonical root containment and
+        eligibility, catalog shadowing checks, a cross-kind destination
+        reservation, hidden owned staging and atomic no-replace publication.
+        Same-key same-input requests replay the retained result; the
+        response reports the actual collision-safe repository key and the
+        server-resolved identity of the repository that was published.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRepositoryRequest"
+      responses:
+        "201":
+          $ref: "#/components/responses/CreateRepositoryResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/workspace/repositories/initialize:
+    post:
+      operationId: initializeWorkspaceRepository
+      summary: >-
+        Create one empty local initial commit in an existing unborn clone.
+      description: >-
+        Explicit, bounded initialization of a repository that already exists
+        in the connected server's current catalog (typically a successful
+        clone of an empty remote). Requires an explicit consent flag and a
+        structured repository selector with the expected server-resolved
+        identity: the selector is resolved against the current authorized
+        catalog and the identity is revalidated before any mutation, so
+        renderer-supplied keys, paths and identity fields are comparisons,
+        never independent filesystem authority. The operation preserves the
+        repository's origin remotes, its valid symbolic branch (verbatim,
+        including slash-containing names) and every existing file; it stages
+        nothing, runs no hooks, signs nothing and pushes nothing. Staged,
+        unstaged or untracked content and active merge, rebase, cherry-pick
+        or revert state are refused. A repository whose HEAD already
+        resolves (a competing initializer or an external commit) returns a
+        refresh-only success without another commit, even with local
+        changes. The response reports the refreshed repository under its
+        actual collision-safe catalog key and server-resolved identity.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InitializeRepositoryRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/InitializeRepositoryResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/workspace/repositories/sources:
+    post:
+      operationId: inspectWorkspaceRepositorySources
+      summary: Resolve the local feature source for selected repositories.
+      description: >-
+        Resolves structured selectors against the connected server's current
+        authorized repository catalog, verifies each expected identity, and
+        reports the exact local branch or detached HEAD commit selected by
+        the shared source mode. This inspection never contacts origin and
+        renderer-supplied paths or refs are never revision authority.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositorySourcesRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/RepositorySourcesResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/workspace/repositories/origin-status:
+    post:
+      operationId: checkWorkspaceRepositoryOriginStatus
+      summary: Compare selected local sources with their origin branches.
+      description: >-
+        Resolves structured selectors against the connected server's current
+        authorized repository catalog and reports each repository's typed
+        origin snapshot, scheduling fetch-based checks for sources with an
+        origin mapping. Checks fetch only the mapped origin branch and never
+        change local branches, HEAD, the index, configuration, or working
+        files. Completed results satisfy polling requests for the same
+        resolved source; the refresh list forces a fresh attempt per
+        repository key after a completed result. Renderer-supplied paths,
+        refs, and SHAs are never revision authority.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryOriginStatusRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/RepositoryOriginStatusResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/workspace/repositories/update-source:
+    post:
+      operationId: updateWorkspaceRepositorySource
+      summary: Fast-forward one unoccupied selected source branch from origin.
+      description: >-
+        Advances exactly one catalog-authorized selected local branch to a
+        freshly fetched origin commit, only by a proved fast-forward and only
+        when the branch is absent from every worktree checkout, including
+        the original checkout. The request binds the displayed repository
+        identity, shared branch mode, resolved local branch and origin
+        mapping, expected local and fetched origin SHAs, and the observed
+        checkout HEAD; every expectation is revalidated under canonical
+        common-directory coordination before the expected-old-value
+        compare-and-swap. Changed expectations return a typed stale result
+        with a freshly resolved status; missing or replaced repositories
+        require reselection. The mutation never checks out, resets,
+        rebases, merges, forces, stashes, cleans, stages, pushes, or runs
+        hooks, and never deletes or breaks Git ref/index locks.
+        Renderer-supplied identity is an expectation, never authority to
+        mutate an arbitrary path.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryUpdateSourceRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/RepositoryUpdateSourceResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/workspace/repositories/reconcile-source-update:
+    post:
+      operationId: reconcileWorkspaceRepositorySourceUpdate
+      summary: Reconcile one uncertain Update-from-origin attempt.
+      description: >-
+        Non-mutating settlement read for one Update-from-origin attempt whose
+        response was lost, timed out, or arrived stale. The request repeats the
+        attempted update's displayed binding (repository identity, shared
+        branch mode, local branch, origin mapping, and both expected tips);
+        every value is an expectation for comparison, never authority over
+        which repository or ref is read. The server first waits out the
+        lifetime of any admitted update attempt on the same repository,
+        including one still waiting for common-directory coordination, then
+        reads the current identity, selected source, and the requested
+        branch's tip under that same coordination and reports whether the
+        expected target is present, the original tip remains, the local state
+        changed, or the branch no longer resolves. It never fetches from
+        origin, never infers success from transport completion or a different
+        observed commit, and never mutates anything; a cached origin
+        comparison is never evidence here. Missing or replaced repositories
+        require reselection.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositorySourceReconcileRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/RepositorySourceReconcileResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/recovery:
     get:
       operationId: getRecoverySnapshot
@@ -1154,6 +1499,29 @@ components:
       required: true
       schema:
         type: string
+    CloneOperationID:
+      name: operation_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-z0-9-]{1,64}$"
+    CloneListLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    CloneListAfter:
+      name: after
+      in: query
+      required: false
+      schema:
+        type: string
+        maxLength: 256
     RunNumber:
       name: run_number
       in: path
@@ -1492,6 +1860,68 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RepositoryInitResponse"
+    CreateRepositoryResponse:
+      description: Newly created workspace repository.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CreateRepositoryResponse"
+    InitializeRepositoryResponse:
+      description: >-
+        Refreshed workspace repository after an explicit initialization
+        (created or already initialized).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/InitializeRepositoryResponse"
+    RepositorySourcesResponse:
+      description: Exact local sources for the selected repositories.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositorySourcesResponse"
+    RepositoryOriginStatusResponse:
+      description: Typed origin snapshots for the selected repositories.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositoryOriginStatusResponse"
+    RepositoryUpdateSourceResponse:
+      description: >-
+        Typed outcome of one Update-from-origin attempt: the branch advanced,
+        an equality no-op, or a typed stale refusal with a freshly resolved
+        status snapshot.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositoryUpdateSourceResponse"
+    RepositorySourceReconcileResponse:
+      description: >-
+        Typed settlement of one uncertain Update-from-origin attempt: the
+        observed branch state after the update can no longer mutate, plus the
+        freshly resolved current selection when one resolves.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositorySourceReconcileResponse"
+    CloneActionResponse:
+      description: Authoritative clone operation snapshot after a mutation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CloneActionResponse"
+    CloneOperationResponse:
+      description: Authoritative clone operation snapshot.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CloneOperationResponse"
+    CloneOperationListResponse:
+      description: Bounded page of clone operations with continuation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CloneOperationListResponse"
     ActionResponse:
       description: Mutation result.
       content:
@@ -1962,7 +2392,7 @@ components:
           x-go-type-skip-optional-pointer: false
     WorkspaceRootReadiness:
       type: object
-      required: [path, valid]
+      required: [path, valid, clone_eligible]
       properties:
         path:
           type: string
@@ -1971,9 +2401,21 @@ components:
         issue:
           $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
+        clone_eligible:
+          type: boolean
+          description: >-
+            Whether this root is suitable as a clone destination. A root that
+            is valid for repository discovery may still be ineligible for
+            cloning (e.g. it is not writable or is itself a repository).
+        clone_issue:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            When clone_eligible is false, the canonical error explaining why
+            the root cannot be used as a clone destination.
     RepositoryReadiness:
       type: object
-      required: [name, path, valid]
+      required: [name, path, valid, feature_ready]
       properties:
         name:
           type: string
@@ -1984,6 +2426,59 @@ components:
         issue:
           $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
+        feature_ready:
+          type: boolean
+          description: >-
+            Whether the repository can start feature work. A repository
+            without commits (e.g. cloned from an empty remote) is a valid,
+            discoverable git repository but is not feature ready.
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            Server-resolved identity binding this repository to its canonical
+            checkout path and Git repository. Present for every valid
+            repository; stable across commits, branch checkouts, discovery
+            refreshes and reconnects to the same server. Absent when the
+            identity could not be resolved, in which case the repository
+            cannot be selected.
+    RepositoryIdentity:
+      type: object
+      required: [path, common_dir, device, inode]
+      description: >-
+        Server-resolved repository identity. Two catalog entries describe the
+        same repository exactly when their identities are equal: the
+        canonical checkout path plus the resolved Git common directory
+        distinguish linked worktrees from their main checkout, and the
+        filesystem identity of the common directory invalidates the prior
+        identity when a checkout or its Git directory is replaced at the same
+        path. Device and inode are decimal strings so the comparison stays
+        exact across languages.
+      properties:
+        path:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          description: Canonical checkout path (symlinks resolved).
+        common_dir:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          description: >-
+            Resolved Git common directory. Linked worktrees share it with
+            their main checkout but differ in path.
+        device:
+          type: string
+          pattern: "^[0-9]{1,20}$"
+          description: Device id of the Git common directory, as decimal text.
+        inode:
+          type: string
+          pattern: "^[0-9]{1,20}$"
+          description: Inode of the Git common directory, as decimal text.
+        birth_time:
+          type: string
+          maxLength: 64
+          description: Filesystem creation time of the Git common directory, when available, distinguishing reused inodes. Omitted on filesystems without birth-time support.
     RepositoryInitRequest:
       x-go-name: RepositoryInitSchema
       type: object
@@ -2022,6 +2517,860 @@ components:
               type: string
             repository:
               $ref: "#/components/schemas/WorkspaceRepository"
+    CreateRepositoryRequest:
+      x-go-name: CreateRepositorySchema
+      type: object
+      required: [root_path, destination, idempotency_key, consent]
+      properties:
+        root_path:
+          type: string
+          maxLength: 1024
+          description: >-
+            Configured workspace root that receives the new repository. The
+            root must be clone-eligible (existing, writable, not itself a
+            repository) and is revalidated at execution.
+        destination:
+          type: string
+          maxLength: 128
+          description: >-
+            Single new folder name inside the root. Separators, traversal,
+            controls, hidden and reserved names are rejected, as is every
+            existing destination (including empty directories).
+        idempotency_key:
+          type: string
+          maxLength: 128
+          description: >-
+            Client-generated key binding this request. Same-key same-input
+            replays return the retained result; changed-input reuse
+            conflicts.
+        consent:
+          type: boolean
+          description: >-
+            Explicit user consent to create the repository with one empty
+            initial commit on main using Agentico's identity, without an
+            origin remote or a push. Must be true.
+    CreateRepositoryResult:
+      type: object
+      required: [repo_key, path, has_head, root]
+      properties:
+        repo_key:
+          type: string
+          description: >-
+            Actual collision-safe catalog key computed from workspace
+            discovery after publication, never the requested folder name.
+        path:
+          type: string
+          description: Absolute path of the created repository.
+        has_head:
+          type: boolean
+          description: >-
+            Whether the created repository has commits. A successful create
+            always has exactly one empty initial commit, so this is true.
+        root:
+          type: string
+          description: The configured workspace root that received the repository.
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            Server-resolved identity of the repository actually published,
+            pinned by the durable publication marker. Clients select and
+            adopt the repository by this identity, never by key or path.
+    CreateRepositoryResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [result, repository]
+          properties:
+            result:
+              type: string
+            repository:
+              $ref: "#/components/schemas/CreateRepositoryResult"
+    InitializeRepositoryRequest:
+      x-go-name: InitializeRepositorySchema
+      type: object
+      required: [repo_key, identity, consent]
+      properties:
+        repo_key:
+          type: string
+          maxLength: 512
+          description: >-
+            Collision-safe repository key from the connected server's
+            current catalog. The server resolves this key itself; the key
+            is never filesystem authority. Keys may contain slashes.
+        path:
+          type: string
+          maxLength: 4096
+          description: >-
+            Optional expected repository path. When present it must match
+            the server-resolved catalog entry; a mismatch refuses the
+            request. Never filesystem authority.
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+          description: >-
+            Expected server-resolved identity of the selected repository.
+            Revalidated against a fresh resolution before any mutation; a
+            mismatch (the repository was replaced) refuses the request.
+        consent:
+          type: boolean
+          description: >-
+            Explicit user consent to create exactly one empty local initial
+            commit using Agentico's identity, preserving the origin remote
+            and the existing branch, without pushing. Must be true.
+    InitializeRepositoryResult:
+      type: object
+      required: [repo_key, path, has_head, root]
+      properties:
+        repo_key:
+          type: string
+          description: >-
+            Actual collision-safe catalog key computed from workspace
+            discovery after the initial commit, never the requested key.
+        path:
+          type: string
+          description: Absolute path of the initialized repository.
+        has_head:
+          type: boolean
+          description: >-
+            Whether the repository has commits. Both result values report
+            true: the repository was either initialized here or was already
+            initialized by another actor.
+        root:
+          type: string
+          description: The configured workspace root containing the repository.
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            Server-resolved identity of the refreshed repository. Clients
+            select and adopt the repository by this identity, never by key
+            or path.
+    InitializeRepositoryResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [result, repository]
+          properties:
+            result:
+              type: string
+              enum: [initialized, already_initialized]
+              description: >-
+               "initialized" when this request created the initial commit;
+               "already_initialized" when HEAD already resolved (a
+               competing initializer or an external commit), a refresh-only
+               success.
+            repository:
+              $ref: "#/components/schemas/InitializeRepositoryResult"
+    RepositorySourceSelector:
+      type: object
+      additionalProperties: false
+      required: [repo_key, identity]
+      properties:
+        repo_key:
+          type: string
+          minLength: 1
+          maxLength: 512
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+    RepositorySourcesRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, repositories]
+      properties:
+        mode:
+          type: string
+          enum: [default, current]
+        repositories:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/RepositorySourceSelector"
+    RepositorySource:
+      type: object
+      additionalProperties: false
+      required: [repo_key, identity, mode, kind, observed_sha]
+      properties:
+        repo_key:
+          type: string
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+          x-go-type-skip-optional-pointer: false
+        mode:
+          type: string
+          enum: [default, current]
+        kind:
+          type: string
+          enum: [branch, detached]
+        branch:
+          type: string
+        observed_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+    RepositorySourcesResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [repositories]
+          properties:
+            repositories:
+              type: array
+              maxItems: 32
+              items:
+               $ref: "#/components/schemas/RepositorySource"
+    RepositoryOriginStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, repositories]
+      properties:
+        mode:
+          type: string
+          enum: [default, current]
+        repositories:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/RepositorySourceSelector"
+        refresh:
+          type: array
+          description: >-
+            Repository keys whose completed result must be replaced by a
+            fresh attempt. Absent or in-flight keys are no-ops; a completed
+            result never satisfies a refreshed request.
+          maxItems: 32
+          items:
+            type: string
+            minLength: 1
+            maxLength: 512
+    RepositoryOriginStatus:
+      type: object
+      additionalProperties: false
+      required: [repo_key, identity, mode, kind, status]
+      properties:
+        repo_key:
+          type: string
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+          x-go-type-skip-optional-pointer: false
+        mode:
+          type: string
+          enum: [default, current]
+        kind:
+          type: string
+          enum: [branch, detached]
+        branch:
+          type: string
+          description: Full local branch name; present for the branch kind.
+        commit:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: Detached commit; present for the detached kind.
+        local_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: Resolved local commit; present when the source resolved.
+        origin_branch:
+          type: string
+          description: Mapped origin branch; present when a mapping resolved.
+        fetched_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: Freshly fetched origin commit; present when the current attempt fetched.
+        checked_at:
+          type: string
+          format: date-time
+          description: Completion time of the current result; absent while checking.
+          x-go-type-skip-optional-pointer: false
+        status:
+          type: string
+          enum:
+            [
+              checking,
+              up_to_date,
+              behind,
+              ahead,
+              diverged,
+              no_origin,
+              remote_branch_missing,
+              other_upstream,
+              detached,
+              local_base_missing,
+              unknown,
+            ]
+        ahead_count:
+          type: integer
+          minimum: 0
+          description: Local-only commits; present for comparison statuses.
+          x-go-type-skip-optional-pointer: false
+        behind_count:
+          type: integer
+          minimum: 0
+          description: Origin-only commits; present for comparison statuses.
+          x-go-type-skip-optional-pointer: false
+        issue:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: Canonical issue for statuses that carry one.
+        stale_comparison:
+          $ref: "#/components/schemas/OriginComparison"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            The earlier successful comparison preserved after a failed retry,
+            tied to its original source, SHAs, counts, and timestamp.
+        update_eligible:
+          type: boolean
+          description: >-
+            Advisory eligibility for a future branch update; never
+            authorization for a mutation. Present when a fresh comparison
+            exists or the comparison is unavailable.
+          x-go-type-skip-optional-pointer: false
+        update_blockers:
+          type: array
+          description: Observed advisory reasons a future update is not defined or not safe.
+          items:
+            type: string
+            enum:
+              [
+               local_not_behind,
+               dirty_target_checkout,
+               git_operation_in_progress,
+               branch_checked_out_in_worktree,
+               checkout_operation_in_progress,
+               ignored_path_collision,
+               checkout_uninspectable,
+               comparison_unavailable,
+              ]
+        checkout_head_ref:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: >-
+            Observed checkout HEAD reference: the full symbolic ref
+            (refs/heads/...) or the literal "detached". Present when the
+            checkout HEAD resolved; binds Update requests to the observed
+            checkout identity.
+          x-go-type-skip-optional-pointer: false
+        checkout_head_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: >-
+            Observed checkout HEAD commit. Present when the checkout HEAD
+            resolves to a commit.
+          x-go-type-skip-optional-pointer: false
+    OriginComparison:
+      type: object
+      additionalProperties: false
+      required:
+        [status, local_sha, fetched_sha, origin_branch, ahead_count, behind_count, checked_at]
+      properties:
+        status:
+          type: string
+          enum: [up_to_date, behind, ahead, diverged]
+        local_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+        fetched_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+        origin_branch:
+          type: string
+        ahead_count:
+          type: integer
+          minimum: 0
+        behind_count:
+          type: integer
+          minimum: 0
+        checked_at:
+          type: string
+          format: date-time
+    RepositoryOriginStatusResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [repositories]
+          properties:
+            repositories:
+              type: array
+              maxItems: 32
+              items:
+               $ref: "#/components/schemas/RepositoryOriginStatus"
+    RepositoryUpdateSourceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          repo_key,
+          identity,
+          mode,
+          branch,
+          origin_branch,
+          expected_local_sha,
+          expected_origin_sha,
+          checkout_head_ref,
+          checkout_head_sha,
+        ]
+      properties:
+        repo_key:
+          type: string
+          minLength: 1
+          maxLength: 512
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+        mode:
+          type: string
+          enum: [default, current]
+        branch:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: >-
+            Expected full local branch name as displayed by the origin
+            comparison. A comparison against the server-resolved selection,
+            never ref authority.
+        origin_branch:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: >-
+            Expected mapped origin branch as displayed by the origin
+            comparison, including differently named tracking branches.
+        expected_local_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: Displayed local tip of the selected branch.
+        expected_origin_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: >-
+            Displayed fetched origin tip from a completed behind
+            comparison. The update refetches and proves this value is still
+            current before mutating.
+        checkout_head_ref:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: >-
+            Observed checkout HEAD reference at display time: the full
+            symbolic ref (refs/heads/...) or the literal "detached". Binds
+            the update to the observed checkout identity so a checkout
+            switch refuses the mutation even when the selected source is
+            unchanged.
+        checkout_head_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: Observed checkout HEAD commit at display time.
+    RepositoryUpdateSourceResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [result, repo_key, identity, mode, branch, origin_branch]
+          properties:
+            result:
+              type: string
+              enum: [updated, already_up_to_date, stale]
+              description: >-
+                updated: the branch advanced — by compare-and-swap for an
+                unoccupied branch, or by the working-tree-aware fast-forward
+                for a branch held only by the original checkout.
+                already_up_to_date: equality no-op after revalidation,
+                including a completed original-checkout replay.
+                stale: a displayed expectation no longer matches or the
+                original checkout is not provably safe; nothing was mutated.
+            reason:
+              type: string
+              enum:
+                [
+                  checkout_changed,
+                  source_changed,
+                  mapping_changed,
+                  local_tip_changed,
+                  origin_tip_changed,
+                  origin_branch_missing,
+                  not_fast_forward,
+                  branch_checked_out,
+                  dirty_checkout,
+                  checkout_operation_in_progress,
+                  ignored_path_collision,
+                  checkout_conflict,
+                ]
+              description: >-
+                Typed stale reason; present only for stale results.
+                branch_checked_out names a linked worktree holder.
+                dirty_checkout, checkout_operation_in_progress, and
+                ignored_path_collision are original-checkout safety
+                refusals; checkout_conflict reports a boundary refusal that
+                was proved to have left the checkout untouched.
+            repo_key:
+              type: string
+              description: Server-resolved current catalog key.
+            identity:
+              $ref: "#/components/schemas/RepositoryIdentity"
+              x-go-type-skip-optional-pointer: false
+            mode:
+              type: string
+              enum: [default, current]
+            branch:
+              type: string
+              description: Server-resolved full local branch name.
+            origin_branch:
+              type: string
+              description: Server-resolved mapped origin branch.
+            previous_sha:
+              type: string
+              pattern: "^[0-9a-f]{40,64}$"
+              description: Local tip before the advance; present for updated results.
+              x-go-type-skip-optional-pointer: false
+            local_sha:
+              type: string
+              pattern: "^[0-9a-f]{40,64}$"
+              description: >-
+                Local tip after the attempt; present for updated and
+                already_up_to_date results.
+              x-go-type-skip-optional-pointer: false
+            fetched_sha:
+              type: string
+              pattern: "^[0-9a-f]{40,64}$"
+              description: >-
+                Freshly fetched origin tip proved by this attempt; present
+                when the attempt fetched the mapped branch.
+              x-go-type-skip-optional-pointer: false
+            status:
+              $ref: "#/components/schemas/RepositoryOriginStatus"
+              x-go-type-skip-optional-pointer: false
+              description: >-
+                Freshly resolved status snapshot for the selected source;
+                present for stale results where the authorized repository
+                still exists.
+    RepositorySourceReconcileRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          repo_key,
+          identity,
+          mode,
+          branch,
+          origin_branch,
+          expected_local_sha,
+          expected_origin_sha,
+        ]
+      properties:
+        repo_key:
+          type: string
+          minLength: 1
+          maxLength: 512
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+        mode:
+          type: string
+          enum: [default, current]
+          description: Shared branch mode of the attempted update.
+        branch:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: >-
+            The attempted update's expected full local branch name, as
+            displayed by the comparison the update was based on. An
+            expectation for the settlement read, never ref authority.
+        origin_branch:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: >-
+            The attempted update's expected mapped origin branch, including
+            differently named tracking branches.
+        expected_local_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: >-
+            The local tip displayed before the attempted update; the state
+            whose absence proves the branch moved.
+        expected_origin_sha:
+           type: string
+           pattern: "^[0-9a-f]{40,64}$"
+           description: >-
+             The fetched origin tip the attempted update was expected to
+             advance the branch to.
+        checkout_head_ref:
+           type: string
+           minLength: 1
+           maxLength: 512
+           description: >-
+             The observed checkout HEAD reference the attempted update bound
+             to, as displayed: the full symbolic ref (refs/heads/...) or the
+             literal "detached". Optional; when it is the attempted branch's
+             own ref, the settlement also observes the original checkout's
+             state before any whole-checkout completion is claimed.
+           x-go-type-skip-optional-pointer: false
+        checkout_head_sha:
+           type: string
+           pattern: "^[0-9a-f]{40,64}$"
+           description: The observed checkout HEAD commit the attempted update bound to.
+           x-go-type-skip-optional-pointer: false
+    RepositorySourceReconcileResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [outcome, repo_key, identity, mode, branch, origin_branch]
+          properties:
+            outcome:
+              type: string
+              enum:
+                [
+                  expected_target_present,
+                  original_tip_remains,
+                  local_state_changed,
+                  branch_missing,
+                ]
+              description: >-
+                expected_target_present: the branch tip is the expected
+                origin SHA. original_tip_remains: the branch tip is still the
+                expected local SHA. local_state_changed: the branch tip is
+                neither expected value. branch_missing: the branch no longer
+                resolves. None of these infer operation success from
+                transport completion.
+            repo_key:
+              type: string
+              description: Server-resolved current catalog key.
+            identity:
+              $ref: "#/components/schemas/RepositoryIdentity"
+              x-go-type-skip-optional-pointer: false
+            mode:
+              type: string
+              enum: [default, current]
+              description: The attempted update's shared branch mode, echoed.
+            branch:
+              type: string
+              description: The attempted update's expected local branch, echoed.
+            origin_branch:
+              type: string
+              description: The attempted update's expected origin branch, echoed.
+            local_sha:
+              type: string
+              pattern: "^[0-9a-f]{40,64}$"
+              description: >-
+                Observed tip of the requested branch under coordination;
+                present whenever the branch resolves.
+              x-go-type-skip-optional-pointer: false
+            selection:
+              $ref: "#/components/schemas/RepositorySource"
+              x-go-type-skip-optional-pointer: false
+              description: >-
+                Freshly resolved current selection for the shared mode, read
+                under the same coordination; present when a selection
+                resolves. Its observed SHA is the current selection's commit,
+                never evidence about the attempted update.
+            checkout:
+              $ref: "#/components/schemas/RepositorySourceReconcileCheckout"
+              x-go-type-skip-optional-pointer: false
+              description: >-
+                Observed state of the original checkout holding the branch,
+                present only when the attempted update bound the checkout
+                HEAD to the branch itself and the original checkout still
+                holds it. The branch tip alone never proves the index and
+                files advanced; only a clean checkout whose HEAD is the
+                observed tip supports a whole-checkout completion claim.
+    RepositorySourceReconcileCheckout:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [clean, dirty, operation_in_progress, unobserved]
+          description: >-
+            clean: consistent index and tracked working tree with no
+            in-progress Git operation. dirty: staged, unstaged, or
+            inconsistent tracked content, possibly a partial or externally
+            changed checkout. operation_in_progress: a merge, rebase,
+            cherry-pick, or revert is underway. unobserved: the checkout
+            could not be completely inspected; no whole-checkout claim may
+            be based on it.
+        head_ref:
+          type: string
+          maxLength: 512
+          description: >-
+            Observed checkout HEAD reference; empty when it could not be
+            read.
+        head_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
+          description: Observed checkout HEAD commit; empty when it could not be read.
+          x-go-type-skip-optional-pointer: false
+    CloneStartRequest:
+      x-go-name: CloneStartSchema
+      type: object
+      required: [remote_url, root_path, destination, idempotency_key]
+      properties:
+        remote_url:
+          type: string
+          maxLength: 2048
+          description: >-
+            HTTP, HTTPS or SSH remote URL for the clone. Local paths,
+            helper transports, embedded credentials and token-bearing
+            queries or fragments are rejected without echoing secrets.
+        root_path:
+          type: string
+          maxLength: 1024
+          description: Configured workspace root that will receive the clone.
+        destination:
+          type: string
+          maxLength: 128
+          description: >-
+            Single new folder name inside the root. Separators,
+            traversal, controls, hidden and reserved names are rejected.
+        idempotency_key:
+          type: string
+          maxLength: 128
+          description: >-
+            Client-generated key binding this request. Same-key
+            same-input replays return the retained operation; changed-input
+            reuse conflicts.
+    CloneOperation:
+      type: object
+      required:
+        [
+          id,
+          state,
+          remote_url,
+          root_path,
+          destination,
+          destination_path,
+          idempotency_key,
+          created_at,
+          updated_at,
+          cancel_requested,
+        ]
+      properties:
+        id:
+          type: string
+        state:
+          type: string
+          enum:
+            [
+              accepted,
+              running,
+              finalizing,
+              cancelling,
+              succeeded,
+              failed,
+              cancelled,
+              interrupted,
+              cleanup_pending,
+            ]
+        stage:
+          type: string
+        progress:
+          type: string
+          description: Bounded sanitized progress summary, never raw git output.
+        remote_url:
+          type: string
+          description: The validated remote as recorded (secrets rejected before recording).
+        root_path:
+          type: string
+        destination:
+          type: string
+        destination_path:
+          type: string
+        idempotency_key:
+          type: string
+        pending_outcome:
+          type: string
+          enum: [failed, cancelled, interrupted]
+          description: >-
+            For cleanup-pending attempts: the outcome the attempt resolves
+            to once cleanup completes.
+        cancel_requested:
+          type: boolean
+        cancel_requested_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+        cleanup_issue:
+          type: string
+          description: Canonical reason cleanup could not yet be proved safe.
+        error:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+        published:
+          $ref: "#/components/schemas/ClonePublication"
+          x-go-type-skip-optional-pointer: false
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        terminal_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+        resolved_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+    ClonePublication:
+      type: object
+      required: [repo_key, path, has_head, published_at]
+      properties:
+        repo_key:
+          type: string
+          description: Actual collision-safe catalog key from discovery after publication.
+        path:
+          type: string
+        has_head:
+          type: boolean
+          description: >-
+            Whether the published repository has commits. An empty remote
+            still publishes successfully with has_head false.
+        published_at:
+          type: string
+          format: date-time
+        identity:
+          $ref: "#/components/schemas/RepositoryIdentity"
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            Server-resolved identity of the repository actually published,
+            pinned by the durable publication marker. Absent for older
+            records or when the destination no longer matches the marker:
+            such publications stay viewable but must never be adopted by a
+            key or path fallback.
+    CloneActionResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [result, operation]
+          properties:
+            result:
+              type: string
+            operation:
+              $ref: "#/components/schemas/CloneOperation"
+    CloneOperationResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [operation]
+          properties:
+            operation:
+              $ref: "#/components/schemas/CloneOperation"
+    CloneOperationListResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [operations]
+          properties:
+            operations:
+              type: array
+              items:
+                $ref: "#/components/schemas/CloneOperation"
+            next_page_token:
+              type: string
+              x-go-type-skip-optional-pointer: false
+              description: >-
+                Continuation token for the next page. A truncated page is
+                never proof that an operation does not exist.
     WorkspaceReadiness:
       type: object
       required: [roots, repositories]
@@ -2512,6 +3861,17 @@ components:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          properties:
+            warnings:
+              type: array
+              maxItems: 32
+              items:
+                $ref: "#/components/schemas/Error"
+              description: >-
+                Canonical nonblocking warnings from best-effort feature-branch
+                collision checks. They do not assert source freshness or remote
+                branch availability.
     CreateFeatureMutationRequest:
       type: object
       additionalProperties: false
@@ -2546,6 +3906,12 @@ components:
           maxItems: 24
           items: { type: string }
         use_current_branch: { type: boolean }
+        repository_sources:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/RepositorySource"
         checkpoints:
           $ref: "#/components/schemas/Checkpoints"
         risk_level:
@@ -3717,6 +5083,9 @@ components:
           type: string
         start_point:
           type: string
+        exact_sha:
+          type: string
+          pattern: "^[0-9a-f]{40,64}$"
         use_current_branch:
           type: boolean
         attempt:

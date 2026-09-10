@@ -52,6 +52,14 @@ export const IPC_CHANNELS = {
   workspaceRemoveRoot: 'agentico:workspace:remove-root',
   workspaceReorderRoots: 'agentico:workspace:reorder-roots',
   workspaceInitRepository: 'agentico:workspace:init-repository',
+  cloneStart: 'agentico:clone:start',
+  cloneOperationGet: 'agentico:clone:operation-get',
+  cloneOperationsList: 'agentico:clone:operations-list',
+  cloneOperationCancel: 'agentico:clone:operation-cancel',
+  cloneOperationCleanup: 'agentico:clone:operation-cleanup',
+  cloneOperationRetry: 'agentico:clone:operation-retry',
+  createRepository: 'agentico:create:repository',
+  initializeRepository: 'agentico:initialize:repository',
   repositoriesList: 'agentico:repositories:list',
   featuresList: 'agentico:features:list',
   featuresGet: 'agentico:features:get',
@@ -91,6 +99,10 @@ export const IPC_CHANNELS = {
   sessionsOutputOpen: 'agentico:sessions:output-open',
   sessionsOutputCancel: 'agentico:sessions:output-cancel',
   creationDefaults: 'agentico:creation:defaults',
+  creationSources: 'agentico:creation:sources',
+  creationOriginStatus: 'agentico:creation:origin-status',
+  creationUpdateSource: 'agentico:creation:update-source',
+  creationReconcileSourceUpdate: 'agentico:creation:reconcile-source-update',
   creationPickFiles: 'agentico:creation:pick-files',
   creationUploadFiles: 'agentico:creation:upload-files',
   clipboardReadImage: 'agentico:clipboard:read-image',
@@ -682,15 +694,61 @@ export const WorkspaceRootStateSchema = z.strictObject({
   path: z.string(),
   valid: z.boolean(),
   issue: ReadinessIssueSchema.optional(),
+  cloneEligible: z.boolean(),
+  cloneIssue: ReadinessIssueSchema.optional(),
 });
 
 export type WorkspaceRootState = z.output<typeof WorkspaceRootStateSchema>;
+
+/**
+ * Server-resolved repository identity. Two catalog entries describe the same
+ * repository exactly when their identities are equal; reconciliation across
+ * discovery refreshes compares identities, never keys or paths alone. The
+ * filesystem fields are decimal text so 64-bit values stay exact.
+ */
+export const RepositoryIdentitySchema = z.strictObject({
+  /** Canonical checkout path (symlinks resolved). */
+  path: z.string().min(1).max(4096),
+  /** Resolved Git common directory; linked worktrees share it with the main checkout. */
+  commonDir: z.string().min(1).max(4096),
+  /** Device id of the Git common directory, as decimal text. */
+  device: z.string().regex(/^[0-9]{1,20}$/),
+  /** Inode of the Git common directory, as decimal text. */
+  inode: z.string().regex(/^[0-9]{1,20}$/),
+  /** Directory creation time, when supported, to detect reused inodes. */
+  birthTime: z.string().max(64).optional(),
+});
+
+export type RepositoryIdentity = z.output<typeof RepositoryIdentitySchema>;
+
+/**
+ * Repository identity equality: the whole server-resolved tuple, never a key
+ * or path alone. Shared by the renderer reconciliation and the main-process
+ * search/resolve boundaries so both agree on what "the same repository" is.
+ */
+export function sameRepositoryIdentity(a: RepositoryIdentity, b: RepositoryIdentity): boolean {
+  return (
+    a.path === b.path &&
+    a.commonDir === b.commonDir &&
+    a.device === b.device &&
+    a.inode === b.inode &&
+    (a.birthTime ?? '') === (b.birthTime ?? '')
+  );
+}
 
 export const RepositoryStateSchema = z.strictObject({
   name: z.string(),
   path: z.string(),
   valid: z.boolean(),
   issue: ReadinessIssueSchema.optional(),
+  /** Whether the repository can start feature work (has commits). */
+  featureReady: z.boolean(),
+  /**
+   * Server-resolved identity. Absent when the server could not resolve it (or
+   * the repository is invalid): such repositories cannot be selected because
+   * their selection could not be reconciled across discovery changes.
+   */
+  identity: RepositoryIdentitySchema.optional(),
 });
 
 export type RepositoryState = z.output<typeof RepositoryStateSchema>;
@@ -1096,8 +1154,129 @@ export const InitRepositoryRequestSchema = z.strictObject({
   path: AbsolutePathSchema,
   consent: z.literal(true),
 });
-
 export type InitRepositoryRequest = z.output<typeof InitRepositoryRequestSchema>;
+
+// --- Clone operations --------------------------------------------------------
+// Authoritative snapshots of server-owned clone work. Only the server's
+// durable record decides state; the renderer never infers outcomes.
+
+export const CloneOperationStateSchema = z.enum([
+  'accepted',
+  'running',
+  'finalizing',
+  'cancelling',
+  'succeeded',
+  'failed',
+  'cancelled',
+  'interrupted',
+  'cleanup_pending',
+]);
+export type CloneOperationState = z.output<typeof CloneOperationStateSchema>;
+
+export const ClonePublicationSchema = z.strictObject({
+  repoKey: z.string(),
+  path: z.string(),
+  hasHead: z.boolean(),
+  publishedAt: z.string(),
+  identity: RepositoryIdentitySchema.optional(),
+});
+export type ClonePublication = z.output<typeof ClonePublicationSchema>;
+
+export const CloneOperationSchema = z.strictObject({
+  id: z.string(),
+  state: CloneOperationStateSchema,
+  stage: z.string().optional(),
+  progress: z.string().optional(),
+  remoteUrl: z.string(),
+  rootPath: z.string(),
+  destination: z.string(),
+  destinationPath: z.string(),
+  idempotencyKey: z.string(),
+  pendingOutcome: z.enum(['failed', 'cancelled', 'interrupted']).optional(),
+  cancelRequested: z.boolean(),
+  cancelRequestedAt: z.string().optional(),
+  cleanupIssue: z.string().optional(),
+  error: ReadinessIssueSchema.optional(),
+  published: ClonePublicationSchema.optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  terminalAt: z.string().optional(),
+  resolvedAt: z.string().optional(),
+});
+export type CloneOperation = z.output<typeof CloneOperationSchema>;
+
+export const CloneStartRequestSchema = z.strictObject({
+  remoteUrl: z.string().min(1).max(2048),
+  rootPath: z.string().min(1).max(1024),
+  destination: z.string().min(1).max(128),
+  idempotencyKey: z.string().min(8).max(128),
+});
+export type CloneStartRequest = z.output<typeof CloneStartRequestSchema>;
+
+export const CloneOperationsListSchema = z.strictObject({
+  operations: z.array(CloneOperationSchema),
+  nextPageToken: z.string().optional(),
+});
+export type CloneOperationsList = z.output<typeof CloneOperationsListSchema>;
+
+// --- Repository creation -----------------------------------------------------
+// A synchronous server-owned creation: one empty initial commit on main
+// with Agentico's identity, no origin, no push. Consent is enforced at the
+// schema layer exactly like legacy initialization, and the result carries
+// the actual repository key and the server-resolved identity.
+
+export const CreateRepositoryRequestSchema = z.strictObject({
+  rootPath: z.string().min(1).max(1024),
+  destination: z.string().min(1).max(128),
+  idempotencyKey: z.string().min(8).max(128),
+  consent: z.literal(true),
+});
+export type CreateRepositoryRequest = z.output<typeof CreateRepositoryRequestSchema>;
+
+export const CreateRepositoryResultSchema = z.strictObject({
+  repoKey: z.string(),
+  path: z.string(),
+  hasHead: z.boolean(),
+  root: z.string(),
+  // Server-resolved identity of the repository actually published. Absent
+  // only for a replayed success whose destination no longer matches the
+  // publication marker: such a result is never adopted by key or path.
+  identity: RepositoryIdentitySchema.optional(),
+});
+export type CreateRepositoryResult = z.output<typeof CreateRepositoryResultSchema>;
+
+// --- Repository initialization (explicit initial commit for an unborn clone) --
+// A synchronous server-owned operation on an existing repository from the
+// server's current catalog: exactly one empty local initial commit with
+// Agentico's identity, preserving origin and the existing branch, pushing
+// nothing. The selector is compared by the server against its own catalog
+// resolution; the renderer's key, path and identity are never filesystem
+// authority.
+
+export const InitializeRepositoryRequestSchema = z.strictObject({
+  repoKey: z.string().min(1).max(512),
+  // Expected server-resolved identity, revalidated server-side before any
+  // mutation; a mismatch means the repository was replaced.
+  identity: RepositoryIdentitySchema,
+  // Optional expected path; a comparison only, never authority.
+  path: AbsolutePathSchema.optional(),
+  consent: z.literal(true),
+});
+export type InitializeRepositoryRequest = z.output<typeof InitializeRepositoryRequestSchema>;
+
+export const InitializeRepositoryResultSchema = z.strictObject({
+  // "initialized" when this request created the commit; "already_initialized"
+  // when a competing actor had (refresh-only success, no second commit).
+  result: z.enum(['initialized', 'already_initialized']),
+  repoKey: z.string(),
+  path: z.string(),
+  hasHead: z.boolean(),
+  root: z.string(),
+  // Server-resolved identity of the refreshed repository. Adoption selects
+  // by this identity, never by key or path.
+  identity: RepositoryIdentitySchema.optional(),
+});
+export type InitializeRepositoryResult = z.output<typeof InitializeRepositoryResultSchema>;
 
 // --- Features (renderer-facing views of authoritative server snapshots) -----
 // The renderer never receives raw server payloads; the main process maps
@@ -2501,14 +2680,32 @@ export const CREATION_IMAGE_FORMATS = [
   { extension: 'webp', mime: 'image/webp' },
 ] as const;
 
+/**
+ * A file referenced from a repository via @-mention. `repoKey` is the
+ * transmitted catalog key — reconciled by identity whenever discovery
+ * refreshes — and `identity` is the server-resolved repository identity the
+ * reference was captured from, so a reused key can never redirect the
+ * reference to a replacement repository. Identity is absent only for
+ * feature-inherited references that predate identity capture.
+ */
 export const RepositoryFileRefSchema = z.strictObject({
   repoKey: z.string().min(1).max(200),
   path: z.string().min(1).max(1000),
+  identity: RepositoryIdentitySchema.optional(),
 });
 export type RepositoryFileRef = z.output<typeof RepositoryFileRefSchema>;
 
 export const EffortLevelSchema = z.enum(['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 export type EffortLevel = z.output<typeof EffortLevelSchema>;
+
+export const RepositorySourceExpectationSchema = z.strictObject({
+  repoKey: z.string().min(1).max(512),
+  identity: RepositoryIdentitySchema,
+  mode: z.enum(['default', 'current']),
+  kind: z.enum(['branch', 'detached']),
+  branch: z.string().min(1).optional(),
+  observedSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+});
 
 /** The narrow creation input, validated at both IPC boundaries. */
 export const CreateFeatureInputSchema = z.strictObject({
@@ -2522,6 +2719,7 @@ export const CreateFeatureInputSchema = z.strictObject({
   repoKeys: z.array(z.string().min(1).max(200)).min(1).max(32),
   /** Branch choice: reuse the current branch instead of a feature branch. */
   useCurrentBranch: z.boolean(),
+  repositorySources: z.array(RepositorySourceExpectationSchema).max(32).default([]),
   /** Native-picker approved inputs; main/server revalidate before reading. */
   images: z.array(AbsolutePathSchema).max(CREATION_IMAGE_LIMIT).default([]),
   attachments: z.array(AbsolutePathSchema).max(CREATION_ATTACHMENT_LIMIT).default([]),
@@ -2569,6 +2767,8 @@ export type CreateFeatureInput = z.input<typeof CreateFeatureInputSchema>;
 
 export const CreateFeatureResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
+  /** Canonical nonblocking warnings from best-effort remote collision probes. */
+  warnings: z.array(CanonicalErrorSchema).max(32).optional(),
 });
 
 export type CreateFeatureResult = z.output<typeof CreateFeatureResultSchema>;
@@ -2627,6 +2827,8 @@ export type SetupDispatchResult = z.output<typeof SetupDispatchResultSchema>;
  */
 export const CreationDefaultsSchema = z.strictObject({
   repositories: z.array(RepositoryStateSchema),
+  /** Workspace roots from the same readiness snapshot (clone eligibility). */
+  workspaceRoots: z.array(WorkspaceRootStateSchema).default([]),
   defaults: z.strictObject({
     pipeline: z.string().optional(),
     inquireness: z.string().optional(),
@@ -2640,6 +2842,221 @@ export const CreationDefaultsSchema = z.strictObject({
 });
 
 export type CreationDefaults = z.output<typeof CreationDefaultsSchema>;
+
+export const RepositorySourcesRequestSchema = z.strictObject({
+  mode: z.enum(['default', 'current']),
+  repositories: z
+    .array(
+      z.strictObject({
+        repoKey: z.string().min(1).max(512),
+        identity: RepositoryIdentitySchema,
+      }),
+    )
+    .min(1)
+    .max(32),
+});
+export type RepositorySourcesRequest = z.output<typeof RepositorySourcesRequestSchema>;
+
+export const RepositorySourcesResultSchema = z.strictObject({
+  repositories: z.array(RepositorySourceExpectationSchema).min(1).max(32),
+});
+export type RepositorySourcesResult = z.output<typeof RepositorySourcesResultSchema>;
+
+export const RepositoryOriginStatusRequestSchema = z.strictObject({
+  mode: z.enum(['default', 'current']),
+  repositories: z
+    .array(
+      z.strictObject({
+        repoKey: z.string().min(1).max(512),
+        identity: RepositoryIdentitySchema,
+      }),
+    )
+    .min(1)
+    .max(32),
+  refresh: z.array(z.string().min(1).max(512)).max(32).optional(),
+});
+export type RepositoryOriginStatusRequest = z.output<typeof RepositoryOriginStatusRequestSchema>;
+
+export const OriginComparisonSchema = z.strictObject({
+  status: z.enum(['up_to_date', 'behind', 'ahead', 'diverged']),
+  localSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+  fetchedSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+  originBranch: z.string().min(1),
+  aheadCount: z.number().int().min(0),
+  behindCount: z.number().int().min(0),
+  checkedAt: z.string().min(1),
+});
+export type OriginComparison = z.output<typeof OriginComparisonSchema>;
+
+export const RepositoryOriginStatusSnapshotSchema = z.strictObject({
+  repoKey: z.string().min(1),
+  identity: RepositoryIdentitySchema,
+  mode: z.enum(['default', 'current']),
+  kind: z.enum(['branch', 'detached']),
+  branch: z.string().optional(),
+  commit: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  localSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  originBranch: z.string().optional(),
+  fetchedSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  checkedAt: z.string().optional(),
+  status: z.enum([
+    'checking',
+    'up_to_date',
+    'behind',
+    'ahead',
+    'diverged',
+    'no_origin',
+    'remote_branch_missing',
+    'other_upstream',
+    'detached',
+    'local_base_missing',
+    'unknown',
+  ]),
+  aheadCount: z.number().int().min(0).optional(),
+  behindCount: z.number().int().min(0).optional(),
+  issue: CanonicalErrorSchema.optional(),
+  staleComparison: OriginComparisonSchema.optional(),
+  updateEligible: z.boolean().optional(),
+  updateBlockers: z
+    .array(
+      z.enum([
+        'local_not_behind',
+        'dirty_target_checkout',
+        'git_operation_in_progress',
+        'branch_checked_out_in_worktree',
+        'checkout_operation_in_progress',
+        'ignored_path_collision',
+        'checkout_uninspectable',
+        'comparison_unavailable',
+      ]),
+    )
+    .optional(),
+  checkoutHeadRef: z.string().min(1).max(512).optional(),
+  checkoutHeadSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+});
+export type RepositoryOriginStatusSnapshot = z.output<typeof RepositoryOriginStatusSnapshotSchema>;
+
+export const RepositoryOriginStatusResultSchema = z.strictObject({
+  repositories: z.array(RepositoryOriginStatusSnapshotSchema).min(1).max(32),
+});
+export type RepositoryOriginStatusResult = z.output<typeof RepositoryOriginStatusResultSchema>;
+
+export const RepositoryUpdateSourceRequestSchema = z.strictObject({
+  repoKey: z.string().min(1).max(512),
+  identity: RepositoryIdentitySchema,
+  mode: z.enum(['default', 'current']),
+  branch: z.string().min(1).max(512),
+  originBranch: z.string().min(1).max(512),
+  expectedLocalSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+  expectedOriginSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+  checkoutHeadRef: z.string().min(1).max(512),
+  checkoutHeadSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+});
+export type RepositoryUpdateSourceRequest = z.output<typeof RepositoryUpdateSourceRequestSchema>;
+
+export const RepositoryUpdateSourceResultSchema = z.strictObject({
+  result: z.enum(['updated', 'already_up_to_date', 'stale']),
+  reason: z
+    .enum([
+      'checkout_changed',
+      'source_changed',
+      'mapping_changed',
+      'local_tip_changed',
+      'origin_tip_changed',
+      'origin_branch_missing',
+      'not_fast_forward',
+      'branch_checked_out',
+      'dirty_checkout',
+      'checkout_operation_in_progress',
+      'ignored_path_collision',
+      'checkout_conflict',
+    ])
+    .optional(),
+  repoKey: z.string().min(1),
+  identity: RepositoryIdentitySchema,
+  mode: z.enum(['default', 'current']),
+  branch: z.string().min(1),
+  originBranch: z.string().min(1),
+  previousSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  localSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  fetchedSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  status: RepositoryOriginStatusSnapshotSchema.optional(),
+});
+export type RepositoryUpdateSourceResult = z.output<typeof RepositoryUpdateSourceResultSchema>;
+
+export const RepositorySourceReconcileRequestSchema = z.strictObject({
+  repoKey: z.string().min(1).max(512),
+  identity: RepositoryIdentitySchema,
+  mode: z.enum(['default', 'current']),
+  branch: z.string().min(1).max(512),
+  originBranch: z.string().min(1).max(512),
+  expectedLocalSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+  expectedOriginSha: z.string().regex(/^[0-9a-f]{40,64}$/),
+  checkoutHeadRef: z.string().min(1).max(512).optional(),
+  checkoutHeadSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+});
+export type RepositorySourceReconcileRequest = z.output<
+  typeof RepositorySourceReconcileRequestSchema
+>;
+
+export const RepositorySourceReconcileCheckoutSchema = z.strictObject({
+  state: z.enum(['clean', 'dirty', 'operation_in_progress', 'unobserved']),
+  headRef: z.string().max(512).optional(),
+  headSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+});
+export type RepositorySourceReconcileCheckout = z.output<
+  typeof RepositorySourceReconcileCheckoutSchema
+>;
+
+export const RepositorySourceReconcileResultSchema = z.strictObject({
+  outcome: z.enum([
+    'expected_target_present',
+    'original_tip_remains',
+    'local_state_changed',
+    'branch_missing',
+  ]),
+  repoKey: z.string().min(1),
+  identity: RepositoryIdentitySchema,
+  mode: z.enum(['default', 'current']),
+  branch: z.string().min(1),
+  originBranch: z.string().min(1),
+  localSha: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/)
+    .optional(),
+  selection: RepositorySourceExpectationSchema.optional(),
+  checkout: RepositorySourceReconcileCheckoutSchema.optional(),
+});
+export type RepositorySourceReconcileResult = z.output<
+  typeof RepositorySourceReconcileResultSchema
+>;
 
 export const CreationFileKindSchema = z.enum(['image', 'attachment']);
 export type CreationFileKind = z.output<typeof CreationFileKindSchema>;
@@ -2691,9 +3108,21 @@ export const UploadCreationFilesResultSchema = z.strictObject({
   results: z.array(CreationFileUploadResultSchema).max(CREATION_ATTACHMENT_LIMIT),
 });
 export type UploadCreationFilesResult = z.output<typeof UploadCreationFilesResultSchema>;
+/**
+ * A repository whose files the mention search covers. Creation drafts always
+ * carry the expected identity (captured at selection time), so the search is
+ * bound to that repository rather than to whoever currently holds the key;
+ * identity is absent only for feature-inherited repositories.
+ */
+export const CreationFileSearchRepositorySchema = z.strictObject({
+  key: z.string().min(1).max(200),
+  identity: RepositoryIdentitySchema.optional(),
+});
+export type CreationFileSearchRepository = z.output<typeof CreationFileSearchRepositorySchema>;
+
 export const CreationFileSearchRequestSchema = z.strictObject({
   requestId: z.string().uuid(),
-  repoKeys: z.array(z.string().min(1).max(200)).min(1).max(32),
+  repositories: z.array(CreationFileSearchRepositorySchema).min(1).max(32),
   query: z.string().max(200),
 });
 export type CreationFileSearchRequest = z.output<typeof CreationFileSearchRequestSchema>;
@@ -3603,6 +4032,38 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([InitRepositoryRequestSchema]),
     response: ReadinessSnapshotSchema,
   },
+  [IPC_CHANNELS.cloneStart]: {
+    request: z.tuple([CloneStartRequestSchema]),
+    response: CloneOperationSchema,
+  },
+  [IPC_CHANNELS.cloneOperationGet]: {
+    request: z.tuple([z.string().min(1).max(64)]),
+    response: CloneOperationSchema,
+  },
+  [IPC_CHANNELS.cloneOperationsList]: {
+    request: z.tuple([]),
+    response: CloneOperationsListSchema,
+  },
+  [IPC_CHANNELS.cloneOperationCancel]: {
+    request: z.tuple([z.string().min(1).max(64)]),
+    response: CloneOperationSchema,
+  },
+  [IPC_CHANNELS.cloneOperationCleanup]: {
+    request: z.tuple([z.string().min(1).max(64)]),
+    response: CloneOperationSchema,
+  },
+  [IPC_CHANNELS.cloneOperationRetry]: {
+    request: z.tuple([z.string().min(1).max(64)]),
+    response: CloneOperationSchema,
+  },
+  [IPC_CHANNELS.createRepository]: {
+    request: z.tuple([CreateRepositoryRequestSchema]),
+    response: CreateRepositoryResultSchema,
+  },
+  [IPC_CHANNELS.initializeRepository]: {
+    request: z.tuple([InitializeRepositoryRequestSchema]),
+    response: InitializeRepositoryResultSchema,
+  },
   [IPC_CHANNELS.repositoriesList]: {
     request: z.tuple([]),
     response: z.array(RepositoryStateSchema),
@@ -3679,6 +4140,22 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   [IPC_CHANNELS.creationDefaults]: {
     request: z.tuple([]),
     response: CreationDefaultsSchema,
+  },
+  [IPC_CHANNELS.creationSources]: {
+    request: z.tuple([RepositorySourcesRequestSchema]),
+    response: RepositorySourcesResultSchema,
+  },
+  [IPC_CHANNELS.creationOriginStatus]: {
+    request: z.tuple([RepositoryOriginStatusRequestSchema]),
+    response: RepositoryOriginStatusResultSchema,
+  },
+  [IPC_CHANNELS.creationUpdateSource]: {
+    request: z.tuple([RepositoryUpdateSourceRequestSchema]),
+    response: RepositoryUpdateSourceResultSchema,
+  },
+  [IPC_CHANNELS.creationReconcileSourceUpdate]: {
+    request: z.tuple([RepositorySourceReconcileRequestSchema]),
+    response: RepositorySourceReconcileResultSchema,
   },
   [IPC_CHANNELS.creationPickFiles]: {
     request: z.tuple([CreationFileKindSchema]),
@@ -3978,6 +4455,37 @@ export interface AgenticoApi {
   removeWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
   reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot>;
   initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
+  /**
+   * Starts a server-owned clone. The returned snapshot is the durable
+   * accepted (or retained) operation, independent of transfer duration.
+   */
+  startClone(request: CloneStartRequest): Promise<CloneOperation>;
+  /** Reads one authoritative clone operation snapshot. */
+  getCloneOperation(operationId: string): Promise<CloneOperation>;
+  /** Lists active and recent clone operations on the connected server. */
+  listCloneOperations(): Promise<CloneOperationsList>;
+  /** Requests explicit cancellation; returns the cancelling snapshot. */
+  cancelCloneOperation(operationId: string): Promise<CloneOperation>;
+  /** Retries cleanup for a cleanup-pending attempt. */
+  retryCloneCleanup(operationId: string): Promise<CloneOperation>;
+  /** Starts a deliberate fresh retry of a terminal attempt. */
+  retryCloneOperation(operationId: string): Promise<CloneOperation>;
+  /**
+   * Creates a new repository as a child of a configured workspace root:
+   * one empty initial commit on main with Agentico's identity, no origin,
+   * no push. The resolved result carries the actual repository key and
+   * the server-resolved identity of the published repository.
+   */
+  createRepository(request: CreateRepositoryRequest): Promise<CreateRepositoryResult>;
+  /**
+   * Creates one empty local initial commit in an existing unborn clone
+   * from the server's current catalog, with Agentico's identity, preserving
+   * the origin remote and the existing branch and pushing nothing. The
+   * result carries the refreshed repository's actual catalog key and
+   * server-resolved identity; `alreadyInitialized` results (a competing
+   * initializer won) are successes too.
+   */
+  initializeRepository(request: InitializeRepositoryRequest): Promise<InitializeRepositoryResult>;
   listRepositories(): Promise<RepositoryState[]>;
   listFeatures(): Promise<FeaturesListResult>;
   getFeature(featureId: string): Promise<FeatureSnapshot>;
@@ -3999,6 +4507,29 @@ export interface AgenticoApi {
   cancelSessionOutput(subscriptionId: string): Promise<boolean>;
   onSessionOutput(listener: (event: SessionOutputEvent) => void): () => void;
   getCreationDefaults(): Promise<CreationDefaults>;
+  inspectRepositorySources(request: RepositorySourcesRequest): Promise<RepositorySourcesResult>;
+  checkRepositoryOriginStatus(
+    request: RepositoryOriginStatusRequest,
+  ): Promise<RepositoryOriginStatusResult>;
+  /**
+   * Advances one unoccupied selected source branch from origin through the
+   * server's expected-old-value compare-and-swap. Sends the displayed
+   * expectations unchanged; returns the typed outcome (updated, equality
+   * no-op, or stale with a freshly resolved status snapshot).
+   */
+  updateRepositorySource(
+    request: RepositoryUpdateSourceRequest,
+  ): Promise<RepositoryUpdateSourceResult>;
+  /**
+   * Settles one uncertain Update-from-origin attempt whose response was
+   * lost, timed out, or arrived stale: the server waits out the attempt's
+   * lifetime, then reads the branch under coordination and reports the
+   * observed state (target present, original tip, changed, or missing). It
+   * never mutates and never fetches from origin.
+   */
+  reconcileSourceUpdate(
+    request: RepositorySourceReconcileRequest,
+  ): Promise<RepositorySourceReconcileResult>;
   pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
   readClipboardImage(): Promise<PickedCreationFiles>;
   importDroppedCreationFiles(kind: CreationFileKind, files: readonly File[]): PickedCreationFiles;

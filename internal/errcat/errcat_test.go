@@ -46,6 +46,7 @@ var zeroParams = []Params{
 	WarningRepoParams{},
 	OrphanSessionParams{},
 	ChatContextParams{},
+	CloneDestinationParams{},
 }
 
 func TestCatalogEntriesAreValid(t *testing.T) {
@@ -200,6 +201,7 @@ func TestAuthoredClasses(t *testing.T) {
 		want Class
 	}{
 		{RebaseAlreadyUpToDate, ClassWarning},
+		{LocalSourceStale, ClassNeedsAction},
 		{ParentWorktreesDirty, ClassNeedsAction},
 		{ActiveChildExists, ClassNeedsAction},
 		{BadRequest, ClassBlocking},
@@ -222,6 +224,25 @@ func TestAuthoredClasses(t *testing.T) {
 		if entry.Class != tc.want {
 			t.Errorf("%s: class is %q; want %q", tc.code, entry.Class, tc.want)
 		}
+	}
+}
+
+func TestLocalSourceStaleCarriesRefreshedRepositoryContext(t *testing.T) {
+	rendered := New(LocalSourceStale, WithRepositories(CodeRepository{
+		Name: "api", Branch: "release/2026/q3", ObservedSHA: strings.Repeat("a", 40),
+	}))
+	if rendered.Class != ClassNeedsAction {
+		t.Fatalf("local_source_stale class = %q, want %q", rendered.Class, ClassNeedsAction)
+	}
+	if rendered.Remediation == nil || !strings.Contains(rendered.Remediation.Hint, "Review the refreshed local source") {
+		t.Fatalf("local_source_stale remediation = %+v, want refreshed-source review guidance", rendered.Remediation)
+	}
+	if rendered.Context == nil || len(rendered.Context.Repositories) != 1 {
+		t.Fatalf("local_source_stale context = %+v, want repository context", rendered.Context)
+	}
+	got := rendered.Context.Repositories[0]
+	if got.Name != "api" || got.Branch != "release/2026/q3" || got.ObservedSHA != strings.Repeat("a", 40) {
+		t.Fatalf("local_source_stale repository = %+v", got)
 	}
 }
 

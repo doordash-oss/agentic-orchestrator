@@ -14,6 +14,7 @@ require (
 ```
 
 Key directives:
+
 - `module` — module path; for v2+, must include `/v2` suffix
 - `go` — minimum Go version (mandatory as of Go 1.21; enforced by toolchain)
 - `require` — minimum required version of each dependency
@@ -52,11 +53,11 @@ go mod why pkg       # explain why a dependency is needed
 
 ## Versioning Strategy
 
-| Version | Meaning |
-|---------|---------|
-| `v0.x.x` | Unstable, no compat guarantee |
+| Version  | Meaning                                  |
+| -------- | ---------------------------------------- |
+| `v0.x.x` | Unstable, no compat guarantee            |
 | `v1.x.x` | Stable, backward-compatible within major |
-| `v2+` | New module path (`/v2`), separate module |
+| `v2+`    | New module path (`/v2`), separate module |
 
 ## Private Modules
 
@@ -92,6 +93,7 @@ go work use ./moduleC
 **Single module per repo is the recommended default** — simpler versioning.
 
 When multiple modules are needed:
+
 - Each module root gets its own `go.mod`
 - Version tags include subdirectory prefix: `module1/v1.2.3`
 - Use case: components needing truly independent versioning

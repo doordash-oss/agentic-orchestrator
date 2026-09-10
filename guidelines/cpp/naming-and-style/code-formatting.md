@@ -15,20 +15,20 @@ BasedOnStyle: Google
 IndentWidth: 2
 ColumnLimit: 100
 BreakBeforeBraces: Attach
-PointerAlignment: Left        # int* p
+PointerAlignment: Left # int* p
 SortIncludes: true
 IncludeBlocks: Regroup
 ```
 
 ### Available Base Styles
 
-| Style | Indent | Braces | Line Limit |
-|-------|--------|--------|------------|
-| Google | 2 spaces | K&R attach | 80 |
-| LLVM | 2 spaces | K&R attach | 80 |
-| Mozilla | 2 spaces | Break before functions | 80 |
-| WebKit | 4 spaces | Attach | - |
-| Microsoft | 4 spaces | Allman | - |
+| Style     | Indent   | Braces                 | Line Limit |
+| --------- | -------- | ---------------------- | ---------- |
+| Google    | 2 spaces | K&R attach             | 80         |
+| LLVM      | 2 spaces | K&R attach             | 80         |
+| Mozilla   | 2 spaces | Break before functions | 80         |
+| WebKit    | 4 spaces | Attach                 | -          |
+| Microsoft | 4 spaces | Allman                 | -          |
 
 ## Brace Placement
 

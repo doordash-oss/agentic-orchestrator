@@ -43,6 +43,7 @@ if (const int* p = std::get_if<int>(&r)) {
 ### `std::monostate` for Default Construction
 
 When no alternative is default-constructible:
+
 ```cpp
 std::variant<std::monostate, NonDefaultConstructible, int> v;
 // v is in monostate
@@ -50,13 +51,13 @@ std::variant<std::monostate, NonDefaultConstructible, int> v;
 
 ## `std::variant` vs Virtual Dispatch
 
-| Concern | `std::variant` | Virtual dispatch |
-|---------|---------------|-----------------|
-| Closed type set | Ideal | Overkill |
-| Open/extensible types | Must recompile | Add new subclass |
-| Memory locality | Value semantics, stack | Heap typical |
-| Inlining | Full | Limited |
-| Exhaustiveness | Compile-time | None |
+| Concern               | `std::variant`         | Virtual dispatch |
+| --------------------- | ---------------------- | ---------------- |
+| Closed type set       | Ideal                  | Overkill         |
+| Open/extensible types | Must recompile         | Add new subclass |
+| Memory locality       | Value semantics, stack | Heap typical     |
+| Inlining              | Full                   | Limited          |
+| Exhaustiveness        | Compile-time           | None             |
 
 ## `std::any` — Dynamic Type Erasure
 

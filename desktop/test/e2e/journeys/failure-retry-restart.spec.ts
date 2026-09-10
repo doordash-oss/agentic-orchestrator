@@ -77,21 +77,40 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     });
     const mainRef = path.join(beta, '.git', 'refs', 'heads', 'main');
 
-    transcript.section('Create the feature on both repos; setup fails partially');
-    const cockpit = await createFeatureViaForm(handle, {
-      name: 'Two Repo Feature',
-      repoPatterns: [/alpha/, /beta/],
-      beforeSubmit: () => {
-        transcript.section('Invalidate the second repo after discovery, before dispatch');
-        // Deleting the ref behind HEAD leaves the repository discoverable
-        // (IsGitRepo passes) and creation valid (HEAD still symrefs main), but
-        // strips every commit — so exactly the second worktree task fails with
-        // the engine's safe "no commits yet" error.
-        fs.rmSync(mainRef, { force: true });
-        fs.rmSync(path.join(beta, '.git', 'packed-refs'), { force: true });
-        transcript.step(`deleted \`${mainRef}\` (and packed-refs): beta now has an unborn HEAD`);
-      },
-    });
+    transcript.section('Create on both repos; invalidate beta between acceptance and dispatch');
+    // Creation pins immutable local commits, so a repository broken before
+    // submit is refused as a stale source instead of queueing a doomed
+    // setup. Break the second repository AFTER acceptance — the journey owns
+    // the explicit setup dispatch through the packaged IPC contract — so
+    // exactly the second worktree task fails with the engine's safe "no
+    // commits yet" error while the first task and the feature survive
+    // durably.
+    const createdId = await handle.page.evaluate(
+      async (name) =>
+        (
+          await window.agentico.createFeature({
+            name,
+            description: 'Setup failure, retry, and restart persistence journey.',
+            repoKeys: ['alpha', 'beta'],
+            useCurrentBranch: false,
+          })
+        ).featureId,
+      'Two Repo Feature',
+    );
+    // Deleting the ref behind HEAD leaves the repository discoverable and
+    // its accepted commit object intact, but strips every ref — so the
+    // second worktree task cannot branch from a born HEAD.
+    fs.rmSync(mainRef, { force: true });
+    fs.rmSync(path.join(beta, '.git', 'packed-refs'), { force: true });
+    transcript.step(
+      `creation accepted both local sources; then deleted \`${mainRef}\` (and packed-refs): beta now has an unborn HEAD`,
+    );
+    await handle.page.evaluate(async (id) => window.agentico.dispatchFeatureSetup(id), createdId);
+    transcript.step('explicit setup dispatch: the alpha task ran, the beta task failed');
+
+    await handle.page.getByRole('option', { name: /Two Repo Feature/ }).click();
+    const cockpit = handle.page.getByLabel('Feature Two Repo Feature');
+    await expect(cockpit).toBeVisible({ timeout: 30_000 });
     // The durable failure renders once through the full error surface: the
     // alert role, the "Failed" class label, the caption naming the owning
     // task, the canonical code tag, and the catalog title — exactly once on

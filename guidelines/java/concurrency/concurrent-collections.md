@@ -2,14 +2,14 @@
 
 ## Choosing the Right Collection
 
-| Need | Thread-Safe Choice |
-|------|-------------------|
-| Key-value map, high concurrency | `ConcurrentHashMap` |
-| List, mostly reads | `CopyOnWriteArrayList` |
-| Queue, producer-consumer | `BlockingQueue` implementations |
-| Sorted set, concurrent | `ConcurrentSkipListSet` |
-| Sorted map, concurrent | `ConcurrentSkipListMap` |
-| Fast reads, occasional writes | `CopyOnWriteArraySet` |
+| Need                            | Thread-Safe Choice              |
+| ------------------------------- | ------------------------------- |
+| Key-value map, high concurrency | `ConcurrentHashMap`             |
+| List, mostly reads              | `CopyOnWriteArrayList`          |
+| Queue, producer-consumer        | `BlockingQueue` implementations |
+| Sorted set, concurrent          | `ConcurrentSkipListSet`         |
+| Sorted map, concurrent          | `ConcurrentSkipListMap`         |
+| Fast reads, occasional writes   | `CopyOnWriteArraySet`           |
 
 **Never** synchronize a `ConcurrentHashMap` externally — it defeats the purpose
 of the lock-striping design.
@@ -66,13 +66,13 @@ Task task = queue.take();  // blocks if empty
 Task task = queue.poll(5, TimeUnit.SECONDS);  // null if timeout
 ```
 
-| Implementation | When to Use |
-|---------------|-------------|
-| `ArrayBlockingQueue` | Bounded, fixed capacity, fairness option |
-| `LinkedBlockingQueue` | Optionally bounded, slightly higher throughput |
-| `PriorityBlockingQueue` | Unbounded, priority ordering |
-| `SynchronousQueue` | Zero capacity — direct handoff, tight coupling |
-| `LinkedTransferQueue` | High-performance, used by ForkJoinPool |
+| Implementation          | When to Use                                    |
+| ----------------------- | ---------------------------------------------- |
+| `ArrayBlockingQueue`    | Bounded, fixed capacity, fairness option       |
+| `LinkedBlockingQueue`   | Optionally bounded, slightly higher throughput |
+| `PriorityBlockingQueue` | Unbounded, priority ordering                   |
+| `SynchronousQueue`      | Zero capacity — direct handoff, tight coupling |
+| `LinkedTransferQueue`   | High-performance, used by ForkJoinPool         |
 
 **Rule**: always use bounded queues in production. Unbounded queues can
 cause `OutOfMemoryError` under load.

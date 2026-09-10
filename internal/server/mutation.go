@@ -182,6 +182,7 @@ type CreateFeatureRequest struct {
 	ImageUploads            []string                `json:"image_uploads,omitempty"`
 	UseCurrentBranch        bool                    `json:"use_current_branch,omitempty"`
 	UseCurrentBranchPerRepo map[string]bool         `json:"use_current_branch_per_repo,omitempty"`
+	RepositorySources       []RepositorySource      `json:"repository_sources,omitempty"`
 	Checkpoints             feature.Checkpoints     `json:"checkpoints,omitempty"`
 	Attachments             []string                `json:"attachments,omitempty"`
 	AttachmentUploads       []string                `json:"attachment_uploads,omitempty"`
@@ -689,12 +690,25 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return []string{http.MethodPost}, true
 	case apiPathWorkspaceRepositoriesInit:
 		return []string{http.MethodPost}, true
+	case apiPathWorkspaceRepositoriesInitialize:
+		return []string{http.MethodPost}, true
 	case apiPathUploads:
 		return []string{http.MethodPost}, true
 	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send", "/api/v1/prompts/chat/start", "/api/v1/prompts/chat/end":
 		return []string{http.MethodPost}, true
 	}
 	if !strings.HasPrefix(path, "/api/v1/features/") {
+		if strings.HasPrefix(path, apiPathWorkspaceClone+"/") {
+			parts := splitPath(strings.TrimPrefix(path, apiPathWorkspaceClone+"/"))
+			if invalidPathParts(parts) || len(parts) != 2 || !validEntityID(parts[0]) {
+				return nil, false
+			}
+			switch parts[1] {
+			case "cancel", "cleanup", "retry":
+				return []string{http.MethodPost}, true
+			}
+			return nil, false
+		}
 		return nil, false
 	}
 	parts := splitPath(strings.TrimPrefix(path, "/api/v1/features/"))
@@ -807,6 +821,12 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 		return
 	}
 	if h.rejectNotReadyForCreation(w, r) {
+		return
+	}
+	// Acceptance serializes with admitted source updates: a selected source
+	// whose update may still mutate waits out that attempt's lifetime first,
+	// so the accepted immutable SHA is captured after the mutation settles.
+	if !h.awaitSourceUpdateSettlement(w, r, req.RepositorySources) {
 		return
 	}
 	resp, err := h.createFeatureOnce(req)
@@ -1201,6 +1221,13 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 			return
 		}
 		defaultActionFields(&resp, "", resultUpdated)
+		if resp.Result == resultUpdated && h.broker != nil {
+			// A runtime configuration change (workspace roots, defaults,
+			// notifications) reshapes discovery and read models: every
+			// surface re-reads its snapshot. Unchanged mutations publish
+			// nothing.
+			h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
+		}
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		w.Header().Set("Allow", "GET, PATCH, PUT")
@@ -1220,6 +1247,10 @@ func validateWorkspaceRootPaths(w http.ResponseWriter, roots []string) bool {
 		Reason string `json:"reason"`
 	}
 	var invalid []rejectedRoot
+	// Canonical (home-expanded, symlink-resolved) forms detect duplicates
+	// that differ as text: adding a root that names the same directory as
+	// an existing entry must not create a second configuration entry.
+	canonical := make(map[string]string, len(roots))
 	for _, root := range roots {
 		info, err := os.Stat(workspace.ExpandHome(root))
 		switch {
@@ -1227,11 +1258,30 @@ func validateWorkspaceRootPaths(w http.ResponseWriter, roots []string) bool {
 			// Valid root.
 		case err == nil:
 			invalid = append(invalid, rejectedRoot{Path: root, Reason: "path is not a directory"})
+			continue
 		case errors.Is(err, fs.ErrNotExist):
 			invalid = append(invalid, rejectedRoot{Path: root, Reason: "path does not exist"})
+			continue
 		default:
 			invalid = append(invalid, rejectedRoot{Path: root, Reason: "path could not be resolved"})
+			continue
 		}
+		expanded, err := filepath.Abs(workspace.ExpandHome(root))
+		if err != nil {
+			continue
+		}
+		resolved, err := filepath.EvalSymlinks(expanded)
+		if err != nil {
+			continue
+		}
+		if existing, dup := canonical[resolved]; dup {
+			invalid = append(invalid, rejectedRoot{
+				Path:   root,
+				Reason: "names the same directory as the existing root " + existing,
+			})
+			continue
+		}
+		canonical[resolved] = root
 	}
 	if len(invalid) == 0 {
 		return true

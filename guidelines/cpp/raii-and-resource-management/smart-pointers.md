@@ -2,13 +2,13 @@
 
 ## The Ownership Vocabulary
 
-| Declaration | Ownership Meaning |
-|-------------|-------------------|
-| `T&` or `const T&` | Non-owning borrow; cannot be null |
-| `T*` or `const T*` | Non-owning borrow; may be null |
-| `std::unique_ptr<T>` | Exclusive ownership |
-| `std::shared_ptr<T>` | Shared (reference-counted) ownership |
-| `std::weak_ptr<T>` | Non-owning observer of a shared object |
+| Declaration          | Ownership Meaning                      |
+| -------------------- | -------------------------------------- |
+| `T&` or `const T&`   | Non-owning borrow; cannot be null      |
+| `T*` or `const T*`   | Non-owning borrow; may be null         |
+| `std::unique_ptr<T>` | Exclusive ownership                    |
+| `std::shared_ptr<T>` | Shared (reference-counted) ownership   |
+| `std::weak_ptr<T>`   | Non-owning observer of a shared object |
 
 ## `std::unique_ptr` — Exclusive Ownership
 

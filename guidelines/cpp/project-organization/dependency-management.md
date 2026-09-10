@@ -2,12 +2,12 @@
 
 ## Comparison
 
-| Factor | vcpkg | Conan 2 | FetchContent | Git Submodules |
-|--------|-------|---------|--------------|----------------|
-| Binary caching | Yes | Yes | No | No |
-| Package ecosystem | 2000+ | 1900+ | CMake projects only | Any |
-| Version locking | `builtin-baseline` | `conanfile.lock` | `GIT_TAG` hash | Commit hash |
-| CI complexity | Medium | Medium-High | Low | Medium |
+| Factor            | vcpkg              | Conan 2          | FetchContent        | Git Submodules |
+| ----------------- | ------------------ | ---------------- | ------------------- | -------------- |
+| Binary caching    | Yes                | Yes              | No                  | No             |
+| Package ecosystem | 2000+              | 1900+            | CMake projects only | Any            |
+| Version locking   | `builtin-baseline` | `conanfile.lock` | `GIT_TAG` hash      | Commit hash    |
+| CI complexity     | Medium             | Medium-High      | Low                 | Medium         |
 
 ## vcpkg: Manifest Mode
 
@@ -25,6 +25,7 @@
 ```
 
 CMake integration via toolchain file:
+
 ```cmake
 set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystem/vcpkg.cmake")
 ```

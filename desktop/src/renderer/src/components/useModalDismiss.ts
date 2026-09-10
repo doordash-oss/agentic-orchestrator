@@ -17,7 +17,7 @@ limitations under the License.
 import { useEffect, useRef, type RefObject } from 'react';
 
 const FOCUSABLE_SELECTOR =
-  'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** Escape-to-close, Tab focus trap, focus restoration, and body-scroll lock. */
 export function useModalDismiss(
@@ -69,7 +69,16 @@ export function useModalDismiss(
     return () => {
       window.removeEventListener('keydown', onKey);
       document.body.style.overflow = previousOverflow;
-      requestAnimationFrame(() => previouslyFocused?.focus());
+      // Restore the opener only when nothing else has claimed focus. A flow that
+      // closes the modal and focuses its own target in the same commit (adoption
+      // focuses the adopted repository row) owns focus, and an unconditional
+      // deferred restore would steal it back after that owner has settled.
+      requestAnimationFrame(() => {
+        const focused = document.activeElement;
+        const abandoned =
+          focused === null || focused === document.body || node?.contains(focused) === true;
+        if (abandoned) previouslyFocused?.focus();
+      });
     };
   }, [active, ref]);
 }

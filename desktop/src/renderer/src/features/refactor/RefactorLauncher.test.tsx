@@ -179,7 +179,10 @@ describe('RefactorLauncher', () => {
 
     expect(screen.getByLabelText('Brief')).toHaveValue('Refactor @repo-a/src/query.ts ');
     expect(mock.api.searchCreationFiles).toHaveBeenCalledWith(
-      expect.objectContaining({ repoKeys: ['repo-a', 'repo-b'], query: 'que' }),
+      expect.objectContaining({
+        repositories: [{ key: 'repo-a' }, { key: 'repo-b' }],
+        query: 'que',
+      }),
     );
   });
 

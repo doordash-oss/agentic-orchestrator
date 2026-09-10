@@ -158,6 +158,14 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     removeWorkspaceRoot: vi.fn(() => Promise.reject(new Error('unused'))),
     reorderWorkspaceRoots: vi.fn(() => Promise.reject(new Error('unused'))),
     initRepository: vi.fn(() => Promise.reject(new Error('unused'))),
+    startClone: vi.fn(() => Promise.reject(new Error('unused'))),
+    getCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    listCloneOperations: vi.fn(() => Promise.reject(new Error('unused'))),
+    cancelCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    retryCloneCleanup: vi.fn(() => Promise.reject(new Error('unused'))),
+    retryCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    createRepository: vi.fn(() => Promise.reject(new Error('unused'))),
+    initializeRepository: vi.fn(() => Promise.reject(new Error('unused'))),
     listRepositories: vi.fn(() => Promise.resolve([])),
     listFeatures: vi.fn(() => Promise.resolve({ features: [], warnings: [] })),
     getFeature: vi.fn(() => Promise.resolve(snapshot())),
@@ -180,7 +188,53 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({
         repositories: [],
+        workspaceRoots: [],
         defaults: { models: [], effort: [], useCurrentBranch: false },
+      }),
+    ),
+    inspectRepositorySources: vi.fn(
+      async (request: Parameters<IpcServices['inspectRepositorySources']>[0]) => ({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          observedSha: 'a'.repeat(40),
+        })),
+      }),
+    ),
+    checkRepositoryOriginStatus: vi.fn(
+      async (request: Parameters<IpcServices['checkRepositoryOriginStatus']>[0]) => ({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          localSha: 'a'.repeat(40),
+          status: 'no_origin' as const,
+        })),
+      }),
+    ),
+    updateRepositorySource: vi.fn(
+      async (request: Parameters<IpcServices['updateRepositorySource']>[0]) => ({
+        result: 'already_up_to_date' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
+      }),
+    ),
+    reconcileSourceUpdate: vi.fn(
+      async (request: Parameters<IpcServices['reconcileSourceUpdate']>[0]) => ({
+        outcome: 'original_tip_remains' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
       }),
     ),
     loadLocalReviewDraft: vi.fn(() => null),

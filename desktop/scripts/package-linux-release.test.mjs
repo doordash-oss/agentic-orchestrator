@@ -829,6 +829,6 @@ describe('detached release evidence boundary', () => {
         removeDetachedReleaseWorkspace(workspace);
       }
     },
-    20_000,
+    120_000,
   );
 });

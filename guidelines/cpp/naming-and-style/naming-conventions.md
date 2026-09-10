@@ -2,16 +2,16 @@
 
 ## Quick Reference
 
-| Element | Google | LLVM | Qt/Mozilla |
-|---------|--------|------|------------|
-| Classes | `PascalCase` | `PascalCase` | `PascalCase` |
-| Functions | `PascalCase` | `camelCase` | `camelCase` |
-| Variables | `snake_case` | `CamelCase` | `camelCase` |
-| Members | `name_` | `Name` | `m_name` |
-| Constants | `kConstName` | `ConstName` | `kConstName` |
-| Namespaces | `snake_case` | `llvm` | `lowercase` |
-| Macros | `ALL_CAPS` | `ALL_CAPS` | `ALL_CAPS` |
-| Files | `snake_case.h` | `PascalCase.h` | varies |
+| Element    | Google         | LLVM           | Qt/Mozilla   |
+| ---------- | -------------- | -------------- | ------------ |
+| Classes    | `PascalCase`   | `PascalCase`   | `PascalCase` |
+| Functions  | `PascalCase`   | `camelCase`    | `camelCase`  |
+| Variables  | `snake_case`   | `CamelCase`    | `camelCase`  |
+| Members    | `name_`        | `Name`         | `m_name`     |
+| Constants  | `kConstName`   | `ConstName`    | `kConstName` |
+| Namespaces | `snake_case`   | `llvm`         | `lowercase`  |
+| Macros     | `ALL_CAPS`     | `ALL_CAPS`     | `ALL_CAPS`   |
+| Files      | `snake_case.h` | `PascalCase.h` | varies       |
 
 ## Classes and Structs
 

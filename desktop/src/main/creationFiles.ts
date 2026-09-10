@@ -26,11 +26,13 @@ import {
   CREATION_ATTACHMENT_LIMIT,
   CREATION_FILE_SEARCH_RESULT_LIMIT,
   CREATION_IMAGE_LIMIT,
+  sameRepositoryIdentity,
   type CreationFileKind,
   type CreationFileSearchRequest,
   type CreationFileSearchResult,
   type ReadinessSnapshot,
   type RepositoryFileRef,
+  type RepositoryIdentity,
 } from '../shared/ipc';
 import { validateWithSchema } from '../shared/api/parse';
 import { alwaysLocal, assertLocalConnection, type LocalitySource } from './locality';
@@ -70,9 +72,19 @@ export class CreationFilesService {
     this.searches.set(request.requestId, controller);
     try {
       const snapshot = await this.deps.readReadiness();
-      const eligible = snapshot.repositories.filter(
-        (repo) => repo.valid && request.repoKeys.includes(repo.name),
-      );
+      // Each requested repository is bound to its expected identity, so the
+      // search walks the repository the request was issued against — a
+      // replacement that took over the key, or a repository on another
+      // server, can never contribute files. Feature-inherited entries
+      // without an identity fall back to the current key.
+      const eligible = snapshot.repositories.filter((repo) => {
+        if (!repo.valid) return false;
+        return request.repositories.some((expected) =>
+          expected.identity !== undefined && repo.identity !== undefined
+            ? sameRepositoryIdentity(expected.identity, repo.identity)
+            : expected.key === repo.name,
+        );
+      });
       const files: Array<RepositoryFileRef & { score: number }> = [];
       let scanned = 0;
       let truncated = false;
@@ -84,7 +96,13 @@ export class CreationFilesService {
             break;
           }
           const score = fuzzyScore(relative, request.query);
-          if (score >= 0) files.push({ repoKey: repo.name, path: relative, score });
+          if (score >= 0)
+            files.push({
+              repoKey: repo.name,
+              path: relative,
+              ...(repo.identity === undefined ? {} : { identity: repo.identity }),
+              score,
+            });
         }
         if (truncated || controller.signal.aborted) break;
       }
@@ -93,7 +111,11 @@ export class CreationFilesService {
         requestId: request.requestId,
         files: files
           .slice(0, CREATION_FILE_SEARCH_RESULT_LIMIT)
-          .map(({ repoKey, path: filePath }) => ({ repoKey, path: filePath })),
+          .map(({ repoKey, path, identity }) => ({
+            repoKey,
+            path,
+            ...(identity === undefined ? {} : { identity }),
+          })),
         truncated: truncated || files.length > CREATION_FILE_SEARCH_RESULT_LIMIT,
         cancelled: controller.signal.aborted,
       };
@@ -113,12 +135,29 @@ export class CreationFilesService {
     // Refs resolve to local absolute paths; remote submission never sees any.
     assertLocalConnection(this.locality);
     const snapshot = await this.deps.readReadiness();
-    const repositories = new Map(
-      snapshot.repositories.filter((repo) => repo.valid).map((repo) => [repo.name, repo.path]),
-    );
     const resolved: string[] = [];
     for (const ref of refs) {
-      const root = repositories.get(ref.repoKey);
+      let root: string | undefined;
+      if (ref.identity !== undefined) {
+        // The reference must still point at the repository it was captured
+        // from. A replacement at the same key or path cannot satisfy it, and
+        // a missing repository surfaces as unresolved instead of silently
+        // dropping or redirecting the attachment.
+        const match = snapshot.repositories.find(
+          (repo) =>
+            repo.valid &&
+            repo.identity !== undefined &&
+            sameRepositoryIdentity(ref.identity as RepositoryIdentity, repo.identity),
+        );
+        if (match === undefined) {
+          throw repositoryFileError('E_REPOSITORY_FILE_UNRESOLVED');
+        }
+        root = match.path;
+      } else {
+        // Feature-inherited references without identity resolve by key.
+        const match = snapshot.repositories.find((repo) => repo.valid && repo.name === ref.repoKey);
+        root = match?.path;
+      }
       if (root === undefined || path.isAbsolute(ref.path) || ref.path.includes('\0')) {
         throw repositoryFileError('E_REPOSITORY_FILE_INELIGIBLE');
       }
@@ -146,7 +185,8 @@ function repositoryFileError(
     | 'E_REPOSITORY_FILE_INELIGIBLE'
     | 'E_REPOSITORY_FILE_ESCAPED'
     | 'E_REPOSITORY_FILE_OUTSIDE'
-    | 'E_REPOSITORY_FILE_NOT_REGULAR',
+    | 'E_REPOSITORY_FILE_NOT_REGULAR'
+    | 'E_REPOSITORY_FILE_UNRESOLVED',
 ): CanonicalErrorException {
   return new CanonicalErrorException(buildCanonicalError(code));
 }

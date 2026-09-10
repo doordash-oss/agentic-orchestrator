@@ -5,24 +5,24 @@
 Go initializes all variables to their zero value. Design types so the zero value
 is immediately useful:
 
-| Type | Zero Value |
-|------|-----------|
-| `bool` | `false` |
-| `int`, `float64` | `0` |
-| `string` | `""` |
-| `pointer`, `slice`, `map`, `channel`, `func`, `interface` | `nil` |
-| `struct` | All fields zero-valued |
+| Type                                                      | Zero Value             |
+| --------------------------------------------------------- | ---------------------- |
+| `bool`                                                    | `false`                |
+| `int`, `float64`                                          | `0`                    |
+| `string`                                                  | `""`                   |
+| `pointer`, `slice`, `map`, `channel`, `func`, `interface` | `nil`                  |
+| `struct`                                                  | All fields zero-valued |
 
 **Examples of useful zero values**: `sync.Mutex` (unlocked), `bytes.Buffer`
 (empty, ready to write), `strings.Builder` (empty, ready to write).
 
 ## new vs make
 
-| | `new(T)` | `make(T, args)` |
-|---|---|---|
-| Returns | `*T` (pointer to zeroed memory) | `T` (initialized value) |
-| For | Any type | Slices, maps, channels only |
-| State | Zero value | Internal structures initialized |
+|         | `new(T)`                        | `make(T, args)`                 |
+| ------- | ------------------------------- | ------------------------------- |
+| Returns | `*T` (pointer to zeroed memory) | `T` (initialized value)         |
+| For     | Any type                        | Slices, maps, channels only     |
+| State   | Zero value                      | Internal structures initialized |
 
 ```go
 p := new(bytes.Buffer)       // *bytes.Buffer, zero value, ready to use
@@ -43,6 +43,7 @@ s := make([]int, 0)      // empty slice: same as above
 
 Both work identically for `append`, `len`, `cap`, and `range`. The difference
 matters for:
+
 - **JSON**: nil encodes to `null`, empty encodes to `[]`
 - **Reflection**: `reflect.DeepEqual(nil, []int{})` is `false`
 
@@ -154,6 +155,7 @@ return &Config{":8080", 30 * time.Second}
 
 Structs are values — assigning or passing copies all fields. This is safe unless
 the struct contains:
+
 - **Pointers**: the copy shares the pointed-to data
 - **Slices/maps**: the copy shares the backing array/hash table
 - **sync types**: `sync.Mutex`, `sync.WaitGroup` — must not be copied after use

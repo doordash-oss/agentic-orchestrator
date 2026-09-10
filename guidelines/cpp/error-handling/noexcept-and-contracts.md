@@ -68,11 +68,11 @@ class Base {
 
 ## assert vs Exceptions vs Contracts
 
-| Mechanism | For | When Violated |
-|-----------|-----|---------------|
-| `assert` | Programmer bugs (invariants, preconditions) | Crash in debug; gone in release |
-| Exceptions | Runtime errors (resources, input, network) | Throw, propagate, catch, recover |
-| Contracts (C++26) | API contracts between caller/callee | Configurable: enforce/observe/ignore |
+| Mechanism         | For                                         | When Violated                        |
+| ----------------- | ------------------------------------------- | ------------------------------------ |
+| `assert`          | Programmer bugs (invariants, preconditions) | Crash in debug; gone in release      |
+| Exceptions        | Runtime errors (resources, input, network)  | Throw, propagate, catch, recover     |
+| Contracts (C++26) | API contracts between caller/callee         | Configurable: enforce/observe/ignore |
 
 ```cpp
 // assert: programmer errors

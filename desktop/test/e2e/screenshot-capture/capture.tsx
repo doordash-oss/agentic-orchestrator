@@ -173,8 +173,8 @@ const SETUP_WIZARD_MODELS_STEP: ReadinessSnapshot = {
     },
   },
   configuration: { valid: true },
-  workspaceRoots: [{ path: '/work/space', valid: true }],
-  repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true }],
+  workspaceRoots: [{ path: '/work/space', valid: true, cloneEligible: true }],
+  repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true, featureReady: true }],
   issues: [
     {
       code: 'models_unavailable',

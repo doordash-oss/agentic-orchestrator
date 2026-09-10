@@ -68,7 +68,7 @@ Details of the paste flow:
   tells you the server is kept **for this session only** — it works until
   you quit, and you will need to paste the string again next launch.
 - **Already a local server:** if the pasted address turns out to belong to a
-  server the app already knows as a *local* entry (matched by the server's
+  server the app already knows as a _local_ entry (matched by the server's
   runtime identity, not its address), the app doesn't add a duplicate — it
   steers you to the existing local entry.
 

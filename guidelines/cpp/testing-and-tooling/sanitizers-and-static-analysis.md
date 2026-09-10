@@ -28,6 +28,7 @@ Key checks: `signed-integer-overflow`, `null`, `shift`, `alignment`, `return`,
 `vptr` (strict aliasing violations).
 
 Per-function suppression for intentional behavior:
+
 ```cpp
 [[clang::no_sanitize("signed-integer-overflow")]]
 uint64_t hash_mix(uint64_t a, uint64_t b) { return a * 2654435761ULL + b; }
@@ -54,6 +55,7 @@ Mixing instrumented and uninstrumented code produces false positives.
 ## clang-tidy
 
 Recommended `.clang-tidy`:
+
 ```yaml
 Checks: >
   -*,
@@ -73,6 +75,7 @@ WarningsAsErrors: "bugprone-*,performance-*"
 ```
 
 CMake integration:
+
 ```cmake
 set(CMAKE_CXX_CLANG_TIDY clang-tidy;-p=${CMAKE_BINARY_DIR})
 ```
@@ -80,6 +83,7 @@ set(CMAKE_CXX_CLANG_TIDY clang-tidy;-p=${CMAKE_BINARY_DIR})
 ## cppcheck
 
 Complementary static analyzer with very low false-positive rate:
+
 ```bash
 cppcheck --enable=all --error-exitcode=1 src/
 ```

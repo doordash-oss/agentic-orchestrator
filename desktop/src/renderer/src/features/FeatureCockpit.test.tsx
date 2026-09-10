@@ -1693,6 +1693,36 @@ describe('FeatureCockpit warnings', () => {
       summary: `The Implement effort "high" is beyond what ${model} supports.`,
     });
 
+  it('renders an immediate creation warning in the same canonical status area', async () => {
+    const warning = canonicalWarning({
+      code: 'branch_collision_probe_unavailable',
+      title: 'Remote branch check unavailable',
+      summary: 'The feature branch could not be checked against its origin.',
+    });
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({ status: 'Created', warnings: [] }),
+    });
+    render(
+      <FeatureCockpit
+        featureId={FEATURE_ID}
+        titleHint="Search revamp"
+        onClose={vi.fn()}
+        onLoadedName={vi.fn()}
+        attentionItems={[]}
+        refreshAttention={() => Promise.resolve([])}
+        attentionDrafts={emptyAttentionDrafts()}
+        setAttentionDrafts={vi.fn()}
+        creationWarnings={[warning]}
+      />,
+    );
+
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    const notice = screen.getByText('Remote branch check unavailable').closest('.error-surface');
+    expect(notice).toHaveAttribute('role', 'status');
+    expect(notice).toHaveClass('error-surface--compact', 'error-surface--warning');
+    expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
+  });
+
   it('renders one compact status surface per effort-drift warning with no action', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({

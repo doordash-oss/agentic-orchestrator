@@ -86,6 +86,66 @@ func (e AutomaticReviewStateSource) Valid() bool {
 	}
 }
 
+// Defines values for CloneOperationPendingOutcome.
+const (
+	CloneOperationPendingOutcomeCancelled   CloneOperationPendingOutcome = "cancelled"
+	CloneOperationPendingOutcomeFailed      CloneOperationPendingOutcome = "failed"
+	CloneOperationPendingOutcomeInterrupted CloneOperationPendingOutcome = "interrupted"
+)
+
+// Valid indicates whether the value is a known member of the CloneOperationPendingOutcome enum.
+func (e CloneOperationPendingOutcome) Valid() bool {
+	switch e {
+	case CloneOperationPendingOutcomeCancelled:
+		return true
+	case CloneOperationPendingOutcomeFailed:
+		return true
+	case CloneOperationPendingOutcomeInterrupted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CloneOperationState.
+const (
+	CloneOperationStateAccepted       CloneOperationState = "accepted"
+	CloneOperationStateCancelled      CloneOperationState = "cancelled"
+	CloneOperationStateCancelling     CloneOperationState = "cancelling"
+	CloneOperationStateCleanupPending CloneOperationState = "cleanup_pending"
+	CloneOperationStateFailed         CloneOperationState = "failed"
+	CloneOperationStateFinalizing     CloneOperationState = "finalizing"
+	CloneOperationStateInterrupted    CloneOperationState = "interrupted"
+	CloneOperationStateRunning        CloneOperationState = "running"
+	CloneOperationStateSucceeded      CloneOperationState = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the CloneOperationState enum.
+func (e CloneOperationState) Valid() bool {
+	switch e {
+	case CloneOperationStateAccepted:
+		return true
+	case CloneOperationStateCancelled:
+		return true
+	case CloneOperationStateCancelling:
+		return true
+	case CloneOperationStateCleanupPending:
+		return true
+	case CloneOperationStateFailed:
+		return true
+	case CloneOperationStateFinalizing:
+		return true
+	case CloneOperationStateInterrupted:
+		return true
+	case CloneOperationStateRunning:
+		return true
+	case CloneOperationStateSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateFeatureMutationRequestInquireness.
 const (
 	CreateFeatureMutationRequestInquirenessHigh   CreateFeatureMutationRequestInquireness = "high"
@@ -286,19 +346,19 @@ func (e FeatureConfigAutomaticReviewMode) Valid() bool {
 
 // Defines values for FeatureConfigInputNotifications.
 const (
-	Default FeatureConfigInputNotifications = "default"
-	Enabled FeatureConfigInputNotifications = "enabled"
-	Muted   FeatureConfigInputNotifications = "muted"
+	FeatureConfigInputNotificationsDefault FeatureConfigInputNotifications = "default"
+	FeatureConfigInputNotificationsEnabled FeatureConfigInputNotifications = "enabled"
+	FeatureConfigInputNotificationsMuted   FeatureConfigInputNotifications = "muted"
 )
 
 // Valid indicates whether the value is a known member of the FeatureConfigInputNotifications enum.
 func (e FeatureConfigInputNotifications) Valid() bool {
 	switch e {
-	case Default:
+	case FeatureConfigInputNotificationsDefault:
 		return true
-	case Enabled:
+	case FeatureConfigInputNotificationsEnabled:
 		return true
-	case Muted:
+	case FeatureConfigInputNotificationsMuted:
 		return true
 	default:
 		return false
@@ -326,6 +386,24 @@ func (e FeatureConfigInquireness) Valid() bool {
 	}
 }
 
+// Defines values for InitializeRepositoryResponseResult.
+const (
+	AlreadyInitialized InitializeRepositoryResponseResult = "already_initialized"
+	Initialized        InitializeRepositoryResponseResult = "initialized"
+)
+
+// Valid indicates whether the value is a known member of the InitializeRepositoryResponseResult enum.
+func (e InitializeRepositoryResponseResult) Valid() bool {
+	switch e {
+	case AlreadyInitialized:
+		return true
+	case Initialized:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for NeedUserInputVerificationAction.
 const (
 	RETRYAFTERAUTH NeedUserInputVerificationAction = "RETRY_AFTER_AUTH"
@@ -338,6 +416,30 @@ func (e NeedUserInputVerificationAction) Valid() bool {
 	case RETRYAFTERAUTH:
 		return true
 	case WAIVE:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OriginComparisonStatus.
+const (
+	OriginComparisonStatusAhead    OriginComparisonStatus = "ahead"
+	OriginComparisonStatusBehind   OriginComparisonStatus = "behind"
+	OriginComparisonStatusDiverged OriginComparisonStatus = "diverged"
+	OriginComparisonStatusUpToDate OriginComparisonStatus = "up_to_date"
+)
+
+// Valid indicates whether the value is a known member of the OriginComparisonStatus enum.
+func (e OriginComparisonStatus) Valid() bool {
+	switch e {
+	case OriginComparisonStatusAhead:
+		return true
+	case OriginComparisonStatusBehind:
+		return true
+	case OriginComparisonStatusDiverged:
+		return true
+	case OriginComparisonStatusUpToDate:
 		return true
 	default:
 		return false
@@ -395,6 +497,384 @@ func (e RelationshipChildOutcome) Valid() bool {
 	case RelationshipChildOutcomeCompleted:
 		return true
 	case RelationshipChildOutcomeDiscarded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryOriginStatusKind.
+const (
+	RepositoryOriginStatusKindBranch   RepositoryOriginStatusKind = "branch"
+	RepositoryOriginStatusKindDetached RepositoryOriginStatusKind = "detached"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryOriginStatusKind enum.
+func (e RepositoryOriginStatusKind) Valid() bool {
+	switch e {
+	case RepositoryOriginStatusKindBranch:
+		return true
+	case RepositoryOriginStatusKindDetached:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryOriginStatusMode.
+const (
+	RepositoryOriginStatusModeCurrent RepositoryOriginStatusMode = "current"
+	RepositoryOriginStatusModeDefault RepositoryOriginStatusMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryOriginStatusMode enum.
+func (e RepositoryOriginStatusMode) Valid() bool {
+	switch e {
+	case RepositoryOriginStatusModeCurrent:
+		return true
+	case RepositoryOriginStatusModeDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryOriginStatusStatus.
+const (
+	RepositoryOriginStatusStatusAhead               RepositoryOriginStatusStatus = "ahead"
+	RepositoryOriginStatusStatusBehind              RepositoryOriginStatusStatus = "behind"
+	RepositoryOriginStatusStatusChecking            RepositoryOriginStatusStatus = "checking"
+	RepositoryOriginStatusStatusDetached            RepositoryOriginStatusStatus = "detached"
+	RepositoryOriginStatusStatusDiverged            RepositoryOriginStatusStatus = "diverged"
+	RepositoryOriginStatusStatusLocalBaseMissing    RepositoryOriginStatusStatus = "local_base_missing"
+	RepositoryOriginStatusStatusNoOrigin            RepositoryOriginStatusStatus = "no_origin"
+	RepositoryOriginStatusStatusOtherUpstream       RepositoryOriginStatusStatus = "other_upstream"
+	RepositoryOriginStatusStatusRemoteBranchMissing RepositoryOriginStatusStatus = "remote_branch_missing"
+	RepositoryOriginStatusStatusUnknown             RepositoryOriginStatusStatus = "unknown"
+	RepositoryOriginStatusStatusUpToDate            RepositoryOriginStatusStatus = "up_to_date"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryOriginStatusStatus enum.
+func (e RepositoryOriginStatusStatus) Valid() bool {
+	switch e {
+	case RepositoryOriginStatusStatusAhead:
+		return true
+	case RepositoryOriginStatusStatusBehind:
+		return true
+	case RepositoryOriginStatusStatusChecking:
+		return true
+	case RepositoryOriginStatusStatusDetached:
+		return true
+	case RepositoryOriginStatusStatusDiverged:
+		return true
+	case RepositoryOriginStatusStatusLocalBaseMissing:
+		return true
+	case RepositoryOriginStatusStatusNoOrigin:
+		return true
+	case RepositoryOriginStatusStatusOtherUpstream:
+		return true
+	case RepositoryOriginStatusStatusRemoteBranchMissing:
+		return true
+	case RepositoryOriginStatusStatusUnknown:
+		return true
+	case RepositoryOriginStatusStatusUpToDate:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryOriginStatusUpdateBlockers.
+const (
+	RepositoryOriginStatusUpdateBlockersBranchCheckedOutInWorktree  RepositoryOriginStatusUpdateBlockers = "branch_checked_out_in_worktree"
+	RepositoryOriginStatusUpdateBlockersCheckoutOperationInProgress RepositoryOriginStatusUpdateBlockers = "checkout_operation_in_progress"
+	RepositoryOriginStatusUpdateBlockersCheckoutUninspectable       RepositoryOriginStatusUpdateBlockers = "checkout_uninspectable"
+	RepositoryOriginStatusUpdateBlockersComparisonUnavailable       RepositoryOriginStatusUpdateBlockers = "comparison_unavailable"
+	RepositoryOriginStatusUpdateBlockersDirtyTargetCheckout         RepositoryOriginStatusUpdateBlockers = "dirty_target_checkout"
+	RepositoryOriginStatusUpdateBlockersGitOperationInProgress      RepositoryOriginStatusUpdateBlockers = "git_operation_in_progress"
+	RepositoryOriginStatusUpdateBlockersIgnoredPathCollision        RepositoryOriginStatusUpdateBlockers = "ignored_path_collision"
+	RepositoryOriginStatusUpdateBlockersLocalNotBehind              RepositoryOriginStatusUpdateBlockers = "local_not_behind"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryOriginStatusUpdateBlockers enum.
+func (e RepositoryOriginStatusUpdateBlockers) Valid() bool {
+	switch e {
+	case RepositoryOriginStatusUpdateBlockersBranchCheckedOutInWorktree:
+		return true
+	case RepositoryOriginStatusUpdateBlockersCheckoutOperationInProgress:
+		return true
+	case RepositoryOriginStatusUpdateBlockersCheckoutUninspectable:
+		return true
+	case RepositoryOriginStatusUpdateBlockersComparisonUnavailable:
+		return true
+	case RepositoryOriginStatusUpdateBlockersDirtyTargetCheckout:
+		return true
+	case RepositoryOriginStatusUpdateBlockersGitOperationInProgress:
+		return true
+	case RepositoryOriginStatusUpdateBlockersIgnoredPathCollision:
+		return true
+	case RepositoryOriginStatusUpdateBlockersLocalNotBehind:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryOriginStatusRequestMode.
+const (
+	RepositoryOriginStatusRequestModeCurrent RepositoryOriginStatusRequestMode = "current"
+	RepositoryOriginStatusRequestModeDefault RepositoryOriginStatusRequestMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryOriginStatusRequestMode enum.
+func (e RepositoryOriginStatusRequestMode) Valid() bool {
+	switch e {
+	case RepositoryOriginStatusRequestModeCurrent:
+		return true
+	case RepositoryOriginStatusRequestModeDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositorySourceKind.
+const (
+	RepositorySourceKindBranch   RepositorySourceKind = "branch"
+	RepositorySourceKindDetached RepositorySourceKind = "detached"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourceKind enum.
+func (e RepositorySourceKind) Valid() bool {
+	switch e {
+	case RepositorySourceKindBranch:
+		return true
+	case RepositorySourceKindDetached:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositorySourceMode.
+const (
+	RepositorySourceModeCurrent RepositorySourceMode = "current"
+	RepositorySourceModeDefault RepositorySourceMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourceMode enum.
+func (e RepositorySourceMode) Valid() bool {
+	switch e {
+	case RepositorySourceModeCurrent:
+		return true
+	case RepositorySourceModeDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositorySourceReconcileCheckoutState.
+const (
+	Clean               RepositorySourceReconcileCheckoutState = "clean"
+	Dirty               RepositorySourceReconcileCheckoutState = "dirty"
+	OperationInProgress RepositorySourceReconcileCheckoutState = "operation_in_progress"
+	Unobserved          RepositorySourceReconcileCheckoutState = "unobserved"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourceReconcileCheckoutState enum.
+func (e RepositorySourceReconcileCheckoutState) Valid() bool {
+	switch e {
+	case Clean:
+		return true
+	case Dirty:
+		return true
+	case OperationInProgress:
+		return true
+	case Unobserved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositorySourceReconcileRequestMode.
+const (
+	RepositorySourceReconcileRequestModeCurrent RepositorySourceReconcileRequestMode = "current"
+	RepositorySourceReconcileRequestModeDefault RepositorySourceReconcileRequestMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourceReconcileRequestMode enum.
+func (e RepositorySourceReconcileRequestMode) Valid() bool {
+	switch e {
+	case RepositorySourceReconcileRequestModeCurrent:
+		return true
+	case RepositorySourceReconcileRequestModeDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositorySourceReconcileResponseMode.
+const (
+	RepositorySourceReconcileResponseModeCurrent RepositorySourceReconcileResponseMode = "current"
+	RepositorySourceReconcileResponseModeDefault RepositorySourceReconcileResponseMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourceReconcileResponseMode enum.
+func (e RepositorySourceReconcileResponseMode) Valid() bool {
+	switch e {
+	case RepositorySourceReconcileResponseModeCurrent:
+		return true
+	case RepositorySourceReconcileResponseModeDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositorySourceReconcileResponseOutcome.
+const (
+	BranchMissing         RepositorySourceReconcileResponseOutcome = "branch_missing"
+	ExpectedTargetPresent RepositorySourceReconcileResponseOutcome = "expected_target_present"
+	LocalStateChanged     RepositorySourceReconcileResponseOutcome = "local_state_changed"
+	OriginalTipRemains    RepositorySourceReconcileResponseOutcome = "original_tip_remains"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourceReconcileResponseOutcome enum.
+func (e RepositorySourceReconcileResponseOutcome) Valid() bool {
+	switch e {
+	case BranchMissing:
+		return true
+	case ExpectedTargetPresent:
+		return true
+	case LocalStateChanged:
+		return true
+	case OriginalTipRemains:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositorySourcesRequestMode.
+const (
+	RepositorySourcesRequestModeCurrent RepositorySourcesRequestMode = "current"
+	RepositorySourcesRequestModeDefault RepositorySourcesRequestMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositorySourcesRequestMode enum.
+func (e RepositorySourcesRequestMode) Valid() bool {
+	switch e {
+	case RepositorySourcesRequestModeCurrent:
+		return true
+	case RepositorySourcesRequestModeDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryUpdateSourceRequestMode.
+const (
+	RepositoryUpdateSourceRequestModeCurrent RepositoryUpdateSourceRequestMode = "current"
+	RepositoryUpdateSourceRequestModeDefault RepositoryUpdateSourceRequestMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryUpdateSourceRequestMode enum.
+func (e RepositoryUpdateSourceRequestMode) Valid() bool {
+	switch e {
+	case RepositoryUpdateSourceRequestModeCurrent:
+		return true
+	case RepositoryUpdateSourceRequestModeDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryUpdateSourceResponseMode.
+const (
+	Current RepositoryUpdateSourceResponseMode = "current"
+	Default RepositoryUpdateSourceResponseMode = "default"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryUpdateSourceResponseMode enum.
+func (e RepositoryUpdateSourceResponseMode) Valid() bool {
+	switch e {
+	case Current:
+		return true
+	case Default:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryUpdateSourceResponseReason.
+const (
+	RepositoryUpdateSourceResponseReasonBranchCheckedOut            RepositoryUpdateSourceResponseReason = "branch_checked_out"
+	RepositoryUpdateSourceResponseReasonCheckoutChanged             RepositoryUpdateSourceResponseReason = "checkout_changed"
+	RepositoryUpdateSourceResponseReasonCheckoutConflict            RepositoryUpdateSourceResponseReason = "checkout_conflict"
+	RepositoryUpdateSourceResponseReasonCheckoutOperationInProgress RepositoryUpdateSourceResponseReason = "checkout_operation_in_progress"
+	RepositoryUpdateSourceResponseReasonDirtyCheckout               RepositoryUpdateSourceResponseReason = "dirty_checkout"
+	RepositoryUpdateSourceResponseReasonIgnoredPathCollision        RepositoryUpdateSourceResponseReason = "ignored_path_collision"
+	RepositoryUpdateSourceResponseReasonLocalTipChanged             RepositoryUpdateSourceResponseReason = "local_tip_changed"
+	RepositoryUpdateSourceResponseReasonMappingChanged              RepositoryUpdateSourceResponseReason = "mapping_changed"
+	RepositoryUpdateSourceResponseReasonNotFastForward              RepositoryUpdateSourceResponseReason = "not_fast_forward"
+	RepositoryUpdateSourceResponseReasonOriginBranchMissing         RepositoryUpdateSourceResponseReason = "origin_branch_missing"
+	RepositoryUpdateSourceResponseReasonOriginTipChanged            RepositoryUpdateSourceResponseReason = "origin_tip_changed"
+	RepositoryUpdateSourceResponseReasonSourceChanged               RepositoryUpdateSourceResponseReason = "source_changed"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryUpdateSourceResponseReason enum.
+func (e RepositoryUpdateSourceResponseReason) Valid() bool {
+	switch e {
+	case RepositoryUpdateSourceResponseReasonBranchCheckedOut:
+		return true
+	case RepositoryUpdateSourceResponseReasonCheckoutChanged:
+		return true
+	case RepositoryUpdateSourceResponseReasonCheckoutConflict:
+		return true
+	case RepositoryUpdateSourceResponseReasonCheckoutOperationInProgress:
+		return true
+	case RepositoryUpdateSourceResponseReasonDirtyCheckout:
+		return true
+	case RepositoryUpdateSourceResponseReasonIgnoredPathCollision:
+		return true
+	case RepositoryUpdateSourceResponseReasonLocalTipChanged:
+		return true
+	case RepositoryUpdateSourceResponseReasonMappingChanged:
+		return true
+	case RepositoryUpdateSourceResponseReasonNotFastForward:
+		return true
+	case RepositoryUpdateSourceResponseReasonOriginBranchMissing:
+		return true
+	case RepositoryUpdateSourceResponseReasonOriginTipChanged:
+		return true
+	case RepositoryUpdateSourceResponseReasonSourceChanged:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryUpdateSourceResponseResult.
+const (
+	AlreadyUpToDate RepositoryUpdateSourceResponseResult = "already_up_to_date"
+	Stale           RepositoryUpdateSourceResponseResult = "stale"
+	Updated         RepositoryUpdateSourceResponseResult = "updated"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryUpdateSourceResponseResult enum.
+func (e RepositoryUpdateSourceResponseResult) Valid() bool {
+	switch e {
+	case AlreadyUpToDate:
+		return true
+	case Stale:
+		return true
+	case Updated:
 		return true
 	default:
 		return false
@@ -902,6 +1382,81 @@ func (e StageUploadParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for StartWorkspaceCloneParamsXAgenticoClient.
+const (
+	StartWorkspaceCloneParamsXAgenticoClientLocal StartWorkspaceCloneParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the StartWorkspaceCloneParamsXAgenticoClient enum.
+func (e StartWorkspaceCloneParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case StartWorkspaceCloneParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CancelWorkspaceCloneParamsXAgenticoClient.
+const (
+	CancelWorkspaceCloneParamsXAgenticoClientLocal CancelWorkspaceCloneParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CancelWorkspaceCloneParamsXAgenticoClient enum.
+func (e CancelWorkspaceCloneParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CancelWorkspaceCloneParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RetryWorkspaceCloneCleanupParamsXAgenticoClient.
+const (
+	RetryWorkspaceCloneCleanupParamsXAgenticoClientLocal RetryWorkspaceCloneCleanupParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the RetryWorkspaceCloneCleanupParamsXAgenticoClient enum.
+func (e RetryWorkspaceCloneCleanupParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case RetryWorkspaceCloneCleanupParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RetryWorkspaceCloneParamsXAgenticoClient.
+const (
+	RetryWorkspaceCloneParamsXAgenticoClientLocal RetryWorkspaceCloneParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the RetryWorkspaceCloneParamsXAgenticoClient enum.
+func (e RetryWorkspaceCloneParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case RetryWorkspaceCloneParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateWorkspaceRepositoryParamsXAgenticoClient.
+const (
+	CreateWorkspaceRepositoryParamsXAgenticoClientLocal CreateWorkspaceRepositoryParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CreateWorkspaceRepositoryParamsXAgenticoClient enum.
+func (e CreateWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CreateWorkspaceRepositoryParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for InitWorkspaceRepositoryParamsXAgenticoClient.
 const (
 	InitWorkspaceRepositoryParamsXAgenticoClientLocal InitWorkspaceRepositoryParamsXAgenticoClient = "local"
@@ -911,6 +1466,81 @@ const (
 func (e InitWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case InitWorkspaceRepositoryParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InitializeWorkspaceRepositoryParamsXAgenticoClient.
+const (
+	InitializeWorkspaceRepositoryParamsXAgenticoClientLocal InitializeWorkspaceRepositoryParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the InitializeWorkspaceRepositoryParamsXAgenticoClient enum.
+func (e InitializeWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case InitializeWorkspaceRepositoryParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient.
+const (
+	CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClientLocal CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient enum.
+func (e CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient.
+const (
+	ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClientLocal ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient enum.
+func (e ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InspectWorkspaceRepositorySourcesParamsXAgenticoClient.
+const (
+	InspectWorkspaceRepositorySourcesParamsXAgenticoClientLocal InspectWorkspaceRepositorySourcesParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the InspectWorkspaceRepositorySourcesParamsXAgenticoClient enum.
+func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case InspectWorkspaceRepositorySourcesParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateWorkspaceRepositorySourceParamsXAgenticoClient.
+const (
+	UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the UpdateWorkspaceRepositorySourceParamsXAgenticoClient enum.
+func (e UpdateWorkspaceRepositorySourceParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -1149,6 +1779,99 @@ type CleanupFeatureResponse struct {
 	Target     string       `json:"target,omitempty"`
 }
 
+// CloneActionResponse defines model for CloneActionResponse.
+type CloneActionResponse struct {
+	APIVersion string         `json:"api_version"`
+	Meta       ResponseMeta   `json:"meta,omitempty"`
+	Operation  CloneOperation `json:"operation"`
+	Result     string         `json:"result"`
+}
+
+// CloneOperation defines model for CloneOperation.
+type CloneOperation struct {
+	CancelRequested   bool       `json:"cancel_requested"`
+	CancelRequestedAt *time.Time `json:"cancel_requested_at,omitempty"`
+
+	// CleanupIssue Canonical reason cleanup could not yet be proved safe.
+	CleanupIssue    string    `json:"cleanup_issue,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	Destination     string    `json:"destination"`
+	DestinationPath string    `json:"destination_path"`
+
+	// Error Canonical catalog-rendered error.
+	Error          *Error `json:"error,omitempty"`
+	ID             string `json:"id"`
+	IdempotencyKey string `json:"idempotency_key"`
+
+	// PendingOutcome For cleanup-pending attempts: the outcome the attempt resolves to once cleanup completes.
+	PendingOutcome CloneOperationPendingOutcome `json:"pending_outcome,omitempty"`
+
+	// Progress Bounded sanitized progress summary, never raw git output.
+	Progress  string            `json:"progress,omitempty"`
+	Published *ClonePublication `json:"published,omitempty"`
+
+	// RemoteURL The validated remote as recorded (secrets rejected before recording).
+	RemoteURL  string              `json:"remote_url"`
+	ResolvedAt *time.Time          `json:"resolved_at,omitempty"`
+	RootPath   string              `json:"root_path"`
+	Stage      string              `json:"stage,omitempty"`
+	State      CloneOperationState `json:"state"`
+	TerminalAt *time.Time          `json:"terminal_at,omitempty"`
+	UpdatedAt  time.Time           `json:"updated_at"`
+}
+
+// CloneOperationPendingOutcome For cleanup-pending attempts: the outcome the attempt resolves to once cleanup completes.
+type CloneOperationPendingOutcome string
+
+// CloneOperationState defines model for CloneOperation.State.
+type CloneOperationState string
+
+// CloneOperationListResponse defines model for CloneOperationListResponse.
+type CloneOperationListResponse struct {
+	APIVersion string       `json:"api_version"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+
+	// NextPageToken Continuation token for the next page. A truncated page is never proof that an operation does not exist.
+	NextPageToken *string          `json:"next_page_token,omitempty"`
+	Operations    []CloneOperation `json:"operations"`
+}
+
+// CloneOperationResponse defines model for CloneOperationResponse.
+type CloneOperationResponse struct {
+	APIVersion string         `json:"api_version"`
+	Meta       ResponseMeta   `json:"meta,omitempty"`
+	Operation  CloneOperation `json:"operation"`
+}
+
+// ClonePublication defines model for ClonePublication.
+type ClonePublication struct {
+	// HasHead Whether the published repository has commits. An empty remote still publishes successfully with has_head false.
+	HasHead bool `json:"has_head"`
+
+	// Identity Server-resolved identity of the repository actually published, pinned by the durable publication marker. Absent for older records or when the destination no longer matches the marker: such publications stay viewable but must never be adopted by a key or path fallback.
+	Identity    *RepositoryIdentity `json:"identity,omitempty"`
+	Path        string              `json:"path"`
+	PublishedAt time.Time           `json:"published_at"`
+
+	// RepoKey Actual collision-safe catalog key from discovery after publication.
+	RepoKey string `json:"repo_key"`
+}
+
+// CloneStartSchema defines model for CloneStartRequest.
+type CloneStartSchema struct {
+	// Destination Single new folder name inside the root. Separators, traversal, controls, hidden and reserved names are rejected.
+	Destination string `json:"destination"`
+
+	// IdempotencyKey Client-generated key binding this request. Same-key same-input replays return the retained operation; changed-input reuse conflicts.
+	IdempotencyKey string `json:"idempotency_key"`
+
+	// RemoteURL HTTP, HTTPS or SSH remote URL for the clone. Local paths, helper transports, embedded credentials and token-bearing queries or fragments are rejected without echoing secrets.
+	RemoteURL string `json:"remote_url"`
+
+	// RootPath Configured workspace root that will receive the clone.
+	RootPath string `json:"root_path"`
+}
+
 // CompatibilityDeclaration The server's explicit compatibility contract. Clients (such as the desktop app) must attach only when they support the declared (api_version, schema_version) REST contract AND the declared runtime_policy, and when their own client schema version is at least min_client_schema. A shared API major version alone is never sufficient. Contains no secrets.
 type CompatibilityDeclaration struct {
 	// APIVersion The REST API major version this server serves (e.g. "v1").
@@ -1283,6 +2006,7 @@ type CreateFeatureMutationRequest struct {
 	Name              string                                  `json:"name"`
 	Pipeline          CreateFeatureMutationRequestPipeline    `json:"pipeline,omitempty"`
 	Repos             []string                                `json:"repos,omitempty"`
+	RepositorySources []RepositorySource                      `json:"repository_sources,omitempty"`
 	RiskLevel         CreateFeatureMutationRequestRiskLevel   `json:"risk_level,omitempty"`
 	UseCurrentBranch  bool                                    `json:"use_current_branch,omitempty"`
 }
@@ -1302,6 +2026,50 @@ type CreateFeatureResponse struct {
 	FeatureID  string       `json:"feature_id"`
 	Meta       ResponseMeta `json:"meta,omitempty"`
 	Result     string       `json:"result"`
+
+	// Warnings Canonical nonblocking warnings from best-effort feature-branch collision checks. They do not assert source freshness or remote branch availability.
+	Warnings []Error `json:"warnings,omitempty"`
+}
+
+// CreateRepositorySchema defines model for CreateRepositoryRequest.
+type CreateRepositorySchema struct {
+	// Consent Explicit user consent to create the repository with one empty initial commit on main using Agentico's identity, without an origin remote or a push. Must be true.
+	Consent bool `json:"consent"`
+
+	// Destination Single new folder name inside the root. Separators, traversal, controls, hidden and reserved names are rejected, as is every existing destination (including empty directories).
+	Destination string `json:"destination"`
+
+	// IdempotencyKey Client-generated key binding this request. Same-key same-input replays return the retained result; changed-input reuse conflicts.
+	IdempotencyKey string `json:"idempotency_key"`
+
+	// RootPath Configured workspace root that receives the new repository. The root must be clone-eligible (existing, writable, not itself a repository) and is revalidated at execution.
+	RootPath string `json:"root_path"`
+}
+
+// CreateRepositoryResponse defines model for CreateRepositoryResponse.
+type CreateRepositoryResponse struct {
+	APIVersion string                 `json:"api_version"`
+	Meta       ResponseMeta           `json:"meta,omitempty"`
+	Repository CreateRepositoryResult `json:"repository"`
+	Result     string                 `json:"result"`
+}
+
+// CreateRepositoryResult defines model for CreateRepositoryResult.
+type CreateRepositoryResult struct {
+	// HasHead Whether the created repository has commits. A successful create always has exactly one empty initial commit, so this is true.
+	HasHead bool `json:"has_head"`
+
+	// Identity Server-resolved identity of the repository actually published, pinned by the durable publication marker. Clients select and adopt the repository by this identity, never by key or path.
+	Identity *RepositoryIdentity `json:"identity,omitempty"`
+
+	// Path Absolute path of the created repository.
+	Path string `json:"path"`
+
+	// RepoKey Actual collision-safe catalog key computed from workspace discovery after publication, never the requested folder name.
+	RepoKey string `json:"repo_key"`
+
+	// Root The configured workspace root that received the repository.
+	Root string `json:"root"`
 }
 
 // Cursor defines model for Cursor.
@@ -1721,6 +2489,52 @@ type HelpSendResponse struct {
 	SessionID  string       `json:"session_id"`
 }
 
+// InitializeRepositorySchema defines model for InitializeRepositoryRequest.
+type InitializeRepositorySchema struct {
+	// Consent Explicit user consent to create exactly one empty local initial commit using Agentico's identity, preserving the origin remote and the existing branch, without pushing. Must be true.
+	Consent bool `json:"consent"`
+
+	// Identity Expected server-resolved identity of the selected repository. Revalidated against a fresh resolution before any mutation; a mismatch (the repository was replaced) refuses the request.
+	Identity RepositoryIdentity `json:"identity"`
+
+	// Path Optional expected repository path. When present it must match the server-resolved catalog entry; a mismatch refuses the request. Never filesystem authority.
+	Path string `json:"path,omitempty"`
+
+	// RepoKey Collision-safe repository key from the connected server's current catalog. The server resolves this key itself; the key is never filesystem authority. Keys may contain slashes.
+	RepoKey string `json:"repo_key"`
+}
+
+// InitializeRepositoryResponse defines model for InitializeRepositoryResponse.
+type InitializeRepositoryResponse struct {
+	APIVersion string                     `json:"api_version"`
+	Meta       ResponseMeta               `json:"meta,omitempty"`
+	Repository InitializeRepositoryResult `json:"repository"`
+
+	// Result "initialized" when this request created the initial commit; "already_initialized" when HEAD already resolved (a competing initializer or an external commit), a refresh-only success.
+	Result InitializeRepositoryResponseResult `json:"result"`
+}
+
+// InitializeRepositoryResponseResult "initialized" when this request created the initial commit; "already_initialized" when HEAD already resolved (a competing initializer or an external commit), a refresh-only success.
+type InitializeRepositoryResponseResult string
+
+// InitializeRepositoryResult defines model for InitializeRepositoryResult.
+type InitializeRepositoryResult struct {
+	// HasHead Whether the repository has commits. Both result values report true: the repository was either initialized here or was already initialized by another actor.
+	HasHead bool `json:"has_head"`
+
+	// Identity Server-resolved identity of the refreshed repository. Clients select and adopt the repository by this identity, never by key or path.
+	Identity *RepositoryIdentity `json:"identity,omitempty"`
+
+	// Path Absolute path of the initialized repository.
+	Path string `json:"path"`
+
+	// RepoKey Actual collision-safe catalog key computed from workspace discovery after the initial commit, never the requested key.
+	RepoKey string `json:"repo_key"`
+
+	// Root The configured workspace root containing the repository.
+	Root string `json:"root"`
+}
+
 // JSONResponse defines model for JSONResponse.
 type JSONResponse struct {
 	APIVersion string       `json:"api_version"`
@@ -1864,6 +2678,20 @@ type Observability struct {
 	OTelEnabled     bool   `json:"otel_enabled"`
 	OTelServiceName string `json:"otel_service_name,omitempty"`
 }
+
+// OriginComparison defines model for OriginComparison.
+type OriginComparison struct {
+	AheadCount   int                    `json:"ahead_count"`
+	BehindCount  int                    `json:"behind_count"`
+	CheckedAt    time.Time              `json:"checked_at"`
+	FetchedSha   string                 `json:"fetched_sha"`
+	LocalSha     string                 `json:"local_sha"`
+	OriginBranch string                 `json:"origin_branch"`
+	Status       OriginComparisonStatus `json:"status"`
+}
+
+// OriginComparisonStatus defines model for OriginComparison.Status.
+type OriginComparisonStatus string
 
 // OwnedError defines model for OwnedError.
 type OwnedError struct {
@@ -2247,6 +3075,24 @@ type RepositoryDiffResponse struct {
 	Truncated bool `json:"truncated,omitempty"`
 }
 
+// RepositoryIdentity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+type RepositoryIdentity struct {
+	// BirthTime Filesystem creation time of the Git common directory, when available, distinguishing reused inodes. Omitted on filesystems without birth-time support.
+	BirthTime string `json:"birth_time,omitempty"`
+
+	// CommonDir Resolved Git common directory. Linked worktrees share it with their main checkout but differ in path.
+	CommonDir string `json:"common_dir"`
+
+	// Device Device id of the Git common directory, as decimal text.
+	Device string `json:"device"`
+
+	// Inode Inode of the Git common directory, as decimal text.
+	Inode string `json:"inode"`
+
+	// Path Canonical checkout path (symlinks resolved).
+	Path string `json:"path"`
+}
+
 // RepositoryInitSchema defines model for RepositoryInitRequest.
 type RepositoryInitSchema struct {
 	// Consent Explicit user consent to create a git repository at the target path. Must be true.
@@ -2264,6 +3110,89 @@ type RepositoryInitResponse struct {
 	Result     string              `json:"result"`
 }
 
+// RepositoryOriginStatus defines model for RepositoryOriginStatus.
+type RepositoryOriginStatus struct {
+	// AheadCount Local-only commits; present for comparison statuses.
+	AheadCount *int `json:"ahead_count,omitempty"`
+
+	// BehindCount Origin-only commits; present for comparison statuses.
+	BehindCount *int `json:"behind_count,omitempty"`
+
+	// Branch Full local branch name; present for the branch kind.
+	Branch string `json:"branch,omitempty"`
+
+	// CheckedAt Completion time of the current result; absent while checking.
+	CheckedAt *time.Time `json:"checked_at,omitempty"`
+
+	// CheckoutHeadRef Observed checkout HEAD reference: the full symbolic ref (refs/heads/...) or the literal "detached". Present when the checkout HEAD resolved; binds Update requests to the observed checkout identity.
+	CheckoutHeadRef *string `json:"checkout_head_ref,omitempty"`
+
+	// CheckoutHeadSha Observed checkout HEAD commit. Present when the checkout HEAD resolves to a commit.
+	CheckoutHeadSha *string `json:"checkout_head_sha,omitempty"`
+
+	// Commit Detached commit; present for the detached kind.
+	Commit string `json:"commit,omitempty"`
+
+	// FetchedSha Freshly fetched origin commit; present when the current attempt fetched.
+	FetchedSha string `json:"fetched_sha,omitempty"`
+
+	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+	Identity RepositoryIdentity `json:"identity"`
+
+	// Issue Canonical issue for statuses that carry one.
+	Issue *Error                     `json:"issue,omitempty"`
+	Kind  RepositoryOriginStatusKind `json:"kind"`
+
+	// LocalSha Resolved local commit; present when the source resolved.
+	LocalSha string                     `json:"local_sha,omitempty"`
+	Mode     RepositoryOriginStatusMode `json:"mode"`
+
+	// OriginBranch Mapped origin branch; present when a mapping resolved.
+	OriginBranch string `json:"origin_branch,omitempty"`
+	RepoKey      string `json:"repo_key"`
+
+	// StaleComparison The earlier successful comparison preserved after a failed retry, tied to its original source, SHAs, counts, and timestamp.
+	StaleComparison *OriginComparison            `json:"stale_comparison,omitempty"`
+	Status          RepositoryOriginStatusStatus `json:"status"`
+
+	// UpdateBlockers Observed advisory reasons a future update is not defined or not safe.
+	UpdateBlockers []RepositoryOriginStatusUpdateBlockers `json:"update_blockers,omitempty"`
+
+	// UpdateEligible Advisory eligibility for a future branch update; never authorization for a mutation. Present when a fresh comparison exists or the comparison is unavailable.
+	UpdateEligible *bool `json:"update_eligible,omitempty"`
+}
+
+// RepositoryOriginStatusKind defines model for RepositoryOriginStatus.Kind.
+type RepositoryOriginStatusKind string
+
+// RepositoryOriginStatusMode defines model for RepositoryOriginStatus.Mode.
+type RepositoryOriginStatusMode string
+
+// RepositoryOriginStatusStatus defines model for RepositoryOriginStatus.Status.
+type RepositoryOriginStatusStatus string
+
+// RepositoryOriginStatusUpdateBlockers defines model for RepositoryOriginStatus.UpdateBlockers.
+type RepositoryOriginStatusUpdateBlockers string
+
+// RepositoryOriginStatusRequest defines model for RepositoryOriginStatusRequest.
+type RepositoryOriginStatusRequest struct {
+	Mode RepositoryOriginStatusRequestMode `json:"mode"`
+
+	// Refresh Repository keys whose completed result must be replaced by a fresh attempt. Absent or in-flight keys are no-ops; a completed result never satisfies a refreshed request.
+	Refresh      []string                   `json:"refresh,omitempty"`
+	Repositories []RepositorySourceSelector `json:"repositories"`
+}
+
+// RepositoryOriginStatusRequestMode defines model for RepositoryOriginStatusRequest.Mode.
+type RepositoryOriginStatusRequestMode string
+
+// RepositoryOriginStatusResponse defines model for RepositoryOriginStatusResponse.
+type RepositoryOriginStatusResponse struct {
+	APIVersion   string                   `json:"api_version"`
+	Meta         ResponseMeta             `json:"meta,omitempty"`
+	Repositories []RepositoryOriginStatus `json:"repositories"`
+}
+
 // RepositoryPathDTO defines model for RepositoryPathDTO.
 type RepositoryPathDTO struct {
 	APIVersion string       `json:"api_version"`
@@ -2277,12 +3206,219 @@ type RepositoryPathDTO struct {
 
 // RepositoryReadiness defines model for RepositoryReadiness.
 type RepositoryReadiness struct {
+	// FeatureReady Whether the repository can start feature work. A repository without commits (e.g. cloned from an empty remote) is a valid, discoverable git repository but is not feature ready.
+	FeatureReady bool `json:"feature_ready"`
+
+	// Identity Server-resolved identity binding this repository to its canonical checkout path and Git repository. Present for every valid repository; stable across commits, branch checkouts, discovery refreshes and reconnects to the same server. Absent when the identity could not be resolved, in which case the repository cannot be selected.
+	Identity *RepositoryIdentity `json:"identity,omitempty"`
+
 	// Issue Canonical catalog-rendered error.
 	Issue *Error `json:"issue,omitempty"`
 	Name  string `json:"name"`
 	Path  string `json:"path"`
 	Valid bool   `json:"valid"`
 }
+
+// RepositorySource defines model for RepositorySource.
+type RepositorySource struct {
+	Branch string `json:"branch,omitempty"`
+
+	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+	Identity    RepositoryIdentity   `json:"identity"`
+	Kind        RepositorySourceKind `json:"kind"`
+	Mode        RepositorySourceMode `json:"mode"`
+	ObservedSha string               `json:"observed_sha"`
+	RepoKey     string               `json:"repo_key"`
+}
+
+// RepositorySourceKind defines model for RepositorySource.Kind.
+type RepositorySourceKind string
+
+// RepositorySourceMode defines model for RepositorySource.Mode.
+type RepositorySourceMode string
+
+// RepositorySourceReconcileCheckout defines model for RepositorySourceReconcileCheckout.
+type RepositorySourceReconcileCheckout struct {
+	// HeadRef Observed checkout HEAD reference; empty when it could not be read.
+	HeadRef string `json:"head_ref,omitempty"`
+
+	// HeadSha Observed checkout HEAD commit; empty when it could not be read.
+	HeadSha *string `json:"head_sha,omitempty"`
+
+	// State clean: consistent index and tracked working tree with no in-progress Git operation. dirty: staged, unstaged, or inconsistent tracked content, possibly a partial or externally changed checkout. operation_in_progress: a merge, rebase, cherry-pick, or revert is underway. unobserved: the checkout could not be completely inspected; no whole-checkout claim may be based on it.
+	State RepositorySourceReconcileCheckoutState `json:"state"`
+}
+
+// RepositorySourceReconcileCheckoutState clean: consistent index and tracked working tree with no in-progress Git operation. dirty: staged, unstaged, or inconsistent tracked content, possibly a partial or externally changed checkout. operation_in_progress: a merge, rebase, cherry-pick, or revert is underway. unobserved: the checkout could not be completely inspected; no whole-checkout claim may be based on it.
+type RepositorySourceReconcileCheckoutState string
+
+// RepositorySourceReconcileRequest defines model for RepositorySourceReconcileRequest.
+type RepositorySourceReconcileRequest struct {
+	// Branch The attempted update's expected full local branch name, as displayed by the comparison the update was based on. An expectation for the settlement read, never ref authority.
+	Branch string `json:"branch"`
+
+	// CheckoutHeadRef The observed checkout HEAD reference the attempted update bound to, as displayed: the full symbolic ref (refs/heads/...) or the literal "detached". Optional; when it is the attempted branch's own ref, the settlement also observes the original checkout's state before any whole-checkout completion is claimed.
+	CheckoutHeadRef *string `json:"checkout_head_ref,omitempty"`
+
+	// CheckoutHeadSha The observed checkout HEAD commit the attempted update bound to.
+	CheckoutHeadSha *string `json:"checkout_head_sha,omitempty"`
+
+	// ExpectedLocalSha The local tip displayed before the attempted update; the state whose absence proves the branch moved.
+	ExpectedLocalSha string `json:"expected_local_sha"`
+
+	// ExpectedOriginSha The fetched origin tip the attempted update was expected to advance the branch to.
+	ExpectedOriginSha string `json:"expected_origin_sha"`
+
+	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+	Identity RepositoryIdentity `json:"identity"`
+
+	// Mode Shared branch mode of the attempted update.
+	Mode RepositorySourceReconcileRequestMode `json:"mode"`
+
+	// OriginBranch The attempted update's expected mapped origin branch, including differently named tracking branches.
+	OriginBranch string `json:"origin_branch"`
+	RepoKey      string `json:"repo_key"`
+}
+
+// RepositorySourceReconcileRequestMode Shared branch mode of the attempted update.
+type RepositorySourceReconcileRequestMode string
+
+// RepositorySourceReconcileResponse defines model for RepositorySourceReconcileResponse.
+type RepositorySourceReconcileResponse struct {
+	APIVersion string `json:"api_version"`
+
+	// Branch The attempted update's expected local branch, echoed.
+	Branch string `json:"branch"`
+
+	// Checkout Observed state of the original checkout holding the branch, present only when the attempted update bound the checkout HEAD to the branch itself and the original checkout still holds it. The branch tip alone never proves the index and files advanced; only a clean checkout whose HEAD is the observed tip supports a whole-checkout completion claim.
+	Checkout *RepositorySourceReconcileCheckout `json:"checkout,omitempty"`
+
+	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+	Identity RepositoryIdentity `json:"identity"`
+
+	// LocalSha Observed tip of the requested branch under coordination; present whenever the branch resolves.
+	LocalSha *string      `json:"local_sha,omitempty"`
+	Meta     ResponseMeta `json:"meta,omitempty"`
+
+	// Mode The attempted update's shared branch mode, echoed.
+	Mode RepositorySourceReconcileResponseMode `json:"mode"`
+
+	// OriginBranch The attempted update's expected origin branch, echoed.
+	OriginBranch string `json:"origin_branch"`
+
+	// Outcome expected_target_present: the branch tip is the expected origin SHA. original_tip_remains: the branch tip is still the expected local SHA. local_state_changed: the branch tip is neither expected value. branch_missing: the branch no longer resolves. None of these infer operation success from transport completion.
+	Outcome RepositorySourceReconcileResponseOutcome `json:"outcome"`
+
+	// RepoKey Server-resolved current catalog key.
+	RepoKey string `json:"repo_key"`
+
+	// Selection Freshly resolved current selection for the shared mode, read under the same coordination; present when a selection resolves. Its observed SHA is the current selection's commit, never evidence about the attempted update.
+	Selection *RepositorySource `json:"selection,omitempty"`
+}
+
+// RepositorySourceReconcileResponseMode The attempted update's shared branch mode, echoed.
+type RepositorySourceReconcileResponseMode string
+
+// RepositorySourceReconcileResponseOutcome expected_target_present: the branch tip is the expected origin SHA. original_tip_remains: the branch tip is still the expected local SHA. local_state_changed: the branch tip is neither expected value. branch_missing: the branch no longer resolves. None of these infer operation success from transport completion.
+type RepositorySourceReconcileResponseOutcome string
+
+// RepositorySourceSelector defines model for RepositorySourceSelector.
+type RepositorySourceSelector struct {
+	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+	Identity RepositoryIdentity `json:"identity"`
+	RepoKey  string             `json:"repo_key"`
+}
+
+// RepositorySourcesRequest defines model for RepositorySourcesRequest.
+type RepositorySourcesRequest struct {
+	Mode         RepositorySourcesRequestMode `json:"mode"`
+	Repositories []RepositorySourceSelector   `json:"repositories"`
+}
+
+// RepositorySourcesRequestMode defines model for RepositorySourcesRequest.Mode.
+type RepositorySourcesRequestMode string
+
+// RepositorySourcesResponse defines model for RepositorySourcesResponse.
+type RepositorySourcesResponse struct {
+	APIVersion   string             `json:"api_version"`
+	Meta         ResponseMeta       `json:"meta,omitempty"`
+	Repositories []RepositorySource `json:"repositories"`
+}
+
+// RepositoryUpdateSourceRequest defines model for RepositoryUpdateSourceRequest.
+type RepositoryUpdateSourceRequest struct {
+	// Branch Expected full local branch name as displayed by the origin comparison. A comparison against the server-resolved selection, never ref authority.
+	Branch string `json:"branch"`
+
+	// CheckoutHeadRef Observed checkout HEAD reference at display time: the full symbolic ref (refs/heads/...) or the literal "detached". Binds the update to the observed checkout identity so a checkout switch refuses the mutation even when the selected source is unchanged.
+	CheckoutHeadRef string `json:"checkout_head_ref"`
+
+	// CheckoutHeadSha Observed checkout HEAD commit at display time.
+	CheckoutHeadSha string `json:"checkout_head_sha"`
+
+	// ExpectedLocalSha Displayed local tip of the selected branch.
+	ExpectedLocalSha string `json:"expected_local_sha"`
+
+	// ExpectedOriginSha Displayed fetched origin tip from a completed behind comparison. The update refetches and proves this value is still current before mutating.
+	ExpectedOriginSha string `json:"expected_origin_sha"`
+
+	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+	Identity RepositoryIdentity                `json:"identity"`
+	Mode     RepositoryUpdateSourceRequestMode `json:"mode"`
+
+	// OriginBranch Expected mapped origin branch as displayed by the origin comparison, including differently named tracking branches.
+	OriginBranch string `json:"origin_branch"`
+	RepoKey      string `json:"repo_key"`
+}
+
+// RepositoryUpdateSourceRequestMode defines model for RepositoryUpdateSourceRequest.Mode.
+type RepositoryUpdateSourceRequestMode string
+
+// RepositoryUpdateSourceResponse defines model for RepositoryUpdateSourceResponse.
+type RepositoryUpdateSourceResponse struct {
+	APIVersion string `json:"api_version"`
+
+	// Branch Server-resolved full local branch name.
+	Branch string `json:"branch"`
+
+	// FetchedSha Freshly fetched origin tip proved by this attempt; present when the attempt fetched the mapped branch.
+	FetchedSha *string `json:"fetched_sha,omitempty"`
+
+	// Identity Server-resolved repository identity. Two catalog entries describe the same repository exactly when their identities are equal: the canonical checkout path plus the resolved Git common directory distinguish linked worktrees from their main checkout, and the filesystem identity of the common directory invalidates the prior identity when a checkout or its Git directory is replaced at the same path. Device and inode are decimal strings so the comparison stays exact across languages.
+	Identity RepositoryIdentity `json:"identity"`
+
+	// LocalSha Local tip after the attempt; present for updated and already_up_to_date results.
+	LocalSha *string                            `json:"local_sha,omitempty"`
+	Meta     ResponseMeta                       `json:"meta,omitempty"`
+	Mode     RepositoryUpdateSourceResponseMode `json:"mode"`
+
+	// OriginBranch Server-resolved mapped origin branch.
+	OriginBranch string `json:"origin_branch"`
+
+	// PreviousSha Local tip before the advance; present for updated results.
+	PreviousSha *string `json:"previous_sha,omitempty"`
+
+	// Reason Typed stale reason; present only for stale results. branch_checked_out names a linked worktree holder. dirty_checkout, checkout_operation_in_progress, and ignored_path_collision are original-checkout safety refusals; checkout_conflict reports a boundary refusal that was proved to have left the checkout untouched.
+	Reason RepositoryUpdateSourceResponseReason `json:"reason,omitempty"`
+
+	// RepoKey Server-resolved current catalog key.
+	RepoKey string `json:"repo_key"`
+
+	// Result updated: the branch advanced — by compare-and-swap for an unoccupied branch, or by the working-tree-aware fast-forward for a branch held only by the original checkout. already_up_to_date: equality no-op after revalidation, including a completed original-checkout replay. stale: a displayed expectation no longer matches or the original checkout is not provably safe; nothing was mutated.
+	Result RepositoryUpdateSourceResponseResult `json:"result"`
+
+	// Status Freshly resolved status snapshot for the selected source; present for stale results where the authorized repository still exists.
+	Status *RepositoryOriginStatus `json:"status,omitempty"`
+}
+
+// RepositoryUpdateSourceResponseMode defines model for RepositoryUpdateSourceResponse.Mode.
+type RepositoryUpdateSourceResponseMode string
+
+// RepositoryUpdateSourceResponseReason Typed stale reason; present only for stale results. branch_checked_out names a linked worktree holder. dirty_checkout, checkout_operation_in_progress, and ignored_path_collision are original-checkout safety refusals; checkout_conflict reports a boundary refusal that was proved to have left the checkout untouched.
+type RepositoryUpdateSourceResponseReason string
+
+// RepositoryUpdateSourceResponseResult updated: the branch advanced — by compare-and-swap for an unoccupied branch, or by the working-tree-aware fast-forward for a branch held only by the original checkout. already_up_to_date: equality no-op after revalidation, including a completed original-checkout replay. stale: a displayed expectation no longer matches or the original checkout is not provably safe; nothing was mutated.
+type RepositoryUpdateSourceResponseResult string
 
 // Resource defines model for Resource.
 type Resource struct {
@@ -2818,6 +3954,7 @@ type SetupTask struct {
 
 	// Error Canonical error rendering the task's stored failure record; absent when the task has not failed.
 	Error            *Error     `json:"error,omitempty"`
+	ExactSha         string     `json:"exact_sha,omitempty"`
 	Key              string     `json:"key"`
 	Kind             string     `json:"kind"`
 	Label            string     `json:"label,omitempty"`
@@ -2972,6 +4109,12 @@ type WorkspaceRepository struct {
 
 // WorkspaceRootReadiness defines model for WorkspaceRootReadiness.
 type WorkspaceRootReadiness struct {
+	// CloneEligible Whether this root is suitable as a clone destination. A root that is valid for repository discovery may still be ineligible for cloning (e.g. it is not writable or is itself a repository).
+	CloneEligible bool `json:"clone_eligible"`
+
+	// CloneIssue When clone_eligible is false, the canonical error explaining why the root cannot be used as a clone destination.
+	CloneIssue *Error `json:"clone_issue,omitempty"`
+
 	// Issue Canonical catalog-rendered error.
 	Issue *Error `json:"issue,omitempty"`
 	Path  string `json:"path"`
@@ -2980,6 +4123,15 @@ type WorkspaceRootReadiness struct {
 
 // ArtifactID defines model for ArtifactID.
 type ArtifactID = string
+
+// CloneListAfter defines model for CloneListAfter.
+type CloneListAfter = string
+
+// CloneListLimit defines model for CloneListLimit.
+type CloneListLimit = int
+
+// CloneOperationID defines model for CloneOperationID.
+type CloneOperationID = string
 
 // FeatureID defines model for FeatureID.
 type FeatureID = string
@@ -3362,6 +4514,57 @@ type StageUploadParams struct {
 // StageUploadParamsXAgenticoClient defines parameters for StageUpload.
 type StageUploadParamsXAgenticoClient string
 
+// ListWorkspaceClonesParams defines parameters for ListWorkspaceClones.
+type ListWorkspaceClonesParams struct {
+	Limit CloneListLimit `form:"limit,omitempty" json:"limit,omitempty"`
+	After CloneListAfter `form:"after,omitempty" json:"after,omitempty"`
+}
+
+// StartWorkspaceCloneParams defines parameters for StartWorkspaceClone.
+type StartWorkspaceCloneParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient StartWorkspaceCloneParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// StartWorkspaceCloneParamsXAgenticoClient defines parameters for StartWorkspaceClone.
+type StartWorkspaceCloneParamsXAgenticoClient string
+
+// CancelWorkspaceCloneParams defines parameters for CancelWorkspaceClone.
+type CancelWorkspaceCloneParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CancelWorkspaceCloneParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CancelWorkspaceCloneParamsXAgenticoClient defines parameters for CancelWorkspaceClone.
+type CancelWorkspaceCloneParamsXAgenticoClient string
+
+// RetryWorkspaceCloneCleanupParams defines parameters for RetryWorkspaceCloneCleanup.
+type RetryWorkspaceCloneCleanupParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient RetryWorkspaceCloneCleanupParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// RetryWorkspaceCloneCleanupParamsXAgenticoClient defines parameters for RetryWorkspaceCloneCleanup.
+type RetryWorkspaceCloneCleanupParamsXAgenticoClient string
+
+// RetryWorkspaceCloneParams defines parameters for RetryWorkspaceClone.
+type RetryWorkspaceCloneParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient RetryWorkspaceCloneParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// RetryWorkspaceCloneParamsXAgenticoClient defines parameters for RetryWorkspaceClone.
+type RetryWorkspaceCloneParamsXAgenticoClient string
+
+// CreateWorkspaceRepositoryParams defines parameters for CreateWorkspaceRepository.
+type CreateWorkspaceRepositoryParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CreateWorkspaceRepositoryParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CreateWorkspaceRepositoryParamsXAgenticoClient defines parameters for CreateWorkspaceRepository.
+type CreateWorkspaceRepositoryParamsXAgenticoClient string
+
 // InitWorkspaceRepositoryParams defines parameters for InitWorkspaceRepository.
 type InitWorkspaceRepositoryParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -3370,6 +4573,51 @@ type InitWorkspaceRepositoryParams struct {
 
 // InitWorkspaceRepositoryParamsXAgenticoClient defines parameters for InitWorkspaceRepository.
 type InitWorkspaceRepositoryParamsXAgenticoClient string
+
+// InitializeWorkspaceRepositoryParams defines parameters for InitializeWorkspaceRepository.
+type InitializeWorkspaceRepositoryParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient InitializeWorkspaceRepositoryParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// InitializeWorkspaceRepositoryParamsXAgenticoClient defines parameters for InitializeWorkspaceRepository.
+type InitializeWorkspaceRepositoryParamsXAgenticoClient string
+
+// CheckWorkspaceRepositoryOriginStatusParams defines parameters for CheckWorkspaceRepositoryOriginStatus.
+type CheckWorkspaceRepositoryOriginStatusParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient defines parameters for CheckWorkspaceRepositoryOriginStatus.
+type CheckWorkspaceRepositoryOriginStatusParamsXAgenticoClient string
+
+// ReconcileWorkspaceRepositorySourceUpdateParams defines parameters for ReconcileWorkspaceRepositorySourceUpdate.
+type ReconcileWorkspaceRepositorySourceUpdateParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient defines parameters for ReconcileWorkspaceRepositorySourceUpdate.
+type ReconcileWorkspaceRepositorySourceUpdateParamsXAgenticoClient string
+
+// InspectWorkspaceRepositorySourcesParams defines parameters for InspectWorkspaceRepositorySources.
+type InspectWorkspaceRepositorySourcesParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient InspectWorkspaceRepositorySourcesParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// InspectWorkspaceRepositorySourcesParamsXAgenticoClient defines parameters for InspectWorkspaceRepositorySources.
+type InspectWorkspaceRepositorySourcesParamsXAgenticoClient string
+
+// UpdateWorkspaceRepositorySourceParams defines parameters for UpdateWorkspaceRepositorySource.
+type UpdateWorkspaceRepositorySourceParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient UpdateWorkspaceRepositorySourceParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// UpdateWorkspaceRepositorySourceParamsXAgenticoClient defines parameters for UpdateWorkspaceRepositorySource.
+type UpdateWorkspaceRepositorySourceParamsXAgenticoClient string
 
 // RefreshProviderModelsJSONRequestBody defines body for RefreshProviderModels for application/json ContentType.
 type RefreshProviderModelsJSONRequestBody = ProviderModelRefreshRequest
@@ -3440,5 +4688,26 @@ type RefreshReadinessJSONRequestBody RefreshReadinessJSONBody
 // ExecuteRecoveryActionsJSONRequestBody defines body for ExecuteRecoveryActions for application/json ContentType.
 type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody
 
+// StartWorkspaceCloneJSONRequestBody defines body for StartWorkspaceClone for application/json ContentType.
+type StartWorkspaceCloneJSONRequestBody = CloneStartSchema
+
+// CreateWorkspaceRepositoryJSONRequestBody defines body for CreateWorkspaceRepository for application/json ContentType.
+type CreateWorkspaceRepositoryJSONRequestBody = CreateRepositorySchema
+
 // InitWorkspaceRepositoryJSONRequestBody defines body for InitWorkspaceRepository for application/json ContentType.
 type InitWorkspaceRepositoryJSONRequestBody = RepositoryInitSchema
+
+// InitializeWorkspaceRepositoryJSONRequestBody defines body for InitializeWorkspaceRepository for application/json ContentType.
+type InitializeWorkspaceRepositoryJSONRequestBody = InitializeRepositorySchema
+
+// CheckWorkspaceRepositoryOriginStatusJSONRequestBody defines body for CheckWorkspaceRepositoryOriginStatus for application/json ContentType.
+type CheckWorkspaceRepositoryOriginStatusJSONRequestBody = RepositoryOriginStatusRequest
+
+// ReconcileWorkspaceRepositorySourceUpdateJSONRequestBody defines body for ReconcileWorkspaceRepositorySourceUpdate for application/json ContentType.
+type ReconcileWorkspaceRepositorySourceUpdateJSONRequestBody = RepositorySourceReconcileRequest
+
+// InspectWorkspaceRepositorySourcesJSONRequestBody defines body for InspectWorkspaceRepositorySources for application/json ContentType.
+type InspectWorkspaceRepositorySourcesJSONRequestBody = RepositorySourcesRequest
+
+// UpdateWorkspaceRepositorySourceJSONRequestBody defines body for UpdateWorkspaceRepositorySource for application/json ContentType.
+type UpdateWorkspaceRepositorySourceJSONRequestBody = RepositoryUpdateSourceRequest

@@ -64,7 +64,9 @@ You are a critical link in an AI orchestration pipeline. Downstream agents (impl
 ## Search Strategy
 
 ### Phase 1: Locate Task Runners and Build Files
+
 Search for these files at the repo root and in common subdirectories:
+
 - `Makefile`, `GNUmakefile`, `makefile`
 - `Taskfile.yml`, `Taskfile.yaml`
 - `package.json` (read the `scripts` section)
@@ -75,7 +77,9 @@ Search for these files at the repo root and in common subdirectories:
 Read these files and extract every target/script related to testing, building, linting, or verification.
 
 ### Phase 2: Locate CI/CD Configurations
+
 Search for:
+
 - `.github/workflows/*.yml` or `.github/workflows/*.yaml`
 - `.circleci/config.yml`
 - `.gitlab-ci.yml`
@@ -86,7 +90,9 @@ Search for:
 Read these and extract the shell commands that perform verification steps.
 
 ### Phase 3: Locate Test Infrastructure
+
 Search for:
+
 - Test directories: `test/`, `tests/`, `__tests__/`, `spec/`, `e2e/`, `integration/`, `testdata/`
 - Test config files: `jest.config.*`, `vitest.config.*`, `pytest.ini`, `.mocharc.*`, `karma.conf.*`, `playwright.config.*`, `cypress.config.*`
 - Test fixtures and helpers: `testutil/`, `testhelpers/`, `fixtures/`, `factories/`
@@ -94,7 +100,9 @@ Search for:
 - Docker test setups: `docker-compose.test.yml`, `docker-compose.ci.yml`, `Dockerfile.test`
 
 ### Phase 4: Locate Linting and Static Analysis
+
 Search for:
+
 - `.eslintrc*`, `eslint.config.*`, `.prettierrc*`, `biome.json`
 - `.golangci.yml`, `.golangci.yaml`
 - `mypy.ini`, `.flake8`, `.pylintrc`, `ruff.toml`
@@ -103,7 +111,9 @@ Search for:
 - `.pre-commit-config.yaml`
 
 ### Phase 5: Locate Application Entry Points
+
 Search for:
+
 - `cmd/`, `main.go`, `main.py`, `index.ts`, `index.js`, `app.py`, `manage.py`
 - `docker-compose.yml`, `docker-compose.yaml` (for running the full stack)
 - `.env.example`, `.env.template` (environment requirements)
@@ -111,7 +121,9 @@ Search for:
 - `README.md`, `CONTRIBUTING.md` (often document how to run and test)
 
 ### Phase 6: Locate AI Tool Configurations
+
 Search for:
+
 - `.claude/skills/*.md`
 - `.claude/commands/*.md`
 - `.cursor/rules/*.mdc`
@@ -201,7 +213,7 @@ Source: `Makefile`
 - **Include config file paths** — agents may need to read these for additional context
 - **Document environment requirements** — databases, services, environment variables, special tooling
 - **Cover the repo comprehensively** — check every directory, every build file, every CI config
-- **If no test infrastructure exists**, document what execution methods are available (running the app, CLI invocations, build commands) — there is always *some* way to verify changes
+- **If no test infrastructure exists**, document what execution methods are available (running the app, CLI invocations, build commands) — there is always _some_ way to verify changes
 
 ## What NOT to Do
 

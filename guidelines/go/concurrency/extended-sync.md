@@ -155,11 +155,11 @@ func getCached(key string) ([]byte, error) {
 
 ## Choosing the Right Tool
 
-| Need | Tool |
-|------|------|
-| Fan-out with error collection | `errgroup` |
-| Bounded parallelism | `errgroup.SetLimit` or `semaphore` |
-| Deduplicate identical concurrent work | `singleflight` |
-| Weighted resource limiting | `semaphore` |
-| Simple goroutine coordination | `sync.WaitGroup` |
-| Exactly-once initialization | `sync.Once` |
+| Need                                  | Tool                               |
+| ------------------------------------- | ---------------------------------- |
+| Fan-out with error collection         | `errgroup`                         |
+| Bounded parallelism                   | `errgroup.SetLimit` or `semaphore` |
+| Deduplicate identical concurrent work | `singleflight`                     |
+| Weighted resource limiting            | `semaphore`                        |
+| Simple goroutine coordination         | `sync.WaitGroup`                   |
+| Exactly-once initialization           | `sync.Once`                        |

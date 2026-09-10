@@ -24,13 +24,13 @@ go generate ./...    # process all generate directives
 
 ## Common Generators
 
-| Tool | Purpose |
-|------|---------|
-| `stringer` | `String()` method for integer constants |
-| `mockgen` | Interface mocks for testing (go.uber.org/mock) |
-| `protoc-gen-go` | Go code from Protocol Buffer definitions |
-| `enumer` | Extended enum methods (names, values, parsing) |
-| `go-bindata` | Embed binary assets (largely replaced by `//go:embed`) |
+| Tool            | Purpose                                                |
+| --------------- | ------------------------------------------------------ |
+| `stringer`      | `String()` method for integer constants                |
+| `mockgen`       | Interface mocks for testing (go.uber.org/mock)         |
+| `protoc-gen-go` | Go code from Protocol Buffer definitions               |
+| `enumer`        | Extended enum methods (names, values, parsing)         |
+| `go-bindata`    | Embed binary assets (largely replaced by `//go:embed`) |
 
 ### stringer Example
 
@@ -63,14 +63,14 @@ other comments.
 
 ### Pre-Defined Tags
 
-| Category | Tags |
-|----------|------|
-| OS | `linux`, `windows`, `darwin`, `android`, `ios` |
-| Architecture | `amd64`, `arm64`, `386`, `arm` |
-| Compiler | `gc`, `gccgo` |
-| CGO | `cgo` |
-| Go version | `go1.18`, `go1.22`, etc. |
-| General | `unix` (all Unix-like) |
+| Category     | Tags                                           |
+| ------------ | ---------------------------------------------- |
+| OS           | `linux`, `windows`, `darwin`, `android`, `ios` |
+| Architecture | `amd64`, `arm64`, `386`, `arm`                 |
+| Compiler     | `gc`, `gccgo`                                  |
+| CGO          | `cgo`                                          |
+| Go version   | `go1.18`, `go1.22`, etc.                       |
+| General      | `unix` (all Unix-like)                         |
 
 ### Filename-Based Constraints
 

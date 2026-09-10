@@ -32,9 +32,12 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { retryAction, useConnectionState, useTheme } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import { WorkspaceDefaultsPanel } from './ConfigEditor';
+import { CloneRepositorySection } from './CloneRepositorySection';
+import { WorkspaceRepositoriesSection } from './WorkspaceRepositoriesSection';
+import { CreateRepositorySection } from './CreateRepositorySection';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { BUNDLED_RUNTIME_LABEL } from '../components/ServerSwitcher';
-import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../components/FieldError';
+import { FieldError } from '../components/FieldError';
 import type { PaneFocusIntent } from './settingsPanes';
 import type {
   CanonicalError,
@@ -54,9 +57,6 @@ import type {
 import { canInstallInApp, hasActiveWork, installWhenIdleLabel } from '../../../shared/updateState';
 
 const TERMINAL_SESSION_STATUSES = new Set(['Done', 'Failed']);
-
-/** The id the typed-root input references while its validation message shows. */
-const SETTINGS_ROOT_ADD_ERROR_ID = 'settings-root-add-error';
 
 function isRuntimeIdle(sessions: SessionSummary[]): boolean {
   return sessions.every((s) => TERMINAL_SESSION_STATUSES.has(s.status));
@@ -82,9 +82,6 @@ export function SettingsPanel({
   const { preference: themePref, setPreference: setThemePref } = useTheme();
   const [error, setError] = useState<CanonicalError | null>(null);
   const [addingRoot, setAddingRoot] = useState(false);
-  /** Typed-path entry for remote servers; the server's PATCH validates it. */
-  const [rootDraft, setRootDraft] = useState('');
-  const [rootAddError, setRootAddError] = useState<string | null>(null);
   const [removingRoot, setRemovingRoot] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
   const [refreshingProviders, setRefreshingProviders] = useState<Set<string>>(() => new Set());
@@ -213,31 +210,6 @@ export function SettingsPanel({
       setAddingRoot(false);
     }
   }, [refresh]);
-
-  /**
-   * Remote-only root entry: the folder lives on the server host, so the
-   * typed path goes straight into the tightened runtime-config PATCH and
-   * its rejection is the validation the form reports inline.
-   */
-  const handleAddTypedRoot = useCallback(async () => {
-    const path = rootDraft.trim();
-    if (path === '') return;
-    if (!path.startsWith('/')) {
-      setRootAddError('Enter the path exactly as the server sees it, starting with /.');
-      return;
-    }
-    try {
-      setAddingRoot(true);
-      setRootAddError(null);
-      await window.agentico.addWorkspaceRoot(path);
-      setRootDraft('');
-      refresh();
-    } catch (e: unknown) {
-      setRootAddError(parseIpcError(e).summary);
-    } finally {
-      setAddingRoot(false);
-    }
-  }, [rootDraft, refresh]);
 
   const handleRemoveRoot = useCallback(
     async (rootPath: string) => {
@@ -489,80 +461,48 @@ export function SettingsPanel({
                     <span className="settings-panel__root-count">
                       {count} {count === 1 ? 'repo' : 'repos'}
                     </span>
-                    <div className="settings-panel__root-actions">
-                      <button
-                        type="button"
-                        className="settings-panel__root-btn"
-                        onClick={() => void handleMoveRoot(root.path, 'up')}
-                        disabled={reordering || index === 0}
-                        aria-label={`Move ${root.path} up`}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        className="settings-panel__root-btn"
-                        onClick={() => void handleMoveRoot(root.path, 'down')}
-                        disabled={reordering || index === workspaceRoots.length - 1}
-                        aria-label={`Move ${root.path} down`}
-                      >
-                        ↓
-                      </button>
-                      <button
-                        type="button"
-                        className="settings-panel__root-btn settings-panel__root-btn--danger"
-                        onClick={() => void handleRemoveRoot(root.path)}
-                        disabled={removingRoot === root.path || reordering}
-                        aria-label={`Remove ${root.path}`}
-                      >
-                        {removingRoot === root.path ? '…' : 'Remove'}
-                      </button>
-                    </div>
+                    {remoteServer ? null : (
+                      <div className="settings-panel__root-actions">
+                        <button
+                          type="button"
+                          className="settings-panel__root-btn"
+                          onClick={() => void handleMoveRoot(root.path, 'up')}
+                          disabled={reordering || index === 0}
+                          aria-label={`Move ${root.path} up`}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className="settings-panel__root-btn"
+                          onClick={() => void handleMoveRoot(root.path, 'down')}
+                          disabled={reordering || index === workspaceRoots.length - 1}
+                          aria-label={`Move ${root.path} down`}
+                        >
+                          ↓
+                        </button>
+                        <button
+                          type="button"
+                          className="settings-panel__root-btn settings-panel__root-btn--danger"
+                          onClick={() => void handleRemoveRoot(root.path)}
+                          disabled={removingRoot === root.path || reordering}
+                          aria-label={`Remove ${root.path}`}
+                        >
+                          {removingRoot === root.path ? '…' : 'Remove'}
+                        </button>
+                      </div>
+                    )}
                   </li>
                 );
               })
             )}
           </ul>
           {remoteServer ? (
-            <div className="settings-panel__path-entry">
-              <label className="form-field" htmlFor="settings-root-path">
-                <span className="form-field__label">Folder path on the server</span>
-                <input
-                  id="settings-root-path"
-                  className="form-field__input"
-                  type="text"
-                  value={rootDraft}
-                  placeholder="/srv/work"
-                  spellCheck={false}
-                  autoComplete="off"
-                  disabled={addingRoot}
-                  aria-describedby={fieldAriaDescribedBy(
-                    SETTINGS_ROOT_ADD_ERROR_ID,
-                    rootAddError !== null,
-                  )}
-                  aria-invalid={fieldAriaInvalid(rootAddError !== null)}
-                  onChange={(event) => {
-                    setRootDraft(event.currentTarget.value);
-                    setRootAddError(null);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      void handleAddTypedRoot();
-                    }
-                  }}
-                />
-              </label>
-              <FieldError id={SETTINGS_ROOT_ADD_ERROR_ID} message={rootAddError} />
-              <button
-                type="button"
-                className="setup-wizard__action"
-                onClick={() => void handleAddTypedRoot()}
-                disabled={addingRoot || refreshingProviders.size > 0 || rootDraft.trim() === ''}
-              >
-                {addingRoot ? 'Adding…' : 'Add root'}
-              </button>
-            </div>
+            <p className="settings-panel__root-readonly-notice">
+              Workspace roots are managed by the server administrator. Adding, removing and
+              reordering roots stay with them; ask them to configure a writable, non-repository
+              folder as a workspace root.
+            </p>
           ) : (
             <button
               type="button"
@@ -574,6 +514,30 @@ export function SettingsPanel({
             </button>
           )}
         </section>
+      )}
+
+      {pane === 'workspace-roots' && (
+        <CloneRepositorySection
+          readiness={readiness}
+          connection={connection}
+          onReadinessChanged={setReadiness}
+        />
+      )}
+
+      {pane === 'workspace-roots' && (
+        <CreateRepositorySection
+          readiness={readiness}
+          connection={connection}
+          onReadinessChanged={setReadiness}
+        />
+      )}
+
+      {pane === 'workspace-roots' && (
+        <WorkspaceRepositoriesSection
+          readiness={readiness}
+          connection={connection}
+          onReadinessChanged={setReadiness}
+        />
       )}
 
       {pane === 'servers' && (

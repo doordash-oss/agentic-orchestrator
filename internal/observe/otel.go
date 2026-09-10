@@ -139,14 +139,20 @@ var otelStartupLogf = log.Printf
 // otelStartupProbe runs the asynchronous reachability check against the
 // effective endpoint. Tests replace it to keep the constructor synchronous.
 var otelStartupProbe = func(endpoint string) {
+	// Capture injectable dependencies before the goroutine starts. Tests
+	// restore these package hooks during cleanup; an asynchronous read of
+	// the globals would race that restoration and could log into the next
+	// test's sink.
+	logf := otelStartupLogf
+	prober := defaultCollectorProber
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), collectorProbeTimeout)
 		defer cancel()
-		if reason := defaultCollectorProber.probe(ctx, endpoint); reason != "" {
-			otelStartupLogf("otel: collector unreachable at startup: %s — traces will be dropped until it becomes reachable", reason)
+		if reason := prober.probe(ctx, endpoint); reason != "" {
+			logf("otel: collector unreachable at startup: %s — traces will be dropped until it becomes reachable", reason)
 			return
 		}
-		otelStartupLogf("otel: collector reachable: %s", endpoint)
+		logf("otel: collector reachable: %s", endpoint)
 	}()
 }
 

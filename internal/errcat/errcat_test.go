@@ -319,6 +319,29 @@ func TestWithRemediationHintOverridesAuthoredHint(t *testing.T) {
 	}
 }
 
+// TestRoadmapPullRequestsInvalidEntry pins the roadmap-gate rejection entry:
+// blocking class with authored title, summary, and remediation, and
+// diagnostics carrying the table problems verbatim.
+func TestRoadmapPullRequestsInvalidEntry(t *testing.T) {
+	entry, ok := Lookup(RoadmapPullRequestsInvalid)
+	if !ok {
+		t.Fatalf("%s missing from catalog", RoadmapPullRequestsInvalid)
+	}
+	if entry.Class != ClassBlocking {
+		t.Errorf("class = %q, want %q", entry.Class, ClassBlocking)
+	}
+	if entry.Title == "" || entry.Summary == "" || entry.Remediation == "" {
+		t.Errorf("entry must carry authored title, summary, and remediation: %+v", entry)
+	}
+	rendered := New(RoadmapPullRequestsInvalid, WithDiagnostics("## Pull Requests: phase 2 is not covered by any row"))
+	if rendered.Code != RoadmapPullRequestsInvalid || rendered.Class != ClassBlocking {
+		t.Errorf("rendered = %+v, want the roadmap pull-requests code with blocking class", rendered)
+	}
+	if !strings.Contains(rendered.Diagnostics, "## Pull Requests") {
+		t.Errorf("diagnostics = %q, want the table problems carried verbatim", rendered.Diagnostics)
+	}
+}
+
 // TestPackageImportsOnlyStdlib pins the leaf-package contract: errcat must
 // not depend on any internal or external package so every layer can use it.
 func TestPackageImportsOnlyStdlib(t *testing.T) {

@@ -1355,10 +1355,16 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 				if err != nil {
 					return err
 				}
-				newRun.CurrentRoadmapPhase = partial.roadmapPhase
-				newRun.TotalRoadmapPhases = oldRun.TotalRoadmapPhases
-				newRun.RoadmapPhaseType = roadmapPhaseType(partial.roadmapPhase, oldRun.TotalRoadmapPhases)
-				newRun.RoadmapPhaseCommitAnchors = carryForwardRoadmapPhaseCommitAnchors(oldRun.RoadmapPhaseCommitAnchors, partial.roadmapPhase)
+			newRun.CurrentRoadmapPhase = partial.roadmapPhase
+			newRun.TotalRoadmapPhases = oldRun.TotalRoadmapPhases
+			newRun.RoadmapPhaseType = roadmapPhaseType(partial.roadmapPhase, oldRun.TotalRoadmapPhases)
+			// A partial rewind keeps the approved stack: the roadmap (and
+			// its `## Pull Requests` table) is carried forward, so the
+			// forked run still holds the approved layer definitions. A full
+			// rewind to the roadmap phase or earlier re-runs planning, which
+			// re-derives and re-persists the stack at the next approval.
+			newRun.Stack = CopyStackLayers(oldRun.Stack)
+			newRun.RoadmapPhaseCommitAnchors = carryForwardRoadmapPhaseCommitAnchors(oldRun.RoadmapPhaseCommitAnchors, partial.roadmapPhase)
 				pendingRoadmapPhase := partial.roadmapPhase
 				newRun.PendingRewindReviewRoadmapPhase = &pendingRoadmapPhase
 			}

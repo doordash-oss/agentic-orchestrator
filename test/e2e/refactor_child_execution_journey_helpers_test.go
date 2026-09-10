@@ -44,6 +44,12 @@ Land the child work and integrate it into the parent.
 ### Scope
 
 One small change.
+
+## Pull Requests
+
+| # | Title | Phases | Rationale |
+|---|---|---|---|
+| 1 | Child integration slice | 1 | One phase, one reviewable slice. |
 `
 
 var journeyPhasePlanText = "# Phase 1 Plan\n\n" +

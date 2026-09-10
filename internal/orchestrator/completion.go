@@ -555,8 +555,17 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 		if roadmapPath := o.resolveArtifactPath(f, "roadmap"); roadmapPath != "" {
 			if data, readErr := os.ReadFile(roadmapPath); readErr == nil {
 				if phases, parseErr := agent.ParseRoadmap(string(data)); parseErr == nil {
+					// The planning loop's contract validation rejects an
+					// invalid `## Pull Requests` table before approval, so a
+					// parseable table here is expected; derivation stays
+					// best-effort so a mid-edit roadmap cannot wedge the
+					// auto-approval path.
+					rows, problems := agent.ValidateRoadmapPullRequestsTable(string(data), phases)
 					_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 						ff.TotalRoadmapPhases = len(phases)
+						if len(problems) == 0 {
+							ff.Stack = agent.DeriveStackLayers(rows)
+						}
 						return nil
 					})
 				}

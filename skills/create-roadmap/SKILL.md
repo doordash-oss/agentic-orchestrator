@@ -56,3 +56,14 @@ Write the roadmap to the output directory with a descriptive slug (e.g. `YYYY-MM
 #### Output Shape
 
 The roadmap's output shape is defined in [format.md](format.md). Read it before writing the roadmap and conform to its template exactly.
+
+### 4. Group Phases Into Pull Requests
+
+Fill in the roadmap's `## Pull Requests` table, which proposes how the phases group into the stacked pull requests that will deliver the feature. Apply these rules:
+
+- **Default to one pull request per phase.** Each phase is already an independently reviewable vertical slice.
+- Merge adjacent phases into one pull request only when a phase alone is not independently reviewable, or when two phases are two halves of one reviewable concern.
+- **Never split a phase across pull requests.** The table groups whole phases; it does not subdivide them.
+- There is no numeric size target — do not justify a grouping by commit, file, or line counts.
+- The `Title` cell becomes the pull request title reviewers will see; name the reviewable concern concisely.
+- The `Rationale` is a one-line reason for the grouping (why these phases ship together).

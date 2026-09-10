@@ -1548,6 +1548,18 @@ func (o *Orchestrator) HandleReviewDecision(featureID string, d ReviewDecision) 
 // count). Each branch both prepares state and dispatches the appropriate
 // follow-up phase so the orchestrator owns the full unwind.
 func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d ReviewDecision) error {
+	// Roadmap approval re-reads the roadmap from disk — so edits made at the
+	// review gate are honored — and persists TotalRoadmapPhases and the
+	// pull-request stack BEFORE the gate is cleared or the roadmap phase
+	// advances. A roadmap that cannot yield a stack returns an error with
+	// the gate still open, so a run can never advance past approval without
+	// one.
+	if d.Roadmap && f.CurrentRoadmapPhase == 0 {
+		if err := o.persistRoadmapApproval(featureID, f); err != nil {
+			return fmt.Errorf("persisting approved roadmap: %w", err)
+		}
+	}
+
 	if err := o.clearReviewGate(featureID); err != nil {
 		return err
 	}
@@ -1582,14 +1594,13 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 	// Roadmap-level plan approval: advance roadmap phase, then dispatch
 	// PhasePlan for the newly-advanced phase.
 	if d.Roadmap {
-		// Parse roadmap and persist TotalRoadmapPhases before advancing. The
-		// automatic approved path (onPlanApproved) does this when the planner
-		// returns "approved" status, but when the planner returns
-		// "needs_human_review" and the reviewer subsequently approves via the
-		// gate, TotalRoadmapPhases is still 0 and downstream roadmap sequencing
-		// (CurrentRoadmapPhase < TotalRoadmapPhases checks, phase-plan vs legacy
-		// plan routing) would be wrong.
-		o.persistRoadmapPhaseCount(featureID, f)
+		// The top-level roadmap approval persisted the phase count and stack
+		// above, before the gate was cleared. Mid-flight synthetic Roadmap
+		// proceeds (CurrentRoadmapPhase > 0) keep the legacy best-effort
+		// count persist.
+		if f.CurrentRoadmapPhase > 0 {
+			o.persistRoadmapPhaseCount(featureID, f)
+		}
 		if err := o.deps.Lifecycle.AdvanceRoadmapPhase(featureID); err != nil {
 			return fmt.Errorf("advance roadmap phase: %w", err)
 		}
@@ -1779,6 +1790,36 @@ func (o *Orchestrator) clearReviewGate(featureID string) error {
 		ff.PendingReviewPhase = nil
 		ff.PendingRewindReviewRoadmapPhase = nil
 		ff.IsRewind = false
+		return nil
+	})
+}
+
+// persistRoadmapApproval re-reads the roadmap from disk — so edits made at
+// the review gate are honored — and persists TotalRoadmapPhases and the
+// pull-request stack on the run. Unlike the best-effort persistRoadmapPhaseCount,
+// a failure here is returned: the caller must not clear the review gate or
+// advance the roadmap phase when the approved roadmap cannot yield a stack.
+func (o *Orchestrator) persistRoadmapApproval(featureID string, f *feature.Feature) error {
+	roadmapPath := o.resolveArtifactPath(f, "roadmap")
+	if roadmapPath == "" {
+		return fmt.Errorf("roadmap artifact is missing, so the pull-request stack cannot be derived")
+	}
+	data, err := os.ReadFile(roadmapPath)
+	if err != nil {
+		return fmt.Errorf("reading roadmap to derive the pull-request stack: %w", err)
+	}
+	phases, err := agent.ParseRoadmap(string(data))
+	if err != nil {
+		return fmt.Errorf("parsing roadmap to derive the pull-request stack: %w", err)
+	}
+	rows, problems := agent.ValidateRoadmapPullRequestsTable(string(data), phases)
+	if len(problems) > 0 {
+		return fmt.Errorf("roadmap ## Pull Requests table is invalid: %s", strings.Join(problems, "; "))
+	}
+	layers := agent.DeriveStackLayers(rows)
+	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+		ff.TotalRoadmapPhases = len(phases)
+		ff.Stack = layers
 		return nil
 	})
 }

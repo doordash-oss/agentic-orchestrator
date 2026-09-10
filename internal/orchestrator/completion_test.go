@@ -1762,6 +1762,67 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_RoadmapApproved_NoGate_EmitsFea
 	}
 }
 
+// Auto-approval of a roadmap whose table has two rows persists a two-layer
+// stack on the run alongside the phase count, before the roadmap advances.
+func TestOrchestrator_HandlePhaseCompletion_Plan_RoadmapApproved_PersistsStack(t *testing.T) {
+	tmpDir := t.TempDir()
+	roadmapPath := filepath.Join(tmpDir, "roadmap.md")
+	roadmap := "# Roadmap\n\n## Phase 1: Bootstrap\n### Goal\nInit\n\n## Phase 2: Build\n### Goal\nBuild\n\n## Phase 3: Polish\n### Goal\nPolish\n\n" +
+		"## Pull Requests\n\n| # | Title | Phases | Rationale |\n|---|---|---|---|\n" +
+		"| 1 | Bootstrap | 1 | Stands alone. |\n| 2 | Build and polish | 2-3 | Two halves of one concern. |\n"
+	if err := os.WriteFile(roadmapPath, []byte(roadmap), 0o644); err != nil {
+		t.Fatalf("write roadmap: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:                  "feat-ra-stack",
+		Status:              feature.StatusPlanning,
+		CurrentPhase:        feature.PhasePlan,
+		Pipeline:            feature.PipelineLarge,
+		CurrentRoadmapPhase: 0,
+		Artifacts:           map[string]string{"roadmap": roadmapPath},
+		Repos:               []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1"}},
+	}
+	lc := lifecycleForFeature(f)
+	lc.AdvanceRoadmapPhaseFn = func(id string) error {
+		f.CurrentRoadmapPhase = 1
+		f.Status = feature.StatusPlanning
+		return nil
+	}
+	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	if err := o.HandlePhaseCompletion("feat-ra-stack", orchestrator.PhaseCompletionInput{
+		Phase:      feature.PhasePlan,
+		PlanResult: &agent.PlanLoopResult{FinalStatus: "approved"},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+
+	if f.TotalRoadmapPhases != 3 {
+		t.Errorf("TotalRoadmapPhases = %d, want 3 (persisted as today)", f.TotalRoadmapPhases)
+	}
+	if len(f.Stack) != 2 {
+		t.Fatalf("stack = %+v, want two layers", f.Stack)
+	}
+	want := []feature.StackLayer{
+		{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}},
+		{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}},
+	}
+	for i, layer := range want {
+		if f.Stack[i].Position != layer.Position || f.Stack[i].Title != layer.Title ||
+			f.Stack[i].Slug != layer.Slug || len(f.Stack[i].Phases) != len(layer.Phases) {
+			t.Errorf("stack layer %d = %+v, want %+v", i+1, f.Stack[i], layer)
+		}
+		for j, phase := range layer.Phases {
+			if f.Stack[i].Phases[j] != phase {
+				t.Errorf("stack layer %d phases = %v, want %v", i+1, f.Stack[i].Phases, layer.Phases)
+			}
+		}
+	}
+}
+
 // Per-phase plan approved (roadmap mid-flight) → dispatches PhaseImplement.
 // FeatureAdvanced(PhaseImplement) must fire after
 // StartRoadmapPhaseImplementation + populate + startPhase so subscribers see

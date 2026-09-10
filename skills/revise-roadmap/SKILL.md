@@ -40,6 +40,8 @@ If the caller provides prior-attempt axis approvals (files named like `axis-appr
 - If editing a Frozen-but-Forced section, add a 1-line rationale at the top of the revised section: `Edited despite sticky approval because: <axis-name> flagged <reason>.` so downstream validators (and future revisers) can see why the freeze was broken.
 - Never silently edit a `Frozen` section that is not also in `ForcedEdits`. If you believe an edit is needed but the failing axis did not cite that section, leave the section untouched and instead surface the tension in "What We're NOT Doing" or note it for the human.
 
+The `## Pull Requests` section follows this same rule: changes-requested feedback that names `## Pull Requests` unlocks editing that section even when a prior sticky approval listed it in `frozen_sections`. Fixing the Pull Requests table — regrouping rows, renumbering positions, or editing titles and rationale — must not re-title or renumber phases: the `## Phase N:` heading text stays byte-equal.
+
 **Worked example.**
 
 Suppose two prior validator attempts produced these `## Sticky Approval` blocks (each in its own per-axis feedback file):

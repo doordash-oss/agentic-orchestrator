@@ -34,16 +34,17 @@ const (
 
 // Mutation and action-conflict codes.
 const (
-	Conflict              Code = "conflict"
-	LocalSourceStale      Code = "local_source_stale"
-	LocalBaseMissing      Code = "local_base_missing"
-	PublishRemoteDiverged Code = "publish_remote_diverged"
-	PublishRemoteChanged  Code = "publish_remote_changed"
-	PipelineMismatch      Code = "pipeline_mismatch"
-	NeedUserInputOpen     Code = "need_user_input_open"
-	PhaseFinalizing       Code = "phase_finalizing"
-	InvalidTransition     Code = "invalid_transition"
-	InvalidWorkspaceRoot  Code = "invalid_workspace_root"
+	Conflict                   Code = "conflict"
+	LocalSourceStale           Code = "local_source_stale"
+	LocalBaseMissing           Code = "local_base_missing"
+	PublishRemoteDiverged      Code = "publish_remote_diverged"
+	PublishRemoteChanged       Code = "publish_remote_changed"
+	PipelineMismatch           Code = "pipeline_mismatch"
+	NeedUserInputOpen          Code = "need_user_input_open"
+	PhaseFinalizing            Code = "phase_finalizing"
+	InvalidTransition          Code = "invalid_transition"
+	InvalidWorkspaceRoot       Code = "invalid_workspace_root"
+	RoadmapPullRequestsInvalid Code = "roadmap_pull_requests_invalid"
 )
 
 // Relationship-guard codes.
@@ -503,6 +504,12 @@ var catalog = map[Code]Entry{
 		Title:       "Invalid transition",
 		Summary:     "The action is not valid in the feature's current state.",
 		Remediation: "Refresh the feature and retry.",
+	},
+	RoadmapPullRequestsInvalid: {
+		Class:       ClassBlocking,
+		Title:       "Roadmap Pull Requests table is invalid",
+		Summary:     "The roadmap's ## Pull Requests table is missing or breaks the required grouping rules.",
+		Remediation: "Fix the table in the review editor and submit the decision again.",
 	},
 	InvalidWorkspaceRoot: {
 		Class:   ClassBlocking,

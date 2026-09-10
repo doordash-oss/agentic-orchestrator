@@ -1240,6 +1240,71 @@ func TestRewindRoadmapPhaseYAMLRoundTripAndLegacyOmit(t *testing.T) {
 	}
 }
 
+func TestStackYAMLRoundTripAndLegacyOmit(t *testing.T) {
+	r := Run{
+		RunNumber: 1,
+		Stack: []StackLayer{
+			{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}},
+			{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}},
+		},
+	}
+	data, err := yaml.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !containsBytes(data, []byte("stack:")) || !containsBytes(data, []byte("slug: build-and-polish")) {
+		t.Fatalf("run.yaml missing stack layers: %s", string(data))
+	}
+	var got Run
+	if err := yaml.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(got.Stack) != 2 {
+		t.Fatalf("stack = %+v, want two layers", got.Stack)
+	}
+	if got.Stack[1].Position != 2 || got.Stack[1].Title != "Build and polish" ||
+		got.Stack[1].Slug != "build-and-polish" || len(got.Stack[1].Phases) != 2 {
+		t.Fatalf("layer 2 = %+v, want the persisted composition", got.Stack[1])
+	}
+
+	legacy := []byte("run_number: 1\ncurrent_roadmap_phase: 2\n")
+	var old Run
+	if err := yaml.Unmarshal(legacy, &old); err != nil {
+		t.Fatalf("Unmarshal legacy run without stack: %v", err)
+	}
+	if old.Stack != nil {
+		t.Errorf("legacy stack = %+v, want nil", old.Stack)
+	}
+}
+
+func TestStackShadowSyncRoundTrip(t *testing.T) {
+	store := NewStore(t.TempDir())
+	f := &Feature{
+		ID:            "test-stack-sync",
+		Name:          "Stack Sync Test",
+		Status:        StatusImplementing,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: SchemaVersionCurrent,
+		Stack: []StackLayer{
+			{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(got.Stack) != 1 || got.Stack[0].Slug != "bootstrap" {
+		t.Fatalf("stack shadow = %+v, want the persisted layer", got.Stack)
+	}
+	if len(got.Run().Stack) != 1 || got.Run().Stack[0].Slug != "bootstrap" {
+		t.Fatalf("run stack = %+v, want the persisted layer", got.Run().Stack)
+	}
+}
+
 func TestRoadmapFieldsOmittedWhenZero(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
@@ -1252,7 +1317,7 @@ func TestRoadmapFieldsOmittedWhenZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	for _, field := range []string{"current_roadmap_phase", "total_roadmap_phases", "roadmap_phase_type"} {
+	for _, field := range []string{"current_roadmap_phase", "total_roadmap_phases", "roadmap_phase_type", "stack"} {
 		if containsBytes(data, []byte(field)) {
 			t.Errorf("expected %s to be omitted from YAML when zero, but found in output", field)
 		}

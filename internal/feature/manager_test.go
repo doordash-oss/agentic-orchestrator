@@ -6230,3 +6230,124 @@ func writeFeatureYAMLFromExternal(t *testing.T, baseDir, id string, activeRun, r
 		t.Fatalf("write feature.yaml: %v", err)
 	}
 }
+
+// A partial rewind copies the persisted stack into the forked run alongside
+// the phase count, and the sealed run keeps its own copy.
+func TestRewindWithRequest_PartialCarriesStackForward(t *testing.T) {
+	mgr := newTestManager(t)
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
+	})
+	run1Dir := filepath.Join(mgr.Store.BaseDir, f.ID, "runs", "run-001")
+	stack := []feature.StackLayer{
+		{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}},
+		{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}},
+	}
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.CurrentRoadmapPhase = 3
+		ff.TotalRoadmapPhases = 3
+		ff.Stack = stack
+		ff.Artifacts = map[string]string{
+			"roadmap":      filepath.Join(run1Dir, "roadmap", "roadmap.md"),
+			"phase-1-plan": filepath.Join(run1Dir, "phase-01", "plan", "phase-plan.md"),
+			"phase-2-plan": filepath.Join(run1Dir, "phase-02", "plan", "phase-plan.md"),
+			"phase-3-plan": filepath.Join(run1Dir, "phase-03", "plan", "phase-plan.md"),
+		}
+		ff.Run().RoadmapPhaseCommitAnchors = map[int]map[string]string{
+			1: {"repo-a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			2: {"repo-a": "cccccccccccccccccccccccccccccccccccccccc"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	files := map[string]string{
+		filepath.Join("roadmap", "roadmap.md"):             "roadmap",
+		filepath.Join("phase-01", "plan", "phase-plan.md"): "phase 1 plan",
+		filepath.Join("phase-02", "plan", "phase-plan.md"): "phase 2 plan",
+		filepath.Join("phase-03", "plan", "phase-plan.md"): "phase 3 plan",
+	}
+	for rel, content := range files {
+		full := filepath.Join(run1Dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
+	mgr.PRs = nil
+
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 2,
+	}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+
+	newRun, err := mgr.Store.LoadRun(f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if len(newRun.Stack) != len(stack) {
+		t.Fatalf("new run stack = %+v, want %+v", newRun.Stack, stack)
+	}
+	for i, layer := range stack {
+		if newRun.Stack[i].Position != layer.Position || newRun.Stack[i].Title != layer.Title ||
+			newRun.Stack[i].Slug != layer.Slug || len(newRun.Stack[i].Phases) != len(layer.Phases) {
+			t.Errorf("new run stack layer %d = %+v, want %+v", i+1, newRun.Stack[i], layer)
+		}
+	}
+	sealedRun, err := mgr.Store.LoadRun(f.ID, 1)
+	if err != nil {
+		t.Fatalf("LoadRun(1): %v", err)
+	}
+	if len(sealedRun.Stack) != len(stack) || sealedRun.Stack[0].Slug != stack[0].Slug {
+		t.Errorf("sealed run stack = %+v, want its own copy of %+v", sealedRun.Stack, stack)
+	}
+}
+
+// A full rewind to the roadmap phase leaves the forked run without layers:
+// planning re-runs and re-persists the stack at the next approval.
+func TestRewindToPhase_FullRewindToRoadmapClearsStack(t *testing.T) {
+	mgr := newTestManager(t)
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
+	})
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.CurrentRoadmapPhase = 3
+		ff.TotalRoadmapPhases = 3
+		ff.Stack = []feature.StackLayer{
+			{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}},
+			{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
+	mgr.PRs = nil
+
+	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+	newRun, err := mgr.Store.LoadRun(f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if newRun.Stack != nil {
+		t.Errorf("new run stack = %+v, want no layers after a full rewind to the roadmap phase", newRun.Stack)
+	}
+	sealedRun, err := mgr.Store.LoadRun(f.ID, 1)
+	if err != nil {
+		t.Fatalf("LoadRun(1): %v", err)
+	}
+	if len(sealedRun.Stack) != 2 {
+		t.Errorf("sealed run stack = %+v, want its own copy kept", sealedRun.Stack)
+	}
+}

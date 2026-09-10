@@ -95,6 +95,56 @@ func TestContractRegistryPlanRoadmapPlannerReportsMalformedRoadmap(t *testing.T)
 	}
 }
 
+func TestContractRegistryPlanRoadmapPlannerReportsMissingPullRequestsTable(t *testing.T) {
+	attemptDir := writeRoadmapPlannerAttempt(t, "# Roadmap\n\n## Phase 1: Skeleton\n\n### Goal\nShip the skeleton.\n", validPlanAttemptMetaYAML())
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanRoadmapPlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if out.OK {
+		t.Fatal("Validate() OK = true, want false")
+	}
+	got := JoinProtocolViolations(violations)
+	if !strings.Contains(got, "roadmap markdown") || !strings.Contains(got, "## Pull Requests") {
+		t.Fatalf("JoinProtocolViolations() = %q, want violation naming the ## Pull Requests section", got)
+	}
+}
+
+func TestContractRegistryPlanRoadmapPlannerReportsInvalidPullRequestsTable(t *testing.T) {
+	roadmap := "# Roadmap\n\n## Phase 1: Skeleton\n\n### Goal\nShip the skeleton.\n\n## Pull Requests\n\n" +
+		"| # | Title | Phases | Rationale |\n|---|---|---|---|\n| 1 | Skeleton | 1 | First. |\n| 2 | Extras | 2 | Second. |\n"
+	attemptDir := writeRoadmapPlannerAttempt(t, roadmap, validPlanAttemptMetaYAML())
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanRoadmapPlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if out.OK {
+		t.Fatal("Validate() OK = true, want false")
+	}
+	got := JoinProtocolViolations(violations)
+	if !strings.Contains(got, "## Pull Requests") || !strings.Contains(got, "phase 2, which is not a roadmap phase") {
+		t.Fatalf("JoinProtocolViolations() = %q, want the specific table problem naming the section", got)
+	}
+}
+
+func TestValidateArtifactsPreflightReportsInvalidPullRequestsTable(t *testing.T) {
+	attemptDir := writeRoadmapPlannerAttempt(t, "# Roadmap\n\n## Phase 1: Skeleton\n\n### Goal\nShip the skeleton.\n", "")
+
+	out, violations, err := ValidateArtifactsPreflight(feature.PhasePlan, RolePlanRoadmapPlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
+	}
+	if out.OK {
+		t.Fatal("ValidateArtifactsPreflight() OK = true, want false")
+	}
+	got := JoinProtocolViolations(violations)
+	if !strings.Contains(got, "## Pull Requests") {
+		t.Fatalf("JoinProtocolViolations() = %q, want preflight violation naming the section", got)
+	}
+}
+
 func TestContractRegistryPlanRoadmapPlannerReportsMissingMeta(t *testing.T) {
 	attemptDir := writeRoadmapPlannerAttempt(t, validRoadmapText(), "")
 
@@ -1014,7 +1064,8 @@ func writeRoadmapPlannerAttempt(t *testing.T, roadmapText, metaText string) stri
 }
 
 func validRoadmapText() string {
-	return "# Roadmap\n\n## Phase 1: Skeleton\n\n### Goal\nShip the skeleton.\n"
+	return "# Roadmap\n\n## Phase 1: Skeleton\n\n### Goal\nShip the skeleton.\n\n## Pull Requests\n\n" +
+		"| # | Title | Phases | Rationale |\n|---|---|---|---|\n| 1 | Skeleton | 1 | One phase, one reviewable slice. |\n"
 }
 
 func validPlanAttemptMetaYAML() string {

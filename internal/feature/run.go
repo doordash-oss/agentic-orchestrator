@@ -141,6 +141,13 @@ type Run struct {
 	// marked as frontend work. Missing phases default to false.
 	RoadmapPhaseFrontendByPhase map[int]bool `yaml:"roadmap_phase_frontend,omitempty"`
 
+	// Stack records the approved pull-request stack composition (one layer
+	// per `## Pull Requests` table row), derived from the roadmap on disk at
+	// approval so gate edits are honored. Omitted on runs approved before the
+	// table existed; a full rewind to the roadmap phase clears it because
+	// planning re-runs and re-persists it at the next approval.
+	Stack []StackLayer `yaml:"stack,omitempty"`
+
 	// Artifacts (moved from Feature) — entries are run-relative paths.
 	Artifacts map[string]string `yaml:"artifacts,omitempty"`
 
@@ -224,6 +231,31 @@ type SessionCostRecord struct {
 // IsSealed reports whether this run has been sealed (rewound past).
 // A sealed run is immutable: SaveRun panics if called on one.
 func (r *Run) IsSealed() bool { return r != nil && r.SealedAt != nil }
+
+// StackLayer is one pull-request layer of a feature's delivery stack,
+// derived from one `## Pull Requests` table row of the approved roadmap.
+// Later roadmap phases read it through the run accessors to name branches
+// and pull requests; this phase only persists the composition.
+type StackLayer struct {
+	Position int    `yaml:"position" json:"position"`
+	Title    string `yaml:"title,omitempty" json:"title,omitempty"`
+	Slug     string `yaml:"slug,omitempty" json:"slug,omitempty"`
+	Phases   []int  `yaml:"phases,omitempty" json:"phases,omitempty"`
+}
+
+// CopyStackLayers returns a deep copy of stack so a forked run and the
+// sealed run it came from never share backing arrays.
+func CopyStackLayers(stack []StackLayer) []StackLayer {
+	if stack == nil {
+		return nil
+	}
+	out := make([]StackLayer, len(stack))
+	for i, layer := range stack {
+		out[i] = layer
+		out[i].Phases = append([]int(nil), layer.Phases...)
+	}
+	return out
+}
 
 // AccumulateActiveTime moves elapsed time from ActivePhaseStart into
 // PhaseTimings under the ActiveTimingKey, then clears ActivePhaseStart.

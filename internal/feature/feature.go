@@ -715,6 +715,8 @@ type Feature struct {
 	TotalRoadmapPhases          int          `yaml:"-"`
 	RoadmapPhaseType            string       `yaml:"-"`
 	RoadmapPhaseFrontendByPhase map[int]bool `yaml:"-"`
+	// Stack mirrors Run.Stack: the approved pull-request layer composition.
+	Stack []StackLayer `yaml:"-"`
 
 	// Transient: populated by Store.Load, not serialized. Exposed via Run().
 	run *Run `yaml:"-"`
@@ -813,6 +815,7 @@ func (f *Feature) syncShadowsToRun() {
 	r.CurrentRoadmapPhase = f.CurrentRoadmapPhase
 	r.TotalRoadmapPhases = f.TotalRoadmapPhases
 	r.RoadmapPhaseType = f.RoadmapPhaseType
+	r.Stack = f.Stack
 	r.MaxPlanIterations = f.MaxPlanIterations
 	r.PendingNeedUserInputPath = f.PendingNeedUserInputPath
 	r.CurrentPhaseStatus = f.CurrentPhaseStatus
@@ -851,6 +854,7 @@ func (f *Feature) syncRunToShadows() {
 	f.CurrentRoadmapPhase = r.CurrentRoadmapPhase
 	f.TotalRoadmapPhases = r.TotalRoadmapPhases
 	f.RoadmapPhaseType = r.RoadmapPhaseType
+	f.Stack = r.Stack
 	f.MaxPlanIterations = r.MaxPlanIterations
 	f.PendingNeedUserInputPath = r.PendingNeedUserInputPath
 	f.CurrentPhaseStatus = r.CurrentPhaseStatus

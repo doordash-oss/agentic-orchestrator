@@ -544,6 +544,100 @@ fi
 	}
 }
 
+// TestRoadmapPlanningLoopInvalidPullRequestsTableRoutesToReviser proves an
+// attempt whose roadmap lacks a valid `## Pull Requests` table is recorded
+// as changes requested with feedback naming the section, and a later
+// attempt writing a valid table proceeds to validator approval.
+func TestRoadmapPlanningLoopInvalidPullRequestsTableRoutesToReviser(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	stateDir := tmpDir
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	planDir := filepath.Join(stateDir, "test-plan-001", "runs", "run-001", "roadmap")
+	for _, d := range []string{workDir, planDir, scriptsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", d, err)
+		}
+	}
+
+	// The first attempt writes a roadmap whose `## Pull Requests` table is
+	// missing. The script answers every commit-violation nudge with a fresh
+	// success outcome but never fixes the roadmap, so the attempt can only
+	// end as a protocol violation carrying the table problems. Once the loop
+	// forks attempt-02 the script writes a valid roadmap and exits normally.
+	assistantOutcomeEcho := strings.Split(testutil.JSONLSuccess, "\n")[0]
+	roadmapWithoutTable := "# Roadmap\n\n## Phase 1: Skeleton\n\n### Goal\nShip the skeleton.\n"
+	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh", fmt.Sprintf(`%s
+if [ -d %q ]; then
+%s
+%s
+exit 0
+fi
+cat > %q <<'ROADMAPEOF'
+%s
+ROADMAPEOF
+%s
+while IFS= read -r _line; do
+  case "$_line" in
+    %s)
+      %s
+      ;;
+  esac
+done
+`, testutil.JSONLInit, filepath.Join(planDir, "attempt-02"),
+		writeRoadmapArtifactSnippet(planDir), testutil.JSONLSuccess,
+		filepath.Join(planDir, "roadmap.md"), roadmapWithoutTable,
+		assistantOutcomeEcho, finishOrViolateNudgeCasePattern, assistantOutcomeEcho))
+	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	store := feature.NewStore(stateDir)
+	f := newTestPlanFeature(t, workDir)
+	_ = store.Save(f)
+
+	result, err := RunRoadmapPlanningLoop(PlanLoopConfig{
+		Feature:                    f,
+		FeatureStore:               store,
+		StateDir:                   stateDir,
+		WorkDir:                    workDir,
+		MaxAttempts:                2,
+		DangerouslySkipPermissions: true,
+		BuildSession:               mockBuildSession(planScript, criticScript),
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunRoadmapPlanningLoop() error = %v", err)
+	}
+	if result.FinalStatus != "approved" {
+		t.Fatalf("FinalStatus = %q, want approved (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+	if result.Iterations != 2 {
+		t.Fatalf("Iterations = %d, want 2", result.Iterations)
+	}
+
+	attemptMeta, err := os.ReadFile(filepath.Join(planDir, "attempt-01", "meta.yaml"))
+	if err != nil {
+		t.Fatalf("read attempt-01 meta: %v", err)
+	}
+	if !strings.Contains(string(attemptMeta), "CHANGES_REQUESTED") {
+		t.Errorf("attempt-01 meta = %q, want changes-requested review status", attemptMeta)
+	}
+	feedback, err := os.ReadFile(filepath.Join(planDir, "attempt-01", "validation-feedback.md"))
+	if err != nil {
+		t.Fatalf("read attempt-01 validation feedback: %v", err)
+	}
+	if !strings.Contains(string(feedback), "## Pull Requests") {
+		t.Errorf("attempt-01 feedback = %q, want feedback naming the ## Pull Requests section", feedback)
+	}
+}
+
 // TestRoadmapPlanningLoop_FinishOrViolateNudgeRecoversSameSession proves the
 // roadmap planner recovers within a single attempt via the finish-or-violate
 // nudge: the planner ends its first turn without a root outcome, the harness
@@ -2638,7 +2732,7 @@ fi
 		testutil.WriteSpecificAxisApproved(tmpDir, "scope", []string{"Deferred Work"}),
 		testutil.JSONLSuccess))
 
-	_ = os.WriteFile(filepath.Join(planDir, "plan.md"), []byte("# Test Roadmap\n## Phase 1: Architecture Approach\nDo stuff."), 0o644)
+	_ = os.WriteFile(filepath.Join(planDir, "plan.md"), []byte("# Test Roadmap\n## Phase 1: Architecture Approach\nDo stuff.\n\n## Pull Requests\n\n| # | Title | Phases | Rationale |\n|---|---|---|---|\n| 1 | Architecture Approach | 1 | One phase, one reviewable slice. |\n"), 0o644)
 
 	buildSession := mockBuildSessionPerDomain(planScript, map[string]string{
 		"architecture": archScript,

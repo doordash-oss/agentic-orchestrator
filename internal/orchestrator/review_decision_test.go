@@ -18,6 +18,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -794,7 +795,9 @@ func TestOrchestrator_ProceedFromRewindReview_DispatchesEscalatedKBTarget(t *tes
 func TestOrchestrator_HandleReviewDecision_Proceed_Roadmap_PersistsPhaseCount(t *testing.T) {
 	tmpDir := t.TempDir()
 	roadmapPath := filepath.Join(tmpDir, "roadmap.md")
-	roadmap := "# Roadmap\n\n## Phase 1: Bootstrap\n### Goal\nInit\n\n## Phase 2: Build\n### Goal\nBuild\n\n## Phase 3: Polish\n### Goal\nPolish\n"
+	roadmap := "# Roadmap\n\n## Phase 1: Bootstrap\n### Goal\nInit\n\n## Phase 2: Build\n### Goal\nBuild\n\n## Phase 3: Polish\n### Goal\nPolish\n\n" +
+		"## Pull Requests\n\n| # | Title | Phases | Rationale |\n|---|---|---|---|\n" +
+		"| 1 | Bootstrap | 1 | Stands alone. |\n| 2 | Build and polish | 2-3 | Two halves of one concern. |\n"
 	if err := os.WriteFile(roadmapPath, []byte(roadmap), 0o644); err != nil {
 		t.Fatalf("write roadmap: %v", err)
 	}
@@ -846,6 +849,118 @@ func TestOrchestrator_HandleReviewDecision_Proceed_Roadmap_PersistsPhaseCount(t 
 		t.Errorf("TotalRoadmapPhases at AdvanceRoadmapPhase = %d, want 3 (must be persisted first)", totalAtAdvance)
 	}
 	assertLifecycleCall(t, lc, "AdvanceRoadmapPhase")
+}
+
+// Proceed on a roadmap edited at the gate from two rows to three: the stack
+// is derived from the on-disk roadmap at decision time and persisted before
+// the roadmap phase advances.
+func TestOrchestrator_HandleReviewDecision_Proceed_Roadmap_PersistsEditedStack(t *testing.T) {
+	tmpDir := t.TempDir()
+	roadmapPath := filepath.Join(tmpDir, "roadmap.md")
+	roadmap := "# Roadmap\n\n## Phase 1: Bootstrap\n### Goal\nInit\n\n## Phase 2: Build\n### Goal\nBuild\n\n## Phase 3: Polish\n### Goal\nPolish\n\n" +
+		"## Pull Requests\n\n| # | Title | Phases | Rationale |\n|---|---|---|---|\n" +
+		"| 1 | Bootstrap | 1 | Stands alone. |\n| 2 | Build | 2 | Stands alone. |\n| 3 | Polish | 3 | Stands alone. |\n"
+	if err := os.WriteFile(roadmapPath, []byte(roadmap), 0o644); err != nil {
+		t.Fatalf("write roadmap: %v", err)
+	}
+
+	planGate := feature.PhasePlan
+	f := &feature.Feature{
+		ID:                  "feat-rd-rm-stack",
+		Status:              feature.StatusPlanNeedsReview,
+		Pipeline:            feature.PipelineLarge,
+		PendingReviewPhase:  &planGate,
+		TotalRoadmapPhases:  3,
+		CurrentRoadmapPhase: 0,
+		Artifacts:           map[string]string{"roadmap": roadmapPath},
+		// The auto-approval path persisted a two-layer stack before the gate.
+		Stack: []feature.StackLayer{
+			{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}},
+			{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}},
+		},
+	}
+	lc := lifecycleForFeature(f)
+	var stackAtAdvance []feature.StackLayer
+	lc.AdvanceRoadmapPhaseFn = func(id string) error {
+		stackAtAdvance = append([]feature.StackLayer(nil), f.Stack...)
+		f.CurrentRoadmapPhase = 1
+		f.Status = feature.StatusPlanning
+		return nil
+	}
+	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
+	fs := newFeatureStore(f)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+	if err := o.HandleReviewDecision("feat-rd-rm-stack", orchestrator.ReviewDecision{
+		Decision: "proceed",
+		Roadmap:  true,
+	}); err != nil {
+		t.Fatalf("HandleReviewDecision: %v", err)
+	}
+
+	want := []feature.StackLayer{
+		{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}},
+		{Position: 2, Title: "Build", Slug: "build", Phases: []int{2}},
+		{Position: 3, Title: "Polish", Slug: "polish", Phases: []int{3}},
+	}
+	if len(f.Stack) != len(want) {
+		t.Fatalf("stack = %+v, want %+v", f.Stack, want)
+	}
+	for i, layer := range want {
+		if f.Stack[i].Position != layer.Position || f.Stack[i].Title != layer.Title ||
+			f.Stack[i].Slug != layer.Slug || len(f.Stack[i].Phases) != 1 || f.Stack[i].Phases[0] != layer.Phases[0] {
+			t.Errorf("stack layer %d = %+v, want %+v", i+1, f.Stack[i], layer)
+		}
+	}
+	if len(stackAtAdvance) != len(want) {
+		t.Errorf("stack at AdvanceRoadmapPhase = %+v, want the edited stack persisted before advancing", stackAtAdvance)
+	}
+}
+
+// Proceed on a roadmap whose table cannot yield a stack: the decision
+// errors, the gate is not cleared, and the roadmap phase is not advanced.
+func TestOrchestrator_HandleReviewDecision_Proceed_Roadmap_DerivationFailureKeepsGate(t *testing.T) {
+	tmpDir := t.TempDir()
+	roadmapPath := filepath.Join(tmpDir, "roadmap.md")
+	roadmap := "# Roadmap\n\n## Phase 1: Bootstrap\n### Goal\nInit\n\n## Phase 2: Build\n### Goal\nBuild\n"
+	if err := os.WriteFile(roadmapPath, []byte(roadmap), 0o644); err != nil {
+		t.Fatalf("write roadmap: %v", err)
+	}
+
+	planGate := feature.PhasePlan
+	f := &feature.Feature{
+		ID:                  "feat-rd-rm-bad",
+		Status:              feature.StatusPlanNeedsReview,
+		Pipeline:            feature.PipelineLarge,
+		PendingReviewPhase:  &planGate,
+		TotalRoadmapPhases:  2,
+		CurrentRoadmapPhase: 0,
+		Artifacts:           map[string]string{"roadmap": roadmapPath},
+	}
+	lc := lifecycleForFeature(f)
+	lc.AdvanceRoadmapPhaseFn = func(id string) error {
+		t.Error("AdvanceRoadmapPhase must not run when stack derivation fails")
+		return nil
+	}
+	fs := newFeatureStore(f)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+	err := o.HandleReviewDecision("feat-rd-rm-bad", orchestrator.ReviewDecision{
+		Decision: "proceed",
+		Roadmap:  true,
+	})
+	if err == nil {
+		t.Fatal("HandleReviewDecision must fail when the roadmap cannot yield a stack")
+	}
+	if !strings.Contains(err.Error(), "## Pull Requests") {
+		t.Errorf("error = %v, want the ## Pull Requests table problems", err)
+	}
+	if f.PendingReviewPhase == nil {
+		t.Error("PendingReviewPhase must stay set so the gate remains open")
+	}
+	if len(f.Stack) != 0 {
+		t.Errorf("stack = %+v, want no layers persisted", f.Stack)
+	}
 }
 
 // Unknown decision returns an error.

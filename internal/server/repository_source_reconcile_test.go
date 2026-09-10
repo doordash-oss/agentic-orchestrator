@@ -153,7 +153,7 @@ func TestWorkspaceRepositoryReconcileSourceUpdateReportsExternallyChangedTip(t *
 	body := fx.updateSourceBody(repo, bare)
 	// An external writer moves the branch to a third commit: the settlement
 	// reports the observation without inferring anything about the attempt.
-	third := fx.gitIn(repo, "commit-tree", "refs/heads/main^{tree}", "-m", "external")
+	third := fx.gitIn(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit-tree", "refs/heads/main^{tree}", "-m", "external")
 	fx.gitIn(repo, "update-ref", "refs/heads/main", third)
 
 	w, resp := fx.reconcileSource(reconcileSourceBodyFromUpdate(body))
@@ -557,7 +557,6 @@ func TestCreateFeatureFailsClosedWhenAdmittedUpdateCannotSettle(t *testing.T) {
 		t.Fatalf("update status = %d body=%s", w.Code, w.Body.String())
 	}
 }
-
 
 func TestWorkspaceRepositoryReconcileSourceUpdateObservesOriginalCheckoutCompletion(t *testing.T) {
 	fx := newInitializeFixture(t)

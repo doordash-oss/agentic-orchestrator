@@ -112,10 +112,12 @@ func classifyRenameError(err error) error {
 	if !errors.As(err, &errno) {
 		return err
 	}
-	switch errno {
-	case syscall.EEXIST, syscall.ENOTEMPTY:
+	// ENOTSUP and EOPNOTSUPP alias on Linux but differ on Darwin. Boolean
+	// comparisons preserve both platforms' errors without duplicate cases.
+	switch {
+	case errno == syscall.EEXIST || errno == syscall.ENOTEMPTY:
 		return ErrDestinationExists
-	case syscall.ENOSYS, syscall.EINVAL, syscall.ENOTSUP, syscall.EOPNOTSUPP:
+	case errno == syscall.ENOSYS || errno == syscall.EINVAL || errno == syscall.ENOTSUP || errno == syscall.EOPNOTSUPP:
 		return fmt.Errorf("%w: %v", ErrNoReplaceUnsupported, errno)
 	}
 	return err

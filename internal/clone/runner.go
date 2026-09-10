@@ -15,12 +15,10 @@
 package clone
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -137,6 +135,9 @@ type realHandle struct {
 	tailMu     sync.Mutex
 	tail       []string
 	progressFn func(stage, progress string)
+	// line is owned by exec's stderr-copy goroutine until cmd.Wait returns.
+	// Only the bounded prefix is retained; excess bytes are still consumed.
+	line []byte
 }
 
 func (r *realRunner) Start(spec RunSpec) (RunHandle, error) {
@@ -157,63 +158,45 @@ func (r *realRunner) Start(spec RunSpec) (RunHandle, error) {
 		return os.ErrProcessDone
 	}
 	cmd.WaitDelay = time.Second
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("clone stderr pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		cancel()
-		return nil, fmt.Errorf("start git clone: %w", err)
-	}
 	h := &realHandle{
 		cmd:        cmd,
 		cancel:     cancel,
 		done:       make(chan struct{}),
-		pid:        cmd.Process.Pid,
-		pgid:       cmd.Process.Pid,
-		identity:   processStartIdentity(cmd.Process.Pid),
 		progressFn: spec.OnStage,
 	}
-	go h.drain(stderr)
+	// Let exec own pipe draining so Wait joins the writer before publishing
+	// the final diagnostics. Stopping consumption can block a verbose clone.
+	cmd.Stderr = h
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("start git clone: %w", err)
+	}
+	h.pid = cmd.Process.Pid
+	h.pgid = cmd.Process.Pid
+	h.identity = processStartIdentity(cmd.Process.Pid)
 	go h.await(ctx)
 	return h, nil
 }
 
-// drain reads stderr line by line, updating sanitized progress and keeping
-// a bounded redacted tail. Total read volume is capped so output floods
-// cannot exhaust memory.
-func (h *realHandle) drain(pipe io.Reader) {
+// Write drains all stderr while retaining a bounded prefix of each record.
+// Git progress uses carriage returns as well as newlines; either terminates
+// a record, including an overlong one, so later diagnostics are not lost.
+func (h *realHandle) Write(data []byte) (int, error) {
 	const maxLine = 8 * 1024
-	const maxTotal = 1 << 20 // hard cap on consumed bytes
-	reader := bufio.NewReaderSize(io.LimitReader(pipe, maxTotal), maxLine)
-	var consumed int64
-	for {
-		line, err := reader.ReadSlice('\n')
-		consumed += int64(len(line))
-		if len(line) > 0 {
-			trimmed := strings.TrimRight(string(line), "\r\n")
-			if len(trimmed) > maxLine {
-				trimmed = trimmed[:maxLine]
-			}
-			h.ingest(trimmed)
+	for _, b := range data {
+		if b == '\n' || b == '\r' {
+			h.flushLine()
+		} else if len(h.line) < maxLine {
+			h.line = append(h.line, b)
 		}
-		if err != nil {
-			if errors.Is(err, bufio.ErrBufferFull) {
-				// Overlong fragment: discard until the next newline.
-				for {
-					_, skipErr := reader.ReadByte()
-					if skipErr != nil {
-						break
-					}
-				}
-				continue
-			}
-			return
-		}
-		if consumed >= maxTotal {
-			return
-		}
+	}
+	return len(data), nil
+}
+
+func (h *realHandle) flushLine() {
+	if len(h.line) > 0 {
+		h.ingest(string(h.line))
+		h.line = h.line[:0]
 	}
 }
 
@@ -283,6 +266,7 @@ func RedactDiagnostics(s string) string {
 
 func (h *realHandle) await(ctx context.Context) {
 	waitErr := h.cmd.Wait()
+	h.flushLine()
 	h.cancel()
 	result := RunResult{Err: waitErr, OutputTail: h.tailText()}
 	if ctx.Err() != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {

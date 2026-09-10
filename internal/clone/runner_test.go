@@ -243,3 +243,50 @@ func TestOutputFloodCannotExhaustMemory(t *testing.T) {
 		t.Errorf("tail grew to %d bytes beyond its bound", tailBytes)
 	}
 }
+
+func TestRealRunnerDrainsVerboseCloneAndRetainsFinalDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	gitShim := filepath.Join(dir, "fake-git")
+	// A finite producer must complete even when its stderr exceeds the old
+	// 1 MiB capture quota. The final unterminated diagnostic must be observed
+	// before Wait returns so failure classification remains accurate.
+	script := "#!/bin/sh\ndd if=/dev/zero bs=65536 count=32 >&2 2>/dev/null\nprintf '\\nfatal: Authentication failed' >&2\nexit 1\n"
+	if err := os.WriteFile(gitShim, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	handle, err := NewRealRunner(gitShim).Start(RunSpec{
+		Remote: "https://example.com/acme/widget.git", Staging: filepath.Join(dir, "staging"),
+		Deadline: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := handle.Wait()
+	if result.TimedOut || result.ExitCode != 1 || result.Err != nil {
+		t.Fatalf("finite stderr producer did not complete: %+v", result)
+	}
+	if got := ClassifyFailure(result); got != FailureAuthentication {
+		t.Fatalf("failure = %s, want authentication failure from final diagnostic: %+v", got, result)
+	}
+}
+
+func TestCloneOutputFramesProgressAfterOverlongRecord(t *testing.T) {
+	t.Parallel()
+	var progress []string
+	h := &realHandle{progressFn: func(_, text string) { progress = append(progress, text) }}
+	for _, chunk := range []string{
+		strings.Repeat("x", 32*1024),
+		"\rReceiving objects: 10%\rReceiving obj",
+		"ects: 100%\r\nfinal diagnostic\n",
+	} {
+		if n, err := h.Write([]byte(chunk)); n != len(chunk) || err != nil {
+			t.Fatalf("Write consumed %d of %d bytes: %v", n, len(chunk), err)
+		}
+	}
+	if len(progress) != 2 || progress[0] != "Receiving objects: 10%" || progress[1] != "Receiving objects: 100%" {
+		t.Fatalf("progress after overlong record = %q", progress)
+	}
+	if tail := h.tailText(); !strings.Contains(tail, "final diagnostic") || len(tail) > MaxDiagnosticsLength {
+		t.Fatalf("final diagnostic missing or output exceeded bound: %q", tail)
+	}
+}

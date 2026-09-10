@@ -615,9 +615,10 @@ func revalidateOriginalCheckout(ctx context.Context, repoPath string, expected S
 // checkoutMergeArgs is the working-tree-aware fast-forward invocation: only a
 // proved fast-forward may run, automatic stashing and merge commits are
 // disabled, and hooks are disabled by pointing core.hooksPath at a path that
-// can hold no executable hook.
+// can hold no executable hook. Ignored-file protection is enforced by Git
+// itself as well as preflight, covering files created after the safety check.
 var checkoutMergeArgs = func(target string) []string {
-	return []string{"-c", "core.hooksPath=/dev/null", "merge", "--ff-only", "--no-edit", "--no-autostash", target}
+	return []string{"-c", "core.hooksPath=/dev/null", "merge", "--ff-only", "--no-edit", "--no-autostash", "--no-overwrite-ignore", target}
 }
 
 // mergeFastForwardCheckout performs the original checkout's fast-forward.

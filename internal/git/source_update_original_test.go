@@ -511,33 +511,46 @@ func (r *racingCheckoutRunner) Run(ctx context.Context, repoPath, stdin string, 
 }
 
 func TestUpdateSourceFromOriginalCheckoutBoundaryRaceRefusesWithoutOverwriting(t *testing.T) {
-	fx := newOriginalCheckoutFixture(t)
-	expected := fx.originalExpectation(t, LocalSourceModeDefault)
-	options := SourceUpdateOptions{UpdateRefRunner: &racingCheckoutRunner{
-		inner: ExecSourceUpdateRefRunner{},
-		race: func() {
-			// An untracked file lands on an incoming path between the final
-			// revalidation and the fast-forward: Git's own boundary refuses
-			// to overwrite it, and the refusal is proved untouched.
-			if err := os.WriteFile(filepath.Join(fx.repo, "added.txt"), []byte("precious\n"), 0o644); err != nil {
-				t.Error(err)
+	for _, ignored := range []bool{false, true} {
+		name := "untracked"
+		if ignored {
+			name = "ignored"
+		}
+		t.Run(name, func(t *testing.T) {
+			fx := newOriginalCheckoutFixture(t)
+			expected := fx.originalExpectation(t, LocalSourceModeDefault)
+			if ignored {
+				if err := os.WriteFile(filepath.Join(fx.repo, ".git", "info", "exclude"), []byte("added.txt\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
-		},
-	}}
+			options := SourceUpdateOptions{UpdateRefRunner: &racingCheckoutRunner{
+				inner: ExecSourceUpdateRefRunner{},
+				race: func() {
+					// A local file lands on an incoming path between the final
+					// revalidation and the fast-forward: Git's own boundary refuses
+					// to overwrite it, and the refusal is proved untouched.
+					if err := os.WriteFile(filepath.Join(fx.repo, "added.txt"), []byte("precious\n"), 0o644); err != nil {
+						t.Error(err)
+					}
+				},
+			}}
 
-	outcome, err := UpdateSourceFromOrigin(context.Background(), fx.repo, expected, options)
-	if err != nil {
-		t.Fatalf("update: %v", err)
-	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonCheckoutConflict {
-		t.Fatalf("result = %q reason = %q; want stale checkout_conflict", outcome.Result, outcome.Reason)
-	}
-	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
-		t.Fatalf("refs/heads/main = %s; want the displayed tip preserved", got)
-	}
-	got, err := os.ReadFile(filepath.Join(fx.repo, "added.txt"))
-	if err != nil || string(got) != "precious\n" {
-		t.Fatalf("added.txt = %q err=%v; want the racing content untouched", got, err)
+			outcome, err := UpdateSourceFromOrigin(context.Background(), fx.repo, expected, options)
+			if err != nil {
+				t.Fatalf("update: %v", err)
+			}
+			if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonCheckoutConflict {
+				t.Fatalf("result = %q reason = %q; want stale checkout_conflict", outcome.Result, outcome.Reason)
+			}
+			if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
+				t.Fatalf("refs/heads/main = %s; want the displayed tip preserved", got)
+			}
+			got, err := os.ReadFile(filepath.Join(fx.repo, "added.txt"))
+			if err != nil || string(got) != "precious\n" {
+				t.Fatalf("added.txt = %q err=%v; want the racing content untouched", got, err)
+			}
+		})
 	}
 }
 

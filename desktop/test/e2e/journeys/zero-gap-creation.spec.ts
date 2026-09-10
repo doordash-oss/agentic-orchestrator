@@ -124,6 +124,9 @@ test('the creation sheet covers scoped files, initialization, the contract, setu
     const consent = app.page.getByRole('dialog', { name: 'Initialize a new repository?' });
     await expect(consent).toContainText(emptyRepository);
     await consent.getByRole('button', { name: 'Initialize repository' }).click();
+    // The click starts asynchronous initialization and rediscovery. Wait for adoption
+    // before inspecting Git so slower hosts cannot race the repository creation.
+    await expect(app.page.getByRole('checkbox', { name: /initialized-lab/ })).toBeChecked();
     // Initialization honors the host's default branch; discovery must show that branch.
     const initializedBranch = gitText(emptyRepository, 'branch', '--show-current');
     await expect(

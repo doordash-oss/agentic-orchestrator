@@ -18,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -254,6 +256,7 @@ func (o *Orchestrator) ExecuteRecovery(
 	// Build dedup map for relaunch: a multi-repo feature may have several
 	// items, but we want to re-dispatch its current phase at most once.
 	resumedFeatures := make(map[string]feature.Phase)
+	resumedRepos := make(map[string]map[string]struct{})
 	var resumedOrder []string
 	for _, item := range items {
 		if item.Feature == nil {
@@ -268,18 +271,105 @@ func (o *Orchestrator) ExecuteRecovery(
 			resumedFeatures[item.Feature.ID] = item.Feature.CurrentPhase
 			resumedOrder = append(resumedOrder, item.Feature.ID)
 		}
+		if item.RepoName != "" {
+			if resumedRepos[item.Feature.ID] == nil {
+				resumedRepos[item.Feature.ID] = make(map[string]struct{})
+			}
+			resumedRepos[item.Feature.ID][item.RepoName] = struct{}{}
+		}
 	}
 	var relaunchErrs []error
 	for _, fid := range resumedOrder {
 		phase := resumedFeatures[fid]
-		if _, _, err := o.startPhase(fid, phase); err != nil {
+		var claims []*agent.ResumeClaim
+		if phase == feature.PhaseKnowledgeBase {
+			current, err := o.deps.Lifecycle.Get(fid)
+			if err != nil {
+				relaunchErrs = append(relaunchErrs, fmt.Errorf("load %s for KB recovery resume: %w", fid, err))
+				continue
+			}
+			claims, err = o.claimKBResumes(current, resumedRepos[fid])
+			if err != nil {
+				if errors.Is(err, agent.ErrResumeAlreadyClaimed) {
+					continue
+				}
+				relaunchErrs = append(relaunchErrs, fmt.Errorf("claim KB recovery resume for %s: %w", fid, err))
+				continue
+			}
+		} else {
+			claim, dispatch := o.claimSequentialResume(fid, phase)
+			if !dispatch {
+				continue
+			}
+			if claim != nil {
+				claims = append(claims, claim)
+			}
+		}
+		_, started, err := o.startPhaseGuarded(fid, phase)
+		if err != nil {
+			if relErr := releaseResumeClaims(claims, time.Now()); relErr != nil {
+				relaunchErrs = append(relaunchErrs, fmt.Errorf("releasing resume claims for %s: %w", fid, relErr))
+			}
 			relaunchErrs = append(relaunchErrs, fmt.Errorf("relaunch %s phase %s: %w", fid, phase, err))
+			continue
+		}
+		for _, claim := range claims {
+			if started {
+				claim.DispatchStarted()
+			} else if relErr := claim.Release(time.Now()); relErr != nil {
+				relaunchErrs = append(relaunchErrs, fmt.Errorf("releasing resume claim for %s: %w", fid, relErr))
+			}
 		}
 	}
 	if len(relaunchErrs) > 0 {
 		return errors.Join(relaunchErrs...)
 	}
 	return nil
+}
+
+// claimSequentialResume stamps durable continuation intent for an eligible
+// interrupted parent unit. Manual resume and startup recovery share this seam;
+// lookup, eligibility, or claim failures deliberately degrade to the existing
+// fresh relaunch path unless durable fallback bookkeeping also fails.
+func (o *Orchestrator) claimSequentialResume(featureID string, phase feature.Phase) (*agent.ResumeClaim, bool) {
+	if o.deps.Lifecycle == nil || o.deps.PhaseRunner == nil {
+		return nil, true
+	}
+	current, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return nil, true
+	}
+	coordinator := o.resumeCoordinatorForFeature(current)
+	if coordinator == nil {
+		return nil, true
+	}
+	if current.CurrentPhase != phase {
+		return nil, true
+	}
+	model := resumeModelForFeature(o.deps.PhaseRunner, current)
+	claim, eligibility, err := coordinator.Claim(
+		featureID,
+		current,
+		model,
+		o.deps.PhaseRunner.Registry,
+		time.Now(),
+	)
+	if err != nil {
+		if errors.Is(err, agent.ErrResumeAlreadyClaimed) {
+			return nil, false
+		}
+		if persistErr := coordinator.MarkFreshFallback("claim_error", time.Now()); persistErr != nil {
+			return nil, false
+		}
+		return nil, true
+	}
+	if !eligibility.Eligible {
+		if persistErr := coordinator.MarkFreshFallback(string(eligibility.Reason), time.Now()); persistErr != nil {
+			return nil, false
+		}
+		return nil, true
+	}
+	return claim, true
 }
 
 // recoveryActionString returns the lowercase action label used for events

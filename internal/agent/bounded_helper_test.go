@@ -1229,3 +1229,93 @@ func askUserControlRequest(requestID string) llm.SDKMessage {
 		},
 	}
 }
+
+// routedAskTestSession is a utilityTestSession whose pending AskUserQuestion
+// clears when the test answers it, mirroring the desktop answering a pending
+// control request through the session's control surface.
+type routedAskTestSession struct {
+	*utilityTestSession
+	mu       sync.Mutex
+	answered bool
+}
+
+func (s *routedAskTestSession) answer() {
+	s.mu.Lock()
+	s.answered = true
+	s.mu.Unlock()
+}
+
+func (s *routedAskTestSession) HasPendingAskUserQuestion() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.answered
+}
+
+func (s *routedAskTestSession) LastControlRequest() *llm.ControlRequestMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.answered {
+		return nil
+	}
+	return s.lastControl
+}
+
+// TestRunBoundedHelper_RouteUserInputPausesForAnswers proves a helper opted
+// into user-input routing pauses on AskUserQuestion instead of failing: the
+// live session keeps waiting, the pending question is answered through the
+// session's control surface, and the resumed turn still completes. The
+// fixer's old interactive pipeline had exactly this behavior.
+func TestRunBoundedHelper_RouteUserInputPausesForAnswers(t *testing.T) {
+	sess := &routedAskTestSession{utilityTestSession: newUtilityTestSession()}
+	sess.attachCh = make(chan llm.SDKMessage)
+	sess.statusCh = make(chan string)
+	sess.lastControl = askUserControlRequest("ask-1").ControlRequest
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		sess.id = id
+		sess.featureID = featureID
+		sess.phase = phase
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+	pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+		return []string{testMockIdentifier}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir}, nil
+	}
+
+	go func() {
+		// Unbuffered: the send returns only once the helper loop has taken
+		// the question, so the answer below can never overtake the pause.
+		sess.attachCh <- askUserControlRequest("ask-1")
+		sess.answer()
+		sess.result = &llm.ResultMessage{
+			Type:       testResultMessageType,
+			Subtype:    testResultSuccessValue,
+			Result:     testResultSuccessValue,
+			StopReason: testStopReasonEndTurn,
+		}
+		select {
+		case sess.statusCh <- agentStatusSuccess:
+		case <-time.After(5 * time.Second):
+		}
+	}()
+
+	result, err := pr.RunBoundedHelper(context.Background(), BoundedHelperConfig{
+		SessionID:      "feature-final-review-fix-01",
+		FeatureID:      "feature-1",
+		Phase:          feature.PhaseFinalReview,
+		Model:          "test-model",
+		Prompt:         "Fix the findings; ask if blocked.",
+		SystemPrompt:   "You are the final-review fixer.",
+		WorkDir:        t.TempDir(),
+		Timeout:        5 * time.Second,
+		EffortLevel:    llm.EffortMedium,
+		RouteUserInput: true,
+	})
+	if err != nil {
+		t.Fatalf("RunBoundedHelper() error = %v, want paused question answered and run completed", err)
+	}
+	if result.Status != BoundedHelperStatusCompleted {
+		t.Fatalf("result.Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+	}
+}

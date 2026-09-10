@@ -29,6 +29,8 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -509,6 +511,358 @@ func TestExecuteRecovery_ResumeActionRelaunchesPhase(t *testing.T) {
 	}
 	if spy.Calls[0].Feature == nil || spy.Calls[0].Feature.ID != "feat-a" {
 		t.Errorf("spy Feature.ID = %+v, want feat-a", spy.Calls[0].Feature)
+	}
+}
+
+func TestExecuteRecovery_ResumeEligibleImplementStampsPendingIntent(t *testing.T) {
+	stateDir := t.TempDir()
+	planPath := writeTempFile(t, "plan.md", "# plan")
+	f := &feature.Feature{
+		ID:                  "recovery-resume-eligible",
+		CurrentPhase:        feature.PhaseImplement,
+		Status:              feature.StatusImplementing,
+		CurrentIteration:    2,
+		CurrentRoadmapPhase: 1,
+		ActiveTimingKey:     "phase-1-impl",
+		ActiveRun:           1,
+		Models:              config.ModelConfig{Implementation: "codex:model-a"},
+		Repos:               []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+		Artifacts:           map[string]string{"plan": planPath},
+	}
+	writeExecOrderNextToPlan(t, planPath, f.Repos)
+	iterDir := filepath.Join(agent.ActiveImplementDir(stateDir, f), "iteration-02")
+	if err := agent.WriteResumeRecord(iterDir, agent.ResumeRecord{
+		ProviderSessionID:     "thread-recovery-123",
+		Provider:              "codex",
+		ResolvedModel:         "model-a",
+		PhaseKey:              "phase-1-impl",
+		Iteration:             2,
+		RunNumber:             1,
+		OrchestratorSessionID: "recovery-resume-eligible-phase-01-impl-02",
+		CreatedAt:             time.Now(),
+		UpdatedAt:             time.Now(),
+	}); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+
+	items := fakeRecoveryItems(itemSpec{
+		FeatureID:    f.ID,
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusImplementing,
+	})
+	items[0].Feature = f
+	actions := map[string]ports.RecoveryAction{
+		ports.RecoveryActionKey(f.ID, ""): ports.RecoveryResume,
+	}
+	registry := llm.NewRegistry()
+	registry.Register(&codex.Provider{})
+	store := newFeatureStore(f)
+	o := orchestrator.New(orchestrator.Deps{
+		Recovery:  &fakeRecoveryOp{},
+		Lifecycle: lifecycleForFeature(f),
+		Store:     store,
+		PhaseRunner: &agent.PhaseRunner{
+			StateDir: stateDir,
+			Registry: registry,
+		},
+	}, orchestrator.Hooks{})
+	o.SetRunMultiRepoImplFn((&fakeRunMultiRepoImpl{}).Fn())
+
+	if err := o.ExecuteRecovery(context.Background(), items, actions); err != nil {
+		t.Fatalf("ExecuteRecovery() error = %v", err)
+	}
+	record, err := agent.ReadResumeRecord(iterDir)
+	if err != nil {
+		t.Fatalf("ReadResumeRecord() error = %v", err)
+	}
+	if record == nil || !record.PendingResume {
+		t.Errorf("resume record = %#v, want recovery-stamped pending intent", record)
+	}
+	if err := agent.NewResumeCoordinator(iterDir).ClearPending(time.Now()); err != nil {
+		t.Fatalf("ClearPending() error = %v", err)
+	}
+}
+
+func TestExecuteRecovery_ResumeIneligibleImplementMarksFreshFallback(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured string
+		record     string
+		runNumber  int
+		wantReason string
+	}{
+		{
+			name:       "model changed",
+			configured: "codex:model-a",
+			record:     "model-b",
+			runNumber:  1,
+			wantReason: string(agent.ResumeReasonModelChanged),
+		},
+		{
+			name:       "run sealed",
+			configured: "codex:model-a",
+			record:     "model-a",
+			runNumber:  2,
+			wantReason: string(agent.ResumeReasonRunSealed),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			planPath := writeTempFile(t, "plan.md", "# plan")
+			f := &feature.Feature{
+				ID:                  "recovery-fallback-" + strings.ReplaceAll(test.name, " ", "-"),
+				CurrentPhase:        feature.PhaseImplement,
+				Status:              feature.StatusImplementing,
+				CurrentIteration:    2,
+				CurrentRoadmapPhase: 1,
+				ActiveTimingKey:     "phase-1-impl",
+				ActiveRun:           1,
+				Models:              config.ModelConfig{Implementation: test.configured},
+				Repos:               []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+				Artifacts:           map[string]string{"plan": planPath},
+			}
+			writeExecOrderNextToPlan(t, planPath, f.Repos)
+			iterDir := filepath.Join(agent.ActiveImplementDir(stateDir, f), "iteration-02")
+			originalSessionID := "thread-before-fallback"
+			if err := agent.WriteResumeRecord(iterDir, agent.ResumeRecord{
+				ProviderSessionID:     originalSessionID,
+				Provider:              "codex",
+				ResolvedModel:         test.record,
+				PhaseKey:              "phase-1-impl",
+				Iteration:             2,
+				RunNumber:             test.runNumber,
+				OrchestratorSessionID: f.ID + "-phase-01-impl-02",
+				CreatedAt:             time.Now(),
+				UpdatedAt:             time.Now(),
+			}); err != nil {
+				t.Fatalf("WriteResumeRecord() error = %v", err)
+			}
+			items := fakeRecoveryItems(itemSpec{
+				FeatureID:    f.ID,
+				CurrentPhase: feature.PhaseImplement,
+				Status:       feature.StatusImplementing,
+			})
+			items[0].Feature = f
+			registry := llm.NewRegistry()
+			registry.Register(&codex.Provider{})
+			spy := &fakeRunMultiRepoImpl{}
+			o := orchestrator.New(orchestrator.Deps{
+				Recovery:  &fakeRecoveryOp{},
+				Lifecycle: lifecycleForFeature(f),
+				Store:     newFeatureStore(f),
+				PhaseRunner: &agent.PhaseRunner{
+					StateDir: stateDir,
+					Registry: registry,
+				},
+			}, orchestrator.Hooks{})
+			o.SetRunMultiRepoImplFn(spy.Fn())
+
+			err := o.ExecuteRecovery(context.Background(), items, map[string]ports.RecoveryAction{
+				ports.RecoveryActionKey(f.ID, ""): ports.RecoveryResume,
+			})
+			if err != nil {
+				t.Fatalf("ExecuteRecovery() error = %v", err)
+			}
+			if spy.numCalls() != 1 {
+				t.Fatalf("fresh relaunches = %d, want 1", spy.numCalls())
+			}
+			record, err := agent.ReadResumeRecord(iterDir)
+			if err != nil {
+				t.Fatalf("ReadResumeRecord() error = %v", err)
+			}
+			if record == nil ||
+				record.ProviderSessionID != originalSessionID ||
+				record.PendingResume ||
+				record.FreshFallbackCount != 1 ||
+				record.FreshFallbackReason != test.wantReason {
+				t.Errorf("resume record = %#v, want retained identity and fallback reason %q", record, test.wantReason)
+			}
+		})
+	}
+}
+
+func TestExecuteRecovery_ClaimsKnowledgeBaseRepositorySessions(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	store := feature.NewStore(cpr.stateDir)
+	manager := feature.NewManager(store, config.NewDefault())
+	registry := llm.NewRegistry()
+	registry.Register(&codex.Provider{})
+	cpr.pr.FeatureStore = store
+	cpr.pr.Registry = registry
+	cpr.pr.BuildSessionFn = func(opts agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		cpr.mu.Lock()
+		cpr.capturedOpts = append(cpr.capturedOpts, opts)
+		cpr.mu.Unlock()
+		return []string{"echo", "test"}, nil, &session.SessionOpts{
+			PIDDir:                opts.PIDDir,
+			InitialPrompt:         opts.Prompt,
+			ProviderName:          "codex",
+			Model:                 "model-a",
+			RepoName:              opts.RepoName,
+			SupportsSessionResume: true,
+		}, nil
+	}
+	repos := []feature.FeatureRepo{
+		{Name: "repo-a", Path: t.TempDir()},
+		{Name: "repo-b", Path: t.TempDir()},
+	}
+	f := &feature.Feature{
+		ID:            "recovery-kb-provider-resume",
+		Name:          "Recovery KB provider resume",
+		Slug:          "recovery-kb-provider-resume",
+		Status:        feature.StatusBuildingKB,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Pipeline:      feature.PipelineLarge,
+		Models:        config.ModelConfig{KBBuild: "codex:model-a"},
+		Repos:         repos,
+		RepoStates: map[string]*feature.RepoState{
+			"repo-a": {},
+			"repo-b": {},
+		},
+		KBStatus: map[string]string{
+			"repo-a": "pending",
+			"repo-b": "pending",
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	now := time.Now()
+	items := make([]ports.RecoveryItem, 0, len(repos))
+	actions := make(map[string]ports.RecoveryAction, len(repos))
+	for i, repo := range repos {
+		if err := agent.WriteResumeRecord(agent.KBResumeDir(cpr.stateDir, f, repo.Name), agent.ResumeRecord{
+			ProviderSessionID:     "thread-" + repo.Name,
+			Provider:              "codex",
+			ResolvedModel:         "model-a",
+			PhaseKey:              feature.PhaseKnowledgeBase.DirName(),
+			ChildKey:              repo.Name,
+			RunNumber:             1,
+			OrchestratorSessionID: f.ID + "-kb-" + repo.Name,
+			CreatedAt:             now,
+			UpdatedAt:             now,
+		}); err != nil {
+			t.Fatalf("WriteResumeRecord(%s) error = %v", repo.Name, err)
+		}
+		items = append(items, ports.RecoveryItem{
+			PIDFile: session.PIDFile{
+				PID:       999999900 + i,
+				FeatureID: f.ID,
+				Phase:     feature.PhaseKnowledgeBase.String(),
+				RepoName:  repo.Name,
+			},
+			Feature:  f,
+			RepoName: repo.Name,
+		})
+		actions[ports.RecoveryActionKey(f.ID, repo.Name)] = ports.RecoveryResume
+		repoName := repo.Name
+		t.Cleanup(func() {
+			_ = agent.ReleaseKBLock(agent.KBStateDir(cpr.stateDir, repoName), f.ID)
+		})
+	}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Recovery:    &fakeRecoveryOp{},
+		Lifecycle:   manager,
+		Store:       store,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{})
+	if err := o.ExecuteRecovery(context.Background(), items, actions); err != nil {
+		t.Fatalf("ExecuteRecovery() error = %v", err)
+	}
+
+	builds := cpr.capturedByPhase(feature.PhaseKnowledgeBase)
+	if len(builds) != len(repos) {
+		t.Fatalf("KB BuildSession calls = %d, want %d", len(builds), len(repos))
+	}
+	resumeIDs := make(map[string]string, len(builds))
+	for _, build := range builds {
+		resumeIDs[build.RepoName] = build.ResumeSessionID
+	}
+	for _, repo := range repos {
+		if got := resumeIDs[repo.Name]; got != "thread-"+repo.Name {
+			t.Errorf("repo %s ResumeSessionID = %q, want %q", repo.Name, got, "thread-"+repo.Name)
+		}
+	}
+}
+
+func TestExecuteRecovery_ResumeClaimConflictDegradesToFresh(t *testing.T) {
+	stateDir := t.TempDir()
+	planPath := writeTempFile(t, "plan.md", "# plan")
+	f := &feature.Feature{
+		ID:                  "recovery-claim-conflict",
+		CurrentPhase:        feature.PhaseImplement,
+		Status:              feature.StatusImplementing,
+		CurrentIteration:    1,
+		CurrentRoadmapPhase: 1,
+		ActiveTimingKey:     "phase-1-impl",
+		ActiveRun:           1,
+		Models:              config.ModelConfig{Implementation: "codex:model-a"},
+		Repos:               []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+		Artifacts:           map[string]string{"plan": planPath},
+	}
+	writeExecOrderNextToPlan(t, planPath, f.Repos)
+	iterDir := filepath.Join(agent.ActiveImplementDir(stateDir, f), "iteration-01")
+	if err := agent.WriteResumeRecord(iterDir, agent.ResumeRecord{
+		ProviderSessionID:     "thread-conflict",
+		Provider:              "codex",
+		ResolvedModel:         "model-a",
+		PhaseKey:              "phase-1-impl",
+		Iteration:             1,
+		RunNumber:             1,
+		OrchestratorSessionID: f.ID + "-phase-01-impl-01",
+		CreatedAt:             time.Now(),
+		UpdatedAt:             time.Now(),
+	}); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+	registry := llm.NewRegistry()
+	registry.Register(&codex.Provider{})
+	coordinator := agent.NewResumeCoordinator(iterDir)
+	heldClaim, eligibility, err := coordinator.Claim(f.ID, f, "codex:model-a", registry, time.Now())
+	if err != nil || !eligibility.Eligible {
+		t.Fatalf("holding Claim() = (%#v, %v), want eligible claim", eligibility, err)
+	}
+	defer heldClaim.Release(time.Now())
+
+	items := fakeRecoveryItems(itemSpec{
+		FeatureID:    f.ID,
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusImplementing,
+	})
+	items[0].Feature = f
+	spy := &fakeRunMultiRepoImpl{}
+	o := orchestrator.New(orchestrator.Deps{
+		Recovery:  &fakeRecoveryOp{},
+		Lifecycle: lifecycleForFeature(f),
+		Store:     newFeatureStore(f),
+		PhaseRunner: &agent.PhaseRunner{
+			StateDir: stateDir,
+			Registry: registry,
+		},
+	}, orchestrator.Hooks{})
+	o.SetRunMultiRepoImplFn(spy.Fn())
+
+	if err := o.ExecuteRecovery(context.Background(), items, map[string]ports.RecoveryAction{
+		ports.RecoveryActionKey(f.ID, ""): ports.RecoveryResume,
+	}); err != nil {
+		t.Fatalf("ExecuteRecovery() error = %v", err)
+	}
+	record, err := agent.ReadResumeRecord(iterDir)
+	if err != nil {
+		t.Fatalf("ReadResumeRecord() error = %v", err)
+	}
+	if spy.numCalls() != 0 ||
+		record == nil ||
+		!record.PendingResume ||
+		record.FreshFallbackCount != 0 {
+		t.Errorf("duplicate recovery claim = calls %d, record %#v; want no second dispatch and original pending claim preserved", spy.numCalls(), record)
 	}
 }
 
@@ -1087,5 +1441,85 @@ func TestExecuteRecovery_Resume_NoCycle_FallsThroughToPhase(t *testing.T) {
 	}
 	if spy.numCalls() != 1 {
 		t.Errorf("runMultiRepoImplFn calls = %d, want 1 (phase resume should dispatch)", spy.numCalls())
+	}
+}
+
+func TestExecuteRecovery_ResumeRefusesOpenNeedUserInputGate(t *testing.T) {
+	planPath := writeTempFile(t, "plan.md", "# plan")
+	f := &feature.Feature{
+		ID:                       "feat-gated",
+		CurrentPhase:             feature.PhaseImplement,
+		Status:                   feature.StatusImplementing,
+		Repos:                    []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+		Artifacts:                map[string]string{"plan": planPath},
+		PendingNeedUserInputPath: filepath.Join(t.TempDir(), "need-input.md"),
+	}
+	writeExecOrderNextToPlan(t, planPath, f.Repos)
+	items := fakeRecoveryItems(itemSpec{
+		FeatureID:    "feat-gated",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusImplementing,
+	})
+	items[0].Feature = f
+	actions := map[string]ports.RecoveryAction{
+		ports.RecoveryActionKey("feat-gated", ""): ports.RecoveryResume,
+	}
+
+	spy := &fakeRunMultiRepoImpl{}
+	o := orchestrator.New(orchestrator.Deps{
+		Recovery:  &fakeRecoveryOp{},
+		Lifecycle: lifecycleForFeature(f),
+		Store:     newFeatureStore(f),
+	}, orchestrator.Hooks{})
+	o.SetRunMultiRepoImplFn(spy.Fn())
+
+	err := o.ExecuteRecovery(context.Background(), items, actions)
+	if !errors.Is(err, feature.ErrNeedUserInputGateOpen) {
+		t.Fatalf("ExecuteRecovery() error = %v, want ErrNeedUserInputGateOpen", err)
+	}
+	if spy.numCalls() != 0 {
+		t.Fatalf("runMultiRepoImplFn calls = %d, want 0 (input gate must block relaunch)", spy.numCalls())
+	}
+}
+
+func TestExecuteRecovery_ResumeEmitsFeatureStarted(t *testing.T) {
+	planPath := writeTempFile(t, "plan.md", "# plan")
+	f := &feature.Feature{
+		ID:           "feat-started",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusImplementing,
+		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+		Artifacts:    map[string]string{"plan": planPath},
+	}
+	writeExecOrderNextToPlan(t, planPath, f.Repos)
+	items := fakeRecoveryItems(itemSpec{
+		FeatureID:    "feat-started",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusImplementing,
+	})
+	items[0].Feature = f
+	actions := map[string]ports.RecoveryAction{
+		ports.RecoveryActionKey("feat-started", ""): ports.RecoveryResume,
+	}
+
+	spy := &fakeRunMultiRepoImpl{}
+	o := orchestrator.New(orchestrator.Deps{
+		Recovery:  &fakeRecoveryOp{},
+		Lifecycle: lifecycleForFeature(f),
+		Store:     newFeatureStore(f),
+	}, orchestrator.Hooks{})
+	o.SetRunMultiRepoImplFn(spy.Fn())
+
+	if err := o.ExecuteRecovery(context.Background(), items, actions); err != nil {
+		t.Fatalf("ExecuteRecovery: %v", err)
+	}
+	started := 0
+	for _, ev := range drainEvents(o) {
+		if ev.Type == ports.FeatureStarted && ev.FeatureID == "feat-started" {
+			started++
+		}
+	}
+	if started != 1 {
+		t.Fatalf("FeatureStarted events = %d, want 1", started)
 	}
 }

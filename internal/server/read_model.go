@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -128,7 +129,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 			}
 		}
 	}
-	detail := featureDetailFromSummary(summarizeFeature(f))
+	detail := featureDetailFromSummary(h.featureSummaryDTO(f))
 	if f.IsChild() {
 		detail.ParentID = f.Parent.ParentID
 		detail.ParentKind = f.Parent.Kind
@@ -221,7 +222,8 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 	for _, item := range f.VerificationItems {
 		detail.VerificationItems = append(detail.VerificationItems, VerificationItem{Name: item.Name, State: item.State})
 	}
-	detail.Actions = actionCatalogDTOsWithChildGuard(f, detail.ActiveChild != nil)
+	// FeatureDetail carries no cycle field: the cycle subsystem is deleted.
+	detail.Actions = h.actionCatalogDTOs(f, detail.ActiveChild != nil)
 	// Destructive actions carry a server-authoritative impact preview so
 	// confirmations enumerate the exact relationship and resources at stake.
 	if f.IsChild() {
@@ -251,6 +253,75 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 	}
 	detail.Warnings = append(detail.Warnings, effortDriftWarnings(f, h.registry)...)
 	return detail, nil
+}
+
+func (h *apiHandler) activeResumeIndicator(f *feature.Feature) (bool, int) {
+	if h == nil || h.store == nil || f == nil || f.ActiveRun <= 0 {
+		return false, 0
+	}
+	unitDir, ok := agent.ResumeUnitDir(stateDirForFeatureRead(h.store, f), f)
+	if !ok {
+		return false, 0
+	}
+	var resumed bool
+	var resumeCount int
+	record, err := agent.ReadResumeRecord(unitDir)
+	if err == nil && record != nil {
+		resumed = record.Resumed || record.ResumeCount > 0
+		resumeCount = max(record.ResumeCount, 0)
+	} else if f.CurrentPhase == feature.PhaseImplement {
+		meta, metaErr := agent.NewArtifactManager("").ReadMeta(unitDir)
+		if metaErr == nil {
+			resumed = meta.Resumed || meta.ResumeCount > 0
+			resumeCount = max(meta.ResumeCount, 0)
+		}
+	}
+	childResumed, childCount := aggregateChildResumeRecords(unitDir)
+	return resumed || childResumed, resumeCount + childCount
+}
+
+func aggregateChildResumeRecords(unitDir string) (bool, int) {
+	var resumed bool
+	var resumeCount int
+	rootSidecar := filepath.Join(unitDir, agent.ResumeSidecarFile)
+	_ = filepath.WalkDir(unitDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || entry.Name() != agent.ResumeSidecarFile || path == rootSidecar {
+			return nil
+		}
+		record, readErr := agent.ReadResumeRecord(filepath.Dir(path))
+		if readErr != nil || record == nil {
+			return nil
+		}
+		if record.Resumed || record.ResumeCount > 0 {
+			resumed = true
+			resumeCount += max(record.ResumeCount, 0)
+		}
+		return nil
+	})
+	return resumed, resumeCount
+}
+
+func activeImplementIterationDirForRead(runDir string, f *feature.Feature) string {
+	if f == nil {
+		return ""
+	}
+	// No cycle/refactor path prefix applies: those subsystems were deleted and
+	// their prefixes are treated as empty.
+	var implementDir string
+	if f.CurrentRoadmapPhase > 0 {
+		implementDir = filepath.Join(runDir, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")
+	} else {
+		implementDir = filepath.Join(runDir, "implement")
+	}
+	return filepath.Join(implementDir, fmt.Sprintf("iteration-%02d", f.CurrentIteration))
+}
+
+func stateDirForFeatureRead(store FeatureReader, f *feature.Feature) string {
+	if store == nil || f == nil || f.ActiveRun <= 0 {
+		return ""
+	}
+	runDir := store.RunDir(f.ID, f.ActiveRun)
+	return filepath.Dir(filepath.Dir(filepath.Dir(runDir)))
 }
 
 func childHasIntegrationAttention(child *feature.Feature) bool {
@@ -445,6 +516,8 @@ func featureDetailFromSummary(summary FeatureSummary) FeatureDetail {
 		CreatedAt:    summary.CreatedAt,
 		Checkpoints:  summary.Checkpoints,
 		Progress:     summary.Progress,
+		Resumed:      summary.Resumed,
+		ResumeCount:  summary.ResumeCount,
 		Warnings:     summary.Warnings,
 	}
 }
@@ -589,6 +662,90 @@ func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSumma
 	return dto
 }
 
+func actionCatalogDTOs(f *feature.Feature) []Action {
+	return actionCatalogDTOsWithChildGuard(f, false)
+}
+
+// Both guards apply: main's active-child flag, plus the resume-eligibility
+// gating that decides whether a failed feature is offered resume.
+func (h *apiHandler) actionCatalogDTOs(f *feature.Feature, hasActiveChild bool) []Action {
+	if f == nil || f.Status != feature.StatusFailed {
+		return actionCatalogDTOsWithChildGuard(f, hasActiveChild)
+	}
+	eligibility := h.resumeEligibility(f)
+	return actionCatalogDTOsWithGuards(f, hasActiveChild, &eligibility)
+}
+
+func (h *apiHandler) resumeEligibility(f *feature.Feature) agent.ResumeEligibility {
+	var record *agent.ResumeRecord
+	var unitDir string
+	if h != nil && h.store != nil && f != nil && f.ActiveRun > 0 {
+		if dir, ok := agent.ResumeUnitDir(stateDirForFeatureRead(h.store, f), f); ok {
+			unitDir = dir
+			record, _ = agent.ReadResumeRecord(unitDir)
+		}
+	}
+	var registry *llm.Registry
+	if h != nil {
+		registry = h.registry
+	}
+	currentModel := ""
+	if f != nil {
+		runner := &agent.PhaseRunner{Registry: registry}
+		switch f.CurrentPhase {
+		case feature.PhaseInquire:
+			configured := f.Models.Inquiry
+			if configured == "" {
+				configured = f.Models.Research
+			}
+			currentModel = runner.ModelForRole(configured, llm.PhaseInquiry)
+		case feature.PhaseResearch:
+			currentModel = runner.ModelForRole(f.Models.Research, llm.PhaseResearch)
+		case feature.PhaseDesign, feature.PhasePlan:
+			currentModel = runner.ModelForRole(f.Models.Planning, llm.PhasePlanning)
+		case feature.PhaseImplement:
+			currentModel = runner.ModelForRole(f.Models.Implementation, llm.PhaseImplementation)
+			parent := agent.EvaluateResumeEligibility(f, record, currentModel, registry)
+			if parent.Eligible {
+				return parent
+			}
+			child := agent.EvaluateCompositeResumeEligibility(
+				unitDir,
+				f,
+				registry,
+				agent.ResumeParentContext{
+					PhaseKey:  agent.ResumePhaseKey(f),
+					Iteration: f.CurrentIteration,
+				},
+				func(string) string {
+					return runner.ModelForRole(f.Models.Review, llm.PhaseReview)
+				},
+			)
+			if child.Eligible {
+				return child
+			}
+			return parent
+		case feature.PhaseReview, feature.PhaseFinalReview:
+			return agent.EvaluateCompositeResumeEligibility(
+				unitDir,
+				f,
+				registry,
+				agent.ResumeParentContext{
+					PhaseKey:  feature.PhaseFinalReview.DirName(),
+					Iteration: f.ReviewIteration,
+				},
+				func(childKey string) string {
+					if childKey == string(agent.RoleFinalReviewFixer) {
+						return runner.ModelForRole(f.Models.Implementation, llm.PhaseImplementation)
+					}
+					return runner.ModelForRole(f.Models.Review, llm.PhaseReview)
+				},
+			)
+		}
+	}
+	return agent.EvaluateResumeEligibility(f, record, currentModel, registry)
+}
+
 // wireStoredError renders a stored failure record through the catalog onto
 // the canonical wire error, bounding raw diagnostics with the safe-display
 // helper. A nil record yields nil; every adapter that projects a stored
@@ -670,10 +827,6 @@ func relationshipChildSummaryDTOs(children []*feature.Feature) []RelationshipChi
 	return out
 }
 
-func actionCatalogDTOs(f *feature.Feature) []Action {
-	return actionCatalogDTOsWithChildGuard(f, false)
-}
-
 // disabledParentHasActiveChild is the ActionDisabledReason used when a
 // parent action is locked because an active child exists.
 var disabledParentHasActiveChild = ActionDisabledReason{
@@ -681,7 +834,14 @@ var disabledParentHasActiveChild = ActionDisabledReason{
 	Message: "parent mutations are locked while a child is active; only paired config editing and cascade delete are available",
 }
 
+// Entry point for callers without resume-eligibility context; the guards
+// body below carries the active-child guard and optional resume-eligibility
+// gating.
 func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []Action {
+	return actionCatalogDTOsWithGuards(f, hasActiveChild, nil)
+}
+
+func actionCatalogDTOsWithGuards(f *feature.Feature, hasActiveChild bool, resumeEligibility *agent.ResumeEligibility) []Action {
 	if f == nil {
 		return nil
 	}
@@ -725,6 +885,21 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	canResume := status == feature.StatusInterrupted ||
 		status == feature.StatusNeedUserInput ||
 		f.PendingNeedUserInputPath != ""
+	// Paused non-failed features resume on paused-session/input-gate presence;
+	// failed features are gated by resume eligibility below.
+	resumeDisabledReason := ActionDisabledReason{
+		Code:    "not_paused",
+		Message: "feature has no paused session or input gate",
+	}
+	if status == feature.StatusFailed && resumeEligibility != nil {
+		canResume = resumeEligibility.Eligible
+		if !resumeEligibility.Eligible {
+			resumeDisabledReason = ActionDisabledReason{
+				Code:    string(resumeEligibility.Reason),
+				Message: resumeEligibility.Message,
+			}
+		}
+	}
 	canRestart := !running
 	// The publish action is enabled whenever the completion preflight would
 	// allow a publish: a publishable feature at CodeReady or Published,
@@ -775,7 +950,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		action(actionSetup, canSetup, featureScope, nil, childGuardReason(canSetup, ActionDisabledReason{Code: "no_pending_setup", Message: "feature has no pending or failed setup work"})...),
 		action(actionStart, canStart, featureScope, nil, childGuardReason(canStart, disabledStatusReason(status))...),
 		action(actionPauseStop, canStop, featureScope, nil, childGuardReason(canStop, ActionDisabledReason{Code: "not_running", Message: "feature has no active work to pause or stop"})...),
-		action(actionResume, canResume, featureScope, nil, childGuardReason(canResume, ActionDisabledReason{Code: "not_paused", Message: "feature has no paused session or input gate"})...),
+		action(actionResume, canResume, featureScope, nil, childGuardReason(canResume, resumeDisabledReason)...),
 		action(actionRestart, canRestart, featureScope, nil, childGuardReason(canRestart, ActionDisabledReason{Code: "running", Message: "feature must stop before restart"})...),
 		action(actionPublish, canPublish, featureScope, nil, childGuardReason(canPublish, publishDisabledReason(f))...),
 		action(actionMerge, canMerge, featureScope, nil, childGuardReason(canMerge, mergeDisabledReason(f))...),

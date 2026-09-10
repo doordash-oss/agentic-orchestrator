@@ -284,7 +284,7 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 		if f.IsChild() {
 			continue
 		}
-		summary := summarizeFeature(f)
+		summary := h.featureSummaryDTO(f)
 		var children *feature.RelationshipChildren
 		if bulkChildren != nil {
 			if children = bulkChildren[f.ID]; children == nil {
@@ -562,6 +562,12 @@ func summarizeFeature(f *feature.Feature) FeatureSummary {
 			CurrentPhaseStatus:  f.CurrentPhaseStatus,
 		},
 	}
+}
+
+func (h *apiHandler) featureSummaryDTO(f *feature.Feature) FeatureSummary {
+	summary := summarizeFeature(f)
+	summary.Resumed, summary.ResumeCount = h.activeResumeIndicator(f)
+	return summary
 }
 
 func splitPath(path string) []string {

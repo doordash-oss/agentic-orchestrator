@@ -255,6 +255,22 @@ type SessionUpdate struct {
 	Used int        `json:"used,omitempty"`
 	Size int        `json:"size,omitempty"`
 	Cost *UsageCost `json:"cost,omitempty"`
+
+	// Error is present on typed assistant-message failures.
+	Error *AssistantMessageError `json:"error,omitempty"`
+}
+
+// AssistantMessageError is OpenCode's typed assistant-message failure.
+type AssistantMessageError struct {
+	Name string                    `json:"name"`
+	Data AssistantMessageErrorData `json:"data"`
+}
+
+// AssistantMessageErrorData contains the recovery-relevant provider fields.
+type AssistantMessageErrorData struct {
+	Message     string `json:"message"`
+	StatusCode  int    `json:"statusCode,omitempty"`
+	IsRetryable *bool  `json:"isRetryable,omitempty"`
 }
 
 // UsageCost is the cumulative session cost carried on a usage_update. Amount is
@@ -274,6 +290,7 @@ const (
 	UpdateToolCallUpdate    = "tool_call_update"
 	UpdateUsage             = "usage_update"
 	UpdateAvailableCommands = "available_commands_update"
+	UpdateAssistantMessage  = "assistant_message"
 )
 
 // UpdateContent is the content block carried by message-chunk updates.

@@ -405,6 +405,32 @@ func TestPhaseImplementDir(t *testing.T) {
 	}
 }
 
+func TestActiveImplementDir(t *testing.T) {
+	tests := []struct {
+		name string
+		f    *feature.Feature
+		want string
+	}{
+		{
+			name: "roadmap phase",
+			f:    &feature.Feature{ID: "feat1", ActiveRun: 2, CurrentRoadmapPhase: 3},
+			want: filepath.Join("/tmp/state", "feat1", "runs", "run-002", "phase-03", "implement"),
+		},
+		{
+			name: "plain implementation",
+			f:    &feature.Feature{ID: "feat1", ActiveRun: 1},
+			want: filepath.Join("/tmp/state", "feat1", "runs", "run-001", "implement"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ActiveImplementDir("/tmp/state", tt.f); got != tt.want {
+				t.Errorf("ActiveImplementDir() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPhaseTestingContractDir(t *testing.T) {
 	f := &feature.Feature{ID: "feat1", ActiveRun: 1}
 	got := PhaseTestingContractDir("/tmp/state", f, 2)

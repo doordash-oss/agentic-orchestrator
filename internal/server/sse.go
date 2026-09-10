@@ -540,6 +540,8 @@ func eventDTOFromDomain(ev ports.Event) SSEEvent {
 		resourceType = resourceTypeSession
 	case ports.RepoStatusChanged:
 		kind = sseEventLifecycleUpdated
+	case ports.FeatureResumed:
+		kind = sseEventLifecycleUpdated
 	case ports.FeatureFailed:
 		kind = sseEventLifecycleUpdated
 	}
@@ -547,6 +549,11 @@ func eventDTOFromDomain(ev ports.Event) SSEEvent {
 	if ev.Phase == feature.Phase(0) && phase == feature.PhaseResearch.String() {
 		phase = ""
 	}
+	if ev.PhaseKey != "" {
+		phase = ev.PhaseKey
+	}
+	// A PhaseKey on the event overrides the derived phase name so roadmap phase
+	// keys survive the DTO mapping.
 	resource := Resource{Type: resourceType, FeatureID: ev.FeatureID, Phase: phase}
 	var dto SSEEvent
 	if kind == sseEventSessionOutputActivity {
@@ -626,6 +633,8 @@ func safeEventSummary(ev ports.Event) string {
 		return "feature failed"
 	case ports.FeatureRewound:
 		return "feature rewound"
+	case ports.FeatureResumed:
+		return "feature resumed"
 	case ports.PhaseCompleted:
 		return "phase completed"
 	case ports.PhaseStarted:

@@ -1559,6 +1559,12 @@ type FeatureDetail struct {
 	RepoStatus   []RepoStatus       `json:"repo_status"`
 	Repos        []string           `json:"repos"`
 
+	// ResumeCount Number of persisted provider-session resumptions for the active phase unit.
+	ResumeCount int `json:"resume_count"`
+
+	// Resumed Whether the active phase unit has resumed a persisted provider session.
+	Resumed bool `json:"resumed"`
+
 	// ReviewFeedback Persisted selected comments captured at launch for a review-feedback child; absent for refactor children and parents.
 	ReviewFeedback []ReviewFeedbackComment `json:"review_feedback,omitempty"`
 	ReviewGate     ReviewGate              `json:"review_gate"`
@@ -1668,9 +1674,15 @@ type FeatureSummary struct {
 	Name     string          `json:"name"`
 	Progress FeatureProgress `json:"progress"`
 	Repos    []string        `json:"repos"`
-	RunCount int             `json:"run_count"`
-	Slug     string          `json:"slug"`
-	Status   string          `json:"status"`
+
+	// ResumeCount Number of persisted provider-session resumptions for the active phase unit.
+	ResumeCount int `json:"resume_count"`
+
+	// Resumed Whether the active phase unit has resumed a persisted provider session.
+	Resumed  bool   `json:"resumed"`
+	RunCount int    `json:"run_count"`
+	Slug     string `json:"slug"`
+	Status   string `json:"status"`
 
 	// Warnings Canonical warning-class errors for this feature, such as effort-capability drift; absent when there is nothing to warn about.
 	Warnings []Error `json:"warnings,omitempty"`

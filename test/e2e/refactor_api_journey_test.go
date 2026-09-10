@@ -386,7 +386,10 @@ func waitForJourneySetupComplete(t *testing.T, baseURL, childID string) map[stri
 				body = detail["feature"].(map[string]any)
 			}
 			resp.Body.Close()
-			if body != nil && body["setup_complete"] == true {
+			// setup_complete flips just before the durable status parks back
+			// at Created; require both so a poll landing inside that window
+			// keeps waiting instead of observing a transient status.
+			if body != nil && body["setup_complete"] == true && body["status"] == "Created" {
 				return body
 			}
 		} else if err == nil {

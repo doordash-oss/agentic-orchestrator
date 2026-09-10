@@ -37,6 +37,22 @@ func TestKBStateDir(t *testing.T) {
 	}
 }
 
+func TestKBResumeDirUsesActiveRunAndRepository(t *testing.T) {
+	f := &feature.Feature{ID: "feat-kb", ActiveRun: 2, RunCount: 2}
+	got := KBResumeDir("/state/features", f, "payments")
+	want := filepath.Join(
+		"/state/features",
+		"feat-kb",
+		"runs",
+		"run-002",
+		"knowledgebase",
+		"payments",
+	)
+	if got != want {
+		t.Fatalf("KBResumeDir() = %q, want %q", got, want)
+	}
+}
+
 func TestBuildKBSessionIDKeepsQualifiedRepoNamesURLSafeAndDistinct(t *testing.T) {
 	t.Parallel()
 

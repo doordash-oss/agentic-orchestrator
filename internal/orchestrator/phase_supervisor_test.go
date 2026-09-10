@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -358,6 +359,253 @@ func TestPhaseSupervisorSingleShotClassifiesDoneResultCost(t *testing.T) {
 	}
 }
 
+// TestPhaseSupervisorSingleShotTransientFailureResumesThenCompletes exercises
+// the production wiring (resume driver AND committer both set): a transient
+// process failure auto-resumes, and the resumed session's success is adjudicated
+// through the commit boundary before the phase completes.
+func TestPhaseSupervisorSingleShotTransientFailureResumesThenCompletes(t *testing.T) {
+	sink := newRecordingPhaseCompletionSink()
+	sm := mocks.NewMockSessionManager()
+	failed := &singleShotProviderSession{MockSessionView: mocks.NewMockSessionView("feat-inquire", "feat"), providerID: "provider-1"}
+	failed.PhaseVal = feature.PhaseInquire
+	failed.ErrorDetailVal = "service temporarily unavailable"
+	resumed := &singleShotProviderSession{MockSessionView: mocks.NewMockSessionView("feat-inquire-resume-01", "feat"), providerID: "provider-1"}
+	configureSuccessfulRootTurn(resumed.MockSessionView)
+	resumed.StatusChVal <- phaseSupervisorStatusSuccess
+	driver := &fakeSingleShotResumeDriver{
+		supports: true,
+		dispatch: func(previous, resumeID string, ordinal int, fresh bool) (*agent.SingleShotResumeResult, error) {
+			if previous != "feat-inquire" || resumeID != "provider-1" || ordinal != 1 || fresh {
+				t.Fatalf("dispatch = %q %q %d %v", previous, resumeID, ordinal, fresh)
+			}
+			return &agent.SingleShotResumeResult{SessionID: resumed.ID(), Session: resumed}, nil
+		},
+	}
+	sm.GetSessionFn = func(string) ports.SessionView { return failed }
+	var waits []time.Duration
+	var committed []string
+	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
+		Completion:        sink,
+		Sessions:          sm,
+		SingleShotResumer: driver,
+		CommitOutcome: func(_ string, sessionID string, _ feature.Phase, _ llm.CompletionIntent) ([]agent.ProtocolViolation, error) {
+			committed = append(committed, sessionID)
+			return nil, nil
+		},
+		AutoResumeWait: func(wait time.Duration) bool {
+			waits = append(waits, wait)
+			return true
+		},
+	})
+	supervisor.superviseSingleShotSession("feat", failed.ID(), feature.PhaseInquire)
+	close(failed.DoneChVal)
+
+	call := sink.wait(t)
+	if !call.input.Success || call.input.SessionID != resumed.ID() {
+		t.Fatalf("completion = %+v", call.input)
+	}
+	if len(waits) != 1 || waits[0] != 5*time.Second {
+		t.Fatalf("waits = %v", waits)
+	}
+	if len(committed) != 1 || committed[0] != resumed.ID() {
+		t.Fatalf("committed sessions = %v, want the resumed session only", committed)
+	}
+	if driver.resumed != 1 || driver.completed != 1 {
+		t.Fatalf("resumed/completed = %d/%d", driver.resumed, driver.completed)
+	}
+}
+
+func TestPhaseSupervisorSingleShotTransientCapCompletesFailure(t *testing.T) {
+	sink := newRecordingPhaseCompletionSink()
+	sm := mocks.NewMockSessionManager()
+	initial := &singleShotProviderSession{MockSessionView: mocks.NewMockSessionView("feat-design", "feat"), providerID: "provider"}
+	initial.ErrorDetailVal = "service temporarily unavailable"
+	driver := &fakeSingleShotResumeDriver{supports: true}
+	driver.dispatch = func(_ string, _ string, ordinal int, _ bool) (*agent.SingleShotResumeResult, error) {
+		next := &singleShotProviderSession{MockSessionView: mocks.NewMockSessionView(fmt.Sprintf("resume-%d", ordinal), "feat"), providerID: "provider"}
+		next.ErrorDetailVal = "service temporarily unavailable"
+		close(next.DoneChVal)
+		return &agent.SingleShotResumeResult{SessionID: next.ID(), Session: next}, nil
+	}
+	sm.GetSessionFn = func(string) ports.SessionView { return initial }
+	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
+		Completion: sink, Sessions: sm, SingleShotResumer: driver,
+		AutoResumeWait: func(time.Duration) bool { return true },
+	})
+	supervisor.superviseSingleShotSession("feat", initial.ID(), feature.PhaseDesign)
+	close(initial.DoneChVal)
+
+	call := sink.wait(t)
+	if call.input.Success {
+		t.Fatalf("completion = %+v, want failure", call.input)
+	}
+	if driver.dispatched != 3 {
+		t.Fatalf("dispatch count = %d, want 3", driver.dispatched)
+	}
+}
+
+func TestPhaseSupervisorSingleShotProgressResetsConsecutiveUntilAbsoluteCap(t *testing.T) {
+	sink := newRecordingPhaseCompletionSink()
+	sm := mocks.NewMockSessionManager()
+	initial := &singleShotProviderSession{MockSessionView: mocks.NewMockSessionView("feat-research", "feat"), providerID: "provider"}
+	initial.ErrorDetailVal = "service temporarily unavailable"
+	driver := &fakeSingleShotResumeDriver{supports: true}
+	driver.dispatch = func(_ string, _ string, ordinal int, _ bool) (*agent.SingleShotResumeResult, error) {
+		next := &singleShotProviderSession{MockSessionView: mocks.NewMockSessionView(fmt.Sprintf("resume-%d", ordinal), "feat"), providerID: "provider"}
+		next.ErrorDetailVal = "service temporarily unavailable"
+		next.AccumulatedUsageVal.InputTokens = 1
+		close(next.DoneChVal)
+		return &agent.SingleShotResumeResult{SessionID: next.ID(), Session: next}, nil
+	}
+	sm.GetSessionFn = func(string) ports.SessionView { return initial }
+	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
+		Completion: sink, Sessions: sm, SingleShotResumer: driver,
+		AutoResumeWait: func(time.Duration) bool { return true },
+	})
+	supervisor.superviseSingleShotSession("feat", initial.ID(), feature.PhaseResearch)
+	close(initial.DoneChVal)
+
+	call := sink.wait(t)
+	if call.input.Success {
+		t.Fatalf("completion = %+v, want failure", call.input)
+	}
+	if driver.dispatched != 10 {
+		t.Fatalf("dispatch count = %d, want absolute cap 10", driver.dispatched)
+	}
+}
+
+func TestPhaseSupervisorSingleShotRetryHintRaisesBackoffFloor(t *testing.T) {
+	sink := newRecordingPhaseCompletionSink()
+	sm := mocks.NewMockSessionManager()
+	initial := &singleShotProviderSession{MockSessionView: mocks.NewMockSessionView("feat-inquire", "feat"), providerID: "provider"}
+	initial.ErrorDetailVal = "rate limit"
+	initial.MessageLogVal.Append(llm.SDKMessage{RateLimit: &llm.RateLimitMessage{RetryMS: 90_000}})
+	resumed := &singleShotProviderSession{MockSessionView: mocks.NewMockSessionView("resume-1", "feat"), providerID: "provider"}
+	configureSuccessfulRootTurn(resumed.MockSessionView)
+	resumed.StatusChVal <- phaseSupervisorStatusSuccess
+	driver := &fakeSingleShotResumeDriver{
+		supports: true,
+		dispatch: func(string, string, int, bool) (*agent.SingleShotResumeResult, error) {
+			return &agent.SingleShotResumeResult{SessionID: resumed.ID(), Session: resumed}, nil
+		},
+	}
+	sm.GetSessionFn = func(string) ports.SessionView { return initial }
+	var gotWait time.Duration
+	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
+		Completion: sink, Sessions: sm, SingleShotResumer: driver,
+		CommitOutcome: commitAllOutcomes,
+		AutoResumeWait: func(wait time.Duration) bool {
+			gotWait = wait
+			return true
+		},
+	})
+	supervisor.superviseSingleShotSession("feat", initial.ID(), feature.PhaseInquire)
+	close(initial.DoneChVal)
+
+	if call := sink.wait(t); !call.input.Success {
+		t.Fatalf("completion = %+v, want success", call.input)
+	}
+	if gotWait != 90*time.Second {
+		t.Fatalf("wait = %v, want provider retry hint 1m30s", gotWait)
+	}
+}
+
+func TestPhaseSupervisorSingleShotBackoffStopsForInterruptedFeature(t *testing.T) {
+	driver := &fakeSingleShotResumeDriver{interrupted: true}
+	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
+		SingleShotResumer: driver,
+	})
+	startedAt := time.Now()
+	if supervisor.waitForSingleShotResume("feat-design", time.Second) {
+		t.Fatal("waitForSingleShotResume() = true, want interrupted feature to cancel dispatch")
+	}
+	if elapsed := time.Since(startedAt); elapsed >= 500*time.Millisecond {
+		t.Errorf("interrupted backoff took %v, want prompt cancellation", elapsed)
+	}
+}
+
+func TestPhaseSupervisorSingleShotRejectedEstablishmentFallsBackFresh(t *testing.T) {
+	sink := newRecordingPhaseCompletionSink()
+	sm := mocks.NewMockSessionManager()
+	rejected := &singleShotProviderSession{MockSessionView: mocks.NewMockSessionView("feat-inquire-resume-01", "feat"), providerID: "provider"}
+	rejected.ErrorDetailVal = "session not found"
+	fresh := &singleShotProviderSession{MockSessionView: mocks.NewMockSessionView("feat-inquire-fresh-01", "feat"), providerID: "provider-fresh"}
+	configureSuccessfulRootTurn(fresh.MockSessionView)
+	fresh.StatusChVal <- phaseSupervisorStatusSuccess
+	driver := &fakeSingleShotResumeDriver{supports: true, pending: true, rejectOnce: true}
+	driver.dispatch = func(_ string, _ string, ordinal int, freshFallback bool) (*agent.SingleShotResumeResult, error) {
+		if ordinal != 1 || !freshFallback {
+			t.Fatalf("fresh dispatch ordinal/fresh = %d/%v", ordinal, freshFallback)
+		}
+		driver.pending = false
+		return &agent.SingleShotResumeResult{SessionID: fresh.ID(), Session: fresh}, nil
+	}
+	sm.GetSessionFn = func(string) ports.SessionView { return rejected }
+	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
+		Completion: sink, Sessions: sm, SingleShotResumer: driver,
+		CommitOutcome:  commitAllOutcomes,
+		AutoResumeWait: func(time.Duration) bool { t.Fatal("rejection must not consume transient retry"); return false },
+	})
+	supervisor.superviseSingleShotSession("feat", rejected.ID(), feature.PhaseInquire)
+	close(rejected.DoneChVal)
+
+	call := sink.wait(t)
+	if !call.input.Success || call.input.SessionID != fresh.ID() {
+		t.Fatalf("completion = %+v", call.input)
+	}
+	if driver.dispatched != 1 || driver.resumed != 0 || driver.completed != 1 {
+		t.Fatalf("dispatch/resumed/completed = %d/%d/%d", driver.dispatched, driver.resumed, driver.completed)
+	}
+}
+
+type singleShotProviderSession struct {
+	*mocks.MockSessionView
+	providerID string
+}
+
+func (s *singleShotProviderSession) SessionID() string { return s.providerID }
+
+type fakeSingleShotResumeDriver struct {
+	supports    bool
+	pending     bool
+	dispatched  int
+	resumed     int
+	completed   int
+	retired     int
+	rejectOnce  bool
+	interrupted bool
+	dispatch    func(string, string, int, bool) (*agent.SingleShotResumeResult, error)
+}
+
+func (d *fakeSingleShotResumeDriver) SingleShotPhaseComplete(string) bool { return false }
+func (d *fakeSingleShotResumeDriver) SingleShotSupportsResume(string) bool {
+	return d.supports
+}
+func (d *fakeSingleShotResumeDriver) SingleShotInterrupted(string) bool { return d.interrupted }
+func (d *fakeSingleShotResumeDriver) SingleShotNeedsEstablishment(string) bool {
+	return d.pending
+}
+func (d *fakeSingleShotResumeDriver) CaptureSingleShotProviderSnapshot(string, ports.SessionView) error {
+	return nil
+}
+func (d *fakeSingleShotResumeDriver) DispatchSingleShotContinuation(previous, resumeID string, ordinal int, fresh bool) (*agent.SingleShotResumeResult, error) {
+	d.dispatched++
+	return d.dispatch(previous, resumeID, ordinal, fresh)
+}
+func (d *fakeSingleShotResumeDriver) CompleteSingleShotResumeEstablishment(string, ports.SessionView, time.Duration) (bool, error) {
+	if d.rejectOnce {
+		d.rejectOnce = false
+		return false, nil
+	}
+	d.resumed++
+	return true, nil
+}
+func (d *fakeSingleShotResumeDriver) MarkSingleShotCompleted(string) error {
+	d.completed++
+	return nil
+}
+func (d *fakeSingleShotResumeDriver) RetireSingleShotResume(string) { d.retired++ }
+
 func configureSuccessfulRootTurn(sess *mocks.MockSessionView) {
 	sess.RootCompletionIntentVal = llm.CompletionIntent{
 		Found:  true,
@@ -368,4 +616,100 @@ func configureSuccessfulRootTurn(sess *mocks.MockSessionView) {
 
 func commitAllOutcomes(string, string, feature.Phase, llm.CompletionIntent) ([]agent.ProtocolViolation, error) {
 	return nil, nil
+}
+
+// TestPhaseSupervisorSingleShotBothWiredInitialSuccessCommitsOutcome verifies
+// the production configuration (resume driver AND committer both set) on the
+// initial session: success passes through commit-time validation and records
+// the resume record as completed.
+func TestPhaseSupervisorSingleShotBothWiredInitialSuccessCommitsOutcome(t *testing.T) {
+	sink := newRecordingPhaseCompletionSink()
+	sm := mocks.NewMockSessionManager()
+	sess := &singleShotProviderSession{MockSessionView: mocks.NewMockSessionView(inquireSessionID, "feat"), providerID: "provider-1"}
+	sess.PhaseVal = feature.PhaseInquire
+	configureSuccessfulRootTurn(sess.MockSessionView)
+	sm.GetSessionFn = func(string) ports.SessionView { return sess }
+
+	driver := &fakeSingleShotResumeDriver{supports: true}
+	var committed []string
+	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
+		Completion:        sink,
+		Sessions:          sm,
+		SingleShotResumer: driver,
+		CommitOutcome: func(_ string, sessionID string, _ feature.Phase, _ llm.CompletionIntent) ([]agent.ProtocolViolation, error) {
+			committed = append(committed, sessionID)
+			return nil, nil
+		},
+	})
+	supervisor.superviseSingleShotSession("feat", sess.ID(), feature.PhaseInquire)
+
+	sess.StatusChVal <- phaseSupervisorStatusSuccess
+
+	call := sink.wait(t)
+	if !call.input.Success || call.input.SessionID != sess.ID() {
+		t.Fatalf("completion = %+v, want commit-validated inquire success", call.input)
+	}
+	if len(committed) != 1 || committed[0] != sess.ID() {
+		t.Fatalf("committed sessions = %v, want exactly the initial session", committed)
+	}
+	if driver.completed != 1 {
+		t.Fatalf("MarkSingleShotCompleted calls = %d, want 1", driver.completed)
+	}
+}
+
+// TestPhaseSupervisorSingleShotCommitValidationFailureAfterResume verifies the
+// production configuration when a resumed session's root outcome fails
+// commit validation: the phase fails as a protocol violation with structured
+// detail, and no further resume dispatch is consumed.
+func TestPhaseSupervisorSingleShotCommitValidationFailureAfterResume(t *testing.T) {
+	sink := newRecordingPhaseCompletionSink()
+	sm := mocks.NewMockSessionManager()
+	initial := &singleShotProviderSession{MockSessionView: mocks.NewMockSessionView("feat-inquire", "feat"), providerID: "provider-1"}
+	initial.PhaseVal = feature.PhaseInquire
+	initial.ErrorDetailVal = "service temporarily unavailable"
+	resumed := &singleShotProviderSession{MockSessionView: mocks.NewMockSessionView("feat-inquire-resume-01", "feat"), providerID: "provider-1"}
+	configureSuccessfulRootTurn(resumed.MockSessionView)
+	resumed.LogFilePathVal = filepath.Join(t.TempDir(), "output.txt")
+	close(resumed.DoneChVal)
+	driver := &fakeSingleShotResumeDriver{
+		supports: true,
+		dispatch: func(_ string, _ string, ordinal int, fresh bool) (*agent.SingleShotResumeResult, error) {
+			if ordinal != 1 || fresh {
+				t.Fatalf("dispatch ordinal/fresh = %d/%v, want resumed continuation", ordinal, fresh)
+			}
+			return &agent.SingleShotResumeResult{SessionID: resumed.ID(), Session: resumed}, nil
+		},
+	}
+	sm.GetSessionFn = func(string) ports.SessionView { return initial }
+	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
+		Completion:        sink,
+		Sessions:          sm,
+		SingleShotResumer: driver,
+		CommitOutcome: func(_ string, _ string, _ feature.Phase, _ llm.CompletionIntent) ([]agent.ProtocolViolation, error) {
+			return []agent.ProtocolViolation{{
+				Artifact: "agentico-outcome",
+				Reason:   `root outcome status "retry" disagrees with progress.md iteration state "success"`,
+			}}, nil
+		},
+		AutoResumeWait: func(time.Duration) bool { return true },
+	})
+	supervisor.superviseSingleShotSession("feat", initial.ID(), feature.PhaseInquire)
+	close(initial.DoneChVal)
+
+	call := sink.wait(t)
+	if call.input.Success {
+		t.Fatalf("completion = %+v, want failure", call.input)
+	}
+	if call.input.FailureCode != errcat.ProtocolViolation {
+		t.Fatalf("FailureCode = %q, want %q", call.input.FailureCode, errcat.ProtocolViolation)
+	}
+	if !strings.Contains(call.input.ErrorDetail, "agentico-outcome") {
+		t.Fatalf("ErrorDetail = %q, want structured violation detail", call.input.ErrorDetail)
+	}
+	if driver.dispatched != 1 {
+		t.Fatalf("dispatch count = %d, want 1 (protocol violation must not retry)", driver.dispatched)
+	}
+	if driver.retired != 1 {
+		t.Fatalf("retire count = %d, want 1", driver.retired)
+	}
 }

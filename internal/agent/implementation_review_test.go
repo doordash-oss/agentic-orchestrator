@@ -15,17 +15,23 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 func TestImplementationReviewAxesForGate(t *testing.T) {
@@ -538,6 +544,169 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForFrontendDesign(t *testi
 	requirePermissionDecision(t, designOpts.PermHandler, "Bash", `{"command":"npm install && npm run build > out.log"}`, "allow")
 	requirePermissionDecision(t, designOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(iterDir, "review", "design", "evidence", "home.png")+`"}`, "allow")
 	requirePermissionDecision(t, designOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(workDir, "main.go")+`"}`, "deny")
+}
+
+func TestImplementationReviewCompositeResumeReusesResumesAndFallsBackFresh(t *testing.T) {
+	root := t.TempDir()
+	workDir := filepath.Join(root, "work")
+	artifactDir := filepath.Join(root, "artifacts")
+	iterDir := filepath.Join(artifactDir, "iteration-01")
+	reviewDir := filepath.Join(iterDir, "review")
+	stateDir := filepath.Join(root, "state")
+	for _, dir := range []string{workDir, iterDir, reviewDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	progressPath := filepath.Join(artifactDir, "progress.md")
+	reportPath := filepath.Join(iterDir, "verification-report.yaml")
+	planPath := filepath.Join(artifactDir, "phase-plan.md")
+	for path, body := range map[string]string{
+		progressPath: "# Iteration Progress\n\n## Iteration State\n\nSUCCESS\n",
+		reportPath:   "version: 1\nrequired_checks: []\n",
+		planPath:     "# Plan\n",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+
+	f := newTestFeature(t, workDir)
+	f.ID = "implementation-review-composite-resume"
+	f.Name = "Implementation Review Composite Resume"
+	f.Pipeline = feature.PipelineMoonshot
+	f.CurrentPhase = feature.PhaseImplement
+	f.CurrentRoadmapPhase = 1
+	f.CurrentIteration = 1
+	f.ActiveTimingKey = "phase-1-impl"
+	f.ActiveRun = 1
+	f.Models.Review = "codex:model-a"
+	store := feature.NewStore(stateDir)
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	now := time.Now()
+	parentRecord := resumeTestRecord()
+	parentRecord.Completed = true
+	parentRecord.CompletedAt = &now
+	if err := WriteResumeRecord(iterDir, parentRecord); err != nil {
+		t.Fatalf("WriteResumeRecord(parent) error = %v", err)
+	}
+	craftDir := filepath.Join(reviewDir, "craft")
+	if err := os.MkdirAll(craftDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(craft) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(craftDir, "review-feedback.md"), []byte(testutil.StructuredReviewFeedback("", "", "APPROVED")), 0o644); err != nil {
+		t.Fatalf("WriteFile(craft feedback) error = %v", err)
+	}
+	writeTestCompletionReceiptFor(t, craftDir, feature.PhaseReview, RoleImplementationReviewCraft)
+	for _, child := range []string{"craft", "functionality-evidence", "cleanliness"} {
+		record := resumeTestRecord()
+		record.ChildKey = child
+		record.Completed = child == "craft"
+		record.OrchestratorSessionID = "review-" + child
+		if err := WriteResumeRecord(filepath.Join(reviewDir, child), record); err != nil {
+			t.Fatalf("WriteResumeRecord(%s) error = %v", child, err)
+		}
+	}
+
+	var mu sync.Mutex
+	var builds []BuildSessionOpts
+	rawSM := mocks.NewMockSessionManager()
+	rawSM.StartSessionFn = func(id, _ string, _ feature.Phase, _ []string, _ string, env []string, _ ...*session.SessionOpts) (ports.SessionHandle, error) {
+		if strings.Contains(id, "cleanliness") && slices.Contains(env, "TEST_RESUME=1") {
+			return nil, fmt.Errorf("thread/resume error: thread not found")
+		}
+		child := "functionality-evidence"
+		if strings.Contains(id, "cleanliness") {
+			child = "cleanliness"
+		}
+		childDir := filepath.Join(reviewDir, child)
+		if err := os.WriteFile(filepath.Join(childDir, "review-feedback.md"), []byte(testutil.StructuredReviewFeedback("", "", "APPROVED")), 0o644); err != nil {
+			return nil, err
+		}
+		sess := newUtilityTestSession()
+		sess.result = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
+		sess.setRootIntent(validSuccessCompletionIntent())
+		sess.statusCh <- agentStatusSuccess
+		return sess, nil
+	}
+	sm := &serializedSessionManager{SessionManager: rawSM}
+	cfg := ImplementConfig{
+		Feature: f, FeatureStore: store, Registry: resumeTestRegistry(),
+		WorkDir: workDir, PlanPath: planPath, ExitCriteria: "Relevant tests pass",
+		ReviewModel: "codex:model-a", ArtifactDir: artifactDir, StateDir: stateDir,
+		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			mu.Lock()
+			builds = append(builds, opts)
+			mu.Unlock()
+			var env []string
+			if opts.ResumeSessionID != "" {
+				env = []string{"TEST_RESUME=1"}
+			}
+			return []string{"mock-reviewer"}, env, &ports.SessionOpts{
+				ProviderName: "codex", Model: "model-a",
+			}, nil
+		},
+		Observer: observe.New(false, "", false, "", false, "test"),
+	}
+	status, feedback, err := runImplementationReviewAxes(
+		cfg, sm, 1, iterDir, reviewDir,
+		observe.SpanContext{TraceID: f.TraceID, SpanID: "review-span", FeatureID: f.ID, FeatureName: f.Name, RunNumber: 1},
+		implementationReviewInput{ProgressPath: progressPath, VerificationReportPath: reportPath},
+	)
+	if err != nil {
+		mu.Lock()
+		gotBuilds := append([]BuildSessionOpts(nil), builds...)
+		mu.Unlock()
+		t.Fatalf("runImplementationReviewAxes() error = %v; builds=%+v", err, gotBuilds)
+	}
+	if status != ReviewApproved {
+		t.Fatalf("status = %s, want APPROVED; feedback:\n%s", status, feedback)
+	}
+	mu.Lock()
+	gotBuilds := append([]BuildSessionOpts(nil), builds...)
+	mu.Unlock()
+	if len(gotBuilds) != 3 {
+		t.Fatalf("BuildSession calls = %d, want resumed functionality plus rejected and fresh cleanliness", len(gotBuilds))
+	}
+	resumeBuilds, freshBuilds := 0, 0
+	for _, opts := range gotBuilds {
+		if opts.ResumeSessionID == "" {
+			freshBuilds++
+		} else {
+			resumeBuilds++
+		}
+	}
+	if resumeBuilds != 2 || freshBuilds != 1 {
+		t.Fatalf("resume/fresh builds = %d/%d, want 2/1", resumeBuilds, freshBuilds)
+	}
+	functionality, _ := ReadResumeRecord(filepath.Join(reviewDir, "functionality-evidence"))
+	cleanliness, _ := ReadResumeRecord(filepath.Join(reviewDir, "cleanliness"))
+	if functionality == nil || !functionality.Resumed || !functionality.Completed {
+		t.Fatalf("functionality record = %#v, want resumed and completed", functionality)
+	}
+	if cleanliness == nil || cleanliness.Resumed || cleanliness.FreshFallbackCount != 1 || !cleanliness.Completed {
+		t.Fatalf("cleanliness record = %#v, want completed fresh fallback lineage", cleanliness)
+	}
+}
+
+type serializedSessionManager struct {
+	ports.SessionManager
+	mu sync.Mutex
+}
+
+func (m *serializedSessionManager) StartSession(
+	id, featureID string,
+	phase feature.Phase,
+	command []string,
+	workdir string,
+	env []string,
+	opts ...*ports.SessionOpts,
+) (ports.SessionHandle, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.SessionManager.StartSession(id, featureID, phase, command, workdir, env, opts...)
 }
 
 func TestRunImplementationReviewAxesEmitsEventsAndPersistsStatus(t *testing.T) {

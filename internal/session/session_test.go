@@ -124,6 +124,11 @@ func TestSessionInitPersistsProtocolSessionIDToPIDFile(t *testing.T) {
 			Model:     "test",
 		},
 	})
+	var providerInit ports.ProviderInitInfo
+	s.onProviderInit = func(info ports.ProviderInitInfo) {
+		providerInit = info
+	}
+	s.providerName = "test-provider"
 
 	if err := WritePIDFile(dir, PIDFile{
 		PID: s.process.Process.Pid, RepoName: "repo", FeatureID: "feat-1", Phase: feature.PhaseImplement.String(),
@@ -146,6 +151,11 @@ func TestSessionInitPersistsProtocolSessionIDToPIDFile(t *testing.T) {
 	}
 	if got := s.SessionID(); got != "provider-session" {
 		t.Fatalf("session.SessionID() = %q, want provider-session", got)
+	}
+	if providerInit.SessionID != "provider-session" ||
+		providerInit.Provider != "test-provider" ||
+		providerInit.Model != "test" {
+		t.Errorf("provider init = %#v, want provider session identity", providerInit)
 	}
 }
 
@@ -377,11 +387,11 @@ func TestPendingToolWatchdogAllowsPromptResultAfterCompletedTool(t *testing.T) {
 	scriptPath := filepath.Join(tmpDir, "pending-tool-completed.sh")
 	script := `#!/usr/bin/env bash
 printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"pending"}'
-sleep 0.01
+sleep 0.04
 printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"in_progress"}'
-sleep 0.01
+sleep 0.04
 printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"completed"}'
-sleep 0.06
+sleep 0.24
 printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 `
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
@@ -401,11 +411,16 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 		&SessionOpts{
 			ProviderName: "test-provider",
 			Watchdog: &ports.SessionWatchdogConfig{
-				PendingToolIdleTimeout:    25 * time.Millisecond,
-				TurnCompletionIdleTimeout: 100 * time.Millisecond,
-				PollInterval:              5 * time.Millisecond,
+				// The margins scale the original 25/100ms pair 4x so a fully
+				// parallel test-binary run cannot starve the reader between
+				// the tool's completed event and the turn result. The
+				// completed-tool gap (240ms) still exceeds the pending-tool
+				// bound and stays under the turn-completion bound.
+				PendingToolIdleTimeout:    100 * time.Millisecond,
+				TurnCompletionIdleTimeout: 400 * time.Millisecond,
+				PollInterval:              20 * time.Millisecond,
 			},
-			ResultShutdownGrace: 20 * time.Millisecond,
+			ResultShutdownGrace: 80 * time.Millisecond,
 		},
 	)
 	if err != nil {
@@ -417,7 +432,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 		if status != "SUCCESS" {
 			t.Fatalf("StatusCh = %q, want SUCCESS", status)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for success status")
 	}
 }

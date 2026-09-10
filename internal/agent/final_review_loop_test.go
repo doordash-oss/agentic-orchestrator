@@ -26,8 +26,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -1651,6 +1653,66 @@ func TestRunFeatureFinalReviewLoop_CrashRecoveryResumesFromInterruptedIter(t *te
 	}
 }
 
+func TestRunFinalReviewAxis_ReusesCompletedCleanVerdict(t *testing.T) {
+	iterDir := t.TempDir()
+	axis := implementationReviewAxisRegistry[0]
+	axisDir := filepath.Join(iterDir, implementationReviewAxisSlug(axis.Name))
+	if err := os.MkdirAll(axisDir, 0o755); err != nil {
+		t.Fatalf("creating axis dir: %v", err)
+	}
+	feedback := FormatStructuredReviewFeedback("cached", "", "", ReviewApproved)
+	if err := os.WriteFile(filepath.Join(axisDir, "review-feedback.md"), []byte(feedback), 0o644); err != nil {
+		t.Fatalf("writing cached feedback: %v", err)
+	}
+	writeTestCompletionReceiptFor(t, axisDir, feature.PhaseReview, axis.Role)
+
+	state := &featureFinalReviewLoopState{
+		cfg: OrchestratorConfig{
+			BuildSession: func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				t.Fatal("BuildSession called for reusable final-review axis")
+				return nil, nil, nil, nil
+			},
+		},
+	}
+	status, gotFeedback, err := state.runFinalReviewAxis(1, iterDir, axis, observe.SpanContext{}, OrchestratorConfig{})
+	if err != nil {
+		t.Fatalf("runFinalReviewAxis() error = %v", err)
+	}
+	if status != ReviewApproved {
+		t.Errorf("runFinalReviewAxis() status = %v, want %v", status, ReviewApproved)
+	}
+	if !strings.Contains(gotFeedback, "## Verdict\nAPPROVED") {
+		t.Errorf("runFinalReviewAxis() feedback = %q, want cached approved verdict", gotFeedback)
+	}
+}
+
+func TestRunFinalReviewFixer_ReusesCompletedChild(t *testing.T) {
+	iterDir := t.TempDir()
+	fixDir := filepath.Join(iterDir, "fix")
+	if err := os.MkdirAll(fixDir, 0o755); err != nil {
+		t.Fatalf("creating fix dir: %v", err)
+	}
+	writeTestCompletionReceiptFor(t, fixDir, feature.PhaseReview, RoleFinalReviewFixer)
+	state := &featureFinalReviewLoopState{
+		cfg: OrchestratorConfig{
+			BuildSession: func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				t.Fatal("BuildSession called for reusable final-review fixer")
+				return nil, nil, nil, nil
+			},
+		},
+	}
+	status, err := state.runFix(1, iterDir, "cached feedback")
+	if err != nil {
+		t.Fatalf("runFix() error = %v", err)
+	}
+	if status != agentStatusSuccess {
+		t.Errorf("runFix() status = %q, want %q", status, agentStatusSuccess)
+	}
+	if _, err := ReadCompletionReceipt(iterDir); err != nil {
+		t.Fatalf("runFix() did not republish the parent iteration completion receipt: %v", err)
+	}
+}
+
 // TestRunFeatureFinalReviewLoop_NoStagedReposShortCircuits verifies the
 // degenerate "every repo already past FR" case returns review_passed
 // without launching a session. Mirrors the legacy short-circuit behavior
@@ -1769,6 +1831,91 @@ func TestRunMultiRepoFinalReview_RunFinalReviewFnSeam(t *testing.T) {
 	if result.FinalStatus != "all_passed" {
 		t.Errorf("FinalStatus = %q, want all_passed", result.FinalStatus)
 	}
+}
+
+// TestPhaseRunnerMultiRepoConfigsWireRegistryAndResumeHooks guards the
+// production OrchestratorConfig wiring in the PhaseRunner multi-repo entry
+// points: without the Registry, every review-child resume claim fails the
+// nil-registry ineligibility and runs fresh even though the UI advertises
+// resume; without OnFeatureResumed, resumed children emit no audit event.
+func TestPhaseRunnerMultiRepoConfigsWireRegistryAndResumeHooks(t *testing.T) {
+	env := newFRLoopEnv(t)
+	registry := llm.NewRegistry()
+	registry.Register(&codex.Provider{})
+	resumedHook := func(ports.FeatureResumedData) {}
+
+	t.Run("final review", func(t *testing.T) {
+		store, f, _ := newFRTestFeature(t, env.stateDir, "fr-registry-wiring", []string{testRepoNameAPI})
+		f.Models = config.ModelConfig{Implementation: "codex:model-a", Review: "codex:model-a"}
+		if err := store.Save(f); err != nil {
+			t.Fatalf("save feature: %v", err)
+		}
+		var gotCfg OrchestratorConfig
+		pr := &PhaseRunner{
+			StateDir:         env.stateDir,
+			FeatureStore:     store,
+			Registry:         registry,
+			OnFeatureResumed: resumedHook,
+			RunFinalReviewFn: func(cfg OrchestratorConfig, _ ports.SessionManager) (*FeatureFinalReviewResult, error) {
+				gotCfg = cfg
+				return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed, Repos: []string{testRepoNameAPI}}, nil
+			},
+		}
+		ch, err := pr.RunMultiRepoFinalReview(f)
+		if err != nil {
+			t.Fatalf("RunMultiRepoFinalReview() error = %v", err)
+		}
+		result := <-ch
+		if result.FinalStatus != "all_passed" {
+			t.Fatalf("FinalStatus = %q, want all_passed (seam result)", result.FinalStatus)
+		}
+		if gotCfg.Registry != registry {
+			t.Errorf("OrchestratorConfig.Registry = %v, want the runner's registry (nil-registry makes every child resume claim ineligible)", gotCfg.Registry)
+		}
+		if gotCfg.OnFeatureResumed == nil {
+			t.Error("OrchestratorConfig.OnFeatureResumed = nil, want the runner's hook forwarded")
+		}
+	})
+
+	t.Run("implementation", func(t *testing.T) {
+		store, f, _ := newLoopTestFeature(t, env.stateDir, "impl-registry-wiring", []string{testRepoNameAPI}, loopTestFeatureOptions{
+			Name:                "Implementation Registry Wiring",
+			Slug:                "impl-registry-wiring",
+			Status:              feature.StatusImplementing,
+			CurrentPhase:        feature.PhaseImplement,
+			CurrentRoadmapPhase: 1,
+			OmitPRURL:           true,
+		})
+		f.Models = config.ModelConfig{Implementation: "codex:model-a", Review: "codex:model-a"}
+		if err := store.Save(f); err != nil {
+			t.Fatalf("save feature: %v", err)
+		}
+		planPath := filepath.Join(env.stateDir, "plan.md")
+		if err := os.WriteFile(planPath, []byte("# Plan\n\n## Tasks\n\n### Task 1\n\nDo it.\n"), 0o644); err != nil {
+			t.Fatalf("write plan: %v", err)
+		}
+		var gotRegistry *llm.Registry
+		pr := &PhaseRunner{
+			StateDir:     env.stateDir,
+			FeatureStore: store,
+			Registry:     registry,
+			RunImplementFn: func(cfg ImplementConfig, _ ports.SessionManager) (*LoopResult, error) {
+				gotRegistry = cfg.Registry
+				return &LoopResult{FinalStatus: finalStatusReviewPassed}, nil
+			},
+		}
+		ch, err := pr.RunMultiRepoImplementation(f, planPath)
+		if err != nil {
+			t.Fatalf("RunMultiRepoImplementation() error = %v", err)
+		}
+		result := <-ch
+		if result.FinalStatus != "awaiting_final_review" {
+			t.Fatalf("FinalStatus = %q, want awaiting_final_review (seam result)", result.FinalStatus)
+		}
+		if gotRegistry != registry {
+			t.Errorf("ImplementConfig.Registry = %v, want the runner's registry (nil-registry makes every review-child resume claim ineligible)", gotRegistry)
+		}
+	})
 }
 
 func TestRunMultiRepoFinalReview_ProtocolViolationStatusPreserved(t *testing.T) {

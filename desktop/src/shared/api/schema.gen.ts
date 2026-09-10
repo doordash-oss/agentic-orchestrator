@@ -1961,6 +1961,10 @@ export interface components {
             created_at: string;
             checkpoints: components["schemas"]["Checkpoints"];
             progress: components["schemas"]["FeatureProgress"];
+            /** @description Whether the active phase unit has resumed a persisted provider session. */
+            resumed: boolean;
+            /** @description Number of persisted provider-session resumptions for the active phase unit. */
+            resume_count: number;
             /** @description Canonical warning-class errors for this feature, such as effort-capability drift; absent when there is nothing to warn about. */
             warnings?: components["schemas"]["Error"][];
             /** @description Current non-warning errors this feature or its active child owns, each pairing the catalog-rendered error (without diagnostics) with the reference to its durable home. Entries are ordered blocking first, then needs_action, stable by scope and key; absent when there are none. Warning-class records never appear here. */

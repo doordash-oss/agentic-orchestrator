@@ -115,7 +115,7 @@ func (m *MockPRCloser) ClosePR(prURL string) error {
 // MockWorktreeOps implements feature.WorktreeOps with configurable
 // function overrides and call tracking.
 type MockWorktreeOps struct {
-	CreateFn               func(repoPath, featureSlug, repoName, startPoint string) (string, error)
+	CreateFn               func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error)
 	ExpectedPathFn         func(featureSlug, repoName string) string
 	RemoveFn               func(worktreePath string, deleteBranch bool) error
 	RemoveRefFn            func(worktreePath, mainRepo, branch string) error
@@ -128,6 +128,7 @@ type MockWorktreeOps struct {
 	UpdateRefFn            func(repoPath, ref, oldSHA, newSHA string) error
 	CreateMergeCandidateFn func(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error)
 	InspectCleanlinessFn   func(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
+	RenameBranchFn         func(worktreePath, oldName, newName string) error
 
 	DefaultError error
 	Calls        []MockCall
@@ -136,10 +137,10 @@ type MockWorktreeOps struct {
 // NewMockWorktreeOps returns a MockWorktreeOps with zero-value defaults.
 func NewMockWorktreeOps() *MockWorktreeOps { return &MockWorktreeOps{} }
 
-func (m *MockWorktreeOps) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "Create", Args: []any{repoPath, featureSlug, repoName, startPoint}})
+func (m *MockWorktreeOps) Create(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "Create", Args: []any{repoPath, workspaceSlug, branch, repoName, startPoint}})
 	if m.CreateFn != nil {
-		return m.CreateFn(repoPath, featureSlug, repoName, startPoint)
+		return m.CreateFn(repoPath, workspaceSlug, branch, repoName, startPoint)
 	}
 	return "", m.DefaultError
 }
@@ -238,4 +239,12 @@ func (m *MockWorktreeOps) InspectCleanliness(worktreePath string, maxPerCategory
 		return m.InspectCleanlinessFn(worktreePath, maxPerCategory)
 	}
 	return &git.CleanlinessReport{}, m.DefaultError
+}
+
+func (m *MockWorktreeOps) RenameBranch(worktreePath, oldName, newName string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "RenameBranch", Args: []any{worktreePath, oldName, newName}})
+	if m.RenameBranchFn != nil {
+		return m.RenameBranchFn(worktreePath, oldName, newName)
+	}
+	return m.DefaultError
 }

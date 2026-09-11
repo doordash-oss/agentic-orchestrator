@@ -307,12 +307,13 @@ func (m *Manager) executeWorktreeSetupTask(f *Feature, task SetupTask, logPath s
 		return task, fmt.Errorf("repo %q no longer exists on feature", task.Repo)
 	}
 	repo := f.Repos[idx]
-	workspaceSlug, branch := setupWorkspaceSlug(f, repo, task)
-	if workspaceSlug == "" {
-		workspaceSlug = f.WorkspaceSlug()
-	}
-	if branch == "" || branch == git.BranchName(workspaceSlug) {
-		branch = git.BranchName(workspaceSlug)
+	// The workspace slug for the expected worktree path always comes from the
+	// feature; the branch always comes from the setup task or the repository
+	// record — never recomputed from the slug.
+	workspaceSlug := f.WorkspaceSlug()
+	branch := task.Branch
+	if branch == "" {
+		branch = repo.Branch
 	}
 	task.Branch = branch
 	if task.StartPoint == "" && !task.UseCurrentBranch {
@@ -334,7 +335,7 @@ func (m *Manager) executeWorktreeSetupTask(f *Feature, task SetupTask, logPath s
 		startPoint = ""
 	}
 	appendSetupLog(logPath, "creating worktree repo=%s branch=%s start_point=%s", repo.Name, task.Branch, startPoint)
-	path, err := m.Worktrees.Create(repo.Path, workspaceSlug, repo.Name, startPoint)
+	path, err := m.Worktrees.Create(repo.Path, workspaceSlug, task.Branch, repo.Name, startPoint)
 	if err != nil {
 		return task, fmt.Errorf("creating worktree for %s: %w", repo.Name, err)
 	}

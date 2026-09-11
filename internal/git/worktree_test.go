@@ -38,7 +38,8 @@ func TestWorktreeCreateAndRemove(t *testing.T) {
 	mgr := NewWorktreeManager(wtBaseDir)
 
 	// Create worktree from HEAD (empty start point)
-	wtPath, err := mgr.Create(repoDir, "test-feature", "test-repo", "")
+	provisional := LayerBranchName("test-feature", 1, "test-feature")
+	wtPath, err := mgr.Create(repoDir, "test-feature", provisional, "test-repo", "")
 	if err != nil {
 		t.Fatalf("create worktree: %v", err)
 	}
@@ -50,8 +51,8 @@ func TestWorktreeCreateAndRemove(t *testing.T) {
 
 	// Verify branch
 	branch := CurrentBranch(wtPath)
-	if branch != "feature/test-feature" {
-		t.Errorf("expected branch feature/test-feature, got %s", branch)
+	if branch != provisional {
+		t.Errorf("expected branch %s, got %s", provisional, branch)
 	}
 
 	// Make a commit in worktree
@@ -70,7 +71,7 @@ func TestWorktreeCreateRejectsExistingBranchAtDifferentAcceptedCommit(t *testing
 	runGit(t, repo, "branch", "feature/pinned-mismatch")
 
 	mgr := NewWorktreeManager(t.TempDir())
-	if _, err := mgr.Create(repo, "pinned-mismatch", "repo", accepted); err == nil ||
+	if _, err := mgr.Create(repo, "pinned-mismatch", "feature/pinned-mismatch", "repo", accepted); err == nil ||
 		!strings.Contains(err.Error(), "want accepted commit") {
 		t.Fatalf("Create() error = %v, want accepted-commit mismatch", err)
 	}
@@ -152,7 +153,7 @@ func TestWorktreeRemoveMaterialFailureReturned(t *testing.T) {
 	parentDir := t.TempDir()
 	mgr := NewWorktreeManager(parentDir)
 
-	wtPath, err := mgr.Create(repoDir, "stuck-feature", "test-repo", "")
+	wtPath, err := mgr.Create(repoDir, "stuck-feature", "feature/stuck-feature", "test-repo", "")
 	if err != nil {
 		t.Fatalf("create worktree: %v", err)
 	}
@@ -205,7 +206,7 @@ func TestWorktreeRemoveRefDeletesBranchAfterDeregistration(t *testing.T) {
 	repoDir := testutil.InitGitRepo(t)
 	mgr := NewWorktreeManager(t.TempDir())
 
-	wtPath, err := mgr.Create(repoDir, "partial-feature", "test-repo", "")
+	wtPath, err := mgr.Create(repoDir, "partial-feature", "feature/partial-feature", "test-repo", "")
 	if err != nil {
 		t.Fatalf("create worktree: %v", err)
 	}
@@ -259,7 +260,7 @@ func TestWorktreeRemoveIdempotentOnAbsentResources(t *testing.T) {
 	repoDir := testutil.InitGitRepo(t)
 	mgr := NewWorktreeManager(t.TempDir())
 
-	wtPath, err := mgr.Create(repoDir, "gone-feature", "test-repo", "")
+	wtPath, err := mgr.Create(repoDir, "gone-feature", "feature/gone-feature", "test-repo", "")
 	if err != nil {
 		t.Fatalf("create worktree: %v", err)
 	}
@@ -287,7 +288,7 @@ func TestWorktreeCreateRejectsEmptyRepoPath(t *testing.T) {
 	})
 
 	mgr := NewWorktreeManager(t.TempDir())
-	if _, err := mgr.Create("", "empty-repo-path", "test-repo", ""); err == nil {
+	if _, err := mgr.Create("", "empty-repo-path", "feature/empty-repo-path", "test-repo", ""); err == nil {
 		t.Fatal("Create() error = nil, want empty repo path rejected")
 	}
 }
@@ -348,7 +349,7 @@ func TestWorktreeThinStateQueries(t *testing.T) {
 					t.Fatal("HasOriginRemote() = true, want false before remote setup")
 				}
 				mgr := NewWorktreeManager(t.TempDir())
-				wtPath, err := mgr.Create(repo, "no-origin-feat", "repo", "")
+				wtPath, err := mgr.Create(repo, "no-origin-feat", "feature/no-origin-feat", "repo", "")
 				if err != nil {
 					t.Fatalf("Create() error = %v", err)
 				}
@@ -463,7 +464,7 @@ func TestResetToBaseLocal(t *testing.T) {
 	baseCommit := gitOutput(t, repoDir, "rev-parse", baseBranch)
 
 	// Create worktree
-	wtPath, err := mgr.Create(repoDir, "reset-local-feat", "repo", "")
+	wtPath, err := mgr.Create(repoDir, "reset-local-feat", "feature/reset-local-feat", "repo", "")
 	if err != nil {
 		t.Fatalf("create worktree: %v", err)
 	}
@@ -520,7 +521,7 @@ func TestResetToCommit_NoOriginNeeded(t *testing.T) {
 	}
 
 	mgr := NewWorktreeManager(t.TempDir())
-	wtPath, err := mgr.Create(repoDir, "reset-to-commit", "test-repo", "main")
+	wtPath, err := mgr.Create(repoDir, "reset-to-commit", "feature/reset-to-commit", "test-repo", "main")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -547,7 +548,7 @@ func TestResetToCommitRetriesTransientIndexLock(t *testing.T) {
 	testutil.CommitFile(t, repoDir, "later.txt", "later\n", "later commit")
 
 	mgr := NewWorktreeManager(t.TempDir())
-	wtPath, err := mgr.Create(repoDir, "reset-lock-retry", "test-repo", "main")
+	wtPath, err := mgr.Create(repoDir, "reset-lock-retry", "feature/reset-lock-retry", "test-repo", "main")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -574,6 +575,46 @@ func TestResetToCommitRetriesTransientIndexLock(t *testing.T) {
 	}
 	if got := gitOutput(t, wtPath, "rev-parse", "HEAD"); got != anchor {
 		t.Fatalf("HEAD = %s, want anchor %s", got, anchor)
+	}
+}
+
+func TestWorktreeManagerRenameBranch(t *testing.T) {
+	t.Parallel()
+
+	repoDir := testutil.InitGitRepo(t)
+	mgr := NewWorktreeManager(t.TempDir())
+	provisional := LayerBranchName("rename-me-a1b2c3d4", 1, "rename-me")
+	approved := LayerBranchName("rename-me-a1b2c3d4", 1, "approved-layer")
+	wtPath, err := mgr.Create(repoDir, "rename-me-a1b2c3d4", provisional, "repo", "")
+	if err != nil {
+		t.Fatalf("create worktree: %v", err)
+	}
+
+	if err := mgr.RenameBranch(wtPath, provisional, approved); err != nil {
+		t.Fatalf("RenameBranch: %v", err)
+	}
+	if got := CurrentBranch(wtPath); got != approved {
+		t.Fatalf("CurrentBranch() = %q, want %q", got, approved)
+	}
+	if got := gitOutput(t, repoDir, "branch", "--list", provisional); got != "" {
+		t.Fatalf("old branch %q still present after rename", provisional)
+	}
+
+	// Identical names are a no-op.
+	if err := mgr.RenameBranch(wtPath, approved, approved); err != nil {
+		t.Fatalf("RenameBranch(no-op): %v", err)
+	}
+	if got := CurrentBranch(wtPath); got != approved {
+		t.Fatalf("CurrentBranch() = %q after no-op rename, want %q", got, approved)
+	}
+
+	// A target that already exists is refused instead of clobbered.
+	testutil.CreateBranch(t, repoDir, "feature/taken")
+	if err := mgr.RenameBranch(wtPath, approved, "feature/taken"); err == nil {
+		t.Fatal("RenameBranch to an existing ref must fail")
+	}
+	if got := CurrentBranch(wtPath); got != approved {
+		t.Fatalf("CurrentBranch() = %q after failed rename, want %q", got, approved)
 	}
 }
 

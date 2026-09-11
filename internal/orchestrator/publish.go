@@ -62,7 +62,15 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	}
 
 	workDir := repoWorkDir(repo)
-	branch := repoBranch(f, repo)
+	branch := repo.Branch
+	if branch == "" {
+		// No fabricated name: a repository without a recorded branch cannot
+		// be published, and the error names the repository so the user can
+		// fix the record.
+		err := fmt.Errorf("repo %q has no feature branch recorded", repoName)
+		o.storePublishFailure(f, repoName, err)
+		return "", err
+	}
 
 	// A repository that already has a pull request is re-pushed, never
 	// re-described: CreatePR cannot update an existing PR's body, so
@@ -167,7 +175,12 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 // request and re-records the existing URL.
 func (o *Orchestrator) republishRepo(f *feature.Feature, repo feature.FeatureRepo, prURL string) (string, error) {
 	workDir := repoWorkDir(repo)
-	branch := repoBranch(f, repo)
+	branch := repo.Branch
+	if branch == "" {
+		err := fmt.Errorf("repo %q has no feature branch recorded", repo.Name)
+		o.storePublishFailure(f, repo.Name, err)
+		return "", err
+	}
 	if err := o.assertPRAcceptsUpdates(f, repo, prURL); err != nil {
 		return "", err
 	}

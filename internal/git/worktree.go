@@ -61,15 +61,17 @@ func (w *WorktreeManager) ExpectedPath(featureSlug, repoName string) string {
 	return filepath.Join(w.BaseDir, featureSlug, repoName)
 }
 
-// Create creates a new worktree branching from startPoint. If startPoint is
-// empty, HEAD is used (preserving legacy behavior).
-func (w *WorktreeManager) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+// Create creates a new worktree on branch, branching from startPoint. If
+// startPoint is empty, HEAD is used (preserving legacy behavior). The branch
+// name is taken explicitly — the layer-1 provisional name at setup, an
+// approved layer name later — while the worktree path continues to derive
+// from the workspace slug alone.
+func (w *WorktreeManager) Create(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 	if strings.TrimSpace(repoPath) == "" {
 		return "", fmt.Errorf("repo path is required for %q", repoName)
 	}
 
-	branch := BranchName(featureSlug)
-	wtPath := w.ExpectedPath(featureSlug, repoName)
+	wtPath := w.ExpectedPath(workspaceSlug, repoName)
 
 	if err := os.MkdirAll(filepath.Dir(wtPath), 0o755); err != nil {
 		return "", fmt.Errorf("creating worktree directory: %w", err)
@@ -348,6 +350,26 @@ func (w *WorktreeManager) ResetToCommit(worktreePath, commitSHA string) error {
 	}
 	if out, err := runGitMutationWithLockRetry(worktreePath, "clean", "-fd"); err != nil {
 		return fmt.Errorf("cleaning worktree after reset to commit %s: %s: %w", commitSHA, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// RenameBranch renames the branch checked out in the worktree from oldName
+// to newName in place. The caller has already verified the worktree sits on
+// oldName and newName differs; git branch -m refuses a target that already
+// exists, which keeps the rename from clobbering a stale ref. Identical
+// names are a no-op so approval of an unchanged layer-1 slug never touches
+// git.
+func (w *WorktreeManager) RenameBranch(worktreePath, oldName, newName string) error {
+	if oldName == newName {
+		return nil
+	}
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithLockRetry(worktreePath, "branch", "-m", oldName, newName); err != nil {
+		return fmt.Errorf("renaming branch %s to %s: %s: %w", oldName, newName, strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }

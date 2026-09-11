@@ -38,9 +38,10 @@ type childFakeWorktrees struct {
 	clean func(string, int) (*git.CleanlinessReport, error)
 }
 
-func (f *childFakeWorktrees) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+func (f *childFakeWorktrees) Create(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 	return "", nil
 }
+func (f *childFakeWorktrees) RenameBranch(string, string, string) error { return nil }
 func (f *childFakeWorktrees) Remove(string, bool) error              { return nil }
 func (f *childFakeWorktrees) RemoveRef(string, string, string) error { return nil }
 func (f *childFakeWorktrees) ResetToBase(string, string) error       { return nil }
@@ -224,12 +225,19 @@ func TestCreateRefactorChildPersistsRelationshipAndIntent(t *testing.T) {
 	if child.Parent.Bases[0].ParentBranch != "feature/parent-1-x" {
 		t.Fatalf("parent branch provenance = %+v", child.Parent.Bases[0])
 	}
-	// Inherits repos in order with unique child branch identities.
+	// Inherits repos in order with unique child branch identities: the
+	// child's own provisional layer-1 branch, never the parent's namespace.
 	if len(child.Repos) != 2 || child.Repos[0].Name != "repo-a" || child.Repos[1].Name != "repo-b" {
 		t.Fatalf("repos = %+v", child.Repos)
 	}
-	if child.Repos[0].Branch == "" || child.Repos[0].Branch == "feature/parent-1-x" {
-		t.Fatalf("child branch not unique: %q", child.Repos[0].Branch)
+	wantChildBranch := git.LayerBranchName(feature.WorkspaceSlug(child.Slug, child.ID), 1, child.Slug)
+	for _, repo := range child.Repos {
+		if repo.Branch != wantChildBranch {
+			t.Fatalf("child branch for %s = %q, want %q", repo.Name, repo.Branch, wantChildBranch)
+		}
+		if strings.HasPrefix(repo.Branch, "feature/parent-1-x") {
+			t.Fatalf("child branch %q leaks into the parent namespace", repo.Branch)
+		}
 	}
 	if child.Repos[0].WorktreePath != "" {
 		t.Fatalf("child worktree path must be deferred to setup, got %q", child.Repos[0].WorktreePath)
@@ -765,10 +773,11 @@ type reuseWorktrees struct {
 	created bool
 }
 
-func (f *reuseWorktrees) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+func (f *reuseWorktrees) Create(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 	f.created = true
 	return "", nil
 }
+func (f *reuseWorktrees) RenameBranch(string, string, string) error { return nil }
 func (f *reuseWorktrees) Remove(string, bool) error              { return nil }
 func (f *reuseWorktrees) RemoveRef(string, string, string) error { return nil }
 func (f *reuseWorktrees) ResetToBase(string, string) error       { return nil }
@@ -846,6 +855,35 @@ func TestRunSetupValidatesExactBaseOnReuse(t *testing.T) {
 		}
 		if done.Status != feature.StatusCreated || done.Run().Setup.Status != feature.SetupStatusDone {
 			t.Fatalf("status=%v setup=%v", done.Status, done.Run().Setup.Status)
+		}
+		// The empty task branch fell back to the repository record's branch,
+		// never to a recomputed name.
+		task := done.Run().Setup.Tasks["worktree:repo-a"]
+		if task.Branch != done.Repos[0].Branch {
+			t.Fatalf("task branch = %q, want the repository record's %q", task.Branch, done.Repos[0].Branch)
+		}
+	})
+
+	t.Run("worktree on another branch fails safely", func(t *testing.T) {
+		mgr, wt, childID := newManager(t)
+		existing, err := mgr.Store.Load(childID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wtPath := existing.Run().Setup.Tasks["worktree:repo-a"].Path
+		wt.heads[wtPath] = sha
+		// The live worktree sits on some other branch than the task's.
+		testutil.CreateBranch(t, wtPath, "feature/someone-else")
+		err = mgr.RunSetup(childID)
+		if err == nil || !strings.Contains(err.Error(), "is on branch") {
+			t.Fatalf("err = %v, want branch mismatch", err)
+		}
+		failed, ferr := mgr.Store.Load(childID)
+		if ferr != nil {
+			t.Fatal(ferr)
+		}
+		if failed.Status != feature.StatusFailed || failed.Run().Setup.Status != feature.SetupStatusFailed {
+			t.Fatalf("status=%v setup=%v", failed.Status, failed.Run().Setup.Status)
 		}
 	})
 

@@ -1469,6 +1469,16 @@ var catalog = map[Code]Entry{
 		},
 		Remediation: "Restore the origin branch or re-track the local branch; creation can continue from the local source.",
 	},
+	RoadmapBranchRenameFailed: {
+		Class:   ClassWarning,
+		Title:   "Branch rename failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Renaming a repository's branch to the approved layer-1 name failed during roadmap approval.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "Renaming the branch for %s to the approved layer-1 name failed during roadmap approval.")
+		},
+		Remediation: "The repository stays on the branch it is checked out on; rename it yourself and re-run approval from the review gate if the names must match.",
+	},
 
 	// --- Orphan-session recovery codes ---------------------------------------
 	// An orphan session's recovery item carries one of these, picked by

@@ -37,7 +37,9 @@ var ErrDuplicateSlug = fmt.Errorf("feature with this slug already exists")
 // WorktreeOps is the feature package's single worktree substitution point.
 // Satisfied by *git.WorktreeManager.
 type WorktreeOps interface {
-	Create(repoPath, featureSlug, repoName, startPoint string) (string, error)
+	// Create makes a worktree on the given branch; the path derives from the
+	// workspace slug alone.
+	Create(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error)
 	ExpectedPath(featureSlug, repoName string) string
 	Remove(worktreePath string, deleteBranch bool) error
 	RemoveRef(worktreePath, mainRepo, branch string) error
@@ -50,6 +52,8 @@ type WorktreeOps interface {
 	UpdateRef(repoPath, ref, oldSHA, newSHA string) error
 	CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error)
 	InspectCleanliness(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
+	// RenameBranch renames the branch checked out in the worktree in place.
+	RenameBranch(worktreePath, oldName, newName string) error
 }
 
 // PRCloser abstracts the single git/gh operation the feature manager performs
@@ -89,39 +93,6 @@ func (m *Manager) SlugExists(slug string) (string, error) {
 
 func NewManager(store *Store, cfg *config.Config) *Manager {
 	return &Manager{Store: store, Config: cfg}
-}
-
-func branchSlug(branch string) string {
-	return strings.TrimPrefix(branch, "feature/")
-}
-
-func repoWorkspaceSlug(f *Feature, repo FeatureRepo) string {
-	if slug := branchSlug(repo.Branch); slug != "" && slug != repo.Branch {
-		return slug
-	}
-	if f == nil {
-		return ""
-	}
-	return f.WorkspaceSlug()
-}
-
-func setupWorkspaceSlug(f *Feature, repo FeatureRepo, task SetupTask) (string, string) {
-	if f == nil {
-		return "", task.Branch
-	}
-	qualified := f.WorkspaceSlug()
-	qualifiedBranch := git.BranchName(qualified)
-	legacyBranch := git.BranchName(f.Slug)
-	if task.Branch == "" || task.Branch == legacyBranch {
-		return qualified, qualifiedBranch
-	}
-	if slug := branchSlug(task.Branch); slug != "" && slug != task.Branch {
-		return slug, task.Branch
-	}
-	if slug := branchSlug(repo.Branch); slug != "" && slug != repo.Branch {
-		return slug, repo.Branch
-	}
-	return qualified, qualifiedBranch
 }
 
 // CreateOptions holds optional parameters for feature creation.
@@ -259,9 +230,12 @@ func (m *Manager) Create(name, description string, repos []string, models config
 	}
 
 	var branchProbeWarnings []git.BranchProbeWarning
-	// Ensure the branch name is locally unique in every usable selected checkout
-	// and does not conflict with a confirmed origin branch. Origin failures are
-	// warnings; local uniqueness failures are blocking.
+	// Ensure the feature-branch prefix is locally unique in every usable
+	// selected checkout and does not conflict with a confirmed origin branch:
+	// both the flat feature/<slug>-<id> name and everything under
+	// feature/<slug>-<id>/ are probed, because git refuses to create a nested
+	// layer ref while the flat ref exists. Origin failures are warnings; local
+	// uniqueness failures are blocking.
 	if opt.QueueSetup || m.Worktrees != nil {
 		probeRepos := make([]git.BranchProbeRepository, 0, len(featureRepos))
 		for _, repo := range featureRepos {
@@ -286,10 +260,9 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		selected := false
 		for attempt := 0; attempt < 5; attempt++ {
 			workspaceSlug = WorkspaceSlug(slug, id)
-			branch := git.BranchName(workspaceSlug)
-			result, err := git.ProbeBranchCandidate(probeCtx, probeRepos, branch, m.BranchProbeOptions)
+			result, err := git.ProbeBranchPrefix(probeCtx, probeRepos, workspaceSlug, m.BranchProbeOptions)
 			if err != nil {
-				return nil, fmt.Errorf("checking generated feature branch %q: %w", branch, err)
+				return nil, fmt.Errorf("checking generated feature branch prefix feature/%s: %w", workspaceSlug, err)
 			}
 			if result.State != git.BranchProbeCollision {
 				branchProbeWarnings = result.Warnings
@@ -348,8 +321,10 @@ func (m *Manager) Create(name, description string, repos []string, models config
 	}
 
 	if opt.QueueSetup || m.Worktrees != nil {
+		// The provisional layer-1 branch: the layer naming helper applied to
+		// position 1 and the feature slug (after any collision-retry suffix).
 		for i := range featureRepos {
-			featureRepos[i].Branch = git.BranchName(workspaceSlug)
+			featureRepos[i].Branch = git.LayerBranchName(workspaceSlug, 1, slug)
 		}
 	}
 
@@ -455,7 +430,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 					startPoint = ""
 				}
 			}
-			wtPath, err := m.Worktrees.Create(fr.Path, workspaceSlug, fr.Name, startPoint)
+			wtPath, err := m.Worktrees.Create(fr.Path, workspaceSlug, fr.Branch, fr.Name, startPoint)
 			if err != nil {
 				return nil, fmt.Errorf("creating worktree for %s: %w", fr.Name, err)
 			}

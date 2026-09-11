@@ -552,36 +552,52 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 	// approved top-level roadmap so the feature lands in Planning with
 	// CurrentRoadmapPhase=1.
 	if f.CurrentRoadmapPhase == 0 {
+		// Derivation stays best-effort so a mid-edit roadmap cannot wedge the
+		// auto-approval path. Branch names are filled in for every layer
+		// here, but the worktree rename only runs when approval is final on
+		// the no-gate path below; auto-approval that routes to the human
+		// review gate never renames — the gate's proceed does, after any
+		// table edits.
+		approvalPhaseCount := 0
+		approvalLayers := []feature.StackLayer(nil)
+		approvalValid := false
 		if roadmapPath := o.resolveArtifactPath(f, "roadmap"); roadmapPath != "" {
 			if data, readErr := os.ReadFile(roadmapPath); readErr == nil {
 				if phases, parseErr := agent.ParseRoadmap(string(data)); parseErr == nil {
 					// The planning loop's contract validation rejects an
 					// invalid `## Pull Requests` table before approval, so a
-					// parseable table here is expected; derivation stays
-					// best-effort so a mid-edit roadmap cannot wedge the
-					// auto-approval path. The delivery-mode constraint rides
-					// along: a single-delivery feature with multiple rows also
-					// skips stack derivation while the phase count still
-					// persists.
+					// parseable table here is expected. The delivery-mode
+					// constraint rides along: a single-delivery feature with
+					// multiple rows also skips stack derivation while the
+					// phase count still persists.
+					approvalPhaseCount = len(phases)
 					rows, problems := agent.ValidateRoadmapPullRequestsTableForMode(string(data), phases, f.EffectiveDeliveryMode())
-					_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-						ff.TotalRoadmapPhases = len(phases)
-						if len(problems) == 0 {
-							ff.Stack = agent.DeriveStackLayers(rows)
-						}
-						return nil
-					})
+					if len(problems) == 0 {
+						approvalLayers = stackLayersWithBranches(agent.DeriveStackLayers(rows), f.WorkspaceSlug())
+						approvalValid = true
+					}
 				}
 			}
 		}
 
-		// Re-load feature after Modify so subsequent logic sees fresh state.
+		// Re-load feature so subsequent logic sees fresh state.
 		ff, getErr := o.deps.Lifecycle.Get(featureID)
 		if getErr != nil {
 			return fmt.Errorf("reload feature: %w", getErr)
 		}
 		if ff.Checkpoints.RoadmapReview {
-			// Route through review gate.
+			// Route through review gate: the count and stack persist
+			// best-effort, but no rename happens — the human may still edit
+			// the table at the gate.
+			if approvalPhaseCount > 0 {
+				_ = o.deps.Store.Modify(featureID, func(mod *feature.Feature) error {
+					mod.TotalRoadmapPhases = approvalPhaseCount
+					if approvalValid {
+						mod.Stack = approvalLayers
+					}
+					return nil
+				})
+			}
 			if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
 				return fmt.Errorf("mark needs plan review: %w", err)
 			}
@@ -596,6 +612,29 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 				o.hooks.OnReviewRequired(featureID, phase)
 			}
 			return nil
+		}
+		// No-gate auto-approval: approval is final, so the worktree rename
+		// runs before the single persistence write. A failing repository
+		// emits a warning event and its record stays on the branch actually
+		// checked out while the run still advances.
+		var renames []repoBranchRename
+		if approvalValid {
+			renames = o.renameWorktreeBranchesToLayerOne(ff, approvalLayers)
+			for _, rename := range renames {
+				if rename.Err != nil {
+					o.emitRoadmapBranchRenameWarning(featureID, rename)
+				}
+			}
+		}
+		if approvalPhaseCount > 0 {
+			_ = o.deps.Store.Modify(featureID, func(mod *feature.Feature) error {
+				if approvalValid {
+					applyApprovedStack(mod, approvalPhaseCount, approvalLayers, renames)
+				} else {
+					mod.TotalRoadmapPhases = approvalPhaseCount
+				}
+				return nil
+			})
 		}
 		// Auto-advance into first phase-plan.
 		if err := o.deps.Lifecycle.AdvanceRoadmapPhase(featureID); err != nil {
@@ -1462,6 +1501,11 @@ func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPrefligh
 	for _, repo := range f.Repos {
 		state := f.RepoStates[repo.Name]
 		publishable := repoPublishable(repo)
+		if publishable && repo.Branch == "" {
+			// No fabricated branch name: a publishable repository without a
+			// recorded branch has no deliverable destination.
+			return CompletionPreflightResult{}, fmt.Errorf("repo %q has no feature branch recorded", repo.Name)
+		}
 		repoResult := CompletionRepoResult{
 			Repo:        repo.Name,
 			Publishable: publishable,

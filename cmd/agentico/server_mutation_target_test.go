@@ -1533,7 +1533,7 @@ func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(
 	store := feature.NewStore(stateDir)
 	manager := feature.NewManager(store, cfg)
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		return "", errors.New("worktree creation should be deferred to setup")
 	}
 	manager.Worktrees = worktrees
@@ -1571,8 +1571,8 @@ func TestServerMutationTargetSetupFeatureCompletesToStartableStateWithoutStartin
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+		return filepath.Join(runtimeDir, "worktrees", workspaceSlug, repoName), nil
 	}
 	manager.Worktrees = worktrees
 
@@ -1631,12 +1631,12 @@ func TestServerMutationTargetSetupFeatureRetriesOnlyUnfinishedWorkWithoutStartin
 	failRepoB := true
 	creates := 0
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		creates++
 		if repoName == testRepoBName && failRepoB {
 			return "", errors.New("transient checkout failure")
 		}
-		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+		return filepath.Join(runtimeDir, "worktrees", workspaceSlug, repoName), nil
 	}
 	manager.Worktrees = worktrees
 
@@ -1711,12 +1711,12 @@ func TestServerMutationTargetSetupFeatureOnFailedSetupChildRerunsUnfinishedAndPa
 	failRepoB := true
 	creates := 0
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		creates++
 		if repoName == testRepoBName && failRepoB {
 			return "", errors.New("transient checkout failure")
 		}
-		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+		return filepath.Join(runtimeDir, "worktrees", workspaceSlug, repoName), nil
 	}
 	manager.Worktrees = worktrees
 
@@ -1806,11 +1806,11 @@ func TestServerMutationTargetRetryFeatureRoutesSetupFailureToSetupRetry(t *testi
 	manager := feature.NewManager(store, cfg)
 	failWorktree := true
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		if failWorktree {
 			return "", errors.New("repo checkout missing")
 		}
-		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+		return filepath.Join(runtimeDir, "worktrees", workspaceSlug, repoName), nil
 	}
 	manager.Worktrees = worktrees
 	f, err := manager.Create("Retry setup via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{

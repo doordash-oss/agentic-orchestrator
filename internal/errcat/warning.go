@@ -64,6 +64,10 @@ const (
 	// OriginBranchMissing reports a selected repository whose mapped origin
 	// branch was proved missing on the remote by the current check attempt.
 	OriginBranchMissing Code = "origin_branch_missing"
+	// RoadmapBranchRenameFailed reports a repository whose checked-out
+	// branch could not be renamed to the approved layer-1 name during a
+	// no-gate auto-approval; that repository stays on the branch it is on.
+	RoadmapBranchRenameFailed Code = "roadmap_branch_rename_failed"
 )
 
 // Orphan-session recovery codes. An orphan session is a recovery item whose

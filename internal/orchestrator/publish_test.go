@@ -649,7 +649,7 @@ func TestOrchestrator_PublishRepo_DescriptionGenerationFailureStoresRecord(t *te
 		Status: feature.StatusReviewPassed,
 		Models: config.ModelConfig{Planning: "sonnet"},
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, BaseBranch: mainBranch},
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, Branch: "feature/pub-desc-failure-a1b2c3d4/1-pub", BaseBranch: mainBranch},
 		},
 	}
 	lc := lifecycleForFeature(f)

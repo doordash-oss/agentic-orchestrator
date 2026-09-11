@@ -33,9 +33,10 @@ type cascadeTestWorktrees struct {
 	removeErr   error
 }
 
-func (w *cascadeTestWorktrees) Create(string, string, string, string) (string, error) {
+func (w *cascadeTestWorktrees) Create(string, string, string, string, string) (string, error) {
 	return "", nil
 }
+func (*cascadeTestWorktrees) RenameBranch(string, string, string) error { return nil }
 func (w *cascadeTestWorktrees) Remove(string, bool) error {
 	w.removeCalls++
 	if _, err := w.store.LoadCascadeDelete("parent"); err != nil {

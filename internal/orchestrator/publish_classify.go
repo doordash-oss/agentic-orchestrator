@@ -101,7 +101,7 @@ func PublishConflictRecord(err error) (errcat.FailureRecord, bool) {
 func (o *Orchestrator) storePublishFailure(f *feature.Feature, repoName string, err error) {
 	branch := ""
 	if repo, ok := findRepo(f, repoName); ok {
-		branch = repoBranch(f, repo)
+		branch = repo.Branch
 	}
 	_ = o.deps.Lifecycle.SetRepoPublishError(f.ID, repoName, publishFailureRecord(repoName, branch, err))
 }

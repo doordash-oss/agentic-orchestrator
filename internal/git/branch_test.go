@@ -47,12 +47,15 @@ func (r *scriptedBranchProbeRunner) Run(_ context.Context, _ string, args []stri
 	return result
 }
 
-func TestBranchName(t *testing.T) {
+func TestLayerBranchName(t *testing.T) {
 	t.Parallel()
 
-	got := BranchName("fix-query")
-	if got != "feature/fix-query" {
-		t.Errorf("BranchName = %q, want %q", got, "feature/fix-query")
+	got := LayerBranchName("fix-query-a1b2c3d4", 1, "fix-query")
+	if got != "feature/fix-query-a1b2c3d4/1-fix-query" {
+		t.Errorf("LayerBranchName = %q, want %q", got, "feature/fix-query-a1b2c3d4/1-fix-query")
+	}
+	if got := LayerBranchName("fix-query-a1b2c3d4", 2, "cleanup"); got != "feature/fix-query-a1b2c3d4/2-cleanup" {
+		t.Errorf("LayerBranchName = %q, want %q", got, "feature/fix-query-a1b2c3d4/2-cleanup")
 	}
 }
 
@@ -79,31 +82,46 @@ func TestProbeRemoteBranchDistinguishesCollisionAndAbsence(t *testing.T) {
 	})
 }
 
-func TestProbeBranchCandidateChecksLocalBeforeUnavailableOrigin(t *testing.T) {
+func TestProbeBranchPrefixChecksLocalBeforeUnavailableOrigin(t *testing.T) {
 	t.Parallel()
 
 	t.Run("local collision avoids remote probe", func(t *testing.T) {
-		runner := &scriptedBranchProbeRunner{results: []BranchProbeCommandResult{{ExitCode: 0}}}
-		result, err := ProbeBranchCandidate(context.Background(), []BranchProbeRepository{{Name: "repo-a", Path: "/repo-a", ProbeOrigin: true}}, "feature/name", BranchProbeOptions{Runner: runner})
+		runner := &scriptedBranchProbeRunner{results: []BranchProbeCommandResult{
+			{ExitCode: 0, Stdout: "refs/heads/feature/name-a1b2c3d4/2-anything\n"},
+		}}
+		result, err := ProbeBranchPrefix(context.Background(), []BranchProbeRepository{{Name: "repo-a", Path: "/repo-a", ProbeOrigin: true}}, "name-a1b2c3d4", BranchProbeOptions{Runner: runner})
 		if err != nil {
-			t.Fatalf("ProbeBranchCandidate() error = %v", err)
+			t.Fatalf("ProbeBranchPrefix() error = %v", err)
 		}
-		if result.State != BranchProbeCollision || len(runner.args) != 1 || !strings.Contains(strings.Join(runner.args[0], " "), "show-ref") {
-			t.Fatalf("result = %+v, args = %v; want local collision from one show-ref", result, runner.args)
+		if result.State != BranchProbeCollision || len(runner.args) != 1 || !strings.Contains(strings.Join(runner.args[0], " "), "for-each-ref") {
+			t.Fatalf("result = %+v, args = %v; want local collision from one for-each-ref", result, runner.args)
+		}
+	})
+
+	t.Run("local listing failure is a hard error", func(t *testing.T) {
+		runner := &scriptedBranchProbeRunner{results: []BranchProbeCommandResult{
+			{ExitCode: 128, Diagnostics: "fatal: not a git repository", Err: errors.New("exit status 128")},
+		}}
+		_, err := ProbeBranchPrefix(context.Background(), []BranchProbeRepository{{Name: "repo-a", Path: "/repo-a"}}, "name-a1b2c3d4", BranchProbeOptions{Runner: runner})
+		if err == nil || !strings.Contains(err.Error(), "repo-a") {
+			t.Fatalf("ProbeBranchPrefix() error = %v, want a hard error naming the repository", err)
 		}
 	})
 
 	t.Run("unavailable origin preserves locally unique candidate", func(t *testing.T) {
 		runner := &scriptedBranchProbeRunner{results: []BranchProbeCommandResult{
-			{ExitCode: 1},
+			{ExitCode: 0, Stdout: ""},
 			{ExitCode: 128, Diagnostics: "fatal: unable to access 'https://user:secret@example.test/repo': offline\x1b[31m", Err: errors.New("exit status 128")},
 		}}
-		result, err := ProbeBranchCandidate(context.Background(), []BranchProbeRepository{{Name: "repo-a", Path: "/repo-a", ProbeOrigin: true}}, "feature/name", BranchProbeOptions{Runner: runner})
+		result, err := ProbeBranchPrefix(context.Background(), []BranchProbeRepository{{Name: "repo-a", Path: "/repo-a", ProbeOrigin: true}}, "name-a1b2c3d4", BranchProbeOptions{Runner: runner})
 		if err != nil {
-			t.Fatalf("ProbeBranchCandidate() error = %v", err)
+			t.Fatalf("ProbeBranchPrefix() error = %v", err)
 		}
 		if result.State != BranchProbeUnavailable || len(result.Warnings) != 1 {
 			t.Fatalf("result = %+v, want unavailable with one warning", result)
+		}
+		if got := result.Warnings[0].Branch; got != "feature/name-a1b2c3d4" {
+			t.Fatalf("warning branch = %q, want the probed prefix", got)
 		}
 		if got := result.Warnings[0].Diagnostics; strings.Contains(got, "secret") || strings.ContainsRune(got, '\x1b') || !strings.Contains(got, "[redacted]") {
 			t.Fatalf("diagnostics = %q, want credentials and controls redacted", got)
@@ -111,27 +129,109 @@ func TestProbeBranchCandidateChecksLocalBeforeUnavailableOrigin(t *testing.T) {
 	})
 }
 
-func TestProbeBranchCandidateDetectsRealLocalBranch(t *testing.T) {
+func TestProbeBranchPrefixDetectsRealLocalBranches(t *testing.T) {
 	t.Parallel()
 	repoDir := testutil.InitGitRepo(t)
-	testutil.CreateBranch(t, repoDir, "feature/local-collision")
+	// A stale layer branch under the candidate prefix collides, and so does
+	// the flat name, because git refuses nested refs while the flat ref
+	// exists. An unrelated branch sharing only the prefix text does not.
+	testutil.CreateBranch(t, repoDir, "feature/local-collision-a1b2c3d4/2-anything")
+	testutil.CreateBranch(t, repoDir, "feature/flat-collision-a1b2c3d4")
+	testutil.CreateBranch(t, repoDir, "feature/local-collision-a1b2c3d4-other")
 	repos := []BranchProbeRepository{{Name: "repo-a", Path: repoDir}}
 
-	result, err := ProbeBranchCandidate(context.Background(), repos, "feature/local-collision", BranchProbeOptions{OperationTimeout: time.Second})
+	result, err := ProbeBranchPrefix(context.Background(), repos, "local-collision-a1b2c3d4", BranchProbeOptions{OperationTimeout: time.Second})
 	if err != nil {
-		t.Fatalf("ProbeBranchCandidate() error = %v", err)
+		t.Fatalf("ProbeBranchPrefix() error = %v", err)
 	}
 	if result.State != BranchProbeCollision {
-		t.Fatalf("state = %q, want local collision", result.State)
+		t.Fatalf("state = %q, want collision from the nested local branch", result.State)
 	}
 
-	result, err = ProbeBranchCandidate(context.Background(), repos, "feature/locally-unique", BranchProbeOptions{OperationTimeout: time.Second})
+	result, err = ProbeBranchPrefix(context.Background(), repos, "flat-collision-a1b2c3d4", BranchProbeOptions{OperationTimeout: time.Second})
 	if err != nil {
-		t.Fatalf("ProbeBranchCandidate(unique) error = %v", err)
+		t.Fatalf("ProbeBranchPrefix(flat) error = %v", err)
+	}
+	if result.State != BranchProbeCollision {
+		t.Fatalf("flat state = %q, want collision from the flat local branch", result.State)
+	}
+
+	result, err = ProbeBranchPrefix(context.Background(), repos, "unrelated-a1b2c3d4", BranchProbeOptions{OperationTimeout: time.Second})
+	if err != nil {
+		t.Fatalf("ProbeBranchPrefix(unrelated) error = %v", err)
 	}
 	if result.State != BranchProbeAbsent {
-		t.Fatalf("unique state = %q, want absent", result.State)
+		t.Fatalf("unrelated state = %q, want absent", result.State)
 	}
+}
+
+func TestProbeBranchPrefixProbesOriginForPublishableRepositories(t *testing.T) {
+	t.Parallel()
+	localDir, bareDir := testutil.InitPublishReadyGitRepo(t)
+	seedRemoteOnlyBranch := func(slug, fileName string) {
+		t.Helper()
+		branch := "feature/" + slug
+		testutil.CreateBranch(t, localDir, branch)
+		testutil.CommitFile(t, localDir, fileName, slug+"\n", slug+" commit")
+		testutil.SimulatePush(t, localDir, bareDir, branch, branch)
+		// The collision must come from the origin alone: drop the local ref.
+		// CreateBranch checks the branch out, so move back to main first.
+		runGit(t, localDir, "checkout", "main")
+		runGit(t, localDir, "branch", "-D", branch)
+	}
+	seedRemoteOnlyBranch("remote-collision-a1b2c3d4/2-stale-layer", "stale-layer.txt")
+	seedRemoteOnlyBranch("remote-flat-a1b2c3d4", "flat.txt")
+	testutil.CreateBranch(t, localDir, "feature/unrelated-a1b2c3d4-other")
+
+	t.Run("remote branch under the prefix collides with no local match", func(t *testing.T) {
+		repos := []BranchProbeRepository{{Name: "repo-a", Path: localDir, ProbeOrigin: true}}
+		result, err := ProbeBranchPrefix(context.Background(), repos, "remote-collision-a1b2c3d4", BranchProbeOptions{OperationTimeout: 5 * time.Second})
+		if err != nil {
+			t.Fatalf("ProbeBranchPrefix() error = %v", err)
+		}
+		if result.State != BranchProbeCollision {
+			t.Fatalf("state = %q, want collision from the remote nested branch", result.State)
+		}
+	})
+
+	t.Run("remote flat branch collides with no local match", func(t *testing.T) {
+		repos := []BranchProbeRepository{{Name: "repo-a", Path: localDir, ProbeOrigin: true}}
+		result, err := ProbeBranchPrefix(context.Background(), repos, "remote-flat-a1b2c3d4", BranchProbeOptions{OperationTimeout: 5 * time.Second})
+		if err != nil {
+			t.Fatalf("ProbeBranchPrefix() error = %v", err)
+		}
+		if result.State != BranchProbeCollision {
+			t.Fatalf("state = %q, want collision from the remote flat branch", result.State)
+		}
+	})
+
+	t.Run("local-only repository skips the origin probe", func(t *testing.T) {
+		repos := []BranchProbeRepository{{Name: "repo-a", Path: localDir, ProbeOrigin: false}}
+		result, err := ProbeBranchPrefix(context.Background(), repos, "remote-collision-a1b2c3d4", BranchProbeOptions{OperationTimeout: 5 * time.Second})
+		if err != nil {
+			t.Fatalf("ProbeBranchPrefix() error = %v", err)
+		}
+		if result.State != BranchProbeAbsent {
+			t.Fatalf("state = %q, want absent (origin not probed)", result.State)
+		}
+	})
+
+	t.Run("unreachable origin yields unavailable with a sanitized warning", func(t *testing.T) {
+		// A real checkout with no origin remote: the local listing succeeds
+		// and the remote probe fails without proving absence.
+		repoDir := testutil.InitGitRepo(t)
+		repos := []BranchProbeRepository{{Name: "repo-a", Path: repoDir, ProbeOrigin: true}}
+		result, err := ProbeBranchPrefix(context.Background(), repos, "any-a1b2c3d4", BranchProbeOptions{OperationTimeout: 5 * time.Second})
+		if err != nil {
+			t.Fatalf("ProbeBranchPrefix() error = %v", err)
+		}
+		if result.State != BranchProbeUnavailable || len(result.Warnings) != 1 {
+			t.Fatalf("result = %+v, want unavailable with one warning", result)
+		}
+		if warning := result.Warnings[0]; warning.Repository != "repo-a" {
+			t.Fatalf("warning repository = %q, want repo-a", warning.Repository)
+		}
+	})
 }
 
 func TestNonInteractiveGitEnvPreservesServerConfiguration(t *testing.T) {

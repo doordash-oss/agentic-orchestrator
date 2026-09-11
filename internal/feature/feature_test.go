@@ -1244,8 +1244,8 @@ func TestStackYAMLRoundTripAndLegacyOmit(t *testing.T) {
 	r := Run{
 		RunNumber: 1,
 		Stack: []StackLayer{
-			{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}},
-			{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}},
+			{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}, Branch: "feature/demo-a1b2c3d4/1-bootstrap"},
+			{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}, Branch: "feature/demo-a1b2c3d4/2-build-and-polish"},
 		},
 	}
 	data, err := yaml.Marshal(r)
@@ -1255,6 +1255,9 @@ func TestStackYAMLRoundTripAndLegacyOmit(t *testing.T) {
 	if !containsBytes(data, []byte("stack:")) || !containsBytes(data, []byte("slug: build-and-polish")) {
 		t.Fatalf("run.yaml missing stack layers: %s", string(data))
 	}
+	if !containsBytes(data, []byte("branch: feature/demo-a1b2c3d4/2-build-and-polish")) {
+		t.Fatalf("run.yaml missing layer branch names: %s", string(data))
+	}
 	var got Run
 	if err := yaml.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
@@ -1263,10 +1266,12 @@ func TestStackYAMLRoundTripAndLegacyOmit(t *testing.T) {
 		t.Fatalf("stack = %+v, want two layers", got.Stack)
 	}
 	if got.Stack[1].Position != 2 || got.Stack[1].Title != "Build and polish" ||
-		got.Stack[1].Slug != "build-and-polish" || len(got.Stack[1].Phases) != 2 {
+		got.Stack[1].Slug != "build-and-polish" || len(got.Stack[1].Phases) != 2 ||
+		got.Stack[1].Branch != "feature/demo-a1b2c3d4/2-build-and-polish" {
 		t.Fatalf("layer 2 = %+v, want the persisted composition", got.Stack[1])
 	}
 
+	// A run YAML persisted before layer branch names existed loads unchanged.
 	legacy := []byte("run_number: 1\ncurrent_roadmap_phase: 2\n")
 	var old Run
 	if err := yaml.Unmarshal(legacy, &old); err != nil {
@@ -1274,6 +1279,14 @@ func TestStackYAMLRoundTripAndLegacyOmit(t *testing.T) {
 	}
 	if old.Stack != nil {
 		t.Errorf("legacy stack = %+v, want nil", old.Stack)
+	}
+	legacyStack := []byte("run_number: 1\nstack:\n- position: 1\n  title: Bootstrap\n  slug: bootstrap\n  phases:\n  - 1\n")
+	var noBranch Run
+	if err := yaml.Unmarshal(legacyStack, &noBranch); err != nil {
+		t.Fatalf("Unmarshal legacy stack without branch names: %v", err)
+	}
+	if len(noBranch.Stack) != 1 || noBranch.Stack[0].Branch != "" {
+		t.Fatalf("legacy stack = %+v, want one layer with no branch name", noBranch.Stack)
 	}
 }
 

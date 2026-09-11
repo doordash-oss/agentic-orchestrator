@@ -234,13 +234,17 @@ func (r *Run) IsSealed() bool { return r != nil && r.SealedAt != nil }
 
 // StackLayer is one pull-request layer of a feature's delivery stack,
 // derived from one `## Pull Requests` table row of the approved roadmap.
-// Later roadmap phases read it through the run accessors to name branches
-// and pull requests; this phase only persists the composition.
+// Branch is the layer's shared branch name feature/<slug>-<id>/<k>-<layer-
+// slug>, filled in at roadmap approval from the workspace slug, the
+// position, and the layer slug; a run persisted before that fill loads with
+// it omitted. Later roadmap phases read it through the run accessors to
+// create the next layer's branch rather than recomputing the name.
 type StackLayer struct {
 	Position int    `yaml:"position" json:"position"`
 	Title    string `yaml:"title,omitempty" json:"title,omitempty"`
 	Slug     string `yaml:"slug,omitempty" json:"slug,omitempty"`
 	Phases   []int  `yaml:"phases,omitempty" json:"phases,omitempty"`
+	Branch   string `yaml:"branch,omitempty" json:"branch,omitempty"`
 }
 
 // CopyStackLayers returns a deep copy of stack so a forked run and the

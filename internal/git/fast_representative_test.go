@@ -145,12 +145,13 @@ func TestFastWorktreeRepresentative(t *testing.T) {
 
 	baseBranch := DefaultBranch(repo)
 	baseCommit := gitOutput(t, repo, "rev-parse", baseBranch)
-	wtPath, err := mgr.Create(repo, "fast-worktree", "repo", "")
+	fastBranch := LayerBranchName("fast-worktree", 1, "fast-worktree")
+	wtPath, err := mgr.Create(repo, "fast-worktree", fastBranch, "repo", "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if branch := CurrentBranch(wtPath); branch != "feature/fast-worktree" {
-		t.Errorf("CurrentBranch() = %q, want feature/fast-worktree", branch)
+	if branch := CurrentBranch(wtPath); branch != fastBranch {
+		t.Errorf("CurrentBranch() = %q, want %s", branch, fastBranch)
 	}
 
 	testutil.CommitFile(t, wtPath, "file.txt", "data\n", "worktree commit")

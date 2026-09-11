@@ -106,22 +106,24 @@ var ErrStalePreflight = errors.New("preflight is stale: repository state changed
 
 // completionDestinationRef is the ref a repository's work is delivered to: the
 // remote branch behind its pull request, or the local base branch a merge
-// targets.
-func completionDestinationRef(f *feature.Feature, repo feature.FeatureRepo, publishable bool) string {
+// targets. A publishable repository without a recorded branch has no
+// destination: the caller reports an error naming the repository instead of
+// fabricating a name.
+func completionDestinationRef(repo feature.FeatureRepo, publishable bool) string {
 	if !publishable {
 		return repo.BaseBranch
 	}
-	if branch := repoBranch(f, repo); branch != "" {
-		return "origin/" + branch
+	if repo.Branch == "" {
+		return ""
 	}
-	return ""
+	return "origin/" + repo.Branch
 }
 
 // applyPendingDelivery folds undelivered-work measurements into a repository's
 // preflight result and distinguishes a stale pull request or base branch from a
 // delivered one. An unresolvable destination leaves the result untouched.
 func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.FeatureRepo, result CompletionRepoResult) CompletionRepoResult {
-	dest := completionDestinationRef(f, repo, result.Publishable)
+	dest := completionDestinationRef(repo, result.Publishable)
 	work, ok := git.PendingAgainst(repoWorkDir(repo), dest)
 	if !ok {
 		return result

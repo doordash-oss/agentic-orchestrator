@@ -122,32 +122,71 @@ func ProbeRemoteBranch(ctx context.Context, repoPath, branch string, options Bra
 	return BranchProbeResult{State: BranchProbeUnavailable, Diagnostics: nonemptyBranchProbeDiagnostic(result.Diagnostics)}
 }
 
-// ProbeBranchCandidate checks every local branch before contacting any origin.
-// Local probe failures fail closed because local uniqueness must be proved.
-func ProbeBranchCandidate(ctx context.Context, repos []BranchProbeRepository, branch string, options BranchProbeOptions) (BranchCandidateResult, error) {
+// probeRemoteBranchPrefix checks the flat origin branch feature/<workspaceSlug>
+// and every origin branch under feature/<workspaceSlug>/ in one bounded call.
+// Exit code 2 from git ls-remote --exit-code proves absence of both patterns;
+// a listing is a collision; every other outcome is unavailable rather than
+// evidence of absence.
+func probeRemoteBranchPrefix(ctx context.Context, repoPath, workspaceSlug string, options BranchProbeOptions) BranchProbeResult {
+	flat := "refs/heads/feature/" + workspaceSlug
+	result := runBranchProbe(ctx, repoPath, []string{"ls-remote", "--exit-code", "--heads", "origin", flat, flat + "/*"}, options)
+	switch result.ExitCode {
+	case 0:
+		if strings.TrimSpace(result.Stdout) != "" {
+			return BranchProbeResult{State: BranchProbeCollision}
+		}
+	case 2:
+		return BranchProbeResult{State: BranchProbeAbsent}
+	}
+	return BranchProbeResult{State: BranchProbeUnavailable, Diagnostics: nonemptyBranchProbeDiagnostic(result.Diagnostics)}
+}
+
+// localBranchPrefixExists lists the flat branch feature/<workspaceSlug> and
+// every branch under feature/<workspaceSlug>/ in one bounded call. A literal
+// for-each-ref pattern matches the exact ref and every ref below it, so one
+// pattern covers both shapes. Any match is a collision; git for-each-ref
+// exits 0 with no output when nothing matches, so a non-zero exit is a probe
+// failure, not evidence of absence.
+func localBranchPrefixExists(ctx context.Context, repoPath, workspaceSlug string, options BranchProbeOptions) (bool, error) {
+	result := runBranchProbe(ctx, repoPath, []string{"for-each-ref", "--format=%(refname)", "refs/heads/feature/" + workspaceSlug}, options)
+	if result.ExitCode != 0 {
+		return false, fmt.Errorf("listing local branches under feature/%s: %s", workspaceSlug, nonemptyBranchProbeDiagnostic(result.Diagnostics))
+	}
+	return strings.TrimSpace(result.Stdout) != "", nil
+}
+
+// featureBranchPrefix is the shared prefix of every feature branch ref name.
+const featureBranchPrefix = "feature/"
+
+// ProbeBranchPrefix checks every local branch under the candidate workspace
+// slug's feature-branch prefix — the flat feature/<workspaceSlug> name and
+// everything below feature/<workspaceSlug>/ — before contacting any origin.
+// The flat name matters because git refuses to create a nested ref while the
+// flat ref exists. Local probe failures fail closed because local uniqueness
+// must be proved; origin failures are warnings.
+func ProbeBranchPrefix(ctx context.Context, repos []BranchProbeRepository, workspaceSlug string, options BranchProbeOptions) (BranchCandidateResult, error) {
 	for _, repo := range repos {
-		result := runBranchProbe(ctx, repo.Path, []string{"show-ref", "--verify", "--quiet", "refs/heads/" + branch}, options)
-		switch result.ExitCode {
-		case 0:
+		collision, err := localBranchPrefixExists(ctx, repo.Path, workspaceSlug, options)
+		if err != nil {
+			return BranchCandidateResult{}, fmt.Errorf("checking local branches in repo %q: %w", repo.Name, err)
+		}
+		if collision {
 			return BranchCandidateResult{State: BranchProbeCollision}, nil
-		case 1:
-			// Git show-ref uses 1 for a missing exact ref.
-		default:
-			return BranchCandidateResult{}, fmt.Errorf("checking local branch in repo %q: %s", repo.Name, nonemptyBranchProbeDiagnostic(result.Diagnostics))
 		}
 	}
 
+	prefix := featureBranchPrefix + workspaceSlug
 	var warnings []BranchProbeWarning
 	for _, repo := range repos {
 		if !repo.ProbeOrigin {
 			continue
 		}
-		result := ProbeRemoteBranch(ctx, repo.Path, branch, options)
+		result := probeRemoteBranchPrefix(ctx, repo.Path, workspaceSlug, options)
 		switch result.State {
 		case BranchProbeCollision:
 			return BranchCandidateResult{State: BranchProbeCollision}, nil
 		case BranchProbeUnavailable:
-			warnings = append(warnings, BranchProbeWarning{Repository: repo.Name, Branch: branch, Diagnostics: result.Diagnostics})
+			warnings = append(warnings, BranchProbeWarning{Repository: repo.Name, Branch: prefix, Diagnostics: result.Diagnostics})
 		}
 	}
 	if len(warnings) > 0 {
@@ -314,9 +353,12 @@ func sanitizeBranchProbeDiagnostics(value string, limit int) string {
 	return value
 }
 
-// BranchName returns the full branch name for a feature.
-func BranchName(featureSlug string) string {
-	return "feature/" + featureSlug
+// LayerBranchName returns the full branch name for layer k of a feature:
+// feature/<workspace-slug>/<k>-<layer-slug>. Position 1 with the feature
+// slug is the provisional layer-1 branch a worktree is created on; approval
+// and layer boundaries derive every other layer from the stack's slugs.
+func LayerBranchName(workspaceSlug string, position int, layerSlug string) string {
+	return fmt.Sprintf("feature/%s/%d-%s", workspaceSlug, position, layerSlug)
 }
 
 // BranchExistsOnRemote checks whether a branch exists on the origin remote.

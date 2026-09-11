@@ -1796,33 +1796,24 @@ func (o *Orchestrator) clearReviewGate(featureID string) error {
 
 // persistRoadmapApproval re-reads the roadmap from disk — so edits made at
 // the review gate are honored — and persists TotalRoadmapPhases and the
-// pull-request stack on the run. Unlike the best-effort persistRoadmapPhaseCount,
+// pull-request stack (with every layer's branch name) on the run, alongside
+// the repository records' and worktree setup tasks' renamed branch. All
+// renames run BEFORE the single persistence write, so a crash between the
+// two is healed by the retry. Unlike the best-effort persistRoadmapPhaseCount,
 // a failure here is returned: the caller must not clear the review gate or
-// advance the roadmap phase when the approved roadmap cannot yield a stack.
+// advance the roadmap phase when the approved roadmap cannot yield a stack
+// or a repository worktree cannot be renamed onto the approved layer-1 name.
 func (o *Orchestrator) persistRoadmapApproval(featureID string, f *feature.Feature) error {
-	roadmapPath := o.resolveArtifactPath(f, "roadmap")
-	if roadmapPath == "" {
-		return fmt.Errorf("roadmap artifact is missing, so the pull-request stack cannot be derived")
-	}
-	data, err := os.ReadFile(roadmapPath)
+	phaseCount, layers, err := o.deriveApprovedStack(f)
 	if err != nil {
-		return fmt.Errorf("reading roadmap to derive the pull-request stack: %w", err)
+		return err
 	}
-	phases, err := agent.ParseRoadmap(string(data))
-	if err != nil {
-		return fmt.Errorf("parsing roadmap to derive the pull-request stack: %w", err)
+	renames := o.renameWorktreeBranchesToLayerOne(f, layers)
+	if failures := joinRenameFailures(renames); failures != nil {
+		return failures
 	}
-	rows, problems := agent.ValidateRoadmapPullRequestsTable(string(data), phases)
-	if len(problems) > 0 {
-		return fmt.Errorf("roadmap ## Pull Requests table is invalid: %s", strings.Join(problems, "; "))
-	}
-	if deliveryProblems := agent.ValidateRoadmapPullRequestsDeliveryMode(f.EffectiveDeliveryMode(), rows); len(deliveryProblems) > 0 {
-		return fmt.Errorf("roadmap ## Pull Requests table violates the single-pull-request delivery mode: %s", strings.Join(deliveryProblems, "; "))
-	}
-	layers := agent.DeriveStackLayers(rows)
 	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-		ff.TotalRoadmapPhases = len(phases)
-		ff.Stack = layers
+		applyApprovedStack(ff, phaseCount, layers, renames)
 		return nil
 	})
 }

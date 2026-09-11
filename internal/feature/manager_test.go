@@ -222,8 +222,8 @@ func TestManagerCreateWithWorktree(t *testing.T) {
 
 	mgr := feature.NewManager(store, cfg)
 	mgr.Worktrees = &mocks.MockWorktreeOps{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-			return filepath.Join(wtDir, featureSlug, repoName), nil
+		CreateFn: func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+			return filepath.Join(wtDir, workspaceSlug, repoName), nil
 		},
 	}
 	mgr.PRs = mocks.NewMockPRCloser()
@@ -244,7 +244,7 @@ func TestManagerCreateWithWorktree(t *testing.T) {
 	if repo.Branch == "" {
 		t.Error("expected Branch to be set")
 	}
-	expectedBranch := git.BranchName(f.WorkspaceSlug())
+	expectedBranch := git.LayerBranchName(f.WorkspaceSlug(), 1, f.Slug)
 	if repo.Branch != expectedBranch {
 		t.Errorf("branch = %q, want %q", repo.Branch, expectedBranch)
 	}
@@ -264,7 +264,7 @@ func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) 
 
 	mgr := feature.NewManager(store, cfg)
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		return "", fmt.Errorf("worktree side effect should not run while setup is only queued")
 	}
 	mgr.Worktrees = worktrees
@@ -289,7 +289,7 @@ func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) 
 		t.Fatalf("persisted features = %d, want 1", len(features))
 	}
 	persisted := features[0]
-	wantBranch := git.BranchName(persisted.WorkspaceSlug())
+	wantBranch := git.LayerBranchName(persisted.WorkspaceSlug(), 1, persisted.Slug)
 	if got := persisted.Repos[0].Branch; got != wantBranch {
 		t.Fatalf("persisted branch = %q, want %q", got, wantBranch)
 	}
@@ -405,7 +405,7 @@ func TestManagerRunSetupUsesFeatureIDQualifiedBranchWhenPlainSlugBranchIsChecked
 	if gotBranch == occupiedBranch {
 		t.Fatalf("branch = %q, want ID-qualified branch distinct from occupied plain slug branch", gotBranch)
 	}
-	wantBranch := git.BranchName(loaded.WorkspaceSlug())
+	wantBranch := git.LayerBranchName(loaded.WorkspaceSlug(), 1, loaded.Slug)
 	if gotBranch != wantBranch {
 		t.Fatalf("branch = %q, want %q", gotBranch, wantBranch)
 	}
@@ -423,8 +423,8 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 	cfg.Repos["repo-b"] = config.RepoConfig{Path: "/repos/repo-b"}
 	mgr := feature.NewManager(store, cfg)
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-		return filepath.Join(wtDir, featureSlug, repoName), nil
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+		return filepath.Join(wtDir, workspaceSlug, repoName), nil
 	}
 	mgr.Worktrees = worktrees
 	mgr.PRs = mocks.NewMockPRCloser()
@@ -482,8 +482,8 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 		if repo.WorktreePath != wantPath {
 			t.Fatalf("%s worktree path = %q, want %q", repo.Name, repo.WorktreePath, wantPath)
 		}
-		if repo.Branch != git.BranchName(loaded.WorkspaceSlug()) {
-			t.Fatalf("%s branch = %q, want %q", repo.Name, repo.Branch, git.BranchName(loaded.WorkspaceSlug()))
+		if repo.Branch != git.LayerBranchName(loaded.WorkspaceSlug(), 1, loaded.Slug) {
+			t.Fatalf("%s branch = %q, want %q", repo.Name, repo.Branch, git.LayerBranchName(loaded.WorkspaceSlug(), 1, loaded.Slug))
 		}
 	}
 	if got, want := len(loaded.Images), 1; got != want {
@@ -528,7 +528,7 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 func TestManagerRunSetupFailurePersistsDiagnosticsAndLog(t *testing.T) {
 	mgr := newTestManager(t)
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		return "", errors.New("git worktree add failed: branch exists")
 	}
 	mgr.Worktrees = worktrees
@@ -586,8 +586,8 @@ func TestManagerRunSetupImageFailurePreservesCompletedWorktree(t *testing.T) {
 	wtDir := t.TempDir()
 	mgr := newTestManager(t)
 	mgr.Worktrees = &mocks.MockWorktreeOps{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-			return filepath.Join(wtDir, featureSlug, repoName), nil
+		CreateFn: func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+			return filepath.Join(wtDir, workspaceSlug, repoName), nil
 		},
 	}
 
@@ -636,11 +636,11 @@ func TestManagerRetrySetupSkipsDoneTasksAndCompletesOriginalRun(t *testing.T) {
 	mgr := feature.NewManager(store, cfg)
 	worktrees := mocks.NewMockWorktreeOps()
 	failRepoB := true
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		if repoName == "repo-b" && failRepoB {
 			return "", errors.New("repo-b checkout failed")
 		}
-		return filepath.Join(wtDir, featureSlug, repoName), nil
+		return filepath.Join(wtDir, workspaceSlug, repoName), nil
 	}
 	mgr.Worktrees = worktrees
 	mgr.PRs = mocks.NewMockPRCloser()
@@ -690,7 +690,7 @@ func TestManagerRetrySetupSkipsDoneTasksAndCompletesOriginalRun(t *testing.T) {
 	}
 	var repoACreates int
 	for _, call := range worktrees.Calls {
-		if call.Method == "Create" && len(call.Args) >= 3 && call.Args[2] == "repo-a" {
+		if call.Method == "Create" && len(call.Args) >= 4 && call.Args[3] == "repo-a" {
 			repoACreates++
 		}
 	}
@@ -705,10 +705,10 @@ func TestManagerRetrySetupRefusesDuplicateActiveRunner(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	mgr.Worktrees = &mocks.MockWorktreeOps{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		CreateFn: func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 			close(started)
 			<-release
-			return filepath.Join(wtDir, featureSlug, repoName), nil
+			return filepath.Join(wtDir, workspaceSlug, repoName), nil
 		},
 	}
 	f, err := mgr.Create("Setup Duplicate", "duplicate retry", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
@@ -735,7 +735,7 @@ func TestManagerRetrySetupFailsOnExpectedWorktreeBranchMismatch(t *testing.T) {
 	conflictPath := testutil.InitGitRepo(t)
 	testutil.CreateBranch(t, conflictPath, "feature/someone-else")
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		t.Fatalf("Create called despite persisted path conflict")
 		return "", nil
 	}
@@ -783,7 +783,7 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 	worktrees.ExpectedPathFn = func(featureSlug, repoName string) string {
 		return expectedPath
 	}
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		t.Fatalf("Create called even though expected worktree path exists")
 		return "", nil
 	}
@@ -793,7 +793,7 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	expectedBranch := git.BranchName(f.WorkspaceSlug())
+	expectedBranch := git.LayerBranchName(f.WorkspaceSlug(), 1, f.Slug)
 	if err := os.MkdirAll(expectedPath, 0o755); err != nil {
 		t.Fatalf("mkdir expected path: %v", err)
 	}
@@ -1434,8 +1434,8 @@ func TestManagerCreateNoSuffixWhenNoUpstreamConflict(t *testing.T) {
 
 	mgr := feature.NewManager(store, cfg)
 	mgr.Worktrees = &mocks.MockWorktreeOps{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-			return filepath.Join(wtDir, featureSlug, repoName), nil
+		CreateFn: func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+			return filepath.Join(wtDir, workspaceSlug, repoName), nil
 		},
 	}
 	mgr.PRs = mocks.NewMockPRCloser()
@@ -1477,8 +1477,8 @@ func TestManagerCreateKeepsLocallyUniqueBranchWhenOriginProbeIsUnavailable(t *te
 			mgr := feature.NewManager(store, cfg)
 			mgr.Worktrees = mocks.NewMockWorktreeOps()
 			mgr.BranchProbeOptions = git.BranchProbeOptions{Runner: git.BranchProbeRunnerFunc(func(_ context.Context, _ string, args []string, _ int) git.BranchProbeCommandResult {
-				if len(args) > 0 && args[0] == "show-ref" {
-					return git.BranchProbeCommandResult{ExitCode: 1}
+				if len(args) > 0 && args[0] == "for-each-ref" {
+					return git.BranchProbeCommandResult{ExitCode: 0}
 				}
 				return git.BranchProbeCommandResult{ExitCode: 128, Diagnostics: "fatal: https://user:secret@example.test/repo.git offline\x1b[31m", Err: errors.New("exit status 128")}
 			})}
@@ -1493,8 +1493,8 @@ func TestManagerCreateKeepsLocallyUniqueBranchWhenOriginProbeIsUnavailable(t *te
 				t.Fatalf("creation warnings = %+v, want one", f.CreationWarnings)
 			}
 			warning := f.CreationWarnings[0]
-			if warning.Repository != "repo-a" || warning.Branch != f.Repos[0].Branch {
-				t.Fatalf("warning = %+v, want repo-a on %q", warning, f.Repos[0].Branch)
+			if warning.Repository != "repo-a" || warning.Branch != "feature/"+f.WorkspaceSlug() {
+				t.Fatalf("warning = %+v, want repo-a on prefix %q", warning, "feature/"+f.WorkspaceSlug())
 			}
 			if strings.Contains(warning.Diagnostics, "secret") || strings.ContainsRune(warning.Diagnostics, '\x1b') || !strings.Contains(warning.Diagnostics, "[redacted]") {
 				t.Fatalf("diagnostics = %q, want bounded redaction", warning.Diagnostics)
@@ -1531,7 +1531,9 @@ func TestManagerCreateSelectsSuffixedCandidateWhenOriginConfirmsCollision(t *tes
 		Runner: git.BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, limit int) git.BranchProbeCommandResult {
 			if len(args) > 0 && args[0] == "ls-remote" && !planted {
 				planted = true
-				branch := strings.TrimPrefix(args[len(args)-1], "refs/heads/")
+				// The flat pattern is the second-to-last ls-remote argument;
+				// the last one is the nested wildcard.
+				branch := strings.TrimPrefix(args[len(args)-2], "refs/heads/")
 				testutil.CreateBranch(t, fixtureDir, branch)
 				testutil.SimulatePush(t, fixtureDir, bareDir, branch, branch)
 			}
@@ -1546,7 +1548,7 @@ func TestManagerCreateSelectsSuffixedCandidateWhenOriginConfirmsCollision(t *tes
 	if f.Slug == "origin-collision" || !strings.HasPrefix(f.Slug, "origin-collision-") {
 		t.Fatalf("slug = %q, want a suffixed candidate after the confirmed origin collision", f.Slug)
 	}
-	if got := f.Repos[0].Branch; got != git.BranchName(feature.WorkspaceSlug(f.Slug, f.ID)) {
+	if got := f.Repos[0].Branch; got != git.LayerBranchName(feature.WorkspaceSlug(f.Slug, f.ID), 1, f.Slug) {
 		t.Fatalf("selected branch = %q, want the regenerated candidate", got)
 	}
 	if len(f.CreationWarnings) != 0 {
@@ -1569,8 +1571,8 @@ func TestManagerCreateBoundsBranchProbesAcrossRepositories(t *testing.T) {
 	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.BranchProbeBudget = 40 * time.Millisecond
 	mgr.BranchProbeOptions = git.BranchProbeOptions{OperationTimeout: time.Second, Runner: git.BranchProbeRunnerFunc(func(ctx context.Context, _ string, args []string, _ int) git.BranchProbeCommandResult {
-		if len(args) > 0 && args[0] == "show-ref" {
-			return git.BranchProbeCommandResult{ExitCode: 1}
+		if len(args) > 0 && args[0] == "for-each-ref" {
+			return git.BranchProbeCommandResult{ExitCode: 0}
 		}
 		<-ctx.Done()
 		return git.BranchProbeCommandResult{ExitCode: -1, Diagnostics: ctx.Err().Error(), Err: ctx.Err()}
@@ -1599,7 +1601,7 @@ func TestManagerCreateFailsAfterFiniteBranchCandidateExhaustion(t *testing.T) {
 	var calls int
 	mgr.BranchProbeOptions = git.BranchProbeOptions{Runner: git.BranchProbeRunnerFunc(func(_ context.Context, _ string, _ []string, _ int) git.BranchProbeCommandResult {
 		calls++
-		return git.BranchProbeCommandResult{ExitCode: 0}
+		return git.BranchProbeCommandResult{ExitCode: 0, Stdout: "refs/heads/feature/colliding\n"}
 	})}
 
 	_, err := mgr.Create("Exhaust Branches", "test", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
@@ -4397,8 +4399,8 @@ func TestManagerCreateSkipsBranchCheckForUnpublishedRepos(t *testing.T) {
 	cfg.Repos["local-repo"] = config.RepoConfig{Path: "/repos/local-repo"}
 	mgr := feature.NewManager(store, cfg)
 	mgr.Worktrees = &mocks.MockWorktreeOps{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-			return filepath.Join(t.TempDir(), featureSlug, repoName), nil
+		CreateFn: func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+			return filepath.Join(t.TempDir(), workspaceSlug, repoName), nil
 		},
 	}
 	mgr.PRs = mocks.NewMockPRCloser()
@@ -6349,8 +6351,8 @@ func TestRewindWithRequest_PartialCarriesStackForward(t *testing.T) {
 	})
 	run1Dir := filepath.Join(mgr.Store.BaseDir, f.ID, "runs", "run-001")
 	stack := []feature.StackLayer{
-		{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}},
-		{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}},
+		{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}, Branch: "feature/carry-a1b2c3d4/1-bootstrap"},
+		{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}, Branch: "feature/carry-a1b2c3d4/2-build-and-polish"},
 	}
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusImplementing
@@ -6406,7 +6408,8 @@ func TestRewindWithRequest_PartialCarriesStackForward(t *testing.T) {
 	}
 	for i, layer := range stack {
 		if newRun.Stack[i].Position != layer.Position || newRun.Stack[i].Title != layer.Title ||
-			newRun.Stack[i].Slug != layer.Slug || len(newRun.Stack[i].Phases) != len(layer.Phases) {
+			newRun.Stack[i].Slug != layer.Slug || len(newRun.Stack[i].Phases) != len(layer.Phases) ||
+			newRun.Stack[i].Branch != layer.Branch {
 			t.Errorf("new run stack layer %d = %+v, want %+v", i+1, newRun.Stack[i], layer)
 		}
 	}

@@ -403,7 +403,9 @@ func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
 		}
 		branch := repo.Branch
 		if branch == "" {
-			branch = "feature/" + f.Slug
+			// No fabricated name: a repository without a recorded branch
+			// cannot be merged locally, and the error names the repository.
+			return fmt.Errorf("%s: no feature branch recorded", repo.Name)
 		}
 		baseBranch := repo.BaseBranch
 		if baseBranch == "" {

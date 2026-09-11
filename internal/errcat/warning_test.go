@@ -32,6 +32,7 @@ var warningCodeList = []Code{
 	RewindWorktreeResetFailed,
 	RepositoryWorktreeUnavailable,
 	RepositoryDiffFailed,
+	RoadmapBranchRenameFailed,
 }
 
 // orphanSessionCodeList is the closed set of orphan-session recovery codes.
@@ -44,8 +45,8 @@ var orphanSessionCodeList = []Code{
 // for every warning code: warning class and no action references. A warning
 // never blocks progress, never gates a lane, and never offers an action.
 func TestWarningCodesAreWarningClassWithoutActions(t *testing.T) {
-	if len(warningCodeList) != 10 {
-		t.Fatalf("warning code list has %d entries; want 10", len(warningCodeList))
+	if len(warningCodeList) != 11 {
+		t.Fatalf("warning code list has %d entries; want 11", len(warningCodeList))
 	}
 	for _, code := range warningCodeList {
 		entry, ok := Lookup(code)

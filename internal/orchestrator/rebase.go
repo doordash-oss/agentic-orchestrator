@@ -69,14 +69,6 @@ func repoWorkDir(repo feature.FeatureRepo) string {
 	return repo.Path
 }
 
-// repoBranch returns repo's branch, falling back to "feature/<slug>".
-func repoBranch(f *feature.Feature, repo feature.FeatureRepo) string {
-	if repo.Branch != "" {
-		return repo.Branch
-	}
-	return "feature/" + f.Slug
-}
-
 // rebaseFreshnessInputForRepo builds the per-repo input carrying the resolved
 // rebase target and worktree identity for freshness/blocker decisions.
 func (o *Orchestrator) rebaseFreshnessInputForRepo(f *feature.Feature, repo feature.FeatureRepo) RebaseRepoFreshnessInput {

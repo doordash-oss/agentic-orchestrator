@@ -36,7 +36,7 @@ import (
 func TestManagerSetupFailureStoresCanonicalRecord(t *testing.T) {
 	mgr := newTestManager(t)
 	mgr.Worktrees = &mocks.MockWorktreeOps{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		CreateFn: func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 			return "", errors.New("git worktree add failed: branch exists")
 		},
 	}
@@ -109,11 +109,11 @@ func TestManagerRetrySetupClearsFailureRecord(t *testing.T) {
 	wtDir := t.TempDir()
 	fail := true
 	mgr.Worktrees = &mocks.MockWorktreeOps{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		CreateFn: func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 			if fail {
 				return "", errors.New("git worktree add failed: branch exists")
 			}
-			return filepath.Join(wtDir, featureSlug, repoName), nil
+			return filepath.Join(wtDir, workspaceSlug, repoName), nil
 		},
 	}
 

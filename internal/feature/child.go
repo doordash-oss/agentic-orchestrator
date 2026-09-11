@@ -1023,7 +1023,9 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 	id := generateID()
 	slug := Slugify(spec.Name)
 	workspaceSlug := WorkspaceSlug(slug, id)
-	branch := git.BranchName(workspaceSlug)
+	// The child's own provisional layer-1 branch, in the child's own
+	// namespace: it never touches the parent's feature/<slug>-<id>/ prefix.
+	branch := git.LayerBranchName(workspaceSlug, 1, slug)
 
 	childRepos := make([]FeatureRepo, 0, len(parent.Repos))
 	for _, pr := range parent.Repos {

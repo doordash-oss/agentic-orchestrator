@@ -58,6 +58,13 @@ type WorktreeOps interface {
 	// HEAD and checks it out in place, leaving the branch moved off pointing
 	// at the same commit.
 	CreateBranchAtHead(worktreePath, branch string) error
+	// SwitchBranch switches the worktree's HEAD to an existing local branch
+	// in place, discarding uncommitted changes; the branch moved off keeps
+	// pointing at its commit.
+	SwitchBranch(worktreePath, branch string) error
+	// DeleteBranch deletes a local branch ref by name; an absent branch is
+	// success, and a branch checked out in any worktree is refused.
+	DeleteBranch(worktreePath, branch string) error
 }
 
 // PRCloser abstracts the single git/gh operation the feature manager performs
@@ -1084,10 +1091,16 @@ func RewindChoicesForFeature(f *Feature) []RewindChoice {
 	return choices
 }
 
+// partialRewindPlan is the resolved execution plan for a partial roadmap-phase
+// rewind. resetAnchors holds the previous phase's per-repo commit anchors for
+// the anchor reset; layerTips holds the stack layer below's per-repo tips for
+// the layer-tip reset (first phase of a layer above layer 1). Exactly one of
+// the two is populated once the plan is enabled.
 type partialRewindPlan struct {
 	enabled      bool
 	roadmapPhase int
 	resetAnchors map[string]string
+	layerTips    map[string]string
 }
 
 func (m *Manager) validatePartialRewindRequest(f *Feature, request RewindRequest) (partialRewindPlan, error) {
@@ -1233,15 +1246,99 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 		}
 	}
 
-	// Reset worktree if rewinding past Implement
+	// Reset worktree if rewinding past Implement. On a feature with a stack
+	// the rewind is stack-aware: a partial rewind first switches each
+	// worktree to the target layer's branch and deletes the local refs of
+	// every layer above it, while a full rewind deletes every other layer's
+	// ref and renames the checked-out branch to the provisional layer-1
+	// name. Every step is warn-and-continue — the backup branch already
+	// preserves each repository's commits — and a step that cannot run
+	// because an earlier one failed (deleting a ref that is still checked
+	// out after a failed switch) surfaces as its own warning. Afterwards
+	// each repository record is set to the branch its worktree is actually
+	// on, keeping the recorded-branch-equals-checked-out-branch invariant
+	// intact for the later approval rename and boundary split.
+	rewindBranches := map[string]string{}
 	if targetPhase.LogicalOrder() <= PhaseImplement.LogicalOrder() {
 		if m.Worktrees != nil {
+			stacked := hasStack(f)
+			layerPosition := 0
+			layerBranch := ""
+			provisionalBranch := ""
+			if stacked {
+				if partial.enabled {
+					if layer, ok := f.StackLayerForPhase(partial.roadmapPhase); ok {
+						layerPosition = layer.Position
+						layerBranch = layer.Branch
+					}
+				} else {
+					provisionalBranch = git.LayerBranchName(f.WorkspaceSlug(), 1, f.Slug)
+				}
+			}
 			for _, repo := range f.Repos {
 				if repo.WorktreePath == "" {
 					continue
 				}
+				var current string
+				if stacked {
+					current = m.Worktrees.CurrentBranch(repo.WorktreePath)
+				}
+				if partial.enabled && stacked && layerBranch != "" && current != layerBranch {
+					if err := m.Worktrees.SwitchBranch(repo.WorktreePath, layerBranch); err != nil {
+						warns = append(warns, RewindWarning{
+							Kind:   RewindWarningStackBranch,
+							Repo:   repo.Name,
+							Branch: layerBranch,
+							Err:    err,
+						})
+					}
+				}
+				if stacked && !partial.enabled {
+					for _, layer := range f.Stack {
+						if layer.Branch == "" || layer.Branch == current {
+							continue
+						}
+						if err := m.Worktrees.DeleteBranch(repo.WorktreePath, layer.Branch); err != nil {
+							warns = append(warns, RewindWarning{
+								Kind:   RewindWarningStackBranch,
+								Repo:   repo.Name,
+								Branch: layer.Branch,
+								Err:    err,
+							})
+						}
+					}
+					switch {
+					case current == provisionalBranch && current != "":
+						// Already the provisional layer-1 name: the collapse
+						// has nothing left to rename (a healed retry reads
+						// here).
+					case current != "" && current == repo.Branch:
+						if err := m.Worktrees.RenameBranch(repo.WorktreePath, current, provisionalBranch); err != nil {
+							warns = append(warns, RewindWarning{
+								Kind:   RewindWarningStackBranch,
+								Repo:   repo.Name,
+								Branch: current,
+								Err:    err,
+							})
+						}
+					default:
+						err := fmt.Errorf("worktree is on branch %q, want the recorded %q; left unrenamed",
+							current, repo.Branch)
+						if current == "" {
+							err = fmt.Errorf("could not read the worktree's current branch; left unrenamed")
+						}
+						warns = append(warns, RewindWarning{
+							Kind:   RewindWarningStackBranch,
+							Repo:   repo.Name,
+							Branch: current,
+							Err:    err,
+						})
+					}
+				}
 				var resetErr error
-				switch WorktreeResetKind(repo, partial.enabled, partial.roadmapPhase) {
+				switch WorktreeResetKind(f, repo, partial.enabled, partial.roadmapPhase) {
+				case ResetKindLayerTip:
+					resetErr = m.Worktrees.ResetToCommit(repo.WorktreePath, partial.layerTips[repo.Name])
 				case ResetKindAnchor:
 					resetErr = m.Worktrees.ResetToCommit(repo.WorktreePath, partial.resetAnchors[repo.Name])
 				case ResetKindBaseLocal:
@@ -1256,6 +1353,26 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 						Branch: repo.Branch,
 						Err:    resetErr,
 					})
+				}
+				if partial.enabled && stacked {
+					for _, layer := range f.Stack {
+						if layer.Branch == "" || layer.Position <= layerPosition {
+							continue
+						}
+						if err := m.Worktrees.DeleteBranch(repo.WorktreePath, layer.Branch); err != nil {
+							warns = append(warns, RewindWarning{
+								Kind:   RewindWarningStackBranch,
+								Repo:   repo.Name,
+								Branch: layer.Branch,
+								Err:    err,
+							})
+						}
+					}
+				}
+				if stacked {
+					if actual := m.Worktrees.CurrentBranch(repo.WorktreePath); actual != "" {
+						rewindBranches[repo.Name] = actual
+					}
 				}
 			}
 		}
@@ -1364,7 +1481,15 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 				// forked run still holds the approved layer definitions. A full
 				// rewind to the roadmap phase or earlier re-runs planning, which
 				// re-derives and re-persists the stack at the next approval.
-				newRun.Stack = CopyStackLayers(oldRun.Stack)
+				// The target layer and every layer above lose their
+				// per-repository entries (tip, pushed SHA, pull request URL
+				// and state) — the worktrees were reset, so the next layer
+				// boundary re-records them; layers below keep theirs.
+				if layer, ok := f.StackLayerForPhase(partial.roadmapPhase); ok {
+					newRun.Stack = CopyStackLayersForPartialRewind(oldRun.Stack, layer.Position)
+				} else {
+					newRun.Stack = CopyStackLayers(oldRun.Stack)
+				}
 				newRun.RoadmapPhaseCommitAnchors = carryForwardRoadmapPhaseCommitAnchors(oldRun.RoadmapPhaseCommitAnchors, partial.roadmapPhase)
 				pendingRoadmapPhase := partial.roadmapPhase
 				newRun.PendingRewindReviewRoadmapPhase = &pendingRoadmapPhase
@@ -1399,6 +1524,19 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 		}
 		f.IsRewind = true
 		f.CurrentPhase = phaseBeforeTarget(targetPhase)
+		// Record the branch each worktree actually ended on after the
+		// stack-aware steps, so the recorded-branch-equals-checked-out-branch
+		// invariant holds even when a switch or rename warned and left the
+		// worktree elsewhere. Repositories without a worktree path are
+		// untouched; setup state is not carried across the fork, so only the
+		// repository records need the update.
+		for name, branch := range rewindBranches {
+			for i := range f.Repos {
+				if f.Repos[i].Name == name {
+					f.Repos[i].Branch = branch
+				}
+			}
+		}
 		return nil
 	})
 	_ = updated

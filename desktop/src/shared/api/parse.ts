@@ -1227,7 +1227,8 @@ export const ServerRewindPRConsequenceSchema = z.object({
 
 export const ServerRewindWorktreeConsequenceSchema = z.object({
   repo: z.string(),
-  reset_kind: z.enum(['anchor', 'base', 'base-local', 'none']),
+  reset_kind: z.enum(['anchor', 'base', 'base-local', 'layer-tip', 'none']),
+  branch: z.string().optional(),
 });
 
 export const RewindPreviewResponseSchema = z.object({
@@ -1264,7 +1265,7 @@ export const RewindActionResponseSchema = z.object({
   source_run_number: z.number().int().nonnegative().optional(),
   new_run_number: z.number().int().nonnegative().optional(),
   // Canonical warning-class errors for non-fatal rewind failures
-  // (pull-request close, backup branch, worktree reset).
+  // (pull-request close, backup branch, worktree reset, stack branch step).
   warnings: z.array(CanonicalErrorSchema).max(100).optional(),
 });
 export type RewindActionResponse = z.output<typeof RewindActionResponseSchema>;

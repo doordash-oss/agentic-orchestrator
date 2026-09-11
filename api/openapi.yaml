@@ -4165,7 +4165,7 @@ components:
                 $ref: "#/components/schemas/Error"
               description: >-
                 Canonical warning-class errors for non-fatal rewind failures
-                (pull-request close, backup branch, worktree reset).
+                (pull-request close, backup branch, worktree reset, stack branch step).
     RewindPreviewResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -4257,7 +4257,10 @@ components:
           type: string
         reset_kind:
           type: string
-          enum: [anchor, base, base-local, none]
+          enum: [anchor, base, base-local, layer-tip, none]
+        branch:
+          type: string
+          description: Stack layer branch the worktree ends on after the rewind; omitted when the feature carries no pull-request stack.
     RetryFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"

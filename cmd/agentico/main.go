@@ -1983,6 +1983,8 @@ func wireRewindWarnings(warnings []feature.RewindWarning) []serverruntime.Error 
 			code = errcat.RewindPullRequestCloseFailed
 		case feature.RewindWarningBackupBranch:
 			code = errcat.RewindBackupBranchFailed
+		case feature.RewindWarningStackBranch:
+			code = errcat.RewindStackBranchFailed
 		default:
 			code = errcat.RewindWorktreeResetFailed
 		}

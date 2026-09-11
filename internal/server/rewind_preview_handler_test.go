@@ -85,6 +85,49 @@ func TestRewindPreviewEndpointReturnsEligiblePreview(t *testing.T) {
 	}
 }
 
+func TestRewindPreviewEndpointCarriesStackLayerTipConsequence(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	// Give the repo a base branch so worktree reset consequences are real, and
+	// a two-layer stack whose layer 1 records the repo's tip: rewinding to
+	// roadmap phase 3 (the first phase of layer 2) must surface a layer-tip
+	// reset onto layer 2's branch.
+	f.Repos[0].BaseBranch = "main"
+	f.Stack = []feature.StackLayer{
+		{
+			Position: 1, Slug: "core", Phases: []int{1, 2}, Branch: "feature/ws/1-core",
+			Repos: map[string]feature.StackRepoEntry{repoNameSelf: {TipSHA: "tip-1"}},
+		},
+		{Position: 2, Slug: "ext", Phases: []int{3}, Branch: "feature/ws/2-ext"},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features/"+f.ID+"/rewind/preview?target_phase=implement&roadmap_phase=3", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200; body: %s", w.Code, w.Body.String())
+	}
+	body := decodeBodyMap(t, w.Result())
+	if eligible := body["eligible"]; eligible != true {
+		t.Fatalf("eligible = %v; want true; body: %v", eligible, body)
+	}
+	wtCons, _ := body["worktree_consequences"].([]any)
+	if len(wtCons) != 1 {
+		t.Fatalf("worktree_consequences = %v; want one entry", wtCons)
+	}
+	consequence, _ := wtCons[0].(map[string]any)
+	if got := consequence["reset_kind"]; got != feature.ResetKindLayerTip {
+		t.Fatalf("reset_kind = %v; want %q", got, feature.ResetKindLayerTip)
+	}
+	if got, _ := consequence["branch"].(string); got != "feature/ws/2-ext" {
+		t.Fatalf("branch = %q; want %q", got, "feature/ws/2-ext")
+	}
+}
+
 func TestRewindPreviewEndpointRejectsInvalidTarget(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)

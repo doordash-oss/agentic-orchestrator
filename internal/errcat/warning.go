@@ -51,6 +51,11 @@ const (
 	// RewindWorktreeResetFailed reports a repository whose worktree could
 	// not be reset during a rewind.
 	RewindWorktreeResetFailed Code = "rewind_worktree_reset_failed"
+	// RewindStackBranchFailed reports a repository where a stack branch step
+	// could not run during a rewind: switching to the layer's branch,
+	// deleting an upper layer's local ref, or renaming to the provisional
+	// layer-1 name.
+	RewindStackBranchFailed Code = "rewind_stack_branch_failed"
 	// RepositoryWorktreeUnavailable reports a repository whose worktree is
 	// not available for diff inspection.
 	RepositoryWorktreeUnavailable Code = "repository_worktree_unavailable"

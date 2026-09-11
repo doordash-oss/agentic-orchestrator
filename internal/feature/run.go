@@ -53,6 +53,11 @@ const (
 	// RewindWarningWorktreeReset marks a worktree that could not be reset
 	// during the rewind.
 	RewindWarningWorktreeReset RewindWarningKind = "worktree_reset"
+	// RewindWarningStackBranch marks a stack branch step that could not run
+	// during the rewind: switching a worktree to its layer's branch, deleting
+	// an upper layer's local ref, or renaming the checked-out branch to the
+	// provisional layer-1 name.
+	RewindWarningStackBranch RewindWarningKind = "stack_branch"
 )
 
 // RewindWarning is one typed non-fatal rewind failure: the cause family, the
@@ -294,6 +299,22 @@ func CopyStackLayers(stack []StackLayer) []StackLayer {
 				repos[name] = entry
 			}
 			out[i].Repos = repos
+		}
+	}
+	return out
+}
+
+// CopyStackLayersForPartialRewind deep-copies stack for a partial rewind to a
+// phase of the layer at layerPosition: every layer definition (position,
+// title, slug, phases, branch) is kept, while the per-repository entries of
+// the target layer and every layer above are cleared — the worktrees were
+// reset, so the next layer boundary re-records them against the new tips.
+// Layers below the target layer keep their entries untouched.
+func CopyStackLayersForPartialRewind(stack []StackLayer, layerPosition int) []StackLayer {
+	out := CopyStackLayers(stack)
+	for i := range out {
+		if layerPosition > 0 && out[i].Position >= layerPosition {
+			out[i].Repos = nil
 		}
 	}
 	return out

@@ -1997,7 +1997,7 @@ export interface components {
             source_run_number?: number;
             /** @description The new active run forked by the rewind. */
             new_run_number?: number;
-            /** @description Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset). */
+            /** @description Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset, stack branch step). */
             warnings?: components["schemas"]["Error"][];
         };
         RewindPreviewResponse: components["schemas"]["JSONResponse"] & components["schemas"]["RewindPreview"];
@@ -2032,7 +2032,9 @@ export interface components {
         RewindWorktreeConsequence: {
             repo: string;
             /** @enum {string} */
-            reset_kind: "anchor" | "base" | "base-local" | "none";
+            reset_kind: "anchor" | "base" | "base-local" | "layer-tip" | "none";
+            /** @description Stack layer branch the worktree ends on after the rewind; omitted when the feature carries no pull-request stack. */
+            branch?: string;
         };
         RetryFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         RefactorFeatureRequest: {

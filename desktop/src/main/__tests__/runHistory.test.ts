@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 import { describe, expect, it } from 'vitest';
-import { FeatureActionResultSchema } from '../../shared/ipc';
+import { FeatureActionResultSchema, RewindPreviewViewSchema } from '../../shared/ipc';
 import { RunHistoryService } from '../runHistory';
 
 describe('RunHistoryService', () => {
@@ -202,5 +202,65 @@ describe('RunHistoryService', () => {
     });
     expect(result.warnings?.[1]?.diagnostics).toBeUndefined();
     expect(() => FeatureActionResultSchema.parse(result)).not.toThrow();
+  });
+
+  it('maps stacked rewind preview consequences to layer-tip views with the branch', async () => {
+    const service = new RunHistoryService({
+      apiRequest: () =>
+        Promise.resolve({
+          status: 200,
+          body: {
+            api_version: 'v1',
+            eligible: true,
+            source_run_number: 3,
+            source_revision: 'abc123def456',
+            target_phase: 'implement',
+            effective_phase: 'implement',
+            roadmap_phase: 3,
+            worktree_consequences: [
+              { repo: 'repo-a', reset_kind: 'layer-tip', branch: 'feature/ws/2-ext' },
+              { repo: 'repo-b', reset_kind: 'layer-tip', branch: 'feature/ws/2-ext' },
+            ],
+          },
+        }),
+    });
+
+    const preview = await service.getRewindPreview({
+      featureId: 'abcd1234ef567890',
+      targetPhase: 'implement',
+      roadmapPhase: 3,
+    });
+    expect(preview.worktreeConsequences).toStrictEqual([
+      { repo: 'repo-a', resetKind: 'layer-tip', branch: 'feature/ws/2-ext' },
+      { repo: 'repo-b', resetKind: 'layer-tip', branch: 'feature/ws/2-ext' },
+    ]);
+    expect(() => RewindPreviewViewSchema.parse(preview)).not.toThrow();
+  });
+
+  it('omits the branch on unstacked rewind preview consequences', async () => {
+    const service = new RunHistoryService({
+      apiRequest: () =>
+        Promise.resolve({
+          status: 200,
+          body: {
+            api_version: 'v1',
+            eligible: true,
+            source_run_number: 3,
+            source_revision: 'abc123def456',
+            target_phase: 'implement',
+            effective_phase: 'implement',
+            roadmap_phase: 1,
+            worktree_consequences: [{ repo: 'repo-a', reset_kind: 'base' }],
+          },
+        }),
+    });
+
+    const preview = await service.getRewindPreview({
+      featureId: 'abcd1234ef567890',
+      targetPhase: 'implement',
+      roadmapPhase: 1,
+    });
+    expect(preview.worktreeConsequences).toStrictEqual([{ repo: 'repo-a', resetKind: 'base' }]);
+    expect(() => RewindPreviewViewSchema.parse(preview)).not.toThrow();
   });
 });

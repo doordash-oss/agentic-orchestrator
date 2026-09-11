@@ -30,6 +30,7 @@ var warningCodeList = []Code{
 	RewindPullRequestCloseFailed,
 	RewindBackupBranchFailed,
 	RewindWorktreeResetFailed,
+	RewindStackBranchFailed,
 	RepositoryWorktreeUnavailable,
 	RepositoryDiffFailed,
 	RoadmapBranchRenameFailed,
@@ -45,8 +46,8 @@ var orphanSessionCodeList = []Code{
 // for every warning code: warning class and no action references. A warning
 // never blocks progress, never gates a lane, and never offers an action.
 func TestWarningCodesAreWarningClassWithoutActions(t *testing.T) {
-	if len(warningCodeList) != 11 {
-		t.Fatalf("warning code list has %d entries; want 11", len(warningCodeList))
+	if len(warningCodeList) != 12 {
+		t.Fatalf("warning code list has %d entries; want 12", len(warningCodeList))
 	}
 	for _, code := range warningCodeList {
 		entry, ok := Lookup(code)

@@ -925,6 +925,7 @@ const (
 	Anchor    RewindWorktreeConsequenceResetKind = "anchor"
 	Base      RewindWorktreeConsequenceResetKind = "base"
 	BaseLocal RewindWorktreeConsequenceResetKind = "base-local"
+	LayerTip  RewindWorktreeConsequenceResetKind = "layer-tip"
 	None      RewindWorktreeConsequenceResetKind = "none"
 )
 
@@ -936,6 +937,8 @@ func (e RewindWorktreeConsequenceResetKind) Valid() bool {
 	case Base:
 		return true
 	case BaseLocal:
+		return true
+	case LayerTip:
 		return true
 	case None:
 		return true
@@ -3664,7 +3667,7 @@ type RewindFeatureResponse struct {
 	TargetPhase     string `json:"target_phase,omitempty"`
 	UpgradePipeline string `json:"upgrade_pipeline,omitempty"`
 
-	// Warnings Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset).
+	// Warnings Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset, stack branch step).
 	Warnings []Error `json:"warnings,omitempty"`
 }
 
@@ -3722,6 +3725,8 @@ type RewindPreviewResponse struct {
 
 // RewindWorktreeConsequence defines model for RewindWorktreeConsequence.
 type RewindWorktreeConsequence struct {
+	// Branch Stack layer branch the worktree ends on after the rewind; omitted when the feature carries no pull-request stack.
+	Branch    string                             `json:"branch,omitempty"`
 	Repo      string                             `json:"repo"`
 	ResetKind RewindWorktreeConsequenceResetKind `json:"reset_kind"`
 }

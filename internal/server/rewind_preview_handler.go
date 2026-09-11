@@ -108,6 +108,7 @@ func rewindPreviewResponseFromResult(result feature.RewindPreviewResult) RewindP
 	}
 	for _, wc := range result.WorktreeConsequences {
 		resp.WorktreeConsequences = append(resp.WorktreeConsequences, RewindWorktreeConsequence{
+			Branch:    wc.Branch,
 			Repo:      wc.Repo,
 			ResetKind: RewindWorktreeConsequenceResetKind(wc.ResetKind),
 		})

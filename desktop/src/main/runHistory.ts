@@ -234,6 +234,7 @@ export class RunHistoryService {
             worktreeConsequences: response.worktree_consequences.map((w) => ({
               repo: w.repo,
               resetKind: w.reset_kind,
+              ...(w.branch !== undefined && w.branch !== '' ? { branch: w.branch } : {}),
             })),
           }
         : {}),

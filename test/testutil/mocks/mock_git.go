@@ -130,6 +130,8 @@ type MockWorktreeOps struct {
 	InspectCleanlinessFn   func(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
 	RenameBranchFn         func(worktreePath, oldName, newName string) error
 	CreateBranchAtHeadFn   func(worktreePath, branch string) error
+	SwitchBranchFn         func(worktreePath, branch string) error
+	DeleteBranchFn         func(worktreePath, branch string) error
 
 	DefaultError error
 	Calls        []MockCall
@@ -254,6 +256,22 @@ func (m *MockWorktreeOps) CreateBranchAtHead(worktreePath, branch string) error 
 	m.Calls = append(m.Calls, MockCall{Method: "CreateBranchAtHead", Args: []any{worktreePath, branch}})
 	if m.CreateBranchAtHeadFn != nil {
 		return m.CreateBranchAtHeadFn(worktreePath, branch)
+	}
+	return m.DefaultError
+}
+
+func (m *MockWorktreeOps) SwitchBranch(worktreePath, branch string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "SwitchBranch", Args: []any{worktreePath, branch}})
+	if m.SwitchBranchFn != nil {
+		return m.SwitchBranchFn(worktreePath, branch)
+	}
+	return m.DefaultError
+}
+
+func (m *MockWorktreeOps) DeleteBranch(worktreePath, branch string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "DeleteBranch", Args: []any{worktreePath, branch}})
+	if m.DeleteBranchFn != nil {
+		return m.DeleteBranchFn(worktreePath, branch)
 	}
 	return m.DefaultError
 }

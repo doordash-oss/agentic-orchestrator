@@ -38,6 +38,8 @@ func (w *cascadeTestWorktrees) Create(string, string, string, string, string) (s
 }
 func (*cascadeTestWorktrees) RenameBranch(string, string, string) error { return nil }
 func (*cascadeTestWorktrees) CreateBranchAtHead(string, string) error   { return nil }
+func (*cascadeTestWorktrees) SwitchBranch(string, string) error         { return nil }
+func (*cascadeTestWorktrees) DeleteBranch(string, string) error         { return nil }
 func (w *cascadeTestWorktrees) Remove(string, bool) error {
 	w.removeCalls++
 	if _, err := w.store.LoadCascadeDelete("parent"); err != nil {

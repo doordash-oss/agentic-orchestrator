@@ -6481,3 +6481,672 @@ func TestRewindToPhase_FullRewindToRoadmapClearsStack(t *testing.T) {
 		t.Errorf("sealed run stack = %+v, want its own copy kept", sealedRun.Stack)
 	}
 }
+
+// stackRewindFixture is a two-repository feature carrying a two-layer,
+// three-phase stack (layer 1 covers phases 1 and 2, layer 2 covers phase 3)
+// with per-repository entries on both layers and phase-1 commit anchors,
+// plus the mutable worktree state its mock drives: the branch each worktree
+// is checked out on, the branch refs that exist in each worktree's
+// repository, and per-worktree failure injections for the stack branch
+// steps.
+type stackRewindFixture struct {
+	mgr       *feature.Manager
+	f         *feature.Feature
+	worktrees *mocks.MockWorktreeOps
+	branches  map[string]string
+	refs      map[string]map[string]bool
+	stack     []feature.StackLayer
+	layer1    string
+	layer2    string
+	anchorA   string
+	anchorB   string
+}
+
+const (
+	stackWtA = "/tmp/stack-wt-a"
+	stackWtB = "/tmp/stack-wt-b"
+)
+
+// newStackRewindFixture builds the stacked feature with both worktrees on
+// the given starting branch (defaulting to layer 2's) and both layer refs
+// present (layer 2 present only when reached).
+func newStackRewindFixture(t *testing.T, startBranch string, layer2Reached bool) *stackRewindFixture {
+	t.Helper()
+	mgr := newTestManager(t)
+	layer1 := "feature/stack-ws/1-bootstrap"
+	layer2 := "feature/stack-ws/2-extension"
+	if startBranch == "" {
+		startBranch = layer2
+	}
+	fx := &stackRewindFixture{
+		mgr:      mgr,
+		branches: map[string]string{stackWtA: startBranch, stackWtB: startBranch},
+		refs: map[string]map[string]bool{
+			stackWtA: {layer1: true},
+			stackWtB: {layer1: true},
+		},
+		layer1:  layer1,
+		layer2:  layer2,
+		anchorA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		anchorB: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		stack: []feature.StackLayer{
+			{
+				Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1, 2}, Branch: layer1,
+				Repos: map[string]feature.StackRepoEntry{
+					"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", LastPushedSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", PRURL: "https://github.com/org/repo-a/pull/1", PRState: feature.StackPRStateMerged},
+					"repo-b": {TipSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", LastPushedSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", PRURL: "https://github.com/org/repo-b/pull/1", PRState: feature.StackPRStateMerged},
+				},
+			},
+			{
+				Position: 2, Title: "Extension", Slug: "extension", Phases: []int{3}, Branch: layer2,
+				Repos: map[string]feature.StackRepoEntry{
+					"repo-a": {TipSHA: "cccccccccccccccccccccccccccccccccccccccc", LastPushedSHA: "cccccccccccccccccccccccccccccccccccccccc", PRURL: "https://github.com/org/repo-a/pull/2", PRState: feature.StackPRStateOpen},
+					"repo-b": {TipSHA: "dddddddddddddddddddddddddddddddddddddddd", PRURL: "https://github.com/org/repo-b/pull/2", PRState: feature.StackPRStateOpen},
+				},
+			},
+		},
+	}
+	if layer2Reached {
+		fx.refs[stackWtA][layer2] = true
+		fx.refs[stackWtB][layer2] = true
+	}
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/stack-repo-a", WorktreePath: stackWtA, BaseBranch: "main", Branch: startBranch},
+		{Name: "repo-b", Path: "/tmp/stack-repo-b", WorktreePath: stackWtB, BaseBranch: "main", Branch: startBranch},
+	})
+	run1Dir := filepath.Join(mgr.Store.BaseDir, f.ID, "runs", "run-001")
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.CurrentRoadmapPhase = 3
+		ff.TotalRoadmapPhases = 3
+		ff.Stack = fx.stack
+		ff.Run().RoadmapPhaseCommitAnchors = map[int]map[string]string{
+			1: {"repo-a": fx.anchorA, "repo-b": fx.anchorB},
+			2: {"repo-a": "cccccccccccccccccccccccccccccccccccccccc", "repo-b": "dddddddddddddddddddddddddddddddddddddddd"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	for _, dir := range []string{
+		filepath.Join(run1Dir, "roadmap"),
+		filepath.Join(run1Dir, "phase-01", "plan"),
+		filepath.Join(run1Dir, "phase-02", "plan"),
+		filepath.Join(run1Dir, "phase-03", "plan"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	fx.f = f
+	return fx
+}
+
+// mock installs the stateful worktree double: CurrentBranch reads the
+// branches map, SwitchBranch moves it, DeleteBranch removes an existing ref
+// (an absent one is success, mirroring the real operation), and RenameBranch
+// renames the checked-out branch. Fail* maps inject one failing step per
+// worktree path. Every call is recorded on the mock's Calls log.
+func (fx *stackRewindFixture) mock(failSwitch, failDelete, failRename map[string]bool) {
+	w := mocks.NewMockWorktreeOps()
+	w.CurrentBranchFn = func(path string) string { return fx.branches[path] }
+	w.SwitchBranchFn = func(path, branch string) error {
+		if failSwitch[path] {
+			return fmt.Errorf("switch refused")
+		}
+		fx.branches[path] = branch
+		return nil
+	}
+	w.DeleteBranchFn = func(path, branch string) error {
+		if failDelete[path] {
+			return fmt.Errorf("delete refused")
+		}
+		delete(fx.refs[path], branch)
+		return nil
+	}
+	w.RenameBranchFn = func(path, oldName, newName string) error {
+		if failRename[path] {
+			return fmt.Errorf("rename refused")
+		}
+		if fx.refs[path][oldName] {
+			delete(fx.refs[path], oldName)
+			fx.refs[path][newName] = true
+		}
+		fx.branches[path] = newName
+		return nil
+	}
+	fx.worktrees = w
+	fx.mgr.Worktrees = w
+	fx.mgr.PRs = nil
+}
+
+// calls returns the recorded mock calls for one method.
+func (fx *stackRewindFixture) calls(method string) []mocks.MockCall {
+	var out []mocks.MockCall
+	for _, c := range fx.worktrees.Calls {
+		if c.Method == method {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// warnings returns the rewind warnings of one kind (backup-branch warnings
+// from the nonexistent /tmp worktree paths are expected noise here).
+func stackWarnings(warnings []feature.RewindWarning, kind feature.RewindWarningKind) []feature.RewindWarning {
+	var out []feature.RewindWarning
+	for _, w := range warnings {
+		if w.Kind == kind {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func branchOf(t *testing.T, mgr *feature.Manager, id, repo string) string {
+	t.Helper()
+	loaded, err := mgr.Store.Load(id)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, r := range loaded.Repos {
+		if r.Name == repo {
+			return r.Branch
+		}
+	}
+	t.Fatalf("repo %s not found", repo)
+	return ""
+}
+
+// A partial rewind to the first phase of the upper layer switches nothing
+// (the worktrees already sit on that layer's branch), resets each worktree
+// to layer 1's recorded tip, deletes no refs, keeps layer 1's per-repo
+// entries while clearing layer 2's, and records layer 2's branch on every
+// repository.
+func TestRewindWithRequest_PartialStackRewindToFirstPhaseOfUpperLayer(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(nil, nil, nil)
+
+	warnings, _, err := fx.mgr.RewindWithRequest(fx.f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 3,
+	})
+	if err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+	if got := stackWarnings(warnings, feature.RewindWarningStackBranch); len(got) != 0 {
+		t.Fatalf("stack branch warnings = %+v; want none", got)
+	}
+	if got := stackWarnings(warnings, feature.RewindWarningWorktreeReset); len(got) != 0 {
+		t.Fatalf("worktree reset warnings = %+v; want none", got)
+	}
+	if calls := fx.calls("SwitchBranch"); len(calls) != 0 {
+		t.Errorf("SwitchBranch calls = %+v; want none (already on layer 2)", calls)
+	}
+	if calls := fx.calls("DeleteBranch"); len(calls) != 0 {
+		t.Errorf("DeleteBranch calls = %+v; want none (no layers above)", calls)
+	}
+	resets := fx.calls("ResetToCommit")
+	if len(resets) != 2 {
+		t.Fatalf("ResetToCommit calls = %+v; want one per repo", resets)
+	}
+	wantTips := map[string]string{stackWtA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", stackWtB: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	for _, c := range resets {
+		path, _ := c.Args[0].(string)
+		sha, _ := c.Args[1].(string)
+		if sha != wantTips[path] {
+			t.Errorf("ResetToCommit(%s) = %s; want layer 1's tip %s", path, sha, wantTips[path])
+		}
+	}
+	for _, path := range []string{stackWtA, stackWtB} {
+		if !fx.refs[path][fx.layer1] {
+			t.Errorf("layer 1 ref removed in %s; want it untouched", path)
+		}
+	}
+	newRun, err := fx.mgr.Store.LoadRun(fx.f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if len(newRun.Stack) != 2 {
+		t.Fatalf("new run stack = %+v; want both layer definitions", newRun.Stack)
+	}
+	if newRun.Stack[0].Repos["repo-a"].TipSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ||
+		newRun.Stack[0].Repos["repo-b"].TipSHA != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Errorf("layer 1 entries = %+v; want them kept", newRun.Stack[0].Repos)
+	}
+	if newRun.Stack[1].Repos != nil {
+		t.Errorf("layer 2 entries = %+v; want them cleared", newRun.Stack[1].Repos)
+	}
+	for _, layer := range newRun.Stack {
+		if layer.Branch == "" || len(layer.Phases) == 0 {
+			t.Errorf("layer %d definition trimmed: %+v", layer.Position, layer)
+		}
+	}
+	for _, repo := range []string{"repo-a", "repo-b"} {
+		if got := branchOf(t, fx.mgr, fx.f.ID, repo); got != fx.layer2 {
+			t.Errorf("repo %s recorded on %q; want layer 2's branch %q", repo, got, fx.layer2)
+		}
+	}
+}
+
+// A partial rewind to a later phase of layer 1 switches each worktree to
+// layer 1's branch, resets to the phase-1 anchor, deletes layer 2's ref,
+// clears both layers' per-repo entries while keeping both definitions, and
+// records layer 1's branch.
+func TestRewindWithRequest_PartialStackRewindWithinLayerOne(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(nil, nil, nil)
+
+	warnings, _, err := fx.mgr.RewindWithRequest(fx.f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 2,
+	})
+	if err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+	if got := stackWarnings(warnings, feature.RewindWarningStackBranch); len(got) != 0 {
+		t.Fatalf("stack branch warnings = %+v; want none", got)
+	}
+	switches := fx.calls("SwitchBranch")
+	if len(switches) != 2 {
+		t.Fatalf("SwitchBranch calls = %+v; want one per repo", switches)
+	}
+	for _, c := range switches {
+		if branch, _ := c.Args[1].(string); branch != fx.layer1 {
+			t.Errorf("SwitchBranch to %q; want layer 1's branch %q", branch, fx.layer1)
+		}
+	}
+	resets := fx.calls("ResetToCommit")
+	if len(resets) != 2 {
+		t.Fatalf("ResetToCommit calls = %+v; want one per repo", resets)
+	}
+	wantAnchors := map[string]string{stackWtA: fx.anchorA, stackWtB: fx.anchorB}
+	for _, c := range resets {
+		path, _ := c.Args[0].(string)
+		sha, _ := c.Args[1].(string)
+		if sha != wantAnchors[path] {
+			t.Errorf("ResetToCommit(%s) = %s; want phase-1 anchor %s", path, sha, wantAnchors[path])
+		}
+	}
+	deletes := fx.calls("DeleteBranch")
+	if len(deletes) != 2 {
+		t.Fatalf("DeleteBranch calls = %+v; want layer 2's ref per repo", deletes)
+	}
+	for _, c := range deletes {
+		if branch, _ := c.Args[1].(string); branch != fx.layer2 {
+			t.Errorf("DeleteBranch(%q); want layer 2's branch %q", branch, fx.layer2)
+		}
+	}
+	for _, path := range []string{stackWtA, stackWtB} {
+		if fx.refs[path][fx.layer2] {
+			t.Errorf("layer 2 ref still exists in %s; want it deleted", path)
+		}
+		if !fx.refs[path][fx.layer1] {
+			t.Errorf("layer 1 ref removed in %s; want it kept", path)
+		}
+	}
+	newRun, err := fx.mgr.Store.LoadRun(fx.f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if len(newRun.Stack) != 2 {
+		t.Fatalf("new run stack = %+v; want both layer definitions", newRun.Stack)
+	}
+	for _, layer := range newRun.Stack {
+		if layer.Repos != nil {
+			t.Errorf("layer %d entries = %+v; want them cleared", layer.Position, layer.Repos)
+		}
+		if layer.Branch == "" || len(layer.Phases) == 0 {
+			t.Errorf("layer %d definition trimmed: %+v", layer.Position, layer)
+		}
+	}
+	for _, repo := range []string{"repo-a", "repo-b"} {
+		if got := branchOf(t, fx.mgr, fx.f.ID, repo); got != fx.layer1 {
+			t.Errorf("repo %s recorded on %q; want layer 1's branch %q", repo, got, fx.layer1)
+		}
+	}
+}
+
+// A failing branch switch in one repository produces exactly one
+// stack-branch warning, leaves that repository recorded on the branch the
+// mock reports (layer 2's, untouched by the failed switch), still runs the
+// reset and deletion steps, and the rewind still seals and forks.
+func TestRewindWithRequest_PartialStackRewindSwitchFailureWarnsAndContinues(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(map[string]bool{stackWtA: true}, nil, nil)
+
+	warnings, _, err := fx.mgr.RewindWithRequest(fx.f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 2,
+	})
+	if err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+	got := stackWarnings(warnings, feature.RewindWarningStackBranch)
+	if len(got) != 1 {
+		t.Fatalf("stack branch warnings = %+v; want exactly one", got)
+	}
+	if got[0].Repo != "repo-a" || got[0].Branch != fx.layer1 || got[0].Err == nil {
+		t.Fatalf("stack branch warning = %+v; want repo-a naming layer 1's branch", got[0])
+	}
+	if len(fx.calls("ResetToCommit")) != 2 {
+		t.Errorf("ResetToCommit calls = %d; want the reset to still run for both repos", len(fx.calls("ResetToCommit")))
+	}
+	if len(fx.calls("DeleteBranch")) != 2 {
+		t.Errorf("DeleteBranch calls = %d; want the deletion to still run for both repos", len(fx.calls("DeleteBranch")))
+	}
+	if got := branchOf(t, fx.mgr, fx.f.ID, "repo-a"); got != fx.layer2 {
+		t.Errorf("repo-a recorded on %q; want the branch the worktree stayed on %q", got, fx.layer2)
+	}
+	if got := branchOf(t, fx.mgr, fx.f.ID, "repo-b"); got != fx.layer1 {
+		t.Errorf("repo-b recorded on %q; want layer 1's branch %q", got, fx.layer1)
+	}
+	if _, err := fx.mgr.Store.LoadRun(fx.f.ID, 2); err != nil {
+		t.Fatalf("LoadRun(2): %v; want the rewind to still seal and fork", err)
+	}
+}
+
+// A failing upper-layer ref deletion produces exactly one warning and the
+// rewind still completes.
+func TestRewindWithRequest_PartialStackRewindDeleteFailureWarnsAndCompletes(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(nil, map[string]bool{stackWtA: true}, nil)
+
+	warnings, _, err := fx.mgr.RewindWithRequest(fx.f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 2,
+	})
+	if err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+	got := stackWarnings(warnings, feature.RewindWarningStackBranch)
+	if len(got) != 1 {
+		t.Fatalf("stack branch warnings = %+v; want exactly one", got)
+	}
+	if got[0].Repo != "repo-a" || got[0].Branch != fx.layer2 {
+		t.Fatalf("stack branch warning = %+v; want repo-a naming layer 2's branch", got[0])
+	}
+	if _, err := fx.mgr.Store.LoadRun(fx.f.ID, 2); err != nil {
+		t.Fatalf("LoadRun(2): %v; want the rewind to complete", err)
+	}
+}
+
+// A full rewind on a stacked feature deletes every layer ref except the
+// checked-out one, renames it to the provisional layer-1 name, resets to
+// base, records the provisional name on every repository, and leaves the
+// forked run with no stack.
+func TestRewindToPhase_FullStackRewindCollapsesToProvisionalBranch(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(nil, nil, nil)
+	provisional := git.LayerBranchName(fx.f.WorkspaceSlug(), 1, fx.f.Slug)
+
+	warnings, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhasePlan)
+	if err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+	if got := stackWarnings(warnings, feature.RewindWarningStackBranch); len(got) != 0 {
+		t.Fatalf("stack branch warnings = %+v; want none", got)
+	}
+	deletes := fx.calls("DeleteBranch")
+	if len(deletes) != 2 {
+		t.Fatalf("DeleteBranch calls = %+v; want layer 1's ref per repo", deletes)
+	}
+	for _, c := range deletes {
+		if branch, _ := c.Args[1].(string); branch != fx.layer1 {
+			t.Errorf("DeleteBranch(%q); want layer 1's branch %q (layer 2 is checked out)", branch, fx.layer1)
+		}
+	}
+	renames := fx.calls("RenameBranch")
+	if len(renames) != 2 {
+		t.Fatalf("RenameBranch calls = %+v; want one per repo", renames)
+	}
+	for _, c := range renames {
+		oldName, _ := c.Args[1].(string)
+		newName, _ := c.Args[2].(string)
+		if oldName != fx.layer2 || newName != provisional {
+			t.Errorf("RenameBranch(%q, %q); want layer 2's branch to the provisional %q", oldName, newName, provisional)
+		}
+	}
+	if len(fx.calls("ResetToBase")) != 2 {
+		t.Errorf("ResetToBase calls = %d; want one per repo", len(fx.calls("ResetToBase")))
+	}
+	for _, path := range []string{stackWtA, stackWtB} {
+		if fx.refs[path][fx.layer1] || fx.refs[path][fx.layer2] {
+			t.Errorf("refs in %s = %v; want only the provisional branch left", path, fx.refs[path])
+		}
+		if !fx.refs[path][provisional] {
+			t.Errorf("provisional ref missing in %s", path)
+		}
+	}
+	for _, repo := range []string{"repo-a", "repo-b"} {
+		if got := branchOf(t, fx.mgr, fx.f.ID, repo); got != provisional {
+			t.Errorf("repo %s recorded on %q; want the provisional %q", repo, got, provisional)
+		}
+	}
+	newRun, err := fx.mgr.Store.LoadRun(fx.f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if newRun.Stack != nil {
+		t.Errorf("new run stack = %+v; want none after a full rewind", newRun.Stack)
+	}
+}
+
+// With the worktrees on layer 1's branch and layer 2 never reached, a full
+// rewind deletes nothing that exists, renames layer 1's branch to the
+// provisional name, and skips the rename entirely when the branch already
+// carries it.
+func TestRewindToPhase_FullStackRewindOnLayerOne(t *testing.T) {
+	t.Run("renames layer 1 to the provisional name", func(t *testing.T) {
+		fx := newStackRewindFixture(t, "feature/stack-ws/1-bootstrap", false)
+		fx.mock(nil, nil, nil)
+		provisional := git.LayerBranchName(fx.f.WorkspaceSlug(), 1, fx.f.Slug)
+
+		if _, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhasePlan); err != nil {
+			t.Fatalf("RewindToPhase: %v", err)
+		}
+		if len(fx.calls("DeleteBranch")) != 2 {
+			t.Errorf("DeleteBranch calls = %d; want layer 2's absent ref attempted per repo (a no-op)", len(fx.calls("DeleteBranch")))
+		}
+		for _, path := range []string{stackWtA, stackWtB} {
+			if !fx.refs[path][fx.layer1] && !fx.refs[path][provisional] {
+				t.Errorf("refs in %s = %v; want layer 1's ref (renamed) to survive", path, fx.refs[path])
+			}
+		}
+		if len(fx.calls("RenameBranch")) != 2 {
+			t.Fatalf("RenameBranch calls = %d; want one per repo", len(fx.calls("RenameBranch")))
+		}
+		for _, repo := range []string{"repo-a", "repo-b"} {
+			if got := branchOf(t, fx.mgr, fx.f.ID, repo); got != provisional {
+				t.Errorf("repo %s recorded on %q; want the provisional %q", repo, got, provisional)
+			}
+		}
+	})
+	t.Run("no rename call when already the provisional name", func(t *testing.T) {
+		fx := newStackRewindFixture(t, "", false)
+		provisional := git.LayerBranchName(fx.f.WorkspaceSlug(), 1, fx.f.Slug)
+		// The stack's layer 1 already carries the provisional name and both
+		// worktrees sit on it.
+		fx.stack[0].Branch = provisional
+		fx.layer1 = provisional
+		for _, path := range []string{stackWtA, stackWtB} {
+			delete(fx.refs[path], "feature/stack-ws/1-bootstrap")
+			fx.refs[path][provisional] = true
+			fx.branches[path] = provisional
+		}
+		if err := fx.mgr.Store.Modify(fx.f.ID, func(ff *feature.Feature) error {
+			ff.Stack = fx.stack
+			for i := range ff.Repos {
+				ff.Repos[i].Branch = provisional
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("modify: %v", err)
+		}
+		fx.mock(nil, nil, nil)
+
+		warnings, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhasePlan)
+		if err != nil {
+			t.Fatalf("RewindToPhase: %v", err)
+		}
+		if got := stackWarnings(warnings, feature.RewindWarningStackBranch); len(got) != 0 {
+			t.Fatalf("stack branch warnings = %+v; want none", got)
+		}
+		if calls := fx.calls("RenameBranch"); len(calls) != 0 {
+			t.Errorf("RenameBranch calls = %+v; want none (already the provisional name)", calls)
+		}
+		for _, repo := range []string{"repo-a", "repo-b"} {
+			if got := branchOf(t, fx.mgr, fx.f.ID, repo); got != provisional {
+				t.Errorf("repo %s recorded on %q; want the provisional %q", repo, got, provisional)
+			}
+		}
+	})
+}
+
+// A worktree on an unexpected branch yields one warning naming the
+// repository, the current branch, and the recorded branch, is not renamed,
+// is still reset to base, and is recorded on the branch it is on.
+func TestRewindToPhase_FullStackRewindUnexpectedBranchWarnsAndKeepsBranch(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.branches[stackWtA] = "feature/unexpected"
+	fx.refs[stackWtA]["feature/unexpected"] = true
+	fx.mock(nil, nil, nil)
+	provisional := git.LayerBranchName(fx.f.WorkspaceSlug(), 1, fx.f.Slug)
+
+	warnings, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhasePlan)
+	if err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+	got := stackWarnings(warnings, feature.RewindWarningStackBranch)
+	if len(got) != 1 {
+		t.Fatalf("stack branch warnings = %+v; want exactly one", got)
+	}
+	if got[0].Repo != "repo-a" || got[0].Branch != "feature/unexpected" {
+		t.Fatalf("stack branch warning = %+v; want repo-a on the unexpected branch", got[0])
+	}
+	if got[0].Err == nil ||
+		!strings.Contains(got[0].Err.Error(), "feature/unexpected") ||
+		!strings.Contains(got[0].Err.Error(), fx.layer2) {
+		t.Fatalf("stack branch warning error = %v; want it to name the current and recorded branches", got[0].Err)
+	}
+	for _, c := range fx.calls("RenameBranch") {
+		if path, _ := c.Args[0].(string); path == stackWtA {
+			t.Errorf("RenameBranch called for the unexpected-branch worktree: %+v", c)
+		}
+	}
+	if resets := fx.calls("ResetToBase"); len(resets) != 2 {
+		t.Errorf("ResetToBase calls = %d; want the reset to still run for both repos", len(resets))
+	}
+	if got := branchOf(t, fx.mgr, fx.f.ID, "repo-a"); got != "feature/unexpected" {
+		t.Errorf("repo-a recorded on %q; want the branch it stayed on", got)
+	}
+	if got := branchOf(t, fx.mgr, fx.f.ID, "repo-b"); got != provisional {
+		t.Errorf("repo-b recorded on %q; want the provisional %q", got, provisional)
+	}
+}
+
+// A failing rename yields exactly one warning and the rewind still seals
+// and forks, leaving the repository recorded on the branch it kept.
+func TestRewindToPhase_FullStackRewindRenameFailureWarnsAndStillSeals(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(nil, nil, map[string]bool{stackWtA: true})
+
+	warnings, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhasePlan)
+	if err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+	got := stackWarnings(warnings, feature.RewindWarningStackBranch)
+	if len(got) != 1 {
+		t.Fatalf("stack branch warnings = %+v; want exactly one", got)
+	}
+	if got[0].Repo != "repo-a" || got[0].Branch != fx.layer2 {
+		t.Fatalf("stack branch warning = %+v; want repo-a naming layer 2's branch", got[0])
+	}
+	if _, err := fx.mgr.Store.LoadRun(fx.f.ID, 2); err != nil {
+		t.Fatalf("LoadRun(2): %v; want the rewind to still seal and fork", err)
+	}
+	if got := branchOf(t, fx.mgr, fx.f.ID, "repo-a"); got != fx.layer2 {
+		t.Errorf("repo-a recorded on %q; want the branch it kept %q", got, fx.layer2)
+	}
+}
+
+// A partial rewind on a feature without a stack performs no branch switch,
+// no deletion, and no branch-record change.
+func TestRewindWithRequest_PartialRewindWithoutStackLeavesBranchRecordsAlone(t *testing.T) {
+	mgr := newTestManager(t)
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main", Branch: "feature/original"},
+	})
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.CurrentRoadmapPhase = 2
+		ff.TotalRoadmapPhases = 3
+		ff.Run().RoadmapPhaseCommitAnchors = map[int]map[string]string{
+			1: {"repo-a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	worktrees := mocks.NewMockWorktreeOps()
+	mgr.Worktrees = worktrees
+	mgr.PRs = nil
+
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 2,
+	}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+	sawReset := false
+	for _, c := range worktrees.Calls {
+		switch c.Method {
+		case "ResetToCommit":
+			sawReset = true
+		case "CurrentBranch", "SwitchBranch", "DeleteBranch", "RenameBranch":
+			t.Errorf("unexpected %s call on a feature without a stack: %+v", c.Method, c)
+		}
+	}
+	if !sawReset {
+		t.Errorf("worktree calls = %+v; want the anchor reset to still run", worktrees.Calls)
+	}
+	if got := branchOf(t, mgr, f.ID, "repo-a"); got != "feature/original" {
+		t.Errorf("repo-a recorded on %q; want the untouched %q", got, "feature/original")
+	}
+}
+
+// A rewind to Implement without a roadmap phase is a full stack rewind too:
+// it collapses to the provisional branch and leaves the forked run without
+// a stack, exactly like a rewind to the Plan phase.
+func TestRewindToPhase_FullStackRewindToImplementWithoutRoadmapPhase(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(nil, nil, nil)
+	provisional := git.LayerBranchName(fx.f.WorkspaceSlug(), 1, fx.f.Slug)
+
+	if _, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhaseImplement); err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+	if len(fx.calls("DeleteBranch")) != 2 {
+		t.Errorf("DeleteBranch calls = %d; want layer 1's ref per repo", len(fx.calls("DeleteBranch")))
+	}
+	if len(fx.calls("RenameBranch")) != 2 {
+		t.Errorf("RenameBranch calls = %d; want one per repo", len(fx.calls("RenameBranch")))
+	}
+	if len(fx.calls("ResetToBase")) != 2 {
+		t.Errorf("ResetToBase calls = %d; want one per repo", len(fx.calls("ResetToBase")))
+	}
+	for _, repo := range []string{"repo-a", "repo-b"} {
+		if got := branchOf(t, fx.mgr, fx.f.ID, repo); got != provisional {
+			t.Errorf("repo %s recorded on %q; want the provisional %q", repo, got, provisional)
+		}
+	}
+	newRun, err := fx.mgr.Store.LoadRun(fx.f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if newRun.Stack != nil {
+		t.Errorf("new run stack = %+v; want none after a full rewind", newRun.Stack)
+	}
+}

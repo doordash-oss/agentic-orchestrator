@@ -2134,7 +2134,8 @@ export type RewindPRConsequenceView = z.output<typeof RewindPRConsequenceViewSch
 
 export const RewindWorktreeConsequenceViewSchema = z.strictObject({
   repo: z.string(),
-  resetKind: z.enum(['anchor', 'base', 'base-local', 'none']),
+  resetKind: z.enum(['anchor', 'base', 'base-local', 'layer-tip', 'none']),
+  branch: z.string().optional(),
 });
 export type RewindWorktreeConsequenceView = z.output<typeof RewindWorktreeConsequenceViewSchema>;
 

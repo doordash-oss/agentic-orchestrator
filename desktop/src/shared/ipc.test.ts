@@ -33,6 +33,7 @@ import {
   FeatureActionResultSchema,
   RepositoryDiffResultSchema,
   RecoveryItemViewSchema,
+  RewindWorktreeConsequenceViewSchema,
   applyShellPatch,
   ShellPatchSchema,
   SettingsPatchSchema,
@@ -2034,5 +2035,38 @@ describe('sidebar width preferences', () => {
     for (const sidebarWidth of [199, 521, 260.5, NaN, Infinity, '300']) {
       expect(SettingsPatchSchema.safeParse({ shell: { sidebarWidth } }).success).toBe(false);
     }
+  });
+});
+
+describe('rewind worktree consequence views', () => {
+  it('accepts a layer-tip reset carrying the stack layer branch', () => {
+    const parsed = RewindWorktreeConsequenceViewSchema.parse({
+      repo: 'repo-a',
+      resetKind: 'layer-tip',
+      branch: 'feature/ws/2-ext',
+    });
+    expect(parsed.branch).toBe('feature/ws/2-ext');
+    expect(parsed.resetKind).toBe('layer-tip');
+  });
+
+  it('accepts a consequence without a branch (unstacked feature)', () => {
+    const parsed = RewindWorktreeConsequenceViewSchema.parse({
+      repo: 'repo-a',
+      resetKind: 'base',
+    });
+    expect(parsed.branch).toBeUndefined();
+  });
+
+  it('rejects an unknown reset kind or an unexpected branch alias', () => {
+    expect(
+      RewindWorktreeConsequenceViewSchema.safeParse({ repo: 'repo-a', resetKind: 'tip' }).success,
+    ).toBe(false);
+    expect(
+      RewindWorktreeConsequenceViewSchema.safeParse({
+        repo: 'repo-a',
+        resetKind: 'layer-tip',
+        reset_kind: 'layer-tip',
+      }).success,
+    ).toBe(false);
   });
 });

@@ -43,6 +43,8 @@ func (f *childFakeWorktrees) Create(repoPath, workspaceSlug, branch, repoName, s
 }
 func (f *childFakeWorktrees) RenameBranch(string, string, string) error { return nil }
 func (f *childFakeWorktrees) CreateBranchAtHead(string, string) error   { return nil }
+func (f *childFakeWorktrees) SwitchBranch(string, string) error         { return nil }
+func (f *childFakeWorktrees) DeleteBranch(string, string) error         { return nil }
 func (f *childFakeWorktrees) Remove(string, bool) error                 { return nil }
 func (f *childFakeWorktrees) RemoveRef(string, string, string) error    { return nil }
 func (f *childFakeWorktrees) ResetToBase(string, string) error          { return nil }
@@ -780,6 +782,8 @@ func (f *reuseWorktrees) Create(repoPath, workspaceSlug, branch, repoName, start
 }
 func (f *reuseWorktrees) RenameBranch(string, string, string) error { return nil }
 func (f *reuseWorktrees) CreateBranchAtHead(string, string) error   { return nil }
+func (f *reuseWorktrees) SwitchBranch(string, string) error         { return nil }
+func (f *reuseWorktrees) DeleteBranch(string, string) error         { return nil }
 func (f *reuseWorktrees) Remove(string, bool) error                 { return nil }
 func (f *reuseWorktrees) RemoveRef(string, string, string) error    { return nil }
 func (f *reuseWorktrees) ResetToBase(string, string) error          { return nil }

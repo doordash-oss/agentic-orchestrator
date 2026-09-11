@@ -390,3 +390,44 @@ func (w *WorktreeManager) CreateBranchAtHead(worktreePath, branch string) error 
 	}
 	return nil
 }
+
+// SwitchBranch switches the worktree's HEAD to the existing local branch
+// in place, discarding uncommitted changes — checkout --force plus clean
+// -fd, the same discard semantics as the hard resets. A branch that does
+// not exist is refused by git with the worktree left where it was, and
+// the branch moved off keeps pointing at its commit.
+func (w *WorktreeManager) SwitchBranch(worktreePath, branch string) error {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithLockRetry(worktreePath, "checkout", "--force", branch); err != nil {
+		return fmt.Errorf("switching to branch %s: %s: %w", branch, strings.TrimSpace(string(out)), err)
+	}
+	if out, err := runGitMutationWithLockRetry(worktreePath, "clean", "-fd"); err != nil {
+		return fmt.Errorf("switching to branch %s: %s: %w", branch, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// DeleteBranch deletes the named local branch ref from the worktree's
+// repository. An absent ref is success, so retrying an interrupted rewind
+// stays idempotent; git branch -D refuses a branch checked out in this or
+// any other worktree, which keeps the checked-out layer's ref intact. A
+// successful deletion is confirmed by the ref no longer resolving.
+func (w *WorktreeManager) DeleteBranch(worktreePath, branch string) error {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if _, err := ReadRefSHA(worktreePath, "refs/heads/"+branch); err != nil {
+		return nil
+	}
+	if out, err := runGitMutationWithLockRetry(worktreePath, "branch", "-D", branch); err != nil {
+		return fmt.Errorf("deleting branch %s: %s: %w", branch, strings.TrimSpace(string(out)), err)
+	}
+	if sha, err := ReadRefSHA(worktreePath, "refs/heads/"+branch); err == nil {
+		return fmt.Errorf("deleting branch %s: ref still resolves at %s", branch, sha)
+	}
+	return nil
+}

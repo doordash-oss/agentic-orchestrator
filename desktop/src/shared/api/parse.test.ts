@@ -32,6 +32,7 @@ import {
   RepositorySourceReconcileResponseSchema,
   RepositoryDiffResponseSchema,
   RewindActionResponseSchema,
+  RewindPreviewResponseSchema,
   ServerFeatureDetailSchema,
   ServerFeatureSummarySchema,
   ServerRecoveryItemSchema,
@@ -1423,7 +1424,7 @@ describe('Readiness repository identity contract', () => {
 
   it.each([
     ['non-decimal device', { ...validIdentity, device: '0x1f' }],
-    ['negative inode', { ...validIdentity, inode: '-4' }],
+    ['negative inode', { ...validIdentity, inode: '-982394' }],
     ['numeric device instead of text', { ...validIdentity, device: 16777234 }],
     ['empty path', { ...validIdentity, path: '' }],
     ['missing common_dir', { ...validIdentity, common_dir: undefined }],
@@ -1431,5 +1432,51 @@ describe('Readiness repository identity contract', () => {
     ['extra field', { ...validIdentity, extra: 'no' }],
   ])('rejects malformed identity data: %s', (_label, identity) => {
     expect(() => ReadinessResponseSchema.parse(readinessWith(identity))).toThrow();
+  });
+});
+
+describe('rewind preview worktree consequences', () => {
+  const basePreview = {
+    api_version: 'v1',
+    eligible: true,
+    source_run_number: 3,
+    source_revision: 'abc123def456',
+    target_phase: 'implement',
+    effective_phase: 'implement',
+    roadmap_phase: 3,
+  };
+
+  it('accepts a layer-tip reset carrying the stack layer branch', () => {
+    const parsed = RewindPreviewResponseSchema.safeParse({
+      ...basePreview,
+      worktree_consequences: [
+        { repo: 'repo-a', reset_kind: 'layer-tip', branch: 'feature/ws/2-ext' },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.worktree_consequences?.[0]).toStrictEqual({
+      repo: 'repo-a',
+      reset_kind: 'layer-tip',
+      branch: 'feature/ws/2-ext',
+    });
+  });
+
+  it('accepts a consequence without a branch (unstacked feature)', () => {
+    const parsed = RewindPreviewResponseSchema.safeParse({
+      ...basePreview,
+      roadmap_phase: 1,
+      worktree_consequences: [{ repo: 'repo-a', reset_kind: 'base' }],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.worktree_consequences?.[0]?.branch).toBeUndefined();
+  });
+
+  it('rejects an unknown reset kind', () => {
+    expect(
+      RewindPreviewResponseSchema.safeParse({
+        ...basePreview,
+        worktree_consequences: [{ repo: 'repo-a', reset_kind: 'tip' }],
+      }).success,
+    ).toBe(false);
   });
 });

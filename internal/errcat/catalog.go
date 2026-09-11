@@ -1445,6 +1445,16 @@ var catalog = map[Code]Entry{
 		},
 		Remediation: "Check the worktree's state; the rewind may be partially applied.",
 	},
+	RewindStackBranchFailed: {
+		Class:   ClassWarning,
+		Title:   "Stack branch step failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A stack branch step failed during the rewind.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "The stack branch step for %s failed during the rewind.")
+		},
+		Remediation: "Check the repository's branches; the rewind may be partially applied.",
+	},
 	RepositoryWorktreeUnavailable: {
 		Class:   ClassWarning,
 		Title:   "Worktree unavailable",

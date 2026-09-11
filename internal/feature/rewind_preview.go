@@ -326,17 +326,15 @@ func RewindPreviewForFeature(f *Feature, sealedRunDir string, request RewindRequ
 	result.CarriedPhases = dirs
 
 	// PR consequences: which PRs would close (publishable features only).
+	// Each repository contributes its highest layer's pull request — the
+	// primary reviewable artifact the close loop targets.
 	if f.IsPublishable() {
-		prURLs := f.PRURLs()
-		repos := make([]string, 0, len(prURLs))
-		for name := range prURLs {
-			if prURLs[name] != "" {
-				repos = append(repos, name)
+		for _, repo := range f.Repos {
+			prURL := f.TopStackLayerPRURL(repo.Name)
+			if prURL == "" {
+				continue
 			}
-		}
-		sort.Strings(repos)
-		for _, name := range repos {
-			result.PRConsequences = append(result.PRConsequences, RewindPRConsequence{Repo: name, PRURL: prURLs[name]})
+			result.PRConsequences = append(result.PRConsequences, RewindPRConsequence{Repo: repo.Name, PRURL: prURL})
 		}
 	}
 
@@ -512,22 +510,21 @@ type rewindRevisionState struct {
 	TotalRoadmapPhases int            `json:"total_roadmap_phases"`
 	Pipeline           string         `json:"pipeline"`
 	PipelineUpgraded   string         `json:"pipeline_upgraded_from"`
-	PRURLs             []string       `json:"pr_urls"`
+	StackPRs           []string       `json:"stack_prs"`
 	RepoStates         []repoStateSig `json:"repo_states"`
 }
 
 type repoStateSig struct {
 	Repo    string `json:"repo"`
 	Touched bool   `json:"touched"`
-	PRURL   string `json:"pr_url"`
 }
 
 // RewindRevision returns a short, stable hash of the rewind-relevant feature
 // state. The preview emits it as source_revision; execution must present the
 // same value or be rejected as stale before any side effect. The hash changes
-// when the active run, status, phase, roadmap progress, pipeline, PRs, or
-// per-repo state advance — i.e. whenever a preview would no longer match the
-// world it was computed against.
+// when the active run, status, phase, roadmap progress, pipeline, any
+// stack layer's pull request, or per-repo state advance — i.e. whenever a
+// preview would no longer match the world it was computed against.
 func RewindRevision(f *Feature) string {
 	if f == nil {
 		return ""
@@ -536,14 +533,17 @@ func RewindRevision(f *Feature) string {
 	if f.PendingReviewPhase != nil {
 		pendingReview = f.PendingReviewPhase.DirName()
 	}
-	prURLs := f.PRURLs()
-	prList := make([]string, 0, len(prURLs))
-	for name, url := range prURLs {
-		if url != "" {
-			prList = append(prList, name+":"+url)
+	// Hash every layer's pull request URL and state per repository, in
+	// repository and position order, so any layer's pull request moving —
+	// created, closed, merged, or its URL changing — invalidates a stale
+	// preview exactly like the legacy per-repo URL once did.
+	stackPRs := make([]string, 0)
+	for _, repo := range f.Repos {
+		for _, entry := range f.StackRepoPullRequestEntries(repo.Name) {
+			stackPRs = append(stackPRs, fmt.Sprintf("%s:%d:%s:%s", repo.Name, entry.Position, entry.URL, entry.State))
 		}
 	}
-	sort.Strings(prList)
+	sort.Strings(stackPRs)
 	repoNames := make([]string, 0, len(f.RepoStates))
 	for name := range f.RepoStates {
 		repoNames = append(repoNames, name)
@@ -555,7 +555,6 @@ func RewindRevision(f *Feature) string {
 		sig := repoStateSig{Repo: name}
 		if st != nil {
 			sig.Touched = st.Touched
-			sig.PRURL = st.PRURL
 		}
 		repoSigs = append(repoSigs, sig)
 	}
@@ -569,7 +568,7 @@ func RewindRevision(f *Feature) string {
 		TotalRoadmapPhases: f.TotalRoadmapPhases,
 		Pipeline:           string(f.Pipeline),
 		PipelineUpgraded:   string(f.PipelineUpgradedFrom),
-		PRURLs:             prList,
+		StackPRs:           stackPRs,
 		RepoStates:         repoSigs,
 	}
 	data, _ := json.Marshal(state)

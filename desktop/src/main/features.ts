@@ -1134,7 +1134,23 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
             name: repo.name,
             publishable: repo.publishable,
             ...(repo.touched === undefined ? {} : { touched: repo.touched }),
-            ...(repo.pr_url === undefined || repo.pr_url === '' ? {} : { prUrl: repo.pr_url }),
+            ...(repo.pull_requests === undefined || repo.pull_requests.length === 0
+              ? {}
+              : {
+                  // One view entry per stack layer; feature-detail entries
+                  // never carry a push mode, but it passes through when the
+                  // server sends one.
+                  pullRequests: repo.pull_requests.map((entry) => ({
+                    position: entry.position,
+                    title: entry.title,
+                    ...(entry.branch === undefined ? {} : { branch: entry.branch }),
+                    ...(entry.url === undefined || entry.url === '' ? {} : { url: entry.url }),
+                    state: entry.state,
+                    noCommits: entry.no_commits,
+                    pushedUpToDate: entry.pushed_up_to_date,
+                    ...(entry.push_mode === undefined ? {} : { pushMode: entry.push_mode }),
+                  })),
+                }),
             ...(repo.freshness === undefined || repo.freshness === ''
               ? {}
               : { freshness: repo.freshness }),

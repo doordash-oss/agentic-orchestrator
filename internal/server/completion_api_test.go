@@ -93,7 +93,15 @@ func TestCompletionPreflightReturnsEligibleRepos(t *testing.T) {
 			CanMarkDone:    true,
 			Repos: []CompletionPreflightRepo{
 				{Repo: "repo-a", Publishable: true, Touched: true, Status: "eligible"},
-				{Repo: "repo-b", Publishable: true, Touched: true, Status: "already_published", PrURL: "https://example.com/pr/1"},
+				{Repo: "repo-b", Publishable: true, Touched: true, Status: "already_published",
+					PullRequests: []PullRequestEntry{{
+						Position: 1,
+						Title:    "Layer 1",
+						Branch:   "feature/layer-1",
+						URL:      "https://example.com/pr/1",
+						State:    PullRequestEntryStateOpen,
+					}},
+					PushMode: CompletionPreflightRepoPushModeFastForward},
 				{Repo: "repo-c", Publishable: false, Touched: false, Status: "ineligible"},
 			},
 		},
@@ -121,8 +129,11 @@ func TestCompletionPreflightReturnsEligibleRepos(t *testing.T) {
 	if len(resp.Repos) != 3 {
 		t.Fatalf("repos len = %d; want 3", len(resp.Repos))
 	}
-	if resp.Repos[1].PrURL != "https://example.com/pr/1" {
-		t.Fatalf("repo-b pr_url = %q; want https://example.com/pr/1", resp.Repos[1].PrURL)
+	if len(resp.Repos[1].PullRequests) != 1 || resp.Repos[1].PullRequests[0].URL != "https://example.com/pr/1" {
+		t.Fatalf("repo-b pull_requests = %+v, want the layer-1 entry with url https://example.com/pr/1", resp.Repos[1].PullRequests)
+	}
+	if resp.Repos[1].PushMode != CompletionPreflightRepoPushModeFastForward {
+		t.Fatalf("repo-b push_mode = %q, want fast_forward", resp.Repos[1].PushMode)
 	}
 	if target.completionPreflightID != fixtureFeatureID {
 		t.Fatalf("preflight called with %q; want %s", target.completionPreflightID, fixtureFeatureID)

@@ -41,8 +41,8 @@ import (
 // transactional writes round-trip through Modify/Load.
 func newFRTestFeature(t *testing.T, stateDir, featureID string, repoNames []string) (*feature.Store, *feature.Feature, []string) {
 	t.Helper()
-	// Touched=true (via OmitPRURL, no PR URL needed) so the FR loop's
-	// TouchedRepos reader sees each repo as part of the staged subset.
+	// Touched=true so the FR loop's TouchedRepos reader sees each repo as
+	// part of the staged subset.
 	return newLoopTestFeature(t, stateDir, featureID, repoNames, loopTestFeatureOptions{
 		Name:                "Final Review Loop Test",
 		Slug:                "fr-loop-test",
@@ -51,7 +51,6 @@ func newFRTestFeature(t *testing.T, stateDir, featureID string, repoNames []stri
 		Status:              feature.StatusFinalReviewing,
 		CurrentPhase:        feature.PhaseReview,
 		CurrentRoadmapPhase: 1,
-		OmitPRURL:           true,
 	})
 }
 

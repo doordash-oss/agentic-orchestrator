@@ -630,8 +630,16 @@ func TestReviewFeedbackActionCatalogEligibility(t *testing.T) {
 	publishable := true
 	base := actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable)
 	base.RepoStates = map[string]*feature.RepoState{
-		repoNameSelf: {PRURL: "https://github.example/org/repo/pull/17"},
+		repoNameSelf: {Touched: true},
 	}
+	base.Stack = []feature.StackLayer{{
+		Position: 1,
+		Title:    "Layer 1",
+		Branch:   "agentico/read-model/1-layer-1",
+		Repos: map[string]feature.StackRepoEntry{
+			repoNameSelf: {PRURL: "https://github.example/org/repo/pull/17", PRState: feature.StackPRStateOpen},
+		},
+	}}
 
 	tests := []struct {
 		name             string
@@ -646,6 +654,7 @@ func TestReviewFeedbackActionCatalogEligibility(t *testing.T) {
 			feature: func() *feature.Feature {
 				copy := *base
 				copy.RepoStates = map[string]*feature.RepoState{repoNameSelf: {}}
+				copy.Stack = nil
 				return &copy
 			}(),
 			wantDisabledCode: "no_pull_request",

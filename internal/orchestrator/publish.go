@@ -26,6 +26,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 )
 
 // readFileSafe reads a file and returns its contents trimmed of leading/trailing
@@ -44,16 +45,18 @@ func readFileSafe(path string) (string, error) {
 // and layers without a pull request get a generated description, a lease
 // push, and a PR based on the nearest lower layer's non-closed PR. A failure
 // at any layer stores the canonical record — naming the layer — on the
-// repository and stops that repository; other repositories continue.
-func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts PublishOptions) (string, error) {
+// repository and stops that repository; other repositories continue. The
+// durable record of every created pull request lives on the stack's
+// per-layer entries.
+func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts PublishOptions) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
-		return "", fmt.Errorf("load feature: %w", err)
+		return fmt.Errorf("load feature: %w", err)
 	}
 
 	repo, ok := findRepo(f, repoName)
 	if !ok {
-		return "", fmt.Errorf("repo %q not found in feature %s", repoName, featureID)
+		return fmt.Errorf("repo %q not found in feature %s", repoName, featureID)
 	}
 
 	workDir := repoWorkDir(repo)
@@ -65,7 +68,7 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	if len(f.Stack) == 0 {
 		missingErr := &PublishStackMissingError{RepoName: repoName, Branch: branch}
 		o.storePublishFailure(f, repoName, missingErr)
-		return "", missingErr
+		return missingErr
 	}
 	if branch == "" {
 		// No fabricated name: a repository without a recorded branch cannot
@@ -73,7 +76,7 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 		// fix the record.
 		err := fmt.Errorf("repo %q has no feature branch recorded", repoName)
 		o.storePublishFailure(f, repoName, err)
-		return "", err
+		return err
 	}
 
 	// Commit any uncommitted changes onto the checked-out (top) layer.
@@ -81,7 +84,7 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 		if commitErr := git.CommitAll(workDir, f.Name); commitErr != nil {
 			err := fmt.Errorf("commit failed: %w", commitErr)
 			o.storePublishFailure(f, repoName, err)
-			return "", err
+			return err
 		}
 	}
 
@@ -95,7 +98,7 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	if headErr != nil {
 		tipErr := fmt.Errorf("resolving %s's checked-out tip for publish: %w", repoName, headErr)
 		o.storePublishFailure(f, repoName, tipErr)
-		return "", tipErr
+		return tipErr
 	}
 
 	topPosition := 0
@@ -110,7 +113,7 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 			applyStackRepoTip(ff, topPosition, repoName, headSHA)
 			return nil
 		}); modErr != nil {
-			return "", fmt.Errorf("record top layer tip: %w", modErr)
+			return fmt.Errorf("record top layer tip: %w", modErr)
 		}
 	}
 
@@ -119,24 +122,21 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	baseSHA, baseErr := resolveBaseCutSHA(workDir, repo.BaseBranch)
 	if baseErr != nil {
 		o.storePublishFailure(f, repoName, baseErr)
-		return "", baseErr
+		return baseErr
 	}
 
-	highestURL, walkErr := o.walkStackLayers(f, repo, layers, baseSHA)
+	walkErr := o.walkStackLayers(f, repo, layers, baseSHA)
 	// The stack-section refresh runs whether or not the walk stopped early:
 	// pull requests created earlier in the pass still deserve current links.
 	o.reinjectStackSections(featureID, repoName)
-	if walkErr != nil {
-		return "", walkErr
-	}
-	return highestURL, nil
+	return walkErr
 }
 
 // walkStackLayers delivers one repository's stack, ascending by position.
 // entries is the walk's local view of the repository's per-layer entries; it
 // is updated as the walk records outcomes so later layers decide (base
 // branch, stack section) against what this pass just did.
-func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureRepo, layers []feature.StackLayer, baseSHA string) (string, error) {
+func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureRepo, layers []feature.StackLayer, baseSHA string) error {
 	workDir := repoWorkDir(repo)
 	repoName := repo.Name
 	repoPath := repo.Path
@@ -185,28 +185,36 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 				Err:           errors.New("stack layer has no branch recorded"),
 			}
 			o.storePublishFailure(f, repoName, err)
-			return "", err
+			return err
 		}
 
 		if entry.PRURL != "" {
 			stopErr := o.refreshExistingLayerPR(f, repoName, repoPath, layer, &entry)
 			entries[layer.Position] = entry
 			if stopErr != nil {
-				return "", stopErr
+				o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionBlocked)
+				return stopErr
 			}
 			if entry.PRState == feature.StackPRStateMerged {
 				// The layer's work has landed; the branch is left alone.
+				o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionMerged)
 				continue
 			}
 			if entry.TipSHA != entry.LastPushedSHA {
+				action := observe.LayerPublishActionPushed
+				if layerPushRewrites(workDir, layer.Branch, entry) {
+					action = observe.LayerPublishActionRewritten
+				}
 				pushedSHA, pushErr := o.pushStackLayer(repoName, layer, entry, workDir)
 				if pushErr != nil {
 					o.storePublishFailure(f, repoName, pushErr)
-					return "", pushErr
+					o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionFailed)
+					return pushErr
 				}
 				_ = o.deps.Lifecycle.RecordStackLayerPushedSHA(f.ID, repoName, layer.Position, pushedSHA)
 				entry.LastPushedSHA = pushedSHA
 				entries[layer.Position] = entry
+				o.emitLayerPublishEvent(f, repoName, layer, entry, action)
 			}
 			continue
 		}
@@ -223,7 +231,8 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 				Err:           generateErr,
 			}
 			o.storePublishFailure(f, repoName, err)
-			return "", err
+			o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionFailed)
+			return err
 		}
 
 		pushedSHA := entry.LastPushedSHA
@@ -232,7 +241,8 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 			pushedSHA, pushErr = o.pushStackLayer(repoName, layer, entry, workDir)
 			if pushErr != nil {
 				o.storePublishFailure(f, repoName, pushErr)
-				return "", pushErr
+				o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionFailed)
+				return pushErr
 			}
 			_ = o.deps.Lifecycle.RecordStackLayerPushedSHA(f.ID, repoName, layer.Position, pushedSHA)
 			entry.LastPushedSHA = pushedSHA
@@ -251,7 +261,8 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 				Err:           createErr,
 			}
 			o.storePublishFailure(f, repoName, err)
-			return "", err
+			o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionFailed)
+			return err
 		}
 		_ = o.deps.Lifecycle.RecordStackLayerPR(f.ID, repoName, layer.Position, prURL, pushedSHA)
 		entry.PRURL = prURL
@@ -259,8 +270,44 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 		entries[layer.Position] = entry
 		_ = o.deps.Lifecycle.SetRepoPublished(f.ID, repoName)
 		o.applyLayerCrossRefs(f, layer, repoName, prURL)
+		o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionCreated)
 	}
-	return highestLayerPRURL(layers, entries), nil
+	return nil
+}
+
+// emitLayerPublishEvent reports one layer publish outcome through the
+// OnStackLayerPublished hook, following the layer-boundary event pattern.
+// The hook is nil-safe and the observer no-ops when disabled.
+func (o *Orchestrator) emitLayerPublishEvent(f *feature.Feature, repoName string, layer feature.StackLayer, entry feature.StackRepoEntry, action observe.LayerPublishAction) {
+	if o == nil || o.hooks.OnStackLayerPublished == nil {
+		return
+	}
+	state := entry.PRState
+	if entry.PRURL == "" {
+		state = feature.StackPRStateNone
+	} else if state == "" {
+		state = feature.StackPRStateOpen
+	}
+	o.hooks.OnStackLayerPublished(f.ID, observe.LayerPublishEvent{
+		Repository: repoName,
+		Position:   layer.Position,
+		Title:      layer.Title,
+		Branch:     layer.Branch,
+		PRURL:      entry.PRURL,
+		State:      string(state),
+		Action:     action,
+	})
+}
+
+// layerPushRewrites reports whether pushing entry's tip onto the layer's
+// remote branch would rewrite remote history: the remote branch resolves
+// and is not an ancestor of the tip.
+func layerPushRewrites(workDir, branch string, entry feature.StackRepoEntry) bool {
+	remoteSHA, err := git.ReadRefSHA(workDir, "refs/remotes/origin/"+branch)
+	if err != nil || remoteSHA == "" {
+		return false
+	}
+	return !git.IsAncestor(workDir, remoteSHA, entry.TipSHA)
 }
 
 // refreshExistingLayerPR reads a layer's recorded pull request live state.
@@ -530,21 +577,6 @@ func stackLayerBaseBranch(layers []feature.StackLayer, entries map[int]feature.S
 		}
 	}
 	return repoBaseBranch
-}
-
-// highestLayerPRURL returns the pull request URL of the highest positioned
-// layer whose entry carries one — the repository's primary reviewable
-// artifact and the legacy per-repo URL projection.
-func highestLayerPRURL(layers []feature.StackLayer, entries map[int]feature.StackRepoEntry) string {
-	url := ""
-	best := 0
-	for _, layer := range layers {
-		if layer.Position > best && entries[layer.Position].PRURL != "" {
-			url = entries[layer.Position].PRURL
-			best = layer.Position
-		}
-	}
-	return url
 }
 
 // orderedStackLayers returns the run's stack layers sorted ascending by

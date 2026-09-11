@@ -92,7 +92,7 @@ describe('AftercareFacts', () => {
     expect(screen.getByText('$96.75')).toBeVisible();
   });
 
-  it('opens the pull request and shows the pending-delivery fact', async () => {
+  it('opens the top pull request, counts PRs across repositories, and shows the pending-delivery fact', async () => {
     const user = userEvent.setup();
     const onOpenPullRequest = vi.fn();
     render(
@@ -103,8 +103,47 @@ describe('AftercareFacts', () => {
             {
               name: 'agentic-orchestrator',
               publishable: true,
-              prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+              pullRequests: [
+                {
+                  position: 1,
+                  title: 'Phase 8 stack read model',
+                  branch: 'feature/x/1-bootstrap',
+                  url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+                  state: 'open',
+                  noCommits: false,
+                  pushedUpToDate: true,
+                },
+                {
+                  position: 2,
+                  title: 'Empty layer',
+                  state: 'none',
+                  noCommits: true,
+                  pushedUpToDate: false,
+                },
+                {
+                  position: 3,
+                  title: 'Search revamp',
+                  url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/109',
+                  state: 'open',
+                  noCommits: false,
+                  pushedUpToDate: true,
+                },
+              ],
               freshness: 'in sync',
+            },
+            {
+              name: 'web',
+              publishable: true,
+              pullRequests: [
+                {
+                  position: 1,
+                  title: 'Web revamp',
+                  url: 'https://github.com/x/web/pull/12',
+                  state: 'open',
+                  noCommits: false,
+                  pushedUpToDate: true,
+                },
+              ],
             },
           ],
         })}
@@ -117,9 +156,44 @@ describe('AftercareFacts', () => {
     expect(facts).toHaveTextContent('Unpublished');
     expect(facts).toHaveTextContent('3 commits');
     expect(facts).toHaveTextContent('In sync');
+    // The headline link is the highest layer's PR of the first repository
+    // that has one, never a lower layer's.
     await user.click(screen.getByRole('button', { name: 'Open pull request' }));
     expect(onOpenPullRequest).toHaveBeenCalledWith(
-      'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+      'https://github.com/doordash-oss/agentic-orchestrator/pull/109',
     );
+    expect(facts).toHaveTextContent('3 pull requests across 2 repositories');
+  });
+
+  it('renders no pull-request fact when no repository has a PR', () => {
+    render(
+      <AftercareFacts
+        snapshot={featureSnapshot({
+          status: 'CodeReady',
+          repoStatus: [
+            {
+              name: 'agentic-orchestrator',
+              publishable: true,
+              pullRequests: [
+                {
+                  position: 1,
+                  title: 'Phase 8 stack read model',
+                  state: 'none',
+                  noCommits: false,
+                  pushedUpToDate: false,
+                },
+              ],
+              freshness: 'in sync',
+            },
+          ],
+        })}
+        run={completedRun}
+        onOpenPullRequest={vi.fn()}
+      />,
+    );
+    const facts = screen.getByRole('region', { name: 'Feature facts' });
+    expect(facts).toHaveTextContent('In sync');
+    expect(facts).not.toHaveTextContent('Pull request');
+    expect(screen.queryByRole('button', { name: 'Open pull request' })).not.toBeInTheDocument();
   });
 });

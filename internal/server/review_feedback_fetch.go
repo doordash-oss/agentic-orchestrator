@@ -100,9 +100,8 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 	}
 
 	fetched := make(map[string][]feature.ReviewFeedbackComment, len(parent.Repos))
-	prURLs := parent.PRURLs()
 	for _, repo := range parent.Repos {
-		prURL := prURLs[repo.Name]
+		prURL := parent.TopStackLayerPRURL(repo.Name)
 		if prURL == "" {
 			continue
 		}
@@ -300,7 +299,6 @@ func (h *apiHandler) handleReviewFeedbackSelectionTrusted(w http.ResponseWriter,
 // wire view, preserving the parent's stable repository order and the
 // oldest-first comment order established by reconciliation.
 func reviewFeedbackDraftView(parent *feature.Feature, draft *feature.ReviewFeedbackDraft) []ReviewFeedbackRepoComments {
-	prURLs := parent.PRURLs()
 	byRepo := make(map[string][]ReviewFeedbackDraftComment, len(parent.Repos))
 	for _, item := range draft.Items {
 		c := item.Comment
@@ -327,7 +325,7 @@ func reviewFeedbackDraftView(parent *feature.Feature, draft *feature.ReviewFeedb
 		}
 		groups = append(groups, ReviewFeedbackRepoComments{
 			Repo:     repo.Name,
-			PrURL:    prURLs[repo.Name],
+			PrURL:    parent.TopStackLayerPRURL(repo.Name),
 			Comments: comments,
 		})
 	}

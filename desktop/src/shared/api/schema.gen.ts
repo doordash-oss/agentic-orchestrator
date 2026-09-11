@@ -2150,14 +2150,38 @@ export interface components {
             mark_done_blocker?: string;
             repos: components["schemas"]["CompletionPreflightRepo"][];
         };
+        PullRequestEntry: {
+            /** @description Stack layer position, ascending from 1. */
+            position: number;
+            /** @description Layer title from the approved roadmap's pull-request table. */
+            title: string;
+            /** @description Layer branch name. */
+            branch?: string;
+            /** @description Pull request URL, omitted when no pull request exists for the layer. */
+            url?: string;
+            /**
+             * @description Recorded pull request state; none before any pull request exists.
+             * @enum {string}
+             */
+            state: "none" | "open" | "merged" | "closed";
+            /** @description Whether the layer delivered no commits in this repository. */
+            no_commits: boolean;
+            /** @description Whether a pull request exists and the layer's recorded tip equals its last-pushed SHA. */
+            pushed_up_to_date: boolean;
+            /**
+             * @description Per-layer push mode a publish would apply — create (no pull request yet, commits to deliver), fast_forward (pull request exists, tip moved, remote branch is an ancestor), rewrite (remote branch is not an ancestor, publish force-pushes under a lease), or none (up to date, merged, closed, or no commits). Present only on completion preflight entries.
+             * @enum {string}
+             */
+            push_mode?: "create" | "fast_forward" | "rewrite" | "none";
+        };
         CompletionPreflightRepo: {
             repo: string;
             publishable: boolean;
             touched: boolean;
             /** @description Server-authored completion status — eligible, already_published, unpublished_changes, completed, unmerged_changes, ineligible, untouched, or blocked. */
             status: string;
-            /** @description Current PR URL when the repository has been published. */
-            pr_url?: string;
+            /** @description Ordered per-layer stack view for this repository, one entry per layer with its per-layer push mode. Omitted for non-publishable repositories and runs without a stack. */
+            pull_requests?: components["schemas"]["PullRequestEntry"][];
             /** @description Safe, server-authored reason this repository cannot proceed, when non-empty. */
             blocker?: string;
             /** @description Server-authored freshness state. */
@@ -2172,8 +2196,11 @@ export interface components {
             pending_commits?: number;
             /** @description Whether the worktree carries uncommitted changes that have not been delivered. */
             pending_dirty?: boolean;
-            /** @description How a republish reaches an existing pull-request branch — fast_forward or rewrite. rewrite means the remote branch carries commits the local branch does not, so the push replaces remote history under a lease. */
-            push_mode?: string;
+            /**
+             * @description Repository-level push mode — rewrite when any layer's remote branch carries commits its tip does not contain, else fast_forward. Present only when the repository has at least one pull request on some layer.
+             * @enum {string}
+             */
+            push_mode?: "fast_forward" | "rewrite";
             /** @description Bounded list of uncommitted paths a publish would commit. May be shorter than pending_dirty_file_total. */
             pending_dirty_files?: string[];
             /** @description True count of uncommitted paths, which can exceed the listed sample. */
@@ -2607,7 +2634,8 @@ export interface components {
             rebase_target?: string;
             conflict_files?: string[];
             touched: boolean;
-            pr_url?: string;
+            /** @description Ordered per-layer stack view for this repository, one entry per layer in position order. Omitted for non-publishable repositories and runs without a stack; completion preflight entries additionally carry push_mode. */
+            pull_requests?: components["schemas"]["PullRequestEntry"][];
             /** @description Canonical catalog-rendered publish failure record this repository owns, when any. */
             error?: components["schemas"]["Error"];
             publishable: boolean;

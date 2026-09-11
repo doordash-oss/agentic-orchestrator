@@ -60,15 +60,15 @@ func updateSourceFixture(t *testing.T, fx *initializeFixture, name string) (repo
 func (fx *initializeFixture) updateSourceBody(repo, bare string) map[string]any {
 	fx.t.Helper()
 	return map[string]any{
-		"repo_key":           filepath.Base(repo),
-		"identity":           fx.wireIdentity(repo),
-		"mode":               "default",
-		"branch":             "main",
-		"origin_branch":      "main",
-		"expected_local_sha": fx.gitIn(repo, "rev-parse", "refs/heads/main"),
+		"repo_key":            filepath.Base(repo),
+		"identity":            fx.wireIdentity(repo),
+		"mode":                "default",
+		"branch":              "main",
+		"origin_branch":       "main",
+		"expected_local_sha":  fx.gitIn(repo, "rev-parse", "refs/heads/main"),
 		"expected_origin_sha": fx.gitIn(bare, "rev-parse", "refs/heads/main"),
-		"checkout_head_ref":  "refs/heads/work",
-		"checkout_head_sha":  fx.gitIn(repo, "rev-parse", "HEAD^{commit}"),
+		"checkout_head_ref":   "refs/heads/work",
+		"checkout_head_sha":   fx.gitIn(repo, "rev-parse", "HEAD^{commit}"),
 	}
 }
 

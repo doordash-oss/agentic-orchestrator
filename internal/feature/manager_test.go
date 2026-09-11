@@ -1117,21 +1117,23 @@ func TestManagerMarkPublished(t *testing.T) {
 	_ = mgr.Transition(f.ID, feature.StatusReviewPassed)
 	_ = mgr.Transition(f.ID, feature.StatusCodeReady)
 
-	// Mark published — a publishable feature with no repository PR URL
-	// recorded is refused.
+	// Mark published — a publishable feature with no stack layer pull
+	// request recorded is refused.
 	if err := mgr.MarkPublished(f.ID); err == nil {
-		t.Fatalf("MarkPublished without any repository PR URL on publishable feature should fail")
+		t.Fatalf("MarkPublished without any stack layer pull request on publishable feature should fail")
+	} else if !strings.Contains(err.Error(), "no stack layer pull request recorded") {
+		t.Fatalf("MarkPublished error = %v, want the no-stack-layer-pull-request guard", err)
 	}
 
-	// Publishable + a recorded repository PR URL succeeds, and the
-	// run-level PR URL shadow stays unwritten.
+	// Publishable + a recorded stack layer pull request succeeds; the
+	// per-layer entries are the durable record.
 	_ = mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
-		state, ok := ff.RepoStates["test-repo"]
-		if !ok || state == nil {
-			state = &feature.RepoState{}
-			ff.RepoStates["test-repo"] = state
-		}
-		state.PRURL = "https://github.com/test/pr/1"
+		ff.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"test-repo": {PRURL: "https://github.com/test/pr/1", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		return nil
 	})
 	if err := mgr.MarkPublished(f.ID); err != nil {
@@ -1141,11 +1143,8 @@ func TestManagerMarkPublished(t *testing.T) {
 	if f.Status != feature.StatusPublished {
 		t.Errorf("status = %v, want Published", f.Status)
 	}
-	if f.PRURL() != "https://github.com/test/pr/1" {
-		t.Errorf("PRURL = %q, want the repository PR URL preserved", f.PRURL())
-	}
-	if f.Run().PRURL != "" {
-		t.Errorf("run-level PR URL shadow = %q, want unwritten by MarkPublished", f.Run().PRURL)
+	if got := f.TopStackLayerPRURL("test-repo"); got != "https://github.com/test/pr/1" {
+		t.Errorf("TopStackLayerPRURL = %q, want the recorded stack layer PR URL preserved", got)
 	}
 }
 
@@ -1278,7 +1277,8 @@ func TestManagerCreateWithImages(t *testing.T) {
 
 // TestMarkPublished_NonPublishableWithoutPRURLAccepted confirms the guard
 // only applies to publishable features; non-publishable features may
-// legitimately Transition to StatusPublished with no PR URL recorded.
+// legitimately Transition to StatusPublished with no stack layer pull
+// request recorded.
 func TestMarkPublished_NonPublishableWithoutPRURLAccepted(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -1310,8 +1310,8 @@ func TestMarkPublished_NonPublishableWithoutPRURLAccepted(t *testing.T) {
 	if got.Status != feature.StatusPublished {
 		t.Errorf("status = %v, want Published", got.Status)
 	}
-	if got.PRURL() != "" {
-		t.Errorf("PRURL = %q, want empty", got.PRURL())
+	if got.AnyStackLayerHasPullRequest() {
+		t.Errorf("AnyStackLayerHasPullRequest = true, want false (no pull request recorded)")
 	}
 }
 
@@ -1951,13 +1951,17 @@ func TestRewindToPhase_PRURLCleared(t *testing.T) {
 	_ = mgr.Store.Modify(f.ID, func(f *feature.Feature) error {
 		f.Status = feature.StatusPublished
 		f.CurrentPhase = feature.PhasePublish
-		// Per-repo PR URL is the only source of truth.
+		// The stack's per-layer entry is the only source of truth.
 		if f.RepoStates == nil {
 			f.RepoStates = map[string]*feature.RepoState{}
 		}
-		f.RepoStates["test-repo"] = &feature.RepoState{
-			Touched: true, PRURL: "https://github.com/org/repo/pull/123",
-		}
+		f.RepoStates["test-repo"] = &feature.RepoState{Touched: true}
+		f.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"test-repo": {PRURL: "https://github.com/org/repo/pull/123", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		// Ensure the feature is publishable so ClosePR is attempted
 		for i := range f.Repos {
 			f.Repos[i].Publishable = nil
@@ -1981,8 +1985,8 @@ func TestRewindToPhase_PRURLCleared(t *testing.T) {
 		t.Errorf("expected warning about PR close failure, got warnings: %v", warns)
 	}
 	got, _ := mgr.Get(f.ID)
-	if got.PRURL() != "" {
-		t.Errorf("PRURL should be cleared, got %q", got.PRURL())
+	if got.StackRepoHasPullRequest("test-repo") {
+		t.Errorf("stack layer pull request still on record after rewind: stack = %+v", got.Stack)
 	}
 }
 
@@ -2836,7 +2840,8 @@ func TestSetRepoPublished(t *testing.T) {
 	})
 
 	// A two-layer stack whose repo-a entries both carry pull requests: the
-	// legacy per-repo URL must be refreshed to the highest layer's PR.
+	// per-layer entries are the pull-request record; SetRepoPublished only
+	// refreshes the repository's orchestration state.
 	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.RepoStates = map[string]*feature.RepoState{
 			"repo-a": {Touched: true},
@@ -2862,15 +2867,15 @@ func TestSetRepoPublished(t *testing.T) {
 	if !loaded.RepoStates["repo-a"].Touched {
 		t.Errorf("repo-a Touched = false, want true")
 	}
-	if loaded.RepoStates["repo-a"].PRURL != "https://github.com/org/repo/pull/2" {
-		t.Errorf("repo-a PRURL = %q, want the highest layer's PR URL", loaded.RepoStates["repo-a"].PRURL)
+	if got := loaded.Stack[1].Repos["repo-a"].PRURL; got != "https://github.com/org/repo/pull/2" {
+		t.Errorf("repo-a top layer PRURL = %q, want the stack entries preserved", got)
 	}
 	// repo-b should be unchanged
 	if !loaded.RepoStates["repo-b"].Touched {
 		t.Errorf("repo-b Touched = false, want true (unchanged)")
 	}
-	if loaded.RepoStates["repo-b"].PRURL != "" {
-		t.Errorf("repo-b PRURL = %q, want unchanged (no publish recorded)", loaded.RepoStates["repo-b"].PRURL)
+	if loaded.StackRepoHasPullRequest("repo-b") {
+		t.Errorf("repo-b pull request = %v, want none recorded (no publish recorded)", loaded.Stack)
 	}
 }
 
@@ -2961,8 +2966,8 @@ func TestSetRepoPublished_ClearsErrorRecord(t *testing.T) {
 		t.Fatalf("Error = nil, want the stored publish failure record")
 	}
 
-	// Now publish successfully — clears the record and refreshes the URL
-	// from the stack projection.
+	// Now publish successfully — clears the record; the stack entries keep
+	// the pull-request record untouched.
 	err = mgr.SetRepoPublished(f.ID, "repo-a")
 	if err != nil {
 		t.Fatalf("SetRepoPublished: %v", err)
@@ -2972,8 +2977,8 @@ func TestSetRepoPublished_ClearsErrorRecord(t *testing.T) {
 	if loaded.RepoStates["repo-a"].Error != nil {
 		t.Errorf("Error = %+v, want nil (cleared after successful publish)", loaded.RepoStates["repo-a"].Error)
 	}
-	if loaded.RepoStates["repo-a"].PRURL != "https://github.com/org/repo/pull/1" {
-		t.Errorf("PRURL = %q, want the stack projection's PR URL", loaded.RepoStates["repo-a"].PRURL)
+	if got := loaded.Stack[0].Repos["repo-a"].PRURL; got != "https://github.com/org/repo/pull/1" {
+		t.Errorf("stack layer PRURL = %q, want the recorded pull request preserved", got)
 	}
 	if !loaded.RepoStates["repo-a"].Touched {
 		t.Errorf("Touched = false, want true after publish")
@@ -3009,10 +3014,9 @@ func seedStackPublishFeature(t *testing.T) (*feature.Manager, *feature.Store, *f
 }
 
 // TestStackLayerPublishWrites covers the per-layer publish write family:
-// each write updates only its own fields on the target layer's entry,
-// clears the repository's stored error, refreshes the legacy per-repo PR
-// URL to the highest layer with a pull request, and never writes the
-// run-level PR URL shadow.
+// each write updates only its own fields on the target layer's entry and
+// clears the repository's stored error; the per-layer entries are the sole
+// durable pull-request record.
 func TestStackLayerPublishWrites(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs isolate filesystem state.
@@ -3039,13 +3043,10 @@ func TestStackLayerPublishWrites(t *testing.T) {
 				if got := f.Stack[0].Repos["repo-a"]; got.PRURL != "" || got.PRState != "" || got.LastPushedSHA != "" || got.TipSHA != "tip-1" {
 					t.Errorf("layer 1 entry = %+v, want untouched", got)
 				}
-				if got := f.RepoStates["repo-a"].PRURL; got != "https://github.com/org/repo-a/pull/2" {
-					t.Errorf("legacy PRURL = %q, want the layer 2 projection", got)
-				}
 			},
 		},
 		{
-			name: "a lower-layer PR does not change the legacy projection",
+			name: "a lower-layer PR records only its own layer",
 			write: func(mgr *feature.Manager, id string) error {
 				if err := mgr.RecordStackLayerPR(id, "repo-a", 2, "https://github.com/org/repo-a/pull/2", "sha-2"); err != nil {
 					return err
@@ -3056,8 +3057,8 @@ func TestStackLayerPublishWrites(t *testing.T) {
 				if got := f.Stack[0].Repos["repo-a"]; got.PRURL != "https://github.com/org/repo-a/pull/1" {
 					t.Errorf("layer 1 entry = %+v, want its own PR recorded", got)
 				}
-				if got := f.RepoStates["repo-a"].PRURL; got != "https://github.com/org/repo-a/pull/2" {
-					t.Errorf("legacy PRURL = %q, want the highest layer's URL unchanged", got)
+				if got := f.Stack[1].Repos["repo-a"]; got.PRURL != "https://github.com/org/repo-a/pull/2" {
+					t.Errorf("layer 2 entry = %+v, want its own PR unchanged", got)
 				}
 			},
 		},
@@ -3074,8 +3075,8 @@ func TestStackLayerPublishWrites(t *testing.T) {
 				if entry.PRURL != "" || entry.PRState != "" {
 					t.Errorf("layer 2 entry = %+v, want the pull request record untouched", entry)
 				}
-				if got := f.RepoStates["repo-a"].PRURL; got != "" {
-					t.Errorf("legacy PRURL = %q, want unchanged (no layer PR yet)", got)
+				if got := f.Stack[0].Repos["repo-a"]; got.PRURL != "" || got.LastPushedSHA != "" {
+					t.Errorf("layer 1 entry = %+v, want untouched", got)
 				}
 			},
 		},
@@ -3110,8 +3111,8 @@ func TestStackLayerPublishWrites(t *testing.T) {
 				if entry.TipSHA != "tip-2" || entry.PRURL != "" {
 					t.Errorf("layer 2 entry = %+v, want only the marker changed", entry)
 				}
-				if got := f.RepoStates["repo-a"].PRURL; got != "" {
-					t.Errorf("legacy PRURL = %q, want unchanged (no layer PR yet)", got)
+				if got := f.Stack[0].Repos["repo-a"]; got.PRURL != "" || got.NoCommits {
+					t.Errorf("layer 1 entry = %+v, want untouched", got)
 				}
 			},
 		},
@@ -3130,9 +3131,6 @@ func TestStackLayerPublishWrites(t *testing.T) {
 			tt.check(t, loaded)
 			if state := loaded.RepoStates["repo-a"]; state.Error != nil {
 				t.Errorf("repo-a stored error = %+v, want cleared by the publish write", state.Error)
-			}
-			if loaded.Run().PRURL != "" {
-				t.Errorf("run-level PR URL shadow = %q, want never written by per-layer writes", loaded.Run().PRURL)
 			}
 		})
 	}
@@ -3211,14 +3209,22 @@ func TestTryCompletePublish_AllReady(t *testing.T) {
 		{Name: "repo-b", Path: "/tmp/b"},
 	})
 
-	// Set up: feature at ReviewPassed, all repos at pr_ready with PR URLs
+	// Set up: feature at ReviewPassed, all touched repos published on every
+	// stack layer (pull request or no-commits marker).
 	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.Status = feature.StatusReviewPassed
 		feat.CurrentPhase = feature.PhaseImplement
 		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/1"},
-			"repo-b": {Touched: true, PRURL: "https://github.com/org/b/pull/2"},
+			"repo-a": {Touched: true},
+			"repo-b": {Touched: true},
 		}
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://github.com/org/a/pull/1", PRState: feature.StackPRStateOpen},
+				"repo-b": {PRURL: "https://github.com/org/b/pull/2", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		return nil
 	})
 
@@ -3234,11 +3240,8 @@ func TestTryCompletePublish_AllReady(t *testing.T) {
 	if loaded.Status != feature.StatusPublished {
 		t.Errorf("status = %v, want %v", loaded.Status, feature.StatusPublished)
 	}
-	if loaded.PRURL() != "https://github.com/org/a/pull/1" {
-		t.Errorf("PRURL = %q, want first repo's PR URL", loaded.PRURL())
-	}
-	if loaded.Run().PRURL != "" {
-		t.Errorf("run-level PR URL shadow = %q, want unwritten by the publish completion", loaded.Run().PRURL)
+	if got := loaded.TopStackLayerPRURL("repo-a"); got != "https://github.com/org/a/pull/1" {
+		t.Errorf("TopStackLayerPRURL(repo-a) = %q, want the recorded stack layer PR URL", got)
 	}
 }
 
@@ -3258,15 +3261,18 @@ func TestTryCompletePublish_NotAllReady(t *testing.T) {
 		feat.Status = feature.StatusReviewPassed
 		feat.CurrentPhase = feature.PhaseImplement
 		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/1"},
+			"repo-a": {Touched: true},
 			"repo-b": {Touched: true},
 		}
-		// Mirror the strangler-implant dual-write: repo-b is touched but
-		// has no PR URL yet, so AllReposPublished must return false.
-		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/1"},
-			"repo-b": {Touched: true},
-		}
+		// repo-b is touched but its layer entry has no pull request yet, so
+		// AllReposPublished must return false.
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://github.com/org/a/pull/1", PRState: feature.StackPRStateOpen},
+				"repo-b": {TipSHA: "tip-b"},
+			},
+		}}
 		return nil
 	})
 
@@ -3299,8 +3305,14 @@ func TestTryCompletePublish_FeatureAtCodeReady(t *testing.T) {
 		feat.Status = feature.StatusCodeReady
 		feat.CurrentPhase = feature.PhasePublish
 		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/1"},
+			"repo-a": {Touched: true},
 		}
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://github.com/org/a/pull/1", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		return nil
 	})
 
@@ -3321,8 +3333,7 @@ func TestTryCompletePublish_FeatureAtCodeReady(t *testing.T) {
 // TestTryCompletePublish_StackedCodeReadyTransitionsWithoutURL pins the
 // stack-based completion: a code-ready feature whose touched repository has
 // layer 1 carrying a pull request and layer 2 marked empty transitions to
-// Published with no URL argument, and the run-level PR URL shadow stays
-// unwritten.
+// Published through the per-layer record alone.
 func TestTryCompletePublish_StackedCodeReadyTransitionsWithoutURL(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs isolate filesystem state.
@@ -3350,8 +3361,7 @@ func TestTryCompletePublish_StackedCodeReadyTransitionsWithoutURL(t *testing.T) 
 	})
 
 	// Build the settled stack through the per-layer publish writes: layer 1
-	// carries the pull request, layer 2 is marked empty. The writes also
-	// project the legacy per-repo URL the publish transition guards on.
+	// carries the pull request, layer 2 is marked empty.
 	if err := mgr.RecordStackLayerPR(f.ID, "repo-a", 1, "https://github.com/org/a/pull/1", "sha-1"); err != nil {
 		t.Fatalf("RecordStackLayerPR: %v", err)
 	}
@@ -3371,9 +3381,6 @@ func TestTryCompletePublish_StackedCodeReadyTransitionsWithoutURL(t *testing.T) 
 	if loaded.Status != feature.StatusPublished {
 		t.Errorf("status = %v, want %v", loaded.Status, feature.StatusPublished)
 	}
-	if loaded.Run().PRURL != "" {
-		t.Errorf("run-level PR URL shadow = %q, want unwritten by the publish completion", loaded.Run().PRURL)
-	}
 }
 
 func TestTryCompletePublish_WrongStatus(t *testing.T) {
@@ -3391,8 +3398,14 @@ func TestTryCompletePublish_WrongStatus(t *testing.T) {
 		feat.Status = feature.StatusImplementing
 		feat.CurrentPhase = feature.PhaseImplement
 		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/1"},
+			"repo-a": {Touched: true},
 		}
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://github.com/org/a/pull/1", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		return nil
 	})
 
@@ -3548,9 +3561,18 @@ func TestRewindToPhase_ClosesPerRepoPRs(t *testing.T) {
 		feat.Status = feature.StatusImplementing
 		feat.CurrentPhase = feature.PhaseImplement
 		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/10"},
-			"repo-b": {Touched: true, PRURL: "https://github.com/org/b/pull/20"},
+			"repo-a": {Touched: true},
+			"repo-b": {Touched: true},
 		}
+		// Each repository's pull request lives on its top stack layer; the
+		// close loop reads the top layer per repository.
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://github.com/org/a/pull/10", PRState: feature.StackPRStateOpen},
+				"repo-b": {PRURL: "https://github.com/org/b/pull/20", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		return nil
 	})
 
@@ -3596,8 +3618,8 @@ func TestRewindToPhase_ImplementResetsMultiRepoState(t *testing.T) {
 		feat.Status = feature.StatusPublished
 		feat.CurrentPhase = feature.PhasePublish
 		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/1"},
-			"repo-b": {Touched: true, PRURL: "https://github.com/org/b/pull/2"},
+			"repo-a": {Touched: true},
+			"repo-b": {Touched: true},
 		}
 		return nil
 	})
@@ -4538,10 +4560,17 @@ func TestRewindToPhase_SkipsClosePRForUnpublished(t *testing.T) {
 	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.Status = feature.StatusPublished
 		feat.CurrentPhase = feature.PhasePublish
-		feat.SetPRURL("https://github.com/org/repo/pull/99")
 		feat.RepoStates = map[string]*feature.RepoState{
-			"local-repo": {Touched: true, PRURL: "https://github.com/org/repo/pull/100"},
+			"local-repo": {Touched: true},
 		}
+		// A pull request is on record; the feature's unpublishable repos
+		// must still keep the close loop away from it.
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"local-repo": {PRURL: "https://github.com/org/repo/pull/100", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		return nil
 	})
 
@@ -4580,13 +4609,17 @@ func TestRewindToPhase_ClosePRStillCalledForPublished(t *testing.T) {
 	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.Status = feature.StatusPublished
 		feat.CurrentPhase = feature.PhasePublish
-		// Per-repo PR URL is the only source of truth.
+		// The stack's per-layer entry is the only source of truth.
 		if feat.RepoStates == nil {
 			feat.RepoStates = map[string]*feature.RepoState{}
 		}
-		feat.RepoStates["pub-repo"] = &feature.RepoState{
-			Touched: true, PRURL: "https://github.com/org/repo/pull/42",
-		}
+		feat.RepoStates["pub-repo"] = &feature.RepoState{Touched: true}
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"pub-repo": {PRURL: "https://github.com/org/repo/pull/42", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		return nil
 	})
 
@@ -4919,9 +4952,17 @@ func TestInitRepoImpl_PreservesExistingState(t *testing.T) {
 			{Name: "repo-b", Path: "/tmp/b"},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://example.com/a/pr/1"},
+			"repo-a": {Touched: true},
 			"repo-b": {},
 		},
+		// repo-a's pull request lives on its stack layer entry; the state
+		// must survive InitRepoImpl's per-repo bookkeeping.
+		Stack: []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://example.com/a/pr/1", PRState: feature.StackPRStateOpen},
+			},
+		}},
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 	if err := store.Save(f); err != nil {
@@ -4939,8 +4980,8 @@ func TestInitRepoImpl_PreservesExistingState(t *testing.T) {
 	if !loaded.RepoStates["repo-a"].Touched {
 		t.Errorf("repo-a Touched = false, want true (existing state must survive)")
 	}
-	if loaded.RepoStates["repo-a"].PRURL == "" {
-		t.Errorf("repo-a PRURL was cleared, want preserved")
+	if got := loaded.Stack[0].Repos["repo-a"].PRURL; got != "https://example.com/a/pr/1" {
+		t.Errorf("repo-a stack layer PRURL = %q, want preserved", got)
 	}
 	if loaded.RepoStates["repo-b"].Touched {
 		t.Errorf("repo-b Touched = true, want false (existing state must survive)")
@@ -5300,7 +5341,17 @@ func TestRewindWithRequest_RejectsInvalidPartialBeforeSideEffects(t *testing.T) 
 				ff.CurrentRoadmapPhase = 3
 				ff.TotalRoadmapPhases = 3
 				ff.RepoStates = map[string]*feature.RepoState{
-					"repo-a": {PRURL: "https://example.invalid/pr/1"},
+					"repo-a": {Touched: true},
+				}
+				// A pull request is on record: without up-front validation the
+				// rewind would close it, so the no-side-effect assertions below
+				// stay meaningful.
+				ff.Stack = []feature.StackLayer{
+					{Position: 1, Slug: "core", Phases: []int{1, 2}, Branch: "feature/reject-side-effects/1-core",
+						Repos: map[string]feature.StackRepoEntry{
+							"repo-a": {PRURL: "https://example.invalid/pr/1", PRState: feature.StackPRStateOpen},
+						}},
+					{Position: 2, Slug: "ext", Phases: []int{3}, Branch: "feature/reject-side-effects/2-ext"},
 				}
 				if tc.mutate != nil {
 					tc.mutate(ff)
@@ -5779,8 +5830,18 @@ func TestRewindWithRequest_PartialUnpublishableSkipsPRCloseAndRecordsBackups(t *
 		ff.TotalRoadmapPhases = 3
 		ff.Slug = "partial-side-effects"
 		ff.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {PRURL: "https://example.invalid/repo-a/pull/1"},
-			"repo-b": {PRURL: "https://example.invalid/repo-b/pull/2"},
+			"repo-a": {Touched: true},
+			"repo-b": {Touched: true},
+		}
+		// Pull requests are on record for both repositories; the feature's
+		// unpublishable repo must keep the close loop away from them.
+		ff.Stack = []feature.StackLayer{
+			{Position: 1, Slug: "core", Phases: []int{1, 2}, Branch: "feature/partial-side-effects/1-core",
+				Repos: map[string]feature.StackRepoEntry{
+					"repo-a": {PRURL: "https://example.invalid/repo-a/pull/1", PRState: feature.StackPRStateOpen},
+					"repo-b": {PRURL: "https://example.invalid/repo-b/pull/2", PRState: feature.StackPRStateOpen},
+				}},
+			{Position: 2, Slug: "ext", Phases: []int{3}, Branch: "feature/partial-side-effects/2-ext"},
 		}
 		ff.Run().RoadmapPhaseCommitAnchors = map[int]map[string]string{
 			1: {
@@ -5836,8 +5897,18 @@ func TestRewindWithRequest_PartialPublishableClosesPRs(t *testing.T) {
 		ff.CurrentRoadmapPhase = 3
 		ff.TotalRoadmapPhases = 3
 		ff.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {PRURL: "https://example.invalid/repo-a/pull/1"},
-			"repo-b": {PRURL: "https://example.invalid/repo-b/pull/2"},
+			"repo-a": {Touched: true},
+			"repo-b": {Touched: true},
+		}
+		// Each repository's pull request lives on its top stack layer; the
+		// close loop reads the top layer per repository.
+		ff.Stack = []feature.StackLayer{
+			{Position: 1, Slug: "core", Phases: []int{1, 2}, Branch: "feature/partial-closes/1-core",
+				Repos: map[string]feature.StackRepoEntry{
+					"repo-a": {PRURL: "https://example.invalid/repo-a/pull/1", PRState: feature.StackPRStateOpen},
+					"repo-b": {PRURL: "https://example.invalid/repo-b/pull/2", PRState: feature.StackPRStateOpen},
+				}},
+			{Position: 2, Slug: "ext", Phases: []int{3}, Branch: "feature/partial-closes/2-ext"},
 		}
 		ff.Run().RoadmapPhaseCommitAnchors = map[int]map[string]string{
 			1: {

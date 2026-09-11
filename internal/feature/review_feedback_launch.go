@@ -290,14 +290,15 @@ func (s *Store) ActiveReviewFeedbackLaunchReceipt(parentID string) (*Feature, *R
 }
 
 // resolveCurrentReviewFeedback re-fetches GitHub for every parent repository
-// with a PR URL and indexes the currently unaddressed comments by stable
-// reference. Repositories without a PR URL contribute nothing.
+// with a pull request on its stack and indexes the currently unaddressed
+// comments by stable reference. A repository's comments are read from its
+// highest layer's pull request — the primary reviewable artifact.
+// Repositories without a pull request contribute nothing.
 func (m *Manager) resolveCurrentReviewFeedback(parent *Feature) (map[StableReviewFeedbackRef]ReviewFeedbackComment, error) {
 	resolver := m.Store
-	prURLs := parent.PRURLs()
 	current := make(map[StableReviewFeedbackRef]ReviewFeedbackComment)
 	for _, repo := range parent.Repos {
-		prURL := prURLs[repo.Name]
+		prURL := parent.TopStackLayerPRURL(repo.Name)
 		if prURL == "" {
 			continue
 		}

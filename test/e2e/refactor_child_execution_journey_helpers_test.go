@@ -422,15 +422,15 @@ func waitForJourneyChildClosed(t *testing.T, baseURL string, store *feature.Stor
 }
 
 // waitForParentPublishOutcome polls until the parent's per-repo publication
-// state records a terminal result (PR URL on success, a stored failure
-// record on failure).
+// state records a terminal result (a stack layer pull request on success, a
+// stored failure record on failure).
 func waitForParentPublishOutcome(t *testing.T, store *feature.Store, parentID string) {
 	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		parent, err := store.Load(parentID)
 		if err == nil {
-			if st := parent.RepoStates["repoA"]; st != nil && (st.PRURL != "" || st.Error != nil) {
+			if st := parent.RepoStates["repoA"]; st != nil && (parent.StackRepoHasPullRequest("repoA") || st.Error != nil) {
 				return
 			}
 		}

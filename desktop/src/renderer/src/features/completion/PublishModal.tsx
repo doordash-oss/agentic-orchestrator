@@ -19,6 +19,7 @@ import type {
   CompletionPreflightResult,
   FeatureActionResult,
   FeatureActionView,
+  PullRequestEntryView,
   PublishFeatureActionRequest,
 } from '../../../../shared/ipc';
 import { E_REQUEST_TIMEOUT, buildCanonicalError } from '../../../../shared/errors';
@@ -411,6 +412,74 @@ export function PublishModal({
 
 type PublishRepo = CompletionPreflightResult['repos'][number];
 
+/**
+ * The publish verb for one stack layer: the no-commits marker and merged/closed
+ * states speak for themselves, a carried push mode is quoted verbatim, and a
+ * push-mode-less entry (a snapshot-sourced preview) derives from the recorded
+ * state — an open, not-pushed-up-to-date PR reads as an update.
+ */
+function stackPreviewVerb(entry: PullRequestEntryView): string {
+  if (entry.noCommits) return 'no changes in this repository';
+  if (entry.state === 'merged') return 'merged';
+  if (entry.state === 'closed') return 'closed';
+  switch (entry.pushMode) {
+    case 'create':
+      return 'will create';
+    case 'fast_forward':
+      return 'will update';
+    case 'rewrite':
+      return 'will rewrite';
+    case 'none':
+      return 'up to date';
+    default:
+      break;
+  }
+  if (entry.state === 'open') return entry.pushedUpToDate ? 'up to date' : 'will update';
+  return 'will create';
+}
+
+function stackPreviewVerbKey(verb: string): string {
+  return verb.replaceAll(' ', '-');
+}
+
+/**
+ * The per-repository stack preview: one line per layer with its position,
+ * title, and publish verb, linking the layers that already have a PR.
+ */
+function StackPreview({
+  entries,
+  openExternal,
+}: {
+  entries: PullRequestEntryView[];
+  openExternal(url: string): Promise<{ ok: boolean }>;
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <ul className="completion-workspace__stack-preview">
+      {entries.map((entry) => {
+        const verb = stackPreviewVerb(entry);
+        return (
+          <li key={entry.position} className="completion-workspace__stack-preview-line">
+            <span className="completion-workspace__stack-preview-position">
+              Layer {entry.position}
+            </span>
+            <span className="completion-workspace__stack-preview-title">{entry.title}</span>
+            <span
+              className="completion-workspace__stack-preview-verb"
+              data-verb={stackPreviewVerbKey(verb)}
+            >
+              {verb}
+            </span>
+            {entry.url === undefined ? null : (
+              <PrLinkButton url={entry.url} openExternal={openExternal} />
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function PublishRepoRow({
   repo,
   featureId,
@@ -448,10 +517,8 @@ function PublishRepoRow({
             })}
           </span>
         ) : null}
-        {repo.prUrl !== undefined ? (
-          <PrLinkButton url={repo.prUrl} openExternal={openExternal} />
-        ) : null}
       </div>
+      <StackPreview entries={repo.pullRequests ?? []} openExternal={openExternal} />
       {repo.pushMode === 'rewrite' ? (
         <p className="completion-workspace__pending-note">
           Rewrites the pull-request branch with a safety lease.
@@ -507,8 +574,8 @@ function RepoGroup({
           }
         >
           <span>{repo.repo}</span>
-          {title === 'Already published' && repo.prUrl !== undefined ? (
-            <PrLinkButton url={repo.prUrl} openExternal={openExternal} />
+          {title === 'Already published' ? (
+            <StackPreview entries={repo.pullRequests ?? []} openExternal={openExternal} />
           ) : (
             <span className="completion-workspace__ineligible-repo-reason">
               {repo.blocker ?? 'Local-only repository'}

@@ -307,8 +307,8 @@ func TestStackPublishLifecycle(t *testing.T) {
 	}
 
 	// Every remote branch sits at its recorded tip and last-pushed SHA, and
-	// the feature is published with the legacy per-repository URL pointing
-	// at the highest layer's pull request.
+	// the feature is published with each repository's top-layer pull
+	// request as its primary URL.
 	bareRef := func(bare, branch string) string {
 		t.Helper()
 		return runGit(t, bare, "rev-parse", "refs/heads/"+branch)
@@ -320,11 +320,11 @@ func TestStackPublishLifecycle(t *testing.T) {
 	if ff.Status != feature.StatusPublished {
 		t.Fatalf("status after publish = %v, want Published", ff.Status)
 	}
-	if got, want := ff.RepoStates["repo-a"].PRURL, prA2; got != want {
-		t.Fatalf("repo-a legacy PR URL = %q, want the layer-2 pull request %q", got, want)
+	if got, want := ff.TopStackLayerPRURL("repo-a"), prA2; got != want {
+		t.Fatalf("repo-a top-layer PR URL = %q, want the layer-2 pull request %q", got, want)
 	}
-	if got, want := ff.RepoStates["repo-b"].PRURL, prB1; got != want {
-		t.Fatalf("repo-b legacy PR URL = %q, want the layer-2 pull request %q", got, want)
+	if got, want := ff.TopStackLayerPRURL("repo-b"), prB1; got != want {
+		t.Fatalf("repo-b top-layer PR URL = %q, want the layer-2 pull request %q", got, want)
 	}
 	if got := ff.Stack[0].Repos["repo-a"]; got.PRURL != prA1 || got.LastPushedSHA != bareRef(bareA, layer1Branch) {
 		t.Fatalf("repo-a layer-1 entry = %+v, want PR %q at the remote tip", got, prA1)

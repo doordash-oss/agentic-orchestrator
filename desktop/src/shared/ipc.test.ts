@@ -1839,6 +1839,76 @@ describe('repository publish-failure error views', () => {
   });
 });
 
+describe('per-layer pull request entry views', () => {
+  const pullRequests = [
+    {
+      position: 1,
+      title: 'Bootstrap',
+      branch: 'feature/x/1-bootstrap',
+      url: 'https://github.com/org/repo-a/pull/11',
+      state: 'open',
+      noCommits: false,
+      pushedUpToDate: true,
+    },
+    {
+      position: 2,
+      title: 'Layer two',
+      state: 'none',
+      noCommits: true,
+      pushedUpToDate: false,
+      pushMode: 'none',
+    },
+  ];
+  const repoStatusView = {
+    name: 'repo-a',
+    publishable: true,
+    touched: true,
+    pullRequests,
+  };
+  const preflightRepoView = {
+    repo: 'repo-a',
+    publishable: true,
+    touched: true,
+    status: 'unpublished_changes',
+    pullRequests: pullRequests.map((entry, index) => ({
+      ...entry,
+      pushMode: index === 0 ? 'fast_forward' : 'none',
+    })),
+    pushMode: 'fast_forward',
+  };
+
+  it('accepts the entry list on the repository status and preflight repository views', () => {
+    expect(RepoStatusViewSchema.safeParse(repoStatusView).success).toBe(true);
+    expect(CompletionPreflightRepoSchema.safeParse(preflightRepoView).success).toBe(true);
+    const parsed = CompletionPreflightRepoSchema.parse(preflightRepoView);
+    expect(parsed.pullRequests?.[0]?.pushMode).toBe('fast_forward');
+    expect(parsed.pullRequests?.[1]?.url).toBeUndefined();
+  });
+
+  it('rejects an entry with an unknown state on both views', () => {
+    const badState = pullRequests.map((entry) => ({ ...entry, state: 'draft' }));
+    expect(
+      RepoStatusViewSchema.safeParse({ ...repoStatusView, pullRequests: badState }).success,
+    ).toBe(false);
+    expect(
+      CompletionPreflightRepoSchema.safeParse({ ...preflightRepoView, pullRequests: badState })
+        .success,
+    ).toBe(false);
+  });
+
+  it('rejects the removed prUrl key on both strict views', () => {
+    expect(
+      RepoStatusViewSchema.safeParse({ ...repoStatusView, prUrl: 'https://x.test/pull/1' }).success,
+    ).toBe(false);
+    expect(
+      CompletionPreflightRepoSchema.safeParse({
+        ...preflightRepoView,
+        prUrl: 'https://x.test/pull/1',
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe('owned errors on the feature summary and snapshot views', () => {
   const ownedRunError = {
     ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'abcd1234ef567890' },

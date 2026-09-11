@@ -40,8 +40,8 @@ func TestPublishFailureRecordClassifiesEveryFailureSite(t *testing.T) {
 		checkRecord func(t *testing.T, repo errcat.CodeRepository)
 	}{
 		{
-			name: "rewritten-push diverged",
-			err: &PublishRemoteDivergedError{RepoName: "web", Branch: "agentico/f", RemoteOnlyCommits: 3, LayerPosition: 2, LayerTitle: "Fix auth"},
+			name:        "rewritten-push diverged",
+			err:         &PublishRemoteDivergedError{RepoName: "web", Branch: "agentico/f", RemoteOnlyCommits: 3, LayerPosition: 2, LayerTitle: "Fix auth"},
 			wantCode:    errcat.PublishRemoteDiverged,
 			wantBranch:  "agentico/f",
 			checkRecord: layerCheck(2, "Fix auth", remoteOnlyCheck(3)),
@@ -54,8 +54,8 @@ func TestPublishFailureRecordClassifiesEveryFailureSite(t *testing.T) {
 			checkRecord: layerCheck(2, "Fix auth", nil),
 		},
 		{
-			name: "stack pull request closed",
-			err: &PublishStackClosedError{RepoName: "web", Branch: "agentico/f", LayerPosition: 1, LayerTitle: "Foundation", PRURL: "https://github.example/org/web/pull/9", State: "closed"},
+			name:       "stack pull request closed",
+			err:        &PublishStackClosedError{RepoName: "web", Branch: "agentico/f", LayerPosition: 1, LayerTitle: "Foundation", PRURL: "https://github.example/org/web/pull/9", State: "closed"},
 			wantCode:   errcat.PublishStackPullRequestClosed,
 			wantBranch: "agentico/f",
 			checkRecord: func(t *testing.T, repo errcat.CodeRepository) {

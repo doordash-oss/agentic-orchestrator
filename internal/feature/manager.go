@@ -838,16 +838,15 @@ func (m *Manager) MarkFinalReviewReady(featureID string) error {
 	})
 }
 
-// MarkPublished transitions a feature to Published. The per-repository PR
-// URLs on RepoStates — kept fresh by the per-layer publish writes and their
-// legacy projection — are the durable record; the run-level PR URL shadow
-// is deliberately not written. Publishable features must have at least one
-// repository PR URL recorded; otherwise the transition is refused so a
-// stale "Published with no PR" state is unreachable.
+// MarkPublished transitions a feature to Published. The stack's per-layer
+// pull-request entries are the durable record. Publishable features must
+// have at least one pull request recorded on some layer of some repository;
+// otherwise the transition is refused so a stale "Published with no PR"
+// state is unreachable.
 func (m *Manager) MarkPublished(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
-		if f.IsPublishable() && f.FirstRepoPRURL() == "" {
-			return fmt.Errorf("MarkPublished: no repository PR URL recorded for publishable feature %s", featureID)
+		if f.IsPublishable() && !f.AnyStackLayerHasPullRequest() {
+			return fmt.Errorf("MarkPublished: no stack layer pull request recorded for publishable feature %s", featureID)
 		}
 		if err := f.Transition(StatusPublished); err != nil {
 			return err
@@ -1145,12 +1144,10 @@ func roadmapPhaseType(phase, total int) string {
 //	    quick succession on the same featureID could race on PR close and
 //	    worktree reset. The Store.SealAndForkRun step is mutex-guarded and
 //	    idempotent on a sealed run (it errors out instead of double-sealing).
-//	    The PR close loop now iterates f.PRURLs() (legacy f.PRURL shadow +
-//	    per-repo RepoStates[name].PRURL aggregated by repo name) and treats
-//	    failures as non-fatal warnings, so a partial pass on retry simply
-//	    closes whatever PRs are still open without re-closing already-closed
-//	    PRs in any new way (gh pr close on a closed PR returns an error that
-//	    surfaces as a warning, identical to the prior behavior).
+//	    subset) and treats failures as non-fatal warnings, so a partial pass on
+//	    retry simply closes whatever PRs are still open without re-closing
+//	    already-closed PRs in any new way (gh pr close on a closed PR returns
+//	    an error that surfaces as a warning, identical to the prior behavior).
 //	(b) If the process crashes mid-call, persisted state recovery depends on
 //	    where the crash hits: pre-seal leaves the active run unchanged; between
 //	    seal-write and feature.yaml-bump leaves a sealed run on disk with
@@ -1215,20 +1212,23 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 	time.Sleep(500 * time.Millisecond)
 
 	// Close every PR on record (skip for unpublishable features — no PR exists).
-	// f.PRURLs() aggregates the legacy f.PRURL shadow and per-repo
-	// RepoStates[name].PRURL into a single map keyed by repo name, so this
-	// loop covers both single-repo legacy features and multi-repo features
-	// without double-closing.
+	// The close loop reads the highest layer's pull request per repository —
+	// the repository's primary reviewable artifact — so a partial pass on retry
+	// simply closes whatever top pull requests are still open without
+	// re-closing already-closed ones in any new way (gh pr close on a closed
+	// PR returns an error that surfaces as a warning, identical to the prior
+	// behavior).
 	if f.IsPublishable() && m.PRs != nil {
-		for repoName, url := range f.PRURLs() {
+		for _, repo := range f.Repos {
+			url := f.TopStackLayerPRURL(repo.Name)
 			if url == "" {
 				continue
 			}
 			if err := m.PRs.ClosePR(url); err != nil {
 				warns = append(warns, RewindWarning{
 					Kind:   RewindWarningPullRequestClose,
-					Repo:   repoName,
-					Branch: f.repoBranch(repoName),
+					Repo:   repo.Name,
+					Branch: f.repoBranch(repo.Name),
 					Err:    err,
 				})
 			}
@@ -1715,7 +1715,7 @@ func copyFile(src, dst string) error {
 
 // InitRepoImpl ensures every repo in f.Repos has an entry in f.RepoStates
 // and prunes entries for repos that are no longer part of the feature.
-// Existing per-repo state (Touched, PRURL, LastError) survives: durable
+// Existing per-repo state (Touched, LastError) survives: durable
 // progress set by prior iterations must not be clobbered on restart,
 // otherwise the engine cannot short-circuit and redoes approved work.
 //
@@ -1743,11 +1743,9 @@ func (m *Manager) InitRepoImpl(featureID string) error {
 }
 
 // SetRepoPublished updates a repository's implementation state after a
-// successful publish: Touched is set, the stored failure record cleared,
-// and the legacy per-repo PR URL refreshed from the stack projection (the
-// highest layer with a pull request for the repository). The per-layer
-// publish writes are the source of truth for URLs; a repository whose
-// stack carries no pull request yet keeps its previously recorded URL.
+// successful publish: Touched is set and the stored failure record cleared.
+// The per-layer stack entries are the source of truth for pull-request
+// state; no repository-level projection is maintained.
 func (m *Manager) SetRepoPublished(featureID, repoName string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		if f.RepoStates == nil {
@@ -1760,9 +1758,6 @@ func (m *Manager) SetRepoPublished(featureID, repoName string) error {
 		}
 		state.Touched = true
 		state.Error = nil
-		if url := f.highestStackLayerPRURL(repoName); url != "" {
-			state.PRURL = url
-		}
 		return nil
 	})
 }
@@ -1770,10 +1765,7 @@ func (m *Manager) SetRepoPublished(featureID, repoName string) error {
 // modifyStackRepoEntry resolves the stack layer at layerPosition, applies
 // mutate to that layer's entry for repoName, then runs the bookkeeping
 // every per-layer publish write shares: the repository's stored error is
-// cleared and the legacy RepoStates PR URL refreshed to the highest stack
-// layer with a pull request for the repository. The run-level PR URL
-// shadow is never written here; the per-layer entries are the source of
-// truth.
+// cleared. The per-layer entries are the sole durable pull-request record.
 func (m *Manager) modifyStackRepoEntry(featureID, repoName string, layerPosition int, mutate func(entry *StackRepoEntry)) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		var layer *StackLayer
@@ -1802,9 +1794,6 @@ func (m *Manager) modifyStackRepoEntry(featureID, repoName string, layerPosition
 			f.RepoStates[repoName] = state
 		}
 		state.Error = nil
-		if url := f.highestStackLayerPRURL(repoName); url != "" {
-			state.PRURL = url
-		}
 		return nil
 	})
 }

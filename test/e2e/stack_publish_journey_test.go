@@ -239,8 +239,8 @@ func TestStackPublishJourney(t *testing.T) {
 	// assertStackPublished pins the delivered shape for one feature: two
 	// pull requests in ascending layer order with the table titles and
 	// bases, stack sections naming the top layer as current, remote branches
-	// at the recorded tips, and the published status with the legacy
-	// repository URL at the top layer.
+	// at the recorded tips, and the published status with the repository's
+	// top-layer pull request URL.
 	assertStackPublished := func(f *feature.Feature) {
 		t.Helper()
 		workspaceSlug := feature.WorkspaceSlug(f.Slug, f.ID)
@@ -259,8 +259,8 @@ func TestStackPublishJourney(t *testing.T) {
 		if pr1 == "" || pr2 == "" {
 			t.Fatalf("%s stack pull requests = %q/%q, want both layers published", f.Name, pr1, pr2)
 		}
-		if got := ff.RepoStates["repo-a"].PRURL; got != pr2 {
-			t.Fatalf("%s legacy repository URL = %q, want the layer-2 pull request %q", f.Name, got, pr2)
+		if got := ff.TopStackLayerPRURL("repo-a"); got != pr2 {
+			t.Fatalf("%s top-layer pull request URL = %q, want the layer-2 pull request %q", f.Name, got, pr2)
 		}
 
 		record1, ok := pulls.Pull("repo-a", journeyPRNumber(t, pr1))

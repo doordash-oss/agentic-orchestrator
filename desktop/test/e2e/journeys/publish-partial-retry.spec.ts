@@ -321,7 +321,10 @@ test('packaged publish partial retry: repository-owned failure card, inspector l
     transcript.json('getFeature response after repo-scoped retry', retrySnapshot);
     const retryRepo = retrySnapshot.repoStatus?.find((repo) => repo.name === 'publish-web');
     expect(retryRepo?.error).toBeUndefined();
-    expect(retryRepo?.prUrl).toBe('https://github.example/e2e/publish-web/pull/9');
+    // The retry's pull request is recorded on the stack's top-layer entry.
+    expect(retryRepo?.pullRequests?.length ?? 0).toBeGreaterThan(0);
+    expect(retryRepo?.pullRequests?.[0]?.url).toBe('https://github.example/e2e/publish-web/pull/9');
+    expect(retryRepo?.pullRequests?.[0]?.state).toBe('open');
     transcript.step('the repo-scoped retry published the failed repository');
 
     persistAppLogs(handle, 'publish-partial-retry-app-server');
@@ -450,21 +453,6 @@ function seedPublishFixture(
   featureYaml = setRepoPublishable(featureYaml, 'local-only', true);
   fs.writeFileSync(featurePath, featureYaml);
 
-  const runPath = activeRunYamlPath(world, featureId);
-  let runYaml = fs.readFileSync(runPath, 'utf8');
-  runYaml = clearRunFailures(runYaml);
-  runYaml = replaceTopLevelBlock(runYaml, 'repo_states', [
-    'repo_states:',
-    '  publish-api:',
-    '    touched: true',
-    '    pr_url: https://github.example/local-bare/publish-api/pull/1',
-    '  publish-web:',
-    '    touched: true',
-    '  local-only:',
-    '    touched: false',
-  ]);
-  fs.writeFileSync(runPath, runYaml);
-
   for (const repoName of ['publish-api', 'publish-web', 'local-only']) {
     const repoPath = sources[repoName]!;
     const worktree = repos[repoName]!;
@@ -488,12 +476,62 @@ function seedPublishFixture(
     git(worktree, 'config', '--worktree', 'remote.origin.url', barePath);
   }
 
+  const branches: Record<string, string> = {};
+  const heads: Record<string, string> = {};
+  for (const repoName of ['publish-api', 'publish-web', 'local-only']) {
+    const worktree = repos[repoName]!;
+    branches[repoName] = git(worktree, 'rev-parse', '--abbrev-ref', 'HEAD').trim();
+    heads[repoName] = git(worktree, 'rev-parse', 'HEAD').trim();
+  }
+  // One stack layer carries one shared branch name across repositories.
+  const layerBranch = branches['publish-api']!;
+  for (const [repoName, branch] of Object.entries(branches)) {
+    if (branch !== layerBranch) {
+      throw new Error(`worktrees diverged across layer branches: ${repoName} on ${branch}`);
+    }
+  }
+
   for (const repoName of ['publish-api', 'publish-web']) {
     const worktree = repos[repoName]!;
     writeWorktreeChange(worktree, 'README.md', `# ${repoName}\nfeature change\n`);
     git(worktree, 'add', '.');
     git(worktree, 'commit', '-m', `Feature change on ${repoName}`);
+    heads[repoName] = git(worktree, 'rev-parse', 'HEAD').trim();
   }
+
+  // The single-PR-URL seed moved to the stack read model: publish-api's
+  // recorded pull request lives on the layer's repository entry with its tip
+  // and last-pushed SHA in sync, so the preflight reads it as already
+  // published and the publish walk has nothing to redeliver. publish-web and
+  // local-only carry no entry: the walk refreshes their tips from the
+  // checked-out branches and delivers them live.
+  const runPath = activeRunYamlPath(world, featureId);
+  let runYaml = clearRunFailures(fs.readFileSync(runPath, 'utf8'));
+  runYaml = replaceTopLevelBlock(runYaml, 'repo_states', [
+    'repo_states:',
+    '  publish-api:',
+    '    touched: true',
+    '  publish-web:',
+    '    touched: true',
+    '  local-only:',
+    '    touched: false',
+  ]);
+  runYaml = replaceTopLevelBlock(runYaml, 'stack', [
+    'stack:',
+    '    - position: 1',
+    '      title: Publish fixture',
+    '      slug: publish-fixture',
+    '      phases:',
+    '        - 1',
+    `      branch: ${layerBranch}`,
+    '      repos:',
+    '        publish-api:',
+    `          tip_sha: ${heads['publish-api']}`,
+    `          last_pushed_sha: ${heads['publish-api']}`,
+    '          pr_url: https://github.example/local-bare/publish-api/pull/1',
+    '          pr_state: open',
+  ]);
+  fs.writeFileSync(runPath, runYaml);
 
   return { worktrees: repos, sources, origins };
 }
@@ -523,16 +561,6 @@ function seedExistingPRUpdateFixture(
   featureYaml = setRepoPublishable(featureYaml, repoName, true);
   fs.writeFileSync(featurePath, featureYaml);
 
-  const runPath = activeRunYamlPath(world, featureId);
-  let runYaml = clearRunFailures(fs.readFileSync(runPath, 'utf8'));
-  runYaml = replaceTopLevelBlock(runYaml, 'repo_states', [
-    'repo_states:',
-    `  ${repoName}:`,
-    '    touched: true',
-    `    pr_url: https://github.example/local-bare/${repoName}/pull/1`,
-  ]);
-  fs.writeFileSync(runPath, runYaml);
-
   const origin = path.join(world.root, `${repoName}-origin.git`);
   git(world.root, 'init', '--bare', origin, '--initial-branch=main');
   git(source, 'remote', 'add', 'origin', origin);
@@ -543,10 +571,40 @@ function seedExistingPRUpdateFixture(
   git(worktree, 'commit', '-m', 'Published pull-request change');
   const branch = git(worktree, 'rev-parse', '--abbrev-ref', 'HEAD').trim();
   git(worktree, 'push', '-u', 'origin', branch);
+  const pushedSHA = git(worktree, 'rev-parse', 'HEAD').trim();
 
   writeWorktreeChange(worktree, 'README.md', '# existing pull request\nunpublished update\n');
   git(worktree, 'add', '.');
   git(worktree, 'commit', '-m', 'Unpublished pull-request update');
+  const tipSHA = git(worktree, 'rev-parse', 'HEAD').trim();
+
+  // The single-PR-URL seed moved to the stack read model: the layer's entry
+  // records the existing pull request with its tip ahead of the last pushed
+  // SHA, so the preflight classifies the repository as a fast-forward update
+  // to an existing pull request rather than a first publication.
+  const runPath = activeRunYamlPath(world, featureId);
+  let runYaml = clearRunFailures(fs.readFileSync(runPath, 'utf8'));
+  runYaml = replaceTopLevelBlock(runYaml, 'repo_states', [
+    'repo_states:',
+    `  ${repoName}:`,
+    '    touched: true',
+  ]);
+  runYaml = replaceTopLevelBlock(runYaml, 'stack', [
+    'stack:',
+    '    - position: 1',
+    '      title: Publish fixture',
+    '      slug: publish-fixture',
+    '      phases:',
+    '        - 1',
+    `      branch: ${branch}`,
+    '      repos:',
+    `        ${repoName}:`,
+    `          tip_sha: ${tipSHA}`,
+    `          last_pushed_sha: ${pushedSHA}`,
+    `          pr_url: https://github.example/local-bare/${repoName}/pull/1`,
+    '          pr_state: open',
+  ]);
+  fs.writeFileSync(runPath, runYaml);
 
   return { worktrees: repos, sources, origins: { [repoName]: origin } };
 }

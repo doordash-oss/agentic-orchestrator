@@ -600,9 +600,11 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 			}
 		}
 
-		// Get the PR URL from the parent's repo state.
-		repoState := parent.RepoStates[repo.Name]
-		if repoState == nil || repoState.PRURL == "" {
+		// Get the PR URL from the parent's stack: the highest layer's pull
+		// request for this repository — the one the comments were fetched
+		// from.
+		prURL := parent.TopStackLayerPRURL(repo.Name)
+		if prURL == "" {
 			o.recordTransactionTailWarning(child.ID, repo.Name, "no PR URL for review-feedback tail")
 			continue
 		}
@@ -657,9 +659,9 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 			var replyErr error
 			switch comment.Type {
 			case git.CommentTypeReview:
-				replyErr = git.ReplyToPRComment(worktree, repoState.PRURL, comment.ID, body)
+				replyErr = git.ReplyToPRComment(worktree, prURL, comment.ID, body)
 			case git.CommentTypeIssue, git.CommentTypeReviewBody:
-				replyErr = git.ReplyToIssueComment(worktree, repoState.PRURL, body)
+				replyErr = git.ReplyToIssueComment(worktree, prURL, body)
 			default:
 				replyErr = fmt.Errorf("unsupported comment type %q", comment.Type)
 			}
@@ -679,7 +681,7 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 
 		// Fetch the unresolved-thread map and resolve inline threads whose
 		// replies succeeded.
-		threadMap, err := git.FetchReviewThreadMap(worktree, repoState.PRURL)
+		threadMap, err := git.FetchReviewThreadMap(worktree, prURL)
 		if err != nil {
 			o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("fetch thread map: %v", err))
 			continue

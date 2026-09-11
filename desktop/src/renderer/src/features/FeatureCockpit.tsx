@@ -1525,7 +1525,9 @@ export function FeatureCockpit({
     featureId,
     state.phase === 'loaded' ? state.snapshot.repos : [],
     state.phase === 'loaded' &&
-      (state.snapshot.repoStatus ?? []).some((repo) => repo.prUrl !== undefined),
+      (state.snapshot.repoStatus ?? []).some((repo) =>
+        (repo.pullRequests ?? []).some((pr) => pr.url !== undefined),
+      ),
     aftercareSurface,
   );
 

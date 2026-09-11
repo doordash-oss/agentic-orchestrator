@@ -1427,12 +1427,29 @@ export const FeaturesListResultSchema = z.strictObject({
 });
 export type FeaturesListResult = z.output<typeof FeaturesListResultSchema>;
 
+/**
+ * One stack layer's pull request as the renderer renders it, one row per
+ * layer in position order. The per-layer push mode is populated only by
+ * completion preflight.
+ */
+export const PullRequestEntryViewSchema = z.strictObject({
+  position: z.number().int().nonnegative(),
+  title: z.string(),
+  branch: z.string().optional(),
+  url: z.string().max(2048).optional(),
+  state: z.enum(['none', 'open', 'merged', 'closed']),
+  noCommits: z.boolean(),
+  pushedUpToDate: z.boolean(),
+  pushMode: z.enum(['create', 'fast_forward', 'rewrite', 'none']).optional(),
+});
+export type PullRequestEntryView = z.output<typeof PullRequestEntryViewSchema>;
+
 /** Per-repository operational status from the server feature detail. */
 export const RepoStatusViewSchema = z.strictObject({
   name: z.string(),
   publishable: z.boolean(),
   touched: z.boolean().optional(),
-  prUrl: z.string().optional(),
+  pullRequests: z.array(PullRequestEntryViewSchema).optional(),
   freshness: z.string().optional(),
   /** Canonical error rendering the repository's stored publish-failure record; absent when it has not failed. */
   error: CanonicalErrorSchema.optional(),
@@ -1686,7 +1703,8 @@ export const CompletionPreflightRepoSchema = z.strictObject({
   publishable: z.boolean(),
   touched: z.boolean(),
   status: z.string().max(50),
-  prUrl: z.string().max(2000).optional(),
+  /** Ordered per-layer stack view with per-layer push modes. */
+  pullRequests: z.array(PullRequestEntryViewSchema).max(32).optional(),
   blocker: z.string().max(500).optional(),
   freshness: z.string().max(50).optional(),
   /** Canonical error rendering the repository's stored publish-failure record; absent when it has not failed. */

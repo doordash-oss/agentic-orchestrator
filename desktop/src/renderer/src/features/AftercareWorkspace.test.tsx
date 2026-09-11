@@ -423,7 +423,18 @@ describe('AftercareWorkspace What shipped', () => {
         publishable: true,
         touched: true,
         status: 'already_published',
-        prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+        pullRequests: [
+          {
+            position: 1,
+            title: 'Phase 8 stack read model',
+            branch: 'feature/x/1-bootstrap',
+            url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+            state: 'open',
+            noCommits: false,
+            pushedUpToDate: true,
+            pushMode: 'none',
+          },
+        ],
         pendingCommits: 2,
       },
     ],
@@ -439,7 +450,17 @@ describe('AftercareWorkspace What shipped', () => {
         {
           name: 'agentic-orchestrator',
           publishable: true,
-          prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+          pullRequests: [
+            {
+              position: 1,
+              title: 'Phase 8 stack read model',
+              branch: 'feature/x/1-bootstrap',
+              url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+              state: 'open',
+              noCommits: false,
+              pushedUpToDate: true,
+            },
+          ],
           freshness: 'in sync',
         },
       ],
@@ -487,6 +508,7 @@ describe('AftercareWorkspace What shipped', () => {
     expect(within(shipped).getByText('2 of 2 checks passed')).toBeVisible();
     expect(within(shipped).getByText('npm run check · npm test')).toBeVisible();
     expect(within(shipped).getByText('#107')).toBeVisible();
+    expect(within(shipped).getByText('Phase 8 stack read model')).toBeVisible();
     expect(
       within(shipped).getByText('Published from this run · in sync · 1 unresolved comment'),
     ).toBeVisible();
@@ -526,7 +548,7 @@ describe('AftercareWorkspace What shipped', () => {
     expect(shipped.textContent).not.toMatch(/approval|rewind/i);
   });
 
-  it('labels one pull-request row per repository when the feature spans several', () => {
+  it('labels one pull-request row per PR when the feature spans repositories and layers', () => {
     renderWorkspace({
       snapshot: featureSnapshot({
         status: 'Published',
@@ -534,16 +556,55 @@ describe('AftercareWorkspace What shipped', () => {
         actions: [],
         repos: ['api', 'web'],
         repoStatus: [
-          { name: 'api', publishable: true, prUrl: 'https://example.test/api/pull/12' },
-          { name: 'web', publishable: true, prUrl: 'https://example.test/web/pull/34' },
+          {
+            name: 'api',
+            publishable: true,
+            pullRequests: [
+              {
+                position: 1,
+                title: 'Bootstrap',
+                branch: 'feature/x/1-bootstrap',
+                url: 'https://example.test/api/pull/12',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: true,
+              },
+              {
+                position: 2,
+                title: 'Search revamp',
+                url: 'https://example.test/api/pull/56',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: true,
+              },
+            ],
+          },
+          {
+            name: 'web',
+            publishable: true,
+            pullRequests: [
+              {
+                position: 1,
+                title: 'Bootstrap',
+                branch: 'feature/x/1-bootstrap',
+                url: 'https://example.test/web/pull/34',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: true,
+              },
+            ],
+          },
         ],
       }),
     });
     const shipped = screen.getByRole('region', { name: 'What shipped' });
-    expect(within(shipped).getByText('Pull request · api')).toBeVisible();
-    expect(within(shipped).getByText('Pull request · web')).toBeVisible();
+    expect(within(shipped).getByText('Pull request · api · layer 1')).toBeVisible();
+    expect(within(shipped).getByText('Pull request · api · layer 2')).toBeVisible();
+    expect(within(shipped).getByText('Pull request · web · layer 1')).toBeVisible();
     expect(within(shipped).getByText('#12')).toBeVisible();
+    expect(within(shipped).getByText('#56')).toBeVisible();
     expect(within(shipped).getByText('#34')).toBeVisible();
+    expect(within(shipped).getAllByRole('button', { name: /Open on GitHub/ })).toHaveLength(3);
   });
 
   it('omits the unresolved-comment clause when the review-feedback fetch failed', () => {

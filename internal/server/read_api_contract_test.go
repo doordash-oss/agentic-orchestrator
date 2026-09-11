@@ -3214,7 +3214,15 @@ func seedReadFeature(t *testing.T) (*feature.Store, *feature.Feature) {
 	f.TotalRoadmapPhases = 3
 	f.CurrentPhaseStatus = "implementing"
 	f.Artifacts = map[string]string{targetPhasePlan: "plan/phase-plan.md"}
-	f.RepoStates = map[string]*feature.RepoState{repoNameSelf: {Touched: true, PRURL: "https://github.example/pr/1"}}
+	f.RepoStates = map[string]*feature.RepoState{repoNameSelf: {Touched: true}}
+	f.Stack = []feature.StackLayer{{
+		Position: 1,
+		Title:    "Layer 1",
+		Branch:   "agentico/read-api/1-layer-1",
+		Repos: map[string]feature.StackRepoEntry{
+			repoNameSelf: {PRURL: "https://github.example/pr/1", PRState: feature.StackPRStateOpen},
+		},
+	}}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -3807,14 +3815,21 @@ func (l fakeMessageLog) ToolUseBlocks() []llm.ContentBlock {
 
 func TestCompletionPreflightRepoCarriesPendingDeliveryFields(t *testing.T) {
 	repo := CompletionPreflightRepo{
-		Repo:                  "repo-a",
-		Publishable:           true,
-		Touched:               true,
-		Status:                "unpublished_changes",
-		PrURL:                 "https://github.example/repo-a/pull/1",
+		Repo:        "repo-a",
+		Publishable: true,
+		Touched:     true,
+		Status:      "unpublished_changes",
+		PullRequests: []PullRequestEntry{{
+			Position: 1,
+			Title:    "Layer 1",
+			Branch:   "feature/layer-1",
+			URL:      "https://github.example/repo-a/pull/1",
+			State:    PullRequestEntryStateOpen,
+			PushMode: PullRequestEntryPushModeRewrite,
+		}},
 		PendingCommits:        3,
 		PendingDirty:          true,
-		PushMode:              "rewrite",
+		PushMode:              CompletionPreflightRepoPushModeRewrite,
 		PendingDirtyFiles:     []string{"a.go", "b.go"},
 		PendingDirtyFileTotal: 2,
 	}
@@ -3834,6 +3849,14 @@ func TestCompletionPreflightRepoCarriesPendingDeliveryFields(t *testing.T) {
 	}
 	if decoded["push_mode"] != "rewrite" {
 		t.Errorf("push_mode = %v; want rewrite", decoded["push_mode"])
+	}
+	pullRequests, _ := decoded["pull_requests"].([]any)
+	if len(pullRequests) != 1 {
+		t.Fatalf("pull_requests = %v, want one layer entry", decoded["pull_requests"])
+	}
+	entry, _ := pullRequests[0].(map[string]any)
+	if entry["url"] != "https://github.example/repo-a/pull/1" || entry["state"] != "open" || entry["push_mode"] != "rewrite" {
+		t.Errorf("pull_requests[0] = %v, want the open layer-1 entry with rewrite push mode", entry)
 	}
 	files, _ := decoded["pending_dirty_files"].([]any)
 	if len(files) != 2 || files[0] != "a.go" || files[1] != "b.go" {

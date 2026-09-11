@@ -176,8 +176,10 @@ type Run struct {
 	// in a phase).
 	CurrentPhaseStatus string `yaml:"current_phase_status,omitempty"`
 
-	// Publish (moved from Feature).
-	PRURL string `yaml:"pr_url,omitempty"`
+	// Publish. The run-level PR URL shadow was removed with the
+	// single-PR-URL model; the durable pull-request record lives on the
+	// stack's per-layer entries. Legacy `pr_url` keys on old run records
+	// are ignored on load.
 
 	// Plan validation + gate state (moved from Feature).
 	ValidatingPlan    bool              `yaml:"validating_plan,omitempty"`

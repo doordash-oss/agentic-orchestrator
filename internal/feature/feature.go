@@ -216,11 +216,12 @@ func (d DeliveryMode) IsValid() bool {
 }
 
 // RepoState carries the minimal per-repo signal orchestration needs:
-// whether any phase touched the repo, the optional PR URL, and the optional
-// stored publish-failure record. Persisted on Run.RepoStates.
+// whether any phase touched the repo and the optional stored
+// publish-failure record. Persisted on Run.RepoStates. Pull-request state
+// lives on the stack's per-layer entries (StackRepoEntry); the legacy
+// per-repo `pr_url` key on old records is ignored on load.
 type RepoState struct {
 	Touched bool                  `yaml:"touched,omitempty"`
-	PRURL   string                `yaml:"pr_url,omitempty"`
 	Error   *errcat.FailureRecord `yaml:"error,omitempty"`
 
 	Freshness string `yaml:"-"`
@@ -1001,54 +1002,6 @@ func (f *Feature) accumulateActiveTime() {
 	f.ActivePhaseStart = nil
 }
 
-// PRURL returns the feature's primary PR URL. Source of truth is the
-// per-repo RepoStates[name].PRURL map; this accessor returns the first
-// non-empty entry in feature.Repos order, falling back to the run-level
-// shadow for legacy fixtures that haven't yet seeded RepoStates.
-func (f *Feature) PRURL() string {
-	if f == nil {
-		return ""
-	}
-	for _, repo := range f.Repos {
-		if state, ok := f.RepoStates[repo.Name]; ok && state != nil && state.PRURL != "" {
-			return state.PRURL
-		}
-	}
-	return f.Run().PRURL
-}
-
-// SetPRURL updates the run-level PR URL shadow. New code should set
-// per-repo PR URLs via RepoStates[name].PRURL; this setter exists so the
-// publish path can record a feature-level URL until per-repo wiring is
-// complete on every caller.
-func (f *Feature) SetPRURL(url string) {
-	f.Run().PRURL = url
-}
-
-// highestStackLayerPRURL returns the pull request URL of the highest
-// positioned stack layer whose entry for repoName carries a PR. It is the
-// projection source for the legacy per-repo RepoStates PR URL: readers
-// that predate per-layer state expect one URL per repository, and the
-// topmost layer's PR is that repository's primary reviewable artifact.
-// Empty when no layer entry for the repository has a pull request.
-func (f *Feature) highestStackLayerPRURL(repoName string) string {
-	if f == nil {
-		return ""
-	}
-	var url string
-	best := 0
-	for _, layer := range f.Stack {
-		if layer.Position <= best {
-			continue
-		}
-		if entry, ok := layer.Repos[repoName]; ok && entry.PRURL != "" {
-			url = entry.PRURL
-			best = layer.Position
-		}
-	}
-	return url
-}
-
 // SetRoadmapPhaseFrontend records whether a roadmap phase contains frontend
 // work on the active run.
 func (f *Feature) SetRoadmapPhaseFrontend(phase int, frontend bool) {
@@ -1281,10 +1234,11 @@ func (f *Feature) Transition(to Status) error {
 // for that repository). A layer with no entry at all for a touched
 // repository blocks — neither the boundary nor the publish path has
 // recorded an outcome for it yet. Runs without a stack (approved before
-// the `## Pull Requests` table existed) keep the legacy rule: a touched
-// repository needs the per-repo PR URL. Untouched repositories never
-// block, and an unconfigured feature (nil or no repos) is never
-// "published" so callers cannot mistake it for a published one.
+// the `## Pull Requests` table existed) are never published: a touched
+// repository there has no layer composition to settle, matching the
+// fail-closed publish walk. Untouched repositories never block, and an
+// unconfigured feature (nil or no repos) is never "published" so callers
+// cannot mistake it for a published one.
 func (f *Feature) AllReposPublished() bool {
 	if f == nil || len(f.Repos) == 0 {
 		return false
@@ -1295,10 +1249,10 @@ func (f *Feature) AllReposPublished() bool {
 			continue
 		}
 		if len(f.Stack) == 0 {
-			if st.PRURL == "" {
-				return false
-			}
-			continue
+			// A touched repository on a run without a stack has no layer
+			// composition to settle and publish fails closed for it, so it
+			// can never count as published.
+			return false
 		}
 		for _, layer := range f.Stack {
 			entry, ok := layer.Repos[repo.Name]
@@ -1327,17 +1281,6 @@ func (f *Feature) TouchedRepos() []string {
 	return names
 }
 
-// FirstRepoPRURL returns the PR URL of the first repo (by Repos order) that has one.
-// Returns empty string if no repo has a PR URL.
-func (f *Feature) FirstRepoPRURL() string {
-	for _, repo := range f.Repos {
-		if state, ok := f.RepoStates[repo.Name]; ok && state != nil && state.PRURL != "" {
-			return state.PRURL
-		}
-	}
-	return ""
-}
-
 // PhaseStatusFinalizing marks the synchronous end-of-roadmap-phase git
 // boundary: the feature already transitioned to StatusReviewPassed but the
 // per-repo phase commit is still running, so it is not startable yet.
@@ -1360,20 +1303,4 @@ func (f *Feature) IsReviewing() bool {
 		return false
 	}
 	return f.Status == StatusFinalReviewing
-}
-
-// PRURLs returns the per-repo PR URL map. Each entry's value is the URL
-// from RepoStates[name].PRURL when populated. Repos with no PR URL are
-// omitted.
-func (f *Feature) PRURLs() map[string]string {
-	if f == nil {
-		return nil
-	}
-	out := make(map[string]string, len(f.Repos))
-	for _, repo := range f.Repos {
-		if state, ok := f.RepoStates[repo.Name]; ok && state != nil && state.PRURL != "" {
-			out[repo.Name] = state.PRURL
-		}
-	}
-	return out
 }

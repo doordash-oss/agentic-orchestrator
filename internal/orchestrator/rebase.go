@@ -40,7 +40,10 @@ type RebaseRepoFreshnessInput struct {
 // for the given repo. The order matches the auto-rebase path so conflict
 // recovery and the proactive rebase agree on the target:
 //
-//  1. The PR's base branch on GitHub (when a PRURL is recorded), via RemoteOps.
+//  1. The base branch on GitHub of the repository's lowest stack layer that
+//     carries a pull request, via RemoteOps. The lowest layer's pull request
+//     bases on a real target branch; an upper layer's pull request bases on
+//     the layer branch below it, which would make the rebase target wrong.
 //     This is authoritative for published features.
 //  2. repo.BaseBranch from the feature manifest.
 //  3. The repo's default branch (origin/HEAD).
@@ -49,8 +52,8 @@ type RebaseRepoFreshnessInput struct {
 // a hard error rather than silently rebasing onto an empty target.
 func (o *Orchestrator) resolveRebaseTarget(f *feature.Feature, repo *feature.FeatureRepo) string {
 	target := ""
-	if state, ok := f.RepoStates[repo.Name]; ok && state != nil && state.PRURL != "" {
-		target = o.deps.Remote.PRBaseBranch(repo.Path, state.PRURL)
+	if prURL := f.LowestStackLayerPRURL(repo.Name); prURL != "" {
+		target = o.deps.Remote.PRBaseBranch(repo.Path, prURL)
 	}
 	if target == "" {
 		target = repo.BaseBranch

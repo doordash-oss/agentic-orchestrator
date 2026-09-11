@@ -1056,7 +1056,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
 	// The per-repo publish is a clean no-op: the partial state under test is
 	// tryCompletePublish's answer, not a repository failure.
-	o.SetPublishRepoFn(func(id, repo string) (string, error) { return "", nil })
+	o.SetPublishRepoFn(func(id, repo string) error { return nil })
 
 	if err := o.HandlePhaseCompletion("feat-multi-ap", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -1102,8 +1102,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 	fs := newFeatureStore(f)
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
-	o.SetPublishRepoFn(func(id, repo string) (string, error) {
-		return "https://github.com/org/" + repo + "/pull/1", nil
+	o.SetPublishRepoFn(func(id, repo string) error {
+		return nil
 	})
 
 	if err := o.HandlePhaseCompletion("feat-multi-ap-full", orchestrator.PhaseCompletionInput{
@@ -2205,27 +2205,33 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_SkipsAnchorOnCommitFailure
 //
 // The non-roadmap auto-publish path routes through the same Publish pipeline
 // as the roadmap-final one: MarkCodeReady, then a full publish pass whose
-// completion site emits PublishCompleted and fires OnPublishCompleted — with
-// the per-repository PR URLs the pass collected — whenever no repository
-// failed.
+// completion site emits PublishCompleted and fires OnPublishCompleted
+// whenever no repository failed.
 
-// Fully-published non-roadmap multi-repo path: the publish pass walks both
-// repositories (no-op returns of their existing PR URLs), tryCompleteAndEmit
-// succeeds (TryCompletePublish → (true, nil)) → must emit PublishCompleted
-// and fire OnPublishCompleted with the per-repo PR URL map. The nil error
-// signals the happy path.
+// Fully-published non-roadmap multi-repo path: both repositories' stack
+// layers are already delivered (recorded pull requests with pushed tips, so
+// the deferred Final Review pass is skipped), the publish pass walks both
+// repositories as a no-op, and tryCompleteAndEmit succeeds
+// (TryCompletePublish → (true, nil)) → must emit PublishCompleted and fire
+// OnPublishCompleted. The nil error signals the happy path.
 func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPublished_EmitsPublishCompleted(t *testing.T) {
+	stack := singleLayerStack(1, "feature/multi-pub-full")
+	stack[0].Repos = map[string]feature.StackRepoEntry{
+		"r1": {TipSHA: "aaaa", LastPushedSHA: "aaaa", PRURL: "https://github.com/org/r1/pull/1", PRState: feature.StackPRStateOpen},
+		"r2": {TipSHA: "bbbb", LastPushedSHA: "bbbb", PRURL: "https://github.com/org/r2/pull/2", PRState: feature.StackPRStateOpen},
+	}
 	f := &feature.Feature{
 		ID:           "feat-multi-pub-full",
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
+		Stack:        stack,
 		Repos: []feature.FeatureRepo{
 			{Name: "r1", Path: "/tmp/r1"},
 			{Name: "r2", Path: "/tmp/r2"},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"r1": {Touched: true, PRURL: "https://github.com/org/r1/pull/1"},
-			"r2": {Touched: true, PRURL: "https://github.com/org/r2/pull/2"},
+			"r1": {Touched: true},
+			"r2": {Touched: true},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -2238,21 +2244,18 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 	fs := newFeatureStore(f)
 
 	var pubCompletedID string
-	var pubCompletedURLs map[string]string
 	var pubCompletedErr error
 	var pubHookCalls int
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnPublishCompleted: func(id string, urls map[string]string, err error) {
+		OnPublishCompleted: func(id string, err error) {
 			pubCompletedID = id
-			pubCompletedURLs = urls
 			pubCompletedErr = err
 			pubHookCalls++
 		},
 	})
-	// The stack walk over already-published repositories is a no-op that
-	// returns each repository's highest-layer PR URL.
-	o.SetPublishRepoFn(func(id, repo string) (string, error) {
-		return "https://github.com/org/" + repo + "/pull/1", nil
+	// The stack walk over already-delivered repositories is a no-op.
+	o.SetPublishRepoFn(func(id, repo string) error {
+		return nil
 	})
 
 	if err := o.HandlePhaseCompletion("feat-multi-pub-full", orchestrator.PhaseCompletionInput{
@@ -2282,8 +2285,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 		t.Errorf("PublishCompleted.Error = %v, want nil on fully-published happy path", pubEvent.Error)
 	}
 
-	// OnPublishCompleted hook must have fired exactly once with no error and
-	// the per-repo PR URLs the pass collected.
+	// OnPublishCompleted hook must have fired exactly once with no error.
 	if pubHookCalls != 1 {
 		t.Errorf("OnPublishCompleted fired %d times, want 1", pubHookCalls)
 	}
@@ -2293,11 +2295,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 	if pubCompletedErr != nil {
 		t.Errorf("OnPublishCompleted err = %v, want nil", pubCompletedErr)
 	}
-	if got := pubCompletedURLs["r1"]; got != "https://github.com/org/r1/pull/1" {
-		t.Errorf("OnPublishCompleted prURLs[r1] = %q, want r1 URL", got)
-	}
-	if got := pubCompletedURLs["r2"]; got != "https://github.com/org/r2/pull/1" {
-		t.Errorf("OnPublishCompleted prURLs[r2] = %q, want r2 URL", got)
+	if f.Status != feature.StatusPublished {
+		t.Errorf("feature status = %s, want Published", f.Status)
 	}
 }
 
@@ -2324,7 +2323,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_NotFullyP
 	fs := newFeatureStore(f)
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
-	o.SetPublishRepoFn(func(id, repo string) (string, error) { return "", nil })
+	o.SetPublishRepoFn(func(id, repo string) error { return nil })
 
 	if err := o.HandlePhaseCompletion("feat-multi-pub-partial", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,

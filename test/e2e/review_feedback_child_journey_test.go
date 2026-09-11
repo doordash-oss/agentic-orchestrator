@@ -80,10 +80,19 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 			{Name: "repoB", Path: repoB, WorktreePath: repoB, Branch: "feature/review-parent", BaseBranch: "main", Publishable: &publishable},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"repoA": {Touched: true, PRURL: "https://github.com/example/api/pull/1"},
+			"repoA": {Touched: true},
 			"docs":  {},
-			"repoB": {Touched: true, PRURL: "https://github.com/example/web/pull/2"},
+			"repoB": {Touched: true},
 		},
+		Stack: []feature.StackLayer{{
+			Position: 1,
+			Title:    "Parent delivery",
+			Branch:   "feature/review-parent",
+			Repos: map[string]feature.StackRepoEntry{
+				"repoA": {PRURL: "https://github.com/example/api/pull/1", PRState: feature.StackPRStateOpen},
+				"repoB": {PRURL: "https://github.com/example/web/pull/2", PRState: feature.StackPRStateOpen},
+			},
+		}},
 		Models:       config.ModelConfig{Planning: "planning-model", Implementation: "implementation-model", Review: "review-model"},
 		Effort:       config.EffortConfig{Planning: "high", Implementation: "medium", Review: "low"},
 		RiskLevel:    feature.RiskHigh,
@@ -153,8 +162,8 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	if len(fetched.Repos) != 2 || fetched.Repos[0].Repo != "repoA" || fetched.Repos[1].Repo != "repoB" {
 		t.Fatalf("FetchReviewFeedback().Repos = %+v, want repoA then repoB with docs skipped", fetched.Repos)
 	}
-	if fetched.Repos[0].PrURL != parent.RepoStates["repoA"].PRURL || fetched.Repos[1].PrURL != parent.RepoStates["repoB"].PRURL {
-		t.Errorf("fetch PR URLs = %q/%q, want %q/%q", fetched.Repos[0].PrURL, fetched.Repos[1].PrURL, parent.RepoStates["repoA"].PRURL, parent.RepoStates["repoB"].PRURL)
+	if fetched.Repos[0].PrURL != parent.TopStackLayerPRURL("repoA") || fetched.Repos[1].PrURL != parent.TopStackLayerPRURL("repoB") {
+		t.Errorf("fetch PR URLs = %q/%q, want %q/%q", fetched.Repos[0].PrURL, fetched.Repos[1].PrURL, parent.TopStackLayerPRURL("repoA"), parent.TopStackLayerPRURL("repoB"))
 	}
 	if got := fetched.Repos[0].Comments; len(got) != 3 || got[0].ID != 11 || got[0].Type != "review" || got[0].Repo != "repoA" ||
 		got[1].ID != 12 || got[1].Type != "issue" || got[1].Repo != "repoA" ||
@@ -226,7 +235,7 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	if len(child.ReviewFeedback) != 2 || child.ReviewFeedback[0].ID != 11 || child.ReviewFeedback[1].ID != 21 {
 		t.Errorf("child structured feedback = %+v, want selected IDs 11 and 21", child.ReviewFeedback)
 	}
-	for _, want := range []string{"inline selected api", "inline selected web", parent.RepoStates["repoA"].PRURL, parent.RepoStates["repoB"].PRURL} {
+	for _, want := range []string{"inline selected api", "inline selected web", parent.TopStackLayerPRURL("repoA"), parent.TopStackLayerPRURL("repoB")} {
 		if !strings.Contains(child.Description, want) {
 			t.Errorf("child description missing selected context %q:\n%s", want, child.Description)
 		}

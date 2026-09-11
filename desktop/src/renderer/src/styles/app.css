@@ -2434,6 +2434,13 @@ body {
   outline-offset: 2px;
 }
 
+/* The cross-repository PR count under the headline pull-request link. */
+.aftercare-facts__pr-count {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--muted);
+}
+
 /* ─── The sheet family ────────────────────────────────────────────────────
  * The generic window-modal sheet: the scrim covers the entire window,
  * sidebar included, and the sheet descends from the window's top edge —
@@ -8153,6 +8160,65 @@ body {
   padding-left: var(--space-2);
 }
 
+/* The per-repository stack preview under a publish row: one line per layer
+ * with position, title, verb, and the existing PR's link. */
+.completion-workspace__stack-preview {
+  grid-column: 1 / -1;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.completion-workspace__stack-preview-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+  font: 12px var(--bench-font-text);
+}
+
+.completion-workspace__stack-preview-position {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: var(--bench-font-mono);
+  font-size: 12px;
+}
+
+.completion-workspace__stack-preview-title {
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.completion-workspace__stack-preview-verb {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.35rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+  white-space: nowrap;
+}
+
+.completion-workspace__stack-preview-verb[data-verb='will-rewrite'] {
+  border-color: var(--attention);
+  color: var(--attention);
+}
+
+.completion-workspace__stack-preview-verb[data-verb='merged'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .completion-publish-sheet__details {
   display: grid;
   gap: var(--space-2);
@@ -10162,6 +10228,69 @@ body {
 
 .repo-instrument__pr-link:hover {
   text-decoration: underline;
+}
+
+/* The per-repository stack: one row per layer (position, title, state badge,
+ * external link only where the layer has a published PR). */
+.repo-instrument__pr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.repo-instrument__pr-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.repo-instrument__pr-position {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: var(--bench-font-mono);
+  font-size: 12px;
+}
+
+.repo-instrument__pr-title {
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.repo-instrument__pr-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.35rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+  white-space: nowrap;
+}
+
+.repo-instrument__pr-badge[data-state='open'] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.repo-instrument__pr-badge[data-state='merged'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.repo-instrument__pr-badge[data-state='closed'] {
+  border-color: var(--bad);
+  color: var(--bad);
 }
 
 .repo-instrument__rebase-target {

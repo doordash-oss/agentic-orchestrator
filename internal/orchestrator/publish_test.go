@@ -68,9 +68,9 @@ func TestOrchestrator_Publish_HappyPath_MultiRepo(t *testing.T) {
 	})
 
 	publishRepoCalls := make(map[string]int)
-	o.SetPublishRepoFn(func(id, repo string) (string, error) {
+	o.SetPublishRepoFn(func(id, repo string) error {
 		publishRepoCalls[repo]++
-		return "https://github.com/org/" + repo + "/pull/1", nil
+		return nil
 	})
 
 	if err := o.Publish("feat-pub-happy"); err != nil {
@@ -120,7 +120,7 @@ func TestOrchestrator_Publish_NotPublishable_NoOp(t *testing.T) {
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
 
 	calls := 0
-	o.SetPublishRepoFn(func(id, repo string) (string, error) { calls++; return "", nil })
+	o.SetPublishRepoFn(func(id, repo string) error { calls++; return nil })
 
 	if err := o.Publish("feat-pub-np"); err != nil {
 		t.Fatalf("Publish: %v", err)

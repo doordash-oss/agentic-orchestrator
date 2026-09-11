@@ -944,7 +944,18 @@ describe('PublishModal', () => {
                 touched: true,
                 status: 'unpublished_changes',
                 pendingCommits: 3,
-                prUrl: 'https://example.test/pr/1',
+                pullRequests: [
+                  {
+                    position: 1,
+                    title: 'Bootstrap',
+                    branch: 'feature/x/1-bootstrap',
+                    url: 'https://example.test/pr/1',
+                    state: 'open',
+                    noCommits: false,
+                    pushedUpToDate: false,
+                    pushMode: 'fast_forward',
+                  },
+                ],
               },
             ],
           }),
@@ -959,5 +970,137 @@ describe('PublishModal', () => {
       '3 commits',
     );
     expect(within(row as HTMLElement).getByRole('button', { name: 'PR ↗' })).toBeVisible();
+  });
+
+  it('previews the stack under the repository row with a verb per layer', () => {
+    render(
+      <PublishModal
+        {...props({
+          preflight: preflightWith({
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+                pendingCommits: 2,
+                pullRequests: [
+                  {
+                    position: 1,
+                    title: 'Bootstrap',
+                    url: 'https://example.test/pr/1',
+                    state: 'open',
+                    noCommits: false,
+                    pushedUpToDate: true,
+                    pushMode: 'none',
+                  },
+                  {
+                    position: 2,
+                    title: 'Search revamp',
+                    state: 'none',
+                    noCommits: false,
+                    pushedUpToDate: false,
+                    pushMode: 'create',
+                  },
+                  {
+                    position: 3,
+                    title: 'Index revamp',
+                    url: 'https://example.test/pr/3',
+                    state: 'open',
+                    noCommits: false,
+                    pushedUpToDate: false,
+                    pushMode: 'rewrite',
+                  },
+                  {
+                    position: 4,
+                    title: 'Teardown',
+                    url: 'https://example.test/pr/4',
+                    state: 'open',
+                    noCommits: false,
+                    pushedUpToDate: false,
+                    pushMode: 'fast_forward',
+                  },
+                  {
+                    position: 5,
+                    title: 'Empty layer',
+                    state: 'none',
+                    noCommits: true,
+                    pushedUpToDate: false,
+                    pushMode: 'none',
+                  },
+                ],
+              },
+            ],
+          }),
+        })}
+      />,
+    );
+
+    const row = screen
+      .getByRole('checkbox', { name: 'api' })
+      .closest('.completion-workspace__publish-repo') as HTMLElement;
+    const preview = row.querySelector('.completion-workspace__stack-preview') as HTMLElement;
+    const positions = preview.querySelectorAll('.completion-workspace__stack-preview-position');
+    expect(Array.from(positions).map((node) => node.textContent)).toEqual([
+      'Layer 1',
+      'Layer 2',
+      'Layer 3',
+      'Layer 4',
+      'Layer 5',
+    ]);
+    expect(within(preview).getByText('up to date')).toBeVisible();
+    expect(within(preview).getByText('will create')).toBeVisible();
+    expect(within(preview).getByText('will rewrite')).toBeVisible();
+    expect(within(preview).getByText('will update')).toBeVisible();
+    expect(within(preview).getByText('no changes in this repository')).toBeVisible();
+    // Only the layers with a published PR carry the external link.
+    expect(within(preview).getAllByRole('button', { name: 'PR ↗' })).toHaveLength(3);
+    // The repository checkbox stays the row's only per-repository control.
+    expect(within(row).getByRole('checkbox', { name: 'api' })).toBeVisible();
+  });
+
+  it('previews the stack in the already-published group with merged and closed verbs', () => {
+    render(
+      <PublishModal
+        {...props({
+          preflight: preflightWith({
+            repos: [
+              { repo: 'web', publishable: true, touched: true, status: 'eligible' },
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'already_published',
+                pullRequests: [
+                  {
+                    position: 1,
+                    title: 'Bootstrap',
+                    url: 'https://example.test/pr/1',
+                    state: 'merged',
+                    noCommits: false,
+                    pushedUpToDate: true,
+                    pushMode: 'none',
+                  },
+                  {
+                    position: 2,
+                    title: 'Search revamp',
+                    state: 'closed',
+                    noCommits: false,
+                    pushedUpToDate: false,
+                    pushMode: 'none',
+                  },
+                ],
+              },
+            ],
+          }),
+        })}
+      />,
+    );
+
+    const group = document.querySelector('.completion-workspace__published-repos') as HTMLElement;
+    expect(within(group).getByText('api')).toBeVisible();
+    expect(within(group).getByText('merged')).toBeVisible();
+    expect(within(group).getByText('closed')).toBeVisible();
+    expect(within(group).getAllByRole('button', { name: 'PR ↗' })).toHaveLength(1);
   });
 });

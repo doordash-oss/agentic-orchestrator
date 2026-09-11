@@ -21,7 +21,11 @@ limitations under the License.
  * repository state.
  */
 import { isEligibleForPublish } from './completionShared';
-import type { CompletionPreflightRepo, CompletionPreflightResult } from '../../../../shared/ipc';
+import type {
+  CompletionPreflightRepo,
+  CompletionPreflightResult,
+  PullRequestEntryView,
+} from '../../../../shared/ipc';
 
 export const UNPUBLISHED_CHANGES = 'unpublished_changes';
 export const UNMERGED_CHANGES = 'unmerged_changes';
@@ -32,7 +36,8 @@ export interface PendingDeliveryRepo {
   dirty: boolean;
   pushMode?: 'fast_forward' | 'rewrite';
   baseBranch?: string;
-  prUrl?: string;
+  /** One entry per stack layer, in position order. */
+  pullRequests?: PullRequestEntryView[];
   dirtyFiles: string[];
   dirtyFileTotal: number;
 }
@@ -115,7 +120,7 @@ function pendingRepo(repo: CompletionPreflightRepo): PendingDeliveryRepo {
     dirty: repo.pendingDirty ?? false,
     ...(repo.pushMode === undefined ? {} : { pushMode: repo.pushMode }),
     ...(repo.baseBranch === undefined ? {} : { baseBranch: repo.baseBranch }),
-    ...(repo.prUrl === undefined ? {} : { prUrl: repo.prUrl }),
+    ...(repo.pullRequests === undefined ? {} : { pullRequests: repo.pullRequests }),
     dirtyFiles: repo.pendingDirtyFiles ?? [],
     dirtyFileTotal: repo.pendingDirtyFileTotal ?? 0,
   };

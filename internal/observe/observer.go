@@ -1409,3 +1409,76 @@ func (o *Observer) RestackWarning(sc SpanContext, ev RestackWarningEvent) {
 		Data:         data,
 	})
 }
+
+// LayerPublishAction enumerates what a publish pass did to one layer's
+// pull request in one repository.
+type LayerPublishAction string
+
+const (
+	// LayerPublishActionCreated marks a newly created pull request.
+	LayerPublishActionCreated LayerPublishAction = "created"
+	// LayerPublishActionPushed marks a fast-forward push onto an existing
+	// pull request's branch.
+	LayerPublishActionPushed LayerPublishAction = "pushed"
+	// LayerPublishActionRewritten marks a lease-protected force push that
+	// replaced an existing pull request branch's history.
+	LayerPublishActionRewritten LayerPublishAction = "rewritten"
+	// LayerPublishActionMerged marks a layer whose pull request was found
+	// merged.
+	LayerPublishActionMerged LayerPublishAction = "merged"
+	// LayerPublishActionBlocked marks a layer whose pull request was found
+	// closed without merge, blocking the repository.
+	LayerPublishActionBlocked LayerPublishAction = "blocked"
+	// LayerPublishActionFailed marks a layer whose publish step failed.
+	LayerPublishActionFailed LayerPublishAction = "failed"
+)
+
+// LayerPublishEvent is the outcome record one feature.layer_publish event
+// carries: the repository and the layer the publish pass acted on, the
+// layer's pull request URL and recorded state, and what the pass did.
+type LayerPublishEvent struct {
+	Repository string
+	Position   int
+	Title      string
+	Branch     string
+	PRURL      string
+	State      string
+	Action     LayerPublishAction
+}
+
+// StackLayerPublished emits a feature.layer_publish event recording one
+// layer publish outcome for one repository. Safe on nil receiver /
+// disabled observer. Called from the orchestrator's
+// OnStackLayerPublished hook after the layer's persistence write.
+func (o *Observer) StackLayerPublished(sc SpanContext, ev LayerPublishEvent) {
+	if o == nil || !o.enabled {
+		return
+	}
+	data := map[string]any{
+		"repository":     ev.Repository,
+		"layer_position": ev.Position,
+		"action":         string(ev.Action),
+	}
+	if ev.Title != "" {
+		data["layer_title"] = ev.Title
+	}
+	if ev.Branch != "" {
+		data["layer_branch"] = ev.Branch
+	}
+	if ev.PRURL != "" {
+		data["pr_url"] = ev.PRURL
+	}
+	if ev.State != "" {
+		data["pr_state"] = ev.State
+	}
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "feature.layer_publish",
+		FeatureID:    sc.FeatureID,
+		RepoName:     ev.Repository,
+		Data:         data,
+	})
+}

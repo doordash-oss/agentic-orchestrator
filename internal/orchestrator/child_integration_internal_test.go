@@ -93,7 +93,7 @@ func newChildIntegrationFixture(t *testing.T, parentStatus feature.Status, manua
 			BaseBranch:   "main",
 			Publishable:  &publishable,
 		}},
-		RepoStates:    map[string]*feature.RepoState{"repoA": {Touched: true}},
+		RepoStates: map[string]*feature.RepoState{"repoA": {Touched: true}},
 		// A one-layer stack so the real lifecycle's stack-based publish
 		// writes and all-published check run against this fixture.
 		Stack:         []feature.StackLayer{{Position: 1, Title: "Single layer", Slug: "single-layer", Phases: []int{1}, Branch: "feature/parent"}},
@@ -771,7 +771,7 @@ func TestChildIntegrationAutoPublish(t *testing.T) {
 	o := fx.orchestrator()
 
 	var childClosedAtPublish bool
-	o.publishRepoFn = func(featureID, repoName string) (string, error) {
+	o.publishRepoFn = func(featureID, repoName string) error {
 		// Close-before-publish: the child must already be Completed and the
 		// parent already CodeReady when the publication path runs.
 		c, _ := o.deps.Lifecycle.Get(fx.child.ID)
@@ -780,12 +780,12 @@ func TestChildIntegrationAutoPublish(t *testing.T) {
 			p.Status == feature.StatusCodeReady
 		const prURL = "https://example/pr/1"
 		if err := o.deps.Lifecycle.RecordStackLayerPR(featureID, repoName, 1, prURL, ""); err != nil {
-			return "", err
+			return err
 		}
 		if err := o.deps.Lifecycle.SetRepoPublished(featureID, repoName); err != nil {
-			return "", err
+			return err
 		}
-		return prURL, nil
+		return nil
 	}
 
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
@@ -812,8 +812,8 @@ func TestChildIntegrationAutoPublishFailureKeepsCodeReady(t *testing.T) {
 	}
 	fx := newChildIntegrationFixture(t, feature.StatusCodeReady, false)
 	o := fx.orchestrator()
-	o.publishRepoFn = func(featureID, repoName string) (string, error) {
-		return "", errors.New("simulated push failure")
+	o.publishRepoFn = func(featureID, repoName string) error {
+		return errors.New("simulated push failure")
 	}
 
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
@@ -837,10 +837,17 @@ func TestReviewFeedbackIntegrationTailReturnsParentPublished(t *testing.T) {
 	}
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, false)
 	if err := fx.store.Modify(fx.parent.ID, func(f *feature.Feature) error {
-		f.RepoStates["repoA"].PRURL = "https://example.test/org/repo/pull/1"
+		// The review-feedback tail ends with MarkPublished, which refuses a
+		// publishable feature without any stack layer pull request.
+		if f.Stack[0].Repos == nil {
+			f.Stack[0].Repos = make(map[string]feature.StackRepoEntry)
+		}
+		entry := f.Stack[0].Repos["repoA"]
+		entry.PRURL = "https://example.test/org/repo/pull/1"
+		f.Stack[0].Repos["repoA"] = entry
 		return nil
 	}); err != nil {
-		t.Fatalf("seed parent PR URL: %v", err)
+		t.Fatalf("seed parent stack layer PR URL: %v", err)
 	}
 	if err := fx.store.Modify(fx.child.ID, func(f *feature.Feature) error {
 		f.Parent.Kind = feature.ChildKindReviewFeedback
@@ -856,9 +863,9 @@ func TestReviewFeedbackIntegrationTailReturnsParentPublished(t *testing.T) {
 		Worktrees: fx.wm,
 	}, Hooks{OnPublishStarted: func(string) { publishStarts++ }})
 	publishCalls := 0
-	o.publishRepoFn = func(featureID, repoName string) (string, error) {
+	o.publishRepoFn = func(featureID, repoName string) error {
 		publishCalls++
-		return "", errors.New("review-feedback tail must not publish")
+		return errors.New("review-feedback tail must not publish")
 	}
 
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {

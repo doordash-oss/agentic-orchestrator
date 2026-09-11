@@ -1355,9 +1355,11 @@ func TestRefactorChildTransactionalMultiRepoClosureCleanupAndPublicationHandoff(
 	}
 	fx := newMultiRepoE2EFixture(t, 2)
 
-	// Enable auto-publish on the parent.
+	// Enable auto-publish on the parent and give it a one-layer stack so
+	// the publish walk has layer entries to record pull requests on.
 	if err := fx.store.Modify(fx.parent.ID, func(f *feature.Feature) error {
 		f.Checkpoints.ManualPublish = false
+		f.Stack = []feature.StackLayer{{Position: 1, Title: "Parent delivery", Branch: "feature/parent"}}
 		return nil
 	}); err != nil {
 		t.Fatalf("set auto-publish: %v", err)
@@ -1372,17 +1374,13 @@ func TestRefactorChildTransactionalMultiRepoClosureCleanupAndPublicationHandoff(
 	o := fx.orchestratorWithWorktrees(cleanupWT)
 
 	// Install a counting publish hook to verify publication happens once.
+	// The hook records the layer pull request exactly as the real walk does
+	// so the all-published check settles and the parent reaches Published.
 	var publishCount int32
-	o.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
+	o.SetPublishRepoFn(func(featureID, repoName string) error {
 		atomic.AddInt32(&publishCount, 1)
-		prURL := "https://github.com/test/" + repoName + "/pull/1"
-		_ = fx.store.Modify(featureID, func(f *feature.Feature) error {
-			if st, ok := f.RepoStates[repoName]; ok && st != nil {
-				st.PRURL = prURL
-			}
-			return nil
-		})
-		return prURL, nil
+		return fx.mgr.RecordStackLayerPR(featureID, repoName, 1,
+			"https://github.com/test/"+repoName+"/pull/1", "")
 	})
 
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {

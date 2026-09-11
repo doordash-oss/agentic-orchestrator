@@ -238,7 +238,7 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 			}
 			obs.PhaseStarted(sc, feature.PhasePublish.String())
 		},
-		OnPublishCompleted: func(featureID string, prURLs map[string]string, err error) {
+		OnPublishCompleted: func(featureID string, err error) {
 			if obs == nil {
 				return
 			}
@@ -287,22 +287,32 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 				// Iteration counters live on the run / feature under the
 				// unified flow, not per-repo. A stacked repository is
 				// published only when every layer's entry is settled (a
-				// pull request or the no-commits marker): the legacy PR URL
-				// projects the highest layer's pull request and must not
-				// mask an unpublished upper layer.
+				// pull request or the no-commits marker).
 				status := "untouched"
 				switch {
 				case rs.Error != nil:
 					status = "failed"
-				case repoStackSettled(f, name, rs.PRURL):
+				case repoStackSettled(f, name):
 					status = "published"
 				case rs.Touched:
 					status = "touched"
 				}
+				var pullRequests []observe.RepoSummaryPullRequest
+				for _, entry := range f.StackRepoPullRequestEntries(name) {
+					if entry.URL == "" {
+						continue
+					}
+					pullRequests = append(pullRequests, observe.RepoSummaryPullRequest{
+						Position: entry.Position,
+						Title:    entry.Title,
+						URL:      entry.URL,
+						State:    string(entry.State),
+					})
+				}
 				repoStates[name] = observe.RepoSummaryInput{
-					Status:    status,
-					Iteration: 0,
-					PRURL:     rs.PRURL,
+					Status:       status,
+					Iteration:    0,
+					PullRequests: pullRequests,
 				}
 			}
 			errorCode, errorClass := "", ""
@@ -381,6 +391,16 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 				return
 			}
 			obs.LayerBoundaryCrossed(sc, boundary)
+		},
+		OnStackLayerPublished: func(featureID string, outcome observe.LayerPublishEvent) {
+			if obs == nil {
+				return
+			}
+			sc, ok := loadSpan(featureID)
+			if !ok {
+				return
+			}
+			obs.StackLayerPublished(sc, outcome)
 		},
 		OnRestackWarning: func(featureID string, warning observe.RestackWarningEvent) {
 			if obs == nil {

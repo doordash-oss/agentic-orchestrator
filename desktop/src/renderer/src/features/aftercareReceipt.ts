@@ -25,6 +25,7 @@ import type {
   CompletionPreflightResult,
   FeatureSnapshot,
   FetchReviewFeedbackResult,
+  PullRequestEntryView,
   RepositoryDiffResult,
   RunDetailView,
   VerificationItemView,
@@ -114,6 +115,9 @@ export function verificationFact(
 
 export interface PullRequestRow {
   repo: string;
+  /** Stack position of the layer that owns the PR (1 = lowest layer). */
+  position: number;
+  title: string;
   url: string;
   /** `#412` when the URL carries a number; the bare host path otherwise. */
   number: string;
@@ -122,11 +126,14 @@ export interface PullRequestRow {
 }
 
 /**
- * One row per PR-bearing repository. The state clauses are plain language
- * derived from the preflight status and the read model's freshness phrase —
- * never a GitHub open/merged claim, and never an approvals count, neither of
- * which this app fetches. The unresolved-comment clause appears only when the
- * on-demand review-feedback fetch succeeded.
+ * One row per published PR across repositories. Snapshot repositories win:
+ * their stack entries are the rows, and a snapshot repository without entries
+ * falls back to the preflight repository's entries; preflight repositories
+ * absent from the snapshot still ship their PRs. The state clauses are plain
+ * language derived from the preflight status and the read model's freshness
+ * phrase — never a GitHub open/merged claim, and never an approvals count,
+ * neither of which this app fetches. The unresolved-comment clause appears
+ * only when the on-demand review-feedback fetch succeeded.
  */
 export function pullRequestRows(
   snapshot: FeatureSnapshot,
@@ -134,20 +141,60 @@ export function pullRequestRows(
   feedback: FetchReviewFeedbackResult | null,
 ): PullRequestRow[] {
   const rows: PullRequestRow[] = [];
+  const seenRepos = new Set<string>();
   for (const repo of snapshot.repoStatus ?? []) {
+    seenRepos.add(repo.name);
     const preflightRepo = preflight?.repos.find((candidate) => candidate.repo === repo.name);
-    const url = repo.prUrl ?? preflightRepo?.prUrl;
-    if (url === undefined || url === '') continue;
-    const clauses: string[] = [];
-    const state = deliveryState(preflightRepo?.status);
-    if (state !== null) clauses.push(state);
-    const freshness = freshnessClause(repo.freshness);
-    if (freshness !== null) clauses.push(freshness);
-    const unresolved = unresolvedClause(repo.name, feedback);
-    if (unresolved !== null) clauses.push(unresolved);
-    rows.push({ repo: repo.name, url, number: pullRequestNumber(url), clauses });
+    const entries = repo.pullRequests ?? preflightRepo?.pullRequests ?? [];
+    appendPullRequestRows(
+      rows,
+      entries,
+      repo.name,
+      repo.freshness,
+      preflightRepo?.status,
+      feedback,
+    );
+  }
+  for (const preflightRepo of preflight?.repos ?? []) {
+    if (seenRepos.has(preflightRepo.repo)) continue;
+    appendPullRequestRows(
+      rows,
+      preflightRepo.pullRequests ?? [],
+      preflightRepo.repo,
+      preflightRepo.freshness,
+      preflightRepo.status,
+      feedback,
+    );
   }
   return rows;
+}
+
+function appendPullRequestRows(
+  rows: PullRequestRow[],
+  entries: readonly PullRequestEntryView[],
+  repo: string,
+  freshness: string | undefined,
+  preflightStatus: string | undefined,
+  feedback: FetchReviewFeedbackResult | null,
+): void {
+  const clauses: string[] = [];
+  const state = deliveryState(preflightStatus);
+  if (state !== null) clauses.push(state);
+  const freshnessClauseText = freshnessClause(freshness);
+  if (freshnessClauseText !== null) clauses.push(freshnessClauseText);
+  const unresolved = unresolvedClause(repo, feedback);
+  if (unresolved !== null) clauses.push(unresolved);
+  for (const entry of entries) {
+    if (entry.url === undefined || entry.url === '') continue;
+    rows.push({
+      repo,
+      position: entry.position,
+      title: entry.title,
+      url: entry.url,
+      number: pullRequestNumber(entry.url),
+      clauses,
+    });
+  }
 }
 
 export function pullRequestNumber(url: string): string {

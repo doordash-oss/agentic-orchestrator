@@ -1136,8 +1136,8 @@ func TestOrchestrator_TryCompleteAndEmit_Idempotent(t *testing.T) {
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
 		OnFeatureCompleted: func(id string, fv *feature.Feature) { completedCalls++ },
 	})
-	o.SetPublishRepoFn(func(id, repo string) (string, error) {
-		return "https://github.com/org/r1/pull/1", nil
+	o.SetPublishRepoFn(func(id, repo string) error {
+		return nil
 	})
 
 	// First publish fires FeatureCompleted.
@@ -1177,8 +1177,8 @@ func TestOrchestrator_TryCompleteAndEmit_LifecycleError_Propagates(t *testing.T)
 	fs := newFeatureStore(f)
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
-	o.SetPublishRepoFn(func(id, repo string) (string, error) {
-		return "https://github.com/org/r1/pull/1", nil
+	o.SetPublishRepoFn(func(id, repo string) error {
+		return nil
 	})
 
 	err := o.Publish("feat-tce-err")
@@ -1208,8 +1208,8 @@ func TestOrchestrator_Hooks_NilSafe(t *testing.T) {
 
 	// All hook pointers are nil — must not panic through any emission site.
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
-	o.SetPublishRepoFn(func(id, repo string) (string, error) {
-		return "https://github.com/org/r1/pull/1", nil
+	o.SetPublishRepoFn(func(id, repo string) error {
+		return nil
 	})
 
 	// OnPublishStarted + OnPublishCompleted + OnFeatureCompleted all nil.

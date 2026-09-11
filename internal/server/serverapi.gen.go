@@ -146,6 +146,24 @@ func (e CloneOperationState) Valid() bool {
 	}
 }
 
+// Defines values for CompletionPreflightRepoPushMode.
+const (
+	CompletionPreflightRepoPushModeFastForward CompletionPreflightRepoPushMode = "fast_forward"
+	CompletionPreflightRepoPushModeRewrite     CompletionPreflightRepoPushMode = "rewrite"
+)
+
+// Valid indicates whether the value is a known member of the CompletionPreflightRepoPushMode enum.
+func (e CompletionPreflightRepoPushMode) Valid() bool {
+	switch e {
+	case CompletionPreflightRepoPushModeFastForward:
+		return true
+	case CompletionPreflightRepoPushModeRewrite:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateFeatureMutationRequestDeliveryMode.
 const (
 	Single CreateFeatureMutationRequestDeliveryMode = "single"
@@ -497,6 +515,54 @@ func (e PermissionAnswerRequestDecision) Valid() bool {
 	case AllowRemember:
 		return true
 	case Deny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PullRequestEntryPushMode.
+const (
+	PullRequestEntryPushModeCreate      PullRequestEntryPushMode = "create"
+	PullRequestEntryPushModeFastForward PullRequestEntryPushMode = "fast_forward"
+	PullRequestEntryPushModeNone        PullRequestEntryPushMode = "none"
+	PullRequestEntryPushModeRewrite     PullRequestEntryPushMode = "rewrite"
+)
+
+// Valid indicates whether the value is a known member of the PullRequestEntryPushMode enum.
+func (e PullRequestEntryPushMode) Valid() bool {
+	switch e {
+	case PullRequestEntryPushModeCreate:
+		return true
+	case PullRequestEntryPushModeFastForward:
+		return true
+	case PullRequestEntryPushModeNone:
+		return true
+	case PullRequestEntryPushModeRewrite:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PullRequestEntryState.
+const (
+	PullRequestEntryStateClosed PullRequestEntryState = "closed"
+	PullRequestEntryStateMerged PullRequestEntryState = "merged"
+	PullRequestEntryStateNone   PullRequestEntryState = "none"
+	PullRequestEntryStateOpen   PullRequestEntryState = "open"
+)
+
+// Valid indicates whether the value is a known member of the PullRequestEntryState enum.
+func (e PullRequestEntryState) Valid() bool {
+	switch e {
+	case PullRequestEntryStateClosed:
+		return true
+	case PullRequestEntryStateMerged:
+		return true
+	case PullRequestEntryStateNone:
+		return true
+	case PullRequestEntryStateOpen:
 		return true
 	default:
 		return false
@@ -922,25 +988,25 @@ func (e ReviewFeedbackDraftCommentType) Valid() bool {
 
 // Defines values for RewindWorktreeConsequenceResetKind.
 const (
-	Anchor    RewindWorktreeConsequenceResetKind = "anchor"
-	Base      RewindWorktreeConsequenceResetKind = "base"
-	BaseLocal RewindWorktreeConsequenceResetKind = "base-local"
-	LayerTip  RewindWorktreeConsequenceResetKind = "layer-tip"
-	None      RewindWorktreeConsequenceResetKind = "none"
+	RewindWorktreeConsequenceResetKindAnchor    RewindWorktreeConsequenceResetKind = "anchor"
+	RewindWorktreeConsequenceResetKindBase      RewindWorktreeConsequenceResetKind = "base"
+	RewindWorktreeConsequenceResetKindBaseLocal RewindWorktreeConsequenceResetKind = "base-local"
+	RewindWorktreeConsequenceResetKindLayerTip  RewindWorktreeConsequenceResetKind = "layer-tip"
+	RewindWorktreeConsequenceResetKindNone      RewindWorktreeConsequenceResetKind = "none"
 )
 
 // Valid indicates whether the value is a known member of the RewindWorktreeConsequenceResetKind enum.
 func (e RewindWorktreeConsequenceResetKind) Valid() bool {
 	switch e {
-	case Anchor:
+	case RewindWorktreeConsequenceResetKindAnchor:
 		return true
-	case Base:
+	case RewindWorktreeConsequenceResetKindBase:
 		return true
-	case BaseLocal:
+	case RewindWorktreeConsequenceResetKindBaseLocal:
 		return true
-	case LayerTip:
+	case RewindWorktreeConsequenceResetKindLayerTip:
 		return true
-	case None:
+	case RewindWorktreeConsequenceResetKindNone:
 		return true
 	default:
 		return false
@@ -1932,19 +1998,22 @@ type CompletionPreflightRepo struct {
 
 	// PendingDirtyFiles Bounded list of uncommitted paths a publish would commit. May be shorter than pending_dirty_file_total.
 	PendingDirtyFiles []string `json:"pending_dirty_files,omitempty"`
+	Publishable       bool     `json:"publishable"`
 
-	// PrURL Current PR URL when the repository has been published.
-	PrURL       string `json:"pr_url,omitempty"`
-	Publishable bool   `json:"publishable"`
+	// PullRequests Ordered per-layer stack view for this repository, one entry per layer with its per-layer push mode. Omitted for non-publishable repositories and runs without a stack.
+	PullRequests []PullRequestEntry `json:"pull_requests,omitempty"`
 
-	// PushMode How a republish reaches an existing pull-request branch — fast_forward or rewrite. rewrite means the remote branch carries commits the local branch does not, so the push replaces remote history under a lease.
-	PushMode string `json:"push_mode,omitempty"`
-	Repo     string `json:"repo"`
+	// PushMode Repository-level push mode — rewrite when any layer's remote branch carries commits its tip does not contain, else fast_forward. Present only when the repository has at least one pull request on some layer.
+	PushMode CompletionPreflightRepoPushMode `json:"push_mode,omitempty"`
+	Repo     string                          `json:"repo"`
 
 	// Status Server-authored completion status — eligible, already_published, unpublished_changes, completed, unmerged_changes, ineligible, untouched, or blocked.
 	Status  string `json:"status"`
 	Touched bool   `json:"touched"`
 }
+
+// CompletionPreflightRepoPushMode Repository-level push mode — rewrite when any layer's remote branch carries commits its tip does not contain, else fast_forward. Present only when the repository has at least one pull request on some layer.
+type CompletionPreflightRepoPushMode string
 
 // CompletionPreflightResponse defines model for CompletionPreflightResponse.
 type CompletionPreflightResponse struct {
@@ -2828,6 +2897,39 @@ type Publishability struct {
 	Repos         map[string]bool `json:"repos"`
 }
 
+// PullRequestEntry defines model for PullRequestEntry.
+type PullRequestEntry struct {
+	// Branch Layer branch name.
+	Branch string `json:"branch,omitempty"`
+
+	// NoCommits Whether the layer delivered no commits in this repository.
+	NoCommits bool `json:"no_commits"`
+
+	// Position Stack layer position, ascending from 1.
+	Position int `json:"position"`
+
+	// PushMode Per-layer push mode a publish would apply — create (no pull request yet, commits to deliver), fast_forward (pull request exists, tip moved, remote branch is an ancestor), rewrite (remote branch is not an ancestor, publish force-pushes under a lease), or none (up to date, merged, closed, or no commits). Present only on completion preflight entries.
+	PushMode PullRequestEntryPushMode `json:"push_mode,omitempty"`
+
+	// PushedUpToDate Whether a pull request exists and the layer's recorded tip equals its last-pushed SHA.
+	PushedUpToDate bool `json:"pushed_up_to_date"`
+
+	// State Recorded pull request state; none before any pull request exists.
+	State PullRequestEntryState `json:"state"`
+
+	// Title Layer title from the approved roadmap's pull-request table.
+	Title string `json:"title"`
+
+	// URL Pull request URL, omitted when no pull request exists for the layer.
+	URL string `json:"url,omitempty"`
+}
+
+// PullRequestEntryPushMode Per-layer push mode a publish would apply — create (no pull request yet, commits to deliver), fast_forward (pull request exists, tip moved, remote branch is an ancestor), rewrite (remote branch is not an ancestor, publish force-pushes under a lease), or none (up to date, merged, closed, or no commits). Present only on completion preflight entries.
+type PullRequestEntryPushMode string
+
+// PullRequestEntryState Recorded pull request state; none before any pull request exists.
+type PullRequestEntryState string
+
 // ReadinessResponse defines model for ReadinessResponse.
 type ReadinessResponse struct {
 	APIVersion    string                 `json:"api_version"`
@@ -3007,14 +3109,16 @@ type RepoStatus struct {
 	ConflictFiles []string `json:"conflict_files,omitempty"`
 
 	// Error Canonical catalog-rendered publish failure record this repository owns, when any.
-	Error        *Error `json:"error,omitempty"`
-	Freshness    string `json:"freshness,omitempty"`
-	Name         string `json:"name"`
-	PRURL        string `json:"pr_url,omitempty"`
-	Publishable  bool   `json:"publishable"`
-	RebaseStatus string `json:"rebase_status,omitempty"`
-	RebaseTarget string `json:"rebase_target,omitempty"`
-	Touched      bool   `json:"touched"`
+	Error       *Error `json:"error,omitempty"`
+	Freshness   string `json:"freshness,omitempty"`
+	Name        string `json:"name"`
+	Publishable bool   `json:"publishable"`
+
+	// PullRequests Ordered per-layer stack view for this repository, one entry per layer in position order. Omitted for non-publishable repositories and runs without a stack; completion preflight entries additionally carry push_mode.
+	PullRequests []PullRequestEntry `json:"pull_requests,omitempty"`
+	RebaseStatus string             `json:"rebase_status,omitempty"`
+	RebaseTarget string             `json:"rebase_target,omitempty"`
+	Touched      bool               `json:"touched"`
 }
 
 // RepoTransactionEntry defines model for RepoTransactionEntry.

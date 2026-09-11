@@ -252,6 +252,9 @@ func (o *Orchestrator) emitLayerBoundaryEvents(featureID string, layer, next fea
 			FeatureID: featureID,
 			RepoName:  name,
 			Branch:    next.Branch,
+			// A changed repository branch means the boundary split the
+			// worktree onto the next layer; the event names that layer.
+			LayerPosition: next.Position,
 		})
 	}
 }

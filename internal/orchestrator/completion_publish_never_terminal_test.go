@@ -80,8 +80,8 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 	}
 	// Emulates the per-layer publish write the real lifecycle performs on a
 	// successful publish: every stack layer's entry for the repository
-	// records the pull request (so the stack-based all-published check
-	// passes), and the legacy per-repo URL is refreshed alongside it.
+	// records the pull request so the stack-based all-published check
+	// passes.
 	lc.SetRepoPublishedFn = func(id, repo string) error {
 		if f.RepoStates == nil {
 			f.RepoStates = make(map[string]*feature.RepoState)
@@ -101,7 +101,6 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 			f.Stack[i].Repos[repo] = entry
 		}
 		st.Touched = true
-		st.PRURL = prURL
 		st.Error = nil
 		return nil
 	}
@@ -210,8 +209,8 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 	if state.Error != nil {
 		t.Fatalf("repo record = %+v, want cleared by the successful publish", state.Error)
 	}
-	if state.PRURL != "https://github.com/org/r1/pull/1" {
-		t.Fatalf("repo PRURL = %q, want the pull-request link", state.PRURL)
+	if got := f.TopStackLayerPRURL("r1"); got != "https://github.com/org/r1/pull/1" {
+		t.Fatalf("top stack layer PR URL = %q, want the pull-request link", got)
 	}
 	if f.Status != feature.StatusPublished {
 		t.Fatalf("feature status = %v, want Published after the repo-scoped retry", f.Status)
@@ -295,7 +294,7 @@ func TestOrchestrator_RoadmapFinalScrubFailureStillEmitsPublishCompleted(t *test
 		PhaseRunner: pr,
 		CmdRunner:   cmd,
 	}, orchestrator.Hooks{
-		OnPublishCompleted: func(featureID string, prURLs map[string]string, err error) {
+		OnPublishCompleted: func(featureID string, err error) {
 			publishCompletedHook++
 			if err == nil {
 				t.Fatal("OnPublishCompleted err = nil, want the scrub failure")

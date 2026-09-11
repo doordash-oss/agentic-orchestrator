@@ -62,7 +62,7 @@ type Hooks struct {
 	OnFeatureFailed    func(featureID string, code errcat.Code, class errcat.Class, diagnostics string)
 	OnReviewRequired   func(featureID string, phase feature.Phase)
 	OnPublishStarted   func(featureID string)
-	OnPublishCompleted func(featureID string, prURLs map[string]string, err error)
+	OnPublishCompleted func(featureID string, err error)
 
 	// OnFeatureSummaryNeeded fires at every terminal transition (completed,
 	// failed, done) so downstream observers can persist observe-summary.yaml
@@ -85,6 +85,12 @@ type Hooks struct {
 	// — when the boundary split the worktrees — the next layer's position
 	// and branch.
 	OnLayerBoundaryCrossed func(featureID string, boundary observe.LayerBoundaryEvent)
+
+	// OnStackLayerPublished fires after each stack layer's persistence
+	// write during a publish pass, once per layer per repository the pass
+	// acted on, with the layer's publish outcome (created, pushed,
+	// rewritten, merged, blocked, or failed).
+	OnStackLayerPublished func(featureID string, outcome observe.LayerPublishEvent)
 
 	// OnRestackWarning fires for every relocation warning a Final Review
 	// fix round's round-commit hook raises: a fix that landed above its
@@ -221,7 +227,7 @@ type Orchestrator struct {
 	// o.publishRepoWithOptions.
 	// Tests can override this to isolate the Publish loop logic from the
 	// per-repo pipeline logic.
-	publishRepoFn func(featureID, repoName string) (string, error)
+	publishRepoFn func(featureID, repoName string) error
 
 	// runMultiRepoImplFn is a test seam over
 	// PhaseRunner.RunMultiRepoImplementation. The default (set in New()) is
@@ -371,7 +377,7 @@ func (o *Orchestrator) SetPublishFn(fn func(featureID string) error) {
 
 // SetPublishRepoFn installs a test hook that intercepts per-repo publish
 // dispatch in place of o.publishRepoWithOptions. Intended for tests only.
-func (o *Orchestrator) SetPublishRepoFn(fn func(featureID, repoName string) (string, error)) {
+func (o *Orchestrator) SetPublishRepoFn(fn func(featureID, repoName string) error) {
 	o.publishRepoFn = fn
 }
 
@@ -2042,7 +2048,6 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 		o.hooks.OnPublishStarted(featureID)
 	}
 
-	prURLs := make(map[string]string)
 	var firstErr error
 	hasRepoSelection := len(requestedRepos) > 0
 	for _, repo := range f.Repos {
@@ -2061,25 +2066,30 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 		}
 		before := stackRepoEntriesSnapshot(walkF, repo.Name)
 
-		var prURL string
 		var repoErr error
 		if o.publishRepoFn != nil {
-			prURL, repoErr = o.publishRepoFn(featureID, repo.Name)
+			repoErr = o.publishRepoFn(featureID, repo.Name)
 		} else {
-			prURL, repoErr = o.publishRepoWithOptions(featureID, repo.Name, opts)
+			repoErr = o.publishRepoWithOptions(featureID, repo.Name, opts)
 		}
 
-		// One repository status event per repository whose stack entries
-		// the pass changed — whether or not it stopped early — so surfaces
-		// displaying the stack refresh.
+		// One repository status event per changed stack layer — whether or
+		// not the pass stopped early — so surfaces displaying the stack
+		// refresh at layer granularity. Each event carries the changed
+		// layer's position.
 		if freshF, freshErr := o.deps.Lifecycle.Get(featureID); freshErr == nil {
-			if stackRepoEntriesChanged(before, stackRepoEntriesSnapshot(freshF, repo.Name)) {
+			after := stackRepoEntriesSnapshot(freshF, repo.Name)
+			for _, layer := range orderedStackLayers(freshF) {
+				if after[layer.Position] == before[layer.Position] {
+					continue
+				}
 				o.emitEvent(ports.Event{
-					Type:      ports.RepoStatusChanged,
-					FeatureID: featureID,
-					RepoName:  repo.Name,
-					Branch:    repo.Branch,
-					Message:   "stack publish updated repository layer entries",
+					Type:          ports.RepoStatusChanged,
+					FeatureID:     featureID,
+					RepoName:      repo.Name,
+					Branch:        repo.Branch,
+					LayerPosition: layer.Position,
+					Message:       "stack publish updated repository layer entries",
 				})
 			}
 		}
@@ -2088,9 +2098,6 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 				firstErr = repoErr
 			}
 			continue
-		}
-		if prURL != "" {
-			prURLs[repo.Name] = prURL
 		}
 	}
 
@@ -2116,7 +2123,7 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 	}
 	o.emitEventBlocking(publishCompleted)
 	if o.hooks.OnPublishCompleted != nil {
-		o.hooks.OnPublishCompleted(featureID, prURLs, firstErr)
+		o.hooks.OnPublishCompleted(featureID, firstErr)
 	}
 	return firstErr
 }

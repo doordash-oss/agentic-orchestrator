@@ -87,6 +87,7 @@ func setupRebaseJourneyFixtureWithOpts(t *testing.T, parentID string, opts rebas
 
 	featureRepos := make([]feature.FeatureRepo, 0, len(repos))
 	repoStates := make(map[string]*feature.RepoState, len(repos))
+	stackRepoEntries := make(map[string]feature.StackRepoEntry, len(repos))
 	for _, r := range repos {
 		featureRepos = append(featureRepos, feature.FeatureRepo{
 			Name:         r.name,
@@ -96,7 +97,10 @@ func setupRebaseJourneyFixtureWithOpts(t *testing.T, parentID string, opts rebas
 			BaseBranch:   r.baseBranch,
 			Publishable:  &r.publishable,
 		})
-		repoStates[r.name] = &feature.RepoState{Touched: r.touched, PRURL: r.prURL}
+		repoStates[r.name] = &feature.RepoState{Touched: r.touched}
+		if r.prURL != "" {
+			stackRepoEntries[r.name] = feature.StackRepoEntry{PRURL: r.prURL, PRState: feature.StackPRStateOpen}
+		}
 	}
 
 	store := feature.NewStore(stateDir)
@@ -117,6 +121,15 @@ func setupRebaseJourneyFixtureWithOpts(t *testing.T, parentID string, opts rebas
 			PhasePlanReview: true,
 			ManualPublish:   true,
 		},
+	}
+	// A repository's pull request lives on the stack's layer entries; seed
+	// a one-layer stack only when some repository carries a PR URL.
+	if len(stackRepoEntries) > 0 {
+		publishedParent.Stack = []feature.StackLayer{{
+			Position: 1,
+			Title:    "Parent delivery",
+			Repos:    stackRepoEntries,
+		}}
 	}
 	if err := store.Save(publishedParent); err != nil {
 		t.Fatalf("Save(parent) error = %v", err)

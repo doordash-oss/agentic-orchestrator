@@ -1107,7 +1107,7 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 			}
 			o.emitEventBlocking(publishCompleted)
 			if o.hooks.OnPublishCompleted != nil {
-				o.hooks.OnPublishCompleted(featureID, nil, err)
+				o.hooks.OnPublishCompleted(featureID, err)
 			}
 			return &PublishDispatchError{Err: err}
 		}
@@ -1258,9 +1258,10 @@ func (o *Orchestrator) recordRoadmapPhaseCommitAnchors(featureID string, phase i
 // staged for the deferred end-of-feature Final Review pass: under a delivery
 // stack, any layer with commits — an entry whose recorded tip reaches past
 // the lower cut point — that lacks a pull request or whose tip differs from
-// its last-pushed SHA. Runs without a stack (approved before the
-// `## Pull Requests` table) keep the legacy rule: a touched repository
-// without a per-repo PR URL is staged.
+// its last-pushed SHA. A touched repository on a run without a stack has no
+// layer composition to deliver (publish fails closed for it), so it is
+// always staged; a touched non-publishable repository never delivers and is
+// always staged too.
 func (o *Orchestrator) reposNeedFinalReview(f *feature.Feature) bool {
 	if f == nil {
 		return false
@@ -1271,10 +1272,7 @@ func (o *Orchestrator) reposNeedFinalReview(f *feature.Feature) bool {
 			continue
 		}
 		if len(f.Stack) == 0 {
-			if st.PRURL == "" {
-				return true
-			}
-			continue
+			return true
 		}
 		repo, ok := findRepo(f, name)
 		if !ok {
@@ -1284,12 +1282,9 @@ func (o *Orchestrator) reposNeedFinalReview(f *feature.Feature) bool {
 		}
 		if !repoPublishable(repo) {
 			// Delivery never runs for a non-publishable repository, so its
-			// stack entries can never carry pull requests; the legacy
-			// per-repo URL rule settles it, exactly as before the stack.
-			if st.PRURL == "" {
-				return true
-			}
-			continue
+			// stack entries can never carry pull requests; it always needs
+			// the Final Review pass.
+			return true
 		}
 		if o.repoStackNeedsReview(f, repo) {
 			return true
@@ -1467,11 +1462,36 @@ const (
 	completionStatusUnmergedChanges    = "unmerged_changes"
 )
 
-// Push modes describe how a republish reaches an existing pull-request branch.
+// Push modes describe how a republish reaches each layer's pull-request
+// branch. create means no pull request exists yet and the layer has commits
+// to deliver; fast_forward means the pull request exists, its tip moved, and
+// the remote branch is an ancestor of the tip; rewrite means the remote
+// branch is not an ancestor of the tip, so publish force-pushes under a
+// lease; none means nothing is to push (up to date, merged, closed, or no
+// commits in the repository).
 const (
+	completionPushModeCreate      = "create"
 	completionPushModeFastForward = "fast_forward"
 	completionPushModeRewrite     = "rewrite"
+	completionPushModeNone        = "none"
 )
+
+// CompletionPullRequestEntry is one stack layer's pull-request entry on a
+// repository's completion preflight result: the layer's position, title,
+// and branch; the pull request URL and recorded state when one exists; the
+// live no-commits marker computed from the layer's tip against the lower
+// cut point (the same rule the publish walk uses, so the preview is exact);
+// the pushed-up-to-date flag; and the per-layer push mode.
+type CompletionPullRequestEntry struct {
+	Position       int
+	Title          string
+	Branch         string
+	URL            string
+	State          string
+	NoCommits      bool
+	PushedUpToDate bool
+	PushMode       string
+}
 
 // CompletionRepoResult is the per-repository slice of a completion preflight.
 type CompletionRepoResult struct {
@@ -1479,17 +1499,23 @@ type CompletionRepoResult struct {
 	Publishable bool
 	Touched     bool
 	Status      string
-	PRURL       string
 	Blocker     string
 	Freshness   string
 	// Error is the repository's stored publish-failure record, when any.
 	// Adapters render it through the catalog at projection time.
-	Error          *errcat.FailureRecord
-	BaseBranch     string
-	Branch         string
+	Error      *errcat.FailureRecord
+	BaseBranch string
+	Branch     string
+	// PullRequests is the repository's ordered per-layer stack view, one
+	// entry per layer with its per-layer push mode. Nil for non-publishable
+	// repositories and runs without a stack.
+	PullRequests []CompletionPullRequestEntry
+	// PushMode is the repository-level aggregate: rewrite when any layer
+	// rewrites, else fast_forward. Present only when the repository has at
+	// least one pull request on some layer.
+	PushMode       string
 	PendingCommits int
 	PendingDirty   bool
-	PushMode       string
 	// PendingDirtyFiles is a bounded sample of the uncommitted paths a
 	// publish would commit; PendingDirtyFileTotal is the true count, which
 	// can exceed the sample length.
@@ -1518,15 +1544,15 @@ type CompletionPreflightResult struct {
 
 // CompletionPreflight computes a side-effect-free preview of a feature's
 // completion readiness. It enumerates every repository with its completion
-// status, PR URL, blockers, and freshness, and returns a source revision
-// that mutations check for staleness. The worktree is never mutated.
+// status, per-layer pull-request entries and push modes, blockers, and
+// freshness, and returns a source revision that mutations check for
+// staleness. The worktree is never mutated.
 func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPreflightResult, error) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return CompletionPreflightResult{}, fmt.Errorf("load feature: %w", err)
 	}
 	result := CompletionPreflightResult{FeatureID: featureID}
-	prURLs := f.PRURLs()
 	for _, repo := range f.Repos {
 		state := f.RepoStates[repo.Name]
 		publishable := repoPublishable(repo)
@@ -1543,13 +1569,9 @@ func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPrefligh
 		}
 		if state != nil {
 			repoResult.Touched = state.Touched
-			repoResult.PRURL = state.PRURL
 			repoResult.Error = state.Error
 		}
-		if prURLs[repo.Name] != "" {
-			repoResult.PRURL = prURLs[repo.Name]
-		}
-		repoResult.Status = completionRepoStatus(f, repo, state, publishable, repoResult.PRURL)
+		repoResult.Status = completionRepoStatus(f, repo, state, publishable)
 		repoResult = o.applyPendingDelivery(f, repo, repoResult)
 		freshness, blocker, _ := o.repoFreshnessAndBlocker(o.rebaseFreshnessInputForRepo(f, repo))
 		repoResult.Freshness = freshness
@@ -1575,7 +1597,7 @@ func (o *Orchestrator) CompletionPreflightSourceRevision(featureID string) (stri
 	return preflightRevision(o.collectPreflightFingerprints(f)), nil
 }
 
-func completionRepoStatus(f *feature.Feature, repo feature.FeatureRepo, state *feature.RepoState, publishable bool, prURL string) string {
+func completionRepoStatus(f *feature.Feature, repo feature.FeatureRepo, state *feature.RepoState, publishable bool) string {
 	if state != nil && state.Touched {
 		if !publishable {
 			if f.Status == feature.StatusDone {
@@ -1583,7 +1605,7 @@ func completionRepoStatus(f *feature.Feature, repo feature.FeatureRepo, state *f
 			}
 			return completionStatusEligible
 		}
-		if prURL != "" {
+		if f.StackRepoHasPullRequest(repo.Name) {
 			if f.Status == feature.StatusDone {
 				return completionStatusCompleted
 			}

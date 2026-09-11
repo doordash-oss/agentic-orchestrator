@@ -2217,18 +2217,15 @@ func TestServerMutationTargetClosedChildConfigReturnsRelationshipClosed(t *testi
 
 func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata(t *testing.T) {
 	target, manager, store, f := newPublishActionTarget(t)
-	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
+	target.orch.SetPublishRepoFn(func(featureID, repoName string) error {
 		if featureID != f.ID || repoName != testRepoAName {
 			t.Fatalf("publish repo call = %s/%s, want %s/repo-a", featureID, repoName, f.ID)
 		}
 		prURL := "https://github.com/acme/repo-a/pull/12"
 		if err := manager.RecordStackLayerPR(featureID, repoName, 1, prURL, "0000000000000000000000000000000000000000"); err != nil {
-			return "", err
+			return err
 		}
-		if err := manager.SetRepoPublished(featureID, repoName); err != nil {
-			return "", err
-		}
-		return prURL, nil
+		return manager.SetRepoPublished(featureID, repoName)
 	})
 
 	result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{Repos: []string{testRepoAName}})
@@ -2285,8 +2282,8 @@ func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			target, _, _, f := newPublishActionTarget(t)
-			target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
-				return "", tc.publishErr
+			target.orch.SetPublishRepoFn(func(featureID, repoName string) error {
+				return tc.publishErr
 			})
 
 			result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{})
@@ -3248,6 +3245,22 @@ func TestServerMutationTargetCompletionPreflightCarriesRepoError(t *testing.T) {
 	repo := resp.Repos[0]
 	if repo.Repo != testRepoAName {
 		t.Fatalf("preflight repo = %q, want %q", repo.Repo, testRepoAName)
+	}
+	// The adapter maps the orchestrator's per-layer pull-request projection:
+	// one entry per stack layer with the recorded layer fields, state "none"
+	// before any pull request exists, and no repo-level push mode without a
+	// pull request.
+	if len(repo.PullRequests) != 1 {
+		t.Fatalf("preflight repo pull_requests = %+v, want the single layer entry", repo.PullRequests)
+	}
+	entry := repo.PullRequests[0]
+	if entry.Position != 1 || entry.Title != "Single layer" || entry.Branch != "feature/publish-via-rest" ||
+		entry.URL != "" || entry.State != serverruntime.PullRequestEntryStateNone ||
+		!entry.NoCommits || entry.PushedUpToDate || entry.PushMode != serverruntime.PullRequestEntryPushModeNone {
+		t.Fatalf("preflight pull_requests[0] = %+v, want the empty layer-1 entry", entry)
+	}
+	if repo.PushMode != "" {
+		t.Fatalf("preflight repo push_mode = %q, want none without a pull request", repo.PushMode)
 	}
 	if repo.Error == nil {
 		t.Fatalf("preflight repo error = nil, want the canonical object")

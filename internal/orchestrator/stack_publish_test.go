@@ -114,9 +114,6 @@ func stackPublishLifecycle(f *feature.Feature) *mocks.MockFeatureLifecycle {
 		}
 		st.Touched = true
 		st.Error = nil
-		if url := testHighestLayerPRURL(f, repo); url != "" {
-			st.PRURL = url
-		}
 		return nil
 	}
 	lc.SetRepoPublishErrorFn = func(id, repo string, record errcat.FailureRecord) error {
@@ -151,18 +148,6 @@ func testModifyStackEntry(f *feature.Feature, repoName string, layerPosition int
 		mutate(&entry)
 		f.Stack[i].Repos[repoName] = entry
 	}
-}
-
-func testHighestLayerPRURL(f *feature.Feature, repoName string) string {
-	url, best := "", 0
-	for _, layer := range f.Stack {
-		if layer.Position > best {
-			if entry, ok := layer.Repos[repoName]; ok && entry.PRURL != "" {
-				url, best = entry.PRURL, layer.Position
-			}
-		}
-	}
-	return url
 }
 
 // newScriptedDescriptionPhaseRunner scripts the description session per call
@@ -346,24 +331,30 @@ func TestPublishStackWalkCreatesLayerPRsInOrderWithEmptyMiddleLayer(t *testing.T
 		t.Fatalf("layer 3 entry = %+v, want the PR and pushed SHA", entry3)
 	}
 
-	// The feature completes only when every layer is settled, and the legacy
-	// per-repository URL equals the highest layer's PR.
+	// The feature completes only when every layer is settled, and the
+	// durable URL record lives on the stack entries — the highest layer's
+	// PR is the repository's primary reviewable artifact.
 	if f.Status != feature.StatusPublished {
 		t.Fatalf("feature status = %s, want Published (AllReposPublished wired through TryCompletePublish)", f.Status)
 	}
-	if got := f.RepoStates["r1"].PRURL; got != "https://github.com/org/r1/pull/3" {
-		t.Fatalf("legacy per-repo PRURL = %q, want the highest layer's PR", got)
+	if got := f.TopStackLayerPRURL("r1"); got != "https://github.com/org/r1/pull/3" {
+		t.Fatalf("top stack layer PR URL = %q, want the highest layer's PR", got)
 	}
 
-	// One repository status event for the repository whose entries changed.
+	// One repository status event per changed stack layer, each naming its
+	// layer.
 	statusEvents := 0
 	for _, ev := range drainEvents(o) {
-		if ev.Type == ports.RepoStatusChanged && ev.RepoName == "r1" {
-			statusEvents++
+		if ev.Type != ports.RepoStatusChanged || ev.RepoName != "r1" {
+			continue
 		}
+		if ev.LayerPosition == 0 {
+			t.Errorf("RepoStatusChanged event for r1 carries no layer position: %+v", ev)
+		}
+		statusEvents++
 	}
-	if statusEvents != 1 {
-		t.Fatalf("RepoStatusChanged events for r1 = %d, want 1", statusEvents)
+	if statusEvents != 3 {
+		t.Fatalf("RepoStatusChanged events for r1 = %d, want 3 (one per changed layer)", statusEvents)
 	}
 
 	// The pass-end stack section lands on both open PRs.

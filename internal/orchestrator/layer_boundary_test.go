@@ -404,14 +404,15 @@ func TestOrchestrator_LayerBoundary_Phase3RecordsTopLayerTipsOnly(t *testing.T) 
 			on(repoB, boundaryLayer2Branch, map[string]string{boundaryLayer1Branch: boundaryRepoBTip, boundaryLayer2Branch: boundaryRepoBTopTip})
 	}
 	h := newBoundaryHarness(t, 3, onLayer2)
-	// Both repositories are already delivered, so the final phase falls
-	// straight through to MarkCodeReady instead of publish.
+	// Both repositories are untouched and non-publishable, so the final
+	// phase needs no final-review pass and falls straight through to
+	// MarkCodeReady instead of publish.
 	unpub := false
 	for i := range h.f.Repos {
 		h.f.Repos[i].Publishable = &unpub
 	}
-	h.f.RepoStates["repo-a"].PRURL = "https://github.com/org/repo-a/pull/1"
-	h.f.RepoStates["repo-b"].PRURL = "https://github.com/org/repo-b/pull/2"
+	h.f.RepoStates["repo-a"].Touched = false
+	h.f.RepoStates["repo-b"].Touched = false
 	h.lc.MarkCodeReadyFn = func(id string) error {
 		h.f.Status = feature.StatusCodeReady
 		return nil
@@ -638,14 +639,15 @@ func TestOrchestrator_LayerBoundary_NoStackOrPhaseOutsideLayersFailsClosed(t *te
 // touches branches, stack or no stack.
 func TestOrchestrator_LayerBoundary_NonRoadmapNeverRecordsTips(t *testing.T) {
 	h := newBoundaryHarness(t, 0, onLayer1)
-	// Both repositories are already delivered so the completion falls
-	// through to MarkCodeReady without a final-review pass.
+	// Both repositories are untouched and non-publishable, so the
+	// completion falls through to MarkCodeReady without a final-review
+	// pass.
 	unpub := false
 	for i := range h.f.Repos {
 		h.f.Repos[i].Publishable = &unpub
 	}
-	h.f.RepoStates["repo-a"].PRURL = "https://github.com/org/repo-a/pull/1"
-	h.f.RepoStates["repo-b"].PRURL = "https://github.com/org/repo-b/pull/2"
+	h.f.RepoStates["repo-a"].Touched = false
+	h.f.RepoStates["repo-b"].Touched = false
 	h.lc.MarkCodeReadyFn = func(id string) error {
 		h.f.Status = feature.StatusCodeReady
 		return nil

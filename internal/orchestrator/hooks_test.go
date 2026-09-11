@@ -311,7 +311,8 @@ func TestBuildHooks_AllFieldsPopulated_AndNilSafe(t *testing.T) {
 	h.OnRecoveryAction("x", "", "resume")
 	h.OnReviewRequired("x", feature.PhaseImplement)
 	h.OnPublishStarted("x")
-	h.OnPublishCompleted("x", map[string]string{}, nil)
+	h.OnPublishCompleted("x", nil)
+	h.OnStackLayerPublished("x", observe.LayerPublishEvent{Position: 1})
 	h.OnFeatureSummaryNeeded("x", f)
 	h.OnFeatureConfigChanged("x", feature.ConfigSnapshot{}, feature.ConfigSnapshot{})
 	h.OnLayerBoundaryCrossed("x", observe.LayerBoundaryEvent{LayerPosition: 1, LayerBranch: "feature/x/1-bootstrap"})
@@ -534,10 +535,10 @@ func TestBuildHooks_OnFeatureSummaryNeeded_BuildsInputFromRunFailureRecord(t *te
 
 // TestBuildHooks_OnFeatureSummaryNeeded_StackDerivedRepoStatuses pins the
 // per-repository summary status derivation against the delivery stack: the
-// legacy PR URL projects the highest layer's pull request and must not mask
-// an unpublished upper layer, while a repository whose every layer is settled
-// (pull request or no-commits marker) reports published. Stackless runs keep
-// the legacy PR URL rule.
+// read model reports published only when every layer is settled (a pull
+// request or the no-commits marker), so an unpublished upper layer reads
+// touched. A run without a stack can never settle — publish fails closed for
+// it — so a touched repository reports touched under the stackless shape too.
 func TestBuildHooks_OnFeatureSummaryNeeded_StackDerivedRepoStatuses(t *testing.T) {
 	writeSummaryStatus := func(t *testing.T, f *feature.Feature) string {
 		t.Helper()
@@ -592,14 +593,14 @@ func TestBuildHooks_OnFeatureSummaryNeeded_StackDerivedRepoStatuses(t *testing.T
 			},
 			Repos: []feature.FeatureRepo{{Name: "r", Path: "/tmp/r"}},
 			RepoStates: map[string]*feature.RepoState{
-				"r": {Touched: true, PRURL: "https://github.com/org/r/pull/1"},
+				"r": {Touched: true},
 			},
 		}
 	}
 
 	t.Run("unpublished upper layer reports touched, not published", func(t *testing.T) {
-		// Layer 2 delivered nothing yet: no PR, no no-commits marker. The
-		// legacy PR URL projects layer 1's PR and must not mask it.
+		// Layer 2 delivered nothing yet: no PR, no no-commits marker. Layer
+		// 1's pull request must not mask it.
 		if got := writeSummaryStatus(t, stackedFeature(feature.StackRepoEntry{})); got != "touched" {
 			t.Errorf("repos[r].status = %q, want touched (layer 2 is unpublished)", got)
 		}
@@ -611,18 +612,18 @@ func TestBuildHooks_OnFeatureSummaryNeeded_StackDerivedRepoStatuses(t *testing.T
 		}
 	})
 
-	t.Run("stackless legacy PR URL still reports published", func(t *testing.T) {
+	t.Run("stackless touched repo reports touched", func(t *testing.T) {
 		f := &feature.Feature{
 			ID:     "fsum-legacy",
 			Name:   "Summary legacy",
 			Status: feature.StatusPublished,
 			Repos:  []feature.FeatureRepo{{Name: "r", Path: "/tmp/r"}},
 			RepoStates: map[string]*feature.RepoState{
-				"r": {Touched: true, PRURL: "https://github.com/org/r/pull/1"},
+				"r": {Touched: true},
 			},
 		}
-		if got := writeSummaryStatus(t, f); got != "published" {
-			t.Errorf("repos[r].status = %q, want published under the legacy rule", got)
+		if got := writeSummaryStatus(t, f); got != "touched" {
+			t.Errorf("repos[r].status = %q, want touched (a stackless run is never settled)", got)
 		}
 	})
 }

@@ -1406,6 +1406,74 @@ describe('FeatureService.getFeature', () => {
     expect(repo.error?.diagnostics).toContain('[path]');
   });
 
+  it('maps per-layer pull request entries onto the repository status view', async () => {
+    const body = detailBody({
+      repo_status: [
+        {
+          name: 'repo-a',
+          publishable: true,
+          touched: true,
+          pull_requests: [
+            {
+              position: 1,
+              title: 'Bootstrap',
+              branch: 'feature/x/1-bootstrap',
+              url: 'https://github.com/org/repo-a/pull/11',
+              state: 'open',
+              no_commits: false,
+              pushed_up_to_date: true,
+            },
+            {
+              position: 2,
+              title: 'Layer two',
+              branch: 'feature/x/2-layer-two',
+              state: 'none',
+              no_commits: false,
+              pushed_up_to_date: false,
+            },
+            {
+              position: 3,
+              title: 'Layer three',
+              state: 'merged',
+              no_commits: true,
+              pushed_up_to_date: true,
+            },
+          ],
+        },
+      ],
+    });
+    const { service } = makeService(() => ({ status: 200, body }));
+    const snapshot = await service.getFeature('abcd1234ef567890');
+    expect(FeatureSnapshotSchema.parse(snapshot)).toEqual(snapshot);
+    expect(snapshot.repoStatus?.[0]?.pullRequests).toEqual([
+      {
+        position: 1,
+        title: 'Bootstrap',
+        branch: 'feature/x/1-bootstrap',
+        url: 'https://github.com/org/repo-a/pull/11',
+        state: 'open',
+        noCommits: false,
+        pushedUpToDate: true,
+      },
+      {
+        position: 2,
+        title: 'Layer two',
+        branch: 'feature/x/2-layer-two',
+        state: 'none',
+        noCommits: false,
+        pushedUpToDate: false,
+      },
+      {
+        position: 3,
+        title: 'Layer three',
+        state: 'merged',
+        noCommits: true,
+        pushedUpToDate: true,
+      },
+    ]);
+    expect(Reflect.get(snapshot.repoStatus?.[0] as object, 'prUrl')).toBeUndefined();
+  });
+
   it('maps roadmap phase, total, iteration, and phase status from the active run detail', async () => {
     const body = detailBody({
       status: 'Implementing',

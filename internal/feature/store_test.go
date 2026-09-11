@@ -1083,7 +1083,7 @@ func TestStoreStackRepoEntryPublishFieldsRoundTrip(t *testing.T) {
 		Repos:         []FeatureRepo{{Name: "repo-a", Path: "/tmp/a"}, {Name: "repo-b", Path: "/tmp/b"}},
 	}
 	f.RepoStates = map[string]*RepoState{
-		"repo-a": {Touched: true, PRURL: "https://github.com/org/repo-a/pull/2"},
+		"repo-a": {Touched: true},
 	}
 	f.Stack = []StackLayer{
 		{
@@ -1647,6 +1647,64 @@ func TestStoreLoadIgnoresLegacyRepoLastErrorKeys(t *testing.T) {
 	}
 	if state.Error != nil {
 		t.Fatalf("repo record = %+v, want none from a stale last_error key", state.Error)
+	}
+}
+
+// TestStoreLoadIgnoresLegacyRepoPRURLKeys pins the no-schema-bump contract
+// for the removed per-repo PR URL projection: a legacy pr_url key under
+// repo_states in a hand-written run.yaml loads without error (unknown YAML
+// keys are ignored) and contributes no pull-request state, while the
+// current schema stays at 8.
+func TestStoreLoadIgnoresLegacyRepoPRURLKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	if SchemaVersionCurrent != 8 {
+		t.Errorf("SchemaVersionCurrent = %d, want 8 (the per-repo pr_url removal needs no schema bump)", SchemaVersionCurrent)
+	}
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "legacy-repo-pr-001",
+		Name:          "Legacy Repo PR",
+		Slug:          "legacy-repo-pr",
+		Status:        StatusCodeReady,
+		CurrentPhase:  PhasePublish,
+		SchemaVersion: SchemaVersionCurrent,
+		Repos:         []FeatureRepo{{Name: "repo-a", Path: "/tmp/a"}},
+	}
+	f.RepoStates = map[string]*RepoState{
+		"repo-a": {Touched: true},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	stale := strings.Replace(string(raw), "repo-a:\n",
+		"repo-a:\n        pr_url: https://github.com/org/repo-a/pull/2\n", 1)
+	if stale == string(raw) {
+		t.Fatal("run.yaml does not carry the expected repo_states entry header")
+	}
+	if err := os.WriteFile(runPath, []byte(stale), 0o644); err != nil {
+		t.Fatalf("rewrite run.yaml with stale repo pr_url key: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load with stale repo pr_url key: %v", err)
+	}
+	state := loaded.RepoStates["repo-a"]
+	if state == nil || !state.Touched {
+		t.Fatalf("repo state = %+v, want the touched entry preserved", state)
+	}
+	// The legacy projection is gone: only the stack's per-layer entries
+	// answer pull-request questions.
+	if loaded.StackRepoHasPullRequest("repo-a") {
+		t.Fatalf("stack pull requests = %+v, want none recorded from a stale pr_url key", loaded.Stack)
 	}
 }
 

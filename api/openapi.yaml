@@ -4555,6 +4555,36 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/CompletionPreflightRepo"
+    PullRequestEntry:
+      type: object
+      required: [position, title, state, no_commits, pushed_up_to_date]
+      properties:
+        position:
+          type: integer
+          description: Stack layer position, ascending from 1.
+        title:
+          type: string
+          description: Layer title from the approved roadmap's pull-request table.
+        branch:
+          type: string
+          description: Layer branch name.
+        url:
+          type: string
+          description: Pull request URL, omitted when no pull request exists for the layer.
+        state:
+          type: string
+          enum: [none, open, merged, closed]
+          description: Recorded pull request state; none before any pull request exists.
+        no_commits:
+          type: boolean
+          description: Whether the layer delivered no commits in this repository.
+        pushed_up_to_date:
+          type: boolean
+          description: Whether a pull request exists and the layer's recorded tip equals its last-pushed SHA.
+        push_mode:
+          type: string
+          enum: [create, fast_forward, rewrite, none]
+          description: Per-layer push mode a publish would apply — create (no pull request yet, commits to deliver), fast_forward (pull request exists, tip moved, remote branch is an ancestor), rewrite (remote branch is not an ancestor, publish force-pushes under a lease), or none (up to date, merged, closed, or no commits). Present only on completion preflight entries.
     CompletionPreflightRepo:
       type: object
       required: [repo, publishable, touched, status]
@@ -4568,9 +4598,11 @@ components:
         status:
           type: string
           description: Server-authored completion status — eligible, already_published, unpublished_changes, completed, unmerged_changes, ineligible, untouched, or blocked.
-        pr_url:
-          type: string
-          description: Current PR URL when the repository has been published.
+        pull_requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/PullRequestEntry"
+          description: Ordered per-layer stack view for this repository, one entry per layer with its per-layer push mode. Omitted for non-publishable repositories and runs without a stack.
         blocker:
           type: string
           description: Safe, server-authored reason this repository cannot proceed, when non-empty.
@@ -4597,7 +4629,8 @@ components:
           description: Whether the worktree carries uncommitted changes that have not been delivered.
         push_mode:
           type: string
-          description: How a republish reaches an existing pull-request branch — fast_forward or rewrite. rewrite means the remote branch carries commits the local branch does not, so the push replaces remote history under a lease.
+          enum: [fast_forward, rewrite]
+          description: Repository-level push mode — rewrite when any layer's remote branch carries commits its tip does not contain, else fast_forward. Present only when the repository has at least one pull request on some layer.
         pending_dirty_files:
           type: array
           items:
@@ -5581,9 +5614,11 @@ components:
             type: string
         touched:
           type: boolean
-        pr_url:
-          type: string
-          x-go-name: PRURL
+        pull_requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/PullRequestEntry"
+          description: Ordered per-layer stack view for this repository, one entry per layer in position order. Omitted for non-publishable repositories and runs without a stack; completion preflight entries additionally carry push_mode.
         error:
           $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false

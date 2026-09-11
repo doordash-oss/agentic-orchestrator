@@ -1181,6 +1181,80 @@ describe('Repository publish-failure error contract', () => {
   });
 });
 
+describe('per-layer pull request entry contract', () => {
+  const pullRequests = [
+    {
+      position: 1,
+      title: 'Bootstrap',
+      branch: 'feature/x/1-bootstrap',
+      url: 'https://github.com/org/repo-a/pull/11',
+      state: 'open',
+      no_commits: false,
+      pushed_up_to_date: true,
+    },
+    {
+      position: 2,
+      title: 'Layer two',
+      branch: 'feature/x/2-layer-two',
+      state: 'none',
+      no_commits: true,
+      pushed_up_to_date: false,
+    },
+  ];
+  const repoStatus = {
+    name: 'repo-a',
+    publishable: true,
+    touched: true,
+    pull_requests: pullRequests,
+  };
+  const preflightRepo = {
+    repo: 'repo-a',
+    publishable: true,
+    touched: true,
+    status: 'unpublished_changes',
+    pull_requests: pullRequests.map((entry, index) => ({
+      ...entry,
+      push_mode: index === 0 ? 'none' : 'create',
+    })),
+    push_mode: 'fast_forward',
+  };
+
+  it('accepts the shared entry list on the repository status and preflight repository', () => {
+    expect(ServerRepoStatusSchema.safeParse(repoStatus).success).toBe(true);
+    const parsedStatus = ServerRepoStatusSchema.parse(repoStatus);
+    expect(parsedStatus.pull_requests?.[0]).toEqual(pullRequests[0]);
+    expect(parsedStatus.pull_requests?.[1]?.url).toBeUndefined();
+
+    expect(CompletionPreflightRepoSchema.safeParse(preflightRepo).success).toBe(true);
+    const parsedPreflight = CompletionPreflightRepoSchema.parse(preflightRepo);
+    expect(parsedPreflight.pull_requests?.[1]?.push_mode).toBe('create');
+    expect(parsedPreflight.push_mode).toBe('fast_forward');
+  });
+
+  it('rejects an entry with an unknown state on both carriers', () => {
+    const badState = pullRequests.map((entry) => ({ ...entry, state: 'draft' }));
+    expect(
+      ServerRepoStatusSchema.safeParse({ ...repoStatus, pull_requests: badState }).success,
+    ).toBe(false);
+    expect(
+      CompletionPreflightRepoSchema.safeParse({ ...preflightRepo, pull_requests: badState })
+        .success,
+    ).toBe(false);
+  });
+
+  it('rejects push modes outside the wire enums', () => {
+    expect(
+      CompletionPreflightRepoSchema.safeParse({
+        ...preflightRepo,
+        pull_requests: pullRequests.map((entry) => ({ ...entry, push_mode: 'force' })),
+      }).success,
+    ).toBe(false);
+    expect(
+      CompletionPreflightRepoSchema.safeParse({ ...preflightRepo, push_mode: 'create' }).success,
+    ).toBe(false);
+  });
+});
+
 describe('canonical warning wire shapes', () => {
   const canonicalWarning = {
     code: 'rewind_worktree_reset',

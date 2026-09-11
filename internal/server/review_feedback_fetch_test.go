@@ -127,10 +127,19 @@ func seedReviewFeedbackFetchFeature(t *testing.T) (*feature.Store, *feature.Feat
 			{Name: "web", Path: t.TempDir()},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"api":  {PRURL: "https://github.com/example/api/pull/1"},
+			"api":  {Touched: true},
 			"docs": {},
-			"web":  {PRURL: "https://github.com/example/web/pull/2"},
+			"web":  {Touched: true},
 		},
+		Stack: []feature.StackLayer{{
+			Position: 1,
+			Title:    "Layer 1",
+			Branch:   "agentico/parent-fetch/1-layer-1",
+			Repos: map[string]feature.StackRepoEntry{
+				"api": {PRURL: "https://github.com/example/api/pull/1", PRState: feature.StackPRStateOpen},
+				"web": {PRURL: "https://github.com/example/web/pull/2", PRState: feature.StackPRStateOpen},
+			},
+		}},
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save(parent): %v", err)

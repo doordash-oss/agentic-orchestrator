@@ -35,9 +35,17 @@ func launchTestParent() *feature.Feature {
 			{Name: "web", Path: "/src/web", WorktreePath: "/wt/web", Branch: "feature/parent-web", BaseBranch: "main"},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"api": {PRURL: "https://github.example/acme/api/pull/17"},
-			"web": {PRURL: "https://github.example/acme/web/pull/23"},
+			"api": {Touched: true},
+			"web": {Touched: true},
 		},
+		// Each repository's pull request lives on its stack layer entry.
+		Stack: []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"api": {PRURL: "https://github.example/acme/api/pull/17", PRState: feature.StackPRStateOpen},
+				"web": {PRURL: "https://github.example/acme/web/pull/23", PRState: feature.StackPRStateOpen},
+			},
+		}},
 	}
 }
 

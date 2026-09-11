@@ -1059,7 +1059,17 @@ describe('FeatureCockpit snapshot rendering', () => {
           {
             name: 'agentic-orchestrator',
             publishable: true,
-            prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+            pullRequests: [
+              {
+                position: 1,
+                title: 'Phase 8 stack read model',
+                branch: 'feature/x/1-bootstrap',
+                url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: true,
+              },
+            ],
           },
         ],
       }),
@@ -1101,7 +1111,17 @@ describe('FeatureCockpit snapshot rendering', () => {
           {
             name: 'repo-a',
             publishable: true,
-            prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+            pullRequests: [
+              {
+                position: 1,
+                title: 'Phase 8 stack read model',
+                branch: 'feature/x/1-bootstrap',
+                url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: true,
+              },
+            ],
           },
           {
             name: 'repo-b',
@@ -1242,7 +1262,17 @@ describe('FeatureCockpit snapshot rendering', () => {
           {
             name: 'agentic-orchestrator',
             publishable: true,
-            prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/109',
+            pullRequests: [
+              {
+                position: 1,
+                title: 'Phase 8 stack read model',
+                branch: 'feature/x/1-bootstrap',
+                url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/109',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: true,
+              },
+            ],
           },
         ],
       }),

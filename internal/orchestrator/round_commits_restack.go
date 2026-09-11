@@ -380,11 +380,12 @@ func (o *Orchestrator) landRelocation(f *feature.Feature, r *repoRelocation, com
 	// SHAs onto the rewritten chain.
 	r.remapAfterLanding(result)
 	o.emitEvent(ports.Event{
-		Type:      ports.RepoStatusChanged,
-		FeatureID: r.featureID,
-		RepoName:  r.repo,
-		Branch:    top.Branch,
-		Message:   fmt.Sprintf("relocated a final review fix into layer %d", pos),
+		Type:          ports.RepoStatusChanged,
+		FeatureID:     r.featureID,
+		RepoName:      r.repo,
+		Branch:        top.Branch,
+		LayerPosition: pos,
+		Message:       fmt.Sprintf("relocated a final review fix into layer %d", pos),
 	})
 	return relocationLanded, ""
 }
@@ -614,6 +615,7 @@ func (o *Orchestrator) emitFixRelocatedWarning(f *feature.Feature, repository st
 		FeatureID:      f.ID,
 		RepoName:       repository,
 		Branch:         actualBranch,
+		LayerPosition:  actualPos,
 		Message:        warning.Summary,
 		CanonicalError: &warning,
 	})
@@ -652,6 +654,7 @@ func (o *Orchestrator) emitManifestIgnoredWarning(featureID, repository string, 
 		Type:           ports.RepoStatusChanged,
 		FeatureID:      featureID,
 		RepoName:       repository,
+		LayerPosition:  layer,
 		Message:        warning.Summary,
 		CanonicalError: &warning,
 	})

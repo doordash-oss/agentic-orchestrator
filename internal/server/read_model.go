@@ -1001,15 +1001,7 @@ func reviewFeedbackDisabledReason(f *feature.Feature) ActionDisabledReason {
 }
 
 func featureHasPullRequest(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	for _, state := range f.RepoStates {
-		if state != nil && strings.TrimSpace(state.PRURL) != "" {
-			return true
-		}
-	}
-	return false
+	return f != nil && f.AnyStackLayerHasPullRequest()
 }
 
 func rewindPhaseOptions(f *feature.Feature) []string {
@@ -1166,19 +1158,44 @@ func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatus {
 	out := make([]RepoStatus, 0, len(f.Repos))
 	for _, repo := range f.Repos {
 		state := f.RepoStates[repo.Name]
+		publishable := repo.Publishable == nil || *repo.Publishable
 		dto := RepoStatus{
 			Name:        repo.Name,
-			Publishable: repo.Publishable == nil || *repo.Publishable,
+			Publishable: publishable,
 		}
 		if state != nil {
 			dto.Touched = state.Touched
-			dto.PRURL = state.PRURL
 			dto.Error = WireRepoError(state.Error)
+		}
+		if publishable && len(f.Stack) > 0 {
+			dto.PullRequests = wirePullRequestEntries(f.StackRepoPullRequestEntries(repo.Name))
 		}
 		if freshness != nil {
 			dto.Freshness = string(freshness[repo.Name])
 		}
 		out = append(out, dto)
+	}
+	return out
+}
+
+// wirePullRequestEntries projects the feature read model's per-layer stack
+// entries onto the shared wire schema. Push mode stays empty here — only
+// completion preflight, which measures the worktree, fills it.
+func wirePullRequestEntries(entries []feature.StackPullRequestEntry) []PullRequestEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]PullRequestEntry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, PullRequestEntry{
+			Position:       entry.Position,
+			Title:          entry.Title,
+			Branch:         entry.Branch,
+			URL:            entry.URL,
+			State:          PullRequestEntryState(entry.State),
+			NoCommits:      entry.NoCommits,
+			PushedUpToDate: entry.PushedUpToDate,
+		})
 	}
 	return out
 }

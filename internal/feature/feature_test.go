@@ -1617,56 +1617,70 @@ func TestValidTransitionsNoRetiredStates(t *testing.T) {
 	}
 }
 
-func TestFirstRepoPRURL(t *testing.T) {
+// TestStackLayerPRURLSelectors covers the per-repository top/lowest layer
+// PR URL readers: the highest positioned layer entry carrying a pull request
+// for the repository, and the lowest, whatever the layers in between hold.
+func TestStackLayerPRURLSelectors(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
 	tests := []struct {
-		name     string
-		repos    []FeatureRepo
-		repoImpl map[string]*RepoState
-		want     string
+		name       string
+		stack      []StackLayer
+		wantTop    string
+		wantLowest string
 	}{
 		{
-			name:  "first repo has URL",
-			repos: []FeatureRepo{{Name: "a"}, {Name: "b"}},
-			repoImpl: map[string]*RepoState{
-				"a": {PRURL: "url-a"},
-				"b": {PRURL: "url-b"},
+			name: "every layer has a URL",
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{"a": {PRURL: "url-1"}}},
+				{Position: 2, Repos: map[string]StackRepoEntry{"a": {PRURL: "url-2"}}},
 			},
-			want: "url-a",
+			wantTop:    "url-2",
+			wantLowest: "url-1",
 		},
 		{
-			name:  "second repo has URL first doesnt",
-			repos: []FeatureRepo{{Name: "a"}, {Name: "b"}},
-			repoImpl: map[string]*RepoState{
-				"a": {PRURL: ""},
-				"b": {PRURL: "url-b"},
+			name: "only the lower layer has a URL",
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{"a": {PRURL: "url-1"}}},
+				{Position: 2, Repos: map[string]StackRepoEntry{"a": {TipSHA: "tip-2"}}},
 			},
-			want: "url-b",
+			wantTop:    "url-1",
+			wantLowest: "url-1",
 		},
 		{
-			name:  "no repos have URLs",
-			repos: []FeatureRepo{{Name: "a"}, {Name: "b"}},
-			repoImpl: map[string]*RepoState{
-				"a": {PRURL: ""},
-				"b": {PRURL: ""},
+			name: "only the upper layer has a URL",
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{"a": {TipSHA: "tip-1"}}},
+				{Position: 2, Repos: map[string]StackRepoEntry{"a": {PRURL: "url-2"}}},
 			},
-			want: "",
+			wantTop:    "url-2",
+			wantLowest: "url-2",
 		},
 		{
-			name:     "empty RepoImpl",
-			repos:    []FeatureRepo{{Name: "a"}},
-			repoImpl: map[string]*RepoState{},
-			want:     "",
+			name: "no layer carries a URL",
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{"a": {}}},
+			},
+			wantTop:    "",
+			wantLowest: "",
+		},
+		{
+			name:       "no stack",
+			stack:      nil,
+			wantTop:    "",
+			wantLowest: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := &Feature{Repos: tt.repos, RepoStates: tt.repoImpl}
-			got := f.FirstRepoPRURL()
-			if got != tt.want {
-				t.Errorf("FirstRepoPRURL() = %q, want %q", got, tt.want)
+			t.Parallel()
+			f := &Feature{Repos: []FeatureRepo{{Name: "a"}}, Stack: tt.stack}
+			if got := f.TopStackLayerPRURL("a"); got != tt.wantTop {
+				t.Errorf("TopStackLayerPRURL() = %q, want %q", got, tt.wantTop)
+			}
+			if got := f.LowestStackLayerPRURL("a"); got != tt.wantLowest {
+				t.Errorf("LowestStackLayerPRURL() = %q, want %q", got, tt.wantLowest)
 			}
 		})
 	}
@@ -1674,8 +1688,9 @@ func TestFirstRepoPRURL(t *testing.T) {
 
 // TestAllReposPublished covers the publish-completion predicate: under a
 // delivery stack a touched repository counts as published only when every
-// layer's entry either carries a pull request or is marked empty, while
-// runs without a stack keep the legacy per-repo PR URL rule.
+// layer's entry either carries a pull request or is marked empty, while a
+// touched repository on a run without a stack is never published — there is
+// no layer composition to settle and publish fails closed for it.
 func TestAllReposPublished(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
@@ -1699,29 +1714,43 @@ func TestAllReposPublished(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:  "all touched repos have PR URL",
+			name:  "stackless: touched repository is never published",
 			repos: []FeatureRepo{{Name: "api"}, {Name: "web"}},
 			states: map[string]*RepoState{
-				"api": {Touched: true, PRURL: "url-a"},
-				"web": {Touched: true, PRURL: "url-b"},
-			},
-			want: true,
-		},
-		{
-			name:  "one touched repo missing PR URL blocks",
-			repos: []FeatureRepo{{Name: "api"}, {Name: "web"}},
-			states: map[string]*RepoState{
-				"api": {Touched: true, PRURL: "url-a"},
-				"web": {Touched: true, PRURL: ""},
+				"api": {Touched: true},
+				"web": {Touched: true},
 			},
 			want: false,
 		},
 		{
-			name:  "untouched mixed with published touched",
+			name:  "stacked: one touched repo missing its layer PR blocks",
+			repos: []FeatureRepo{{Name: "api"}, {Name: "web"}},
+			states: map[string]*RepoState{
+				"api": {Touched: true},
+				"web": {Touched: true},
+			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {PRURL: "url-a", PRState: StackPRStateOpen},
+					"web": {TipSHA: "tip-web"},
+				}},
+			},
+			want: false,
+		},
+		{
+			name:  "stacked: untouched mixed with published touched",
 			repos: []FeatureRepo{{Name: "api"}, {Name: "web"}, {Name: "infra"}},
 			states: map[string]*RepoState{
-				"api":   {Touched: true, PRURL: "url-a"},
+				"api":   {Touched: true},
 				"infra": {Touched: false},
+			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {PRURL: "url-1", PRState: StackPRStateOpen},
+				}},
+				{Position: 2, Repos: map[string]StackRepoEntry{
+					"api": {NoCommits: true},
+				}},
 			},
 			want: true,
 		},
@@ -1789,10 +1818,10 @@ func TestAllReposPublished(t *testing.T) {
 			want: true,
 		},
 		{
-			name:  "stacked: legacy per-repo URL alone does not satisfy the layer check",
+			name:  "stacked: touched repo with tip-only layer entries blocks",
 			repos: []FeatureRepo{{Name: "api"}},
 			states: map[string]*RepoState{
-				"api": {Touched: true, PRURL: "url-legacy"},
+				"api": {Touched: true},
 			},
 			stack: []StackLayer{
 				{Position: 1, Repos: map[string]StackRepoEntry{
@@ -2221,76 +2250,133 @@ func TestIsFinalizingPhase(t *testing.T) {
 	}
 }
 
-// TestPRURLs covers the PRURLs accessor. Per-repo entries from RepoImpl
-// are the only source of PR URLs.
-func TestPRURLs(t *testing.T) {
+// TestStackRepoPullRequestEntries covers the per-layer read-model
+// projection: one entry per layer in ascending position order (never
+// skipping), state "none" for a layer without a pull request, and the
+// pushed-up-to-date flag only when a layer carrying a pull request has its
+// tip equal to its last pushed SHA. The stack's per-layer entries are the
+// only source of pull request URLs.
+func TestStackRepoPullRequestEntries(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
+	f := &Feature{
+		Repos: []FeatureRepo{{Name: "api"}},
+		Stack: []StackLayer{
+			// Seeded out of position order: the projection must sort.
+			{Position: 2, Title: "Ext", Branch: "feature/x/2-ext", Repos: map[string]StackRepoEntry{
+				"api": {TipSHA: "tip-2", LastPushedSHA: "tip-2", PRURL: "url-2", PRState: StackPRStateOpen},
+			}},
+			{Position: 1, Title: "Core", Branch: "feature/x/1-core", Repos: map[string]StackRepoEntry{
+				"api": {TipSHA: "tip-1", PRURL: "url-1", PRState: StackPRStateMerged},
+			}},
+			{Position: 3, Title: "Polish", Branch: "feature/x/3-polish"},
+		},
+	}
+
+	entries := f.StackRepoPullRequestEntries("api")
+	if len(entries) != 3 {
+		t.Fatalf("StackRepoPullRequestEntries() length = %d, want one per layer (got %v)", len(entries), entries)
+	}
+	want := []StackPullRequestEntry{
+		{Position: 1, Title: "Core", Branch: "feature/x/1-core", URL: "url-1", State: StackPRStateMerged},
+		{Position: 2, Title: "Ext", Branch: "feature/x/2-ext", URL: "url-2", State: StackPRStateOpen, PushedUpToDate: true},
+		{Position: 3, Title: "Polish", Branch: "feature/x/3-polish", State: StackPRStateNone},
+	}
+	for i, got := range entries {
+		if got != want[i] {
+			t.Errorf("StackRepoPullRequestEntries()[%d] = %+v, want %+v", i, got, want[i])
+		}
+	}
+
+	// A layer entry carrying a URL without a recorded state reads as open —
+	// the same posture the publish walk takes toward an indeterminate answer.
+	urlNoState := &Feature{Stack: []StackLayer{{Position: 1, Repos: map[string]StackRepoEntry{
+		"api": {PRURL: "url-open"},
+	}}}}
+	if entries := urlNoState.StackRepoPullRequestEntries("api"); len(entries) != 1 || entries[0].State != StackPRStateOpen {
+		t.Errorf("StackRepoPullRequestEntries() = %+v, want state open for a URL recorded without a state", entries)
+	}
+}
+
+// TestStackRepoPRURLList covers the per-repository URL list: every layer's
+// pull request URL in position order, from the stack entries alone.
+func TestStackRepoPRURLList(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
 	tests := []struct {
-		name     string
-		repos    []FeatureRepo
-		repoImpl map[string]*RepoState
-		prURL    string
-		want     map[string]string
+		name  string
+		stack []StackLayer
+		want  []string
 	}{
 		{
-			name:     "per-repo url present",
-			repos:    []FeatureRepo{{Name: "a"}},
-			repoImpl: map[string]*RepoState{"a": {PRURL: "u-a"}},
-			want:     map[string]string{"a": "u-a"},
+			name: "urls on every layer",
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{"a": {PRURL: "u-1"}}},
+				{Position: 2, Repos: map[string]StackRepoEntry{"a": {PRURL: "u-2"}}},
+			},
+			want: []string{"u-1", "u-2"},
 		},
 		{
-			name:     "multi repo only one populated",
-			repos:    []FeatureRepo{{Name: "a"}, {Name: "b"}},
-			repoImpl: map[string]*RepoState{"a": {PRURL: "u-a"}, "b": {PRURL: ""}},
-			want:     map[string]string{"a": "u-a"},
+			name: "gap between recorded layers",
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{"a": {PRURL: "u-1"}}},
+				{Position: 2, Repos: map[string]StackRepoEntry{"a": {}}},
+				{Position: 3, Repos: map[string]StackRepoEntry{"a": {PRURL: "u-3"}}},
+			},
+			want: []string{"u-1", "u-3"},
 		},
 		{
-			name:     "multi repo legacy fallback ignored",
-			repos:    []FeatureRepo{{Name: "a"}, {Name: "b"}},
-			repoImpl: map[string]*RepoState{},
-			prURL:    "legacy",
-			want:     map[string]string{},
+			name:  "no layer carries a URL",
+			stack: []StackLayer{{Position: 1, Repos: map[string]StackRepoEntry{"a": {}}}},
+			want:  nil,
 		},
 		{
-			name:  "no repos",
-			repos: nil,
-			prURL: "legacy",
-			want:  map[string]string{},
+			name:  "no stack",
+			stack: nil,
+			want:  nil,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := &Feature{Repos: tt.repos, RepoStates: tt.repoImpl}
-			f.SetPRURL(tt.prURL)
-			got := f.PRURLs()
+			t.Parallel()
+			f := &Feature{Repos: []FeatureRepo{{Name: "a"}}, Stack: tt.stack}
+			got := f.StackRepoPRURLList("a")
 			if len(got) != len(tt.want) {
-				t.Errorf("PRURLs() length = %d, want %d (got=%v want=%v)", len(got), len(tt.want), got, tt.want)
+				t.Fatalf("StackRepoPRURLList() length = %d, want %d (got=%v want=%v)", len(got), len(tt.want), got, tt.want)
 			}
-			for k, v := range tt.want {
-				if got[k] != v {
-					t.Errorf("PRURLs()[%s] = %q, want %q", k, got[k], v)
+			for i, url := range tt.want {
+				if got[i] != url {
+					t.Errorf("StackRepoPRURLList()[%d] = %q, want %q", i, got[i], url)
 				}
 			}
 		})
 	}
 }
 
-// TestPRURLs_NoLegacyFallback verifies that the legacy single-repo fallback
-// (f.PRURL → repos[0].Name when RepoImpl[name].PRURL is empty) is gone.
-// A single-repo feature with empty RepoImpl PR URL and a non-empty f.PRURL
-// shadow returns an empty map.
-func TestPRURLs_NoLegacyFallback(t *testing.T) {
+// TestStackReadHelpers_NoStackFailClosed verifies that the legacy
+// single-URL projection is gone: a run without a stack reports no pull
+// requests anywhere, even with a touched repository state.
+func TestStackReadHelpers_NoStackFailClosed(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
 	f := &Feature{
 		Repos:      []FeatureRepo{{Name: "only"}},
-		RepoStates: map[string]*RepoState{"only": {PRURL: ""}},
+		RepoStates: map[string]*RepoState{"only": {Touched: true}},
 	}
-	f.SetPRURL("https://example.com/legacy-pr")
-	got := f.PRURLs()
-	if len(got) != 0 {
-		t.Errorf("PRURLs() = %v, want empty (no legacy fallback)", got)
+	if got := f.StackRepoPullRequestEntries("only"); got != nil {
+		t.Errorf("StackRepoPullRequestEntries() = %v, want nil (no stack)", got)
+	}
+	if f.AnyStackLayerHasPullRequest() {
+		t.Error("AnyStackLayerHasPullRequest() = true, want false (no stack)")
+	}
+	if f.StackRepoHasPullRequest("only") {
+		t.Error("StackRepoHasPullRequest() = true, want false (no stack)")
+	}
+	if got := f.TopStackLayerPRURL("only"); got != "" {
+		t.Errorf("TopStackLayerPRURL() = %q, want empty (no stack)", got)
+	}
+	if got := f.StackRepoPRURLList("only"); len(got) != 0 {
+		t.Errorf("StackRepoPRURLList() = %v, want empty (no stack)", got)
 	}
 }
 

@@ -782,8 +782,7 @@ func validateReviewFeedbackCommentRepos(parent *Feature, comments []ReviewFeedba
 		if _, ok := parentRepos[comment.Repo]; !ok {
 			return fmt.Errorf("%w: %q", ErrReviewFeedbackUnknownRepo, comment.Repo)
 		}
-		state := parent.RepoStates[comment.Repo]
-		if state == nil || strings.TrimSpace(state.PRURL) == "" {
+		if parent.TopStackLayerPRURL(comment.Repo) == "" {
 			return fmt.Errorf("%w: %q", ErrReviewFeedbackRepoHasNoPR, comment.Repo)
 		}
 	}
@@ -791,12 +790,6 @@ func validateReviewFeedbackCommentRepos(parent *Feature, comments []ReviewFeedba
 }
 
 func reviewFeedbackDescription(parent *Feature, comments []ReviewFeedbackComment) string {
-	prURLs := make(map[string]string, len(parent.RepoStates))
-	for repo, state := range parent.RepoStates {
-		if state != nil {
-			prURLs[repo] = state.PRURL
-		}
-	}
 	commentsByRepo := make(map[string][]ReviewFeedbackComment)
 	repoOrder := make([]string, 0)
 	for _, comment := range comments {
@@ -812,7 +805,7 @@ func reviewFeedbackDescription(parent *Feature, comments []ReviewFeedbackComment
 		description.WriteString("\n## Repository: ")
 		description.WriteString(repo)
 		description.WriteString("\n\nPull request: ")
-		description.WriteString(prURLs[repo])
+		description.WriteString(parent.TopStackLayerPRURL(repo))
 		description.WriteString("\n")
 		for _, comment := range commentsByRepo[repo] {
 			description.WriteString("\n### Comment ")

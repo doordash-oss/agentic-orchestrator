@@ -72,8 +72,8 @@ func TestFeatureDetailRepoStatusCarriesCanonicalError(t *testing.T) {
 		t.Fatalf("repo_status = %#v, want one repository", featureBody["repo_status"])
 	}
 	repo := repos[0].(map[string]any)
-	if repo["name"] != "repo-a" || repo["pr_url"] != nil {
-		t.Fatalf("repo status = %#v, want repo-a with no pull request", repo)
+	if repo["name"] != "repo-a" || repo["pull_requests"] != nil {
+		t.Fatalf("repo status = %#v, want repo-a with no pull requests", repo)
 	}
 
 	repoError, ok := repo["error"].(map[string]any)
@@ -135,7 +135,7 @@ func TestFeatureDetailRepoStatusOmitsErrorWithoutRecord(t *testing.T) {
 		Repos:         []feature.FeatureRepo{{Name: "repo-a", Branch: "agentico/my-feature"}},
 	}
 	f.RepoStates = map[string]*feature.RepoState{
-		"repo-a": {Touched: true, PRURL: "https://github.example/org/repo-a/pull/1"},
+		"repo-a": {Touched: true},
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save feature: %v", err)

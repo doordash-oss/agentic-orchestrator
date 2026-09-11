@@ -168,6 +168,17 @@ export function ChangesSurface({
   }, [diff, loadFileDiff, selectedFile, selectedRepo]);
 
   const activeRepo = preflight?.repos.find((repo) => repo.repo === selectedRepo);
+  // The active repository's headline link: the highest layer's PR, the last
+  // entry that carries a URL.
+  const activeRepoPullRequests = activeRepo?.pullRequests ?? [];
+  let activeRepoTopPullRequest: string | undefined;
+  for (let index = activeRepoPullRequests.length - 1; index >= 0; index--) {
+    const url = activeRepoPullRequests[index]!.url;
+    if (url !== undefined && url !== '') {
+      activeRepoTopPullRequest = url;
+      break;
+    }
+  }
 
   /**
    * One control, two verbs by locality. Local: reveal the worktree in the OS
@@ -268,8 +279,8 @@ export function ChangesSurface({
             <strong>{selectedRepo}</strong>
           </div>
           <div className="changes-manifest__repository-actions">
-            {activeRepo?.prUrl === undefined ? null : (
-              <PrLinkButton url={activeRepo.prUrl} openExternal={openExternal} />
+            {activeRepoTopPullRequest === undefined ? null : (
+              <PrLinkButton url={activeRepoTopPullRequest} openExternal={openExternal} />
             )}
             <button
               type="button"

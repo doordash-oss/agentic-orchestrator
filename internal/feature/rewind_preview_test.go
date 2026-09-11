@@ -33,6 +33,17 @@ const (
 func TestRewindPreviewForFeatureEligibleImplementConsequences(t *testing.T) {
 	store := NewStore(t.TempDir())
 	f := newRewindableFeature(t, store, previewRepoName, true)
+	// A stack layer carrying the repository's pull request: the preview's
+	// PR consequence reads the top layer's PR per repository.
+	f.Stack = []StackLayer{{
+		Position: 1, Branch: stackedLayer1Branch,
+		Repos: map[string]StackRepoEntry{
+			previewRepoName: {PRURL: "https://github.example/pr/1", PRState: StackPRStateOpen},
+		},
+	}}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
 	sealedRunDir := store.RunDir(f.ID, f.ActiveRun)
 
 	result := RewindPreviewForFeature(f, sealedRunDir, RewindRequest{TargetPhase: PhaseImplement}, "")
@@ -56,8 +67,11 @@ func TestRewindPreviewForFeatureEligibleImplementConsequences(t *testing.T) {
 		t.Fatalf("carried_phases = %v; want to include plan", result.CarriedPhases)
 	}
 	// Publishable feature: a PR consequence and a worktree reset are present.
-	if len(result.PRConsequences) == 0 {
-		t.Fatalf("pr_consequences empty for publishable feature")
+	if len(result.PRConsequences) != 1 {
+		t.Fatalf("pr_consequences = %v, want the top layer's PR for the repo", result.PRConsequences)
+	}
+	if got := result.PRConsequences[0]; got.Repo != previewRepoName || got.PRURL != "https://github.example/pr/1" {
+		t.Fatalf("pr_consequences[0] = %+v, want %s at https://github.example/pr/1", got, previewRepoName)
 	}
 	if len(result.WorktreeConsequences) == 0 {
 		t.Fatalf("worktree_consequences empty")
@@ -155,6 +169,30 @@ func TestRewindPreviewSourceRevisionMatchesRewindRevision(t *testing.T) {
 	}
 }
 
+// TestRewindRevisionChangesOnStackPRChange pins the per-layer hash: any
+// layer's pull request state or URL moving invalidates a stale preview,
+// exactly like the legacy per-repo URL once did.
+func TestRewindRevisionChangesOnStackPRChange(t *testing.T) {
+	store := NewStore(t.TempDir())
+	f := newStackedRewindFeature(t, store, true)
+
+	rev1 := RewindRevision(f)
+	// A layer's pull request state moving (open -> merged) changes the hash.
+	entry := f.Stack[1].Repos["alpha"]
+	entry.PRState = StackPRStateMerged
+	f.Stack[1].Repos["alpha"] = entry
+	rev2 := RewindRevision(f)
+	if rev2 == rev1 {
+		t.Fatal("revision unchanged after a layer's PR state moved; want change")
+	}
+	// A layer's pull request URL moving changes it again.
+	entry.PRURL = "https://github.example/alpha/pull/99"
+	f.Stack[1].Repos["alpha"] = entry
+	if rev3 := RewindRevision(f); rev3 == rev2 {
+		t.Fatal("revision unchanged after a layer's PR URL moved; want change")
+	}
+}
+
 func TestRewindPreviewUpgradePipelineComputesChoicesForUpgradedProfile(t *testing.T) {
 	store := NewStore(t.TempDir())
 	f := newRewindableFeature(t, store, previewRepoName, true)
@@ -181,7 +219,9 @@ func TestRewindPreviewUpgradePipelineComputesChoicesForUpgradedProfile(t *testin
 }
 
 // newRewindableFeature builds and persists a feature that is eligible for an
-// Implement rewind: StatusImplementing with a publishable repo and a PR URL.
+// Implement rewind: StatusImplementing with a publishable repo and a touched
+// repository state. It carries no stack: the unstacked rewind decisions read
+// it as the no-stack fixture.
 func newRewindableFeature(t *testing.T, store *Store, repo string, publishable bool) *Feature {
 	t.Helper()
 	publishablePtr := publishable
@@ -197,7 +237,7 @@ func newRewindableFeature(t *testing.T, store *Store, repo string, publishable b
 			Name: repo, Path: "/repo/" + repo, WorktreePath: filepath.Join(store.BaseDir, "wt", repo),
 			BaseBranch: "main", Branch: "feature/x", Publishable: &publishablePtr,
 		}},
-		RepoStates:    map[string]*RepoState{repo: {Touched: true, PRURL: "https://github.example/pr/1"}},
+		RepoStates:    map[string]*RepoState{repo: {Touched: true}},
 		SchemaVersion: SchemaVersionCurrent,
 	}
 	if err := store.Save(f); err != nil {
@@ -209,7 +249,8 @@ func newRewindableFeature(t *testing.T, store *Store, repo string, publishable b
 // newStackedRewindFeature builds and persists a feature carrying a two-layer,
 // three-phase pull-request stack: layer 1 owns roadmap phases [1,2] and layer 2
 // owns [3]. Layer 1 records per-repo tip SHAs so a rewind to phase 3 (the first
-// phase of layer 2) can reset to the layer-1 tips.
+// phase of layer 2) can reset to the layer-1 tips, and every layer's entries
+// carry the repository's pull request, as a published stack would.
 func newStackedRewindFeature(t *testing.T, store *Store, publishable bool) *Feature {
 	t.Helper()
 	publishablePtr := publishable
@@ -228,8 +269,8 @@ func newStackedRewindFeature(t *testing.T, store *Store, publishable bool) *Feat
 				BaseBranch: "main", Branch: "feature/old-beta", Publishable: &publishablePtr},
 		},
 		RepoStates: map[string]*RepoState{
-			"alpha": {Touched: true, PRURL: "https://github.example/pr/1"},
-			"beta":  {Touched: true, PRURL: "https://github.example/pr/2"},
+			"alpha": {Touched: true},
+			"beta":  {Touched: true},
 		},
 		SchemaVersion: SchemaVersionCurrent,
 	}
@@ -239,15 +280,15 @@ func newStackedRewindFeature(t *testing.T, store *Store, publishable bool) *Feat
 		{
 			Position: 1, Slug: "core", Phases: []int{1, 2}, Branch: stackedLayer1Branch,
 			Repos: map[string]StackRepoEntry{
-				"alpha": {TipSHA: "tip-alpha-1"},
-				"beta":  {TipSHA: "tip-beta-1"},
+				"alpha": {TipSHA: "tip-alpha-1", PRURL: "https://github.example/alpha/pull/1", PRState: StackPRStateOpen},
+				"beta":  {TipSHA: "tip-beta-1", PRURL: "https://github.example/beta/pull/1", PRState: StackPRStateOpen},
 			},
 		},
 		{
 			Position: 2, Slug: "ext", Phases: []int{3}, Branch: stackedLayer2Branch,
 			Repos: map[string]StackRepoEntry{
-				"alpha": {TipSHA: "tip-alpha-2"},
-				"beta":  {TipSHA: "tip-beta-2"},
+				"alpha": {TipSHA: "tip-alpha-2", PRURL: "https://github.example/alpha/pull/2", PRState: StackPRStateOpen},
+				"beta":  {TipSHA: "tip-beta-2", PRURL: "https://github.example/beta/pull/2", PRState: StackPRStateOpen},
 			},
 		},
 	}
@@ -488,5 +529,27 @@ func TestRewindPreviewStackedWorktreeConsequencesCarryKindAndBranch(t *testing.T
 		if wc.Branch != wantBranch {
 			t.Fatalf("full-rewind consequence for %s branch = %q; want provisional %q", wc.Repo, wc.Branch, wantBranch)
 		}
+	}
+}
+
+// TestRewindPreviewStackedPRConsequencesListTopLayerPerRepo pins the PR
+// consequence list on a stacked feature: one entry per repository, in
+// f.Repos order, each carrying its top layer's pull request — the close
+// loop's per-repo target.
+func TestRewindPreviewStackedPRConsequencesListTopLayerPerRepo(t *testing.T) {
+	store := NewStore(t.TempDir())
+	f := newStackedRewindFeature(t, store, true)
+	sealedRunDir := store.RunDir(f.ID, f.ActiveRun)
+
+	result := RewindPreviewForFeature(f, sealedRunDir, RewindRequest{TargetPhase: PhaseImplement}, "")
+	if !result.Eligible {
+		t.Fatalf("eligible = false; findings %v", result.ValidationFindings)
+	}
+	want := []RewindPRConsequence{
+		{Repo: "alpha", PRURL: "https://github.example/alpha/pull/2"},
+		{Repo: "beta", PRURL: "https://github.example/beta/pull/2"},
+	}
+	if !slices.Equal(result.PRConsequences, want) {
+		t.Fatalf("pr_consequences = %v, want %v", result.PRConsequences, want)
 	}
 }

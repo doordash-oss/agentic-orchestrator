@@ -2079,12 +2079,11 @@ func (t *serverMutationTarget) CompletionPreflight(featureID string) (serverrunt
 		MarkDoneBlocker: result.MarkDoneBlocker,
 	}
 	for _, r := range result.Repos {
-		resp.Repos = append(resp.Repos, serverruntime.CompletionPreflightRepo{
+		repo := serverruntime.CompletionPreflightRepo{
 			Repo:                  r.Repo,
 			Publishable:           r.Publishable,
 			Touched:               r.Touched,
 			Status:                r.Status,
-			PrURL:                 r.PRURL,
 			Blocker:               r.Blocker,
 			Freshness:             r.Freshness,
 			Error:                 serverruntime.WireRepoError(r.Error),
@@ -2092,10 +2091,23 @@ func (t *serverMutationTarget) CompletionPreflight(featureID string) (serverrunt
 			Branch:                r.Branch,
 			PendingCommits:        r.PendingCommits,
 			PendingDirty:          r.PendingDirty,
-			PushMode:              r.PushMode,
+			PushMode:              serverruntime.CompletionPreflightRepoPushMode(r.PushMode),
 			PendingDirtyFiles:     r.PendingDirtyFiles,
 			PendingDirtyFileTotal: r.PendingDirtyFileTotal,
-		})
+		}
+		for _, entry := range r.PullRequests {
+			repo.PullRequests = append(repo.PullRequests, serverruntime.PullRequestEntry{
+				Position:       entry.Position,
+				Title:          entry.Title,
+				Branch:         entry.Branch,
+				URL:            entry.URL,
+				State:          serverruntime.PullRequestEntryState(entry.State),
+				NoCommits:      entry.NoCommits,
+				PushedUpToDate: entry.PushedUpToDate,
+				PushMode:       serverruntime.PullRequestEntryPushMode(entry.PushMode),
+			})
+		}
+		resp.Repos = append(resp.Repos, repo)
 	}
 	return resp, nil
 }

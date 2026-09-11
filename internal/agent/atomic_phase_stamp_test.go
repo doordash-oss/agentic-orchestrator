@@ -22,10 +22,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// testPRURLAPI is the fixture PR URL tests use for the testRepoNameAPI repo
-// wherever the specific URL doesn't matter.
-const testPRURLAPI = "https://example.com/api/pr/1"
-
 func newTestStoreWithFeature(t *testing.T, repos []feature.FeatureRepo, prior map[string]*feature.RepoState) (*feature.Store, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -141,7 +137,7 @@ func TestAtomicPhaseStamp_DoesNotTouchOutsideRepos(t *testing.T) {
 	prior := map[string]*feature.RepoState{
 		testRepoNameAPI: {},
 		testRepoNameWeb: {},
-		"outside":       {Touched: true, PRURL: "https://example.com/outside/pr/1"},
+		"outside":       {Touched: true},
 	}
 	store, id := newTestStoreWithFeature(t, repos, prior)
 
@@ -157,7 +153,7 @@ func TestAtomicPhaseStamp_DoesNotTouchOutsideRepos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if got.RepoStates["outside"].PRURL != "https://example.com/outside/pr/1" {
+	if !got.RepoStates["outside"].Touched {
 		t.Errorf("outside repo was mutated: %+v", got.RepoStates["outside"])
 	}
 	if !got.RepoStates[testRepoNameAPI].Touched {
@@ -180,31 +176,9 @@ func TestAtomicPhaseStamp_EmptyFeatureIDErrors(t *testing.T) {
 	}
 }
 
-func TestAtomicPhaseStamp_PRURLsApplied(t *testing.T) {
-	repos := []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}}
-	store, id := newTestStoreWithFeature(t, repos, nil)
-
-	err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
-		FeatureID: id,
-		Repos:     []string{testRepoNameAPI, testRepoNameWeb},
-		Outcome:   PhaseOutcomeReviewPassed,
-		PRURLs:    map[string]string{testRepoNameAPI: testPRURLAPI},
-	})
-	if err != nil {
-		t.Fatalf("stamp: %v", err)
-	}
-	got, err := store.Load(id)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if got.RepoStates[testRepoNameAPI].PRURL != testPRURLAPI {
-		t.Errorf("api PRURL = %q", got.RepoStates[testRepoNameAPI].PRURL)
-	}
-}
-
 // TestAtomicPhaseStamp_FinalReviewPassedPreservesPublishRecords asserts the
-// FR success outcome only mirrors PR URLs: the per-repo stored record is
-// publish-scoped — written at the publish boundary and cleared by the
+// FR success outcome never mutates per-repo state: the per-repo stored record
+// is publish-scoped — written at the publish boundary and cleared by the
 // published setter or phase retry — so a phase outcome stamp never touches
 // it, while monotonic repo state is preserved.
 func TestAtomicPhaseStamp_FinalReviewPassedPreservesPublishRecords(t *testing.T) {
@@ -219,7 +193,6 @@ func TestAtomicPhaseStamp_FinalReviewPassedPreservesPublishRecords(t *testing.T)
 		FeatureID: id,
 		Repos:     []string{testRepoNameAPI, testRepoNameWeb},
 		Outcome:   PhaseOutcomeFinalReviewPassed,
-		PRURLs:    map[string]string{testRepoNameAPI: testPRURLAPI},
 	})
 	if err != nil {
 		t.Fatalf("stamp: %v", err)
@@ -236,9 +209,6 @@ func TestAtomicPhaseStamp_FinalReviewPassedPreservesPublishRecords(t *testing.T)
 	}
 	if got.RepoStates[testRepoNameAPI].Error == nil {
 		t.Errorf("api publish record cleared by the FR pass, want preserved (publish-scoped)")
-	}
-	if got.RepoStates[testRepoNameAPI].PRURL != testPRURLAPI {
-		t.Errorf("api PRURL not mirrored: %q", got.RepoStates[testRepoNameAPI].PRURL)
 	}
 }
 

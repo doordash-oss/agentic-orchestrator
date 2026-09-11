@@ -956,11 +956,30 @@ export const ServerFeatureSummarySchema = z.object({
 
 export type ServerFeatureSummary = z.output<typeof ServerFeatureSummarySchema>;
 
+/**
+ * One stack layer's pull request on the wire. Shared by the feature-detail
+ * repository status and the completion preflight repository; the per-layer
+ * push mode is populated only by completion preflight.
+ */
+export const ServerPullRequestEntrySchema = z.object({
+  position: z.number(),
+  title: z.string(),
+  branch: z.string().optional(),
+  url: z.string().optional(),
+  state: z.enum(['none', 'open', 'merged', 'closed']),
+  no_commits: z.boolean(),
+  pushed_up_to_date: z.boolean(),
+  push_mode: z.enum(['create', 'fast_forward', 'rewrite', 'none']).optional(),
+});
+export type ServerPullRequestEntry = z.output<typeof ServerPullRequestEntrySchema>;
+
 export const ServerRepoStatusSchema = z.object({
   name: z.string(),
   publishable: z.boolean(),
   touched: z.boolean().optional(),
-  pr_url: z.string().optional(),
+  // Ordered per-layer stack view; omitted for non-publishable repositories
+  // and runs without a stack.
+  pull_requests: z.array(ServerPullRequestEntrySchema).optional(),
   freshness: z.string().optional(),
   // Canonical error rendering the repository's stored publish-failure
   // record; absent when the repository has not failed.
@@ -1584,7 +1603,9 @@ export const CompletionPreflightRepoSchema = z.object({
   publishable: z.boolean(),
   touched: z.boolean(),
   status: z.string(),
-  pr_url: z.string().optional(),
+  // Ordered per-layer stack view with per-layer push modes; omitted for
+  // non-publishable repositories and runs without a stack.
+  pull_requests: z.array(ServerPullRequestEntrySchema).optional(),
   blocker: z.string().optional(),
   freshness: z.string().optional(),
   // Canonical error rendering the repository's stored publish-failure
@@ -1596,7 +1617,7 @@ export const CompletionPreflightRepoSchema = z.object({
   branch: z.string().optional(),
   pending_commits: z.number().optional(),
   pending_dirty: z.boolean().optional(),
-  push_mode: z.string().optional(),
+  push_mode: z.enum(['fast_forward', 'rewrite']).optional(),
   pending_dirty_files: z.array(z.string()).optional(),
   pending_dirty_file_total: z.number().optional(),
 });

@@ -128,9 +128,11 @@ const commitBodiesRangeSeparator = "---commit---"
 // applyPendingDelivery folds undelivered-work measurements into a repository's
 // preflight result and distinguishes a stale pull request or base branch from a
 // delivered one. A publishable repository on a stacked run is measured per
-// delivery layer by applyStackPendingDelivery; every other shape (merge
-// delivery, pre-stack runs) keeps the single-destination measurement. An
-// unresolvable destination leaves the result untouched.
+// delivery layer by applyStackPendingDelivery, which also fills the
+// per-layer pull-request entries with their push modes; every other shape
+// (merge delivery, pre-stack runs) keeps the single-destination measurement
+// and carries no entries. An unresolvable destination leaves the result
+// untouched.
 func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.FeatureRepo, result CompletionRepoResult) CompletionRepoResult {
 	if result.Publishable && len(f.Stack) > 0 {
 		return o.applyStackPendingDelivery(f, repo, result)
@@ -144,12 +146,6 @@ func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.Fea
 	result.PendingDirty = work.Dirty
 	if work.Dirty {
 		result = o.enumeratePendingDirtyFiles(repoWorkDir(repo), result)
-	}
-	if result.Publishable && result.PRURL != "" {
-		result.PushMode = completionPushModeFastForward
-		if work.DestinationAhead > 0 {
-			result.PushMode = completionPushModeRewrite
-		}
 	}
 	if !work.Pending() {
 		return result
@@ -168,17 +164,18 @@ func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.Fea
 }
 
 // applyStackPendingDelivery measures a publishable repository's undelivered
-// work layer by layer. A layer "has commits" when its recorded tip reaches
+// work layer by layer and fills the per-layer pull-request entries with
+// their push modes. A layer "has commits" when its recorded tip reaches
 // past the lower cut point — the previous layer's tip, or the resolved base
-// for layer 1 (remote-tracking base preferred, as today); layers marked
-// NoCommits or without a recorded tip are settled, mirroring the publish
-// walk's emptiness rule so the two readers never disagree. The pending count
-// sums each unpushed layer's commits (the full layer range when it never
-// pushed); the push mode is rewrite when any layer's remote branch holds
-// commits its tip does not contain. The PR URL keeps coming from the legacy
-// projection the caller already filled in. An unresolvable base mirrors the
-// legacy unresolved-destination contract: the pending fields stay untouched
-// rather than guessing.
+// for layer 1 (remote-tracking base preferred, as today); the same rule
+// decides the live no-commits marker, mirroring the publish walk's
+// emptiness rule so the preview is exact. The pending count sums each
+// unpushed layer's commits (the full layer range when it never pushed);
+// the repository-level push mode is rewrite when any layer's remote branch
+// holds commits its tip does not contain, else fast_forward, present only
+// when some layer carries a pull request. An unresolvable base mirrors the
+// legacy unresolved-destination contract: the pending fields and entries
+// stay untouched rather than guessing.
 func (o *Orchestrator) applyStackPendingDelivery(f *feature.Feature, repo feature.FeatureRepo, result CompletionRepoResult) CompletionRepoResult {
 	workDir := repoWorkDir(repo)
 	if workDir == "" {
@@ -197,19 +194,44 @@ func (o *Orchestrator) applyStackPendingDelivery(f *feature.Feature, repo featur
 	pending := false
 	pendingCommits := 0
 	rewrite := false
+	anyPR := false
+	preflightEntries := make([]CompletionPullRequestEntry, 0, len(layers))
 	for i, layer := range layers {
 		entry := entries[layer.Position]
-		if entry.NoCommits || entry.TipSHA == "" {
-			continue
-		}
 		cut := baseSHA
 		if i > 0 {
 			cut = entries[layers[i-1].Position].TipSHA
 		}
-		if cut == "" || !git.HasCommitsBeyond(workDir, entry.TipSHA, cut) {
-			continue
+		// The live no-commits marker uses the publish walk's rule — the
+		// tip does not reach past the lower cut point — so a not-yet-
+		// published empty layer is already marked here.
+		hasCommits := git.HasCommitsBeyond(workDir, entry.TipSHA, cut)
+		state := stackPreflightPRState(entry)
+		pushedUpToDate := entry.PRURL != "" && entry.TipSHA == entry.LastPushedSHA
+		pushMode := completionPushModeNone
+		switch {
+		case !hasCommits:
+			pushMode = completionPushModeNone
+		case entry.PRURL == "":
+			pushMode = completionPushModeCreate
+		case state == string(feature.StackPRStateMerged) || state == string(feature.StackPRStateClosed):
+			pushMode = completionPushModeNone
+		case entry.TipSHA == entry.LastPushedSHA:
+			pushMode = completionPushModeNone
+		default:
+			pushMode = completionPushModeFastForward
+			if remoteSHA, readErr := git.ReadRefSHA(workDir, "refs/remotes/origin/"+layer.Branch); readErr == nil &&
+				remoteSHA != "" && !git.IsAncestor(workDir, remoteSHA, entry.TipSHA) {
+				pushMode = completionPushModeRewrite
+			}
 		}
-		if entry.PRURL == "" || entry.TipSHA != entry.LastPushedSHA {
+		if entry.PRURL != "" {
+			anyPR = true
+			if pushMode == completionPushModeRewrite {
+				rewrite = true
+			}
+		}
+		if hasCommits && (entry.PRURL == "" || entry.TipSHA != entry.LastPushedSHA) {
 			pending = true
 			lowerBound := entry.LastPushedSHA
 			if lowerBound == "" {
@@ -217,17 +239,24 @@ func (o *Orchestrator) applyStackPendingDelivery(f *feature.Feature, repo featur
 			}
 			pendingCommits += stackRangeCommitCount(workDir, lowerBound, entry.TipSHA)
 		}
-		if remoteSHA, readErr := git.ReadRefSHA(workDir, "refs/remotes/origin/"+layer.Branch); readErr == nil &&
-			remoteSHA != "" && !git.IsAncestor(workDir, remoteSHA, entry.TipSHA) {
-			rewrite = true
-		}
+		preflightEntries = append(preflightEntries, CompletionPullRequestEntry{
+			Position:       layer.Position,
+			Title:          layer.Title,
+			Branch:         layer.Branch,
+			URL:            entry.PRURL,
+			State:          state,
+			NoCommits:      !hasCommits,
+			PushedUpToDate: pushedUpToDate,
+			PushMode:       pushMode,
+		})
 	}
+	result.PullRequests = preflightEntries
 	result.PendingCommits = pendingCommits
 	result.PendingDirty = dirty
 	if dirty {
 		result = o.enumeratePendingDirtyFiles(workDir, result)
 	}
-	if result.PRURL != "" {
+	if anyPR {
 		result.PushMode = completionPushModeFastForward
 		if rewrite {
 			result.PushMode = completionPushModeRewrite
@@ -243,6 +272,22 @@ func (o *Orchestrator) applyStackPendingDelivery(f *feature.Feature, repo featur
 		result.Status = completionStatusUnpublishedChanges
 	}
 	return result
+}
+
+// stackPreflightPRState normalizes a recorded layer entry's pull-request
+// state for the preflight entries, matching the feature read model: no
+// pull request URL means "none", and a URL without a recorded state reads
+// as open.
+func stackPreflightPRState(entry feature.StackRepoEntry) string {
+	if entry.PRURL == "" {
+		return string(feature.StackPRStateNone)
+	}
+	switch entry.PRState {
+	case feature.StackPRStateOpen, feature.StackPRStateMerged, feature.StackPRStateClosed:
+		return string(entry.PRState)
+	default:
+		return string(feature.StackPRStateOpen)
+	}
 }
 
 // stackRangeCommitCount counts the commits in lower..tip through the ranged
@@ -286,11 +331,11 @@ func (o *Orchestrator) enumeratePendingDirtyFiles(workDir string, result Complet
 // repoStackSettled reports whether one repository's delivery is settled under
 // the run's stack — every layer's entry either carries a pull request or is
 // marked NoCommits, the per-repository slice of Feature.AllReposPublished.
-// Runs without a stack (approved before the `## Pull Requests` table) keep the
-// legacy rule: the per-repo PR URL alone settles the repository.
-func repoStackSettled(f *feature.Feature, repoName, legacyPRURL string) bool {
+// A run without a stack is never settled: publish fails closed for it, so
+// its repositories can never deliver.
+func repoStackSettled(f *feature.Feature, repoName string) bool {
 	if f == nil || len(f.Stack) == 0 {
-		return legacyPRURL != ""
+		return false
 	}
 	for _, layer := range f.Stack {
 		entry, ok := layer.Repos[repoName]

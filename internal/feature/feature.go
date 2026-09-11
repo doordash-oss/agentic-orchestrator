@@ -228,8 +228,10 @@ type RepoState struct {
 
 // SchemaVersionCurrent is the current durable on-disk schema version stamped
 // onto fresh features at Manager.Create time. Schema 7 added
-// Run.RoadmapPhaseFrontendByPhase.
-const SchemaVersionCurrent = 7
+// Run.RoadmapPhaseFrontendByPhase. Schema 8 added StackLayer.Repos, the
+// per-repository layer entries (tip SHA, last pushed SHA, PR URL, PR state)
+// the layer boundaries record.
+const SchemaVersionCurrent = 8
 
 // RiskLevel classifies the blast radius of a feature change.
 // Autonomy scales inversely with risk: low-risk changes get lightweight
@@ -1073,6 +1075,55 @@ func (f *Feature) EffectiveDeliveryMode() DeliveryMode {
 		return DeliveryModeStack
 	}
 	return f.DeliveryMode
+}
+
+// StackLayerForPhase returns the stack layer whose phase list contains the
+// given roadmap phase. The layer's Branch is read from the stack recorded
+// at approval, never recomputed.
+func (f *Feature) StackLayerForPhase(phase int) (StackLayer, bool) {
+	if f == nil {
+		return StackLayer{}, false
+	}
+	for _, layer := range f.Stack {
+		for _, p := range layer.Phases {
+			if p == phase {
+				return layer, true
+			}
+		}
+	}
+	return StackLayer{}, false
+}
+
+// StackLayerAbove returns the layer positioned directly above the given
+// position. Positions are unique and ordered, so the entry with the
+// smallest position greater than the given one is the layer above.
+func (f *Feature) StackLayerAbove(position int) (StackLayer, bool) {
+	if f == nil {
+		return StackLayer{}, false
+	}
+	var above StackLayer
+	found := false
+	for _, layer := range f.Stack {
+		if layer.Position > position && (!found || layer.Position < above.Position) {
+			above = layer
+			found = true
+		}
+	}
+	return above, found
+}
+
+// IsLastPhaseOfStackLayer reports whether the given roadmap phase is the
+// final phase of the stack layer containing it. A phase no layer contains
+// is never a layer's last.
+func (f *Feature) IsLastPhaseOfStackLayer(phase int) bool {
+	if f == nil {
+		return false
+	}
+	layer, ok := f.StackLayerForPhase(phase)
+	if !ok || len(layer.Phases) == 0 {
+		return false
+	}
+	return layer.Phases[len(layer.Phases)-1] == phase
 }
 
 // IsPublishable returns true when ALL repos have an origin remote.

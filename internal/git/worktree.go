@@ -373,3 +373,20 @@ func (w *WorktreeManager) RenameBranch(worktreePath, oldName, newName string) er
 	}
 	return nil
 }
+
+// CreateBranchAtHead creates the given branch at the worktree's current HEAD
+// and checks it out in place. git checkout -b refuses a target ref that
+// already exists, so a stale ref is never clobbered, and it leaves the
+// branch moved off pointing at the same commit. Uncommitted changes, if
+// any, are carried over: the layer boundary runs after the round-commit
+// hook, so a dirty tree there is not this operation's concern.
+func (w *WorktreeManager) CreateBranchAtHead(worktreePath, branch string) error {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithLockRetry(worktreePath, "checkout", "-b", branch); err != nil {
+		return fmt.Errorf("creating branch %s at HEAD: %s: %w", branch, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}

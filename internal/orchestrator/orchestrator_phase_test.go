@@ -126,6 +126,17 @@ func lifecycleForFeature(f *feature.Feature) *mocks.MockFeatureLifecycle {
 	return lc
 }
 
+// singleLayerStack is the completion-test fixture stack: one layer covering
+// every roadmap phase, so a completed phase is mid-layer and the completion
+// boundary records anchors only, exactly as these pre-stack tests exercised.
+func singleLayerStack(total int, branch string) []feature.StackLayer {
+	phases := make([]int, total)
+	for i := range phases {
+		phases[i] = i + 1
+	}
+	return []feature.StackLayer{{Position: 1, Title: "Single layer", Slug: "single-layer", Phases: phases, Branch: branch}}
+}
+
 // withStatusTransitions wires StartXxx hooks on a MockFeatureLifecycle so
 // that each transition also mutates the feature's Status field in-place.
 // Async phase loops (plan_validation.go, implement.go, final_review.go) gate

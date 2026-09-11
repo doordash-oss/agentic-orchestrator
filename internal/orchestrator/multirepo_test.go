@@ -319,6 +319,7 @@ func TestStartMultiRepoImplementation_PublishConflictDoesNotMarkFeatureFailed(t 
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  1,
+		Stack:               singleLayerStack(1, "feature/x"),
 		Repos: []feature.FeatureRepo{{
 			Name:       repoName,
 			Path:       repoAPath,

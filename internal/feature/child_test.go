@@ -42,12 +42,13 @@ func (f *childFakeWorktrees) Create(repoPath, workspaceSlug, branch, repoName, s
 	return "", nil
 }
 func (f *childFakeWorktrees) RenameBranch(string, string, string) error { return nil }
-func (f *childFakeWorktrees) Remove(string, bool) error              { return nil }
-func (f *childFakeWorktrees) RemoveRef(string, string, string) error { return nil }
-func (f *childFakeWorktrees) ResetToBase(string, string) error       { return nil }
-func (f *childFakeWorktrees) ResetToBaseLocal(string, string) error  { return nil }
-func (f *childFakeWorktrees) ResetToCommit(string, string) error     { return nil }
-func (f *childFakeWorktrees) ExpectedPath(slug, repo string) string  { return "" }
+func (f *childFakeWorktrees) CreateBranchAtHead(string, string) error   { return nil }
+func (f *childFakeWorktrees) Remove(string, bool) error                 { return nil }
+func (f *childFakeWorktrees) RemoveRef(string, string, string) error    { return nil }
+func (f *childFakeWorktrees) ResetToBase(string, string) error          { return nil }
+func (f *childFakeWorktrees) ResetToBaseLocal(string, string) error     { return nil }
+func (f *childFakeWorktrees) ResetToCommit(string, string) error        { return nil }
+func (f *childFakeWorktrees) ExpectedPath(slug, repo string) string     { return "" }
 func (f *childFakeWorktrees) CurrentHeadSHA(p string) (string, error) {
 	sha, ok := f.heads[p]
 	if !ok || sha == "" {
@@ -778,12 +779,13 @@ func (f *reuseWorktrees) Create(repoPath, workspaceSlug, branch, repoName, start
 	return "", nil
 }
 func (f *reuseWorktrees) RenameBranch(string, string, string) error { return nil }
-func (f *reuseWorktrees) Remove(string, bool) error              { return nil }
-func (f *reuseWorktrees) RemoveRef(string, string, string) error { return nil }
-func (f *reuseWorktrees) ResetToBase(string, string) error       { return nil }
-func (f *reuseWorktrees) ResetToBaseLocal(string, string) error  { return nil }
-func (f *reuseWorktrees) ResetToCommit(string, string) error     { return nil }
-func (f *reuseWorktrees) ExpectedPath(slug, repo string) string  { return "" }
+func (f *reuseWorktrees) CreateBranchAtHead(string, string) error   { return nil }
+func (f *reuseWorktrees) Remove(string, bool) error                 { return nil }
+func (f *reuseWorktrees) RemoveRef(string, string, string) error    { return nil }
+func (f *reuseWorktrees) ResetToBase(string, string) error          { return nil }
+func (f *reuseWorktrees) ResetToBaseLocal(string, string) error     { return nil }
+func (f *reuseWorktrees) ResetToCommit(string, string) error        { return nil }
+func (f *reuseWorktrees) ExpectedPath(slug, repo string) string     { return "" }
 func (f *reuseWorktrees) CurrentHeadSHA(p string) (string, error) {
 	return f.heads[p], nil
 }

@@ -6351,7 +6351,12 @@ func TestRewindWithRequest_PartialCarriesStackForward(t *testing.T) {
 	})
 	run1Dir := filepath.Join(mgr.Store.BaseDir, f.ID, "runs", "run-001")
 	stack := []feature.StackLayer{
-		{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}, Branch: "feature/carry-a1b2c3d4/1-bootstrap"},
+		{
+			Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}, Branch: "feature/carry-a1b2c3d4/1-bootstrap",
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", PRURL: "https://github.com/org/repo-a/pull/7", PRState: feature.StackPRStateMerged},
+			},
+		},
 		{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}, Branch: "feature/carry-a1b2c3d4/2-build-and-polish"},
 	}
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
@@ -6413,12 +6418,25 @@ func TestRewindWithRequest_PartialCarriesStackForward(t *testing.T) {
 			t.Errorf("new run stack layer %d = %+v, want %+v", i+1, newRun.Stack[i], layer)
 		}
 	}
+	// A partial rewind carries the per-repository entries forward together
+	// with the layer definitions and branch names.
+	wantEntry := feature.StackRepoEntry{
+		TipSHA:  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PRURL:   "https://github.com/org/repo-a/pull/7",
+		PRState: feature.StackPRStateMerged,
+	}
+	if got := newRun.Stack[0].Repos["repo-a"]; got != wantEntry {
+		t.Errorf("new run layer 1 repo-a = %+v, want %+v", got, wantEntry)
+	}
 	sealedRun, err := mgr.Store.LoadRun(f.ID, 1)
 	if err != nil {
 		t.Fatalf("LoadRun(1): %v", err)
 	}
 	if len(sealedRun.Stack) != len(stack) || sealedRun.Stack[0].Slug != stack[0].Slug {
 		t.Errorf("sealed run stack = %+v, want its own copy of %+v", sealedRun.Stack, stack)
+	}
+	if got := sealedRun.Stack[0].Repos["repo-a"]; got != wantEntry {
+		t.Errorf("sealed run layer 1 repo-a = %+v, want its own copy of %+v", got, wantEntry)
 	}
 }
 

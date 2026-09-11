@@ -129,6 +129,7 @@ type MockWorktreeOps struct {
 	CreateMergeCandidateFn func(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error)
 	InspectCleanlinessFn   func(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
 	RenameBranchFn         func(worktreePath, oldName, newName string) error
+	CreateBranchAtHeadFn   func(worktreePath, branch string) error
 
 	DefaultError error
 	Calls        []MockCall
@@ -245,6 +246,14 @@ func (m *MockWorktreeOps) RenameBranch(worktreePath, oldName, newName string) er
 	m.Calls = append(m.Calls, MockCall{Method: "RenameBranch", Args: []any{worktreePath, oldName, newName}})
 	if m.RenameBranchFn != nil {
 		return m.RenameBranchFn(worktreePath, oldName, newName)
+	}
+	return m.DefaultError
+}
+
+func (m *MockWorktreeOps) CreateBranchAtHead(worktreePath, branch string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "CreateBranchAtHead", Args: []any{worktreePath, branch}})
+	if m.CreateBranchAtHeadFn != nil {
+		return m.CreateBranchAtHeadFn(worktreePath, branch)
 	}
 	return m.DefaultError
 }

@@ -314,6 +314,7 @@ func TestBuildHooks_AllFieldsPopulated_AndNilSafe(t *testing.T) {
 	h.OnPublishCompleted("x", map[string]string{}, nil)
 	h.OnFeatureSummaryNeeded("x", f)
 	h.OnFeatureConfigChanged("x", feature.ConfigSnapshot{}, feature.ConfigSnapshot{})
+	h.OnLayerBoundaryCrossed("x", observe.LayerBoundaryEvent{LayerPosition: 1, LayerBranch: "feature/x/1-bootstrap"})
 }
 
 // TestBuildHooks_OnFeatureConfigChanged_FiresObserver verifies that the hook
@@ -349,6 +350,47 @@ func TestBuildHooks_OnFeatureConfigChanged_FiresObserver(t *testing.T) {
 	events := readEvents(t, filepath.Join(tmp, "f1", "events.jsonl"))
 	if !containsEventType(events, "feature.config_changed") {
 		t.Errorf("expected feature.config_changed event, got events: %+v", events)
+	}
+}
+
+// TestBuildHooks_OnLayerBoundaryCrossed_FiresObserver verifies that the hook
+// invokes Observer.LayerBoundaryCrossed, which writes a
+// feature.layer_boundary line to events.jsonl with the layer snapshot.
+func TestBuildHooks_OnLayerBoundaryCrossed_FiresObserver(t *testing.T) {
+	tmp := t.TempDir()
+	obs := newTestObserver(tmp)
+	defer obs.Shutdown()
+
+	if err := os.MkdirAll(filepath.Join(tmp, "f1"), 0o755); err != nil {
+		t.Fatalf("mkdir feature dir: %v", err)
+	}
+
+	fs := mocks.NewMockFeatureStore()
+	f := &feature.Feature{
+		ID:   "f1",
+		Name: "My feature",
+	}
+	fs.LoadFn = func(id string) (*feature.Feature, error) {
+		return f, nil
+	}
+
+	h := orchestrator.BuildHooks(obs, nil, fs)
+	if h.OnLayerBoundaryCrossed == nil {
+		t.Fatal("OnLayerBoundaryCrossed hook is nil")
+	}
+	h.OnLayerBoundaryCrossed("f1", observe.LayerBoundaryEvent{
+		LayerPosition:     1,
+		LayerTitle:        "Bootstrap",
+		LayerBranch:       "feature/demo-a1b2c3d4/1-bootstrap",
+		RepoTips:          map[string]string{"repo-a": "aaaa"},
+		NextLayerPosition: 2,
+		NextLayerBranch:   "feature/demo-a1b2c3d4/2-build-and-polish",
+	})
+
+	obs.Shutdown()
+	events := readEvents(t, filepath.Join(tmp, "f1", "events.jsonl"))
+	if !containsEventType(events, "feature.layer_boundary") {
+		t.Errorf("expected feature.layer_boundary event, got events: %+v", events)
 	}
 }
 

@@ -128,6 +128,23 @@ func (o *Orchestrator) surfaceDispatchCompletionError(featureID string, cause er
 		// the desktop app owns routing that into the rebase-resolution child pipeline.
 		return
 	}
+	if boundary, ok := asLayerBoundaryError(cause); ok {
+		// A layer-boundary failure fails closed: nothing was persisted, the
+		// roadmap phase did not advance, and the git steps are idempotent, so
+		// the restart re-enters the boundary and skips repositories already
+		// on the next layer's branch. Mark the feature Failed with the
+		// layer-boundary canonical code; the diagnostics name each failing
+		// repository, its current branch, and the expected branch.
+		if markErr := o.markFailedWithEvent(featureID, boundary.failureRecord()); markErr != nil {
+			o.emitEventBlocking(ports.Event{
+				Type:      ports.FeatureFailed,
+				FeatureID: featureID,
+				Message:   boundary.diagnostics,
+				Error:     cause,
+			})
+		}
+		return
+	}
 	if f, err := o.deps.Lifecycle.Get(featureID); err == nil &&
 		f.Status == feature.StatusFailed && f.HasTerminalFailure() {
 		return

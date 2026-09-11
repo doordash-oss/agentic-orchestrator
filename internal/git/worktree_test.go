@@ -627,3 +627,61 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+func TestWorktreeManagerCreateBranchAtHead(t *testing.T) {
+	t.Parallel()
+
+	repoDir := testutil.InitGitRepo(t)
+	mgr := NewWorktreeManager(t.TempDir())
+	layer1 := LayerBranchName("split-me-a1b2c3d4", 1, "split-me")
+	layer2 := LayerBranchName("split-me-a1b2c3d4", 2, "next-layer")
+	wtPath, err := mgr.Create(repoDir, "split-me-a1b2c3d4", layer1, "repo", "")
+	if err != nil {
+		t.Fatalf("create worktree: %v", err)
+	}
+	headBefore, err := CurrentHeadSHA(wtPath)
+	if err != nil {
+		t.Fatalf("HEAD before: %v", err)
+	}
+
+	// An uncommitted modification rides across the split untouched: the
+	// layer boundary runs after the round-commit hook.
+	if err := os.WriteFile(filepath.Join(wtPath, "dirty.txt"), []byte("in flight\n"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	if err := mgr.CreateBranchAtHead(wtPath, layer2); err != nil {
+		t.Fatalf("CreateBranchAtHead: %v", err)
+	}
+	if got := CurrentBranch(wtPath); got != layer2 {
+		t.Fatalf("CurrentBranch() = %q, want %q", got, layer2)
+	}
+	headAfter, err := CurrentHeadSHA(wtPath)
+	if err != nil {
+		t.Fatalf("HEAD after: %v", err)
+	}
+	if headAfter != headBefore {
+		t.Fatalf("HEAD = %s after split, want the same commit %s", headAfter, headBefore)
+	}
+	if got, err := ReadRefSHA(wtPath, "refs/heads/"+layer1); err != nil || got != headBefore {
+		t.Fatalf("layer-1 ref = %q (%v); want it left pointing at %s", got, err, headBefore)
+	}
+	if _, err := os.Stat(filepath.Join(wtPath, "dirty.txt")); err != nil {
+		t.Fatalf("uncommitted modification lost across the split: %v", err)
+	}
+
+	// A target that already exists is refused, naming the branch, without
+	// moving the worktree.
+	if err := mgr.CreateBranchAtHead(wtPath, layer1); err == nil {
+		t.Fatal("CreateBranchAtHead to an existing ref must fail")
+	} else if !strings.Contains(err.Error(), layer1) {
+		t.Fatalf("error %q must name the refused branch %q", err, layer1)
+	}
+	if got := CurrentBranch(wtPath); got != layer2 {
+		t.Fatalf("CurrentBranch() = %q after refused split, want %q", got, layer2)
+	}
+	headRefused, _ := CurrentHeadSHA(wtPath)
+	if headRefused != headBefore {
+		t.Fatalf("HEAD moved during the refused split: %s", headRefused)
+	}
+}

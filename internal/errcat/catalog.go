@@ -206,6 +206,7 @@ const (
 	ArtifactMissing          Code = "artifact_missing"
 	InfrastructureFailure    Code = "infrastructure_failure"
 	WorktreeSetupFailed      Code = "worktree_setup_failed"
+	LayerBoundaryFailed      Code = "layer_boundary_failed"
 )
 
 // RunFailureParams carries the phase name, iteration, and repository names a
@@ -1232,6 +1233,21 @@ var catalog = map[Code]Entry{
 			return runPhaseSummary(params, "failed on an infrastructure error")
 		},
 		Remediation: "Check the runtime environment and provider tooling, then restart the phase.",
+		Actions:     []string{"restart"},
+	},
+	LayerBoundaryFailed: {
+		Class:   ClassBlocking,
+		Title:   "Layer boundary failed",
+		Summary: "The phase could not cross its pull-request layer boundary.",
+		Blocks:  []Block{BlockPhase, BlockRepositories},
+		summaryParams: func(p Params) string {
+			params, ok := p.(RunFailureParams)
+			if !ok {
+				return ""
+			}
+			return runPhaseSummary(params, "could not cross its pull-request layer boundary")
+		},
+		Remediation: "Put each failing repository's worktree on the expected branch, then restart the phase.",
 		Actions:     []string{"restart"},
 	},
 	WorktreeSetupFailed: {

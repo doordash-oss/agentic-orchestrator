@@ -1508,6 +1508,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapFinal_RoutesT
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 3,
 		TotalRoadmapPhases:  3,
+		Stack:               singleLayerStack(3, "feature/feat-multi-rf/1-single"),
 		Repos: []feature.FeatureRepo{
 			{Name: repoName, Path: repoAPath},
 			{Name: repoNameB, Path: repoBPath},
@@ -1554,6 +1555,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapFinal_Publish
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 2,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/feat-multi-rf-err/1-single"),
 		Repos: []feature.FeatureRepo{
 			{Name: repoName, Path: repoAPath},
 			{Name: repoNameB, Path: repoBPath},
@@ -2006,6 +2008,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapMidflight_Emi
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  3,
+		Stack:               singleLayerStack(3, "feature/feat-multi-midflight/1-single"),
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos: []feature.FeatureRepo{
 			{Name: "r1", Path: "/tmp/r1"},
@@ -2067,6 +2070,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapRecordsCommitAnchor
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/feat-roadmap-anchors/1-single"),
 		RoadmapPhaseType:    "tracer-bullet",
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos: []feature.FeatureRepo{
@@ -2135,6 +2139,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_SkipsAnchorOnCommitFailure
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/feat-roadmap-anchor-failure/1-single"),
 		RoadmapPhaseType:    "tracer-bullet",
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos: []feature.FeatureRepo{
@@ -2381,6 +2386,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapSkipsUntouchedRepos
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/feat-roadmap-untouched/1-single"),
 		RoadmapPhaseType:    "tracer-bullet",
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos: []feature.FeatureRepo{
@@ -2452,6 +2458,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapCommitsAllReposWith
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/feat-roadmap-no-states/1-single"),
 		RoadmapPhaseType:    "tracer-bullet",
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos:               []feature.FeatureRepo{{Name: "solo", Path: repo, WorktreePath: repo}},
@@ -2499,6 +2506,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapMarksFinalizingAcro
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/feat-roadmap-finalizing/1-single"),
 		RoadmapPhaseType:    "tracer-bullet",
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos:               []feature.FeatureRepo{{Name: "solo", Path: repo, WorktreePath: repo}},

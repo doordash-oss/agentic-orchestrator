@@ -283,6 +283,7 @@ func TestOrchestrator_OnMultiReposPassed_FinalReviewPlanRevisionResultFailsWitho
 				CurrentPhase:        feature.PhaseImplement,
 				CurrentRoadmapPhase: 1,
 				TotalRoadmapPhases:  1,
+				Stack:               singleLayerStack(1, "feature/"+featureID+"/1-single"),
 				ActiveRun:           1,
 				Pipeline:            tt.pipeline,
 				Artifacts:           map[string]string{"roadmap": roadmapPath},
@@ -382,6 +383,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceStaysOnCurr
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 2,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/"+featureID+"/1-single"),
 		ActiveRun:           1,
 		RunCount:            1,
 		Pipeline:            feature.PipelineLarge,
@@ -725,6 +727,7 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 2,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/fr-roadmap-scrub/1-single"),
 		Pipeline:            feature.PipelineLarge,
 		Checkpoints:         feature.Checkpoints{},
 		Repos: []feature.FeatureRepo{

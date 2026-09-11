@@ -27,6 +27,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -78,6 +79,12 @@ type Hooks struct {
 	// the requested target and the effective target plus source/new run
 	// numbers so observers can emit a durable audit record.
 	OnFeatureRewound func(featureID string, request feature.RewindRequest, effectiveTarget feature.Phase, sourceRun, newRun int)
+
+	// OnLayerBoundaryCrossed fires after a roadmap layer boundary's single
+	// persistence write: the completed layer, its per-repository tips, and
+	// — when the boundary split the worktrees — the next layer's position
+	// and branch.
+	OnLayerBoundaryCrossed func(featureID string, boundary observe.LayerBoundaryEvent)
 }
 
 // PhaseCompletionInput is a sum-type describing a phase completion. Exactly

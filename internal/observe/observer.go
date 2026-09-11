@@ -1294,3 +1294,51 @@ func configSnapshotAttrs(s feature.ConfigSnapshot) map[string]any {
 		},
 	}
 }
+
+// LayerBoundaryEvent is the boundary snapshot one feature.layer_boundary
+// event carries: the layer the phase completed, its per-repository tips,
+// and — when a split happened — the next layer the worktrees moved onto.
+// NextLayerBranch is empty for the final roadmap phase's tip recording,
+// where no split happens.
+type LayerBoundaryEvent struct {
+	LayerPosition     int
+	LayerTitle        string
+	LayerBranch       string
+	RepoTips          map[string]string
+	NextLayerPosition int
+	NextLayerBranch   string
+}
+
+// LayerBoundaryCrossed emits a feature.layer_boundary event recording one
+// roadmap layer boundary: the completed layer, its per-repository tips, and
+// the next layer when the boundary split the worktrees onto a new branch.
+// Safe on nil receiver / disabled observer. Called from the orchestrator's
+// OnLayerBoundaryCrossed hook after the boundary's persistence write.
+func (o *Observer) LayerBoundaryCrossed(sc SpanContext, boundary LayerBoundaryEvent) {
+	if o == nil || !o.enabled {
+		return
+	}
+	tips := make(map[string]string, len(boundary.RepoTips))
+	for repo, sha := range boundary.RepoTips {
+		tips[repo] = sha
+	}
+	data := map[string]any{
+		"layer_position": boundary.LayerPosition,
+		"layer_title":    boundary.LayerTitle,
+		"layer_branch":   boundary.LayerBranch,
+		"repo_tips":      tips,
+	}
+	if boundary.NextLayerBranch != "" {
+		data["next_layer_position"] = boundary.NextLayerPosition
+		data["next_layer_branch"] = boundary.NextLayerBranch
+	}
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "feature.layer_boundary",
+		FeatureID:    sc.FeatureID,
+		Data:         data,
+	})
+}

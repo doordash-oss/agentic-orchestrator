@@ -232,23 +232,54 @@ type SessionCostRecord struct {
 // A sealed run is immutable: SaveRun panics if called on one.
 func (r *Run) IsSealed() bool { return r != nil && r.SealedAt != nil }
 
+// StackPRState is the lifecycle state of the pull request a layer's
+// repository entry delivers. None is the state before any pull request
+// exists; the empty value loads as absent and means the same.
+type StackPRState string
+
+const (
+	StackPRStateNone   StackPRState = "none"
+	StackPRStateOpen   StackPRState = "open"
+	StackPRStateMerged StackPRState = "merged"
+	StackPRStateClosed StackPRState = "closed"
+)
+
+// StackRepoEntry is one repository's state inside one stack layer: the tip
+// SHA the layer boundary snapshotted, the last SHA pushed for the layer's
+// pull request, and that pull request's URL and state. All fields persist
+// with omit-empty semantics; a layer persisted before per-repository
+// entries existed loads with the map absent, and a repository untouched by
+// the layer records a tip equal to the layer below (or the base start
+// point for layer 1), which is how "no pull request here" is represented.
+type StackRepoEntry struct {
+	TipSHA        string       `yaml:"tip_sha,omitempty" json:"tip_sha,omitempty"`
+	LastPushedSHA string       `yaml:"last_pushed_sha,omitempty" json:"last_pushed_sha,omitempty"`
+	PRURL         string       `yaml:"pr_url,omitempty" json:"pr_url,omitempty"`
+	PRState       StackPRState `yaml:"pr_state,omitempty" json:"pr_state,omitempty"`
+}
+
 // StackLayer is one pull-request layer of a feature's delivery stack,
 // derived from one `## Pull Requests` table row of the approved roadmap.
 // Branch is the layer's shared branch name feature/<slug>-<id>/<k>-<layer-
 // slug>, filled in at roadmap approval from the workspace slug, the
 // position, and the layer slug; a run persisted before that fill loads with
 // it omitted. Later roadmap phases read it through the run accessors to
-// create the next layer's branch rather than recomputing the name.
+// create the next layer's branch rather than recomputing the name. Repos
+// holds the per-repository entries the layer boundaries fill in: each
+// repository's layer tip (a boundary snapshot — the checked-out branch ref
+// stays authoritative between boundaries), last pushed SHA, and pull
+// request URL and state.
 type StackLayer struct {
-	Position int    `yaml:"position" json:"position"`
-	Title    string `yaml:"title,omitempty" json:"title,omitempty"`
-	Slug     string `yaml:"slug,omitempty" json:"slug,omitempty"`
-	Phases   []int  `yaml:"phases,omitempty" json:"phases,omitempty"`
-	Branch   string `yaml:"branch,omitempty" json:"branch,omitempty"`
+	Position int                       `yaml:"position" json:"position"`
+	Title    string                    `yaml:"title,omitempty" json:"title,omitempty"`
+	Slug     string                    `yaml:"slug,omitempty" json:"slug,omitempty"`
+	Phases   []int                     `yaml:"phases,omitempty" json:"phases,omitempty"`
+	Branch   string                    `yaml:"branch,omitempty" json:"branch,omitempty"`
+	Repos    map[string]StackRepoEntry `yaml:"repos,omitempty" json:"repos,omitempty"`
 }
 
 // CopyStackLayers returns a deep copy of stack so a forked run and the
-// sealed run it came from never share backing arrays.
+// sealed run it came from never share backing arrays or maps.
 func CopyStackLayers(stack []StackLayer) []StackLayer {
 	if stack == nil {
 		return nil
@@ -257,6 +288,13 @@ func CopyStackLayers(stack []StackLayer) []StackLayer {
 	for i, layer := range stack {
 		out[i] = layer
 		out[i].Phases = append([]int(nil), layer.Phases...)
+		if layer.Repos != nil {
+			repos := make(map[string]StackRepoEntry, len(layer.Repos))
+			for name, entry := range layer.Repos {
+				repos[name] = entry
+			}
+			out[i].Repos = repos
+		}
 	}
 	return out
 }

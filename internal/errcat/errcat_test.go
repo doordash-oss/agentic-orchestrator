@@ -157,6 +157,7 @@ var terminalRunFailureCodes = []Code{
 	ArtifactMissing,
 	InfrastructureFailure,
 	WorktreeSetupFailed,
+	LayerBoundaryFailed,
 	SetupAssetCopyFailed,
 	SetupInterrupted,
 	ProtocolViolation,

@@ -368,5 +368,15 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 			}
 			obs.FeatureRewound(sc, input)
 		},
+		OnLayerBoundaryCrossed: func(featureID string, boundary observe.LayerBoundaryEvent) {
+			if obs == nil {
+				return
+			}
+			sc, ok := loadSpan(featureID)
+			if !ok {
+				return
+			}
+			obs.LayerBoundaryCrossed(sc, boundary)
+		},
 	}
 }

@@ -978,13 +978,20 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 	}
 	o.emitPhaseCompleted(featureID, feature.PhaseImplement, nil)
 
-	// Roadmap mid-flight: record anchors + advance.
+	// Roadmap mid-flight: record anchors + cross the layer boundary + advance.
+	// The finalizing status stays set through tip recording and the split so
+	// no reader sees a startable steady state while the boundary is running;
+	// it is cleared just before the roadmap phase advances and the next plan
+	// dispatches.
 	if f.CurrentRoadmapPhase > 0 && f.CurrentRoadmapPhase < f.TotalRoadmapPhases {
 		anchors := o.roadmapPhaseAnchors(f)
-		o.setFinalizingPhaseStatus(featureID, false)
 		if err := o.recordRoadmapPhaseCommitAnchors(featureID, f.CurrentRoadmapPhase, anchors); err != nil {
 			return err
 		}
+		if err := o.crossLayerBoundary(featureID, f); err != nil {
+			return err
+		}
+		o.setFinalizingPhaseStatus(featureID, false)
 		if err := o.deps.Lifecycle.AdvanceRoadmapPhase(featureID); err != nil {
 			return fmt.Errorf("advance roadmap phase: %w", err)
 		}
@@ -998,13 +1005,17 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 		return nil
 	}
 
-	// Roadmap final phase: record anchors + fall through to review / publish.
+	// Roadmap final phase: record anchors + the top layer's tips + fall
+	// through to review / publish.
 	if f.CurrentRoadmapPhase > 0 && f.CurrentRoadmapPhase == f.TotalRoadmapPhases {
 		anchors := o.roadmapPhaseAnchors(f)
-		o.setFinalizingPhaseStatus(featureID, false)
 		if err := o.recordRoadmapPhaseCommitAnchors(featureID, f.CurrentRoadmapPhase, anchors); err != nil {
 			return err
 		}
+		if err := o.recordTopLayerTips(featureID, f); err != nil {
+			return err
+		}
+		o.setFinalizingPhaseStatus(featureID, false)
 	}
 
 	// Deferred end-of-feature Final Review. When the implementation pass

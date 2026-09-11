@@ -88,7 +88,7 @@ func approvalFeature(t *testing.T, id, slug, layerOneTitle string) (*feature.Fea
 		Slug:   slug,
 		Status: feature.StatusPlanNeedsReview,
 		// Set by the caller when a gate is in play; see seedPlanGate.
-		Pipeline:           feature.PipelineLarge,
+		Pipeline:            feature.PipelineLarge,
 		TotalRoadmapPhases:  3,
 		CurrentRoadmapPhase: 0,
 		Repos: []feature.FeatureRepo{

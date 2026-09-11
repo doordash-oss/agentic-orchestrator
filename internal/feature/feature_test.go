@@ -1318,6 +1318,191 @@ func TestStackShadowSyncRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStackRepoEntriesYAMLRoundTripAndLegacyOmit(t *testing.T) {
+	r := Run{
+		RunNumber: 1,
+		Stack: []StackLayer{
+			{
+				Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1},
+				Branch: "feature/demo-a1b2c3d4/1-bootstrap",
+				Repos: map[string]StackRepoEntry{
+					"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+					"repo-b": {
+						TipSHA:        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+						LastPushedSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+						PRURL:         "https://github.com/org/repo-b/pull/12",
+						PRState:       StackPRStateOpen,
+					},
+				},
+			},
+			{
+				Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3},
+				Branch: "feature/demo-a1b2c3d4/2-build-and-polish",
+				Repos: map[string]StackRepoEntry{
+					"repo-a": {
+						TipSHA:  "cccccccccccccccccccccccccccccccccccccccc",
+						PRURL:   "https://github.com/org/repo-a/pull/13",
+						PRState: StackPRStateMerged,
+					},
+				},
+			},
+		},
+	}
+	data, err := yaml.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, want := range [][]byte{
+		[]byte("repos:"),
+		[]byte("tip_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		[]byte("last_pushed_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+		[]byte("pr_url: https://github.com/org/repo-b/pull/12"),
+		[]byte("pr_state: open"),
+		[]byte("pr_state: merged"),
+	} {
+		if !containsBytes(data, want) {
+			t.Fatalf("run.yaml missing per-repository entry field %q: %s", want, string(data))
+		}
+	}
+	var got Run
+	if err := yaml.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(got.Stack) != 2 {
+		t.Fatalf("stack = %+v, want two layers", got.Stack)
+	}
+	entryA := got.Stack[0].Repos["repo-a"]
+	if entryA.TipSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || entryA.PRURL != "" || entryA.PRState != "" {
+		t.Fatalf("layer 1 repo-a = %+v, want tip-only entry", entryA)
+	}
+	entryB := got.Stack[0].Repos["repo-b"]
+	if entryB.TipSHA != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ||
+		entryB.LastPushedSHA != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ||
+		entryB.PRURL != "https://github.com/org/repo-b/pull/12" ||
+		entryB.PRState != StackPRStateOpen {
+		t.Fatalf("layer 1 repo-b = %+v, want the persisted entry", entryB)
+	}
+	entryTop := got.Stack[1].Repos["repo-a"]
+	if entryTop.PRState != StackPRStateMerged {
+		t.Fatalf("layer 2 repo-a = %+v, want merged PR state", entryTop)
+	}
+
+	// A stack persisted before per-repository entries existed still loads,
+	// with the entries absent.
+	legacyStack := []byte("run_number: 1\nstack:\n- position: 1\n  title: Bootstrap\n  slug: bootstrap\n  phases:\n  - 1\n  branch: feature/demo-a1b2c3d4/1-bootstrap\n")
+	var legacy Run
+	if err := yaml.Unmarshal(legacyStack, &legacy); err != nil {
+		t.Fatalf("Unmarshal legacy stack without repo entries: %v", err)
+	}
+	if len(legacy.Stack) != 1 || legacy.Stack[0].Repos != nil {
+		t.Fatalf("legacy stack = %+v, want one layer with no repo entries", legacy.Stack)
+	}
+
+	// A layer with no entries omits the repos key entirely.
+	bare := Run{RunNumber: 1, Stack: []StackLayer{{Position: 1, Slug: "bootstrap", Phases: []int{1}}}}
+	bareData, err := yaml.Marshal(bare)
+	if err != nil {
+		t.Fatalf("Marshal bare: %v", err)
+	}
+	if containsBytes(bareData, []byte("repos:")) {
+		t.Fatalf("bare stack layer emitted repos: %s", string(bareData))
+	}
+}
+
+func TestStackRepoEntriesShadowSyncRoundTrip(t *testing.T) {
+	store := NewStore(t.TempDir())
+	f := &Feature{
+		ID:            "test-stack-repos-sync",
+		Name:          "Stack Repos Sync Test",
+		Status:        StatusImplementing,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: SchemaVersionCurrent,
+		Stack: []StackLayer{
+			{
+				Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1},
+				Branch: "feature/demo-a1b2c3d4/1-bootstrap",
+				Repos: map[string]StackRepoEntry{
+					"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+					"repo-b": {TipSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", PRURL: "https://github.com/org/repo-b/pull/12", PRState: StackPRStateOpen},
+				},
+			},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	entry := got.Stack[0].Repos["repo-b"]
+	if entry.TipSHA != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ||
+		entry.PRURL != "https://github.com/org/repo-b/pull/12" ||
+		entry.PRState != StackPRStateOpen {
+		t.Fatalf("shadow stack repo-b = %+v, want the persisted entry", entry)
+	}
+	runEntry := got.Run().Stack[0].Repos["repo-b"]
+	if runEntry != entry {
+		t.Fatalf("run stack repo-b = %+v, want the same entry as the shadow", runEntry)
+	}
+}
+
+func TestCopyStackLayersIndependentRepoEntries(t *testing.T) {
+	stack := []StackLayer{
+		{
+			Position: 1, Phases: []int{1, 2}, Branch: "feature/demo-a1b2c3d4/1-bootstrap",
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			},
+		},
+	}
+	copied := CopyStackLayers(stack)
+	copied[0].Repos["repo-a"] = StackRepoEntry{TipSHA: "dddddddddddddddddddddddddddddddddddddddd", PRState: StackPRStateClosed}
+	copied[0].Repos["repo-b"] = StackRepoEntry{TipSHA: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}
+	if got := stack[0].Repos["repo-a"]; got.TipSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || got.PRState != "" {
+		t.Fatalf("source repo-a mutated to %+v; the copy must be independent", got)
+	}
+	if _, ok := stack[0].Repos["repo-b"]; ok {
+		t.Fatal("source map gained repo-b; the copy must be independent")
+	}
+}
+
+func TestStackLayerReadHelpers(t *testing.T) {
+	f := &Feature{
+		Stack: []StackLayer{
+			{Position: 1, Slug: "bootstrap", Phases: []int{1, 2}, Branch: "feature/demo-a1b2c3d4/1-bootstrap"},
+			{Position: 2, Slug: "build-and-polish", Phases: []int{3}, Branch: "feature/demo-a1b2c3d4/2-build-and-polish"},
+		},
+	}
+
+	layer, ok := f.StackLayerForPhase(2)
+	if !ok || layer.Position != 1 || layer.Branch != "feature/demo-a1b2c3d4/1-bootstrap" {
+		t.Fatalf("StackLayerForPhase(2) = %+v, %v; want layer 1", layer, ok)
+	}
+	if _, ok := f.StackLayerForPhase(4); ok {
+		t.Fatal("StackLayerForPhase(4) found a layer; phase 4 belongs to none")
+	}
+
+	above, ok := f.StackLayerAbove(1)
+	if !ok || above.Position != 2 || above.Branch != "feature/demo-a1b2c3d4/2-build-and-polish" {
+		t.Fatalf("StackLayerAbove(1) = %+v, %v; want layer 2", above, ok)
+	}
+	if _, ok := f.StackLayerAbove(2); ok {
+		t.Fatal("StackLayerAbove(2) found a layer; layer 2 is the top")
+	}
+
+	if !f.IsLastPhaseOfStackLayer(2) || !f.IsLastPhaseOfStackLayer(3) {
+		t.Fatal("phases 2 and 3 must be their layers' last phases")
+	}
+	if f.IsLastPhaseOfStackLayer(1) {
+		t.Fatal("phase 1 is mid-layer; it must not read as the layer's last")
+	}
+	if f.IsLastPhaseOfStackLayer(4) {
+		t.Fatal("phase 4 belongs to no layer; it must not read as a layer's last")
+	}
+}
+
 func TestRoadmapFieldsOmittedWhenZero(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.

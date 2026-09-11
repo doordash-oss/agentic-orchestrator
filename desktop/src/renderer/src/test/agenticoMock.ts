@@ -455,7 +455,6 @@ export interface AgenticoMock {
     preflightCompletion: ReturnType<typeof vi.fn>;
     publishUiState: ReturnType<typeof vi.fn>;
     getRepositoryDiff: ReturnType<typeof vi.fn>;
-    generatePublishDescription: ReturnType<typeof vi.fn>;
     openExternal: ReturnType<typeof vi.fn>;
     revealPath: ReturnType<typeof vi.fn>;
     launchRebaseChild: ReturnType<typeof vi.fn>;
@@ -795,7 +794,6 @@ export function installAgenticoMock(
     preflightCompletion: vi.fn(() => Promise.reject(new Error('unused'))),
     publishUiState: vi.fn(() => Promise.resolve({ accepted: true })),
     getRepositoryDiff: vi.fn(() => Promise.reject(new Error('unused'))),
-    generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
     openExternal: vi.fn(() => Promise.reject(new Error('unused'))),
     revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
     launchRebaseChild: vi.fn(() => Promise.reject(new Error('unused'))),

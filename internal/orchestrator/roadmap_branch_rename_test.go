@@ -455,6 +455,8 @@ func TestOrchestrator_PublishRepoWithoutRecordedBranchErrorsNamingRepository(t *
 		Slug:   "no-branch",
 		Status: feature.StatusReviewPassed,
 		Models: config.ModelConfig{Planning: "sonnet"},
+		// The approved stack exists; the repository record is what is broken.
+		Stack: singleLayerStack(1, "feature/no-branch"),
 		Repos: []feature.FeatureRepo{
 			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", BaseBranch: "main"},
 		},

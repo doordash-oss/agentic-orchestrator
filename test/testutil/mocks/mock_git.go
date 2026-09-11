@@ -21,15 +21,16 @@ import (
 // MockRemoteOps is the small test substitute for orchestrator-owned remote
 // operations.
 type MockRemoteOps struct {
-	PushFn                func(worktreePath, branch string) error
-	ForcePushFn           func(worktreePath, branch string) error
-	PushRewrittenBranchFn func(worktreePath, branch string) error
-	PullRebaseFn          func(worktreePath, branch string) error
-	CreatePRFn            func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
-	PRBaseBranchFn        func(repoPath, prURL string) string
-	PRStateFn             func(repoPath, prURL string) (string, error)
-	DefaultError          error
-	Calls                 []MockCall
+	PushFn            func(worktreePath, branch string) error
+	PullRebaseFn      func(worktreePath, branch string) error
+	PushLayerBranchFn func(repoPath, branch, localSHA, lastPushedSHA string) (string, error)
+	CreatePRFn        func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
+	PRBaseBranchFn    func(repoPath, prURL string) string
+	PRStateFn         func(repoPath, prURL string) (string, error)
+	GetPRBodyFn       func(prURL string) (string, error)
+	UpdatePRBodyFn    func(prURL, body string) error
+	DefaultError      error
+	Calls             []MockCall
 }
 
 func NewMockRemoteOps() *MockRemoteOps { return &MockRemoteOps{} }
@@ -42,28 +43,20 @@ func (m *MockRemoteOps) Push(worktreePath, branch string) error {
 	return m.DefaultError
 }
 
-func (m *MockRemoteOps) ForcePush(worktreePath, branch string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "ForcePush", Args: []any{worktreePath, branch}})
-	if m.ForcePushFn != nil {
-		return m.ForcePushFn(worktreePath, branch)
-	}
-	return m.DefaultError
-}
-
-func (m *MockRemoteOps) PushRewrittenBranch(worktreePath, branch string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "PushRewrittenBranch", Args: []any{worktreePath, branch}})
-	if m.PushRewrittenBranchFn != nil {
-		return m.PushRewrittenBranchFn(worktreePath, branch)
-	}
-	return m.DefaultError
-}
-
 func (m *MockRemoteOps) PullRebase(worktreePath, branch string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "PullRebase", Args: []any{worktreePath, branch}})
 	if m.PullRebaseFn != nil {
 		return m.PullRebaseFn(worktreePath, branch)
 	}
 	return m.DefaultError
+}
+
+func (m *MockRemoteOps) PushLayerBranch(repoPath, branch, localSHA, lastPushedSHA string) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "PushLayerBranch", Args: []any{repoPath, branch, localSHA, lastPushedSHA}})
+	if m.PushLayerBranchFn != nil {
+		return m.PushLayerBranchFn(repoPath, branch, localSHA, lastPushedSHA)
+	}
+	return "", m.DefaultError
 }
 
 func (m *MockRemoteOps) CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
@@ -90,6 +83,22 @@ func (m *MockRemoteOps) PRState(repoPath, prURL string) (string, error) {
 		return m.PRStateFn(repoPath, prURL)
 	}
 	return "", m.DefaultError
+}
+
+func (m *MockRemoteOps) GetPRBody(prURL string) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "GetPRBody", Args: []any{prURL}})
+	if m.GetPRBodyFn != nil {
+		return m.GetPRBodyFn(prURL)
+	}
+	return "", m.DefaultError
+}
+
+func (m *MockRemoteOps) UpdatePRBody(prURL, body string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "UpdatePRBody", Args: []any{prURL, body}})
+	if m.UpdatePRBodyFn != nil {
+		return m.UpdatePRBodyFn(prURL, body)
+	}
+	return m.DefaultError
 }
 
 type MockPRCloser struct {

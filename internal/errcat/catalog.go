@@ -468,7 +468,7 @@ var catalog = map[Code]Entry{
 			return publishDivergedSummary(p)
 		},
 		Summary:     "The pull-request branch contains remote work that is not in this workspace.",
-		Remediation: "Review and reconcile the pull-request branch on the remote, then refresh and retry.",
+		Remediation: "Run the rebase pass to replay this workspace's work onto the remote branch, then retry publish.",
 		Actions:     []string{"publish"},
 	},
 	PublishRemoteChanged: {
@@ -714,26 +714,26 @@ var catalog = map[Code]Entry{
 	// Every condition that fails a repository publish classifies into one of
 	// these at the publish boundary; the repository's stored record is the
 	// sole owner of the condition and never marks the run Failed.
-	PublishRebaseConflict: {
+	PublishStackPullRequestClosed: {
 		Class:   ClassNeedsAction,
-		Title:   "Pull-rebase conflict",
+		Title:   "Stack pull request closed",
 		Blocks:  []Block{BlockRepositories},
-		Summary: "The pull rebase onto the target branch conflicted.",
+		Summary: "The stack pull request is closed without merge and cannot receive new commits.",
 		summaryParams: func(p Params) string {
-			return publishRebaseConflictSummary(p)
+			return publishStackPullRequestClosedSummary(p)
 		},
-		Remediation: "Resolve the conflict in the worktree or run a rebase pass, then retry.",
+		Remediation: "Reopen the closed pull request on the remote, then retry.",
 		Actions:     []string{"publish"},
 	},
-	PublishPullRequestClosed: {
+	PublishStackMissing: {
 		Class:   ClassNeedsAction,
-		Title:   "Pull request closed",
+		Title:   "No approved stack",
 		Blocks:  []Block{BlockRepositories},
-		Summary: "The pull request is closed or merged and cannot receive new commits.",
+		Summary: "The run reached publish without an approved stack of pull requests.",
 		summaryParams: func(p Params) string {
-			return publishPullRequestClosedSummary(p)
+			return publishStackMissingSummary(p)
 		},
-		Remediation: "Reopen the pull request on the remote, then retry.",
+		Remediation: "Rewind to the roadmap phase and approve a valid Pull Requests table.",
 		Actions:     []string{"publish"},
 	},
 	PublishPullRequestFailed: {

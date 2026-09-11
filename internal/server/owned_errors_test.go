@@ -204,7 +204,7 @@ func TestOwnedErrorsProjectRepositoryRecords(t *testing.T) {
 	parent.Repos = append(parent.Repos, feature.FeatureRepo{Name: "beta"})
 	record := func(repo string) *errcat.FailureRecord {
 		return &errcat.FailureRecord{
-			Code: errcat.PublishRebaseConflict,
+			Code: errcat.PublishStackPullRequestClosed,
 			Context: &errcat.RecordContext{
 				Repositories: []errcat.CodeRepository{{Name: repo, Branch: "main", ConflictFiles: []string{"a.go"}}},
 			},
@@ -380,7 +380,7 @@ func TestOwnedErrorsClassAndOrderInvariants(t *testing.T) {
 	store, parent := seedReadFeature(t)
 	seedRunFailure(t, store, parent, errcat.IterationBudgetExhausted)
 	parent.RepoStates[repoNameSelf].Error = &errcat.FailureRecord{
-		Code:    errcat.PublishRebaseConflict,
+		Code:    errcat.PublishStackPullRequestClosed,
 		Context: &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: repoNameSelf}}},
 	}
 	if err := store.Save(parent); err != nil {

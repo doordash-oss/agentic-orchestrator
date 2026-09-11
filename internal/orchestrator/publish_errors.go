@@ -17,11 +17,15 @@ package orchestrator
 import "fmt"
 
 // PublishRemoteDivergedError reports remote work that cannot safely be
-// replaced by the workspace's rewritten pull-request branch.
+// replaced by the workspace's rewritten pull-request branch. LayerPosition
+// and LayerTitle name the stack layer whose branch refused the push; a zero
+// position means the failure predates the layered flow.
 type PublishRemoteDivergedError struct {
 	RepoName          string
 	Branch            string
 	RemoteOnlyCommits int
+	LayerPosition     int
+	LayerTitle        string
 }
 
 func (e *PublishRemoteDivergedError) Error() string {
@@ -31,31 +35,53 @@ func (e *PublishRemoteDivergedError) Error() string {
 // PublishRemoteChangedError reports a remote branch that moved after its
 // safety state was inspected for a rewritten push.
 type PublishRemoteChangedError struct {
-	RepoName string
-	Branch   string
+	RepoName      string
+	Branch        string
+	LayerPosition int
+	LayerTitle    string
 }
 
 func (e *PublishRemoteChangedError) Error() string {
 	return "pull-request branch changed while Agentico was publishing"
 }
 
-// PublishPRClosedError reports a republish whose existing pull request is
-// closed or merged and can no longer receive commits. The pull-request URL
-// travels in the error text, which becomes the stored record's diagnostics.
-type PublishPRClosedError struct {
+// PublishStackClosedError reports a stack layer whose recorded pull request
+// is closed without merge and can no longer receive commits. The layer's
+// position and title and the pull-request URL travel in the error so the
+// stored canonical record can name them.
+type PublishStackClosedError struct {
+	RepoName      string
+	Branch        string
+	LayerPosition int
+	LayerTitle    string
+	PRURL         string
+	State         string
+}
+
+func (e *PublishStackClosedError) Error() string {
+	return fmt.Sprintf("stack pull request %s for layer %d (%s) is %s; new commits cannot be delivered to it", e.PRURL, e.LayerPosition, e.LayerTitle, e.State)
+}
+
+// PublishStackMissingError reports a run that reached publish without an
+// approved pull-request stack. Every publishable repository fails closed
+// with it until the roadmap is rewound and re-approved with a valid Pull
+// Requests table.
+type PublishStackMissingError struct {
 	RepoName string
-	PRURL    string
-	State    string
+	Branch   string
 }
 
-func (e *PublishPRClosedError) Error() string {
-	return fmt.Sprintf("pull request %s is %s; new commits cannot be delivered to it", e.PRURL, e.State)
+func (e *PublishStackMissingError) Error() string {
+	return fmt.Sprintf("publish for repo %s has no approved pull-request stack", e.RepoName)
 }
 
-// PublishPRCreateError reports a failed pull-request creation.
+// PublishPRCreateError reports a failed pull-request creation. The layer
+// fields name the stack layer whose pull request could not be opened.
 type PublishPRCreateError struct {
-	RepoName string
-	Err      error
+	RepoName      string
+	LayerPosition int
+	LayerTitle    string
+	Err           error
 }
 
 func (e *PublishPRCreateError) Error() string {
@@ -66,9 +92,12 @@ func (e *PublishPRCreateError) Unwrap() error { return e.Err }
 
 // PublishDescriptionError reports a failed pull-request description
 // generation. Publishing cannot proceed with synthetic fallback content.
+// The layer fields name the stack layer whose description session failed.
 type PublishDescriptionError struct {
-	RepoName string
-	Err      error
+	RepoName      string
+	LayerPosition int
+	LayerTitle    string
+	Err           error
 }
 
 func (e *PublishDescriptionError) Error() string {
@@ -76,6 +105,23 @@ func (e *PublishDescriptionError) Error() string {
 }
 
 func (e *PublishDescriptionError) Unwrap() error { return e.Err }
+
+// PublishPushError reports a layer push failure that is neither a
+// remote-diverged nor a remote-changed refusal. The layer fields name the
+// stack layer whose branch could not be delivered.
+type PublishPushError struct {
+	RepoName      string
+	Branch        string
+	LayerPosition int
+	LayerTitle    string
+	Err           error
+}
+
+func (e *PublishPushError) Error() string {
+	return fmt.Sprintf("push failed: %v", e.Err)
+}
+
+func (e *PublishPushError) Unwrap() error { return e.Err }
 
 // PublishDispatchError marks every error returned by the completion
 // dispatch's auto-publish call. Publish failures are owned by repository

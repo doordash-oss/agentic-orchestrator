@@ -78,7 +78,11 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 		st.Error = &stored
 		return nil
 	}
-	lc.SetRepoPublishedFn = func(id, repo, url string) error {
+	// Emulates the per-layer publish write the real lifecycle performs on a
+	// successful publish: every stack layer's entry for the repository
+	// records the pull request (so the stack-based all-published check
+	// passes), and the legacy per-repo URL is refreshed alongside it.
+	lc.SetRepoPublishedFn = func(id, repo string) error {
 		if f.RepoStates == nil {
 			f.RepoStates = make(map[string]*feature.RepoState)
 		}
@@ -87,8 +91,17 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 			st = &feature.RepoState{}
 			f.RepoStates[repo] = st
 		}
+		const prURL = "https://github.com/org/r1/pull/1"
+		for i := range f.Stack {
+			if f.Stack[i].Repos == nil {
+				f.Stack[i].Repos = make(map[string]feature.StackRepoEntry)
+			}
+			entry := f.Stack[i].Repos[repo]
+			entry.PRURL = prURL
+			f.Stack[i].Repos[repo] = entry
+		}
 		st.Touched = true
-		st.PRURL = url
+		st.PRURL = prURL
 		st.Error = nil
 		return nil
 	}

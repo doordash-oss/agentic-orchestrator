@@ -134,7 +134,6 @@ export const IPC_CHANNELS = {
   rewindExecute: 'agentico:rewind:execute',
   completionPreflight: 'agentico:completion:preflight',
   repositoryDiff: 'agentico:completion:repository-diff',
-  publishDescription: 'agentico:completion:publish-description',
   openExternal: 'agentico:open:external',
   revealPath: 'agentico:open:reveal',
   clipboardWriteText: 'agentico:clipboard:write-text',
@@ -1597,8 +1596,6 @@ export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
     body: z.strictObject({
       source_revision: CompletionSourceRevisionSchema,
       repos: z.array(CompletionRepoNameSchema).min(1).max(200),
-      title: z.string().trim().min(1).max(200).optional(),
-      body: z.string().max(4000).optional(),
     }),
   }),
   z.strictObject({
@@ -1745,19 +1742,6 @@ export const RepositoryDiffResultSchema = z.strictObject({
   error: CanonicalErrorSchema.optional(),
 });
 export type RepositoryDiffResult = z.output<typeof RepositoryDiffResultSchema>;
-
-export const PublishDescriptionRequestSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  repos: z.array(CompletionRepoNameSchema).max(200).optional(),
-});
-export type PublishDescriptionRequest = z.output<typeof PublishDescriptionRequestSchema>;
-
-export const PublishDescriptionResultSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  title: z.string().max(200),
-  body: z.string().max(4000),
-});
-export type PublishDescriptionResult = z.output<typeof PublishDescriptionResultSchema>;
 
 export const OpenExternalRequestSchema = z.strictObject({
   url: z.string().max(2000),
@@ -4295,10 +4279,6 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([RepositoryDiffRequestSchema]),
     response: RepositoryDiffResultSchema,
   },
-  [IPC_CHANNELS.publishDescription]: {
-    request: z.tuple([PublishDescriptionRequestSchema]),
-    response: PublishDescriptionResultSchema,
-  },
   [IPC_CHANNELS.openExternal]: {
     request: z.tuple([OpenExternalRequestSchema]),
     response: z.strictObject({ ok: z.boolean() }),
@@ -4582,7 +4562,6 @@ export interface AgenticoApi {
   executeRewind(request: RewindExecuteRequest): Promise<FeatureActionResult>;
   preflightCompletion(request: CompletionPreflightRequest): Promise<CompletionPreflightResult>;
   getRepositoryDiff(request: RepositoryDiffRequest): Promise<RepositoryDiffResult>;
-  generatePublishDescription(request: PublishDescriptionRequest): Promise<PublishDescriptionResult>;
   openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }>;
   revealPath(request: RevealPathRequest): Promise<RevealPathResult>;
   /**

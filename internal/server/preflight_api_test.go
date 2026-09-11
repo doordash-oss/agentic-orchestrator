@@ -38,7 +38,6 @@ type preflightMutationTarget struct {
 	repoDiffName           string
 	repoDiffFilePath       string
 	publishReq             PublishFeatureRequest
-	publishDescReq         PublishDescriptionRequest
 	mergeReq               GuardedFeatureActionRequest
 	markDoneReq            GuardedFeatureActionRequest
 	cleanupReq             CleanupActionRequest

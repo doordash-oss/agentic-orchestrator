@@ -1086,7 +1086,6 @@ describe('FeatureService.dispatchAction', () => {
         body: {
           source_revision: 'rev-1',
           repos: ['repo-a'],
-          title: 'Ship reviewed changes',
         },
       }),
     ).resolves.toMatchObject({
@@ -1101,7 +1100,6 @@ describe('FeatureService.dispatchAction', () => {
       body: {
         source_revision: 'rev-1',
         repos: ['repo-a'],
-        title: 'Ship reviewed changes',
       },
       // Publish commits, pushes, and opens or updates a pull request per
       // repository; the ordinary 30-second bound would abort mid-flight.
@@ -1229,7 +1227,7 @@ describe('FeatureService.dispatchAction', () => {
     const input = {
       featureId: 'abcd1234ef567890',
       action: 'publish' as const,
-      body: { source_revision: 'rev-1', repos: ['repo-a'], title: 'Ship it' },
+      body: { source_revision: 'rev-1', repos: ['repo-a'] },
     };
 
     await expect(service.dispatchAction(input)).rejects.toMatchObject({
@@ -1266,7 +1264,7 @@ describe('FeatureService.dispatchAction', () => {
     const input = {
       featureId: 'abcd1234ef567890',
       action: 'publish' as const,
-      body: { source_revision: 'rev-1', repos: ['repo-a'], title: 'Ship it' },
+      body: { source_revision: 'rev-1', repos: ['repo-a'] },
     };
 
     await expect(service.dispatchAction(input)).rejects.toThrow();
@@ -1311,33 +1309,6 @@ describe('FeatureService.dispatchAction', () => {
         max_iterations_delta: 10,
         max_plan_iterations_delta: 2,
       },
-    });
-  });
-
-  it('requests a server-authored publish narrative for selected repositories only', async () => {
-    const { service, calls } = makeService(() => ({
-      status: 200,
-      body: {
-        api_version: 'v1',
-        feature_id: 'abcd1234ef567890',
-        title: 'Ship reviewed changes',
-        body: 'Generated from server-owned feature and repository context.',
-        result: 'generated',
-      },
-    }));
-
-    await expect(
-      service.generatePublishDescription('abcd1234ef567890', ['repo-a']),
-    ).resolves.toStrictEqual({
-      featureId: 'abcd1234ef567890',
-      title: 'Ship reviewed changes',
-      body: 'Generated from server-owned feature and repository context.',
-    });
-    expect(calls[0]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/publish/description');
-    expect(calls[0]?.init).toStrictEqual({
-      method: 'POST',
-      body: { repos: ['repo-a'] },
-      timeoutMs: 6 * 60_000,
     });
   });
 
@@ -1711,12 +1682,12 @@ describe('FeatureService.listFeatures', () => {
               {
                 ref: {
                   scope: 'repository',
-                  code: 'publish_rebase_conflict',
+                  code: 'publish_remote_diverged',
                   feature_id: 'abcd1234ef567890',
                   repository: 'repo-a',
                 },
                 error: {
-                  code: 'publish_rebase_conflict',
+                  code: 'publish_remote_diverged',
                   class: 'needs_action',
                   title: 'Pull-rebase conflict',
                   summary:

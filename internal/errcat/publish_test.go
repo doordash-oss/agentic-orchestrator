@@ -26,10 +26,10 @@ import (
 // allPublishFailureCodes lists the seven catalog codes a repository publish
 // failure can carry, in catalog order.
 var allPublishFailureCodes = []Code{
-	PublishRebaseConflict,
 	PublishRemoteDiverged,
 	PublishRemoteChanged,
-	PublishPullRequestClosed,
+	PublishStackPullRequestClosed,
+	PublishStackMissing,
 	PublishPullRequestFailed,
 	PublishDescriptionFailed,
 	PublishPushFailed,
@@ -73,38 +73,150 @@ func TestIsPublishFailureReturnsTrueForExactlyThePublishCodes(t *testing.T) {
 	}
 }
 
-// TestRenderRecordPublishRebaseConflictNamesRepositoryBranchAndTarget pins
-// the conflict projection: a stored record whose repositories block carries a
-// name, branch, and rebase target renders a summary naming all three,
-// without leaking diagnostics.
-func TestRenderRecordPublishRebaseConflictNamesRepositoryBranchAndTarget(t *testing.T) {
-	rendered := RenderRecord(FailureRecord{
-		Code: PublishRebaseConflict,
-		Context: &RecordContext{
-			Repositories: []CodeRepository{{
-				Name:         "publish-web",
-				Branch:       "agentico/my-feature",
-				RebaseTarget: "main",
-			}},
-		},
-		Diagnostics: "CONFLICT (content): Merge conflict in go.mod",
-	})
-	for _, want := range []string{`"publish-web"`, `"agentico/my-feature"`, `"main"`} {
-		if !strings.Contains(rendered.Summary, want) {
-			t.Fatalf("summary does not name %s: %q", want, rendered.Summary)
+// TestRetiredPublishCodesAreMissingFromCatalog pins the retirement: the
+// pull-rebase conflict and closed-PR publish codes no longer resolve in the
+// catalog and no longer classify as publish failures.
+func TestRetiredPublishCodesAreMissingFromCatalog(t *testing.T) {
+	for _, code := range []Code{"publish_rebase_conflict", "publish_pull_request_closed"} {
+		if _, ok := Lookup(code); ok {
+			t.Errorf("%s: retired code still resolves in the catalog", code)
+		}
+		if IsPublishFailure(code) {
+			t.Errorf("%s: retired code still classifies as a publish failure", code)
 		}
 	}
-	if strings.Contains(rendered.Summary, "CONFLICT") {
+}
+
+// TestRenderRecordPublishStackPullRequestClosedNamesRepositoryLayerAndPR pins
+// the closed-stack projection: a stored record whose repositories block
+// carries a name, layer, and pull-request URL renders a summary naming all
+// three, without leaking diagnostics.
+func TestRenderRecordPublishStackPullRequestClosedNamesRepositoryLayerAndPR(t *testing.T) {
+	rendered := RenderRecord(FailureRecord{
+		Code: PublishStackPullRequestClosed,
+		Context: &RecordContext{
+			Repositories: []CodeRepository{{
+				Name:           "publish-web",
+				Branch:         "agentico/my-feature",
+				LayerPosition:  2,
+				LayerTitle:     "Fix auth",
+				PullRequestURL: "https://github.com/acme/publish-web/pull/12",
+			}},
+		},
+		Diagnostics: "pull request state: closed",
+	})
+	want := `The stack pull request for repository "publish-web" at layer 2 (Fix auth) (https://github.com/acme/publish-web/pull/12) is closed without merge and cannot receive new commits.`
+	if rendered.Summary != want {
+		t.Fatalf("summary = %q; want %q", rendered.Summary, want)
+	}
+	if strings.Contains(rendered.Summary, rendered.Diagnostics) {
 		t.Fatalf("summary leaks raw diagnostics: %q", rendered.Summary)
 	}
 	if rendered.Class != ClassNeedsAction {
 		t.Fatalf("class = %q; want needs_action", rendered.Class)
 	}
-	if rendered.Remediation == nil || len(rendered.Remediation.Actions) != 1 || rendered.Remediation.Actions[0] != "publish" {
-		t.Fatalf("publish_rebase_conflict must reference the publish action: %#v", rendered.Remediation)
+	if rendered.Remediation == nil ||
+		rendered.Remediation.Hint != "Reopen the closed pull request on the remote, then retry." {
+		t.Fatalf("remediation = %#v; want the reopen hint", rendered.Remediation)
 	}
-	if rendered.Context == nil || len(rendered.Context.Repositories) != 1 || rendered.Context.Repositories[0].RebaseTarget != "main" {
-		t.Fatalf("repositories block not carried with the rebase target: %#v", rendered.Context)
+	if len(rendered.Remediation.Actions) != 1 || rendered.Remediation.Actions[0] != "publish" {
+		t.Fatalf("publish_stack_pull_request_closed must reference the publish action: %#v", rendered.Remediation)
+	}
+	if rendered.Context == nil || len(rendered.Context.Repositories) != 1 {
+		t.Fatalf("repositories block not carried: %#v", rendered.Context)
+	}
+	repo := rendered.Context.Repositories[0]
+	if repo.LayerPosition != 2 || repo.LayerTitle != "Fix auth" ||
+		repo.PullRequestURL != "https://github.com/acme/publish-web/pull/12" {
+		t.Fatalf("repositories block lost the stack fields: %#v", repo)
+	}
+}
+
+// TestRenderRecordPublishStackMissingNamesRepository pins the missing-stack
+// projection: a stored record whose repositories block carries a name
+// renders a summary naming it, with the rewind-to-roadmap remediation and
+// the publish action.
+func TestRenderRecordPublishStackMissingNamesRepository(t *testing.T) {
+	rendered := RenderRecord(FailureRecord{
+		Code: PublishStackMissing,
+		Context: &RecordContext{
+			Repositories: []CodeRepository{{Name: "publish-api"}},
+		},
+	})
+	want := `The run reached publish for repository "publish-api" without an approved stack of pull requests.`
+	if rendered.Summary != want {
+		t.Fatalf("summary = %q; want %q", rendered.Summary, want)
+	}
+	if rendered.Class != ClassNeedsAction {
+		t.Fatalf("class = %q; want needs_action", rendered.Class)
+	}
+	if rendered.Remediation == nil ||
+		rendered.Remediation.Hint != "Rewind to the roadmap phase and approve a valid Pull Requests table." {
+		t.Fatalf("remediation = %#v; want the rewind-to-roadmap hint", rendered.Remediation)
+	}
+	if len(rendered.Remediation.Actions) != 1 || rendered.Remediation.Actions[0] != "publish" {
+		t.Fatalf("publish_stack_missing must reference the publish action: %#v", rendered.Remediation)
+	}
+}
+
+// TestPublishSummariesNameLayerOnlyWhenPresent pins the layer projection: a
+// summary rendered with a layer parameter names it (with and without a layer
+// title), and one rendered without stays byte-identical to the pre-stack
+// text.
+func TestPublishSummariesNameLayerOnlyWhenPresent(t *testing.T) {
+	base := PublishRepoParams{Repo: "publish-web", Branch: "agentico/my-feature", RemoteOnlyCommits: 3}
+	layered := base
+	layered.LayerPosition = 2
+	layered.LayerTitle = "Fix auth"
+	untitled := base
+	untitled.LayerPosition = 2
+	cases := []struct {
+		code            Code
+		plain           string
+		withLayer       string
+		withLayerNoName string
+	}{
+		{
+			code:            PublishRemoteDiverged,
+			plain:           `The pull-request branch for "publish-web" contains 3 remote commits that are not in this workspace.`,
+			withLayer:       `The pull-request branch for "publish-web" at layer 2 (Fix auth) contains 3 remote commits that are not in this workspace.`,
+			withLayerNoName: `The pull-request branch for "publish-web" at layer 2 contains 3 remote commits that are not in this workspace.`,
+		},
+		{
+			code:            PublishRemoteChanged,
+			plain:           `The pull-request branch for "publish-web" changed while Agentico was publishing.`,
+			withLayer:       `The pull-request branch for "publish-web" at layer 2 (Fix auth) changed while Agentico was publishing.`,
+			withLayerNoName: `The pull-request branch for "publish-web" at layer 2 changed while Agentico was publishing.`,
+		},
+		{
+			code:            PublishPullRequestFailed,
+			plain:           `Creating the pull request for repository "publish-web" failed.`,
+			withLayer:       `Creating the pull request for repository "publish-web" at layer 2 (Fix auth) failed.`,
+			withLayerNoName: `Creating the pull request for repository "publish-web" at layer 2 failed.`,
+		},
+		{
+			code:            PublishDescriptionFailed,
+			plain:           `Generating the pull-request description for repository "publish-web" failed.`,
+			withLayer:       `Generating the pull-request description for repository "publish-web" at layer 2 (Fix auth) failed.`,
+			withLayerNoName: `Generating the pull-request description for repository "publish-web" at layer 2 failed.`,
+		},
+		{
+			code:            PublishPushFailed,
+			plain:           `Publishing repository "publish-web" (branch "agentico/my-feature") failed.`,
+			withLayer:       `Publishing repository "publish-web" at layer 2 (Fix auth) (branch "agentico/my-feature") failed.`,
+			withLayerNoName: `Publishing repository "publish-web" at layer 2 (branch "agentico/my-feature") failed.`,
+		},
+	}
+	for _, tc := range cases {
+		if rendered := New(tc.code, WithParams(base)); rendered.Summary != tc.plain {
+			t.Errorf("%s: summary without a layer = %q; want %q", tc.code, rendered.Summary, tc.plain)
+		}
+		if rendered := New(tc.code, WithParams(layered)); rendered.Summary != tc.withLayer {
+			t.Errorf("%s: summary with a layer = %q; want %q", tc.code, rendered.Summary, tc.withLayer)
+		}
+		if rendered := New(tc.code, WithParams(untitled)); rendered.Summary != tc.withLayerNoName {
+			t.Errorf("%s: summary with an untitled layer = %q; want %q", tc.code, rendered.Summary, tc.withLayerNoName)
+		}
 	}
 }
 
@@ -155,20 +267,24 @@ func TestRenderRecordPublishCodesFallBackToStaticSummaries(t *testing.T) {
 }
 
 // TestPublishRecordRoundTripsYAMLAndJSON pins the stored shape of a
-// repository publish-failure record: the rebase_target and
-// remote_only_commits block fields survive both marshal cycles unchanged.
+// repository publish-failure record: the rebase_target, remote_only_commits,
+// layer, and pull-request-url block fields survive both marshal cycles
+// unchanged.
 func TestPublishRecordRoundTripsYAMLAndJSON(t *testing.T) {
 	record := FailureRecord{
-		Code: PublishRebaseConflict,
+		Code: PublishStackPullRequestClosed,
 		Context: &RecordContext{
 			Repositories: []CodeRepository{{
 				Name:              "publish-web",
 				Branch:            "agentico/my-feature",
 				RebaseTarget:      "main",
 				RemoteOnlyCommits: 2,
+				LayerPosition:     2,
+				LayerTitle:        "Fix auth",
+				PullRequestURL:    "https://github.com/acme/publish-web/pull/12",
 			}},
 		},
-		Diagnostics: "git rebase: conflict in go.mod",
+		Diagnostics: "pull request state: closed",
 	}
 
 	yamlBytes, err := yaml.Marshal(record)
@@ -182,11 +298,16 @@ func TestPublishRecordRoundTripsYAMLAndJSON(t *testing.T) {
 	if !reflect.DeepEqual(fromYAML, record) {
 		t.Fatalf("YAML round-trip mismatch:\n got %#v\nwant %#v\nyaml:\n%s", fromYAML, record, yamlBytes)
 	}
-	if !strings.Contains(string(yamlBytes), "rebase_target: main") {
-		t.Fatalf("YAML does not carry the rebase_target key:\n%s", yamlBytes)
-	}
-	if !strings.Contains(string(yamlBytes), "remote_only_commits: 2") {
-		t.Fatalf("YAML does not carry the remote_only_commits key:\n%s", yamlBytes)
+	for _, want := range []string{
+		"rebase_target: main",
+		"remote_only_commits: 2",
+		"layer_position: 2",
+		"layer_title: Fix auth",
+		"pull_request_url: https://github.com/acme/publish-web/pull/12",
+	} {
+		if !strings.Contains(string(yamlBytes), want) {
+			t.Fatalf("YAML does not carry %q:\n%s", want, yamlBytes)
+		}
 	}
 
 	jsonBytes, err := json.Marshal(record)
@@ -202,12 +323,39 @@ func TestPublishRecordRoundTripsYAMLAndJSON(t *testing.T) {
 	}
 }
 
+// TestPublishRecordLoadsLegacyRepositoriesBlock pins backward-compatible
+// loading: records stored before the stack-layer fields existed unmarshal
+// with a zero layer position, title, and pull-request URL, and render the
+// pre-stack summary text.
+func TestPublishRecordLoadsLegacyRepositoriesBlock(t *testing.T) {
+	legacy := `code: publish_remote_diverged
+context:
+  repositories:
+  - name: publish-web
+    branch: agentico/my-feature
+    remote_only_commits: 3
+`
+	var record FailureRecord
+	if err := yaml.Unmarshal([]byte(legacy), &record); err != nil {
+		t.Fatal(err)
+	}
+	repo := record.Context.Repositories[0]
+	if repo.LayerPosition != 0 || repo.LayerTitle != "" || repo.PullRequestURL != "" {
+		t.Fatalf("legacy record gained stack fields: %#v", repo)
+	}
+	rendered := RenderRecord(record)
+	want := `The pull-request branch for "publish-web" contains 3 remote commits that are not in this workspace.`
+	if rendered.Summary != want {
+		t.Fatalf("summary = %q; want %q", rendered.Summary, want)
+	}
+}
+
 // TestFprintRendersPublishRepositoryFields pins the CLI shape: the rebase
 // target and remote-only commit count render as key-value lines under the
 // repository line when present.
 func TestFprintRendersPublishRepositoryFields(t *testing.T) {
 	rendered := New(
-		PublishRebaseConflict,
+		PublishStackPullRequestClosed,
 		WithRepositories(CodeRepository{
 			Name:              "publish-web",
 			Branch:            "agentico/my-feature",

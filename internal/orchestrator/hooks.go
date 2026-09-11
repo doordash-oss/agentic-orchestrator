@@ -285,12 +285,16 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 					continue
 				}
 				// Iteration counters live on the run / feature under the
-				// unified flow, not per-repo.
+				// unified flow, not per-repo. A stacked repository is
+				// published only when every layer's entry is settled (a
+				// pull request or the no-commits marker): the legacy PR URL
+				// projects the highest layer's pull request and must not
+				// mask an unpublished upper layer.
 				status := "untouched"
 				switch {
 				case rs.Error != nil:
 					status = "failed"
-				case rs.PRURL != "":
+				case repoStackSettled(f, name, rs.PRURL):
 					status = "published"
 				case rs.Touched:
 					status = "touched"

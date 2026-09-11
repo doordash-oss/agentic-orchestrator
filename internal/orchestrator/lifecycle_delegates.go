@@ -167,11 +167,13 @@ func (o *Orchestrator) MarkDone(featureID string) error {
 	return nil
 }
 
-// MarkPublished persists the PR URL and fires the feature-completed hooks
-// (FeatureCompleted event + OnFeatureCompleted + OnFeatureSummaryNeeded)
-// so observer emission lives in a single chokepoint.
-func (o *Orchestrator) MarkPublished(featureID, prURL string) error {
-	if err := o.deps.Lifecycle.MarkPublished(featureID, prURL); err != nil {
+// MarkPublished transitions the feature to Published and fires the
+// feature-completed hooks (FeatureCompleted event + OnFeatureCompleted +
+// OnFeatureSummaryNeeded) so observer emission lives in a single chokepoint.
+// The per-repository PR URLs on RepoStates are the durable record; no URL
+// argument crosses this boundary.
+func (o *Orchestrator) MarkPublished(featureID string) error {
+	if err := o.deps.Lifecycle.MarkPublished(featureID); err != nil {
 		return err
 	}
 	f, fErr := o.deps.Lifecycle.Get(featureID)

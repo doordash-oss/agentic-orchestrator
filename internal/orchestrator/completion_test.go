@@ -1032,10 +1032,11 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_NotPublish
 }
 
 // Multi-repo all_passed, publishable, auto-publish on (>1 repos, non-roadmap)
-// → tryCompleteAndEmit fires (which calls TryCompletePublish). When
-// TryCompletePublish returns (false, nil) — the common "not all repos published
-// yet" resume case — the handler MUST fall back to MarkCodeReady so recovery
-// can continue the remaining repo publishes on restart.
+// routes through the unified MarkCodeReady → Publish tail. When
+// TryCompletePublish returns (false, nil) — the common "not all repos
+// published yet" resume case — the feature stays at CodeReady (marked before
+// the publish dispatch) so recovery can continue the remaining repo
+// publishes on restart.
 func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublish_PartialPublishFallsBackToCodeReady(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-multi-ap",
@@ -1053,6 +1054,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 	fs := newFeatureStore(f)
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	// The per-repo publish is a clean no-op: the partial state under test is
+	// tryCompletePublish's answer, not a repository failure.
+	o.SetPublishRepoFn(func(id, repo string) (string, error) { return "", nil })
 
 	if err := o.HandlePhaseCompletion("feat-multi-ap", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -1072,9 +1076,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 }
 
 // Multi-repo all_passed, publishable, auto-publish on (>1 repos, non-roadmap)
-// with TryCompletePublish → (true, nil) — the fully-published case. Asserts
-// the handler does NOT call MarkCodeReady, because the feature just
-// transitioned to StatusPublished and MarkCodeReady would regress it.
+// with TryCompletePublish → (true, nil) — the fully-published case. The
+// unified tail marks code ready BEFORE dispatching publish, so the transition
+// order is MarkCodeReady → TryCompletePublish and the just-published feature
+// is never regressed back to CodeReady afterwards.
 func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublish_FullyPublishedSkipsCodeReady(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-multi-ap-full",
@@ -1087,10 +1092,19 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 	}
 	lc := lifecycleForFeature(f)
 	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
+	markCodeReadyCalls := 0
+	lc.MarkCodeReadyFn = func(id string) error { markCodeReadyCalls++; return nil }
+	tryCompleteAfterCodeReady := false
+	lc.TryCompletePublishFn = func(id string) (bool, error) {
+		tryCompleteAfterCodeReady = markCodeReadyCalls > 0
+		return true, nil
+	}
 	fs := newFeatureStore(f)
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o.SetPublishRepoFn(func(id, repo string) (string, error) {
+		return "https://github.com/org/" + repo + "/pull/1", nil
+	})
 
 	if err := o.HandlePhaseCompletion("feat-multi-ap-full", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -1100,9 +1114,14 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 	}
 
 	assertLifecycleCall(t, lc, "TryCompletePublish")
-	// When TryCompletePublish → true the feature is at StatusPublished —
-	// MarkCodeReady would regress it.
-	refuteLifecycleCall(t, lc, "MarkCodeReady")
+	// MarkCodeReady fires exactly once and strictly before the publish
+	// completion check — never after StatusPublished.
+	if markCodeReadyCalls != 1 {
+		t.Fatalf("MarkCodeReady calls = %d, want exactly one", markCodeReadyCalls)
+	}
+	if !tryCompleteAfterCodeReady {
+		t.Fatal("TryCompletePublish ran before MarkCodeReady; want code ready marked before the publish dispatch")
+	}
 }
 
 // Multi-repo requires StatusImplementing — otherwise no-op.
@@ -2184,19 +2203,17 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_SkipsAnchorOnCommitFailure
 // Non-roadmap multi-repo auto-publish: PublishCompleted emission
 // ---------------------------------------------------------------------------
 //
-// When the non-roadmap multi-repo auto-publish path completes — per-repo
-// publishes fired via OnRepoStatusChanged as each repo hit review_passed, and
-// the cross-repo join inside onMultiReposPassed reaches tryCompleteAndEmit
-// with published==true — the orchestrator must emit PublishCompleted and
-// fire OnPublishCompleted. Without this, subscribers tracking publish
-// completion (dashboards, observability, tests) miss the non-roadmap
-// multi-repo happy path entirely because the per-repo publishes never emit
-// the feature-level event and the Publish() pipeline is not invoked here.
+// The non-roadmap auto-publish path routes through the same Publish pipeline
+// as the roadmap-final one: MarkCodeReady, then a full publish pass whose
+// completion site emits PublishCompleted and fires OnPublishCompleted — with
+// the per-repository PR URLs the pass collected — whenever no repository
+// failed.
 
-// Fully-published non-roadmap multi-repo path: tryCompleteAndEmit succeeds
-// (TryCompletePublish → (true, nil)) → must emit PublishCompleted and fire
-// OnPublishCompleted with the per-repo PR URL map. The nil error signals the
-// happy path.
+// Fully-published non-roadmap multi-repo path: the publish pass walks both
+// repositories (no-op returns of their existing PR URLs), tryCompleteAndEmit
+// succeeds (TryCompletePublish → (true, nil)) → must emit PublishCompleted
+// and fire OnPublishCompleted with the per-repo PR URL map. The nil error
+// signals the happy path.
 func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPublished_EmitsPublishCompleted(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-multi-pub-full",
@@ -2207,12 +2224,13 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 			{Name: "r2", Path: "/tmp/r2"},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"r1": {PRURL: "https://github.com/org/r1/pull/1"},
-			"r2": {PRURL: "https://github.com/org/r2/pull/2"},
+			"r1": {Touched: true, PRURL: "https://github.com/org/r1/pull/1"},
+			"r2": {Touched: true, PRURL: "https://github.com/org/r2/pull/2"},
 		},
 	}
 	lc := lifecycleForFeature(f)
 	lc.CompleteImplementationFn = func(id string) error { return nil }
+	lc.MarkCodeReadyFn = func(id string) error { return nil }
 	lc.TryCompletePublishFn = func(id string) (bool, error) {
 		f.Status = feature.StatusPublished
 		return true, nil
@@ -2231,6 +2249,11 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 			pubHookCalls++
 		},
 	})
+	// The stack walk over already-published repositories is a no-op that
+	// returns each repository's highest-layer PR URL.
+	o.SetPublishRepoFn(func(id, repo string) (string, error) {
+		return "https://github.com/org/" + repo + "/pull/1", nil
+	})
 
 	if err := o.HandlePhaseCompletion("feat-multi-pub-full", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -2239,9 +2262,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	// tryCompleteAndEmit ran and returned published=true — the orchestrator
-	// must NOT regress the feature to StatusCodeReady.
-	refuteLifecycleCall(t, lc, "MarkCodeReady")
+	// Code ready is marked before the publish dispatch; the just-published
+	// feature is never regressed afterwards.
+	assertLifecycleCall(t, lc, "MarkCodeReady")
 
 	// PublishCompleted event must be on the bus.
 	events := drainEvents(o)
@@ -2260,7 +2283,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 	}
 
 	// OnPublishCompleted hook must have fired exactly once with no error and
-	// the per-repo PR URLs gathered from RepoImpl.
+	// the per-repo PR URLs the pass collected.
 	if pubHookCalls != 1 {
 		t.Errorf("OnPublishCompleted fired %d times, want 1", pubHookCalls)
 	}
@@ -2273,17 +2296,18 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 	if got := pubCompletedURLs["r1"]; got != "https://github.com/org/r1/pull/1" {
 		t.Errorf("OnPublishCompleted prURLs[r1] = %q, want r1 URL", got)
 	}
-	if got := pubCompletedURLs["r2"]; got != "https://github.com/org/r2/pull/2" {
+	if got := pubCompletedURLs["r2"]; got != "https://github.com/org/r2/pull/1" {
 		t.Errorf("OnPublishCompleted prURLs[r2] = %q, want r2 URL", got)
 	}
 }
 
 // Partially-published non-roadmap multi-repo path: tryCompleteAndEmit returns
 // (false, nil) (not yet fully published — e.g. a repo publish is still
-// pending). The handler must fall back to MarkCodeReady so resume paths can
-// recover the partial state, and PublishCompleted must NOT fire (the publish
-// has not actually completed yet).
-func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_NotFullyPublished_NoPublishCompleted(t *testing.T) {
+// pending). The feature stays at CodeReady so resume paths can recover the
+// partial state, and no FeatureCompleted fires — the publish pass itself
+// still reports completion (no repository failed), but the feature-level
+// completion signal is withheld until every repository is published.
+func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_NotFullyPublished_StaysCodeReady(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-multi-pub-partial",
 		Status:       feature.StatusImplementing,
@@ -2299,10 +2323,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_NotFullyP
 	lc.MarkCodeReadyFn = func(id string) error { return nil }
 	fs := newFeatureStore(f)
 
-	var pubHookCalls int
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnPublishCompleted: func(id string, urls map[string]string, err error) { pubHookCalls++ },
-	})
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o.SetPublishRepoFn(func(id, repo string) (string, error) { return "", nil })
 
 	if err := o.HandlePhaseCompletion("feat-multi-pub-partial", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -2314,13 +2336,13 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_NotFullyP
 	// Not fully published → MarkCodeReady must fire so resume paths recover.
 	assertLifecycleCall(t, lc, "MarkCodeReady")
 
-	// PublishCompleted must NOT have fired — the publish has not completed.
+	// FeatureCompleted must NOT fire — the feature is not yet published.
 	events := drainEvents(o)
-	if hasEventType(events, ports.PublishCompleted) {
-		t.Error("PublishCompleted must NOT fire when the feature is not yet fully published")
+	if hasEventType(events, ports.FeatureCompleted) {
+		t.Error("FeatureCompleted must NOT fire when the feature is not yet fully published")
 	}
-	if pubHookCalls != 0 {
-		t.Errorf("OnPublishCompleted fired %d times on partial-publish path; want 0", pubHookCalls)
+	if f.Status == feature.StatusPublished {
+		t.Errorf("feature status = %v, want not published (partial publish)", f.Status)
 	}
 }
 
@@ -2553,15 +2575,18 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapMarksFinalizingAcro
 }
 
 // A non-roadmap feature never crosses the phase commit boundary, so it must
-// not be flagged finalizing.
+// not be flagged finalizing. The repositories are non-publishable so the
+// completion stops at MarkCodeReady — the auto-publish tail is not this
+// test's subject.
 func TestOrchestrator_HandlePhaseCompletion_Implement_NonRoadmapDoesNotFlagFinalizing(t *testing.T) {
+	unpub := false
 	f := &feature.Feature{
 		ID:           "feat-nonroadmap-finalizing",
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: repoName, Path: repoAPath},
-			{Name: repoNameB, Path: repoBPath},
+			{Name: repoName, Path: repoAPath, Publishable: &unpub},
+			{Name: repoNameB, Path: repoBPath, Publishable: &unpub},
 		},
 	}
 	lc := lifecycleForFeature(f)

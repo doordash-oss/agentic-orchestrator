@@ -62,9 +62,6 @@ function props(over: Partial<React.ComponentProps<typeof PublishModal>> = {}) {
     preflight: newPrPreflight,
     actions: [publishAction] as readonly FeatureActionView[],
     dispatchAction: vi.fn().mockResolvedValue(result),
-    generatePublishDescription: vi
-      .fn()
-      .mockResolvedValue({ featureId, title: 'Title', body: 'Body' }),
     openExternal: vi.fn().mockResolvedValue({ ok: true }),
     onDispatched: vi.fn(),
     onClose: vi.fn(),
@@ -108,7 +105,7 @@ describe('PublishModal', () => {
     expect(screen.getByRole('dialog', { name: 'Publish reviewed changes' })).toBeVisible();
     expect(screen.queryByLabelText('PR title')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('PR body')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Generate PR narrative' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Generate narrative' })).not.toBeInTheDocument();
     expect(screen.getByText('Rewrites the pull-request branch with a safety lease.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Publish updates' })).toBeEnabled();
@@ -157,7 +154,7 @@ describe('PublishModal', () => {
     });
   });
 
-  it('shows required and optional PR fields only while a new PR is selected', async () => {
+  it('renders no PR narrative controls even while a new pull request is selected', async () => {
     const user = userEvent.setup();
     render(
       <PublishModal
@@ -178,8 +175,14 @@ describe('PublishModal', () => {
       />,
     );
 
-    expect(screen.getByText('Required')).toBeVisible();
-    expect(screen.getByText('Optional')).toBeVisible();
+    // The repository checkbox is the only per-repository control; the
+    // narrative (title, body, generate) is server-generated, never edited.
+    expect(screen.getByRole('checkbox', { name: 'web' })).toBeVisible();
+    expect(screen.queryByLabelText('PR title')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('PR body')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Generate narrative' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Required')).not.toBeInTheDocument();
+    expect(screen.queryByText('Optional')).not.toBeInTheDocument();
     await user.click(screen.getByRole('checkbox', { name: 'web' }));
     expect(screen.queryByLabelText('PR title')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('PR body')).not.toBeInTheDocument();
@@ -305,60 +308,20 @@ describe('PublishModal', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('uses Publish and sends title metadata when a selected repo needs a new pull request', async () => {
+  it('sends only repos and source_revision when a selected repo needs a new pull request', async () => {
     const user = userEvent.setup();
     const dispatchAction = vi.fn().mockResolvedValue(result);
     render(<PublishModal {...props({ dispatchAction })} />);
 
-    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
-    const details = screen.getByRole('region', { name: 'Pull request details' });
-    expect(within(details).getByRole('button', { name: 'Generate narrative' })).toBeVisible();
-    await user.type(screen.getByLabelText('PR title'), 'Ship reviewed work');
-    await user.type(screen.getByLabelText('PR body'), 'A compact description.');
-    await user.click(screen.getByRole('button', { name: 'Publish' }));
+    const publish = screen.getByRole('button', { name: 'Publish updates' });
+    expect(publish).toBeEnabled();
+    await user.click(publish);
 
     expect(dispatchAction).toHaveBeenCalledWith({
       featureId,
       action: 'publish',
-      body: {
-        source_revision: 'rev-1',
-        repos: ['web'],
-        title: 'Ship reviewed work',
-        body: 'A compact description.',
-      },
+      body: { source_revision: 'rev-1', repos: ['web'] },
     });
-  });
-
-  it('keeps Publish disabled until the required title is nonblank', async () => {
-    const user = userEvent.setup();
-    render(<PublishModal {...props()} />);
-
-    const publish = screen.getByRole('button', { name: 'Publish' });
-    expect(publish).toBeDisabled();
-
-    await user.click(screen.getByLabelText('PR title'));
-    await user.tab();
-    expect(screen.getByText('Add a title to create the pull request.')).toBeVisible();
-
-    await user.type(screen.getByLabelText('PR title'), 'Ship reviewed work');
-    expect(publish).toBeEnabled();
-  });
-
-  it('moves focus to a narrative-generation failure surface', async () => {
-    const user = userEvent.setup();
-    render(
-      <PublishModal
-        {...props({
-          generatePublishDescription: vi.fn().mockRejectedValue(new Error('generation failed')),
-        })}
-      />,
-    );
-
-    await user.click(screen.getByRole('button', { name: 'Generate narrative' }));
-    const surface = await screen.findByRole('alert');
-    expect(surface).toHaveClass('error-surface--compact');
-    expect(screen.getByText('Narrative generation was rejected')).toBeVisible();
-    await waitFor(() => expect(surface).toHaveFocus());
   });
 
   it('keeps the publish mutation locked after a swallowed refresh following a timeout', async () => {
@@ -435,23 +398,6 @@ describe('PublishModal', () => {
     );
     // The publish control stays disarmed by the existing lock logic.
     expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled();
-  });
-
-  it('marks a blank required title invalid after local validation', async () => {
-    const user = userEvent.setup();
-    render(<PublishModal {...props()} />);
-
-    await user.click(screen.getByLabelText('PR title'));
-    await user.tab();
-
-    const title = screen.getByLabelText('PR title');
-    expect(title).toHaveAttribute('aria-invalid', 'true');
-    expect(title).toHaveAttribute('aria-describedby', 'publish-title-error');
-    const fieldError = screen.getByText('Add a title to create the pull request.');
-    expect(fieldError).toHaveClass('field-error');
-    expect(fieldError).toHaveAttribute('id', 'publish-title-error');
-    // The legacy hand-rolled field-error markup is gone.
-    expect(document.querySelector('.completion-publish-sheet__field-error')).toBeNull();
   });
 
   it('moves focus to a rejected publish surface', async () => {
@@ -533,26 +479,19 @@ describe('PublishModal', () => {
     await user.click(within(card).getByText('Diagnostics'));
     expect(within(diagnostics as HTMLElement).getByText(/502 Bad Gateway/)).toBeVisible();
 
-    // With the required title in place, the card's button retries only this
-    // repository with the form's current title and body.
-    await user.type(screen.getByLabelText('PR title'), 'Ship reviewed work');
-    await user.type(screen.getByLabelText('PR body'), 'A compact description.');
+    // The card's button retries only this repository, with no narrative
+    // fields in the payload.
     const retry = within(card).getByRole('button', { name: 'Retry publish' });
     expect(retry).toBeEnabled();
     await user.click(retry);
     expect(dispatchAction).toHaveBeenCalledWith({
       featureId,
       action: 'publish',
-      body: {
-        source_revision: 'rev-1',
-        repos: ['web'],
-        title: 'Ship reviewed work',
-        body: 'A compact description.',
-      },
+      body: { source_revision: 'rev-1', repos: ['web'] },
     });
   });
 
-  it('replaces the row card retry with its disabled reason while the required title is empty', () => {
+  it('keeps the row card retry available whenever the catalog publish action is enabled', () => {
     render(
       <PublishModal
         {...props({
@@ -572,8 +511,10 @@ describe('PublishModal', () => {
     );
 
     const row = failedRepoRow();
-    expect(within(row).queryByRole('button', { name: 'Retry publish' })).not.toBeInTheDocument();
-    expect(within(row).getByText('Add a PR title to retry this publish.')).toBeVisible();
+    expect(within(row).getByRole('button', { name: 'Retry publish' })).toBeEnabled();
+    expect(
+      within(row).queryByText('Add a PR title to retry this publish.'),
+    ).not.toBeInTheDocument();
   });
 
   it('renders no card for a repository without a stored record and no legacy outcome detail', () => {
@@ -659,10 +600,7 @@ describe('PublishModal', () => {
     }
     render(<PartialPublishHarness />);
 
-    // The repository needs a new pull request, so the publish requires a
-    // title before it can be dispatched and rejected.
-    await user.type(screen.getByLabelText('PR title'), 'Ship reviewed work');
-    await user.click(screen.getByRole('button', { name: 'Publish' }));
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
     // The refreshed row card owns the condition: no rejection surface, and
     // the row card is the only alert on the page.
     const card = await screen.findByRole('alert');

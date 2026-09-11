@@ -34,3 +34,16 @@ func IsAncestor(repoPath, ancestor, descendant string) bool {
 	}
 	return true
 }
+
+// HasCommitsBeyond reports whether tipSHA carries commits past cutPointSHA.
+// It is false when the tip is an ancestor of the cut point — including a tip
+// equal to the cut point — and when either SHA is empty, because an unnamed
+// tip has nothing to deliver. A git failure reports true: IsAncestor answers
+// false when it cannot decide, and an indeterminate range must not let a
+// layer be silently skipped as empty.
+func HasCommitsBeyond(repoPath, tipSHA, cutPointSHA string) bool {
+	if tipSHA == "" || cutPointSHA == "" {
+		return false
+	}
+	return !IsAncestor(repoPath, tipSHA, cutPointSHA)
+}

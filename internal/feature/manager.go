@@ -838,19 +838,21 @@ func (m *Manager) MarkFinalReviewReady(featureID string) error {
 	})
 }
 
-// MarkPublished transitions a feature to Published and stores the PR URL.
-// Publishable features must pass a non-empty prURL; otherwise the transition
-// is refused so a stale "Published with no PR" state is unreachable.
-func (m *Manager) MarkPublished(featureID, prURL string) error {
+// MarkPublished transitions a feature to Published. The per-repository PR
+// URLs on RepoStates — kept fresh by the per-layer publish writes and their
+// legacy projection — are the durable record; the run-level PR URL shadow
+// is deliberately not written. Publishable features must have at least one
+// repository PR URL recorded; otherwise the transition is refused so a
+// stale "Published with no PR" state is unreachable.
+func (m *Manager) MarkPublished(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
-		if f.IsPublishable() && prURL == "" {
-			return fmt.Errorf("MarkPublished: PR URL required for publishable feature %s", featureID)
+		if f.IsPublishable() && f.FirstRepoPRURL() == "" {
+			return fmt.Errorf("MarkPublished: no repository PR URL recorded for publishable feature %s", featureID)
 		}
 		if err := f.Transition(StatusPublished); err != nil {
 			return err
 		}
 		f.CurrentPhase = PhasePublish
-		f.SetPRURL(prURL)
 		return nil
 	})
 }
@@ -1740,9 +1742,13 @@ func (m *Manager) InitRepoImpl(featureID string) error {
 	})
 }
 
-// SetRepoPublished updates a repo's implementation state after successful publish.
-// Sets Touched=true, PRURL, and clears the stored failure record.
-func (m *Manager) SetRepoPublished(featureID, repoName, prURL string) error {
+// SetRepoPublished updates a repository's implementation state after a
+// successful publish: Touched is set, the stored failure record cleared,
+// and the legacy per-repo PR URL refreshed from the stack projection (the
+// highest layer with a pull request for the repository). The per-layer
+// publish writes are the source of truth for URLs; a repository whose
+// stack carries no pull request yet keeps its previously recorded URL.
+func (m *Manager) SetRepoPublished(featureID, repoName string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		if f.RepoStates == nil {
 			f.RepoStates = make(map[string]*RepoState)
@@ -1753,9 +1759,89 @@ func (m *Manager) SetRepoPublished(featureID, repoName, prURL string) error {
 			f.RepoStates[repoName] = state
 		}
 		state.Touched = true
-		state.PRURL = prURL
 		state.Error = nil
+		if url := f.highestStackLayerPRURL(repoName); url != "" {
+			state.PRURL = url
+		}
 		return nil
+	})
+}
+
+// modifyStackRepoEntry resolves the stack layer at layerPosition, applies
+// mutate to that layer's entry for repoName, then runs the bookkeeping
+// every per-layer publish write shares: the repository's stored error is
+// cleared and the legacy RepoStates PR URL refreshed to the highest stack
+// layer with a pull request for the repository. The run-level PR URL
+// shadow is never written here; the per-layer entries are the source of
+// truth.
+func (m *Manager) modifyStackRepoEntry(featureID, repoName string, layerPosition int, mutate func(entry *StackRepoEntry)) error {
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		var layer *StackLayer
+		for i := range f.Stack {
+			if f.Stack[i].Position == layerPosition {
+				layer = &f.Stack[i]
+				break
+			}
+		}
+		if layer == nil {
+			return fmt.Errorf("feature %s has no stack layer at position %d", featureID, layerPosition)
+		}
+		if layer.Repos == nil {
+			layer.Repos = make(map[string]StackRepoEntry)
+		}
+		entry := layer.Repos[repoName]
+		mutate(&entry)
+		layer.Repos[repoName] = entry
+
+		if f.RepoStates == nil {
+			f.RepoStates = make(map[string]*RepoState)
+		}
+		state, ok := f.RepoStates[repoName]
+		if !ok || state == nil {
+			state = &RepoState{}
+			f.RepoStates[repoName] = state
+		}
+		state.Error = nil
+		if url := f.highestStackLayerPRURL(repoName); url != "" {
+			state.PRURL = url
+		}
+		return nil
+	})
+}
+
+// RecordStackLayerPR records a successful per-layer publish for one
+// repository: the layer's pull request URL, its open state, and the last
+// SHA pushed for it.
+func (m *Manager) RecordStackLayerPR(featureID, repoName string, layerPosition int, prURL, pushedSHA string) error {
+	return m.modifyStackRepoEntry(featureID, repoName, layerPosition, func(entry *StackRepoEntry) {
+		entry.PRURL = prURL
+		entry.PRState = StackPRStateOpen
+		entry.LastPushedSHA = pushedSHA
+	})
+}
+
+// RecordStackLayerPushedSHA records the last SHA pushed for a layer's pull
+// request without touching the pull request record itself.
+func (m *Manager) RecordStackLayerPushedSHA(featureID, repoName string, layerPosition int, sha string) error {
+	return m.modifyStackRepoEntry(featureID, repoName, layerPosition, func(entry *StackRepoEntry) {
+		entry.LastPushedSHA = sha
+	})
+}
+
+// SetStackLayerPRState records a pull request lifecycle change (merged or
+// closed) on one layer's repository entry.
+func (m *Manager) SetStackLayerPRState(featureID, repoName string, layerPosition int, state StackPRState) error {
+	return m.modifyStackRepoEntry(featureID, repoName, layerPosition, func(entry *StackRepoEntry) {
+		entry.PRState = state
+	})
+}
+
+// MarkStackLayerNoCommits marks one layer's repository entry as having no
+// commits to deliver, so the all-published check counts that layer as
+// settled instead of pending.
+func (m *Manager) MarkStackLayerNoCommits(featureID, repoName string, layerPosition int) error {
+	return m.modifyStackRepoEntry(featureID, repoName, layerPosition, func(entry *StackRepoEntry) {
+		entry.NoCommits = true
 	})
 }
 
@@ -1796,8 +1882,7 @@ func (m *Manager) TryCompletePublish(featureID string) (bool, error) {
 			return false, err
 		}
 	}
-	prURL := f.FirstRepoPRURL()
-	if err := m.MarkPublished(featureID, prURL); err != nil {
+	if err := m.MarkPublished(featureID); err != nil {
 		return false, err
 	}
 	return true, nil

@@ -46,8 +46,7 @@ import (
 const (
 	// descriptionFieldKey, confidenceFieldKey, labelFieldKey, optionsFieldKey,
 	// headerFieldKey, questionsFieldKey and questionFieldKey are JSON field
-	// names reused across AskUserQuestion, rewind-option and
-	// publish-description test fixtures.
+	// names reused across AskUserQuestion and rewind-option test fixtures.
 	descriptionFieldKey = "description"
 	confidenceFieldKey  = "confidence"
 	labelFieldKey       = "label"

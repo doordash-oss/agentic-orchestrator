@@ -2222,7 +2222,10 @@ func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata
 			t.Fatalf("publish repo call = %s/%s, want %s/repo-a", featureID, repoName, f.ID)
 		}
 		prURL := "https://github.com/acme/repo-a/pull/12"
-		if err := manager.SetRepoPublished(featureID, repoName, prURL); err != nil {
+		if err := manager.RecordStackLayerPR(featureID, repoName, 1, prURL, "0000000000000000000000000000000000000000"); err != nil {
+			return "", err
+		}
+		if err := manager.SetRepoPublished(featureID, repoName); err != nil {
 			return "", err
 		}
 		return prURL, nil
@@ -2244,56 +2247,6 @@ func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata
 		t.Fatalf("PublishFeature() result = %+v; want published feature", result)
 	}
 	assertJSONDoesNotContain(t, result, "https://github.com/acme/repo-a/pull/12")
-}
-
-func TestServerMutationTargetPublishActionMapsConflictToRebaseConflictCode(t *testing.T) {
-	target, _, _, f := newPublishActionTarget(t)
-	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
-		return "", &orchestrator.PublishConflictError{
-			RepoName:     repoName,
-			Branch:       "feature/publish-conflict",
-			RebaseTarget: "main",
-		}
-	})
-
-	result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{})
-	if err == nil {
-		t.Fatal("publishAction() error = nil, want publish conflict")
-	}
-	var conflict *orchestrator.PublishConflictError
-	if !errors.As(err, &conflict) {
-		t.Fatalf("publishAction() error = %T %v, want PublishConflictError", err, err)
-	}
-	var actionConflict *serverruntime.ActionConflictError
-	if !errors.As(err, &actionConflict) {
-		t.Fatalf("publishAction() error = %T %v; want ActionConflictError", err, err)
-	}
-	if result.FeatureID != f.ID || result.Result != resultConflict {
-		t.Fatalf("PublishFeature() result = %+v; want conflict feature", result)
-	}
-	if actionConflict.Code != errcat.PublishRebaseConflict {
-		t.Fatalf("ActionConflictError.Code = %q; want %q", actionConflict.Code, errcat.PublishRebaseConflict)
-	}
-	rendered := errcat.New(errcat.PublishRebaseConflict, actionConflict.Options...)
-	if rendered.Class != errcat.ClassNeedsAction {
-		t.Fatalf("rendered class = %q, want needs_action", rendered.Class)
-	}
-	if rendered.Context == nil || len(rendered.Context.Repositories) != 1 {
-		t.Fatalf("rendered context = %+v; want one repository", rendered.Context)
-	}
-	repo := rendered.Context.Repositories[0]
-	if repo.Name != testRepoAName || repo.Branch != "feature/publish-conflict" {
-		t.Fatalf("rendered repository = %+v; want %s on feature/publish-conflict", repo, testRepoAName)
-	}
-	if repo.RebaseTarget != "main" {
-		t.Fatalf("rendered repository rebase target = %q, want main", repo.RebaseTarget)
-	}
-	if !strings.Contains(rendered.Summary, `"main"`) || !strings.Contains(rendered.Summary, testRepoAName) {
-		t.Fatalf("rendered summary = %q, want repo and rebase target named", rendered.Summary)
-	}
-	if !strings.Contains(rendered.Diagnostics, "pull-rebase conflict") {
-		t.Fatalf("rendered diagnostics = %q; want raw publish conflict detail", rendered.Diagnostics)
-	}
 }
 
 func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T) {
@@ -2376,7 +2329,6 @@ func TestServerMutationTargetCompletionActionsRejectStaleSourceRevision(t *testi
 				result, err := target.PublishFeature(featureID, serverruntime.PublishFeatureRequest{
 					SourceRevision: staleRevision,
 					Repos:          []string{testRepoAName},
-					Title:          "Publish completion",
 				})
 				return result.Result, err
 			},
@@ -2787,6 +2739,15 @@ func newPublishActionTarget(t *testing.T) (serverMutationTarget, *feature.Manage
 			ff.Repos[i].Branch = "feature/publish-via-rest"
 		}
 		ff.RepoStates = map[string]*feature.RepoState{testRepoAName: {Touched: true}}
+		// A one-layer stack so the publish path's per-layer writes and the
+		// stack-based all-published check run against this fixture.
+		ff.Stack = []feature.StackLayer{{
+			Position: 1,
+			Title:    "Single layer",
+			Slug:     "single-layer",
+			Phases:   []int{1},
+			Branch:   "feature/publish-via-rest",
+		}}
 		return nil
 	}); err != nil {
 		t.Fatalf("prepare feature: %v", err)

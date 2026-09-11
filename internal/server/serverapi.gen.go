@@ -994,15 +994,12 @@ func (e TaskActivityState) Valid() bool {
 
 // Defines values for FeatureSubaction.
 const (
-	FeatureSubactionDescription FeatureSubaction = "description"
-	FeatureSubactionFetch       FeatureSubaction = "fetch"
+	FeatureSubactionFetch FeatureSubaction = "fetch"
 )
 
 // Valid indicates whether the value is a known member of the FeatureSubaction enum.
 func (e FeatureSubaction) Valid() bool {
 	switch e {
-	case FeatureSubactionDescription:
-		return true
 	case FeatureSubactionFetch:
 		return true
 	default:
@@ -1192,15 +1189,12 @@ func (e RunFeatureSubactionParamsXAgenticoClient) Valid() bool {
 
 // Defines values for RunFeatureSubactionParamsSubaction.
 const (
-	RunFeatureSubactionParamsSubactionDescription RunFeatureSubactionParamsSubaction = "description"
-	RunFeatureSubactionParamsSubactionFetch       RunFeatureSubactionParamsSubaction = "fetch"
+	RunFeatureSubactionParamsSubactionFetch RunFeatureSubactionParamsSubaction = "fetch"
 )
 
 // Valid indicates whether the value is a known member of the RunFeatureSubactionParamsSubaction enum.
 func (e RunFeatureSubactionParamsSubaction) Valid() bool {
 	switch e {
-	case RunFeatureSubactionParamsSubactionDescription:
-		return true
 	case RunFeatureSubactionParamsSubactionFetch:
 		return true
 	default:
@@ -1651,7 +1645,6 @@ type ActionResponse struct {
 	NeedUserInputDraftResponse  NeedUserInputDraftResponse  `json:"need_user_input_draft_response,omitempty"`
 	NeedUserInputResumeResponse NeedUserInputResumeResponse `json:"need_user_input_resume_response,omitempty"`
 	PermissionAnswerResponse    PermissionAnswerResponse    `json:"permission_answer_response,omitempty"`
-	PublishDescriptionResponse  PublishDescriptionResponse  `json:"publish_description_response,omitempty"`
 	PublishFeatureResponse      PublishFeatureResponse      `json:"publish_feature_response,omitempty"`
 	RecoveryActionResponse      RecoveryActionResponse      `json:"recovery_action_response,omitempty"`
 	RetryFeatureResponse        RetryFeatureResponse        `json:"retry_feature_response,omitempty"`
@@ -2819,16 +2812,6 @@ type ProviderReadiness struct {
 	Name    string `json:"name"`
 	Ready   bool   `json:"ready"`
 	Version string `json:"version,omitempty"`
-}
-
-// PublishDescriptionResponse defines model for PublishDescriptionResponse.
-type PublishDescriptionResponse struct {
-	APIVersion string       `json:"api_version"`
-	Body       string       `json:"body"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
-	Title      string       `json:"title"`
 }
 
 // PublishFeatureResponse defines model for PublishFeatureResponse.

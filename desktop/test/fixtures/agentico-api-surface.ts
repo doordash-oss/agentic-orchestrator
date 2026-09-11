@@ -48,7 +48,6 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'executeRecovery',
   'executeRewind',
   'fetchReviewFeedback',
-  'generatePublishDescription',
   'getAttention',
   'getCloneOperation',
   'getConnectionStatus',

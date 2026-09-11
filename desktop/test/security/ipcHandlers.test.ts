@@ -314,7 +314,6 @@ function makeServices(): IpcServices {
     clearDiagnostics: vi.fn(() => diagnosticsSnapshot()),
     preflightCompletion: vi.fn(() => Promise.reject(new Error('unused'))),
     getRepositoryDiff: vi.fn(() => Promise.reject(new Error('unused'))),
-    generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
     openExternal: vi.fn(() => Promise.reject(new Error('unused'))),
     revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
     writeClipboardText: vi.fn(() => Promise.reject(new Error('unused'))),

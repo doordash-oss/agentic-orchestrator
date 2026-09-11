@@ -1566,7 +1566,6 @@ components:
       schema:
         type: string
         enum:
-          - description
           - fetch
     Offset:
       name: offset
@@ -3839,8 +3838,6 @@ components:
               $ref: "#/components/schemas/RuntimeConfigUpdateResponse"
             publish_feature_response:
               $ref: "#/components/schemas/PublishFeatureResponse"
-            publish_description_response:
-              $ref: "#/components/schemas/PublishDescriptionResponse"
             merge_feature_response:
               $ref: "#/components/schemas/MergeFeatureResponse"
             rewind_feature_response:
@@ -4124,17 +4121,6 @@ components:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
-    PublishDescriptionResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [title, body]
-          properties:
-            title:
-              type: string
-            body:
-              type: string
     MergeFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"

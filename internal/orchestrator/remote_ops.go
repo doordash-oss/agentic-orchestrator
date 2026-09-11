@@ -20,12 +20,13 @@ import "github.com/doordash-oss/agentic-orchestrator/internal/git"
 // cannot be exercised hermetically against a local bare repository.
 type RemoteOps interface {
 	Push(worktreePath, branch string) error
-	ForcePush(worktreePath, branch string) error
-	PushRewrittenBranch(worktreePath, branch string) error
 	PullRebase(worktreePath, branch string) error
+	PushLayerBranch(repoPath, branch, localSHA, lastPushedSHA string) (string, error)
 	CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
 	PRBaseBranch(repoPath, prURL string) string
 	PRState(repoPath, prURL string) (string, error)
+	GetPRBody(prURL string) (string, error)
+	UpdatePRBody(prURL, body string) error
 }
 
 type gitRemoteOps struct{}
@@ -34,17 +35,13 @@ func (gitRemoteOps) Push(worktreePath, branch string) error {
 	return git.Push(worktreePath, branch)
 }
 
-func (gitRemoteOps) ForcePush(worktreePath, branch string) error {
-	return git.ForcePush(worktreePath, branch)
-}
-
-func (gitRemoteOps) PushRewrittenBranch(worktreePath, branch string) error {
-	return git.PushRewrittenBranch(worktreePath, branch)
-}
-
 func (gitRemoteOps) PullRebase(worktreePath, branch string) error {
 	res := git.PullRebase(worktreePath, branch)
 	return res.Err
+}
+
+func (gitRemoteOps) PushLayerBranch(repoPath, branch, localSHA, lastPushedSHA string) (string, error) {
+	return git.PushLayerBranch(repoPath, branch, localSHA, lastPushedSHA)
 }
 
 func (gitRemoteOps) CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
@@ -57,4 +54,12 @@ func (gitRemoteOps) PRBaseBranch(repoPath, prURL string) string {
 
 func (gitRemoteOps) PRState(repoPath, prURL string) (string, error) {
 	return git.PRState(repoPath, prURL)
+}
+
+func (gitRemoteOps) GetPRBody(prURL string) (string, error) {
+	return git.GetPRBody(prURL)
+}
+
+func (gitRemoteOps) UpdatePRBody(prURL, body string) error {
+	return git.UpdatePRBody(prURL, body)
 }

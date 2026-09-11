@@ -2541,9 +2541,6 @@ export function FeatureCockpit({
             preflight={completion.preflight}
             actions={snapshot.actions}
             dispatchAction={dispatchPublish}
-            generatePublishDescription={(id, repos) =>
-              window.agentico.generatePublishDescription({ featureId: id, repos })
-            }
             openExternal={(url) => window.agentico.openExternal({ url })}
             onDispatched={onCompletionDispatched}
             onClose={() => setCompletionModal(null)}
@@ -3027,9 +3024,6 @@ export function FeatureCockpit({
               preflight={completion.preflight}
               actions={snapshot.actions}
               dispatchAction={dispatchPublish}
-              generatePublishDescription={(id, repos) =>
-                window.agentico.generatePublishDescription({ featureId: id, repos })
-              }
               openExternal={(url) => window.agentico.openExternal({ url })}
               onDispatched={onCompletionDispatched}
               onClose={() => setCompletionModal(null)}

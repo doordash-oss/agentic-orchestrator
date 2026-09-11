@@ -48,14 +48,13 @@ const (
 // feature.
 const resultCreated = "created"
 
-// resultAnswered, resultGenerated, resultRecovered, resultRewound,
+// resultAnswered, resultRecovered, resultRewound,
 // resultStarted and resultUpdated are further
 // ActionResult/RecoveryActionResponse Result values for
-// permission/ask-user answers, generated publish descriptions, and the
+// permission/ask-user answers and the
 // default results of recovery, rewind, start-cycle and update actions.
 const (
 	resultAnswered     = "answered"
-	resultGenerated    = "generated"
 	resultRecovered    = "recovered"
 	resultRewound      = "rewound"
 	resultSetupStarted = "setup_started"
@@ -120,7 +119,6 @@ type MutationTarget interface {
 	StartChat(req ChatStartRequest, hiddenContext string) (ChatStartResponse, error)
 	EndChat() (ChatEndResponse, error)
 	RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error)
-	GeneratePublishDescription(featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error)
 	PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error)
 	MergeFeature(featureID string, req GuardedFeatureActionRequest) (MergeFeatureResponse, error)
 	RewindFeature(featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error)
@@ -358,16 +356,10 @@ func ModelConfigToPatch(m config.ModelConfig) ModelConfigPatch {
 type PublishFeatureRequest struct {
 	SourceRevision string   `json:"source_revision,omitempty"`
 	Repos          []string `json:"repos,omitempty"`
-	Title          string   `json:"title,omitempty"`
-	Body           string   `json:"body,omitempty"`
 }
 
 type GuardedFeatureActionRequest struct {
 	SourceRevision string `json:"source_revision,omitempty"`
-}
-
-type PublishDescriptionRequest struct {
-	Repos []string `json:"repos,omitempty"`
 }
 
 type RewindFeatureRequest struct {
@@ -741,9 +733,6 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
-			if parts[2] == actionPublish && parts[3] == phaseNameDescription {
-				return []string{http.MethodPost}, true
-			}
 			if parts[2] == actionReviewFeedback && (parts[3] == reviewFeedbackSubactionFetch || parts[3] == reviewFeedbackSubactionSelection) {
 				return []string{http.MethodPost}, true
 			}
@@ -1037,20 +1026,6 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		defaultActionFields(&resp, featureID, "drafted")
 		writeActionJSON(w, http.StatusOK, &resp)
 	case actionPublish:
-		if subaction == phaseNameDescription {
-			var req PublishDescriptionRequest
-			if !decodeMutationJSON(w, r, &req) || !validateRepoList(w, req.Repos, false) {
-				return true
-			}
-			resp, err := h.mutations.GeneratePublishDescription(featureID, req)
-			if err != nil {
-				writeMutationError(w, err)
-				return true
-			}
-			defaultActionFields(&resp, featureID, resultGenerated)
-			writeActionJSON(w, http.StatusOK, &resp)
-			return true
-		}
 		if subaction != "" {
 			return false
 		}

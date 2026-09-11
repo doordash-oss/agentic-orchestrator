@@ -1241,9 +1241,6 @@ function CompletionScene({ scene }: { scene: string }): React.ReactElement {
               { id: 'mark-done', enabled: true, disabledReasons: [] },
             ]}
             dispatchAction={dispatchPublish}
-            generatePublishDescription={(id, repos) =>
-              api.generatePublishDescription({ featureId: id, repos })
-            }
             openExternal={openExternal}
             onDispatched={() => {}}
             onClose={() => {}}

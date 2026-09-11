@@ -1022,7 +1022,7 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 	// completed leaving repos staged for FR and the pipeline runs Final
 	// Review, dispatch the FR pass synchronously here before marking code
 	// ready or auto-publishing.
-	if !f.EffectivePipeline().ShouldSkipFinalReview() && reposNeedFinalReview(f) {
+	if !f.EffectivePipeline().ShouldSkipFinalReview() && o.reposNeedFinalReview(f) {
 		if frErr := o.runDeferredFinalReview(featureID); frErr != nil {
 			if errors.Is(frErr, errFinalReviewInterrupted) {
 				// User pressed Stop during Final Review. InterruptFeature
@@ -1069,72 +1069,12 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 		return nil
 	}
 
-	// Non-roadmap, multi-repo auto-publish: now that every touched repo is
-	// past review, try to complete the feature-level publish. If the feature
-	// is not yet fully published (e.g. a repo publish failed or is still
-	// pending), fall back to MarkCodeReady so startup and resume paths can
-	// recover partially published features.
-	//
-	// When tryCompleteAndEmit reports published==true, the feature-level
-	// publish has just completed as a direct consequence of this handler
-	// finishing the cross-repo join. The phase-sequencing event contract
-	// requires emitting PublishCompleted (and firing OnPublishCompleted) on
-	// every publish-completion site, not only the Publish() pipeline.
-	if f.CurrentRoadmapPhase == 0 {
-		publishRepoFn := o.publishRepoFn
-		if publishRepoFn == nil {
-			publishRepoFn = o.publishRepo
-		}
-		for _, name := range f.TouchedRepos() {
-			st := f.RepoStates[name]
-			if st != nil && st.PRURL != "" {
-				continue
-			}
-			if repo, ok := findRepo(f, name); ok {
-				workDir := repo.WorktreePath
-				if workDir == "" {
-					workDir = repo.Path
-				}
-				if err := o.scrubFinalReviewRootArtifacts(context.Background(), workDir); err != nil {
-					o.storePublishFailure(f, name, err)
-					continue
-				}
-			}
-			_, _ = publishRepoFn(featureID, name)
-		}
-		published, err := o.tryCompleteAndEmit(featureID)
-		if err != nil {
-			return err
-		}
-		if !published {
-			if err := o.deps.Lifecycle.MarkCodeReady(featureID); err != nil {
-				return fmt.Errorf("mark code ready: %w", err)
-			}
-			return nil
-		}
-		prURLs := make(map[string]string)
-		if freshF, freshErr := o.deps.Lifecycle.Get(featureID); freshErr == nil && freshF != nil {
-			for _, r := range freshF.Repos {
-				if st := freshF.RepoStates[r.Name]; st != nil && st.PRURL != "" {
-					prURLs[r.Name] = st.PRURL
-				}
-			}
-		}
-		o.emitEventBlocking(ports.Event{
-			Type:      ports.PublishCompleted,
-			FeatureID: featureID,
-		})
-		if o.hooks.OnPublishCompleted != nil {
-			o.hooks.OnPublishCompleted(featureID, prURLs, nil)
-		}
-		return nil
-	}
-
-	// Roadmap final multi-repo auto-publish: mark code ready, then route
-	// through the full Publish pipeline so PublishStarted/PublishCompleted
-	// events + hooks fire. Every publish failure is owned by the failing
-	// repository's stored record — never terminal, no run-level failure —
-	// so the dispatch error is wrapped for the completion surface to skip.
+	// Auto-publish tail — roadmap-final and non-roadmap features alike:
+	// mark code ready, then route through the full Publish pipeline so
+	// PublishStarted/PublishCompleted events + hooks fire. Every publish
+	// failure is owned by the failing repository's stored record — never
+	// terminal, no run-level failure — so the dispatch error is wrapped for
+	// the completion surface to skip.
 	if err := o.deps.Lifecycle.MarkCodeReady(featureID); err != nil {
 		return fmt.Errorf("mark code ready: %w", err)
 	}
@@ -1314,18 +1254,96 @@ func (o *Orchestrator) recordRoadmapPhaseCommitAnchors(featureID string, phase i
 	return nil
 }
 
-// reposNeedFinalReview returns true when at least one repo was touched by
-// the implement pass and is not yet published — i.e. it is staged for the
-// deferred end-of-feature Final Review. Repos with a non-empty PRURL have
-// already shipped and FR is a no-op for them; if every touched repo is
-// already published the FR pass is skipped.
-func reposNeedFinalReview(f *feature.Feature) bool {
+// reposNeedFinalReview returns true when at least one touched repository is
+// staged for the deferred end-of-feature Final Review pass: under a delivery
+// stack, any layer with commits — an entry whose recorded tip reaches past
+// the lower cut point — that lacks a pull request or whose tip differs from
+// its last-pushed SHA. Runs without a stack (approved before the
+// `## Pull Requests` table) keep the legacy rule: a touched repository
+// without a per-repo PR URL is staged.
+func (o *Orchestrator) reposNeedFinalReview(f *feature.Feature) bool {
 	if f == nil {
 		return false
 	}
 	for _, name := range f.TouchedRepos() {
 		st := f.RepoStates[name]
-		if st != nil && st.PRURL == "" {
+		if st == nil {
+			continue
+		}
+		if len(f.Stack) == 0 {
+			if st.PRURL == "" {
+				return true
+			}
+			continue
+		}
+		repo, ok := findRepo(f, name)
+		if !ok {
+			// A touched repository missing from the configuration cannot be
+			// inspected; staging it for review is the safe default.
+			return true
+		}
+		if !repoPublishable(repo) {
+			// Delivery never runs for a non-publishable repository, so its
+			// stack entries can never carry pull requests; the legacy
+			// per-repo URL rule settles it, exactly as before the stack.
+			if st.PRURL == "" {
+				return true
+			}
+			continue
+		}
+		if o.repoStackNeedsReview(f, repo) {
+			return true
+		}
+	}
+	return false
+}
+
+// repoStackNeedsReview walks one repository's stack layers and reports
+// whether any of them still has undelivered work: a layer with commits that
+// lacks a pull request or whose tip differs from its last-pushed SHA. A layer
+// marked NoCommits is settled, and a layer with a pull request whose tip
+// equals the last-pushed SHA is delivered. Anything that cannot be measured —
+// no boundary-recorded tip on a layer without a settled pull request, an
+// unresolvable lower cut point, or no worktree — counts as needing review:
+// the deferred Final Review must not skip a touched repository whose delivery
+// state is unknown, matching the all-published check's treatment of an
+// unmarked, pull-request-less entry as unsettled.
+func (o *Orchestrator) repoStackNeedsReview(f *feature.Feature, repo feature.FeatureRepo) bool {
+	workDir := repoWorkDir(repo)
+	layers := orderedStackLayers(f)
+	entries := make(map[int]feature.StackRepoEntry, len(layers))
+	for _, layer := range layers {
+		entries[layer.Position] = layer.Repos[repo.Name]
+	}
+	baseSHA, baseOK := "", false
+	if workDir != "" {
+		if sha, err := resolveBaseCutSHA(workDir, repo.BaseBranch); err == nil {
+			baseSHA, baseOK = sha, true
+		}
+	}
+	for i, layer := range layers {
+		entry := entries[layer.Position]
+		if entry.NoCommits {
+			continue
+		}
+		if entry.PRURL != "" && entry.TipSHA == entry.LastPushedSHA {
+			continue
+		}
+		if entry.TipSHA == "" {
+			return true
+		}
+		cut := ""
+		if i == 0 {
+			if baseOK {
+				cut = baseSHA
+			}
+		} else {
+			cut = entries[layers[i-1].Position].TipSHA
+		}
+		if cut == "" {
+			return true
+		}
+		if workDir == "" || git.HasCommitsBeyond(workDir, entry.TipSHA, cut) {
 			return true
 		}
 	}

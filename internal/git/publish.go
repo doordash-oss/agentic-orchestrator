@@ -565,6 +565,32 @@ func DiffStat(worktreePath string, baseBranch ...string) (string, error) {
 	return string(out), nil
 }
 
+// CommitBodiesRange returns the full commit messages (subject + body) of the
+// commits in lowerSHA..tipSHA, separated by blank lines. The explicit range
+// lets a caller describe exactly one layer of a stack whose lower bound is
+// another layer's tip rather than a named base branch.
+func CommitBodiesRange(repoPath, lowerSHA, tipSHA string) (string, error) {
+	cmd := readGitCmd(repoPath, "log", "--format=%B%n---commit---", lowerSHA+".."+tipSHA)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("getting commit bodies: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return string(out), nil
+}
+
+// DiffStatRange returns a per-file summary of additions/deletions between
+// lowerSHA and tipSHA. Unlike DiffStat's merge-base range, the two cut points
+// are compared directly so a layer's stat covers exactly the layer's own
+// changes and nothing from the layers below it.
+func DiffStatRange(repoPath, lowerSHA, tipSHA string) (string, error) {
+	cmd := readGitCmd(repoPath, "diff", "--stat", lowerSHA+".."+tipSHA)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("getting diff stat: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return string(out), nil
+}
+
 // resolveBase returns the base ref to diff against. A matching origin
 // remote-tracking branch takes precedence over the local branch because
 // publish and completion diffs describe what a PR against the remote base

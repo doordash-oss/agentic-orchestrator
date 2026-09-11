@@ -454,10 +454,12 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceStaysOnCurr
 }
 
 // TestOrchestrator_OnMultiReposPassed_N1_AutoPublishComplete_EmitsPublishCompleted
-// verifies the auto-publish path for N=1: when the per-repo publish fired
-// already (via OnRepoStatusChanged eager publish) and the cross-repo join
-// reaches tryCompleteAndEmit with published==true, the orchestrator emits
-// PublishCompleted and fires OnPublishCompleted.
+// verifies the auto-publish tail for N=1: the repository already carries its
+// pull request (so the deferred Final Review pass is skipped), and the
+// unified MarkCodeReady → Publish pipeline emits PublishCompleted and fires
+// OnPublishCompleted with the repository's PR URL — the stack walk over an
+// already-published repository is a no-op that returns the highest layer's
+// pull request.
 func TestOrchestrator_OnMultiReposPassed_N1_AutoPublishComplete_EmitsPublishCompleted(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-n1-pub",
@@ -465,11 +467,12 @@ func TestOrchestrator_OnMultiReposPassed_N1_AutoPublishComplete_EmitsPublishComp
 		CurrentPhase: feature.PhaseImplement,
 		Repos:        []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1"}},
 		RepoStates: map[string]*feature.RepoState{
-			"r1": {PRURL: "https://github.com/org/r1/pull/1"},
+			"r1": {Touched: true, PRURL: "https://github.com/org/r1/pull/1"},
 		},
 	}
 	lc := lifecycleForFeature(f)
 	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
+	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
 	lc.TryCompletePublishFn = func(id string) (bool, error) { f.Status = feature.StatusPublished; return true, nil }
 	fs := newFeatureStore(f)
 
@@ -480,6 +483,9 @@ func TestOrchestrator_OnMultiReposPassed_N1_AutoPublishComplete_EmitsPublishComp
 			pubID = id
 			pubURLs = urls
 		},
+	})
+	o.SetPublishRepoFn(func(id, repo string) (string, error) {
+		return "https://github.com/org/r1/pull/1", nil
 	})
 
 	if err := o.HandlePhaseCompletion("feat-n1-pub", orchestrator.PhaseCompletionInput{
@@ -636,12 +642,13 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 			BaseBranch:   mainBranch,
 		}},
 		RepoStates: map[string]*feature.RepoState{apiRepoName: {Touched: true}},
+		Stack:      singleLayerStack(1, "feature/fr-scrub"),
 	}
 	lc := lifecycleForFeature(f)
 	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
 	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
-	lc.SetRepoPublishedFn = func(featureID, repoName, prURL string) error {
-		f.RepoStates[repoName].PRURL = prURL
+	lc.SetRepoPublishedFn = func(featureID, repoName string) error {
+		f.RepoStates[repoName].PRURL = "https://github.com/org/api/pull/1"
 		return nil
 	}
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
@@ -649,6 +656,9 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 
 	publisher := mocks.NewMockRemoteOps()
 	publisher.PushFn = func(string, string) error { return nil }
+	publisher.PushLayerBranchFn = func(_, _ string, localSHA, _ string) (string, error) {
+		return localSHA, nil
+	}
 	publisher.CreatePRFn = func(string, string, string, string, string, bool) (string, error) {
 		return "https://github.com/org/api/pull/1", nil
 	}
@@ -757,8 +767,8 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
 	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
 	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
-	lc.SetRepoPublishedFn = func(featureID, repoName, prURL string) error {
-		f.RepoStates[repoName].PRURL = prURL
+	lc.SetRepoPublishedFn = func(featureID, repoName string) error {
+		f.RepoStates[repoName].PRURL = "https://github.com/org/" + repoName + "/pull/1"
 		return nil
 	}
 	lc.TryCompletePublishFn = func(id string) (bool, error) { f.Status = feature.StatusPublished; return true, nil }
@@ -770,6 +780,11 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 		return "https://github.com/org/" + filepath.Base(repoPath) + "/pull/1", nil
 	}
 
+	// The stranded artifacts exist before the completion runs: the deferred
+	// Final Review pass is skipped for this fixture (no layer tips are
+	// recorded without WorktreeOps), so the scrub must remove them on the
+	// auto-publish tail's own pass.
+	writeCandidates()
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
 		Store:     fs,
@@ -785,7 +800,6 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 		ff *feature.Feature,
 		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
-		writeCandidates()
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
 		return ch, nil

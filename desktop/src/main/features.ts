@@ -36,7 +36,6 @@ import {
   ServerFeatureOperationalActionResponseSchema,
   FeatureDetailResponseSchema,
   FeatureListResponseSchema,
-  PublishDescriptionResponseSchema,
   RuntimeConfigCreationSchema,
   RepositorySourcesResponseSchema,
   RepositoryOriginStatusResponseSchema,
@@ -89,7 +88,6 @@ import {
   type FeatureActionRequest,
   type FeatureActionResult,
   type OwnedError,
-  type PublishDescriptionResult,
   type ReadinessSnapshot,
   type RepositoryFileRef,
   type LaunchRebaseChildRequest,
@@ -176,11 +174,6 @@ function assertNoLocalPathsRemotely(remote: boolean, ...groups: readonly string[
     }
   }
 }
-
-// Description generation is a synchronous utility LLM session. Its session
-// idle bounds are five minutes, so leave transport cleanup time beyond that
-// without weakening the 30-second default for ordinary API calls.
-const PUBLISH_DESCRIPTION_TIMEOUT_MS = 6 * 60_000;
 
 // Publish and merge run non-idempotent multi-repository git and forge work
 // (commit, push, then pull-request create or update per repository), which
@@ -566,24 +559,6 @@ export class FeatureService {
     });
     const response = validateWithSchema(body, FeatureActionResponseSchema);
     return { result: response.result };
-  }
-
-  async generatePublishDescription(
-    featureId: string,
-    repos: string[] = [],
-  ): Promise<PublishDescriptionResult> {
-    const id = validateWithSchema(featureId, FeatureIdSchema);
-    const body = await this.api(`/api/v1/features/${id}/actions/publish/description`, {
-      method: 'POST',
-      body: repos.length === 0 ? {} : { repos },
-      timeoutMs: PUBLISH_DESCRIPTION_TIMEOUT_MS,
-    });
-    const response = validateWithSchema(body, PublishDescriptionResponseSchema);
-    return {
-      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
-      title: redactText(response.title).slice(0, 200),
-      body: redactText(response.body).slice(0, 4000),
-    };
   }
 
   async listFeatures(): Promise<FeaturesListResult> {

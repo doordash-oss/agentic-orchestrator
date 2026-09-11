@@ -1650,15 +1650,6 @@ export const RepositoryPathResponseSchema = z.object({
 });
 export type RepositoryPathResponse = z.output<typeof RepositoryPathResponseSchema>;
 
-export const PublishDescriptionResponseSchema = z.object({
-  api_version: z.string(),
-  feature_id: z.string(),
-  result: z.string(),
-  title: z.string(),
-  body: z.string(),
-});
-export type PublishDescriptionResponse = z.output<typeof PublishDescriptionResponseSchema>;
-
 // Compile-time drift guards: zod outputs must stay assignable to the
 // generated OpenAPI component types.
 // The canonical error schema is a strict superset check: the generated
@@ -1810,10 +1801,6 @@ void _rewindActionSubset;
 type RepositoryPathDTO = components['schemas']['RepositoryPathDTO'];
 const _repositoryPathSubset = (value: RepositoryPathDTO): RepositoryPathResponse => value;
 void _repositoryPathSubset;
-type PublishDescriptionDTO = components['schemas']['PublishDescriptionResponse'];
-const _publishDescriptionSubset = (value: PublishDescriptionDTO): PublishDescriptionResponse =>
-  value;
-void _publishDescriptionSubset;
 type CompletionPreflightDTO = components['schemas']['CompletionPreflightResponse'];
 const _completionPreflightSubset = (value: CompletionPreflightDTO): CompletionPreflightResponse =>
   value;

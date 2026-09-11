@@ -1874,7 +1874,6 @@ export interface components {
             chat_end_response?: components["schemas"]["ChatEndResponse"];
             runtime_config_update_response?: components["schemas"]["RuntimeConfigUpdateResponse"];
             publish_feature_response?: components["schemas"]["PublishFeatureResponse"];
-            publish_description_response?: components["schemas"]["PublishDescriptionResponse"];
             merge_feature_response?: components["schemas"]["MergeFeatureResponse"];
             rewind_feature_response?: components["schemas"]["RewindFeatureResponse"];
             retry_feature_response?: components["schemas"]["RetryFeatureResponse"];
@@ -1983,10 +1982,6 @@ export interface components {
         };
         RuntimeConfigUpdateResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["ActionResult"];
         PublishFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
-        PublishDescriptionResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
-            title: string;
-            body: string;
-        };
         MergeFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         RewindFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             target_phase?: string;
@@ -3312,7 +3307,7 @@ export interface components {
         LogID: string;
         SessionID: string;
         FeatureAction: components["schemas"]["FeatureAction"];
-        FeatureSubaction: "description" | "fetch";
+        FeatureSubaction: "fetch";
         Offset: number;
         Limit: number;
         /** @description 1-indexed page number for run-history pagination. */

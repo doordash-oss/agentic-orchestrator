@@ -130,35 +130,6 @@ type ReviewDecision struct {
 	Comment string
 }
 
-// PublishConflictError signals a pull-rebase conflict during publish. Satisfies
-// errors.Is(err, ErrPublishConflict) so callers can route conflicts without
-// reflecting on the wrapped type.
-//
-// Branch is the feature branch the conflicted push was targeting.
-// RebaseTarget is the PR base branch (e.g. "master", "main") that the
-// follow-up rebase-resolution plan must rebase ONTO. It is computed by the
-// orchestrator (via PR lookup, repo.BaseBranch, or default-branch fallback)
-// so consumers do not have to re-derive it; passing the feature branch in
-// its place would point the rebase plan at the wrong target.
-type PublishConflictError struct {
-	RepoName     string
-	Branch       string
-	RebaseTarget string
-}
-
-func (e *PublishConflictError) Error() string {
-	return fmt.Sprintf("publish: pull-rebase conflict in repo %s on branch %s", e.RepoName, e.Branch)
-}
-
-// Is reports whether target is the publish-conflict sentinel.
-func (e *PublishConflictError) Is(target error) bool {
-	_, ok := target.(*PublishConflictError)
-	return ok
-}
-
-// ErrPublishConflict is the sentinel used with errors.Is for publish conflicts.
-var ErrPublishConflict = &PublishConflictError{}
-
 // Deps holds all port interface dependencies for the orchestrator.
 type Deps struct {
 	Lifecycle   ports.FeatureLifecycle
@@ -246,7 +217,8 @@ type Orchestrator struct {
 	// the publish implementation.
 	publishFn func(featureID string) error
 
-	// publishRepoFn is a test hook. When nil Publish calls o.publishRepo.
+	// publishRepoFn is a test hook. When nil Publish calls
+	// o.publishRepoWithOptions.
 	// Tests can override this to isolate the Publish loop logic from the
 	// per-repo pipeline logic.
 	publishRepoFn func(featureID, repoName string) (string, error)
@@ -398,7 +370,7 @@ func (o *Orchestrator) SetPublishFn(fn func(featureID string) error) {
 }
 
 // SetPublishRepoFn installs a test hook that intercepts per-repo publish
-// dispatch in place of o.publishRepo. Intended for tests only.
+// dispatch in place of o.publishRepoWithOptions. Intended for tests only.
 func (o *Orchestrator) SetPublishRepoFn(fn func(featureID, repoName string) (string, error)) {
 	o.publishRepoFn = fn
 }
@@ -2029,13 +2001,13 @@ func (o *Orchestrator) Publish(featureID string) error {
 
 type PublishOptions struct {
 	Repos []string
-	Title string
-	Body  string
 }
 
 // PublishWithOptions runs the publish pipeline for all repos, or for the
-// selected repos when Repos is non-empty. Title and Body override generated PR
-// metadata for interactive publish flows that already reviewed those fields.
+// selected repos when Repos is non-empty. Every selected touched repository
+// walks its whole delivery stack; unchanged layers are no-ops. Pull-request
+// narratives are generated per layer per repository through the
+// description-generation session.
 func (o *Orchestrator) PublishWithOptions(featureID string, opts PublishOptions) error {
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
@@ -2072,29 +2044,22 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 
 	prURLs := make(map[string]string)
 	var firstErr error
-	var conflictErr *PublishConflictError
 	hasRepoSelection := len(requestedRepos) > 0
-	republishExistingPRs := publishRequiresLeasePush(f)
 	for _, repo := range f.Repos {
 		if hasRepoSelection && !requestedRepos[repo.Name] {
 			continue
 		}
-		// Skip repos already published (sibling goroutines may have updated)
-		// or untouched (no phase ever touched them, no PR to open).
-		freshF, freshErr := o.deps.Lifecycle.Get(featureID)
-		if freshErr == nil {
-			if st, ok := freshF.RepoStates[repo.Name]; ok && st != nil {
-				if st.PRURL != "" {
-					prURLs[repo.Name] = st.PRURL
-					if !hasRepoSelection && !republishExistingPRs {
-						continue
-					}
-				}
-				if !st.Touched {
-					continue
-				}
+		// Skip untouched repos (no phase ever touched them, no PR to open).
+		// A repository with existing pull requests is NOT skipped: the stack
+		// walk re-reads its layer entries and no-ops the unchanged layers.
+		walkF := f
+		if freshF, freshErr := o.deps.Lifecycle.Get(featureID); freshErr == nil {
+			walkF = freshF
+			if st, ok := freshF.RepoStates[repo.Name]; ok && st != nil && !st.Touched {
+				continue
 			}
 		}
+		before := stackRepoEntriesSnapshot(walkF, repo.Name)
 
 		var prURL string
 		var repoErr error
@@ -2103,18 +2068,30 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 		} else {
 			prURL, repoErr = o.publishRepoWithOptions(featureID, repo.Name, opts)
 		}
+
+		// One repository status event per repository whose stack entries
+		// the pass changed — whether or not it stopped early — so surfaces
+		// displaying the stack refresh.
+		if freshF, freshErr := o.deps.Lifecycle.Get(featureID); freshErr == nil {
+			if stackRepoEntriesChanged(before, stackRepoEntriesSnapshot(freshF, repo.Name)) {
+				o.emitEvent(ports.Event{
+					Type:      ports.RepoStatusChanged,
+					FeatureID: featureID,
+					RepoName:  repo.Name,
+					Branch:    repo.Branch,
+					Message:   "stack publish updated repository layer entries",
+				})
+			}
+		}
 		if repoErr != nil {
-			var ce *PublishConflictError
-			if errors.As(repoErr, &ce) {
-				if conflictErr == nil {
-					conflictErr = ce
-				}
-			} else if firstErr == nil {
+			if firstErr == nil {
 				firstErr = repoErr
 			}
 			continue
 		}
-		prURLs[repo.Name] = prURL
+		if prURL != "" {
+			prURLs[repo.Name] = prURL
+		}
 	}
 
 	// Delegate FeatureCompleted emission to the sole-emitter helper.
@@ -2122,23 +2099,15 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 		firstErr = completeErr
 	}
 
-	// Pick the final error: conflict first, then non-conflict.
-	var finalErr error
-	if conflictErr != nil {
-		finalErr = conflictErr
-	} else if firstErr != nil {
-		finalErr = firstErr
-	}
-
 	publishCompleted := ports.Event{
 		Type:      ports.PublishCompleted,
 		FeatureID: featureID,
-		Error:     finalErr,
+		Error:     firstErr,
 	}
 	// A repository failure owns the condition through its stored record; the
 	// event carries the first failed repository's rendered canonical error
 	// so its SSE projection matches the feature-failure shape.
-	if finalErr != nil {
+	if firstErr != nil {
 		if freshF, getErr := o.deps.Lifecycle.Get(featureID); getErr == nil {
 			if rendered, ok := firstFailedRepoError(freshF); ok {
 				publishCompleted.CanonicalError = &rendered
@@ -2147,9 +2116,9 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 	}
 	o.emitEventBlocking(publishCompleted)
 	if o.hooks.OnPublishCompleted != nil {
-		o.hooks.OnPublishCompleted(featureID, prURLs, finalErr)
+		o.hooks.OnPublishCompleted(featureID, prURLs, firstErr)
 	}
-	return finalErr
+	return firstErr
 }
 
 func publishRepoSelection(f *feature.Feature, repos []string) (map[string]bool, error) {

@@ -313,7 +313,7 @@ func TestWithRemediationHintOverridesAuthoredHint(t *testing.T) {
 		t.Fatalf("remediation = %#v; want hint added to an entry without one", rendered.Remediation)
 	}
 
-	rendered = New(PublishRebaseConflict, WithRemediationHint("Resolve the conflict, then retry"))
+	rendered = New(PublishStackPullRequestClosed, WithRemediationHint("Resolve the conflict, then retry"))
 	if rendered.Remediation == nil || rendered.Remediation.Hint != "Resolve the conflict, then retry" {
 		t.Fatalf("remediation hint = %q; want override", rendered.Remediation.Hint)
 	}

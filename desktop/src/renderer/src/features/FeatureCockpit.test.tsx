@@ -870,12 +870,12 @@ describe('FeatureCockpit snapshot rendering', () => {
           {
             ref: {
               scope: 'repository',
-              code: 'publish_rebase_conflict',
+              code: 'publish_remote_diverged',
               featureId: FEATURE_ID,
               repository: 'repo-a',
             },
             error: {
-              code: 'publish_rebase_conflict',
+              code: 'publish_remote_diverged',
               class: 'needs_action' as const,
               title: 'Pull-rebase conflict',
               summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
@@ -979,7 +979,7 @@ describe('FeatureCockpit snapshot rendering', () => {
 
   it('opens the publish modal and focuses its repository card for a repository entry', async () => {
     const repoError = {
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       class: 'needs_action' as const,
       title: 'Pull-rebase conflict',
       summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
@@ -991,7 +991,7 @@ describe('FeatureCockpit snapshot rendering', () => {
           {
             ref: {
               scope: 'repository',
-              code: 'publish_rebase_conflict',
+              code: 'publish_remote_diverged',
               featureId: FEATURE_ID,
               repository: 'repo-a',
             },

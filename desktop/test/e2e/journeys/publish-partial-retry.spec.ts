@@ -205,7 +205,7 @@ test('packaged publish partial retry: repository-owned failure card, inspector l
     transcript.step('publish-api repository status loaded lazily');
     await changesModal.getByRole('button', { name: 'Close' }).click();
 
-    transcript.section('Open publish sheet and generate a PR narrative');
+    transcript.section('Open publish sheet (narrative is server-generated)');
     await publishRow.click();
     const publishModal = handle.page.getByRole('dialog', { name: 'Publish reviewed changes' });
     await expect(publishModal.locator('.completion-workspace__publish')).toBeVisible();
@@ -214,17 +214,17 @@ test('packaged publish partial retry: repository-owned failure card, inspector l
     await expect(publishModal.getByRole('checkbox', { name: 'publish-web' })).toBeChecked();
     await expect(publishModal.getByRole('checkbox', { name: 'local-only' })).toHaveCount(0);
     await expect(publishModal.getByText('Already published')).toBeVisible({ timeout: 10_000 });
-    await expect(publishModal.getByText('Required')).toBeVisible();
-    await expect(publishModal.getByText('Optional')).toBeVisible();
-    await publishModal.getByRole('button', { name: 'Generate narrative' }).click();
-    await expect(publishModal.getByPlaceholder('Enter PR title')).not.toHaveValue('');
-    await expect(publishModal.getByPlaceholder('Enter PR description')).not.toHaveValue('');
+    // The pull-request narrative is generated per repository by the server;
+    // the sheet offers no title, body, or generate control.
+    await expect(publishModal.getByLabel('PR title')).toHaveCount(0);
+    await expect(publishModal.getByLabel('PR body')).toHaveCount(0);
+    await expect(publishModal.getByRole('button', { name: 'Generate narrative' })).toHaveCount(0);
     transcript.step(
-      'publish modal preselected only the eligible unpublished repo and generated PR text',
+      'publish modal preselected only the eligible unpublished repo, with no narrative controls',
     );
 
     transcript.section('Execute publish and observe the repository-owned failure card');
-    const publishButton = publishModal.getByRole('button', { name: 'Publish', exact: true });
+    const publishButton = publishModal.getByRole('button', { name: 'Publish updates' });
     await expect(publishButton).toBeEnabled();
     await publishButton.click();
     const webRow = publishModal.locator('.completion-workspace__publish-repo').filter({
@@ -297,10 +297,6 @@ test('packaged publish partial retry: repository-owned failure card, inspector l
     transcript.step('retry scope defaults only to failed or still-unpublished repositories');
 
     transcript.section('Retry the failed repository from its owned card');
-    await publishModal.getByPlaceholder('Enter PR title').fill('Publish retry journey');
-    await publishModal
-      .getByPlaceholder('Enter PR description')
-      .fill('Repo-scoped retry after the owned failure card.');
     const retryButton = webRow.getByRole('button', { name: 'Retry publish' });
     await expect(retryButton).toBeEnabled();
     await retryButton.click();

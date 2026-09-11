@@ -499,8 +499,6 @@ func (t *journeyMutationTarget) UpdateFeatureConfig(featureID string, req server
 func (t *journeyMutationTarget) PublishFeature(featureID string, req server.PublishFeatureRequest) (server.PublishFeatureResponse, error) {
 	if err := t.orch.PublishWithOptions(featureID, orchestrator.PublishOptions{
 		Repos: req.Repos,
-		Title: req.Title,
-		Body:  req.Body,
 	}); err != nil {
 		return server.PublishFeatureResponse{FeatureID: featureID, Result: "failed"}, err
 	}

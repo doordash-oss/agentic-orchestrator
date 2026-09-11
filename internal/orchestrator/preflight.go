@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
@@ -119,10 +120,21 @@ func completionDestinationRef(repo feature.FeatureRepo, publishable bool) string
 	return "origin/" + repo.Branch
 }
 
+// commitBodiesRangeSeparator mirrors the per-commit separator of
+// git.CommitBodiesRange's format string. Counting its occurrences counts the
+// commits in a range without a dedicated rev-list helper in the git package.
+const commitBodiesRangeSeparator = "---commit---"
+
 // applyPendingDelivery folds undelivered-work measurements into a repository's
 // preflight result and distinguishes a stale pull request or base branch from a
-// delivered one. An unresolvable destination leaves the result untouched.
+// delivered one. A publishable repository on a stacked run is measured per
+// delivery layer by applyStackPendingDelivery; every other shape (merge
+// delivery, pre-stack runs) keeps the single-destination measurement. An
+// unresolvable destination leaves the result untouched.
 func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.FeatureRepo, result CompletionRepoResult) CompletionRepoResult {
+	if result.Publishable && len(f.Stack) > 0 {
+		return o.applyStackPendingDelivery(f, repo, result)
+	}
 	dest := completionDestinationRef(repo, result.Publishable)
 	work, ok := git.PendingAgainst(repoWorkDir(repo), dest)
 	if !ok {
@@ -130,19 +142,8 @@ func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.Fea
 	}
 	result.PendingCommits = work.Commits
 	result.PendingDirty = work.Dirty
-	// A preflight that cannot enumerate must not claim there are no files:
-	// when Worktrees is unset or InspectCleanliness errors, both fields stay
-	// zero-valued and PendingDirty alone carries the signal.
-	if work.Dirty && o.deps.Worktrees != nil {
-		if report, err := o.deps.Worktrees.InspectCleanliness(repoWorkDir(repo), feature.DefaultDirtyPathLimit); err == nil && report != nil {
-			all := append(append(append([]string{}, report.Staged...), report.Unstaged...), report.Untracked...)
-			// A path staged and further modified (MM) is reported by both
-			// categories; dedupe so it is neither listed nor counted twice.
-			deduped := dedupePreservingOrder(all)
-			result.PendingDirtyFiles = deduped
-			total := report.StagedTotal + report.UnstagedTotal + report.UntrackedTotal
-			result.PendingDirtyFileTotal = total - (len(all) - len(deduped))
-		}
+	if work.Dirty {
+		result = o.enumeratePendingDirtyFiles(repoWorkDir(repo), result)
 	}
 	if result.Publishable && result.PRURL != "" {
 		result.PushMode = completionPushModeFastForward
@@ -164,6 +165,140 @@ func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.Fea
 		}
 	}
 	return result
+}
+
+// applyStackPendingDelivery measures a publishable repository's undelivered
+// work layer by layer. A layer "has commits" when its recorded tip reaches
+// past the lower cut point — the previous layer's tip, or the resolved base
+// for layer 1 (remote-tracking base preferred, as today); layers marked
+// NoCommits or without a recorded tip are settled, mirroring the publish
+// walk's emptiness rule so the two readers never disagree. The pending count
+// sums each unpushed layer's commits (the full layer range when it never
+// pushed); the push mode is rewrite when any layer's remote branch holds
+// commits its tip does not contain. The PR URL keeps coming from the legacy
+// projection the caller already filled in. An unresolvable base mirrors the
+// legacy unresolved-destination contract: the pending fields stay untouched
+// rather than guessing.
+func (o *Orchestrator) applyStackPendingDelivery(f *feature.Feature, repo feature.FeatureRepo, result CompletionRepoResult) CompletionRepoResult {
+	workDir := repoWorkDir(repo)
+	if workDir == "" {
+		return result
+	}
+	baseSHA, baseErr := resolveBaseCutSHA(workDir, repo.BaseBranch)
+	if baseErr != nil {
+		return result
+	}
+	dirty := git.HasUncommittedChanges(workDir)
+	layers := orderedStackLayers(f)
+	entries := make(map[int]feature.StackRepoEntry, len(layers))
+	for _, layer := range layers {
+		entries[layer.Position] = layer.Repos[repo.Name]
+	}
+	pending := false
+	pendingCommits := 0
+	rewrite := false
+	for i, layer := range layers {
+		entry := entries[layer.Position]
+		if entry.NoCommits || entry.TipSHA == "" {
+			continue
+		}
+		cut := baseSHA
+		if i > 0 {
+			cut = entries[layers[i-1].Position].TipSHA
+		}
+		if cut == "" || !git.HasCommitsBeyond(workDir, entry.TipSHA, cut) {
+			continue
+		}
+		if entry.PRURL == "" || entry.TipSHA != entry.LastPushedSHA {
+			pending = true
+			lowerBound := entry.LastPushedSHA
+			if lowerBound == "" {
+				lowerBound = cut
+			}
+			pendingCommits += stackRangeCommitCount(workDir, lowerBound, entry.TipSHA)
+		}
+		if remoteSHA, readErr := git.ReadRefSHA(workDir, "refs/remotes/origin/"+layer.Branch); readErr == nil &&
+			remoteSHA != "" && !git.IsAncestor(workDir, remoteSHA, entry.TipSHA) {
+			rewrite = true
+		}
+	}
+	result.PendingCommits = pendingCommits
+	result.PendingDirty = dirty
+	if dirty {
+		result = o.enumeratePendingDirtyFiles(workDir, result)
+	}
+	if result.PRURL != "" {
+		result.PushMode = completionPushModeFastForward
+		if rewrite {
+			result.PushMode = completionPushModeRewrite
+		}
+	}
+	if !pending && !dirty {
+		return result
+	}
+	switch result.Status {
+	case completionStatusAlreadyPublished:
+		result.Status = completionStatusUnpublishedChanges
+	case completionStatusCompleted:
+		result.Status = completionStatusUnpublishedChanges
+	}
+	return result
+}
+
+// stackRangeCommitCount counts the commits in lower..tip through the ranged
+// commit-body helper: every commit renders exactly one separator, so the
+// separator count is the commit count. A failed range read counts as zero —
+// the pending signal itself comes from the entry fields, only the count
+// degrades.
+func stackRangeCommitCount(workDir, lower, tip string) int {
+	if lower == "" || tip == "" || lower == tip {
+		return 0
+	}
+	bodies, err := git.CommitBodiesRange(workDir, lower, tip)
+	if err != nil {
+		return 0
+	}
+	return strings.Count(bodies, commitBodiesRangeSeparator)
+}
+
+// enumeratePendingDirtyFiles fills the bounded dirty-file sample and true
+// total. A preflight that cannot enumerate must not claim there are no files:
+// when Worktrees is unset or InspectCleanliness errors, both fields stay
+// zero-valued and PendingDirty alone carries the signal.
+func (o *Orchestrator) enumeratePendingDirtyFiles(workDir string, result CompletionRepoResult) CompletionRepoResult {
+	if o.deps.Worktrees == nil {
+		return result
+	}
+	report, err := o.deps.Worktrees.InspectCleanliness(workDir, feature.DefaultDirtyPathLimit)
+	if err != nil || report == nil {
+		return result
+	}
+	all := append(append(append([]string{}, report.Staged...), report.Unstaged...), report.Untracked...)
+	// A path staged and further modified (MM) is reported by both
+	// categories; dedupe so it is neither listed nor counted twice.
+	deduped := dedupePreservingOrder(all)
+	result.PendingDirtyFiles = deduped
+	total := report.StagedTotal + report.UnstagedTotal + report.UntrackedTotal
+	result.PendingDirtyFileTotal = total - (len(all) - len(deduped))
+	return result
+}
+
+// repoStackSettled reports whether one repository's delivery is settled under
+// the run's stack — every layer's entry either carries a pull request or is
+// marked NoCommits, the per-repository slice of Feature.AllReposPublished.
+// Runs without a stack (approved before the `## Pull Requests` table) keep the
+// legacy rule: the per-repo PR URL alone settles the repository.
+func repoStackSettled(f *feature.Feature, repoName, legacyPRURL string) bool {
+	if f == nil || len(f.Stack) == 0 {
+		return legacyPRURL != ""
+	}
+	for _, layer := range f.Stack {
+		entry, ok := layer.Repos[repoName]
+		if !ok || (entry.PRURL == "" && !entry.NoCommits) {
+			return false
+		}
+	}
+	return true
 }
 
 // dedupePreservingOrder drops repeated entries, keeping each one's first

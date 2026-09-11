@@ -1306,12 +1306,12 @@ describe('owned error wire shapes on the feature summary', () => {
   const repoEntry = {
     ref: {
       scope: 'repository',
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       feature_id: 'abcd1234ef567890',
       repository: 'repo-a',
     },
     error: {
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       class: 'needs_action',
       title: 'Pull-rebase conflict',
       summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',

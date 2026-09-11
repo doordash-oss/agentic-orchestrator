@@ -142,7 +142,7 @@ describe('CompletionService.preflightCompletion', () => {
                   touched: true,
                   status: 'unpublished_changes',
                   error: {
-                    code: 'publish_rebase_conflict',
+                    code: 'publish_remote_diverged',
                     class: 'needs_action',
                     title: 'Pull-rebase conflict',
                     summary:
@@ -175,7 +175,7 @@ describe('CompletionService.preflightCompletion', () => {
     expect(repo).toBeDefined();
     if (repo == null) return;
     expect(repo.error).toMatchObject({
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       class: 'needs_action',
       title: 'Pull-rebase conflict',
     });

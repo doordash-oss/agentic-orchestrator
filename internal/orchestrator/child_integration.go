@@ -525,7 +525,13 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 	if child.Parent.Kind == feature.ChildKindReviewFeedback {
 		return o.reviewFeedbackIntegrationTail(child, parent)
 	}
-	if parent.IsPublishable() && parent.Checkpoints.AutoPublish() {
+	// A parent that already reached Published needs no publish handoff:
+	// every touched repository's stack is settled, and re-entering a
+	// settled closure tail must not replay the stack walk (and its PR
+	// state reads) for historical children on later startups. A partial
+	// publish keeps the parent CodeReady, so failed repositories still
+	// retry through this tail.
+	if parent.IsPublishable() && parent.Checkpoints.AutoPublish() && parent.Status != feature.StatusPublished {
 		if err := o.publishWithOptionsLocked(parentID, PublishOptions{}); err != nil {
 			event := ports.Event{
 				Type:      ports.RepoStatusChanged,
@@ -693,7 +699,7 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 	}
 
 	// The parent ends Published whether or not any step failed.
-	if err := o.deps.Lifecycle.MarkPublished(parent.ID, parent.FirstRepoPRURL()); err != nil {
+	if err := o.deps.Lifecycle.MarkPublished(parent.ID); err != nil {
 		return fmt.Errorf("returning review-feedback parent to published: %w", err)
 	}
 

@@ -1,15 +1,17 @@
 {{- /*
-  pr_description.user: the Publish-phase prompt for generating a PR
-  title + body from structured signals (feature context, roadmap, commit
-  bodies, diff stat). The raw line-level diff is intentionally NOT
-  injected — commit messages + stats are sufficient for description and
-  fit comfortably inside CLI prompt budgets even on very large features.
+  pr_description.user: the Publish-phase prompt for generating one stack
+  layer's PR body from structured signals (feature context, the layer's
+  position/title/phases/rationale, the full stack listing, commit bodies,
+  diff stat). The raw line-level diff is intentionally NOT injected —
+  commit messages + stats are sufficient for description and fit
+  comfortably inside CLI prompt budgets even on very large features.
 
-  Output format is rigid: TITLE: + BODY: markers so ParsePRDescription
-  can split deterministically.
+  The reply is body-only markdown: the description session no longer
+  produces a title, and the parser treats the whole reply as the body
+  (with a lenient fallback stripping a legacy TITLE: marker).
 */ -}}
 {{- define "pr_description.user" -}}
-# Generate PR Description
+# Generate PR Description Body
 
 {{ if or .FeatureName .FeatureDescription }}## Feature
 
@@ -17,10 +19,19 @@
 
 {{ end }}{{ if .FeatureDescription }}{{ .FeatureDescription }}
 
-{{ end }}{{ end }}{{ if .Roadmap }}## Roadmap / Plan
+{{ end }}{{ end }}{{ if .LayerPosition }}## This Layer
 
-{{ .Roadmap }}
+Position: Layer {{ .LayerPosition }}{{ if .Stack }} of {{ len .Stack }}{{ end }}
+{{ if .LayerTitle }}Title: {{ .LayerTitle }}
+{{ end }}{{ if .LayerPhases }}Phases: {{ .LayerPhases }}
+{{ end }}{{ if .LayerRationale }}Rationale: {{ .LayerRationale }}
+{{ end }}
+{{ end }}{{ if .Stack }}## Delivery Stack
 
+This feature delivers as a stack of layered pull requests — one branch and pull request per layer below. The highest position is the top layer. This prompt describes only the layer named above.
+
+{{ $top := 0 }}{{ range .Stack }}{{ if gt .Position $top }}{{ $top = .Position }}{{ end }}{{ end }}{{ range .Stack }}- Layer {{ .Position }}{{ if .Title }}: {{ .Title }}{{ end }}{{ if eq .Position $top }} (top layer){{ end }} — phases {{ .Phases }}{{ if .Branch }}, branch {{ .Branch }}{{ end }}
+{{ end }}
 {{ end }}{{ if .CommitBodies }}## Commit Messages
 
 ```
@@ -35,20 +46,19 @@
 
 {{ end }}## Instructions
 
-Generate a pull request description using the feature, roadmap, commit messages,
-and file-level change stats above. The raw line-level diff is intentionally not
+Generate the body of the pull request description for this layer only, using
+the feature context, the layer's position, title, phases, and rationale, the
+delivery stack listing, the commit messages, and file-level change stats
+above. Describe only this layer's changes — not the feature as a whole and
+not other layers' changes. The raw line-level diff is intentionally not
 included — rely on the commit messages and stats to describe the change.
 Use only the context supplied in this prompt. Do not request or invoke tools,
 inspect files, run commands, browse the web, delegate work, or ask for more
 information. Produce the best complete result possible from the available context.
 
 Produce:
-1. A concise title (under 70 characters) that captures the feature intent
-2. A Summary section with 1-3 bullets on what changed and why
-3. A Test plan section
+1. A Summary section with 1-3 bullets on what changed in this layer and why
+2. A Test plan section
 
-Output format (exactly):
-TITLE: <title>
-BODY:
-<body in markdown>
+Output the body in markdown only. Do not include a pull request title.
 {{ end -}}

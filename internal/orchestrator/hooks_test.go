@@ -532,6 +532,101 @@ func TestBuildHooks_OnFeatureSummaryNeeded_BuildsInputFromRunFailureRecord(t *te
 	})
 }
 
+// TestBuildHooks_OnFeatureSummaryNeeded_StackDerivedRepoStatuses pins the
+// per-repository summary status derivation against the delivery stack: the
+// legacy PR URL projects the highest layer's pull request and must not mask
+// an unpublished upper layer, while a repository whose every layer is settled
+// (pull request or no-commits marker) reports published. Stackless runs keep
+// the legacy PR URL rule.
+func TestBuildHooks_OnFeatureSummaryNeeded_StackDerivedRepoStatuses(t *testing.T) {
+	writeSummaryStatus := func(t *testing.T, f *feature.Feature) string {
+		t.Helper()
+		tmp := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(tmp, f.ID), 0o755); err != nil {
+			t.Fatalf("mkdir feature dir: %v", err)
+		}
+		obs := newTestObserver(tmp)
+		defer obs.Shutdown()
+
+		fs := mocks.NewMockFeatureStore()
+		fs.LoadFn = func(id string) (*feature.Feature, error) { return f, nil }
+
+		h := orchestrator.BuildHooks(obs, nil, fs, tmp)
+		if h.OnFeatureSummaryNeeded == nil {
+			t.Fatal("OnFeatureSummaryNeeded hook is nil")
+		}
+		h.OnFeatureSummaryNeeded(f.ID, f)
+		obs.Shutdown()
+
+		data, err := os.ReadFile(filepath.Join(tmp, f.ID, "observe-summary.yaml"))
+		if err != nil {
+			t.Fatalf("read observe-summary.yaml: %v", err)
+		}
+		var summary observe.SummaryArtifact
+		if err := yaml.Unmarshal(data, &summary); err != nil {
+			t.Fatalf("unmarshal observe-summary.yaml: %v\n%s", err, data)
+		}
+		repo, ok := summary.Repos["r"]
+		if !ok {
+			t.Fatalf("repos = %+v, want an entry for r", summary.Repos)
+		}
+		return repo.Status
+	}
+
+	stackedFeature := func(layer2 feature.StackRepoEntry) *feature.Feature {
+		return &feature.Feature{
+			ID:     "fsum-stack",
+			Name:   "Summary stack",
+			Status: feature.StatusCodeReady,
+			Stack: []feature.StackLayer{
+				{
+					Position: 1, Title: "Bootstrap", Branch: "feature/x/1-bootstrap",
+					Repos: map[string]feature.StackRepoEntry{
+						"r": {PRURL: "https://github.com/org/r/pull/1", PRState: feature.StackPRStateOpen},
+					},
+				},
+				{
+					Position: 2, Title: "Build", Branch: "feature/x/2-build",
+					Repos: map[string]feature.StackRepoEntry{"r": layer2},
+				},
+			},
+			Repos: []feature.FeatureRepo{{Name: "r", Path: "/tmp/r"}},
+			RepoStates: map[string]*feature.RepoState{
+				"r": {Touched: true, PRURL: "https://github.com/org/r/pull/1"},
+			},
+		}
+	}
+
+	t.Run("unpublished upper layer reports touched, not published", func(t *testing.T) {
+		// Layer 2 delivered nothing yet: no PR, no no-commits marker. The
+		// legacy PR URL projects layer 1's PR and must not mask it.
+		if got := writeSummaryStatus(t, stackedFeature(feature.StackRepoEntry{})); got != "touched" {
+			t.Errorf("repos[r].status = %q, want touched (layer 2 is unpublished)", got)
+		}
+	})
+
+	t.Run("every layer settled reports published", func(t *testing.T) {
+		if got := writeSummaryStatus(t, stackedFeature(feature.StackRepoEntry{NoCommits: true})); got != "published" {
+			t.Errorf("repos[r].status = %q, want published (every layer settled)", got)
+		}
+	})
+
+	t.Run("stackless legacy PR URL still reports published", func(t *testing.T) {
+		f := &feature.Feature{
+			ID:     "fsum-legacy",
+			Name:   "Summary legacy",
+			Status: feature.StatusPublished,
+			Repos:  []feature.FeatureRepo{{Name: "r", Path: "/tmp/r"}},
+			RepoStates: map[string]*feature.RepoState{
+				"r": {Touched: true, PRURL: "https://github.com/org/r/pull/1"},
+			},
+		}
+		if got := writeSummaryStatus(t, f); got != "published" {
+			t.Errorf("repos[r].status = %q, want published under the legacy rule", got)
+		}
+	})
+}
+
 // ---------------------------------------------------------------------------
 // T10. Orchestrator.Delete — stops sessions then calls lifecycle.
 // ---------------------------------------------------------------------------

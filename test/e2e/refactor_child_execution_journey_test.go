@@ -80,6 +80,15 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 		ActiveRun:     1,
 		RunCount:      1,
 		SchemaVersion: feature.SchemaVersionCurrent,
+		// The approved single-layer stack: the parent branch is layer 1's
+		// delivery, and publish refreshes its tip from the checked-out ref.
+		Stack: []feature.StackLayer{{
+			Position: 1,
+			Title:    "Journey parent",
+			Slug:     "journey-parent",
+			Phases:   []int{1},
+			Branch:   "feature/journey-parent",
+		}},
 		Repos: []feature.FeatureRepo{{
 			Name:         "repoA",
 			Path:         repoDir,
@@ -267,12 +276,8 @@ func (failingPRRemoteOps) Push(worktreePath, branch string) error {
 	return git.Push(worktreePath, branch)
 }
 
-func (failingPRRemoteOps) ForcePush(worktreePath, branch string) error {
-	return git.ForcePush(worktreePath, branch)
-}
-
-func (failingPRRemoteOps) PushRewrittenBranch(worktreePath, branch string) error {
-	return git.PushRewrittenBranch(worktreePath, branch)
+func (failingPRRemoteOps) PushLayerBranch(worktreePath, branch, localSHA, lastPushedSHA string) (string, error) {
+	return git.PushLayerBranch(worktreePath, branch, localSHA, lastPushedSHA)
 }
 
 func (failingPRRemoteOps) PullRebase(worktreePath, branch string) error {
@@ -290,6 +295,14 @@ func (failingPRRemoteOps) PRBaseBranch(repoPath, prURL string) string {
 
 func (failingPRRemoteOps) PRState(repoPath, prURL string) (string, error) {
 	return git.PRState(repoPath, prURL)
+}
+
+func (failingPRRemoteOps) GetPRBody(prURL string) (string, error) {
+	return git.GetPRBody(prURL)
+}
+
+func (failingPRRemoteOps) UpdatePRBody(prURL, body string) error {
+	return git.UpdatePRBody(prURL, body)
 }
 
 // runRefactorChildLifecycle launches one child through the API and drives it

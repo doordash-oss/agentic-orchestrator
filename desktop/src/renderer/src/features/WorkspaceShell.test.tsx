@@ -101,12 +101,12 @@ function needsActionRepositoryError(featureId: string): OwnedError {
   return {
     ref: {
       scope: 'repository',
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       featureId,
       repository: 'repo-a',
     },
     error: {
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       class: 'needs_action',
       title: 'Pull-rebase conflict',
       summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
@@ -2159,7 +2159,7 @@ describe('WorkspaceShell error-item attention jumps', () => {
 
   it('opens the publish modal and focuses its repository card for a repository entry', async () => {
     const repoError = {
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       class: 'needs_action' as const,
       title: 'Pull-rebase conflict',
       summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
@@ -2172,7 +2172,7 @@ describe('WorkspaceShell error-item attention jumps', () => {
         {
           ref: {
             scope: 'repository',
-            code: 'publish_rebase_conflict',
+            code: 'publish_remote_diverged',
             featureId: FEATURE_ID,
             repository: 'repo-a',
           },
@@ -2193,17 +2193,17 @@ describe('WorkspaceShell error-item attention jumps', () => {
     });
     const errorItem: AttentionItem = {
       kind: 'error',
-      id: `error:${FEATURE_ID}:repository:repo-a:publish_rebase_conflict`,
+      id: `error:${FEATURE_ID}:repository:repo-a:publish_remote_diverged`,
       featureId: FEATURE_ID,
       waitingSince: '2026-08-05T12:00:00.000Z',
       ref: {
         scope: 'repository',
-        code: 'publish_rebase_conflict',
+        code: 'publish_remote_diverged',
         featureId: FEATURE_ID,
         repository: 'repo-a',
       },
       class: 'needs_action',
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       title: 'Pull-rebase conflict',
     };
     render(

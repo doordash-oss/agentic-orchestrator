@@ -382,3 +382,201 @@ func TestRetroactivelyUpdateCrossRefs_SkipCurrentRepo(t *testing.T) {
 		t.Errorf("expected no errors when only current repo has URL, got: %v", errs)
 	}
 }
+
+func TestBuildLayerCrossReferenceSection(t *testing.T) {
+	tests := []struct {
+		name        string
+		featureName string
+		entries     []CrossRefEntry
+		currentRepo string
+		wantEmpty   bool
+		contains    []string
+		notContains []string
+	}{
+		{
+			name:        "layer 2 of a two-repo feature links only the other repository's PR",
+			featureName: "my feature",
+			entries: []CrossRefEntry{
+				{RepoName: "repo-a", Branch: "agentico/my-feature", PRURL: "https://github.com/org/repo-a/pull/21"},
+				{RepoName: "repo-b", Branch: "agentico/my-feature", PRURL: "https://github.com/org/repo-b/pull/22"},
+			},
+			currentRepo: "repo-a",
+			contains: []string{
+				CrossRefSectionHeader,
+				"repo-b",
+				"[#22](https://github.com/org/repo-b/pull/22)",
+				"multi-repo feature",
+			},
+			notContains: []string{
+				"repo-a",
+				"[#21]",
+			},
+		},
+		{
+			name:        "a repository whose layer has no PR is omitted",
+			featureName: "my feature",
+			entries: []CrossRefEntry{
+				{RepoName: "repo-a", Branch: "agentico/my-feature", PRURL: "https://github.com/org/repo-a/pull/21"},
+				{RepoName: "repo-b", Branch: "agentico/my-feature", PRURL: ""},
+			},
+			currentRepo: "repo-a",
+			wantEmpty:   true,
+		},
+		{
+			name:        "pending and failed siblings are omitted, current repo excluded",
+			featureName: "my feature",
+			entries: []CrossRefEntry{
+				{RepoName: "repo-a", Branch: "agentico/my-feature", PRURL: "https://github.com/org/repo-a/pull/21"},
+				{RepoName: "repo-b", Branch: "agentico/my-feature", PRURL: ""},
+				{RepoName: "repo-c", Branch: "agentico/my-feature", PRURL: "(failed)"},
+				{RepoName: "repo-d", Branch: "agentico/my-feature", PRURL: "https://github.com/org/repo-d/pull/24"},
+			},
+			currentRepo: "repo-a",
+			contains: []string{
+				"repo-d",
+				"[#24](https://github.com/org/repo-d/pull/24)",
+			},
+			notContains: []string{
+				"repo-a",
+				"repo-b",
+				"repo-c",
+				"_(pending)_",
+				"_(failed)_",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := BuildLayerCrossReferenceSection(tt.featureName, tt.entries, tt.currentRepo)
+
+			if tt.wantEmpty {
+				if got != "" {
+					t.Errorf("expected empty string, got: %q", got)
+				}
+				return
+			}
+
+			for _, s := range tt.contains {
+				if !strings.Contains(got, s) {
+					t.Errorf("expected result to contain %q, got:\n%s", s, got)
+				}
+			}
+			for _, s := range tt.notContains {
+				if strings.Contains(got, s) {
+					t.Errorf("expected result NOT to contain %q, got:\n%s", s, got)
+				}
+			}
+		})
+	}
+}
+
+func TestUpdatePRBodiesWithSection(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	body := "original body" + PRSignature
+	var patches int
+	fake.Mux.HandleFunc("/repos/acme/widgets/pulls/7", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]string{"body": body})
+		case http.MethodPatch:
+			b, _ := io.ReadAll(r.Body)
+			var payload struct {
+				Body string `json:"body"`
+			}
+			_ = json.Unmarshal(b, &payload)
+			body = payload.Body
+			patches++
+			fmt.Fprint(w, `{}`)
+		default:
+			t.Errorf("unexpected method %s", r.Method)
+		}
+	})
+
+	section := CrossRefSectionHeader + "\n\n| Repository | Branch | PR |\n|------------|--------|----|\n| repo-b | branch-b | [#1](https://github.com/org/repo-b/pull/1) |"
+
+	errs := UpdatePRBodiesWithSection([]string{
+		"https://github.com/acme/widgets/pull/7",
+		"",
+		"(failed)",
+	}, section)
+	if len(errs) != 0 {
+		t.Fatalf("UpdatePRBodiesWithSection() errors = %v", errs)
+	}
+	if patches != 1 {
+		t.Errorf("expected exactly one PATCH, got %d", patches)
+	}
+	if !strings.Contains(body, CrossRefSectionHeader) {
+		t.Errorf("expected patched body to contain the cross-reference section, got:\n%s", body)
+	}
+
+	// Re-running over the already-injected body writes nothing back.
+	errs = UpdatePRBodiesWithSection([]string{"https://github.com/acme/widgets/pull/7"}, section)
+	if len(errs) != 0 {
+		t.Fatalf("second UpdatePRBodiesWithSection() errors = %v", errs)
+	}
+	if patches != 1 {
+		t.Errorf("expected no additional PATCH on re-run, got %d", patches)
+	}
+}
+
+func TestUpdatePRBodiesWithSection_Error(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/invalid/nonexistent/pulls/99999", 404, `{"message":"Not Found"}`)
+
+	errs := UpdatePRBodiesWithSection([]string{"https://github.com/invalid/nonexistent/pull/99999"}, CrossRefSectionHeader+"\n\ntable")
+	if len(errs) != 1 {
+		t.Fatalf("expected one error, got: %v", errs)
+	}
+	if !strings.Contains(errs[0].Error(), "https://github.com/invalid/nonexistent/pull/99999") {
+		t.Errorf("expected error to name the PR URL, got: %v", errs[0])
+	}
+}
+
+func TestRetroactivelyUpdateCrossRefs_UpdatesSiblingPRs(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	var patchedBody string
+	var patches int
+	fake.Mux.HandleFunc("/repos/org/other/pulls/9", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			fmt.Fprint(w, `{"body":"sibling body"}`)
+		case http.MethodPatch:
+			b, _ := io.ReadAll(r.Body)
+			var payload struct {
+				Body string `json:"body"`
+			}
+			_ = json.Unmarshal(b, &payload)
+			patchedBody = payload.Body
+			patches++
+			fmt.Fprint(w, `{}`)
+		default:
+			t.Errorf("unexpected method %s", r.Method)
+		}
+	})
+
+	entries := []CrossRefEntry{
+		{RepoName: "mine", Branch: "agentico/my-feature", PRURL: "https://github.com/org/mine/pull/42"},
+		{RepoName: "other", Branch: "agentico/my-feature", PRURL: "https://github.com/org/other/pull/9"},
+	}
+
+	errs := RetroactivelyUpdateCrossRefs("my feature", entries, "mine")
+	if len(errs) != 0 {
+		t.Fatalf("RetroactivelyUpdateCrossRefs() errors = %v", errs)
+	}
+	if patches != 1 {
+		t.Errorf("expected exactly one PATCH on the sibling PR, got %d", patches)
+	}
+	for _, want := range []string{
+		"mine",
+		"other",
+		"[#42](https://github.com/org/mine/pull/42)",
+		"[#9](https://github.com/org/other/pull/9)",
+	} {
+		if !strings.Contains(patchedBody, want) {
+			t.Errorf("expected patched body to contain %q, got:\n%s", want, patchedBody)
+		}
+	}
+}

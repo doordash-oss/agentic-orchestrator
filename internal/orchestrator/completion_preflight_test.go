@@ -585,3 +585,296 @@ func TestCompletionPreflightUnresolvedDestinationKeepsStatus(t *testing.T) {
 		t.Errorf("pending fields set without a resolvable destination: %+v", got)
 	}
 }
+
+// completionGitOutput runs git in dir and returns the trimmed stdout.
+func completionGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %s in %s: %v", strings.Join(args, " "), dir, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// stackedPreflightRepo builds a real git repository wired to a bare origin
+// with a two-layer stack on paper: one commit on feature/l1 off main and one
+// commit on feature/l2 on top of it. Both layer branches stay local until a
+// test pushes them; origin/main is the remote-tracking base the stack
+// preflight resolves.
+func stackedPreflightRepo(t *testing.T) (worktree, tip1, tip2 string) {
+	t.Helper()
+	dir := t.TempDir()
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	runCompletionGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	for _, args := range [][]string{
+		{"init", "--initial-branch=main"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test"},
+		{"commit", "--allow-empty", "-m", "initial"},
+		{"remote", "add", "origin", bare},
+		{"push", "-u", "origin", "main"},
+		{"checkout", "-b", "feature/l1"},
+		{"commit", "--allow-empty", "-m", "layer one"},
+		{"checkout", "-b", "feature/l2"},
+		{"commit", "--allow-empty", "-m", "layer two"},
+	} {
+		runCompletionGit(t, dir, args...)
+	}
+	return dir,
+		completionGitOutput(t, dir, "rev-parse", "feature/l1"),
+		completionGitOutput(t, dir, "rev-parse", "feature/l2")
+}
+
+// newStackedPreflightOrchestrator wires a one-repository feature whose stack
+// and repository state the test shapes — the same shape as
+// newPendingDeliveryOrchestrator plus the delivery stack. The feature keeps
+// the feat-pending ID so onlyPendingRepo addresses it.
+func newStackedPreflightOrchestrator(t *testing.T, status feature.Status, repoPath string, stack []feature.StackLayer, state *feature.RepoState) *Orchestrator {
+	t.Helper()
+	store := feature.NewStore(t.TempDir())
+	manager := feature.NewManager(store, config.NewDefault())
+	f := &feature.Feature{
+		ID:            "feat-pending",
+		Name:          "Stack pending",
+		Slug:          "stack-pending",
+		Status:        status,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun:     1,
+		RunCount:      1,
+		Stack:         stack,
+		Repos: []feature.FeatureRepo{{
+			Name:         "repo-a",
+			Path:         repoPath,
+			WorktreePath: repoPath,
+			Branch:       "feature/l1",
+			BaseBranch:   "main",
+			Publishable:  boolPtr(true),
+		}},
+		RepoStates: map[string]*feature.RepoState{"repo-a": state},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	return New(Deps{Lifecycle: manager, Store: store}, Hooks{})
+}
+
+// A feature whose layer 1 is published (branch pushed, PR recorded, tip equal
+// to the last-pushed SHA) and whose layer 2 carries commits without a PR
+// reports unpublished-changes: the legacy PR URL projects layer 1's PR, the
+// stack measurement sees layer 2's undelivered range, and the pending count
+// equals layer 2's full commit range.
+func TestCompletionPreflightStackUpperLayerUnpublishedReportsUnpublishedChanges(t *testing.T) {
+	t.Parallel()
+	repo, tip1, tip2 := stackedPreflightRepo(t)
+	runCompletionGit(t, repo, "push", "origin", "feature/l1")
+	const layer1URL = "https://github.example/repo-a/pull/1"
+	stack := []feature.StackLayer{
+		{
+			Position: 1, Title: "Bootstrap", Branch: "feature/l1",
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {TipSHA: tip1, LastPushedSHA: tip1, PRURL: layer1URL, PRState: feature.StackPRStateOpen},
+			},
+		},
+		{
+			Position: 2, Title: "Build and polish", Branch: "feature/l2",
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {TipSHA: tip2},
+			},
+		},
+	}
+	o := newStackedPreflightOrchestrator(t, feature.StatusCodeReady, repo, stack,
+		&feature.RepoState{Touched: true, PRURL: layer1URL})
+
+	got := onlyPendingRepo(t, o)
+	if got.Status != completionStatusUnpublishedChanges {
+		t.Errorf("status = %q; want %q (layer 2 has commits but no PR)", got.Status, completionStatusUnpublishedChanges)
+	}
+	if got.PendingCommits != 1 {
+		t.Errorf("pending commits = %d; want 1 (layer 2's full range)", got.PendingCommits)
+	}
+	if got.PendingDirty {
+		t.Error("pending dirty = true; want false")
+	}
+	if got.PushMode != completionPushModeFastForward {
+		t.Errorf("push mode = %q; want %q", got.PushMode, completionPushModeFastForward)
+	}
+	if got.PRURL != layer1URL {
+		t.Errorf("PR URL = %q; want the legacy projection (layer 1's PR)", got.PRURL)
+	}
+}
+
+// Once layer 2 is published too (branch pushed, PR recorded, tip equal to the
+// last-pushed SHA), every layer with commits is delivered and the repository
+// reports already-published with no pending commits.
+func TestCompletionPreflightStackAllLayersPublishedReportsAlreadyPublished(t *testing.T) {
+	t.Parallel()
+	repo, tip1, tip2 := stackedPreflightRepo(t)
+	runCompletionGit(t, repo, "push", "origin", "feature/l1")
+	runCompletionGit(t, repo, "push", "origin", "feature/l2")
+	const layer2URL = "https://github.example/repo-a/pull/2"
+	stack := []feature.StackLayer{
+		{
+			Position: 1, Title: "Bootstrap", Branch: "feature/l1",
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {TipSHA: tip1, LastPushedSHA: tip1, PRURL: "https://github.example/repo-a/pull/1", PRState: feature.StackPRStateOpen},
+			},
+		},
+		{
+			Position: 2, Title: "Build and polish", Branch: "feature/l2",
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {TipSHA: tip2, LastPushedSHA: tip2, PRURL: layer2URL, PRState: feature.StackPRStateOpen},
+			},
+		},
+	}
+	o := newStackedPreflightOrchestrator(t, feature.StatusCodeReady, repo, stack,
+		&feature.RepoState{Touched: true, PRURL: layer2URL})
+
+	got := onlyPendingRepo(t, o)
+	if got.Status != completionStatusAlreadyPublished {
+		t.Errorf("status = %q; want %q", got.Status, completionStatusAlreadyPublished)
+	}
+	if got.PendingCommits != 0 {
+		t.Errorf("pending commits = %d; want 0", got.PendingCommits)
+	}
+	if got.PendingDirty {
+		t.Error("pending dirty = true; want false")
+	}
+	if got.PRURL != layer2URL {
+		t.Errorf("PR URL = %q; want the legacy projection (layer 2's PR)", got.PRURL)
+	}
+}
+
+// A rewritten layer 1 whose remote still holds the pushed tip reports push
+// mode rewrite: the remote contains a commit the local tip does not, so a
+// republish cannot be a fast-forward.
+func TestCompletionPreflightStackRewrittenLayerReportsRewritePushMode(t *testing.T) {
+	t.Parallel()
+	repo, tip1, _ := stackedPreflightRepo(t)
+	runCompletionGit(t, repo, "checkout", "feature/l1")
+	runCompletionGit(t, repo, "commit", "--allow-empty", "-m", "pushed later")
+	runCompletionGit(t, repo, "push", "origin", "feature/l1")
+	pushed := completionGitOutput(t, repo, "rev-parse", "feature/l1")
+	runCompletionGit(t, repo, "reset", "--hard", tip1)
+	runCompletionGit(t, repo, "commit", "--allow-empty", "-m", "rewritten")
+	rewritten := completionGitOutput(t, repo, "rev-parse", "feature/l1")
+	const layer1URL = "https://github.example/repo-a/pull/1"
+	stack := []feature.StackLayer{
+		{
+			Position: 1, Title: "Bootstrap", Branch: "feature/l1",
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {TipSHA: rewritten, LastPushedSHA: pushed, PRURL: layer1URL, PRState: feature.StackPRStateOpen},
+			},
+		},
+	}
+	o := newStackedPreflightOrchestrator(t, feature.StatusCodeReady, repo, stack,
+		&feature.RepoState{Touched: true, PRURL: layer1URL})
+
+	got := onlyPendingRepo(t, o)
+	if got.Status != completionStatusUnpublishedChanges {
+		t.Errorf("status = %q; want %q (the rewritten tip is unpushed)", got.Status, completionStatusUnpublishedChanges)
+	}
+	if got.PushMode != completionPushModeRewrite {
+		t.Errorf("push mode = %q; want %q (the remote holds the old tip)", got.PushMode, completionPushModeRewrite)
+	}
+	if got.PendingCommits != 1 {
+		t.Errorf("pending commits = %d; want 1 (the rewritten commit beyond the pushed tip)", got.PendingCommits)
+	}
+}
+
+// The deferred Final Review staging predicate, driven per repository off the
+// stack: a layer with commits lacking a PR or with a tip that differs from
+// its last-pushed SHA stages review; NoCommits layers and fully delivered
+// stacks do not; stackless runs keep the legacy per-repo PR URL rule.
+func TestReposNeedFinalReviewStackStaging(t *testing.T) {
+	t.Parallel()
+	repo, tip1, tip2 := stackedPreflightRepo(t)
+	const layer1URL = "https://github.example/repo-a/pull/1"
+	const layer2URL = "https://github.example/repo-a/pull/2"
+
+	featureFor := func(stack []feature.StackLayer, prURL string) *feature.Feature {
+		return &feature.Feature{
+			Stack: stack,
+			Repos: []feature.FeatureRepo{{
+				Name: "repo-a", Path: repo, WorktreePath: repo,
+				Branch: "feature/l1", BaseBranch: "main", Publishable: boolPtr(true),
+			}},
+			RepoStates: map[string]*feature.RepoState{
+				"repo-a": {Touched: true, PRURL: prURL},
+			},
+		}
+	}
+	publishedLayer1 := feature.StackLayer{
+		Position: 1, Title: "Bootstrap", Branch: "feature/l1",
+		Repos: map[string]feature.StackRepoEntry{
+			"repo-a": {TipSHA: tip1, LastPushedSHA: tip1, PRURL: layer1URL, PRState: feature.StackPRStateOpen},
+		},
+	}
+	layer2WithCommits := feature.StackLayer{
+		Position: 2, Title: "Build and polish", Branch: "feature/l2",
+		Repos: map[string]feature.StackRepoEntry{
+			"repo-a": {TipSHA: tip2},
+		},
+	}
+
+	cases := []struct {
+		name string
+		f    *feature.Feature
+		want bool
+	}{
+		{
+			name: "upper layer with commits and no PR",
+			f:    featureFor([]feature.StackLayer{publishedLayer1, layer2WithCommits}, layer1URL),
+			want: true,
+		},
+		{
+			name: "every layer with commits published",
+			f: featureFor([]feature.StackLayer{publishedLayer1, {
+				Position: 2, Title: "Build and polish", Branch: "feature/l2",
+				Repos: map[string]feature.StackRepoEntry{
+					"repo-a": {TipSHA: tip2, LastPushedSHA: tip2, PRURL: layer2URL, PRState: feature.StackPRStateOpen},
+				},
+			}}, layer2URL),
+			want: false,
+		},
+		{
+			name: "upper layer marked no-commits never stages",
+			f: featureFor([]feature.StackLayer{publishedLayer1, {
+				Position: 2, Title: "Build and polish", Branch: "feature/l2",
+				Repos: map[string]feature.StackRepoEntry{
+					"repo-a": {TipSHA: tip2, NoCommits: true},
+				},
+			}}, layer1URL),
+			want: false,
+		},
+		{
+			name: "rewritten tip after publish",
+			f: featureFor([]feature.StackLayer{{
+				Position: 1, Title: "Bootstrap", Branch: "feature/l1",
+				Repos: map[string]feature.StackRepoEntry{
+					"repo-a": {TipSHA: tip2, LastPushedSHA: tip1, PRURL: layer1URL, PRState: feature.StackPRStateOpen},
+				},
+			}}, layer1URL),
+			want: true,
+		},
+		{
+			name: "legacy stackless touched repo without PR URL",
+			f:    featureFor(nil, ""),
+			want: true,
+		},
+		{
+			name: "legacy stackless touched repo with PR URL",
+			f:    featureFor(nil, layer1URL),
+			want: false,
+		},
+	}
+	o := New(Deps{}, Hooks{})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := o.reposNeedFinalReview(tc.f); got != tc.want {
+				t.Errorf("reposNeedFinalReview = %v; want %v", got, tc.want)
+			}
+		})
+	}
+}

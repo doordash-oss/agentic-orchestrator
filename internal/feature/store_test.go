@@ -1062,6 +1062,77 @@ func timePointer(t time.Time) *time.Time {
 	return &t
 }
 
+// TestStoreStackRepoEntryPublishFieldsRoundTrip pins the durable shape of
+// the per-layer publish fields on StackRepoEntry: the no-commits marker,
+// pull request URL and state, and last pushed SHA survive a save/load
+// cycle, and a partial rewind's stack copy clears every entry field —
+// including the marker — for layers at and above the target layer while
+// layers below keep their records.
+func TestStoreStackRepoEntryPublishFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "stack-publish-fields-001",
+		Name:          "Stack Publish Fields",
+		Slug:          "stack-publish-fields",
+		Status:        StatusCodeReady,
+		CurrentPhase:  PhasePublish,
+		SchemaVersion: SchemaVersionCurrent,
+		Repos:         []FeatureRepo{{Name: "repo-a", Path: "/tmp/a"}, {Name: "repo-b", Path: "/tmp/b"}},
+	}
+	f.RepoStates = map[string]*RepoState{
+		"repo-a": {Touched: true, PRURL: "https://github.com/org/repo-a/pull/2"},
+	}
+	f.Stack = []StackLayer{
+		{
+			Position: 1,
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "aaaa", PRURL: "https://github.com/org/repo-a/pull/1", PRState: StackPRStateMerged},
+				"repo-b": {TipSHA: "bbbb", NoCommits: true},
+			},
+		},
+		{
+			Position: 2,
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "cccc", LastPushedSHA: "cccc", PRURL: "https://github.com/org/repo-a/pull/2", PRState: StackPRStateOpen},
+			},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := loaded.Stack[0].Repos["repo-b"]; !got.NoCommits || got.TipSHA != "bbbb" {
+		t.Errorf("layer 1 repo-b entry = %+v, want the no-commits marker and tip preserved", got)
+	}
+	if got := loaded.Stack[0].Repos["repo-a"]; got.PRState != StackPRStateMerged || got.PRURL != "https://github.com/org/repo-a/pull/1" {
+		t.Errorf("layer 1 repo-a entry = %+v, want the merged PR record preserved", got)
+	}
+	if got := loaded.Stack[1].Repos["repo-a"]; got.LastPushedSHA != "cccc" || got.PRState != StackPRStateOpen || got.PRURL != "https://github.com/org/repo-a/pull/2" {
+		t.Errorf("layer 2 repo-a entry = %+v, want the pushed SHA and open PR record preserved", got)
+	}
+
+	// A partial rewind to layer 2 clears the target layer's entries — the
+	// no-commits marker goes with the other per-repository fields — while
+	// layer 1 below the target keeps its records.
+	copied := CopyStackLayersForPartialRewind(loaded.Stack, 2)
+	if got := copied[0].Repos["repo-b"]; !got.NoCommits || got.TipSHA != "bbbb" {
+		t.Errorf("layer 1 repo-b entry after copy = %+v, want kept below the rewind target", got)
+	}
+	if got := copied[0].Repos["repo-a"]; got.PRURL != "https://github.com/org/repo-a/pull/1" {
+		t.Errorf("layer 1 repo-a entry after copy = %+v, want kept below the rewind target", got)
+	}
+	if copied[1].Repos != nil {
+		t.Errorf("layer 2 entries after copy = %+v, want cleared at the rewind target", copied[1].Repos)
+	}
+}
+
 func TestStoreDelete(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.

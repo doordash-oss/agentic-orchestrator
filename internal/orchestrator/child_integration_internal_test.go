@@ -94,6 +94,9 @@ func newChildIntegrationFixture(t *testing.T, parentStatus feature.Status, manua
 			Publishable:  &publishable,
 		}},
 		RepoStates:    map[string]*feature.RepoState{"repoA": {Touched: true}},
+		// A one-layer stack so the real lifecycle's stack-based publish
+		// writes and all-published check run against this fixture.
+		Stack:         []feature.StackLayer{{Position: 1, Title: "Single layer", Slug: "single-layer", Phases: []int{1}, Branch: "feature/parent"}},
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 	child := &feature.Feature{
@@ -775,10 +778,14 @@ func TestChildIntegrationAutoPublish(t *testing.T) {
 		p, _ := o.deps.Lifecycle.Get(fx.parent.ID)
 		childClosedAtPublish = c.Parent.CloseOutcome == feature.ChildCloseOutcomeCompleted &&
 			p.Status == feature.StatusCodeReady
-		if err := o.deps.Lifecycle.SetRepoPublished(featureID, repoName, "https://example/pr/1"); err != nil {
+		const prURL = "https://example/pr/1"
+		if err := o.deps.Lifecycle.RecordStackLayerPR(featureID, repoName, 1, prURL, ""); err != nil {
 			return "", err
 		}
-		return "https://example/pr/1", nil
+		if err := o.deps.Lifecycle.SetRepoPublished(featureID, repoName); err != nil {
+			return "", err
+		}
+		return prURL, nil
 	}
 
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {

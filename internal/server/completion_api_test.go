@@ -64,11 +64,6 @@ func (t *preflightMutationTarget) PublishFeature(featureID string, req PublishFe
 	return PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
 }
 
-func (t *preflightMutationTarget) GeneratePublishDescription(featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error) {
-	t.publishDescReq = req
-	return PublishDescriptionResponse{FeatureID: featureID, Title: "Generated title", Body: "Generated body", Result: "generated"}, nil
-}
-
 func (t *preflightMutationTarget) MergeFeature(featureID string, req GuardedFeatureActionRequest) (MergeFeatureResponse, error) {
 	t.mergeReq = req
 	return MergeFeatureResponse{FeatureID: featureID, Result: "merged"}, nil
@@ -148,7 +143,6 @@ func TestCompletionActionsPassThroughSourceRevision(t *testing.T) {
 			body: map[string]any{
 				"source_revision": "rev-publish",
 				"repos":           []string{"repo-a"},
-				"title":           "Publish completion",
 			},
 			check: func(t *testing.T, target *preflightMutationTarget) {
 				t.Helper()
@@ -336,7 +330,10 @@ func TestCleanupActionRejectsCycleTarget(t *testing.T) {
 	}
 }
 
-func TestPublishDescriptionPassesOnlySelectedRepos(t *testing.T) {
+// The publish/description pre-generation subaction is gone: the route no
+// longer reaches the mutation target and answers with the generic
+// unknown-action rejection, exactly like any other unrecognized subaction.
+func TestPublishDescriptionRouteIsGone(t *testing.T) {
 	t.Parallel()
 	target := &preflightMutationTarget{}
 	handler := NewHandler(HandlerOptions{
@@ -347,18 +344,15 @@ func TestPublishDescriptionPassesOnlySelectedRepos(t *testing.T) {
 	w := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/publish/description", map[string]any{
 		"repos": []string{"repo-a"},
 	})
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d body = %s; want the generic unknown-action rejection", w.Code, w.Body.String())
 	}
-	var resp PublishDescriptionResponse
+	var resp ErrorResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Title != "Generated title" || resp.Body != "Generated body" {
-		t.Fatalf("response = %+v, want generated narrative", resp)
-	}
-	if len(target.publishDescReq.Repos) != 1 || target.publishDescReq.Repos[0] != "repo-a" {
-		t.Fatalf("publish description request = %+v, want selected repo only", target.publishDescReq)
+	if resp.Error.Code != "method_not_allowed" {
+		t.Fatalf("error code = %q; want method_not_allowed", resp.Error.Code)
 	}
 }
 

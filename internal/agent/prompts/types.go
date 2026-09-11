@@ -209,13 +209,29 @@ type SummaryUserInput struct {
 	Description string
 }
 
+// PRStackLayerView is one layer of the delivery stack as rendered in the
+// PR-description prompt's stack listing. The line shape mirrors the
+// Final-Review fixer prompt's stack listing so both prompts present the
+// same stack vocabulary.
+type PRStackLayerView struct {
+	Position int
+	Title    string
+	Phases   []int
+	Branch   string
+}
+
 // PRDescriptionUserInput is the data passed to pr_description.user.tmpl.
 // Empty fields suppress their corresponding sections so the model is not
-// asked to reason about absent context.
+// asked to reason about absent context. The layer fields scope the prompt
+// to one stack layer's pull request; the output is a body-only description.
 type PRDescriptionUserInput struct {
 	FeatureName        string
 	FeatureDescription string
-	Roadmap            string
+	LayerPosition      int
+	LayerTitle         string
+	LayerPhases        []int
+	LayerRationale     string
+	Stack              []PRStackLayerView
 	CommitBodies       string
 	DiffStat           string
 }

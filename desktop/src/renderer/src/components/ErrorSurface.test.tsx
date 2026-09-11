@@ -213,7 +213,7 @@ describe('ErrorSurface structured details', () => {
     // rebase target of a conflicted pull-rebase, and the remote-only commit
     // count of a diverged branch; all three render under Details.
     const error: CanonicalError = {
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       class: 'needs_action',
       title: 'Pull-rebase conflict',
       summary: 'The pull rebase for repository "web" (branch "agentico/f") onto "main" conflicted.',

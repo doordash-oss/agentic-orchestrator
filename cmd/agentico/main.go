@@ -1828,8 +1828,6 @@ func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntim
 	}
 	if err := t.orch.PublishWithOptions(featureID, orchestrator.PublishOptions{
 		Repos: req.Repos,
-		Title: req.Title,
-		Body:  req.Body,
 	}); err != nil {
 		if conflict := actionConflictError(err); conflict != nil {
 			return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultConflict}, conflict
@@ -1837,19 +1835,6 @@ func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntim
 		return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
-}
-
-func (t *serverMutationTarget) GeneratePublishDescription(featureID string, req serverruntime.PublishDescriptionRequest) (serverruntime.PublishDescriptionResponse, error) {
-	if t.orch == nil {
-		return serverruntime.PublishDescriptionResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
-	}
-	title, body, err := t.orch.GeneratePublishDescription(featureID, orchestrator.PublishDescriptionOptions{
-		Repos: req.Repos,
-	})
-	if err != nil {
-		return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, err
-	}
-	return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, nil
 }
 
 func (t *serverMutationTarget) MergeFeature(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MergeFeatureResponse, error) {

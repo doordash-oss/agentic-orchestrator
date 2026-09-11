@@ -260,16 +260,20 @@ const (
 
 // StackRepoEntry is one repository's state inside one stack layer: the tip
 // SHA the layer boundary snapshotted, the last SHA pushed for the layer's
-// pull request, and that pull request's URL and state. All fields persist
-// with omit-empty semantics; a layer persisted before per-repository
-// entries existed loads with the map absent, and a repository untouched by
-// the layer records a tip equal to the layer below (or the base start
-// point for layer 1), which is how "no pull request here" is represented.
+// pull request, that pull request's URL and state, and the marker for a
+// repository the layer delivered no commits for — the all-published check
+// reads it to tell "nothing to publish here" from "publish still pending".
+// All fields persist with omit-empty semantics; a layer persisted before
+// per-repository entries existed loads with the map absent, and a
+// repository untouched by the layer records a tip equal to the layer below
+// (or the base start point for layer 1), which is how "no pull request
+// here" is represented.
 type StackRepoEntry struct {
 	TipSHA        string       `yaml:"tip_sha,omitempty" json:"tip_sha,omitempty"`
 	LastPushedSHA string       `yaml:"last_pushed_sha,omitempty" json:"last_pushed_sha,omitempty"`
 	PRURL         string       `yaml:"pr_url,omitempty" json:"pr_url,omitempty"`
 	PRState       StackPRState `yaml:"pr_state,omitempty" json:"pr_state,omitempty"`
+	NoCommits     bool         `yaml:"no_commits,omitempty" json:"no_commits,omitempty"`
 }
 
 // StackLayer is one pull-request layer of a feature's delivery stack,

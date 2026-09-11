@@ -149,8 +149,6 @@ import {
   type BulkPreview,
   type CompletionPreflightRequest,
   type CompletionPreflightResult,
-  type PublishDescriptionRequest,
-  type PublishDescriptionResult,
   type RepositoryDiffRequest,
   type RepositoryDiffResult,
   type OpenExternalRequest,
@@ -280,7 +278,6 @@ export interface IpcServices {
   bulkPreview(): Promise<BulkPreview>;
   preflightCompletion(request: CompletionPreflightRequest): Promise<CompletionPreflightResult>;
   getRepositoryDiff(request: RepositoryDiffRequest): Promise<RepositoryDiffResult>;
-  generatePublishDescription(request: PublishDescriptionRequest): Promise<PublishDescriptionResult>;
   openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }>;
   revealPath(request: RevealPathRequest): Promise<RevealPathResult>;
   writeClipboardText(text: string): Promise<{ ok: boolean }>;
@@ -538,8 +535,6 @@ export function registerIpcHandlers(
       services.preflightCompletion(request),
     [IPC_CHANNELS.repositoryDiff]: (_event, request: RepositoryDiffRequest) =>
       services.getRepositoryDiff(request),
-    [IPC_CHANNELS.publishDescription]: (_event, request: PublishDescriptionRequest) =>
-      services.generatePublishDescription(request),
     [IPC_CHANNELS.openExternal]: (_event, request: OpenExternalRequest) =>
       services.openExternal(request),
     [IPC_CHANNELS.revealPath]: (_event, request: RevealPathRequest) => services.revealPath(request),

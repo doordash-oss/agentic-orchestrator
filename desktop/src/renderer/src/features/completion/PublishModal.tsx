@@ -23,7 +23,6 @@ import type {
 } from '../../../../shared/ipc';
 import { E_REQUEST_TIMEOUT, buildCanonicalError } from '../../../../shared/errors';
 import { ErrorSurface, type ErrorSurfaceAction } from '../../components/ErrorSurface';
-import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../../components/FieldError';
 import { useModalDismiss } from '../../components/useModalDismiss';
 import { catalogErrorAction } from '../featureView';
 import { parseIpcError } from '../../wizard/ipcError';
@@ -64,10 +63,6 @@ export interface PublishModalProps {
   /** The feature's server action catalog; each row card resolves `publish` in it. */
   actions: readonly FeatureActionView[];
   dispatchAction(request: PublishFeatureActionRequest): Promise<FeatureActionResult>;
-  generatePublishDescription(
-    featureId: string,
-    repos: string[],
-  ): Promise<{ featureId: string; title: string; body: string }>;
   openExternal(url: string): Promise<{ ok: boolean }>;
   onDispatched(): void | Promise<void>;
   onClose(): void;
@@ -114,7 +109,6 @@ export function PublishModal({
   preflight,
   actions,
   dispatchAction,
-  generatePublishDescription,
   openExternal,
   onDispatched,
   onClose,
@@ -122,7 +116,6 @@ export function PublishModal({
   setPublishTimeoutLocked,
 }: PublishModalProps): React.ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const titleRef = useRef<HTMLInputElement>(null);
   const failureRef = useRef<HTMLDivElement>(null);
   const [publishRepos, setPublishRepos] = useState<Set<string>>(
     () =>
@@ -132,11 +125,6 @@ export function PublishModal({
           .map((repo) => repo.repo),
       ),
   );
-  const [publishTitle, setPublishTitle] = useState('');
-  const [publishBody, setPublishBody] = useState('');
-  const [titleVisited, setTitleVisited] = useState(false);
-  const [generatingDescription, setGeneratingDescription] = useState(false);
-  const [publishGenResult, setPublishGenResult] = useState<CanonicalError | null>(null);
   const [publishBusy, setPublishBusy] = useState(false);
   const [timedOutThisOpen, setTimedOutThisOpen] = useState(false);
   const [publishResult, setPublishResult] = useState<PublishOutcome | null>(null);
@@ -158,11 +146,6 @@ export function PublishModal({
       ),
     [preflight],
   );
-  const titleRequired = useMemo(
-    () => eligibleRepos.some((repo) => publishRepos.has(repo.repo)),
-    [eligibleRepos, publishRepos],
-  );
-  const titleInvalid = titleRequired && titleVisited && publishTitle.trim() === '';
   const dirtySelected = useMemo(
     () =>
       preflight.repos.filter((repo) => publishRepos.has(repo.repo) && repo.pendingDirty === true),
@@ -176,7 +159,6 @@ export function PublishModal({
   const canPublish =
     preflight.sourceRevision.trim() !== '' &&
     publishRepos.size > 0 &&
-    (!titleRequired || publishTitle.trim() !== '') &&
     (dirtySelected.length === 0 || commitConfirmed) &&
     !publishBusy &&
     !publishLocked;
@@ -204,13 +186,10 @@ export function PublishModal({
   }, [preflight]);
 
   useEffect(() => {
-    if (
-      (publishResult !== null && !publishResult.ok && publishResult.reconciling !== true) ||
-      (publishGenResult !== null && publishResult === null)
-    ) {
+    if (publishResult !== null && !publishResult.ok && publishResult.reconciling !== true) {
       failureRef.current?.focus();
     }
-  }, [publishGenResult, publishResult]);
+  }, [publishResult]);
 
   const togglePublishRepo = useCallback((repo: string) => {
     setPublishRepos((previous) => {
@@ -221,31 +200,14 @@ export function PublishModal({
     });
   }, []);
 
-  const handleGeneratePublishDescription = useCallback(async () => {
-    setGeneratingDescription(true);
-    setPublishGenResult(null);
-    try {
-      const result = await generatePublishDescription(featureId, Array.from(publishRepos));
-      setPublishTitle(result.title);
-      setPublishBody(result.body);
-    } catch (error) {
-      setPublishGenResult(parseIpcError(error));
-    } finally {
-      setGeneratingDescription(false);
-    }
-  }, [featureId, generatePublishDescription, publishRepos]);
-
   const runPublish = useCallback(
     async (repos: string[]) => {
-      const title = publishTitle.trim();
       const request: PublishFeatureActionRequest = {
         featureId,
         action: 'publish',
         body: {
           source_revision: preflight.sourceRevision,
           repos,
-          ...(title === '' ? {} : { title }),
-          ...(publishBody.trim() === '' ? {} : { body: publishBody }),
         },
       };
       setPublishBusy(true);
@@ -282,72 +244,51 @@ export function PublishModal({
         setPublishBusy(false);
       }
     },
-    [
-      dispatchAction,
-      featureId,
-      onDispatched,
-      preflight.sourceRevision,
-      setPublishTimeoutLocked,
-      publishBody,
-      publishTitle,
-    ],
+    [dispatchAction, featureId, onDispatched, preflight.sourceRevision, setPublishTimeoutLocked],
   );
 
   const handlePublish = useCallback(async () => {
-    const title = publishTitle.trim();
-    if (titleRequired && title === '') {
-      setTitleVisited(true);
-      titleRef.current?.focus();
-      return;
-    }
     if (!canPublish) return;
     await runPublish(Array.from(publishRepos));
-  }, [canPublish, publishRepos, runPublish, titleRef, titleRequired, publishTitle]);
+  }, [canPublish, publishRepos, runPublish]);
 
   const handleRetryPublish = useCallback(
     async (repo: PublishRepo) => {
       // The retry button is disabled under these preconditions; the guard
       // keeps a stale dispatch from racing a just-changed form.
       if (publishBusy || publishLocked || preflight.sourceRevision.trim() === '') return;
-      if (repo.prUrl === undefined && publishTitle.trim() === '') return;
       await runPublish([repo.repo]);
     },
-    [preflight.sourceRevision, publishBody, publishLocked, publishTitle, publishBusy, runPublish],
+    [preflight.sourceRevision, publishLocked, publishBusy, runPublish],
   );
 
   // One resolver per row card: the label is fixed, the enabled state is the
-  // catalog's `publish` state plus the modal's own preconditions for that
-  // single repository, and the disabled reason reports whichever blocks it.
-  const retryActionFor = useCallback(
-    (repo: PublishRepo) => {
-      const modalReason =
-        publishBusy || publishLocked
-          ? 'A publish is already running.'
-          : preflight.sourceRevision.trim() === ''
-            ? 'Refresh the preflight, then retry.'
-            : repo.prUrl === undefined && publishTitle.trim() === ''
-              ? 'Add a PR title to retry this publish.'
-              : undefined;
-      return (actionId: string): ErrorSurfaceAction | undefined => {
-        if (actionId !== PUBLISH_ACTION_ID) return undefined;
-        const base = catalogErrorAction({ actions }, actionId, 'Retry publish');
-        if (base === undefined) return undefined;
-        const reason = base.enabled ? modalReason : base.disabledReason;
-        return {
-          ...base,
-          enabled: base.enabled && modalReason === undefined,
-          ...(reason === undefined ? {} : { disabledReason: reason }),
-        };
+  // catalog's `publish` state plus the modal's own preconditions, and the
+  // disabled reason reports whichever blocks it.
+  const retryActionFor = useCallback(() => {
+    const modalReason =
+      publishBusy || publishLocked
+        ? 'A publish is already running.'
+        : preflight.sourceRevision.trim() === ''
+          ? 'Refresh the preflight, then retry.'
+          : undefined;
+    return (actionId: string): ErrorSurfaceAction | undefined => {
+      if (actionId !== PUBLISH_ACTION_ID) return undefined;
+      const base = catalogErrorAction({ actions }, actionId, 'Retry publish');
+      if (base === undefined) return undefined;
+      const reason = base.enabled ? modalReason : base.disabledReason;
+      return {
+        ...base,
+        enabled: base.enabled && modalReason === undefined,
+        ...(reason === undefined ? {} : { disabledReason: reason }),
       };
-    },
-    [actions, preflight.sourceRevision, publishBusy, publishLocked, publishTitle],
-  );
+    };
+  }, [actions, preflight.sourceRevision, publishBusy, publishLocked]);
 
   const rejection =
     publishResult !== null && !publishResult.ok && publishResult.reconciling !== true
       ? publishResult.error
       : null;
-  const genRejection = publishResult === null ? publishGenResult : null;
 
   return (
     <div className="sheet-scrim completion-publish-sheet__scrim" onMouseDown={requestClose}>
@@ -365,9 +306,7 @@ export function PublishModal({
             <div>
               <h3>Publish updates</h3>
               <p className="completion-workspace__publish-hint">
-                {titleRequired
-                  ? 'Choose the repositories whose reviewed work is ready. Existing pull requests are updated without changing their narrative.'
-                  : 'Agentico will update the selected pull-request branches.'}
+                Agentico generates each pull request's narrative from its own changes.
               </p>
             </div>
             <div className="completion-workspace__publish-repos">
@@ -379,7 +318,7 @@ export function PublishModal({
                   checked={publishRepos.has(repo.repo)}
                   onToggle={togglePublishRepo}
                   openExternal={openExternal}
-                  resolveAction={retryActionFor(repo)}
+                  resolveAction={retryActionFor()}
                   onRetryPublish={() => void handleRetryPublish(repo)}
                 />
               ))}
@@ -394,7 +333,7 @@ export function PublishModal({
                       checked={publishRepos.has(repo.repo)}
                       onToggle={togglePublishRepo}
                       openExternal={openExternal}
-                      resolveAction={retryActionFor(repo)}
+                      resolveAction={retryActionFor()}
                       onRetryPublish={() => void handleRetryPublish(repo)}
                     />
                   ))}
@@ -420,60 +359,6 @@ export function PublishModal({
                 />
               ) : null}
             </div>
-            {titleRequired ? (
-              <section
-                className="completion-publish-sheet__details"
-                aria-label="Pull request details"
-              >
-                <div className="completion-publish-sheet__details-heading">
-                  <h4>Pull request details</h4>
-                  <button
-                    type="button"
-                    className="completion-workspace__secondary-action"
-                    disabled={generatingDescription}
-                    onClick={() => void handleGeneratePublishDescription()}
-                  >
-                    {generatingDescription ? 'Generating…' : 'Generate narrative'}
-                  </button>
-                </div>
-                <label className="completion-workspace__field">
-                  <span>
-                    PR title <em>Required</em>
-                  </span>
-                  <input
-                    ref={titleRef}
-                    aria-label="PR title"
-                    aria-invalid={fieldAriaInvalid(titleInvalid)}
-                    aria-describedby={fieldAriaDescribedBy('publish-title-error', titleInvalid)}
-                    value={publishTitle}
-                    onChange={(event) => {
-                      setPublishTitle(event.target.value);
-                      if (event.target.value.trim() !== '') setTitleVisited(false);
-                    }}
-                    onBlur={() => setTitleVisited(true)}
-                    maxLength={200}
-                    placeholder="Enter PR title"
-                  />
-                </label>
-                <FieldError
-                  id="publish-title-error"
-                  message={titleInvalid ? 'Add a title to create the pull request.' : undefined}
-                />
-                <label className="completion-workspace__field">
-                  <span>
-                    PR body <em>Optional</em>
-                  </span>
-                  <textarea
-                    aria-label="PR body"
-                    value={publishBody}
-                    onChange={(event) => setPublishBody(event.target.value)}
-                    maxLength={4000}
-                    rows={5}
-                    placeholder="Enter PR description"
-                  />
-                </label>
-              </section>
-            ) : null}
             {dirtySelected.length > 0 ? (
               <div className="completion-workspace__dirty-notice">
                 <h4>Uncommitted changes</h4>
@@ -504,15 +389,6 @@ export function PublishModal({
                 rootTabIndex={-1}
               />
             ) : null}
-            {rejection === null && genRejection !== null ? (
-              <ErrorSurface
-                error={genRejection}
-                variant="compact"
-                caption="Narrative generation was rejected"
-                rootRef={failureRef}
-                rootTabIndex={-1}
-              />
-            ) : null}
           </div>
         </div>
         <footer className="sheet__footer">
@@ -525,13 +401,7 @@ export function PublishModal({
             disabled={!canPublish}
             onClick={() => void handlePublish()}
           >
-            {publishBusy
-              ? 'Publishing…'
-              : publishLocked
-                ? 'Reconciling…'
-                : titleRequired
-                  ? 'Publish'
-                  : 'Publish updates'}
+            {publishBusy ? 'Publishing…' : publishLocked ? 'Reconciling…' : 'Publish updates'}
           </button>
         </footer>
       </div>

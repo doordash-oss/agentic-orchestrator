@@ -1672,9 +1672,10 @@ func TestFirstRepoPRURL(t *testing.T) {
 	}
 }
 
-// TestAllReposPublished covers the strangler-implant predicate that supersedes
-// AllReposCodeReady. Reads exclusively from the new RepoState shape; legacy
-// RepoImpl is dual-written but unread by orchestration.
+// TestAllReposPublished covers the publish-completion predicate: under a
+// delivery stack a touched repository counts as published only when every
+// layer's entry either carries a pull request or is marked empty, while
+// runs without a stack keep the legacy per-repo PR URL rule.
 func TestAllReposPublished(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
@@ -1682,6 +1683,7 @@ func TestAllReposPublished(t *testing.T) {
 		name   string
 		repos  []FeatureRepo
 		states map[string]*RepoState
+		stack  []StackLayer
 		want   bool
 	}{
 		{
@@ -1723,10 +1725,90 @@ func TestAllReposPublished(t *testing.T) {
 			},
 			want: true,
 		},
+		{
+			name:  "stacked: layer 1 PR and layer 2 marked empty is published",
+			repos: []FeatureRepo{{Name: "api"}},
+			states: map[string]*RepoState{
+				"api": {Touched: true},
+			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {PRURL: "url-1", PRState: StackPRStateOpen},
+				}},
+				{Position: 2, Repos: map[string]StackRepoEntry{
+					"api": {NoCommits: true},
+				}},
+			},
+			want: true,
+		},
+		{
+			name:  "stacked: layer 2 unmarked without PR blocks",
+			repos: []FeatureRepo{{Name: "api"}},
+			states: map[string]*RepoState{
+				"api": {Touched: true},
+			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {PRURL: "url-1"},
+				}},
+				{Position: 2, Repos: map[string]StackRepoEntry{
+					"api": {TipSHA: "tip-2"},
+				}},
+			},
+			want: false,
+		},
+		{
+			name:  "stacked: layer with no entry for the repository blocks",
+			repos: []FeatureRepo{{Name: "api"}},
+			states: map[string]*RepoState{
+				"api": {Touched: true},
+			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {PRURL: "url-1"},
+				}},
+				{Position: 2},
+			},
+			want: false,
+		},
+		{
+			name:  "stacked: untouched repository never blocks",
+			repos: []FeatureRepo{{Name: "api"}, {Name: "web"}},
+			states: map[string]*RepoState{
+				"api": {Touched: true},
+				"web": {},
+			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {PRURL: "url-1"},
+				}},
+				{Position: 2, Repos: map[string]StackRepoEntry{
+					"api": {NoCommits: true},
+				}},
+			},
+			want: true,
+		},
+		{
+			name:  "stacked: legacy per-repo URL alone does not satisfy the layer check",
+			repos: []FeatureRepo{{Name: "api"}},
+			states: map[string]*RepoState{
+				"api": {Touched: true, PRURL: "url-legacy"},
+			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {TipSHA: "tip-1"},
+				}},
+				{Position: 2, Repos: map[string]StackRepoEntry{
+					"api": {TipSHA: "tip-2"},
+				}},
+			},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := &Feature{Repos: tt.repos, RepoStates: tt.states}
+			t.Parallel()
+			f := &Feature{Repos: tt.repos, RepoStates: tt.states, Stack: tt.stack}
 			if got := f.AllReposPublished(); got != tt.want {
 				t.Errorf("AllReposPublished() = %v, want %v", got, tt.want)
 			}

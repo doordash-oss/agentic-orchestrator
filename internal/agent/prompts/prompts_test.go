@@ -672,9 +672,16 @@ func TestGoldenSnapshots(t *testing.T) {
 				return PRDescriptionUserPrompt(PRDescriptionUserInput{
 					FeatureName:        "Add OAuth login",
 					FeatureDescription: "Sign in with Google.",
-					Roadmap:            "Phase 1: scaffolding.\nPhase 2: PKCE.",
-					CommitBodies:       "feat: add login route\n---commit---\nfeat: wire PKCE",
-					DiffStat:           " 5 files changed, 100 insertions(+), 4 deletions(-)",
+					LayerPosition:      2,
+					LayerTitle:         "Wire the OAuth callback",
+					LayerPhases:        []int{3},
+					LayerRationale:     "Callback handling completes the login flow.",
+					Stack: []PRStackLayerView{
+						{Position: 1, Title: "Scaffold the login route", Phases: []int{1, 2}, Branch: "feature/oauth-login-1/scaffold"},
+						{Position: 2, Title: "Wire the OAuth callback", Phases: []int{3}, Branch: "feature/oauth-login-2/callback"},
+					},
+					CommitBodies: "feat: add login route\n---commit---\nfeat: wire PKCE",
+					DiffStat:     " 5 files changed, 100 insertions(+), 4 deletions(-)",
 				})
 			},
 		},

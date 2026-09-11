@@ -122,10 +122,11 @@ func (o *Orchestrator) surfaceDispatchCompletionError(featureID string, cause er
 		// with the first failed repository's canonical error.
 		return
 	}
-	var publishConflict *PublishConflictError
-	if errors.As(cause, &publishConflict) {
-		// Publish already emitted PublishCompleted with the structured conflict;
-		// the desktop app owns routing that into the rebase-resolution child pipeline.
+	if _, ok := PublishConflictRecord(cause); ok {
+		// Publish already emitted PublishCompleted with the structured
+		// conflict-class record (a layer push the remote refused); the
+		// desktop app owns routing that into the rebase-resolution child
+		// pipeline, so the feature must not be marked Failed here.
 		return
 	}
 	if boundary, ok := asLayerBoundaryError(cause); ok {

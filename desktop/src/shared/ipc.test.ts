@@ -70,7 +70,6 @@ import {
   windowPurposeFromArgv,
   LocalReviewDraftSaveRequestSchema,
   LocalReviewDraftStoreSchema,
-  PublishDescriptionRequestSchema,
   RepoStatusViewSchema,
   AppRouteEventSchema,
   ServerRemoveRequestSchema,
@@ -761,25 +760,6 @@ describe('operational IPC schemas', () => {
         body: {
           source_revision: 'rev-1',
           repos: ['repo-a'],
-          title: 'Ship reviewed changes',
-        },
-      }),
-    ).toStrictEqual({
-      featureId: 'abcd1234',
-      action: 'publish',
-      body: {
-        source_revision: 'rev-1',
-        repos: ['repo-a'],
-        title: 'Ship reviewed changes',
-      },
-    });
-    expect(
-      FeatureActionRequestSchema.parse({
-        featureId: 'abcd1234',
-        action: 'publish',
-        body: {
-          source_revision: 'rev-1',
-          repos: ['repo-a'],
         },
       }),
     ).toStrictEqual({
@@ -810,8 +790,12 @@ describe('operational IPC schemas', () => {
       FeatureActionRequestSchema.safeParse({ featureId: 'abcd1234', action: 'publish' }).success,
     ).toBe(false);
     expect(
-      PublishDescriptionRequestSchema.parse({ featureId: 'abcd1234', repos: ['repo-a'] }),
-    ).toStrictEqual({ featureId: 'abcd1234', repos: ['repo-a'] });
+      FeatureActionRequestSchema.safeParse({
+        featureId: 'abcd1234',
+        action: 'publish',
+        body: { source_revision: 'rev-1', repos: ['repo-a'], title: 'No longer accepted' },
+      }).success,
+    ).toBe(false);
   });
 
   it('bounds transcript windows and keeps row cursors distinct from global event cursors', () => {
@@ -1868,12 +1852,12 @@ describe('owned errors on the feature summary and snapshot views', () => {
   const ownedRepoError = {
     ref: {
       scope: 'repository',
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       featureId: 'abcd1234ef567890',
       repository: 'repo-a',
     },
     error: {
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       class: 'needs_action',
       title: 'Pull-rebase conflict',
       summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',

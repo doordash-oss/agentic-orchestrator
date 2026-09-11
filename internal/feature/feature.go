@@ -1025,6 +1025,30 @@ func (f *Feature) SetPRURL(url string) {
 	f.Run().PRURL = url
 }
 
+// highestStackLayerPRURL returns the pull request URL of the highest
+// positioned stack layer whose entry for repoName carries a PR. It is the
+// projection source for the legacy per-repo RepoStates PR URL: readers
+// that predate per-layer state expect one URL per repository, and the
+// topmost layer's PR is that repository's primary reviewable artifact.
+// Empty when no layer entry for the repository has a pull request.
+func (f *Feature) highestStackLayerPRURL(repoName string) string {
+	if f == nil {
+		return ""
+	}
+	var url string
+	best := 0
+	for _, layer := range f.Stack {
+		if layer.Position <= best {
+			continue
+		}
+		if entry, ok := layer.Repos[repoName]; ok && entry.PRURL != "" {
+			url = entry.PRURL
+			best = layer.Position
+		}
+	}
+	return url
+}
+
 // SetRoadmapPhaseFrontend records whether a roadmap phase contains frontend
 // work on the active run.
 func (f *Feature) SetRoadmapPhaseFrontend(phase int, frontend bool) {
@@ -1250,22 +1274,37 @@ func (f *Feature) Transition(to Status) error {
 	return fmt.Errorf("%w from %s to %s", ErrInvalidTransition, f.Status, to)
 }
 
-// AllReposPublished returns true when every repo declared on f.Repos has
-// either never been touched by a phase (Touched=false → no work to publish)
-// or has a non-empty PR URL recorded. Returns false when f or f.Repos is
-// empty so callers cannot mistake an unconfigured feature for a published
-// one.
+// AllReposPublished returns true when every touched repository is fully
+// published under the delivery stack: a touched repository counts as
+// published only when every stack layer's Repos entry for it either carries
+// a pull request URL or is marked NoCommits (the layer delivered nothing
+// for that repository). A layer with no entry at all for a touched
+// repository blocks — neither the boundary nor the publish path has
+// recorded an outcome for it yet. Runs without a stack (approved before
+// the `## Pull Requests` table existed) keep the legacy rule: a touched
+// repository needs the per-repo PR URL. Untouched repositories never
+// block, and an unconfigured feature (nil or no repos) is never
+// "published" so callers cannot mistake it for a published one.
 func (f *Feature) AllReposPublished() bool {
 	if f == nil || len(f.Repos) == 0 {
 		return false
 	}
 	for _, repo := range f.Repos {
 		st := f.RepoStates[repo.Name]
-		if st == nil {
+		if st == nil || !st.Touched {
 			continue
 		}
-		if st.Touched && st.PRURL == "" {
-			return false
+		if len(f.Stack) == 0 {
+			if st.PRURL == "" {
+				return false
+			}
+			continue
+		}
+		for _, layer := range f.Stack {
+			entry, ok := layer.Repos[repo.Name]
+			if !ok || (entry.PRURL == "" && !entry.NoCommits) {
+				return false
+			}
 		}
 	}
 	return true

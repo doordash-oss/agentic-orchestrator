@@ -2727,12 +2727,6 @@ index 5c32b6a..8a9b3c1 100644
         ],
       });
     },
-    generatePublishDescription: () =>
-      Promise.resolve({
-        featureId: 'feat-electron-app',
-        title: 'Complete repository-aware Electron workflow',
-        body: 'Adds the completion workspace, bounded diffs, explicit merge and mark-done controls, cleanup, and protected deletion.',
-      }),
     openExternal: () => Promise.resolve({ ok: true }),
     revealPath: () => Promise.resolve({ ok: true }),
     writeClipboardText: () => Promise.resolve({ ok: true }),

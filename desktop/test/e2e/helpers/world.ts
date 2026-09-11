@@ -516,12 +516,12 @@ function writeStubCli(
       : []),
     // Bounded utility helpers (e.g. Publish PR-description generation) reach
     // every world's stub. Serve them deterministically so publish flows can
-    // generate a title/body without a real provider.
+    // generate a PR body without a real provider.
     'case "$_agentico_prompt" in',
     '  *"Generate PR Description"*)',
     `    echo '{"type":"system","subtype":"init","session_id":"e2e-publish-description"}'`,
     // printf %s: sh echo interprets \n escapes (splitting the JSON line), printf %s does not.
-    `    printf '%s\\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"TITLE: Packaged publish fixture change\\n\\nBODY:\\nDescribes the packaged E2E publish fixture change across the selected repositories."}]}}'`,
+    `    printf '%s\\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"## Summary\\n\\nDescribes the packaged E2E publish fixture change across the selected repositories."}]}}'`,
     `    echo '{"type":"result","subtype":"success","session_id":"e2e-publish-description","total_cost_usd":0}'`,
     '    # drain: give the parent a moment to read stdout before exit closes the pipe',
     '    sleep 0.2',

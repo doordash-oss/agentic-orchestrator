@@ -206,23 +206,43 @@ func TestPRDescriptionPromptPopulationBranches(t *testing.T) {
 		wantOmit     []string
 	}{
 		{
-			name: "pr_description_full_renders_roadmap_commits_and_diffstat",
+			name: "pr_description_full_renders_layer_stack_commits_and_diffstat",
 			input: PRDescriptionUserInput{
 				FeatureName:        "Add OAuth login",
 				FeatureDescription: "Sign in with Google.",
-				Roadmap:            "Phase 1: scaffolding.",
-				CommitBodies:       "feat: add login route",
-				DiffStat:           " 5 files changed",
+				LayerPosition:      2,
+				LayerTitle:         "Wire the OAuth callback",
+				LayerPhases:        []int{3},
+				LayerRationale:     "Callback handling completes the login flow.",
+				Stack: []PRStackLayerView{
+					{Position: 1, Title: "Scaffold the login route", Phases: []int{1, 2}, Branch: "feature/oauth-login-1/scaffold"},
+					{Position: 2, Title: "Wire the OAuth callback", Phases: []int{3}, Branch: "feature/oauth-login-2/callback"},
+				},
+				CommitBodies: "feat: add login route",
+				DiffStat:     " 5 files changed",
 			},
-			wantContains: []string{"## Feature", "## Roadmap / Plan", "## Commit Messages", "## Changes (file stats)"},
+			wantContains: []string{
+				"## Feature",
+				"## This Layer",
+				"Position: Layer 2 of 2",
+				"Title: Wire the OAuth callback",
+				"Phases: [3]",
+				"Rationale: Callback handling completes the login flow.",
+				"## Delivery Stack",
+				"- Layer 2: Wire the OAuth callback (top layer) — phases [3], branch feature/oauth-login-2/callback",
+				"## Commit Messages",
+				"## Changes (file stats)",
+			},
+			wantOmit: []string{"TITLE:"},
 		},
 		{
 			name: "pr_description_minimal_omits_unpopulated_sections",
 			input: PRDescriptionUserInput{
-				FeatureName: "Add OAuth login",
+				FeatureName:   "Add OAuth login",
+				LayerPosition: 1,
 			},
-			wantContains: []string{"## Feature", "Name: Add OAuth login", "## Instructions"},
-			wantOmit:     []string{"## Roadmap / Plan", "## Commit Messages", "## Changes (file stats)"},
+			wantContains: []string{"## Feature", "Name: Add OAuth login", "## This Layer", "Position: Layer 1", "## Instructions"},
+			wantOmit:     []string{"## Delivery Stack", "## Commit Messages", "## Changes (file stats)"},
 		},
 	}
 

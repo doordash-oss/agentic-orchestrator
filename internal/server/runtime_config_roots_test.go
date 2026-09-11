@@ -81,6 +81,48 @@ func TestPatchRuntimeConfigAcceptsValidWorkspaceRoots(t *testing.T) {
 	}
 }
 
+func TestPatchRuntimeConfigAcceptsValidDeliveryMode(t *testing.T) {
+	t.Parallel()
+	recorder := &runtimeConfigRecorder{}
+	handler := newRuntimeConfigHandler(t, recorder)
+
+	w := patchTrustedJSON(handler, apiPathConfigRuntime, map[string]any{
+		"defaults": map[string]any{"delivery_mode": "single"},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
+	}
+	if got := recorder.calls.Load(); got != 1 {
+		t.Fatalf("RuntimeConfig calls = %d; want one authoritative mutation", got)
+	}
+}
+
+// TestPatchRuntimeConfigRejectsInvalidDeliveryMode verifies an unknown
+// workspace delivery default is rejected with a 400 before the mutation
+// target runs; an invalid default would fail every later feature creation.
+func TestPatchRuntimeConfigRejectsInvalidDeliveryMode(t *testing.T) {
+	t.Parallel()
+	recorder := &runtimeConfigRecorder{}
+	handler := newRuntimeConfigHandler(t, recorder)
+
+	w := patchTrustedJSON(handler, apiPathConfigRuntime, map[string]any{
+		"defaults": map[string]any{"delivery_mode": "pr-per-phase"},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s; want 400", w.Code, w.Body.String())
+	}
+	body := decodeErrorBody(t, w)
+	if body.Error.Code != string(errcat.BadRequest) {
+		t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.BadRequest)
+	}
+	if !strings.Contains(body.Error.Diagnostics, "delivery_mode must be stack or single") {
+		t.Fatalf("diagnostics = %q; want delivery_mode must be stack or single", body.Error.Diagnostics)
+	}
+	if got := recorder.calls.Load(); got != 0 {
+		t.Fatalf("RuntimeConfig calls = %d; want none for invalid delivery mode", got)
+	}
+}
+
 func TestPatchRuntimeConfigRejectsDuplicateWorkspaceRoots(t *testing.T) {
 	t.Parallel()
 	root, err := filepath.EvalSymlinks(t.TempDir())

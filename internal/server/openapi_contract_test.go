@@ -214,6 +214,29 @@ func TestIntegrationAttentionSchemasCollapsedToCanonicalError(t *testing.T) {
 	}
 }
 
+// TestDeliveryModeSchemaSurfaces pins the delivery-mode contract: the create
+// request and the feature detail / feature-defaults read surfaces carry the
+// enum, while neither the child launch requests nor the per-feature config
+// surface accept it (the mode is immutable after creation).
+func TestDeliveryModeSchemaSurfaces(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	assertSchemaProperties(t, spec, "CreateFeatureMutationRequest", "delivery_mode")
+	assertSchemaProperties(t, spec, "FeatureDetail", "delivery_mode")
+	assertSchemaProperties(t, spec, "FeatureDefaults", "delivery_mode")
+	for _, schema := range []string{"RefactorFeatureRequest", "FeatureConfig"} {
+		if props := schemaProperties(spec.Components.Schemas[schema]); props["delivery_mode"] {
+			t.Fatalf("components.schemas.%s must not accept delivery_mode; the mode is immutable after creation", schema)
+		}
+	}
+	// The generated create-request enum admits exactly stack and single.
+	if !Single.Valid() || !Stack.Valid() {
+		t.Fatal("generated CreateFeatureMutationRequestDeliveryMode must admit stack and single")
+	}
+	if CreateFeatureMutationRequestDeliveryMode("pr-per-phase").Valid() {
+		t.Fatal("generated CreateFeatureMutationRequestDeliveryMode must reject unknown values")
+	}
+}
+
 // TestRefactorRequestSchemaOmitsRepoSelection pins the refactor contract:
 // repository and base-branch selection are inherited from the parent and must
 // never re-enter the refactor request schema.

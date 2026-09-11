@@ -481,6 +481,97 @@ func TestBuildPhasePlanPrompt_NoPriorPhases(t *testing.T) {
 	}
 }
 
+// TestBuildRoadmapPromptDeliveryMode pins the Delivery section contract:
+// a single-delivery feature gets the one-row `## Pull Requests` instruction,
+// while stack-delivery (explicit or unset, via EffectiveDeliveryMode's stack
+// default) gets the stack sentence and never the one-row instruction.
+func TestBuildRoadmapPromptDeliveryMode(t *testing.T) {
+	const oneRowInstruction = "The `## Pull Requests` table must contain exactly one row"
+
+	single := &feature.Feature{
+		Name:         "Single Delivery Feature",
+		Description:  "A test feature",
+		DeliveryMode: feature.DeliveryModeSingle,
+	}
+	singlePrompt := BuildRoadmapPrompt(single, "", "", "/path/to/design.md", nil)
+	if !strings.Contains(singlePrompt, "## Delivery") {
+		t.Errorf("single-delivery prompt missing Delivery section:\n%s", singlePrompt)
+	}
+	if !strings.Contains(singlePrompt, "delivered as a single pull request") {
+		t.Errorf("single-delivery prompt missing single-delivery sentence:\n%s", singlePrompt)
+	}
+	if !strings.Contains(singlePrompt, oneRowInstruction) {
+		t.Errorf("single-delivery prompt missing one-row instruction naming ## Pull Requests:\n%s", singlePrompt)
+	}
+
+	for name, f := range map[string]*feature.Feature{
+		"explicit_stack": {
+			Name:         "Stack Delivery Feature",
+			Description:  "A test feature",
+			DeliveryMode: feature.DeliveryModeStack,
+		},
+		"unset_defaults_to_stack": {
+			Name:        "Unset Delivery Feature",
+			Description: "A test feature",
+		},
+	} {
+		prompt := BuildRoadmapPrompt(f, "", "", "/path/to/design.md", nil)
+		if !strings.Contains(prompt, "## Delivery") {
+			t.Errorf("%s: prompt missing Delivery section:\n%s", name, prompt)
+		}
+		if !strings.Contains(prompt, "delivered as a stack of pull requests") {
+			t.Errorf("%s: prompt missing stack-delivery sentence:\n%s", name, prompt)
+		}
+		if strings.Contains(prompt, "exactly one row") {
+			t.Errorf("%s: stack prompt must not contain a one-row instruction:\n%s", name, prompt)
+		}
+	}
+}
+
+// TestBuildRoadmapRevisionPromptDeliveryMode pins the same Delivery contract
+// for revisions: a reviser fixing unrelated feedback on a single-delivery
+// feature still sees the one-row constraint, so it cannot regroup the table
+// into several rows. Stack features never see the one-row instruction.
+func TestBuildRoadmapRevisionPromptDeliveryMode(t *testing.T) {
+	const oneRowInstruction = "The `## Pull Requests` table must contain exactly one row"
+
+	single := &feature.Feature{
+		Name:         "Single Delivery Feature",
+		Description:  "A test feature",
+		DeliveryMode: feature.DeliveryModeSingle,
+	}
+	singlePrompt := BuildRoadmapRevisionPrompt(single, "", "/roadmap.md", "/prev.md", "Fix the stub inventory", "", 2, nil)
+	if !strings.Contains(singlePrompt, "## Delivery") {
+		t.Errorf("single-delivery revision prompt missing Delivery section:\n%s", singlePrompt)
+	}
+	if !strings.Contains(singlePrompt, oneRowInstruction) {
+		t.Errorf("single-delivery revision prompt missing one-row instruction naming ## Pull Requests:\n%s", singlePrompt)
+	}
+
+	for name, f := range map[string]*feature.Feature{
+		"explicit_stack": {
+			Name:         "Stack Delivery Feature",
+			Description:  "A test feature",
+			DeliveryMode: feature.DeliveryModeStack,
+		},
+		"unset_defaults_to_stack": {
+			Name:        "Unset Delivery Feature",
+			Description: "A test feature",
+		},
+	} {
+		prompt := BuildRoadmapRevisionPrompt(f, "", "/roadmap.md", "/prev.md", "Fix the stub inventory", "", 2, nil)
+		if !strings.Contains(prompt, "## Delivery") {
+			t.Errorf("%s: revision prompt missing Delivery section:\n%s", name, prompt)
+		}
+		if !strings.Contains(prompt, "delivered as a stack of pull requests") {
+			t.Errorf("%s: revision prompt missing stack-delivery sentence:\n%s", name, prompt)
+		}
+		if strings.Contains(prompt, "exactly one row") {
+			t.Errorf("%s: stack revision prompt must not contain a one-row instruction:\n%s", name, prompt)
+		}
+	}
+}
+
 func TestBuildRoadmapRevisionPrompt(t *testing.T) {
 	f := &feature.Feature{
 		Name:        "Test Feature",

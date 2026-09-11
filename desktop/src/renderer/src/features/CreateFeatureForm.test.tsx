@@ -734,6 +734,116 @@ describe('the creation sheet across its four steps', () => {
   });
 });
 
+describe('the creation sheet delivery choice', () => {
+  it('submits the untouched stack default on the Depth step', async () => {
+    const mock = installAgenticoMock();
+    const { onCreated, user } = await renderForm(mock);
+    await reachContract(user);
+
+    await user.click(screen.getByRole('button', { name: 'Create and start' }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+    expect(mock.api.createFeature).toHaveBeenCalledWith(
+      expect.objectContaining({ deliveryMode: 'stack' }),
+    );
+  });
+
+  it('submits single delivery when its card is selected on the Depth step', async () => {
+    const mock = installAgenticoMock();
+    const { onCreated, user } = await renderForm(mock);
+    await reachDescribe(user);
+    await user.type(screen.getByLabelText('Name'), 'One pull request');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+
+    // The group carries an accessible label, and Stack is the default card.
+    expect(screen.getByRole('group', { name: 'Delivery' })).toBeVisible();
+    expect(screen.getByRole('radio', { name: /Stack/ })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: /Single/ }));
+    expect(screen.getByRole('radio', { name: /Single/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    await user.click(screen.getByRole('button', { name: 'Create and start' }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+    expect(mock.api.createFeature).toHaveBeenCalledWith(
+      expect.objectContaining({ deliveryMode: 'single' }),
+    );
+  });
+
+  it('seeds the delivery choice from the workspace default', async () => {
+    const base = creationDefaults();
+    const mock = installAgenticoMock({
+      defaults: creationDefaults({
+        defaults: { ...base.defaults, delivery_mode: 'single' },
+      }),
+    });
+    const { onCreated, user } = await renderForm(mock);
+    await reachDescribe(user);
+    await user.type(screen.getByLabelText('Name'), 'Seeded single');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+
+    expect(screen.getByRole('radio', { name: /Single/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    await user.click(screen.getByRole('button', { name: 'Create and start' }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+    expect(mock.api.createFeature).toHaveBeenCalledWith(
+      expect.objectContaining({ deliveryMode: 'single' }),
+    );
+  });
+
+  it('falls back to stack for an unknown workspace delivery default', async () => {
+    const base = creationDefaults();
+    const mock = installAgenticoMock({
+      defaults: creationDefaults({
+        defaults: { ...base.defaults, delivery_mode: 'surprise' },
+      }),
+    });
+    const { onCreated, user } = await renderForm(mock);
+    await reachDescribe(user);
+    await user.type(screen.getByLabelText('Name'), 'Unknown default');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+
+    expect(screen.getByRole('radio', { name: /Stack/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    await user.click(screen.getByRole('button', { name: 'Create and start' }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+    expect(mock.api.createFeature).toHaveBeenCalledWith(
+      expect.objectContaining({ deliveryMode: 'stack' }),
+    );
+  });
+
+  it('retains the delivery choice through a sheet remount', async () => {
+    installAgenticoMock();
+    const onDraftDetach = vi.fn();
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <CreateFeatureForm onCreated={vi.fn()} onClose={vi.fn()} onDraftDetach={onDraftDetach} />,
+    );
+    await screen.findByRole('button', { name: 'Next: Describe' });
+    await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Delivery retained');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('radio', { name: /Single/ }));
+    unmount();
+
+    const retained = onDraftDetach.mock.calls.at(0)?.[0];
+    expect(retained?.delivery).toBe('single');
+
+    // The restored draft reopens on Depth with its delivery choice intact.
+    render(
+      <CreateFeatureForm
+        onCreated={vi.fn()}
+        onClose={vi.fn()}
+        retainedDraft={retained}
+        onDraftDetach={vi.fn()}
+      />,
+    );
+    expect(await screen.findByRole('radio', { name: /Single/ })).toBeChecked();
+  });
+});
+
 describe('the creation sheet local source contract', () => {
   it('shows independent branch and detached sources for every selected repository and in review', async () => {
     const repoAIdentity = mockRepoIdentity('/work/space/repo-a');

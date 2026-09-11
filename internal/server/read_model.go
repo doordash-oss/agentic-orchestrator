@@ -197,6 +197,9 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 	detail.Effort = f.Effort
 	detail.Inquireness = f.Inquireness
 	detail.RiskLevel = f.RiskLevel
+	// The detail always exposes the effective mode so legacy records without
+	// a stored value read as stack; delivery mode is immutable after creation.
+	detail.DeliveryMode = f.EffectiveDeliveryMode()
 	detail.ExitCriteria = SafeDisplayText(f.ExitCriteria, 500)
 	autoReviewEnabled, autoReviewSource := feature.ResolveAutomaticReview(
 		f.AutomaticReviewMode,
@@ -1471,6 +1474,7 @@ func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaults {
 		PipelinePreferences:    prefs,
 		Inquireness:            defaults.Inquireness,
 		Pipeline:               defaults.Pipeline,
+		DeliveryMode:           defaults.DeliveryMode,
 		Checkpoints:            defaults.Checkpoints,
 		AutomaticReviewEnabled: defaults.AutomaticReviewEnabled,
 	}

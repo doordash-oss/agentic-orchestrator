@@ -54,6 +54,11 @@ type RoadmapRevisionUserInput struct {
 
 	RoadmapFormatPath string
 
+	// DeliveryMode is the feature's effective delivery mode ("stack" or
+	// "single") as a plain string for template simplicity; empty falls
+	// through to the stack branch like Inquireness's Level fallback.
+	DeliveryMode string
+
 	Inquireness prompts.AutonomousInquirenessInput
 }
 

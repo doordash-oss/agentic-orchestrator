@@ -1027,6 +1027,8 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   wait_reason: z.string().optional(),
   pipeline: z.string().optional(),
   risk_level: z.string().optional(),
+  /** The feature's immutable delivery mode; the server's effective read. */
+  delivery_mode: z.string().optional(),
   exit_criteria: z.string().optional(),
   active_run_detail: z
     .object({
@@ -1476,6 +1478,8 @@ export const RuntimeConfigCreationSchema = z.object({
     effort: ServerEffortDefaultsSchema.optional(),
     inquireness: z.string().optional(),
     pipeline: z.string().optional(),
+    /** Workspace delivery default ("stack" | "single"); unknown ⇒ stack. */
+    delivery_mode: z.string().optional(),
   }),
 });
 

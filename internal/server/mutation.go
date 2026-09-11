@@ -187,6 +187,7 @@ type CreateFeatureRequest struct {
 	Attachments             []string                `json:"attachments,omitempty"`
 	AttachmentUploads       []string                `json:"attachment_uploads,omitempty"`
 	RiskLevel               feature.RiskLevel       `json:"risk_level,omitempty"`
+	DeliveryMode            feature.DeliveryMode    `json:"delivery_mode,omitempty"`
 	Pipeline                feature.PipelineProfile `json:"pipeline,omitempty"`
 	IdempotencyKey          string                  `json:"idempotency_key,omitempty"`
 }
@@ -271,6 +272,7 @@ type RuntimeDefaultsMutation struct {
 	ExitCriteria             string                               `json:"exit_criteria,omitempty"`
 	Inquireness              string                               `json:"inquireness,omitempty"`
 	Pipeline                 string                               `json:"pipeline,omitempty"`
+	DeliveryMode             string                               `json:"delivery_mode,omitempty"`
 	MaxIterations            int                                  `json:"max_iterations,omitempty"`
 	MaxConsecutiveFailures   int                                  `json:"max_consecutive_failures,omitempty"`
 	MaxConsecutiveNoProgress int                                  `json:"max_consecutive_no_progress,omitempty"`
@@ -800,7 +802,7 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("name is required"))
 		return
 	}
-	if !validatePipelineProfile(w, req.Pipeline) || !validateRiskLevel(w, req.RiskLevel) {
+	if !validatePipelineProfile(w, req.Pipeline) || !validateRiskLevel(w, req.RiskLevel) || !validateDeliveryMode(w, req.DeliveryMode) {
 		return
 	}
 	if !h.validateRequestedModels(w, req.Models) {
@@ -1212,6 +1214,12 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		if !validateEffortConfig(w, req.Defaults.Effort, models, h.registry) {
 			return
 		}
+		// An invalid workspace delivery default would fail every later
+		// feature creation, so it is rejected before persistence. (The
+		// runtime-defaults inquireness default has no equivalent check.)
+		if !validateDeliveryMode(w, feature.DeliveryMode(req.Defaults.DeliveryMode)) {
+			return
+		}
 		if req.WorkspaceRoots != nil && !validateWorkspaceRootPaths(w, *req.WorkspaceRoots) {
 			return
 		}
@@ -1590,6 +1598,19 @@ func validateRiskLevel(w http.ResponseWriter, risk feature.RiskLevel) bool {
 		return true
 	default:
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("risk_level must be low, medium, or high"))
+		return false
+	}
+}
+
+// validateDeliveryMode rejects unknown delivery modes with a 400 before any
+// mutation runs. An empty value is valid: the mutation target resolves it
+// from the workspace default (and finally stack).
+func validateDeliveryMode(w http.ResponseWriter, mode feature.DeliveryMode) bool {
+	switch mode {
+	case "", feature.DeliveryModeStack, feature.DeliveryModeSingle:
+		return true
+	default:
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("delivery_mode must be stack or single"))
 		return false
 	}
 }

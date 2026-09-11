@@ -1060,6 +1060,10 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 	if inquireness == "" {
 		inquireness = parent.Inquireness
 	}
+	// Delivery mode is not part of the child spec: children inherit the
+	// parent's effective mode unconditionally, so a feature's delivery
+	// shape can never diverge across its child passes.
+	deliveryMode := parent.EffectiveDeliveryMode()
 
 	exactStart := make(map[string]string, len(bases))
 	for _, b := range bases {
@@ -1082,6 +1086,7 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 		Inquireness:  inquireness,
 		Checkpoints:  spec.Checkpoints,
 		RiskLevel:    risk,
+		DeliveryMode: deliveryMode,
 		Parent: &ChildRelationship{
 			ParentID: parent.ID,
 			Kind:     ChildKindRefactor,

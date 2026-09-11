@@ -42,6 +42,8 @@ If the caller provides prior-attempt axis approvals (files named like `axis-appr
 
 The `## Pull Requests` section follows this same rule: changes-requested feedback that names `## Pull Requests` unlocks editing that section even when a prior sticky approval listed it in `frozen_sections`. Fixing the Pull Requests table — regrouping rows, renumbering positions, or editing titles and rationale — must not re-title or renumber phases: the `## Phase N:` heading text stays byte-equal.
 
+When the prompt's `## Delivery` section states the feature is delivered as a single pull request, keep or restore the one-row table when editing the `## Pull Requests` section: exactly one row whose `Phases` cell spans every phase. This holds even when the feedback you are addressing is unrelated to delivery — a single-delivery table must never be regrouped into several rows. Do not confuse this with a collapsed single-phase roadmap (one phase, one row): the constraint comes from the delivery mode stated in the prompt, not from the phase count.
+
 **Worked example.**
 
 Suppose two prior validator attempts produced these `## Sticky Approval` blocks (each in its own per-axis feedback file):

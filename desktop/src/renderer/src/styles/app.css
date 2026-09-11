@@ -2853,6 +2853,11 @@ body {
   gap: var(--space-2);
 }
 
+/* The Depth step's delivery pairing: two cards on the profile grid. */
+.creation-sheet__profiles--pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .creation-sheet__profile {
   display: flex;
   align-items: flex-start;

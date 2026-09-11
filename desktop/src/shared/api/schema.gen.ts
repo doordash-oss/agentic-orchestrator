@@ -1907,6 +1907,8 @@ export interface components {
             risk_level?: "low" | "medium" | "high";
             /** @enum {string} */
             pipeline?: "medium" | "large" | "moonshot";
+            /** @enum {string} */
+            delivery_mode?: "stack" | "single";
             idempotency_key?: string;
         };
         StageUploadResponse: {
@@ -2278,6 +2280,7 @@ export interface components {
             };
             inquireness?: string;
             pipeline?: string;
+            delivery_mode?: string;
             checkpoints: unknown;
             automatic_review_enabled?: boolean;
         };
@@ -2715,6 +2718,8 @@ export interface components {
             /** @enum {string} */
             inquireness?: "none" | "medium" | "high";
             risk_level?: string;
+            /** @enum {string} */
+            delivery_mode?: "stack" | "single";
             exit_criteria?: string;
             automatic_review: components["schemas"]["AutomaticReviewState"];
             active_run_detail?: components["schemas"]["RunSummary"];

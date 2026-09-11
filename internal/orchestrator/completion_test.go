@@ -1823,6 +1823,57 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_RoadmapApproved_PersistsStack(t
 	}
 }
 
+// Auto-approval of a single-delivery feature whose roadmap table has two
+// rows: stack derivation is skipped (best-effort, matching the structural
+// skip) while the phase count still persists and approval does not fail.
+func TestOrchestrator_HandlePhaseCompletion_Plan_RoadmapApproved_SingleDeliverySkipsStackDerivation(t *testing.T) {
+	tmpDir := t.TempDir()
+	roadmapPath := filepath.Join(tmpDir, "roadmap.md")
+	roadmap := "# Roadmap\n\n## Phase 1: Bootstrap\n### Goal\nInit\n\n## Phase 2: Build\n### Goal\nBuild\n\n" +
+		"## Pull Requests\n\n| # | Title | Phases | Rationale |\n|---|---|---|---|\n" +
+		"| 1 | Bootstrap | 1 | Stands alone. |\n| 2 | Build | 2 | Stands alone. |\n"
+	if err := os.WriteFile(roadmapPath, []byte(roadmap), 0o644); err != nil {
+		t.Fatalf("write roadmap: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:                  "feat-ra-single-skip",
+		Status:              feature.StatusPlanning,
+		CurrentPhase:        feature.PhasePlan,
+		Pipeline:            feature.PipelineLarge,
+		DeliveryMode:        feature.DeliveryModeSingle,
+		CurrentRoadmapPhase: 0,
+		Artifacts:           map[string]string{"roadmap": roadmapPath},
+		Repos:               []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1"}},
+	}
+	lc := lifecycleForFeature(f)
+	lc.AdvanceRoadmapPhaseFn = func(id string) error {
+		f.CurrentRoadmapPhase = 1
+		f.Status = feature.StatusPlanning
+		return nil
+	}
+	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	if err := o.HandlePhaseCompletion("feat-ra-single-skip", orchestrator.PhaseCompletionInput{
+		Phase:      feature.PhasePlan,
+		PlanResult: &agent.PlanLoopResult{FinalStatus: "approved"},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v (single-delivery table problems must not fail approval)", err)
+	}
+
+	if f.TotalRoadmapPhases != 2 {
+		t.Errorf("TotalRoadmapPhases = %d, want 2 (persisted despite the delivery problem)", f.TotalRoadmapPhases)
+	}
+	if len(f.Stack) != 0 {
+		t.Errorf("stack = %+v, want no layers derived from a two-row single-delivery table", f.Stack)
+	}
+	if f.CurrentRoadmapPhase != 1 {
+		t.Errorf("CurrentRoadmapPhase = %d, want 1 (approval still advances)", f.CurrentRoadmapPhase)
+	}
+}
+
 // Per-phase plan approved (roadmap mid-flight) → dispatches PhaseImplement.
 // FeatureAdvanced(PhaseImplement) must fire after
 // StartRoadmapPhaseImplementation + populate + startPhase so subscribers see

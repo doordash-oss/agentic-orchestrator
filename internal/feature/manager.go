@@ -144,6 +144,7 @@ type CreateOptions struct {
 	Attachments             []string // temp attachment file paths
 	RiskLevel               RiskLevel
 	Pipeline                PipelineProfile
+	DeliveryMode            DeliveryMode
 	QueueSetup              bool
 	SourceExpectations      []RepoSourceExpectation
 	PinLocalSources         bool
@@ -360,6 +361,26 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		return nil, fmt.Errorf("invalid inquireness level %q: must be one of none, medium, high", inq)
 	}
 
+	// Delivery mode resolution mirrors the pipeline default fallback: an
+	// unset request value defers to the workspace config default, and an
+	// invalid value — from either source — is rejected instead of silently
+	// falling back. The mode is immutable after creation.
+	deliveryMode := opt.DeliveryMode
+	if deliveryMode == "" {
+		if def := m.Config.Defaults.DeliveryMode; def != "" {
+			parsed := DeliveryMode(def)
+			if !parsed.IsValid() {
+				return nil, fmt.Errorf("invalid defaults.delivery_mode in config: delivery mode %q must be one of stack, single", def)
+			}
+			deliveryMode = parsed
+		} else {
+			deliveryMode = DeliveryModeStack
+		}
+	}
+	if !deliveryMode.IsValid() {
+		return nil, fmt.Errorf("invalid delivery mode %q: must be one of stack, single", deliveryMode)
+	}
+
 	now := time.Now()
 	status := StatusCreated
 	if opt.QueueSetup {
@@ -382,6 +403,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		MaxIterations: m.Config.Defaults.MaxIterations,
 		Checkpoints:   opt.Checkpoints,
 		RiskLevel:     opt.RiskLevel,
+		DeliveryMode:  deliveryMode,
 		// Feature starts on run-001. Explicit seeding ensures feature.yaml is
 		// never persisted with ActiveRun == 0 (which Store.loadUnlocked treats
 		// as the pre-runs migration trip wire).

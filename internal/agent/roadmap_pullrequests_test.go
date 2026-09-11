@@ -17,6 +17,8 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 const pullRequestsFixturePhases = 3
@@ -234,6 +236,117 @@ func TestValidateRoadmapPullRequestsTableNonConsecutiveRange(t *testing.T) {
 	if !found {
 		t.Errorf("no consecutive-phase problem; problems: %v", problems)
 	}
+}
+
+func TestValidateRoadmapPullRequestsDeliveryMode(t *testing.T) {
+	twoRows := []RoadmapPullRequest{
+		{Position: 1, Title: "First", Phases: []int{1}},
+		{Position: 2, Title: "Second", Phases: []int{2}},
+	}
+	oneRowCoveringAll := []RoadmapPullRequest{
+		{Position: 1, Title: "Whole feature", Phases: []int{1, 2, 3}},
+	}
+
+	problems := ValidateRoadmapPullRequestsDeliveryMode(feature.DeliveryModeSingle, twoRows)
+	if len(problems) != 1 {
+		t.Fatalf("single + two rows problems = %v, want exactly one", problems)
+	}
+	if !strings.Contains(problems[0], "## Pull Requests") || !strings.Contains(problems[0], "single pull request") {
+		t.Errorf("single + two rows problem = %q, want it to name the section and the single-pull-request delivery", problems[0])
+	}
+
+	if got := ValidateRoadmapPullRequestsDeliveryMode(feature.DeliveryModeSingle, oneRowCoveringAll); len(got) != 0 {
+		t.Errorf("single + one row covering all phases problems = %v, want none", got)
+	}
+	if got := ValidateRoadmapPullRequestsDeliveryMode(feature.DeliveryModeStack, twoRows); len(got) != 0 {
+		t.Errorf("stack + two rows problems = %v, want none", got)
+	}
+	if got := ValidateRoadmapPullRequestsDeliveryMode("", twoRows); len(got) != 0 {
+		t.Errorf("unset mode + two rows problems = %v, want none (unset defaults to stack)", got)
+	}
+}
+
+func TestValidateRoadmapPullRequestsTableForMode(t *testing.T) {
+	twoPhaseRoadmap := func(table string) string {
+		return "# Roadmap\n\n## Phase 1: First\n\n### Goal\n\nShip it.\n\n## Phase 2: Second\n\n### Goal\n\nShip it.\n\n## Pull Requests\n\n" + table
+	}
+	validTwoRowTable := `| # | Title | Phases | Rationale |
+|---|---|---|---|
+| 1 | First | 1 | First slice. |
+| 2 | Second | 2 | Second slice. |`
+	oneRowTable := `| # | Title | Phases | Rationale |
+|---|---|---|---|
+| 1 | Whole feature | 1-2 | One pull request. |`
+	structurallyBrokenTable := `| # | Title | Phases | Rationale |
+|---|---|---|---|
+| 1 | First | 1 | First slice. |
+| 2 | Second | 3 | Not a roadmap phase. |`
+
+	t.Run("single one row covering all phases is valid", func(t *testing.T) {
+		text := twoPhaseRoadmap(oneRowTable)
+		phases, err := ParseRoadmap(text)
+		if err != nil {
+			t.Fatalf("ParseRoadmap: %v", err)
+		}
+		rows, problems := ValidateRoadmapPullRequestsTableForMode(text, phases, feature.DeliveryModeSingle)
+		if len(problems) != 0 {
+			t.Fatalf("problems = %v, want none", problems)
+		}
+		if len(rows) != 1 || len(rows[0].Phases) != 2 {
+			t.Errorf("rows = %+v, want one row covering both phases", rows)
+		}
+	})
+
+	t.Run("single two rows reports only the delivery problem", func(t *testing.T) {
+		text := twoPhaseRoadmap(validTwoRowTable)
+		phases, err := ParseRoadmap(text)
+		if err != nil {
+			t.Fatalf("ParseRoadmap: %v", err)
+		}
+		_, problems := ValidateRoadmapPullRequestsTableForMode(text, phases, feature.DeliveryModeSingle)
+		if len(problems) != 1 {
+			t.Fatalf("problems = %v, want exactly the delivery problem", problems)
+		}
+		if !strings.Contains(problems[0], "## Pull Requests") || !strings.Contains(problems[0], "single pull request") {
+			t.Errorf("problem = %q, want it to name the section and the single-pull-request delivery", problems[0])
+		}
+	})
+
+	t.Run("stack two rows stays valid", func(t *testing.T) {
+		text := twoPhaseRoadmap(validTwoRowTable)
+		phases, err := ParseRoadmap(text)
+		if err != nil {
+			t.Fatalf("ParseRoadmap: %v", err)
+		}
+		_, problems := ValidateRoadmapPullRequestsTableForMode(text, phases, feature.DeliveryModeStack)
+		if len(problems) != 0 {
+			t.Fatalf("problems = %v, want none for stack delivery", problems)
+		}
+	})
+
+	t.Run("single combines structural and delivery problems", func(t *testing.T) {
+		text := twoPhaseRoadmap(structurallyBrokenTable)
+		phases, err := ParseRoadmap(text)
+		if err != nil {
+			t.Fatalf("ParseRoadmap: %v", err)
+		}
+		_, problems := ValidateRoadmapPullRequestsTableForMode(text, phases, feature.DeliveryModeSingle)
+		if len(problems) < 2 {
+			t.Fatalf("problems = %v, want structural and delivery problems", problems)
+		}
+		sawStructural, sawDelivery := false, false
+		for _, problem := range problems {
+			if strings.Contains(problem, "not a roadmap phase") {
+				sawStructural = true
+			}
+			if strings.Contains(problem, "single pull request") {
+				sawDelivery = true
+			}
+		}
+		if !sawStructural || !sawDelivery {
+			t.Errorf("problems = %v, want both a structural problem and the single-delivery problem", problems)
+		}
+	})
 }
 
 func TestParsePhasesCellAcceptsAndRejects(t *testing.T) {

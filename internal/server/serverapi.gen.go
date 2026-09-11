@@ -146,6 +146,24 @@ func (e CloneOperationState) Valid() bool {
 	}
 }
 
+// Defines values for CreateFeatureMutationRequestDeliveryMode.
+const (
+	Single CreateFeatureMutationRequestDeliveryMode = "single"
+	Stack  CreateFeatureMutationRequestDeliveryMode = "stack"
+)
+
+// Valid indicates whether the value is a known member of the CreateFeatureMutationRequestDeliveryMode enum.
+func (e CreateFeatureMutationRequestDeliveryMode) Valid() bool {
+	switch e {
+	case Single:
+		return true
+	case Stack:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateFeatureMutationRequestInquireness.
 const (
 	CreateFeatureMutationRequestInquirenessHigh   CreateFeatureMutationRequestInquireness = "high"
@@ -1993,23 +2011,27 @@ type Cost struct {
 
 // CreateFeatureMutationRequest defines model for CreateFeatureMutationRequest.
 type CreateFeatureMutationRequest struct {
-	AttachmentUploads []string                                `json:"attachment_uploads,omitempty"`
-	Attachments       []string                                `json:"attachments,omitempty"`
-	Checkpoints       Checkpoints                             `json:"checkpoints,omitempty"`
-	Description       string                                  `json:"description,omitempty"`
-	ExitCriteria      string                                  `json:"exit_criteria,omitempty"`
-	IdempotencyKey    string                                  `json:"idempotency_key,omitempty"`
-	ImageUploads      []string                                `json:"image_uploads,omitempty"`
-	Images            []string                                `json:"images,omitempty"`
-	Inquireness       CreateFeatureMutationRequestInquireness `json:"inquireness,omitempty"`
-	Models            ModelDefaults                           `json:"models,omitempty"`
-	Name              string                                  `json:"name"`
-	Pipeline          CreateFeatureMutationRequestPipeline    `json:"pipeline,omitempty"`
-	Repos             []string                                `json:"repos,omitempty"`
-	RepositorySources []RepositorySource                      `json:"repository_sources,omitempty"`
-	RiskLevel         CreateFeatureMutationRequestRiskLevel   `json:"risk_level,omitempty"`
-	UseCurrentBranch  bool                                    `json:"use_current_branch,omitempty"`
+	AttachmentUploads []string                                 `json:"attachment_uploads,omitempty"`
+	Attachments       []string                                 `json:"attachments,omitempty"`
+	Checkpoints       Checkpoints                              `json:"checkpoints,omitempty"`
+	DeliveryMode      CreateFeatureMutationRequestDeliveryMode `json:"delivery_mode,omitempty"`
+	Description       string                                   `json:"description,omitempty"`
+	ExitCriteria      string                                   `json:"exit_criteria,omitempty"`
+	IdempotencyKey    string                                   `json:"idempotency_key,omitempty"`
+	ImageUploads      []string                                 `json:"image_uploads,omitempty"`
+	Images            []string                                 `json:"images,omitempty"`
+	Inquireness       CreateFeatureMutationRequestInquireness  `json:"inquireness,omitempty"`
+	Models            ModelDefaults                            `json:"models,omitempty"`
+	Name              string                                   `json:"name"`
+	Pipeline          CreateFeatureMutationRequestPipeline     `json:"pipeline,omitempty"`
+	Repos             []string                                 `json:"repos,omitempty"`
+	RepositorySources []RepositorySource                       `json:"repository_sources,omitempty"`
+	RiskLevel         CreateFeatureMutationRequestRiskLevel    `json:"risk_level,omitempty"`
+	UseCurrentBranch  bool                                     `json:"use_current_branch,omitempty"`
 }
+
+// CreateFeatureMutationRequestDeliveryMode defines model for CreateFeatureMutationRequest.DeliveryMode.
+type CreateFeatureMutationRequestDeliveryMode string
 
 // CreateFeatureMutationRequestInquireness defines model for CreateFeatureMutationRequest.Inquireness.
 type CreateFeatureMutationRequestInquireness string
@@ -2260,6 +2282,7 @@ type FeatureConfigUpdateResponse struct {
 type FeatureDefaults struct {
 	AutomaticReviewEnabled bool                                 `json:"automatic_review_enabled,omitempty"`
 	Checkpoints            config.Checkpoints                   `json:"checkpoints"`
+	DeliveryMode           string                               `json:"delivery_mode,omitempty"`
 	Effort                 EffortConfig                         `json:"effort,omitempty"`
 	Inquireness            string                               `json:"inquireness,omitempty"`
 	Models                 ModelDefaults                        `json:"models"`
@@ -2296,12 +2319,13 @@ type FeatureDetail struct {
 	CloseOutcome string `json:"close_outcome,omitempty"`
 
 	// ClosedAt Relationship close timestamp; only set on closed child features.
-	ClosedAt     *time.Time   `json:"closed_at,omitempty"`
-	Cost         Cost         `json:"cost"`
-	CreatedAt    time.Time    `json:"created_at"`
-	CurrentPhase string       `json:"current_phase"`
-	Description  string       `json:"description,omitempty"`
-	Effort       EffortConfig `json:"effort,omitempty"`
+	ClosedAt     *time.Time           `json:"closed_at,omitempty"`
+	Cost         Cost                 `json:"cost"`
+	CreatedAt    time.Time            `json:"created_at"`
+	CurrentPhase string               `json:"current_phase"`
+	DeliveryMode feature.DeliveryMode `json:"delivery_mode,omitempty"`
+	Description  string               `json:"description,omitempty"`
+	Effort       EffortConfig         `json:"effort,omitempty"`
 
 	// Errors Current non-warning errors this feature or its active child owns, each pairing the catalog-rendered error (without diagnostics) with the reference to its durable home. Entries are ordered blocking first, then needs_action, stable by scope and key; absent when there are none. Warning-class records never appear here.
 	Errors       []OwnedError `json:"errors,omitempty"`

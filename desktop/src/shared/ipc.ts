@@ -1502,6 +1502,12 @@ export const FeatureSnapshotSchema = z.strictObject({
   /** Run-contract axes surfaced so child launches can seed from the parent. */
   riskLevel: z.string().max(100).optional(),
   exitCriteria: z.string().max(4000).optional(),
+  /**
+   * The feature's immutable delivery mode ("stack" | "single"), as the
+   * server's effective read; legacy features without a stored value read
+   * as stack. Absent when the server omits it.
+   */
+  deliveryMode: z.string().max(100).optional(),
   waitReason: z.string().optional(),
   repos: z.array(z.string()),
   createdAt: z.string(),
@@ -2734,6 +2740,8 @@ export const CreateFeatureInputSchema = z.strictObject({
   pipeline: z.enum(['medium', 'large', 'moonshot']).default('medium'),
   riskLevel: z.enum(['low', 'medium', 'high']).default('medium'),
   inquireness: z.enum(['none', 'medium', 'high']).default('medium'),
+  /** How the work reaches review; the server treats stack as the default. */
+  deliveryMode: z.enum(['stack', 'single']).default('stack'),
   exitCriteria: z.string().max(4000).default(''),
   models: z.record(z.string().min(1).max(64), z.string().min(1).max(200)).default({}),
   effort: z.record(z.string().min(1).max(64), EffortLevelSchema).default({}),
@@ -2832,6 +2840,8 @@ export const CreationDefaultsSchema = z.strictObject({
   defaults: z.strictObject({
     pipeline: z.string().optional(),
     inquireness: z.string().optional(),
+    /** Workspace delivery default ("stack" | "single"); unknown ⇒ stack. */
+    delivery_mode: z.string().optional(),
     /** Per-phase default models, for read-only display. */
     models: z.array(z.strictObject({ phase: z.string(), model: z.string() })),
     /** Per-phase effort defaults, for read-only display. */

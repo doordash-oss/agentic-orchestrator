@@ -42,5 +42,9 @@ Because reviewers later judge the assembled result as a whole, the roadmap you p
 This feature targets the repositories below. Treat this list as authoritative; ignore sibling directories that are not listed here.
 {{ range .Repos }}- **{{ .Name }}** ({{ .Path }})
 {{ end }}
-{{ end }}{{ template "grillme_inquireness" .Inquireness }}
+{{ end }}## Delivery
+
+{{ if eq .DeliveryMode "single" }}This feature is delivered as a single pull request. The `## Pull Requests` table must contain exactly one row whose `Phases` cell spans every phase (for example `1-3` for a three-phase roadmap). This is a delivery constraint only: phase slicing itself is unchanged — still divide the work into reviewable phases as the skill directs.{{ else }}This feature is delivered as a stack of pull requests — the grouping heuristic in the create-roadmap skill applies when filling in the `## Pull Requests` table.{{ end }}
+
+{{ template "grillme_inquireness" .Inquireness }}
 {{ end -}}

@@ -139,6 +139,74 @@ func TestCreateReviewFeedbackChildPersistsSelectedFeedback(t *testing.T) {
 	}
 }
 
+func TestCreateReviewFeedbackChildInheritsParentDeliveryMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		parent      feature.DeliveryMode // stored value; "" models a legacy record
+		wantPersist feature.DeliveryMode // child's persisted mode
+	}{
+		{"single parent", feature.DeliveryModeSingle, feature.DeliveryModeSingle},
+		{"stack parent", feature.DeliveryModeStack, feature.DeliveryModeStack},
+		{"legacy parent with no stored mode", "", feature.DeliveryModeStack},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := newChildTestManager(t, map[string]string{"/wt/api": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, cleanEverywhere())
+			parent := &feature.Feature{
+				ID:       "parent-rf-delivery",
+				Name:     "Parent",
+				Slug:     "parent",
+				Status:   feature.StatusPublished,
+				Pipeline: feature.PipelineMoonshot,
+				Repos: []feature.FeatureRepo{
+					{Name: "api", Path: "/src/api", WorktreePath: "/wt/api", Branch: "feature/parent-api", BaseBranch: "main"},
+				},
+				ExitCriteria: "all selected feedback is addressed",
+				Checkpoints:  feature.Checkpoints{RoadmapReview: true, ManualPublish: true},
+				RepoStates: map[string]*feature.RepoState{
+					"api": {PRURL: "https://github.example/acme/api/pull/17"},
+				},
+				DeliveryMode: tt.parent,
+			}
+			saveChildTestParent(t, mgr, parent)
+
+			child, err := mgr.CreateReviewFeedbackChild(parent.ID, feature.ReviewFeedbackChildSpec{
+				Comments: []feature.ReviewFeedbackComment{
+					{Repo: "api", ID: 101, Type: "issue", Author: "alice", Body: "Please add a regression test."},
+				},
+			})
+			if err != nil {
+				t.Fatalf("CreateReviewFeedbackChild() error = %v", err)
+			}
+			if child.DeliveryMode != tt.wantPersist {
+				t.Fatalf("child DeliveryMode = %q, want %q", child.DeliveryMode, tt.wantPersist)
+			}
+			if child.EffectiveDeliveryMode() != parent.EffectiveDeliveryMode() {
+				t.Fatalf("child effective DeliveryMode = %q, want parent effective %q", child.EffectiveDeliveryMode(), parent.EffectiveDeliveryMode())
+			}
+
+			loaded, err := mgr.Store.Load(child.ID)
+			if err != nil {
+				t.Fatalf("Store.Load(%q) error = %v", child.ID, err)
+			}
+			if loaded.DeliveryMode != tt.wantPersist {
+				t.Fatalf("reloaded DeliveryMode = %q, want %q", loaded.DeliveryMode, tt.wantPersist)
+			}
+
+			// The paired-config back-sync must not copy the delivery mode.
+			reloadedParent, err := mgr.Store.Load(parent.ID)
+			if err != nil {
+				t.Fatalf("Store.Load(%q) error = %v", parent.ID, err)
+			}
+			if reloadedParent.DeliveryMode != tt.parent {
+				t.Fatalf("parent DeliveryMode = %q, want untouched %q", reloadedParent.DeliveryMode, tt.parent)
+			}
+		})
+	}
+}
+
 func TestCreateReviewFeedbackChildResolvesGateOnParentAndChild(t *testing.T) {
 	t.Parallel()
 

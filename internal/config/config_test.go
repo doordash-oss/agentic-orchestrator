@@ -1555,6 +1555,83 @@ func TestDefaultsPipelinePreservesExisting(t *testing.T) {
 	}
 }
 
+func TestNewDefaultDeliveryMode(t *testing.T) {
+	cfg := NewDefault()
+	if cfg.Defaults.DeliveryMode != "stack" {
+		t.Errorf("expected delivery_mode stack, got %q", cfg.Defaults.DeliveryMode)
+	}
+}
+
+func TestDefaultsDeliveryModeEmptyDefaultsToStack(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// Config YAML with no delivery_mode field.
+	content := []byte("defaults:\n  max_iterations: 5\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if cfg.Defaults.DeliveryMode != "stack" {
+		t.Errorf("expected delivery_mode to default to 'stack', got %q", cfg.Defaults.DeliveryMode)
+	}
+}
+
+func TestDefaultsDeliveryModePreservesExisting(t *testing.T) {
+	cfg := &Config{}
+	cfg.Defaults.DeliveryMode = "single"
+	applyDefaults(cfg)
+
+	if cfg.Defaults.DeliveryMode != "single" {
+		t.Errorf("expected delivery_mode to be preserved as 'single', got %q", cfg.Defaults.DeliveryMode)
+	}
+}
+
+func TestDefaultsDeliveryModeRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	original := NewDefault()
+	original.Defaults.DeliveryMode = "single"
+
+	if err := Save(path, original); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if loaded.Defaults.DeliveryMode != "single" {
+		t.Errorf("expected delivery_mode 'single' after round-trip, got %q", loaded.Defaults.DeliveryMode)
+	}
+}
+
+func TestPipelinePreferenceDeliveryModeOverlay(t *testing.T) {
+	defaults := NewDefault().Defaults
+	defaults.PipelinePreferences = map[string]PipelinePreference{
+		"moonshot": {DeliveryMode: "single"},
+	}
+
+	// A remembered delivery mode overlays the global default.
+	pref := defaults.PreferenceForPipeline("moonshot")
+	if pref.DeliveryMode != "single" {
+		t.Errorf("delivery mode = %q, want overlay %q", pref.DeliveryMode, "single")
+	}
+
+	// A profile without a remembered delivery mode falls back to the global default.
+	pref = defaults.PreferenceForPipeline("medium")
+	if pref.DeliveryMode != defaults.DeliveryMode {
+		t.Errorf("delivery mode = %q, want global default %q", pref.DeliveryMode, defaults.DeliveryMode)
+	}
+}
+
 func TestNewDefault_Utilities(t *testing.T) {
 	cfg := NewDefault()
 	if cfg.Defaults.Models.Utilities != "sonnet[200K]" {

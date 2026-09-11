@@ -1090,6 +1090,7 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 		QueueSetup:              true,
 		RiskLevel:               req.RiskLevel,
 		Pipeline:                req.Pipeline,
+		DeliveryMode:            req.DeliveryMode,
 		SourceExpectations:      sourceExpectations,
 		// Every ordinary server creation is accepted against immutable local
 		// commits. Requests from source-aware clients revalidate their displayed
@@ -1114,7 +1115,7 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 		}
 		return serverruntime.CreateFeatureResponse{}, err
 	}
-	if err := t.persistPipelinePreferences(featureRepoNames(f), f.EffectivePipeline(), f.Models, f.Effort, f.Inquireness, f.Checkpoints, true); err != nil {
+	if err := t.persistPipelinePreferences(featureRepoNames(f), f.EffectivePipeline(), f.Models, f.Effort, f.Inquireness, f.EffectiveDeliveryMode(), f.Checkpoints, true); err != nil {
 		return serverruntime.CreateFeatureResponse{}, err
 	}
 	return serverruntime.CreateFeatureResponse{
@@ -1339,7 +1340,7 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 				if pipeline == "" {
 					pipeline = f.EffectivePipeline()
 				}
-				if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
+				if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.EffectiveDeliveryMode(), f.Checkpoints, f.IsPublishable()); err != nil {
 					return err
 				}
 				configResp = serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}
@@ -1363,7 +1364,7 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 			if pipeline == "" {
 				pipeline = f.EffectivePipeline()
 			}
-			if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
+			if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.EffectiveDeliveryMode(), f.Checkpoints, f.IsPublishable()); err != nil {
 				return err
 			}
 			configResp = serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}
@@ -2556,6 +2557,9 @@ func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch serverruntim
 	if patch.Pipeline != "" && setIfChanged(&dst.Pipeline, patch.Pipeline) {
 		changed = true
 	}
+	if patch.DeliveryMode != "" && setIfChanged(&dst.DeliveryMode, patch.DeliveryMode) {
+		changed = true
+	}
 	if patch.MaxIterations > 0 && setIfChanged(&dst.MaxIterations, patch.MaxIterations) {
 		changed = true
 	}
@@ -2627,7 +2631,10 @@ func featureRepoNames(f *feature.Feature) []string {
 	return repos
 }
 
-func (t *serverMutationTarget) persistPipelinePreferences(repos []string, pipeline feature.PipelineProfile, models config.ModelConfig, effort config.EffortConfig, inquireness feature.Inquireness, checkpoints feature.Checkpoints, publishable bool) error {
+// persistPipelinePreferences remembers the last-used models, effort,
+// inquireness, and delivery mode per pipeline profile so the next creation
+// for the same profile can be seeded from them.
+func (t *serverMutationTarget) persistPipelinePreferences(repos []string, pipeline feature.PipelineProfile, models config.ModelConfig, effort config.EffortConfig, inquireness feature.Inquireness, deliveryMode feature.DeliveryMode, checkpoints feature.Checkpoints, publishable bool) error {
 	if t.configPath == "" {
 		return errors.New("config path is not available")
 	}
@@ -2650,9 +2657,10 @@ func (t *serverMutationTarget) persistPipelinePreferences(repos []string, pipeli
 	projection := pipeline.ProjectGates(checkpoints, publishable)
 	profileKey := string(pipeline)
 	cfg.Defaults.PipelinePreferences[profileKey] = config.PipelinePreference{
-		Models:      models,
-		Effort:      effort,
-		Inquireness: string(inquireness),
+		Models:       models,
+		Effort:       effort,
+		Inquireness:  string(inquireness),
+		DeliveryMode: string(deliveryMode),
 	}
 	configGates := feature.FeatureCheckpointsToConfig(projection.Checkpoints)
 	for _, repoName := range repos {

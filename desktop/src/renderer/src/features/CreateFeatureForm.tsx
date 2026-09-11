@@ -105,12 +105,15 @@ import {
   type SourceUpdateUncertainty,
 } from './sourceUpdates';
 import {
+  DELIVERY_MODES,
   PIPELINES,
   checkpointSummary,
   checkpointsForPipeline,
+  isDeliveryMode,
   isPipeline,
   modelConfigKey,
   type CheckpointState,
+  type DeliveryMode,
   type Pipeline,
 } from './runContract';
 
@@ -367,6 +370,7 @@ export function CreateFeatureForm({
   const [inquireness, setInquireness] = useState<'none' | 'medium' | 'high'>(
     () => retained?.inquireness ?? 'medium',
   );
+  const [delivery, setDelivery] = useState<DeliveryMode>(() => retained?.delivery ?? 'stack');
   const [exitCriteria, setExitCriteria] = useState(() => retained?.exitCriteria ?? '');
   const [images, setImages] = useState<readonly string[]>(() => retained?.images ?? []);
   const [attachments, setAttachments] = useState<readonly string[]>(
@@ -638,6 +642,10 @@ export function CreateFeatureForm({
           setCheckpoints(checkpointsForPipeline(defaults.defaults.pipeline));
         }
         setInquireness(normalizeInquireness(defaults.defaults.inquireness));
+        // An unknown or empty server default leaves the stack default in place.
+        if (isDeliveryMode(defaults.defaults.delivery_mode)) {
+          setDelivery(defaults.defaults.delivery_mode);
+        }
       })
       .catch((err: unknown) => setState({ phase: 'error', error: parseIpcError(err) }));
   }, []);
@@ -815,6 +823,7 @@ export function CreateFeatureForm({
       effortChoices,
       riskLevel,
       inquireness,
+      delivery,
       exitCriteria,
       images: [...images],
       attachments: [...attachments],
@@ -1835,6 +1844,9 @@ export function CreateFeatureForm({
           pipeline,
           riskLevel,
           inquireness,
+          // Always set: the server resolves an omitted value to the workspace
+          // default, so the sheet submits its explicit choice instead.
+          deliveryMode: delivery,
           exitCriteria,
           models,
           effort,
@@ -2572,6 +2584,29 @@ export function CreateFeatureForm({
                       Set the depth
                     </h2>
                     {depthProfiles('full')}
+                    <fieldset className="creation-sheet__group">
+                      <legend className="creation-sheet__field-label">Delivery</legend>
+                      <div className="creation-sheet__profiles creation-sheet__profiles--pair">
+                        {DELIVERY_MODES.map((mode) => (
+                          <label
+                            key={mode.id}
+                            className="creation-sheet__profile"
+                            data-selected={delivery === mode.id}
+                          >
+                            <input
+                              type="radio"
+                              name="delivery"
+                              checked={delivery === mode.id}
+                              onChange={() => setDelivery(mode.id)}
+                            />
+                            <span className="creation-sheet__profile-body">
+                              <b className="creation-sheet__profile-title">{mode.title}</b>
+                              <span className="creation-sheet__profile-note">{mode.note}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
                   </section>
                 ) : null}
 

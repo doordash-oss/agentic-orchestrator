@@ -53,6 +53,47 @@ func ValidateRoadmapPullRequestsTable(roadmapText string, phases []RoadmapPhase)
 	return rows, append(problems, ValidateRoadmapPullRequests(phases, rows)...)
 }
 
+// ValidateRoadmapPullRequestsTableForMode combines the structural `## Pull
+// Requests` table check with the feature's delivery-mode constraint:
+// structural problems first, then the single-delivery problem. Enforcement
+// sites (the roadmap planning loop, the review gate, approval persistence)
+// call this so both classes of problems surface in a single pass.
+func ValidateRoadmapPullRequestsTableForMode(roadmapText string, phases []RoadmapPhase, mode feature.DeliveryMode) (rows []RoadmapPullRequest, problems []string) {
+	rows, problems = ValidateRoadmapPullRequestsTable(roadmapText, phases)
+	if rows == nil {
+		return nil, problems
+	}
+	return rows, append(problems, ValidateRoadmapPullRequestsDeliveryMode(mode, rows)...)
+}
+
+// ValidateRoadmapPullRequestsDeliveryMode checks the parsed table against the
+// feature's delivery mode. A single-delivery feature ships as exactly one
+// pull request, so its table must have exactly one row covering every phase;
+// stack (or unset) delivery adds no constraint beyond the structural rules.
+func ValidateRoadmapPullRequestsDeliveryMode(mode feature.DeliveryMode, rows []RoadmapPullRequest) []string {
+	if mode != feature.DeliveryModeSingle || len(rows) <= 1 {
+		return nil
+	}
+	return []string{fmt.Sprintf("%s: this feature is delivered as a single pull request, so the table must have exactly one row covering all phases — found %d rows", PullRequestsHeading, len(rows))}
+}
+
+// roadmapDeliveryModeViolations enforces the delivery-mode contract on a
+// roadmap's `## Pull Requests` table, mirroring the phase-plan evidence-mode
+// check: the artifact-contract validator is structural and context-free, so
+// the loop-level check converts the delivery problems into protocol
+// violations the planning feedback renderer already knows how to print.
+func roadmapDeliveryModeViolations(roadmapText string, phases []RoadmapPhase, mode feature.DeliveryMode) []ProtocolViolation {
+	_, problems := ValidateRoadmapPullRequestsTableForMode(roadmapText, phases, mode)
+	if len(problems) == 0 {
+		return nil
+	}
+	violations := make([]ProtocolViolation, 0, len(problems))
+	for _, problem := range problems {
+		violations = append(violations, ProtocolViolation{Artifact: "roadmap markdown", Reason: problem})
+	}
+	return violations
+}
+
 // ParseRoadmapPullRequests locates the `## Pull Requests` section, reads the
 // first markdown table under it, and decodes each row's position, title,
 // phase set, and rationale. Problems report a missing section, a missing or

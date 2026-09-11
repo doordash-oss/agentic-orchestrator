@@ -100,6 +100,7 @@ type DefaultsConfig struct {
 	PipelinePreferences      map[string]PipelinePreference `yaml:"pipeline_preferences,omitempty" json:"pipeline_preferences,omitempty"`
 	ExitCriteria             string                        `yaml:"exit_criteria" json:"exit_criteria,omitempty"`
 	Inquireness              string                        `yaml:"inquireness" json:"inquireness,omitempty"`
+	DeliveryMode             string                        `yaml:"delivery_mode" json:"delivery_mode,omitempty"`
 	Pipeline                 string                        `yaml:"pipeline,omitempty" json:"pipeline,omitempty"`
 	MaxIterations            int                           `yaml:"max_iterations" json:"max_iterations,omitempty"`
 	MaxConsecutiveFailures   int                           `yaml:"max_consecutive_failures" json:"max_consecutive_failures,omitempty"`
@@ -116,9 +117,10 @@ type DefaultsConfig struct {
 // PipelinePreference stores the last-used feature-creation settings for a
 // specific pipeline profile.
 type PipelinePreference struct {
-	Models      ModelConfig  `yaml:"models,omitempty" json:"models,omitempty"`
-	Effort      EffortConfig `yaml:"effort,omitempty" json:"effort,omitempty"`
-	Inquireness string       `yaml:"inquireness,omitempty" json:"inquireness,omitempty"`
+	Models       ModelConfig  `yaml:"models,omitempty" json:"models,omitempty"`
+	Effort       EffortConfig `yaml:"effort,omitempty" json:"effort,omitempty"`
+	Inquireness  string       `yaml:"inquireness,omitempty" json:"inquireness,omitempty"`
+	DeliveryMode string       `yaml:"delivery_mode,omitempty" json:"delivery_mode,omitempty"`
 }
 
 type ModelConfig struct {
@@ -378,6 +380,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Defaults.Inquireness == "" {
 		cfg.Defaults.Inquireness = d.Defaults.Inquireness
 	}
+	if cfg.Defaults.DeliveryMode == "" {
+		cfg.Defaults.DeliveryMode = d.Defaults.DeliveryMode
+	}
 	// If the YAML had no checkpoints section at all, UnmarshalYAML was never
 	// called, so parsed is false and the fields are zero values. Apply the
 	// complete default checkpoint set.
@@ -492,9 +497,10 @@ func ApplyProviderDefaults(cfg *Config, defaults map[string]string) {
 // pipeline profile. Missing remembered fields fall back to the global defaults.
 func (d DefaultsConfig) PreferenceForPipeline(profile string) PipelinePreference {
 	pref := PipelinePreference{
-		Models:      d.Models,
-		Effort:      d.Effort,
-		Inquireness: d.Inquireness,
+		Models:       d.Models,
+		Effort:       d.Effort,
+		Inquireness:  d.Inquireness,
+		DeliveryMode: d.DeliveryMode,
 	}
 	if profile == "" || d.PipelinePreferences == nil {
 		return pref
@@ -507,6 +513,9 @@ func (d DefaultsConfig) PreferenceForPipeline(profile string) PipelinePreference
 	pref.Effort = OverlayEffortConfig(pref.Effort, saved.Effort)
 	if saved.Inquireness != "" {
 		pref.Inquireness = saved.Inquireness
+	}
+	if saved.DeliveryMode != "" {
+		pref.DeliveryMode = saved.DeliveryMode
 	}
 	return pref
 }

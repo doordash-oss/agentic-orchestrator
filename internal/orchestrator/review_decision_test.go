@@ -963,6 +963,123 @@ func TestOrchestrator_HandleReviewDecision_Proceed_Roadmap_DerivationFailureKeep
 	}
 }
 
+// Proceed on a single-delivery feature whose on-disk roadmap splits the
+// feature across two rows: the decision errors, the gate stays open, and the
+// roadmap phase does not advance — no stack or phase count is persisted.
+func TestOrchestrator_HandleReviewDecision_Proceed_Roadmap_SingleDeliveryTwoRowKeepsGate(t *testing.T) {
+	tmpDir := t.TempDir()
+	roadmapPath := filepath.Join(tmpDir, "roadmap.md")
+	roadmap := "# Roadmap\n\n## Phase 1: Bootstrap\n### Goal\nInit\n\n## Phase 2: Build\n### Goal\nBuild\n\n" +
+		"## Pull Requests\n\n| # | Title | Phases | Rationale |\n|---|---|---|---|\n" +
+		"| 1 | Bootstrap | 1 | Stands alone. |\n| 2 | Build | 2 | Stands alone. |\n"
+	if err := os.WriteFile(roadmapPath, []byte(roadmap), 0o644); err != nil {
+		t.Fatalf("write roadmap: %v", err)
+	}
+
+	planGate := feature.PhasePlan
+	f := &feature.Feature{
+		ID:                  "feat-rd-rm-single-bad",
+		Status:              feature.StatusPlanNeedsReview,
+		Pipeline:            feature.PipelineLarge,
+		PendingReviewPhase:  &planGate,
+		DeliveryMode:        feature.DeliveryModeSingle,
+		TotalRoadmapPhases:  2,
+		CurrentRoadmapPhase: 0,
+		Artifacts:           map[string]string{"roadmap": roadmapPath},
+	}
+	lc := lifecycleForFeature(f)
+	lc.AdvanceRoadmapPhaseFn = func(id string) error {
+		t.Error("AdvanceRoadmapPhase must not run when the single-delivery table has two rows")
+		return nil
+	}
+	fs := newFeatureStore(f)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+	err := o.HandleReviewDecision("feat-rd-rm-single-bad", orchestrator.ReviewDecision{
+		Decision: "proceed",
+		Roadmap:  true,
+	})
+	if err == nil {
+		t.Fatal("HandleReviewDecision must fail when a single-delivery roadmap carries two rows")
+	}
+	if !strings.Contains(err.Error(), "## Pull Requests") {
+		t.Errorf("error = %v, want the ## Pull Requests table problems", err)
+	}
+	if !strings.Contains(err.Error(), "single") {
+		t.Errorf("error = %v, want the single-delivery constraint named", err)
+	}
+	if f.PendingReviewPhase == nil {
+		t.Error("PendingReviewPhase must stay set so the gate remains open")
+	}
+	if f.CurrentRoadmapPhase != 0 {
+		t.Errorf("CurrentRoadmapPhase = %d, want 0 (roadmap phase unadvanced)", f.CurrentRoadmapPhase)
+	}
+	if f.TotalRoadmapPhases != 2 {
+		t.Errorf("TotalRoadmapPhases = %d, want the pre-existing 2 (not re-persisted)", f.TotalRoadmapPhases)
+	}
+	if len(f.Stack) != 0 {
+		t.Errorf("stack = %+v, want no layers persisted", f.Stack)
+	}
+}
+
+// Proceed on a single-delivery feature whose roadmap carries one row
+// covering every phase: the stack persists with a single layer spanning all
+// phases before the roadmap phase advances.
+func TestOrchestrator_HandleReviewDecision_Proceed_Roadmap_SingleDeliveryOneRowPersistsSingleLayerStack(t *testing.T) {
+	tmpDir := t.TempDir()
+	roadmapPath := filepath.Join(tmpDir, "roadmap.md")
+	roadmap := "# Roadmap\n\n## Phase 1: Bootstrap\n### Goal\nInit\n\n## Phase 2: Build\n### Goal\nBuild\n\n" +
+		"## Pull Requests\n\n| # | Title | Phases | Rationale |\n|---|---|---|---|\n" +
+		"| 1 | Whole feature | 1-2 | Delivered as one pull request. |\n"
+	if err := os.WriteFile(roadmapPath, []byte(roadmap), 0o644); err != nil {
+		t.Fatalf("write roadmap: %v", err)
+	}
+
+	planGate := feature.PhasePlan
+	f := &feature.Feature{
+		ID:                  "feat-rd-rm-single-ok",
+		Status:              feature.StatusPlanNeedsReview,
+		Pipeline:            feature.PipelineLarge,
+		PendingReviewPhase:  &planGate,
+		DeliveryMode:        feature.DeliveryModeSingle,
+		TotalRoadmapPhases:  0,
+		CurrentRoadmapPhase: 0,
+		Artifacts:           map[string]string{"roadmap": roadmapPath},
+	}
+	lc := lifecycleForFeature(f)
+	var stackAtAdvance []feature.StackLayer
+	lc.AdvanceRoadmapPhaseFn = func(id string) error {
+		stackAtAdvance = append([]feature.StackLayer(nil), f.Stack...)
+		f.CurrentRoadmapPhase = 1
+		f.Status = feature.StatusPlanning
+		return nil
+	}
+	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
+	fs := newFeatureStore(f)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+	if err := o.HandleReviewDecision("feat-rd-rm-single-ok", orchestrator.ReviewDecision{
+		Decision: "proceed",
+		Roadmap:  true,
+	}); err != nil {
+		t.Fatalf("HandleReviewDecision: %v", err)
+	}
+
+	if f.TotalRoadmapPhases != 2 {
+		t.Errorf("TotalRoadmapPhases = %d, want 2", f.TotalRoadmapPhases)
+	}
+	if len(f.Stack) != 1 {
+		t.Fatalf("stack = %+v, want a single layer", f.Stack)
+	}
+	layer := f.Stack[0]
+	if layer.Position != 1 || layer.Title != "Whole feature" || len(layer.Phases) != 2 || layer.Phases[0] != 1 || layer.Phases[1] != 2 {
+		t.Errorf("stack layer = %+v, want one layer covering phases 1 and 2", layer)
+	}
+	if len(stackAtAdvance) != 1 {
+		t.Errorf("stack at AdvanceRoadmapPhase = %+v, want the single layer persisted before advancing", stackAtAdvance)
+	}
+}
+
 // Unknown decision returns an error.
 func TestOrchestrator_HandleReviewDecision_UnknownDecision_Errors(t *testing.T) {
 	f := &feature.Feature{ID: "feat-rd-bad", Status: feature.StatusPlanNeedsReview}

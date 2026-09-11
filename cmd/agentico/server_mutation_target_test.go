@@ -1370,6 +1370,116 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 	}
 }
 
+// TestServerMutationTargetCreateFeatureDeliveryModeFlowsToFeatureAndPreference
+// verifies the create target resolves the delivery mode from the request or
+// the workspace default, and that the per-profile pipeline preference records
+// the delivery mode that was used.
+func TestServerMutationTargetCreateFeatureDeliveryModeFlowsToFeatureAndPreference(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		defaultsMode   string
+		requestMode    feature.DeliveryMode
+		wantFeature    feature.DeliveryMode
+		wantPreference string
+	}{
+		{name: "request single", defaultsMode: "stack", requestMode: feature.DeliveryModeSingle, wantFeature: feature.DeliveryModeSingle, wantPreference: "single"},
+		{name: "omitted uses workspace default", defaultsMode: "single", requestMode: "", wantFeature: feature.DeliveryModeSingle, wantPreference: "single"},
+		{name: "omitted with stack default", defaultsMode: "stack", requestMode: "", wantFeature: feature.DeliveryModeStack, wantPreference: "stack"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtimeDir := t.TempDir()
+			configPath := filepath.Join(runtimeDir, "config.yaml")
+			stateDir := filepath.Join(runtimeDir, "features")
+			repoPath := filepath.Join(runtimeDir, testRepoAName)
+			initMutationGitRepo(t, repoPath)
+			cfg := config.NewDefault()
+			cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
+			cfg.Defaults.DeliveryMode = tc.defaultsMode
+			if err := config.Save(configPath, cfg); err != nil {
+				t.Fatalf("Save config error = %v", err)
+			}
+			store := feature.NewStore(stateDir)
+			manager := feature.NewManager(store, cfg)
+			target := newRESTCreateFeatureTarget(store, manager, cfg, configPath)
+
+			result, err := target.CreateFeature(serverruntime.CreateFeatureRequest{
+				Name:         "Delivery via REST",
+				Description:  "create via REST",
+				Repos:        []string{testRepoAName},
+				Pipeline:     feature.PipelineMedium,
+				DeliveryMode: tc.requestMode,
+			})
+			if err != nil {
+				t.Fatalf("CreateFeature() error = %v", err)
+			}
+			created, err := store.Load(result.FeatureID)
+			if err != nil {
+				t.Fatalf("Load created feature: %v", err)
+			}
+			if created.DeliveryMode != tc.wantFeature {
+				t.Fatalf("created DeliveryMode = %q; want %q", created.DeliveryMode, tc.wantFeature)
+			}
+
+			loaded, err := config.Load(configPath)
+			if err != nil {
+				t.Fatalf("Load config: %v", err)
+			}
+			pref := loaded.Defaults.PipelinePreferences["medium"]
+			if pref.DeliveryMode != tc.wantPreference {
+				t.Fatalf("persisted pipeline preference delivery mode = %q; want %q", pref.DeliveryMode, tc.wantPreference)
+			}
+		})
+	}
+}
+
+// TestServerMutationTargetRuntimeConfigUpdatesDeliveryMode verifies a
+// runtime-defaults mutation with a valid delivery mode updates the workspace
+// default durably, and an omitted mode preserves the stored default.
+func TestServerMutationTargetRuntimeConfigUpdatesDeliveryMode(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	cfg := config.NewDefault()
+	cfg.Defaults.DeliveryMode = "stack"
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+
+	result, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Defaults: serverruntime.RuntimeDefaultsMutation{DeliveryMode: "single"},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig() error = %v", err)
+	}
+	if cfg.Defaults.DeliveryMode != "single" {
+		t.Fatalf("in-memory delivery mode = %q; want single", cfg.Defaults.DeliveryMode)
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("Load config error = %v", err)
+	}
+	if loaded.Defaults.DeliveryMode != "single" {
+		t.Fatalf("persisted delivery mode = %q; want single", loaded.Defaults.DeliveryMode)
+	}
+	if result.Result != resultUpdated {
+		t.Fatalf("RuntimeConfig() result = %+v; want updated", result)
+	}
+
+	// A later patch that omits delivery_mode preserves the stored default.
+	result, err = target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Defaults: serverruntime.RuntimeDefaultsMutation{Inquireness: testInquirenessNone},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig() follow-up error = %v", err)
+	}
+	if cfg.Defaults.DeliveryMode != "single" {
+		t.Fatalf("delivery mode = %q after unrelated patch; want preserved single", cfg.Defaults.DeliveryMode)
+	}
+	if result.Result != resultUpdated {
+		t.Fatalf("follow-up RuntimeConfig() result = %+v; want updated", result)
+	}
+}
+
 func TestServerMutationTargetCreateFeatureResolvesBlankExplicitRepoFromWorkspaceRoots(t *testing.T) {
 	runtimeDir := t.TempDir()
 	configPath := filepath.Join(runtimeDir, "config.yaml")

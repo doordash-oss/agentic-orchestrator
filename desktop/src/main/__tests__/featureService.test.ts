@@ -63,6 +63,7 @@ function runtimeConfigBody(): Record<string, unknown> {
       effort: { planning: 'high', implementation: 'max' },
       inquireness: 'medium',
       pipeline: 'medium',
+      delivery_mode: 'single',
       checkpoints: {},
     },
   };
@@ -160,6 +161,7 @@ describe('FeatureService.creationDefaults', () => {
     expect(defaults.repositories[1]?.valid).toBe(false);
     expect(defaults.defaults.pipeline).toBe('medium');
     expect(defaults.defaults.inquireness).toBe('medium');
+    expect(defaults.defaults.delivery_mode).toBe('single');
     expect(defaults.defaults.useCurrentBranch).toBe(false);
     expect(defaults.defaults.models).toEqual([
       { phase: 'Planning', model: 'model-plan' },
@@ -842,9 +844,20 @@ describe('FeatureService.createFeature', () => {
         pipeline: 'medium',
         risk_level: 'medium',
         inquireness: 'medium',
+        // The input schema defaults an omitted delivery choice to stack.
+        delivery_mode: 'stack',
         idempotency_key: expect.stringMatching(/^[0-9a-f-]{36}$/),
       }),
     );
+  });
+
+  it('carries the chosen delivery mode on the create request', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 201,
+      body: { api_version: 'v1', result: 'created', feature_id: 'abcd1234ef567890' },
+    }));
+    await service.createFeature({ ...input, deliveryMode: 'single' });
+    expect(calls[0]?.init?.body).toEqual(expect.objectContaining({ delivery_mode: 'single' }));
   });
 
   it('returns canonical nonblocking branch-probe warnings with diagnostics redacted', async () => {
@@ -1364,6 +1377,14 @@ describe('FeatureService.getFeature', () => {
       },
       { id: 'start', enabled: true, disabledReasons: [], inputs: [] },
     ]);
+  });
+
+  it('maps the immutable delivery mode onto the snapshot', async () => {
+    const body = detailBody({ delivery_mode: 'single' });
+    const { service } = makeService(() => ({ status: 200, body }));
+    const snapshot = await service.getFeature('abcd1234ef567890');
+    expect(FeatureSnapshotSchema.parse(snapshot)).toEqual(snapshot);
+    expect(snapshot.deliveryMode).toBe('single');
   });
 
   it('crosses a repository publish-failure record as the canonical error with redacted diagnostics', async () => {

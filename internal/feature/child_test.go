@@ -312,6 +312,117 @@ func assertSharedReviewConfigMatches(t *testing.T, parent, child *feature.Featur
 	}
 }
 
+func TestCreateRefactorChildInheritsParentDeliveryMode(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp store and fakes isolate state.
+	tests := []struct {
+		name        string
+		parent      feature.DeliveryMode // stored value; "" models a legacy record
+		wantPersist feature.DeliveryMode // child's persisted mode
+	}{
+		{"single parent", feature.DeliveryModeSingle, feature.DeliveryModeSingle},
+		{"stack parent", feature.DeliveryModeStack, feature.DeliveryModeStack},
+		{"legacy parent with no stored mode", "", feature.DeliveryModeStack},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := newChildTestManager(t, map[string]string{"/wt/repo": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, cleanEverywhere())
+			parent := &feature.Feature{
+				ID:           "parent-delivery",
+				Slug:         "parent",
+				Status:       feature.StatusPublished,
+				Repos:        []feature.FeatureRepo{{Name: "repo", Path: "/src/repo", WorktreePath: "/wt/repo", Branch: "feature/parent-x", BaseBranch: "main"}},
+				Pipeline:     feature.PipelineMoonshot,
+				DeliveryMode: tt.parent,
+			}
+			saveChildTestParent(t, mgr, parent)
+
+			child, err := mgr.CreateRefactorChild(parent.ID, childTestSpec())
+			if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			if child.DeliveryMode != parent.EffectiveDeliveryMode() {
+				t.Fatalf("child DeliveryMode = %q, want parent effective %q", child.DeliveryMode, parent.EffectiveDeliveryMode())
+			}
+			if child.DeliveryMode != tt.wantPersist {
+				t.Fatalf("child DeliveryMode = %q, want persisted %q", child.DeliveryMode, tt.wantPersist)
+			}
+
+			loaded, err := mgr.Store.Load(child.ID)
+			if err != nil {
+				t.Fatalf("reload child: %v", err)
+			}
+			if loaded.DeliveryMode != tt.wantPersist {
+				t.Fatalf("reloaded DeliveryMode = %q, want %q", loaded.DeliveryMode, tt.wantPersist)
+			}
+
+			// The paired-config back-sync must not copy the delivery mode:
+			// a legacy parent stays empty even though the child stores the
+			// inherited effective mode.
+			reloadedParent, err := mgr.Store.Load(parent.ID)
+			if err != nil {
+				t.Fatalf("reload parent: %v", err)
+			}
+			if reloadedParent.DeliveryMode != tt.parent {
+				t.Fatalf("parent DeliveryMode = %q, want untouched %q", reloadedParent.DeliveryMode, tt.parent)
+			}
+		})
+	}
+}
+
+func TestCreateRebaseChildInheritsParentDeliveryMode(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp store and fakes isolate state.
+	tests := []struct {
+		name        string
+		parent      feature.DeliveryMode
+		wantPersist feature.DeliveryMode
+	}{
+		{"single parent", feature.DeliveryModeSingle, feature.DeliveryModeSingle},
+		{"stack parent", feature.DeliveryModeStack, feature.DeliveryModeStack},
+		{"legacy parent with no stored mode", "", feature.DeliveryModeStack},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := newChildTestManager(t, nil, cleanEverywhere())
+			parent := &feature.Feature{
+				ID:           "rebase-parent-delivery",
+				Slug:         "rebase-parent",
+				Status:       feature.StatusPublished,
+				Repos:        []feature.FeatureRepo{{Name: "repo", Path: "/src/repo", WorktreePath: "/wt/repo", Branch: "feature/parent-x", BaseBranch: "main"}},
+				Pipeline:     feature.PipelineMoonshot,
+				DeliveryMode: tt.parent,
+			}
+			saveChildTestParent(t, mgr, parent)
+
+			child, err := mgr.CreateRebaseChild(parent.ID, feature.RebaseChildSpec{
+				Bases: []feature.ChildRepoBase{{Repo: "repo", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ParentBranch: "feature/parent-x"}},
+				Targets: []feature.RebaseRepoTarget{
+					{Repo: "repo", Target: "main", Ref: "origin/main", Publishable: true, TargetSHA: "1111111111111111111111111111111111111111"},
+				},
+				Behind: []string{"repo"},
+			})
+			if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			if child.DeliveryMode != tt.wantPersist {
+				t.Fatalf("child DeliveryMode = %q, want %q", child.DeliveryMode, tt.wantPersist)
+			}
+			if child.EffectiveDeliveryMode() != parent.EffectiveDeliveryMode() {
+				t.Fatalf("child effective DeliveryMode = %q, want parent effective %q", child.EffectiveDeliveryMode(), parent.EffectiveDeliveryMode())
+			}
+
+			loaded, err := mgr.Store.Load(child.ID)
+			if err != nil {
+				t.Fatalf("reload child: %v", err)
+			}
+			if loaded.DeliveryMode != tt.wantPersist {
+				t.Fatalf("reloaded DeliveryMode = %q, want %q", loaded.DeliveryMode, tt.wantPersist)
+			}
+		})
+	}
+}
+
 func TestCreateRefactorChildDirtyParentBlocksEverything(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp store and fakes isolate state.

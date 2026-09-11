@@ -3462,6 +3462,115 @@ func TestCreateExplicitPipelineOverridesDefault(t *testing.T) {
 	}
 }
 
+func TestCreateDeliveryModeCarriesWorkspaceDefault(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	cfg := config.NewDefault()
+	cfg.Defaults.DeliveryMode = "single"
+	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/tmp/test-repo"}
+	mgr := feature.NewManager(store, cfg)
+
+	f, err := mgr.Create("single-default-feature", "test", []string{"test-repo"}, config.ModelConfig{}, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.DeliveryMode != feature.DeliveryModeSingle {
+		t.Errorf("DeliveryMode = %v, want single (workspace default)", f.DeliveryMode)
+	}
+}
+
+func TestCreateDefaultDeliveryModeIsStack(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	mgr := newTestManager(t) // NewDefault seeds defaults.delivery_mode = "stack"
+	f, err := mgr.Create("stack-default-feature", "test", []string{"test-repo"}, config.ModelConfig{}, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.DeliveryMode != feature.DeliveryModeStack {
+		t.Errorf("DeliveryMode = %v, want stack", f.DeliveryMode)
+	}
+}
+
+func TestCreateEmptyDefaultsDeliveryModeFallsBackToStack(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	cfg := config.NewDefault()
+	cfg.Defaults.DeliveryMode = "" // explicitly empty
+	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/tmp/test-repo"}
+	mgr := feature.NewManager(store, cfg)
+
+	f, err := mgr.Create("delivery-fallback-feature", "test", []string{"test-repo"}, config.ModelConfig{}, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.DeliveryMode != feature.DeliveryModeStack {
+		t.Errorf("DeliveryMode = %v, want stack (fallback)", f.DeliveryMode)
+	}
+}
+
+func TestCreateExplicitDeliveryModeSinglePersists(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	mgr := newTestManager(t)
+	f, err := mgr.Create("single-feature", "test", []string{"test-repo"}, config.ModelConfig{}, "", "", nil, feature.CreateOptions{DeliveryMode: feature.DeliveryModeSingle})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.DeliveryMode != feature.DeliveryModeSingle {
+		t.Errorf("DeliveryMode = %v, want single", f.DeliveryMode)
+	}
+	loaded, err := mgr.Store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.DeliveryMode != feature.DeliveryModeSingle {
+		t.Errorf("loaded DeliveryMode = %v, want single", loaded.DeliveryMode)
+	}
+}
+
+func TestCreateInvalidDeliveryModeRejected(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	mgr := newTestManager(t)
+	_, err := mgr.Create("bad-delivery-feature", "test", []string{"test-repo"}, config.ModelConfig{}, "", "", nil, feature.CreateOptions{DeliveryMode: feature.DeliveryMode("garbage")})
+	if err == nil {
+		t.Fatal("expected error for invalid delivery mode")
+	}
+	if !strings.Contains(err.Error(), "stack, single") {
+		t.Errorf("error should name the accepted values, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "garbage") {
+		t.Errorf("error should name the rejected value, got: %v", err)
+	}
+}
+
+func TestCreateInvalidDefaultsDeliveryModeRejected(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	cfg := config.NewDefault()
+	cfg.Defaults.DeliveryMode = "garbage"
+	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/tmp/test-repo"}
+	mgr := feature.NewManager(store, cfg)
+
+	_, err := mgr.Create("invalid-default-delivery", "test", []string{"test-repo"}, config.ModelConfig{}, "", "", nil)
+	if err == nil {
+		t.Fatal("expected error for invalid defaults.delivery_mode")
+	}
+	if !strings.Contains(err.Error(), "invalid defaults.delivery_mode") {
+		t.Errorf("error should mention 'invalid defaults.delivery_mode', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "stack, single") {
+		t.Errorf("error should name the accepted values, got: %v", err)
+	}
+}
+
 func TestCreateFeatureWithDiscoveredRepo(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.

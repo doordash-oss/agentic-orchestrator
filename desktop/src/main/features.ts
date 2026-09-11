@@ -253,6 +253,10 @@ export class FeatureService {
         config.feature_defaults.inquireness === ''
           ? {}
           : { inquireness: config.feature_defaults.inquireness }),
+        ...(config.feature_defaults.delivery_mode === undefined ||
+        config.feature_defaults.delivery_mode === ''
+          ? {}
+          : { delivery_mode: config.feature_defaults.delivery_mode }),
         models,
         effort,
         // The creation contract's server default: a new feature branch.
@@ -521,6 +525,8 @@ export class FeatureService {
         pipeline: validated.pipeline,
         risk_level: validated.riskLevel,
         inquireness: validated.inquireness,
+        // Always set: the input schema defaults an omitted choice to stack.
+        delivery_mode: validated.deliveryMode,
         ...(validated.exitCriteria.trim() === ''
           ? {}
           : { exit_criteria: validated.exitCriteria.trim() }),
@@ -1016,6 +1022,9 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
     ...(feature.risk_level === undefined || feature.risk_level === ''
       ? {}
       : { riskLevel: feature.risk_level }),
+    ...(feature.delivery_mode === undefined || feature.delivery_mode === ''
+      ? {}
+      : { deliveryMode: feature.delivery_mode }),
     ...(feature.exit_criteria === undefined || feature.exit_criteria === ''
       ? {}
       : { exitCriteria: feature.exit_criteria }),

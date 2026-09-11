@@ -16,6 +16,10 @@
 This feature targets the repositories below. Treat this list as authoritative; ignore sibling directories that are not listed here.
 - **web** (/repos/web)
 
+## Delivery
+
+This feature is delivered as a stack of pull requests — the grouping heuristic in the create-roadmap skill applies when filling in the `## Pull Requests` table.
+
 ## Ambiguity Resolution [grill-me]
 Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
 

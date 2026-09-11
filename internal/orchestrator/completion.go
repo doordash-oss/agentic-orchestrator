@@ -559,8 +559,11 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 					// invalid `## Pull Requests` table before approval, so a
 					// parseable table here is expected; derivation stays
 					// best-effort so a mid-edit roadmap cannot wedge the
-					// auto-approval path.
-					rows, problems := agent.ValidateRoadmapPullRequestsTable(string(data), phases)
+					// auto-approval path. The delivery-mode constraint rides
+					// along: a single-delivery feature with multiple rows also
+					// skips stack derivation while the phase count still
+					// persists.
+					rows, problems := agent.ValidateRoadmapPullRequestsTableForMode(string(data), phases, f.EffectiveDeliveryMode())
 					_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 						ff.TotalRoadmapPhases = len(phases)
 						if len(problems) == 0 {

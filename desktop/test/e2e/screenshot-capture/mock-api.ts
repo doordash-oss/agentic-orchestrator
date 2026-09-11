@@ -2066,6 +2066,7 @@ function makeMockApi(
         defaults: {
           pipeline: 'large',
           inquireness: 'medium',
+          delivery_mode: 'stack',
           models: [],
           effort: [],
           useCurrentBranch: false,

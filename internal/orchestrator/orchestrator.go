@@ -1816,6 +1816,9 @@ func (o *Orchestrator) persistRoadmapApproval(featureID string, f *feature.Featu
 	if len(problems) > 0 {
 		return fmt.Errorf("roadmap ## Pull Requests table is invalid: %s", strings.Join(problems, "; "))
 	}
+	if deliveryProblems := agent.ValidateRoadmapPullRequestsDeliveryMode(f.EffectiveDeliveryMode(), rows); len(deliveryProblems) > 0 {
+		return fmt.Errorf("roadmap ## Pull Requests table violates the single-pull-request delivery mode: %s", strings.Join(deliveryProblems, "; "))
+	}
 	layers := agent.DeriveStackLayers(rows)
 	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 		ff.TotalRoadmapPhases = len(phases)

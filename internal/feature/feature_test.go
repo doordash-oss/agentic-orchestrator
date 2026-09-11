@@ -1655,6 +1655,97 @@ func TestPipelineYAMLBackwardCompat(t *testing.T) {
 	}
 }
 
+func TestDeliveryModeIsValid(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
+	tests := []struct {
+		name string
+		mode DeliveryMode
+		want bool
+	}{
+		{"stack", DeliveryModeStack, true},
+		{"single", DeliveryModeSingle, true},
+		{"empty is valid so defaults can apply later", "", true},
+		{"unknown", DeliveryMode("mega"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.mode.IsValid(); got != tt.want {
+				t.Errorf("IsValid() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEffectiveDeliveryMode(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
+	tests := []struct {
+		name string
+		mode DeliveryMode
+		want DeliveryMode
+	}{
+		{"empty defaults to stack", "", DeliveryModeStack},
+		{"stack returns stack", DeliveryModeStack, DeliveryModeStack},
+		{"single returns single", DeliveryModeSingle, DeliveryModeSingle},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &Feature{DeliveryMode: tt.mode}
+			if got := f.EffectiveDeliveryMode(); got != tt.want {
+				t.Errorf("EffectiveDeliveryMode() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeliveryModeYAMLRoundTrip(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
+	f := &Feature{
+		ID:           "test",
+		Name:         "test",
+		DeliveryMode: DeliveryModeSingle,
+		Status:       StatusCreated,
+	}
+	data, err := yaml.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("delivery_mode: single")) {
+		t.Errorf("YAML should contain 'delivery_mode: single', got:\n%s", data)
+	}
+	var loaded Feature
+	if err := yaml.Unmarshal(data, &loaded); err != nil {
+		t.Fatal(err)
+	}
+	if loaded.DeliveryMode != DeliveryModeSingle {
+		t.Errorf("DeliveryMode = %v, want single", loaded.DeliveryMode)
+	}
+	if loaded.EffectiveDeliveryMode() != DeliveryModeSingle {
+		t.Errorf("EffectiveDeliveryMode() = %v, want single", loaded.EffectiveDeliveryMode())
+	}
+}
+
+func TestDeliveryModeYAMLBackwardCompat(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
+	// Feature YAML with no delivery_mode key loads as empty with an
+	// effective mode of stack, so legacy records keep working without a
+	// schema version bump.
+	yamlData := []byte("id: test\nname: test\nstatus: Created\n")
+	var f Feature
+	if err := yaml.Unmarshal(yamlData, &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.DeliveryMode != "" {
+		t.Errorf("DeliveryMode should be empty for legacy YAML, got %v", f.DeliveryMode)
+	}
+	if f.EffectiveDeliveryMode() != DeliveryModeStack {
+		t.Errorf("EffectiveDeliveryMode() should be stack for legacy features, got %v", f.EffectiveDeliveryMode())
+	}
+}
+
 func boolPtr(b bool) *bool { return &b }
 
 func TestIsPublishable(t *testing.T) {

@@ -24,6 +24,12 @@ import { GATE_FIELDS, applicableGates, type PhaseKey } from './ConfigEditor';
 
 export type Pipeline = 'medium' | 'large' | 'moonshot';
 
+/**
+ * How the feature's work reaches review: stacked per-slice pull requests, or
+ * one pull request for the whole feature. Immutable after creation.
+ */
+export type DeliveryMode = 'stack' | 'single';
+
 export type CheckpointState = Checkpoints & { draftPublish: boolean };
 
 export const PIPELINE_PROFILES: Record<
@@ -89,6 +95,17 @@ export function checkpointSummary(pipeline: Pipeline, checkpoints: CheckpointSta
 
 export function isPipeline(value: string | undefined): value is Pipeline {
   return value === 'medium' || value === 'large' || value === 'moonshot';
+}
+
+/** The delivery cards, in the Depth step's selection order. */
+export const DELIVERY_MODES: ReadonlyArray<{ id: DeliveryMode; title: string; note: string }> = [
+  { id: 'stack', title: 'Stack', note: 'One pull request per reviewable slice' },
+  { id: 'single', title: 'Single', note: 'One pull request for the whole feature' },
+];
+
+/** Whether a server default names a known delivery mode (unknown ⇒ stack). */
+export function isDeliveryMode(value: string | undefined): value is DeliveryMode {
+  return value === 'stack' || value === 'single';
 }
 
 /** The authoritative server contract's ModelConfig JSON keys. */

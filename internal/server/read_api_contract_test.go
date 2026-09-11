@@ -598,6 +598,62 @@ func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	}
 }
 
+// TestFeatureDetailExposesEffectiveDeliveryMode pins the read-only delivery
+// mode on the feature detail: clients always see stack or single, including
+// legacy records that predate the field.
+func TestFeatureDetailExposesEffectiveDeliveryMode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		stored feature.DeliveryMode
+		want   string
+	}{
+		{"single feature", feature.DeliveryModeSingle, "single"},
+		{"stack feature", feature.DeliveryModeStack, "stack"},
+		{"legacy feature without stored mode", "", "stack"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, f := seedReadFeature(t)
+			f.DeliveryMode = tc.stored
+			if err := store.Save(f); err != nil {
+				t.Fatalf("Save() error = %v", err)
+			}
+			handler := NewHandler(baseReadHandlerOptions(store))
+			detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+			got := detail[entityFeature].(map[string]any)["delivery_mode"]
+			if got != tc.want {
+				t.Fatalf("feature delivery_mode = %v; want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRuntimeConfigFeatureDefaultsExposeDeliveryMode pins the workspace
+// delivery default on the feature-defaults DTO that seeds the create form.
+func TestRuntimeConfigFeatureDefaultsExposeDeliveryMode(t *testing.T) {
+	t.Parallel()
+	store, _ := seedReadFeature(t)
+	for _, tc := range []struct {
+		name string
+		mode string
+		want string
+	}{
+		{"workspace default single", "single", "single"},
+		{"workspace default stack", "stack", "stack"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := baseReadHandlerOptions(store)
+			opts.Config = &config.Config{Defaults: config.DefaultsConfig{DeliveryMode: tc.mode}}
+			handler := NewHandler(opts)
+			body := getJSONMap(t, handler, apiPathConfigRuntime)
+			defaults := body["feature_defaults"].(map[string]any)
+			if defaults["delivery_mode"] != tc.want {
+				t.Fatalf("feature_defaults.delivery_mode = %v; want %s", defaults["delivery_mode"], tc.want)
+			}
+		})
+	}
+}
+
 func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)

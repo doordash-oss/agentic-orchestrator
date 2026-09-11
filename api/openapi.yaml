@@ -3920,6 +3920,9 @@ components:
         pipeline:
           type: string
           enum: [medium, large, moonshot]
+        delivery_mode:
+          type: string
+          enum: [stack, single]
         idempotency_key: { type: string, maxLength: 128 }
     StageUploadResponse:
       type: object
@@ -4835,6 +4838,8 @@ components:
         inquireness:
           type: string
         pipeline:
+          type: string
+        delivery_mode:
           type: string
         checkpoints:
           x-go-type: config.Checkpoints
@@ -5865,6 +5870,13 @@ components:
             risk_level:
               type: string
               x-go-type: feature.RiskLevel
+              x-go-type-import:
+                path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+                name: feature
+            delivery_mode:
+              type: string
+              enum: [stack, single]
+              x-go-type: feature.DeliveryMode
               x-go-type-import:
                 path: github.com/doordash-oss/agentic-orchestrator/internal/feature
                 name: feature

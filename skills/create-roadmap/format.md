@@ -46,7 +46,7 @@ This rule matters operationally: section-matching downstream (sticky-approval `f
 
 ## Pull Requests Table
 
-The roadmap MUST contain a top-level `## Pull Requests` section holding exactly one markdown table that groups consecutive phases into one pull request. Delivery is one PR stack; row positions are `1..M`.
+The roadmap MUST contain a top-level `## Pull Requests` section holding exactly one markdown table that groups consecutive phases into pull requests. Row positions are `1..M`; the feature's delivery mode (below) decides whether that grouping spans multiple rows or collapses to one.
 
 Use exactly `## Pull Requests` — like every other heading, it participates in byte-equal section matching downstream (sticky-approval `frozen_sections`, validator routing). Place the section after the last `## Phase N:` section and before `## Overall Exit Criteria`.
 
@@ -62,6 +62,15 @@ The structural rules, all enforced by the Go validator:
 - Rows are contiguous and ascending in phase order: taken together they cover the phases with no gaps and no reordering.
 - Titles are non-empty.
 - A single-phase (collapsed) roadmap has exactly one row covering phase 1.
+
+### Delivery Modes
+
+The feature's delivery mode is stated in the planning prompt's `## Delivery` section — it is not derived from the phase count:
+
+- **Stack delivery (default).** The table groups phases into the stacked pull requests that deliver the feature, applying the grouping heuristic in `create-roadmap/SKILL.md`.
+- **Single delivery.** The table must contain exactly one row whose `Phases` cell spans every phase (for example `1-3` for a three-phase roadmap). This is a delivery constraint on the table only; phase slicing is unchanged.
+
+A single-phase (collapsed) roadmap has exactly one row covering phase 1 because of its phase count — that is not single delivery. The one-row rule comes from the delivery mode stated in the prompt and applies even when the roadmap has many phases.
 
 ## Body Constraints
 

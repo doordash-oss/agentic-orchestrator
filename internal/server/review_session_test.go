@@ -466,6 +466,173 @@ const roadmapReviewInvalidText = `# Roadmap
 Ship the skeleton.
 `
 
+const roadmapReviewSingleTwoRowText = `# Roadmap
+
+## Phase 1: Skeleton
+
+### Goal
+
+Ship the skeleton.
+
+## Phase 2: Polish
+
+### Goal
+
+Polish it.
+
+## Pull Requests
+
+| # | Title | Phases | Rationale |
+|---|---|---|---|
+| 1 | Skeleton | 1 | First slice. |
+| 2 | Polish | 2 | Second slice. |
+`
+
+const roadmapReviewSingleOneRowText = `# Roadmap
+
+## Phase 1: Skeleton
+
+### Goal
+
+Ship the skeleton.
+
+## Phase 2: Polish
+
+### Goal
+
+Polish it.
+
+## Pull Requests
+
+| # | Title | Phases | Rationale |
+|---|---|---|---|
+| 1 | Whole feature | 1-2 | Delivered as one pull request. |
+`
+
+// seedSingleDeliveryRoadmapReviewFeature seeds a roadmap-review feature
+// whose delivery mode is single: its `## Pull Requests` table must carry
+// exactly one row covering every phase.
+func seedSingleDeliveryRoadmapReviewFeature(t *testing.T, body string) (*feature.Store, *feature.Feature, string) {
+	t.Helper()
+	store, f, roadmapPath := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "roadmap", body)
+	f.DeliveryMode = feature.DeliveryModeSingle
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature with single delivery mode: %v", err)
+	}
+	return store, f, roadmapPath
+}
+
+func TestReviewSessionRoadmapDraftValidationSingleDelivery(t *testing.T) {
+	store, f, _ := seedSingleDeliveryRoadmapReviewFeature(t, roadmapReviewSingleOneRowText)
+	handler := NewHandler(HandlerOptions{
+		Features:              store,
+		FeatureStore:          store,
+		DisableHostValidation: true,
+	})
+
+	created := doReviewSessionJSON[ReviewSessionResponse](t, handler, http.MethodPost, "/api/v1/features/"+f.ID+"/reviews", map[string]any{}, http.StatusOK)
+	if created.ArtifactID != "roadmap" {
+		t.Fatalf("created review session artifact = %q, want roadmap", created.ArtifactID)
+	}
+
+	twoRow := doReviewSessionJSON[ReviewDraftValidationResponse](t, handler, http.MethodPost, "/api/v1/features/"+f.ID+"/reviews/"+created.ReviewID+"/validate", ReviewDraftValidationRequest{Text: roadmapReviewSingleTwoRowText}, http.StatusOK)
+	if !twoRow.Applicable || twoRow.Valid || len(twoRow.Findings) != 1 {
+		t.Fatalf("two-row single-delivery validation = %+v, want applicable failed result with one finding", twoRow)
+	}
+	if twoRow.Findings[0].Code != "pull_requests_table" {
+		t.Fatalf("two-row finding code = %q, want pull_requests_table", twoRow.Findings[0].Code)
+	}
+	if !strings.Contains(twoRow.Findings[0].Message, "## Pull Requests") || !strings.Contains(twoRow.Findings[0].Message, "single pull request") {
+		t.Fatalf("two-row finding = %+v, want a problem naming the section and the single-pull-request delivery", twoRow.Findings[0])
+	}
+
+	oneRow := doReviewSessionJSON[ReviewDraftValidationResponse](t, handler, http.MethodPost, "/api/v1/features/"+f.ID+"/reviews/"+created.ReviewID+"/validate", ReviewDraftValidationRequest{Text: roadmapReviewSingleOneRowText}, http.StatusOK)
+	if !oneRow.Applicable || !oneRow.Valid || len(oneRow.Findings) != 0 {
+		t.Fatalf("one-row single-delivery validation = %+v, want applicable passing result without findings", oneRow)
+	}
+}
+
+func TestReviewSessionServiceRoadmapProceedSingleDeliveryTwoRowBlocked(t *testing.T) {
+	store, f, roadmapPath := seedSingleDeliveryRoadmapReviewFeature(t, roadmapReviewSingleOneRowText)
+	var delegated bool
+	service := newReviewSessionService(store, func(featureID string, req ReviewDecisionRequest) error {
+		delegated = true
+		return nil
+	})
+	created, err := service.Create(f.ID)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	saved, err := service.SaveDraft(f.ID, created.ReviewID, ReviewDraftUpdateRequest{
+		BaseRevision: created.DraftRevision,
+		Text:         roadmapReviewSingleTwoRowText,
+	})
+	if err != nil {
+		t.Fatalf("SaveDraft: %v", err)
+	}
+
+	_, err = service.SubmitDecision(f.ID, created.ReviewID, ReviewSessionDecisionRequest{
+		Decision:     reviewDecisionProceed,
+		BaseRevision: saved.DraftRevision,
+	})
+	if err == nil {
+		t.Fatal("SubmitDecision proceed on a two-row single-delivery draft must fail")
+	}
+	var conflict *ActionConflictError
+	if !errors.As(err, &conflict) || conflict.Code != errcat.RoadmapPullRequestsInvalid {
+		t.Fatalf("SubmitDecision error = %v, want action conflict with the roadmap pull-requests code", err)
+	}
+	if !strings.Contains(conflict.Detail, "## Pull Requests") || !strings.Contains(conflict.Detail, "single pull request") {
+		t.Fatalf("conflict detail = %q, want the single-delivery table problem", conflict.Detail)
+	}
+	if delegated {
+		t.Fatal("review decision delegate must not be invoked for a two-row single-delivery draft")
+	}
+	canonical, err := os.ReadFile(roadmapPath)
+	if err != nil {
+		t.Fatalf("read canonical roadmap: %v", err)
+	}
+	if string(canonical) != roadmapReviewSingleOneRowText {
+		t.Fatalf("canonical roadmap = %q, want the previous content untouched", canonical)
+	}
+}
+
+func TestReviewSessionServiceRoadmapIterateNotBlockedBySingleDelivery(t *testing.T) {
+	store, f, roadmapPath := seedSingleDeliveryRoadmapReviewFeature(t, roadmapReviewSingleOneRowText)
+	var delegated bool
+	service := newReviewSessionService(store, func(featureID string, req ReviewDecisionRequest) error {
+		delegated = true
+		return nil
+	})
+	created, err := service.Create(f.ID)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	saved, err := service.SaveDraft(f.ID, created.ReviewID, ReviewDraftUpdateRequest{
+		BaseRevision: created.DraftRevision,
+		Text:         roadmapReviewSingleTwoRowText,
+	})
+	if err != nil {
+		t.Fatalf("SaveDraft: %v", err)
+	}
+	if _, err := service.SubmitDecision(f.ID, created.ReviewID, ReviewSessionDecisionRequest{
+		Decision:     reviewDecisionIterate,
+		BaseRevision: saved.DraftRevision,
+	}); err != nil {
+		t.Fatalf("SubmitDecision iterate on a two-row single-delivery draft must not be blocked: %v", err)
+	}
+	if !delegated {
+		t.Fatal("review decision delegate must be invoked for iterate")
+	}
+	canonical, err := os.ReadFile(roadmapPath)
+	if err != nil {
+		t.Fatalf("read canonical roadmap: %v", err)
+	}
+	if string(canonical) != roadmapReviewSingleTwoRowText {
+		t.Fatalf("canonical roadmap = %q, want the committed draft", canonical)
+	}
+}
+
 func TestReviewSessionRoadmapDraftValidation(t *testing.T) {
 	store, f, _ := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "roadmap", roadmapReviewValidText)
 	handler := NewHandler(HandlerOptions{

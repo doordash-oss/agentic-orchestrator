@@ -147,6 +147,10 @@ type RoadmapUserInput struct {
 
 	MultiRepo bool
 
+	// DeliveryMode mirrors roles.RoadmapUserInput: plain string so the
+	// template's eq comparison works; empty renders the stack branch.
+	DeliveryMode string
+
 	Inquireness GrillMeInquirenessInput
 }
 
@@ -158,6 +162,10 @@ type RoadmapRevisionUserInput struct {
 	PreviousRoadmapPath string
 
 	RoadmapFormatPath string
+
+	// DeliveryMode mirrors roles.RoadmapRevisionUserInput: plain string so
+	// the template's eq comparison works; empty renders the stack branch.
+	DeliveryMode string
 
 	Inquireness AutonomousInquirenessInput
 }

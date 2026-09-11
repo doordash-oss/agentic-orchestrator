@@ -193,6 +193,28 @@ func (i Inquireness) IsValid() bool {
 	return false
 }
 
+// DeliveryMode selects how a feature is delivered: as a stack of pull
+// requests (one per reviewable slice) or as a single pull request covering
+// the whole feature. It is immutable after creation and inherited
+// unconditionally by child features.
+type DeliveryMode string
+
+const (
+	DeliveryModeStack  DeliveryMode = "stack"
+	DeliveryModeSingle DeliveryMode = "single"
+)
+
+// IsValid returns true for known delivery modes. The empty string is
+// treated as valid so callers can apply defaults after the fact (and so
+// legacy feature records load without a schema bump).
+func (d DeliveryMode) IsValid() bool {
+	switch d {
+	case DeliveryModeStack, DeliveryModeSingle, "":
+		return true
+	}
+	return false
+}
+
 // RepoState carries the minimal per-repo signal orchestration needs:
 // whether any phase touched the repo, the optional PR URL, and the optional
 // stored publish-failure record. Persisted on Run.RepoStates.
@@ -599,6 +621,7 @@ type Feature struct {
 	MaxPlanIterations    int                 `yaml:"max_plan_iterations,omitempty"`
 	RiskLevel            RiskLevel           `yaml:"risk_level,omitempty"`
 	Pipeline             PipelineProfile     `yaml:"pipeline,omitempty"`
+	DeliveryMode         DeliveryMode        `yaml:"delivery_mode,omitempty"`
 	PipelineUpgradedFrom PipelineProfile     `yaml:"pipeline_upgraded_from,omitempty"` // original profile before UpgradePipeline; used to enforce KB restart on rewind
 	Checkpoints          Checkpoints         `yaml:"checkpoints,omitempty"`
 	LastAttachedRepo     string              `yaml:"last_attached_repo,omitempty"` // repo name for attach mode tab restoration
@@ -1039,6 +1062,17 @@ func (f *Feature) EffectivePipeline() PipelineProfile {
 		return PipelineMoonshot
 	}
 	return f.Pipeline
+}
+
+// EffectiveDeliveryMode returns the feature's delivery mode, defaulting to
+// DeliveryModeStack when the field is empty (backward compatibility with
+// features created before delivery modes existed). The mode is immutable
+// after creation; children inherit this effective value unconditionally.
+func (f *Feature) EffectiveDeliveryMode() DeliveryMode {
+	if f == nil || f.DeliveryMode == "" {
+		return DeliveryModeStack
+	}
+	return f.DeliveryMode
 }
 
 // IsPublishable returns true when ALL repos have an origin remote.

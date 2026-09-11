@@ -59,7 +59,7 @@ The roadmap's output shape is defined in [format.md](format.md). Read it before 
 
 ### 4. Group Phases Into Pull Requests
 
-Fill in the roadmap's `## Pull Requests` table, which proposes how the phases group into the stacked pull requests that will deliver the feature. Apply these rules:
+Fill in the roadmap's `## Pull Requests` table, which proposes how the phases group into the pull requests that will deliver the feature. The user prompt's `## Delivery` section states the feature's delivery mode — check it before grouping.
 
 - **Default to one pull request per phase.** Each phase is already an independently reviewable vertical slice.
 - Merge adjacent phases into one pull request only when a phase alone is not independently reviewable, or when two phases are two halves of one reviewable concern.
@@ -67,3 +67,7 @@ Fill in the roadmap's `## Pull Requests` table, which proposes how the phases gr
 - There is no numeric size target — do not justify a grouping by commit, file, or line counts.
 - The `Title` cell becomes the pull request title reviewers will see; name the reviewable concern concisely.
 - The `Rationale` is a one-line reason for the grouping (why these phases ship together).
+
+**Single-pull-request delivery.** When the prompt's `## Delivery` section says the feature is delivered as a single pull request, the table must contain exactly one row whose `Phases` cell spans every phase (for example `1-3` for a three-phase roadmap). This is a delivery constraint on the table only: phase slicing itself is unchanged — still divide the work into reviewable phases as this skill directs.
+
+Do not confuse single delivery with a collapsed single-phase roadmap. A one-phase roadmap naturally has a single row covering one phase, but that shape comes from the phase count, not from the delivery mode. The one-row rule comes from the delivery mode stated in the prompt, and it applies even when the roadmap has many phases.

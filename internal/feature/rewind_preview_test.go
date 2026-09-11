@@ -17,6 +17,7 @@ package feature
 import (
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -28,6 +29,7 @@ const previewRepoName = "agentic-orchestrator"
 const (
 	stackedLayer1Branch = "feature/stacked-ws/1-core"
 	stackedLayer2Branch = "feature/stacked-ws/2-ext"
+	stackedLayer3Branch = "feature/stacked-ws/3-cleanup"
 )
 
 func TestRewindPreviewForFeatureEligibleImplementConsequences(t *testing.T) {
@@ -66,12 +68,15 @@ func TestRewindPreviewForFeatureEligibleImplementConsequences(t *testing.T) {
 	if !slices.Contains(result.CarriedPhases, "plan") {
 		t.Fatalf("carried_phases = %v; want to include plan", result.CarriedPhases)
 	}
-	// Publishable feature: a PR consequence and a worktree reset are present.
+	// Publishable feature: one per-layer PR consequence and a worktree
+	// reset are present.
 	if len(result.PRConsequences) != 1 {
-		t.Fatalf("pr_consequences = %v, want the top layer's PR for the repo", result.PRConsequences)
+		t.Fatalf("pr_consequences = %v, want the stack layer's entry for the repo", result.PRConsequences)
 	}
-	if got := result.PRConsequences[0]; got.Repo != previewRepoName || got.PRURL != "https://github.example/pr/1" {
-		t.Fatalf("pr_consequences[0] = %+v, want %s at https://github.example/pr/1", got, previewRepoName)
+	if got := result.PRConsequences[0]; got.Repo != previewRepoName || got.PRURL != "https://github.example/pr/1" ||
+		got.Position != 1 || got.Branch != stackedLayer1Branch ||
+		got.PRState != string(StackPRStateOpen) || got.Verdict != RewindPRVerdictClose || !got.DeleteRemoteBranch {
+		t.Fatalf("pr_consequences[0] = %+v, want %s layer 1 close with deletion flag", got, previewRepoName)
 	}
 	if len(result.WorktreeConsequences) == 0 {
 		t.Fatalf("worktree_consequences empty")
@@ -532,24 +537,221 @@ func TestRewindPreviewStackedWorktreeConsequencesCarryKindAndBranch(t *testing.T
 	}
 }
 
-// TestRewindPreviewStackedPRConsequencesListTopLayerPerRepo pins the PR
-// consequence list on a stacked feature: one entry per repository, in
-// f.Repos order, each carrying its top layer's pull request — the close
-// loop's per-repo target.
-func TestRewindPreviewStackedPRConsequencesListTopLayerPerRepo(t *testing.T) {
+// newThreeLayerStackedRewindFeature builds and persists a two-repository,
+// three-layer stack: layer 1 owns roadmap phases [1,2], layer 2 owns [3],
+// and layer 3 owns [4]. Every layer records an open pull request and a
+// pushed SHA per repository, and layer 1 records per-repo tips so a partial
+// rewind to phase 3 (the first phase of layer 2) validates.
+func newThreeLayerStackedRewindFeature(t *testing.T, store *Store) *Feature {
+	t.Helper()
+	publishable := true
+	f := &Feature{
+		ID:           "feat-stacked-3",
+		Name:         "Stacked Three",
+		Slug:         "stacked-three",
+		Status:       StatusImplementing,
+		CurrentPhase: PhaseImplement,
+		ActiveRun:    1,
+		RunCount:     1,
+		Repos: []FeatureRepo{
+			{Name: "alpha", Path: "/repo/alpha", WorktreePath: filepath.Join(store.BaseDir, "wt", "alpha"),
+				BaseBranch: "main", Branch: "feature/old-alpha", Publishable: &publishable},
+			{Name: "beta", Path: "/repo/beta", WorktreePath: filepath.Join(store.BaseDir, "wt", "beta"),
+				BaseBranch: "main", Branch: "feature/old-beta", Publishable: &publishable},
+		},
+		RepoStates: map[string]*RepoState{
+			"alpha": {Touched: true},
+			"beta":  {Touched: true},
+		},
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.CurrentRoadmapPhase = 4
+	f.TotalRoadmapPhases = 4
+	stackedEntry := func(repo, tip string, position int) StackRepoEntry {
+		return StackRepoEntry{
+			TipSHA:        tip,
+			LastPushedSHA: tip,
+			PRURL:         "https://github.example/" + repo + "/pull/" + strconv.Itoa(position),
+			PRState:       StackPRStateOpen,
+		}
+	}
+	f.Stack = []StackLayer{
+		{
+			Position: 1, Title: "Core", Slug: "core", Phases: []int{1, 2}, Branch: stackedLayer1Branch,
+			Repos: map[string]StackRepoEntry{
+				"alpha": stackedEntry("alpha", "tip-alpha-1", 1),
+				"beta":  stackedEntry("beta", "tip-beta-1", 1),
+			},
+		},
+		{
+			Position: 2, Title: "Extension", Slug: "ext", Phases: []int{3}, Branch: stackedLayer2Branch,
+			Repos: map[string]StackRepoEntry{
+				"alpha": stackedEntry("alpha", "tip-alpha-2", 2),
+				"beta":  stackedEntry("beta", "tip-beta-2", 2),
+			},
+		},
+		{
+			Position: 3, Title: "Cleanup", Slug: "cleanup", Phases: []int{4}, Branch: stackedLayer3Branch,
+			Repos: map[string]StackRepoEntry{
+				"alpha": stackedEntry("alpha", "tip-alpha-3", 3),
+				"beta":  stackedEntry("beta", "tip-beta-3", 3),
+			},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	return f
+}
+
+// findRewindPRConsequence returns the preview entry for one repository's
+// layer.
+func findRewindPRConsequence(t *testing.T, result RewindPreviewResult, repo string, position int) RewindPRConsequence {
+	t.Helper()
+	for _, c := range result.PRConsequences {
+		if c.Repo == repo && c.Position == position {
+			return c
+		}
+	}
+	t.Fatalf("no pr_consequences entry for %s layer %d in %v", repo, position, result.PRConsequences)
+	return RewindPRConsequence{}
+}
+
+// TestRewindPreviewStackedPRConsequencesPerLayer pins the per-layer PR
+// consequence list on a stacked feature: one entry per layer per repository
+// in position order, never skipping positions. A partial rewind into
+// layer 2 keeps layer 1 (open pull request, remote branch stays) and
+// closes layers 2 and 3 (pull request closed, remote branch deleted).
+func TestRewindPreviewStackedPRConsequencesPerLayer(t *testing.T) {
 	store := NewStore(t.TempDir())
-	f := newStackedRewindFeature(t, store, true)
+	f := newThreeLayerStackedRewindFeature(t, store)
+	sealedRunDir := store.RunDir(f.ID, f.ActiveRun)
+
+	result := RewindPreviewForFeature(f, sealedRunDir, RewindRequest{TargetPhase: PhaseImplement, RoadmapPhase: 3}, "")
+	if !result.Eligible {
+		t.Fatalf("eligible = false; findings %v", result.ValidationFindings)
+	}
+	if len(result.PRConsequences) != 6 {
+		t.Fatalf("pr_consequences = %v; want three entries per repository", result.PRConsequences)
+	}
+	wantVerdicts := []string{RewindPRVerdictKeep, RewindPRVerdictClose, RewindPRVerdictClose}
+	wantFlags := []bool{false, true, true}
+	for _, repo := range []string{"alpha", "beta"} {
+		for position := 1; position <= 3; position++ {
+			got := findRewindPRConsequence(t, result, repo, position)
+			if got.Verdict != wantVerdicts[position-1] {
+				t.Errorf("%s layer %d verdict = %q; want %q", repo, position, got.Verdict, wantVerdicts[position-1])
+			}
+			if got.DeleteRemoteBranch != wantFlags[position-1] {
+				t.Errorf("%s layer %d delete_remote_branch = %v; want %v", repo, position, got.DeleteRemoteBranch, wantFlags[position-1])
+			}
+			if got.PRURL == "" || got.PRState != string(StackPRStateOpen) {
+				t.Errorf("%s layer %d entry = %+v; want the recorded URL and state carried", repo, position, got)
+			}
+			if got.Branch == "" || got.Title == "" {
+				t.Errorf("%s layer %d entry = %+v; want the layer's branch and title carried", repo, position, got)
+			}
+		}
+	}
+	// Entries appear in repository then position order.
+	if result.PRConsequences[0].Repo != "alpha" || result.PRConsequences[2].Repo != "alpha" ||
+		result.PRConsequences[3].Repo != "beta" {
+		t.Fatalf("pr_consequences order = %v; want repo-major, position-ascending", result.PRConsequences)
+	}
+}
+
+// TestRewindPreviewStackedPRConsequencesMergedClosingLayer pins the merged
+// verdict: a closing layer whose pull request is recorded merged is left
+// alone — verdict merged, no remote deletion — exactly as execution skips
+// merged layers.
+func TestRewindPreviewStackedPRConsequencesMergedClosingLayer(t *testing.T) {
+	store := NewStore(t.TempDir())
+	f := newThreeLayerStackedRewindFeature(t, store)
+	entry := f.Stack[2].Repos["alpha"]
+	entry.PRState = StackPRStateMerged
+	f.Stack[2].Repos["alpha"] = entry
+	sealedRunDir := store.RunDir(f.ID, f.ActiveRun)
+
+	result := RewindPreviewForFeature(f, sealedRunDir, RewindRequest{TargetPhase: PhaseImplement, RoadmapPhase: 3}, "")
+	if !result.Eligible {
+		t.Fatalf("eligible = false; findings %v", result.ValidationFindings)
+	}
+	got := findRewindPRConsequence(t, result, "alpha", 3)
+	if got.Verdict != RewindPRVerdictMerged {
+		t.Fatalf("alpha layer 3 verdict = %q; want merged", got.Verdict)
+	}
+	if got.DeleteRemoteBranch {
+		t.Fatalf("alpha layer 3 delete_remote_branch = true; want false for a merged layer")
+	}
+	if other := findRewindPRConsequence(t, result, "beta", 3); other.Verdict != RewindPRVerdictClose || !other.DeleteRemoteBranch {
+		t.Fatalf("beta layer 3 = %+v; want close with deletion (only alpha's layer 3 is merged)", other)
+	}
+}
+
+// TestRewindPreviewStackedPRConsequencesNoPullRequestStillFlagsDeletion
+// pins the none verdict and the pushed-SHA evidence rule: a closing layer
+// with no pull request URL reads none, yet its remote branch is still
+// flagged for deletion when a pushed SHA is on record — the same evidence
+// execution deletes on.
+func TestRewindPreviewStackedPRConsequencesNoPullRequestStillFlagsDeletion(t *testing.T) {
+	store := NewStore(t.TempDir())
+	f := newThreeLayerStackedRewindFeature(t, store)
+	f.Stack[1].Repos["alpha"] = StackRepoEntry{TipSHA: "tip-alpha-2", LastPushedSHA: "tip-alpha-2"}
+	sealedRunDir := store.RunDir(f.ID, f.ActiveRun)
+
+	result := RewindPreviewForFeature(f, sealedRunDir, RewindRequest{TargetPhase: PhaseImplement, RoadmapPhase: 3}, "")
+	if !result.Eligible {
+		t.Fatalf("eligible = false; findings %v", result.ValidationFindings)
+	}
+	got := findRewindPRConsequence(t, result, "alpha", 2)
+	if got.Verdict != RewindPRVerdictNone {
+		t.Fatalf("alpha layer 2 verdict = %q; want none without a pull request", got.Verdict)
+	}
+	if got.PRURL != "" || got.PRState != string(StackPRStateNone) {
+		t.Fatalf("alpha layer 2 entry = %+v; want no URL and state none", got)
+	}
+	if !got.DeleteRemoteBranch {
+		t.Fatalf("alpha layer 2 delete_remote_branch = false; want true with a pushed SHA on record")
+	}
+	// Without pushed evidence the flag drops too.
+	f.Stack[1].Repos["beta"] = StackRepoEntry{TipSHA: "tip-beta-2"}
+	result = RewindPreviewForFeature(f, sealedRunDir, RewindRequest{TargetPhase: PhaseImplement, RoadmapPhase: 3}, "")
+	if got := findRewindPRConsequence(t, result, "beta", 2); got.DeleteRemoteBranch {
+		t.Fatalf("beta layer 2 delete_remote_branch = true; want false with neither URL nor pushed SHA")
+	}
+}
+
+// TestRewindPreviewStackedPRConsequencesFullRewindClosesEveryLayer pins
+// the full-rewind closing set: every layer with a pull request reads
+// close, layers without one read none, and a stackless feature yields no
+// entries at all.
+func TestRewindPreviewStackedPRConsequencesFullRewindClosesEveryLayer(t *testing.T) {
+	store := NewStore(t.TempDir())
+	f := newThreeLayerStackedRewindFeature(t, store)
+	f.Stack[1].Repos["alpha"] = StackRepoEntry{}
 	sealedRunDir := store.RunDir(f.ID, f.ActiveRun)
 
 	result := RewindPreviewForFeature(f, sealedRunDir, RewindRequest{TargetPhase: PhaseImplement}, "")
 	if !result.Eligible {
 		t.Fatalf("eligible = false; findings %v", result.ValidationFindings)
 	}
-	want := []RewindPRConsequence{
-		{Repo: "alpha", PRURL: "https://github.example/alpha/pull/2"},
-		{Repo: "beta", PRURL: "https://github.example/beta/pull/2"},
+	for _, repo := range []string{"alpha", "beta"} {
+		for position := 1; position <= 3; position++ {
+			got := findRewindPRConsequence(t, result, repo, position)
+			want := RewindPRVerdictClose
+			if repo == "alpha" && position == 2 {
+				want = RewindPRVerdictNone
+			}
+			if got.Verdict != want {
+				t.Errorf("%s layer %d verdict = %q; want %q on a full rewind", repo, position, got.Verdict, want)
+			}
+		}
 	}
-	if !slices.Equal(result.PRConsequences, want) {
-		t.Fatalf("pr_consequences = %v, want %v", result.PRConsequences, want)
+
+	// A stackless feature has no per-layer entries.
+	f.Stack = nil
+	result = RewindPreviewForFeature(f, sealedRunDir, RewindRequest{TargetPhase: PhaseImplement}, "")
+	if len(result.PRConsequences) != 0 {
+		t.Fatalf("pr_consequences = %v; want none without a stack", result.PRConsequences)
 	}
 }

@@ -986,6 +986,54 @@ func (e ReviewFeedbackDraftCommentType) Valid() bool {
 	}
 }
 
+// Defines values for RewindPRConsequencePrState.
+const (
+	RewindPRConsequencePrStateClosed RewindPRConsequencePrState = "closed"
+	RewindPRConsequencePrStateMerged RewindPRConsequencePrState = "merged"
+	RewindPRConsequencePrStateNone   RewindPRConsequencePrState = "none"
+	RewindPRConsequencePrStateOpen   RewindPRConsequencePrState = "open"
+)
+
+// Valid indicates whether the value is a known member of the RewindPRConsequencePrState enum.
+func (e RewindPRConsequencePrState) Valid() bool {
+	switch e {
+	case RewindPRConsequencePrStateClosed:
+		return true
+	case RewindPRConsequencePrStateMerged:
+		return true
+	case RewindPRConsequencePrStateNone:
+		return true
+	case RewindPRConsequencePrStateOpen:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RewindPRConsequenceVerdict.
+const (
+	RewindPRConsequenceVerdictClose  RewindPRConsequenceVerdict = "close"
+	RewindPRConsequenceVerdictKeep   RewindPRConsequenceVerdict = "keep"
+	RewindPRConsequenceVerdictMerged RewindPRConsequenceVerdict = "merged"
+	RewindPRConsequenceVerdictNone   RewindPRConsequenceVerdict = "none"
+)
+
+// Valid indicates whether the value is a known member of the RewindPRConsequenceVerdict enum.
+func (e RewindPRConsequenceVerdict) Valid() bool {
+	switch e {
+	case RewindPRConsequenceVerdictClose:
+		return true
+	case RewindPRConsequenceVerdictKeep:
+		return true
+	case RewindPRConsequenceVerdictMerged:
+		return true
+	case RewindPRConsequenceVerdictNone:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RewindWorktreeConsequenceResetKind.
 const (
 	RewindWorktreeConsequenceResetKindAnchor    RewindWorktreeConsequenceResetKind = "anchor"
@@ -3754,15 +3802,40 @@ type RewindFeatureResponse struct {
 	TargetPhase     string `json:"target_phase,omitempty"`
 	UpgradePipeline string `json:"upgrade_pipeline,omitempty"`
 
-	// Warnings Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset, stack branch step).
+	// Warnings Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset, stack branch step, remote branch deletion).
 	Warnings []Error `json:"warnings,omitempty"`
 }
 
 // RewindPRConsequence defines model for RewindPRConsequence.
 type RewindPRConsequence struct {
-	PrURL string `json:"pr_url"`
+	// Branch Stack layer branch whose pull request and remote copy the verdict describes.
+	Branch string `json:"branch"`
+
+	// DeleteRemoteBranch Whether the rewind would delete this layer's remote branch from the repository's origin.
+	DeleteRemoteBranch bool `json:"delete_remote_branch"`
+
+	// Position Stack layer position, ascending with the stack.
+	Position int `json:"position"`
+
+	// PrState Recorded pull-request state at preview time; none when the layer has no pull request.
+	PrState RewindPRConsequencePrState `json:"pr_state"`
+
+	// PrURL Recorded pull request URL; omitted when the layer has no pull request.
+	PrURL string `json:"pr_url,omitempty"`
 	Repo  string `json:"repo"`
+
+	// Title Stack layer title from the approved roadmap.
+	Title string `json:"title"`
+
+	// Verdict What the rewind does to this layer's pull request - keep for layers below the closing set, close for closing layers, merged for an already-merged closing layer that is left alone, none for a layer without a pull request.
+	Verdict RewindPRConsequenceVerdict `json:"verdict"`
 }
+
+// RewindPRConsequencePrState Recorded pull-request state at preview time; none when the layer has no pull request.
+type RewindPRConsequencePrState string
+
+// RewindPRConsequenceVerdict What the rewind does to this layer's pull request - keep for layers below the closing set, close for closing layers, merged for an already-merged closing layer that is left alone, none for a layer without a pull request.
+type RewindPRConsequenceVerdict string
 
 // RewindPreview defines model for RewindPreview.
 type RewindPreview struct {

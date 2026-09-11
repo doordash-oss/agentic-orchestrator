@@ -24,7 +24,11 @@ limitations under the License.
  * reconciles against authoritative run state.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type RewindPreviewView, type FeatureActionResult } from '../../../shared/ipc';
+import {
+  type RewindPreviewView,
+  type RewindPRConsequenceView,
+  type FeatureActionResult,
+} from '../../../shared/ipc';
 import { buildCanonicalError } from '../../../shared/errors';
 import { parseIpcError } from '../wizard/ipcError';
 import type { CanonicalError } from '../../../shared/ipc';
@@ -48,8 +52,28 @@ export interface RewindJourneyProps {
 
 type JourneyStep = 'target' | 'confirm' | 'submitting' | 'determining' | 'success' | 'error';
 
+/** Verdict badge text: what the rewind does to one layer's pull request. */
+const rewindVerdictLabels: Record<RewindPRConsequenceView['verdict'], string> = {
+  keep: 'Keeps open',
+  close: 'Will close',
+  merged: 'Merged and left as is',
+  none: 'No pull request',
+};
+
 /** Facts repeated between preview and confirmation stay consistent by sharing one renderer. */
 function ConsequenceFacts({ preview }: { preview: RewindPreviewView }) {
+  // Entries arrive repository-major, position-ascending; group them into one
+  // block per repository so each repository's stack reads as one unit.
+  const repos: { name: string; rows: RewindPRConsequenceView[] }[] = [];
+  for (const item of preview.prConsequences ?? []) {
+    const current = repos[repos.length - 1];
+    if (current && current.name === item.repo) {
+      current.rows.push(item);
+    } else {
+      repos.push({ name: item.repo, rows: [item] });
+    }
+  }
+  const deletedBranches = (preview.prConsequences ?? []).filter((item) => item.deleteRemoteBranch);
   return (
     <>
       {preview.carriedPhases?.length ? (
@@ -58,10 +82,48 @@ function ConsequenceFacts({ preview }: { preview: RewindPreviewView }) {
           <dd>{preview.carriedPhases.map(displayPhaseLabel).join(', ')}</dd>
         </div>
       ) : null}
-      {preview.prConsequences?.length ? (
+      {repos.length ? (
         <div className="rewind-journey__preview-fact">
-          <dt>PR consequences</dt>
-          <dd>{preview.prConsequences.map((item) => item.repo).join(', ')}</dd>
+          <dt>Pull requests</dt>
+          <dd>
+            <div className="rewind-journey__pr-repos">
+              {repos.map((repo) => (
+                <div key={repo.name} className="rewind-journey__pr-repo">
+                  <span className="rewind-journey__pr-repo-name">{repo.name}</span>
+                  <ul
+                    className="rewind-journey__pr-rows"
+                    aria-label={`Stack pull requests for ${repo.name}`}
+                  >
+                    {repo.rows.map((row) => (
+                      <li key={row.position} className="rewind-journey__pr-row">
+                        <span className="rewind-journey__pr-position">Layer {row.position}</span>
+                        <span className="rewind-journey__pr-title">{row.title}</span>
+                        <span className="rewind-journey__pr-badge" data-verdict={row.verdict}>
+                          {rewindVerdictLabels[row.verdict]}
+                        </span>
+                        {row.prUrl === undefined ? null : (
+                          <button
+                            type="button"
+                            className="rewind-journey__pr-link"
+                            aria-label="Open pull request"
+                            onClick={() => void window.agentico.openExternal({ url: row.prUrl! })}
+                          >
+                            {row.prUrl}
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </dd>
+        </div>
+      ) : null}
+      {deletedBranches.length ? (
+        <div className="rewind-journey__preview-fact">
+          <dt>Remote branches deleted</dt>
+          <dd>{deletedBranches.map((item) => `${item.repo} (${item.branch})`).join(', ')}</dd>
         </div>
       ) : null}
       {preview.worktreeConsequences?.length ? (

@@ -204,6 +204,73 @@ describe('RunHistoryService', () => {
     expect(() => FeatureActionResultSchema.parse(result)).not.toThrow();
   });
 
+  it('maps per-layer PR consequences to camelCase views preserving enums and the flag', async () => {
+    const service = new RunHistoryService({
+      apiRequest: () =>
+        Promise.resolve({
+          status: 200,
+          body: {
+            api_version: 'v1',
+            eligible: true,
+            source_run_number: 3,
+            source_revision: 'abc123def456',
+            target_phase: 'implement',
+            effective_phase: 'implement',
+            roadmap_phase: 3,
+            pr_consequences: [
+              {
+                repo: 'repo-a',
+                position: 1,
+                title: 'Core',
+                branch: 'feature/ws/1-core',
+                pr_url: 'https://github.example/repo-a/pull/1',
+                pr_state: 'open',
+                verdict: 'keep',
+                delete_remote_branch: false,
+              },
+              {
+                repo: 'repo-a',
+                position: 2,
+                title: 'Extension',
+                branch: 'feature/ws/2-ext',
+                pr_state: 'none',
+                verdict: 'none',
+                delete_remote_branch: true,
+              },
+            ],
+          },
+        }),
+    });
+
+    const preview = await service.getRewindPreview({
+      featureId: 'abcd1234ef567890',
+      targetPhase: 'implement',
+      roadmapPhase: 3,
+    });
+    expect(preview.prConsequences).toStrictEqual([
+      {
+        repo: 'repo-a',
+        position: 1,
+        title: 'Core',
+        branch: 'feature/ws/1-core',
+        prUrl: 'https://github.example/repo-a/pull/1',
+        prState: 'open',
+        verdict: 'keep',
+        deleteRemoteBranch: false,
+      },
+      {
+        repo: 'repo-a',
+        position: 2,
+        title: 'Extension',
+        branch: 'feature/ws/2-ext',
+        prState: 'none',
+        verdict: 'none',
+        deleteRemoteBranch: true,
+      },
+    ]);
+    expect(() => RewindPreviewViewSchema.parse(preview)).not.toThrow();
+  });
+
   it('maps stacked rewind preview consequences to layer-tip views with the branch', async () => {
     const service = new RunHistoryService({
       apiRequest: () =>

@@ -1992,7 +1992,7 @@ export interface components {
             source_run_number?: number;
             /** @description The new active run forked by the rewind. */
             new_run_number?: number;
-            /** @description Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset, stack branch step). */
+            /** @description Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset, stack branch step, remote branch deletion). */
             warnings?: components["schemas"]["Error"][];
         };
         RewindPreviewResponse: components["schemas"]["JSONResponse"] & components["schemas"]["RewindPreview"];
@@ -2022,7 +2022,26 @@ export interface components {
         };
         RewindPRConsequence: {
             repo: string;
-            pr_url: string;
+            /** @description Stack layer position, ascending with the stack. */
+            position: number;
+            /** @description Stack layer title from the approved roadmap. */
+            title: string;
+            /** @description Stack layer branch whose pull request and remote copy the verdict describes. */
+            branch: string;
+            /** @description Recorded pull request URL; omitted when the layer has no pull request. */
+            pr_url?: string;
+            /**
+             * @description Recorded pull-request state at preview time; none when the layer has no pull request.
+             * @enum {string}
+             */
+            pr_state: "none" | "open" | "merged" | "closed";
+            /**
+             * @description What the rewind does to this layer's pull request - keep for layers below the closing set, close for closing layers, merged for an already-merged closing layer that is left alone, none for a layer without a pull request.
+             * @enum {string}
+             */
+            verdict: "keep" | "close" | "merged" | "none";
+            /** @description Whether the rewind would delete this layer's remote branch from the repository's origin. */
+            delete_remote_branch: boolean;
         };
         RewindWorktreeConsequence: {
             repo: string;

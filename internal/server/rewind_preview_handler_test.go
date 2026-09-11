@@ -128,6 +128,98 @@ func TestRewindPreviewEndpointCarriesStackLayerTipConsequence(t *testing.T) {
 	}
 }
 
+// TestRewindPreviewEndpointRoundTripsPerLayerPRConsequences pins the
+// per-layer PR consequence wire shape: one entry per stack layer per
+// repository, every field round-tripped over HTTP.
+func TestRewindPreviewEndpointRoundTripsPerLayerPRConsequences(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	f.Repos[0].BaseBranch = "main"
+	f.TotalRoadmapPhases = 4
+	f.Stack = []feature.StackLayer{
+		{
+			Position: 1, Title: "Core", Slug: "core", Phases: []int{1, 2}, Branch: "feature/ws/1-core",
+			Repos: map[string]feature.StackRepoEntry{repoNameSelf: {
+				TipSHA: "tip-1", LastPushedSHA: "tip-1",
+				PRURL: "https://github.example/pr/1", PRState: feature.StackPRStateOpen,
+			}},
+		},
+		{
+			Position: 2, Title: "Extension", Slug: "ext", Phases: []int{3}, Branch: "feature/ws/2-ext",
+			Repos: map[string]feature.StackRepoEntry{repoNameSelf: {
+				TipSHA: "tip-2", LastPushedSHA: "tip-2",
+				PRURL: "https://github.example/pr/2", PRState: feature.StackPRStateOpen,
+			}},
+		},
+		{
+			Position: 3, Title: "Cleanup", Slug: "cleanup", Phases: []int{4}, Branch: "feature/ws/3-cleanup",
+			Repos: map[string]feature.StackRepoEntry{repoNameSelf: {
+				TipSHA: "tip-3", LastPushedSHA: "tip-3",
+				PRURL: "https://github.example/pr/3", PRState: feature.StackPRStateMerged,
+			}},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features/"+f.ID+"/rewind/preview?target_phase=implement&roadmap_phase=3", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200; body: %s", w.Code, w.Body.String())
+	}
+	body := decodeBodyMap(t, w.Result())
+	if eligible := body["eligible"]; eligible != true {
+		t.Fatalf("eligible = %v; want true; body: %v", eligible, body)
+	}
+	prCons, _ := body["pr_consequences"].([]any)
+	if len(prCons) != 3 {
+		t.Fatalf("pr_consequences = %v; want one entry per layer", prCons)
+	}
+	type wantEntry struct {
+		position  float64
+		title     string
+		branch    string
+		prURL     string
+		prState   string
+		verdict   string
+		delBranch bool
+	}
+	for i, want := range []wantEntry{
+		{1, "Core", "feature/ws/1-core", "https://github.example/pr/1", "open", "keep", false},
+		{2, "Extension", "feature/ws/2-ext", "https://github.example/pr/2", "open", "close", true},
+		{3, "Cleanup", "feature/ws/3-cleanup", "https://github.example/pr/3", "merged", "merged", false},
+	} {
+		entry, _ := prCons[i].(map[string]any)
+		if got := entry["repo"]; got != repoNameSelf {
+			t.Errorf("entry %d repo = %v; want %s", i, got, repoNameSelf)
+		}
+		if got := entry["position"]; got != want.position {
+			t.Errorf("entry %d position = %v; want %v", i, got, want.position)
+		}
+		if got := entry["title"]; got != want.title {
+			t.Errorf("entry %d title = %v; want %q", i, got, want.title)
+		}
+		if got := entry["branch"]; got != want.branch {
+			t.Errorf("entry %d branch = %v; want %q", i, got, want.branch)
+		}
+		if got := entry["pr_url"]; got != want.prURL {
+			t.Errorf("entry %d pr_url = %v; want %q", i, got, want.prURL)
+		}
+		if got := entry["pr_state"]; got != want.prState {
+			t.Errorf("entry %d pr_state = %v; want %q", i, got, want.prState)
+		}
+		if got := entry["verdict"]; got != want.verdict {
+			t.Errorf("entry %d verdict = %v; want %q", i, got, want.verdict)
+		}
+		if got := entry["delete_remote_branch"]; got != want.delBranch {
+			t.Errorf("entry %d delete_remote_branch = %v; want %v", i, got, want.delBranch)
+		}
+	}
+}
+
 func TestRewindPreviewEndpointRejectsInvalidTarget(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)

@@ -1274,8 +1274,26 @@ const REWIND_PREVIEW = {
   carriedPhases: ['inquire', 'research', 'design', 'roadmap', 'plan', 'phase-01/plan'],
   carriedFromRun: 7,
   prConsequences: [
-    { repo: 'signal-lab', prUrl: 'https://github.com/example/signal-lab/pull/42' },
-    { repo: 'orchestrator-core', prUrl: 'https://github.com/example/orchestrator-core/pull/18' },
+    {
+      repo: 'signal-lab',
+      position: 1,
+      title: 'Core',
+      branch: 'feature/signal-lab-ws/1-core',
+      prUrl: 'https://github.com/example/signal-lab/pull/42',
+      prState: 'open',
+      verdict: 'close',
+      deleteRemoteBranch: true,
+    },
+    {
+      repo: 'orchestrator-core',
+      position: 1,
+      title: 'Core',
+      branch: 'feature/signal-lab-ws/1-core',
+      prUrl: 'https://github.com/example/orchestrator-core/pull/18',
+      prState: 'open',
+      verdict: 'close',
+      deleteRemoteBranch: true,
+    },
   ],
   worktreeConsequences: [
     { repo: 'signal-lab', resetKind: 'anchor' as const },

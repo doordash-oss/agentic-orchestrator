@@ -1970,6 +1970,8 @@ func wireRewindWarnings(warnings []feature.RewindWarning) []serverruntime.Error 
 			code = errcat.RewindBackupBranchFailed
 		case feature.RewindWarningStackBranch:
 			code = errcat.RewindStackBranchFailed
+		case feature.RewindWarningRemoteBranchDelete:
+			code = errcat.RewindRemoteBranchDeleteFailed
 		default:
 			code = errcat.RewindWorktreeResetFailed
 		}

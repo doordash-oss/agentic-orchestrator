@@ -2130,7 +2130,13 @@ export type RewindChoiceView = z.output<typeof RewindChoiceViewSchema>;
 
 export const RewindPRConsequenceViewSchema = z.strictObject({
   repo: z.string(),
-  prUrl: z.string(),
+  position: z.number().int().positive(),
+  title: z.string(),
+  branch: z.string(),
+  prUrl: z.string().optional(),
+  prState: z.enum(['none', 'open', 'merged', 'closed']),
+  verdict: z.enum(['keep', 'close', 'merged', 'none']),
+  deleteRemoteBranch: z.boolean(),
 });
 export type RewindPRConsequenceView = z.output<typeof RewindPRConsequenceViewSchema>;
 

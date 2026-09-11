@@ -44,7 +44,7 @@ var _ ports.SessionManager = (*mocks.MockSessionManager)(nil)
 
 // Git seams
 var _ orchestrator.RemoteOps = (*mocks.MockRemoteOps)(nil)
-var _ feature.PRCloser = (*mocks.MockPRCloser)(nil)
+var _ feature.RewindRemoteOps = (*mocks.MockPRCloser)(nil)
 var _ feature.WorktreeOps = (*mocks.MockWorktreeOps)(nil)
 
 // TestMockWorktreeOpsRestackAndTransactionOverrides proves the shared mock
@@ -99,6 +99,53 @@ func TestMockWorktreeOpsRestackAndTransactionOverrides(t *testing.T) {
 	}
 	if err := bare.UpdateRefsTransaction("/repo", nil); err != nil {
 		t.Errorf("default UpdateRefsTransaction() error = %v, want nil", err)
+	}
+}
+
+// TestMockPRCloserRecordsCloseStateDeleteInOrder proves the shared mock
+// records the three rewind remote operations in call order and honors the
+// per-method overrides.
+func TestMockPRCloserRecordsCloseStateDeleteInOrder(t *testing.T) {
+	m := mocks.NewMockPRCloser()
+	m.PRStateFn = func(prURL string) (string, error) { return gitpkg.PRStateMerged, nil }
+	m.DeleteRemoteBranchFn = func(repoPath, branch string) error { return nil }
+
+	prURL := "https://github.com/owner/repo/pull/7"
+	if err := m.ClosePR(prURL); err != nil {
+		t.Fatalf("ClosePR() error = %v", err)
+	}
+	state, err := m.PRState(prURL)
+	if err != nil {
+		t.Fatalf("PRState() error = %v", err)
+	}
+	if state != gitpkg.PRStateMerged {
+		t.Fatalf("PRState() = %q; want the configured %q", state, gitpkg.PRStateMerged)
+	}
+	if err := m.DeleteRemoteBranch("/repo", "feature/wslug/2-layer"); err != nil {
+		t.Fatalf("DeleteRemoteBranch() error = %v", err)
+	}
+
+	wantMethods := []string{"ClosePR", "PRState", "DeleteRemoteBranch"}
+	if len(m.Calls) != len(wantMethods) {
+		t.Fatalf("mock calls = %v; want exactly %v", m.Calls, wantMethods)
+	}
+	for i, want := range wantMethods {
+		if m.Calls[i].Method != want {
+			t.Errorf("mock call %d = %q; want %q", i, m.Calls[i].Method, want)
+		}
+	}
+
+	// Zero-value defaults: no override and no default error answer with the
+	// indeterminate state and success.
+	bare := mocks.NewMockPRCloser()
+	if err := bare.ClosePR(prURL); err != nil {
+		t.Errorf("default ClosePR() error = %v; want nil", err)
+	}
+	if state, err := bare.PRState(prURL); err != nil || state != "" {
+		t.Errorf("default PRState() = %q, %v; want empty indeterminate answer", state, err)
+	}
+	if err := bare.DeleteRemoteBranch("/repo", "feature/wslug/2-layer"); err != nil {
+		t.Errorf("default DeleteRemoteBranch() error = %v; want nil", err)
 	}
 }
 

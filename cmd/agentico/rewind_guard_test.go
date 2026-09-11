@@ -121,15 +121,17 @@ func TestWireRewindWarningsClassifiesAndRedacts(t *testing.T) {
 		{Kind: feature.RewindWarningBackupBranch, Repo: "repo-b", Err: errors.New("boom")},
 		{Kind: feature.RewindWarningWorktreeReset, Repo: "repo-c"},
 		{Kind: feature.RewindWarningStackBranch, Repo: "repo-d", Branch: "feature/ws/2-ext", Err: errors.New("switch failed")},
+		{Kind: feature.RewindWarningRemoteBranchDelete, Repo: "repo-e", Branch: "feature/x", Err: errors.New("remote delete failed")},
 	})
-	if len(warnings) != 4 {
-		t.Fatalf("wireRewindWarnings() length = %d; want 4", len(warnings))
+	if len(warnings) != 5 {
+		t.Fatalf("wireRewindWarnings() length = %d; want 5", len(warnings))
 	}
 	wantCodes := []errcat.Code{
 		errcat.RewindPullRequestCloseFailed,
 		errcat.RewindBackupBranchFailed,
 		errcat.RewindWorktreeResetFailed,
 		errcat.RewindStackBranchFailed,
+		errcat.RewindRemoteBranchDeleteFailed,
 	}
 	for i, want := range wantCodes {
 		if warnings[i].Code != string(want) {
@@ -154,6 +156,14 @@ func TestWireRewindWarningsClassifiesAndRedacts(t *testing.T) {
 		warnings[3].Context.Repositories[0].Name != "repo-d" ||
 		warnings[3].Context.Repositories[0].Branch != "feature/ws/2-ext" {
 		t.Fatalf("warnings[3].Context = %+v; want the repo-d repositories block with branch", warnings[3].Context)
+	}
+	if warnings[4].Diagnostics != "remote delete failed" {
+		t.Fatalf("warnings[4].Diagnostics = %q; want the bounded cause", warnings[4].Diagnostics)
+	}
+	if warnings[4].Context == nil || len(warnings[4].Context.Repositories) != 1 ||
+		warnings[4].Context.Repositories[0].Name != "repo-e" ||
+		warnings[4].Context.Repositories[0].Branch != "feature/x" {
+		t.Fatalf("warnings[4].Context = %+v; want the repo-e repositories block with branch", warnings[4].Context)
 	}
 }
 

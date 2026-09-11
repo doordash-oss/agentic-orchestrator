@@ -4151,7 +4151,7 @@ components:
                 $ref: "#/components/schemas/Error"
               description: >-
                 Canonical warning-class errors for non-fatal rewind failures
-                (pull-request close, backup branch, worktree reset, stack branch step).
+                (pull-request close, backup branch, worktree reset, stack branch step, remote branch deletion).
     RewindPreviewResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -4229,12 +4229,33 @@ components:
           type: string
     RewindPRConsequence:
       type: object
-      required: [repo, pr_url]
+      required: [repo, position, title, branch, pr_state, verdict, delete_remote_branch]
       properties:
         repo:
           type: string
+        position:
+          type: integer
+          description: Stack layer position, ascending with the stack.
+        title:
+          type: string
+          description: Stack layer title from the approved roadmap.
+        branch:
+          type: string
+          description: Stack layer branch whose pull request and remote copy the verdict describes.
         pr_url:
           type: string
+          description: Recorded pull request URL; omitted when the layer has no pull request.
+        pr_state:
+          type: string
+          enum: [none, open, merged, closed]
+          description: Recorded pull-request state at preview time; none when the layer has no pull request.
+        verdict:
+          type: string
+          enum: [keep, close, merged, none]
+          description: What the rewind does to this layer's pull request - keep for layers below the closing set, close for closing layers, merged for an already-merged closing layer that is left alone, none for a layer without a pull request.
+        delete_remote_branch:
+          type: boolean
+          description: Whether the rewind would delete this layer's remote branch from the repository's origin.
     RewindWorktreeConsequence:
       type: object
       required: [repo, reset_kind]

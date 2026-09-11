@@ -34,6 +34,7 @@ import {
   RepositoryDiffResultSchema,
   RecoveryItemViewSchema,
   RewindWorktreeConsequenceViewSchema,
+  RewindPRConsequenceViewSchema,
   applyShellPatch,
   ShellPatchSchema,
   SettingsPatchSchema,
@@ -2089,6 +2090,65 @@ describe('sidebar width preferences', () => {
     for (const sidebarWidth of [199, 521, 260.5, NaN, Infinity, '300']) {
       expect(SettingsPatchSchema.safeParse({ shell: { sidebarWidth } }).success).toBe(false);
     }
+  });
+});
+
+describe('rewind PR consequence views', () => {
+  it('accepts a per-layer entry carrying every field', () => {
+    const parsed = RewindPRConsequenceViewSchema.parse({
+      repo: 'repo-a',
+      position: 2,
+      title: 'Extension',
+      branch: 'feature/ws/2-ext',
+      prUrl: 'https://github.example/repo-a/pull/2',
+      prState: 'open',
+      verdict: 'close',
+      deleteRemoteBranch: true,
+    });
+    expect(parsed).toStrictEqual({
+      repo: 'repo-a',
+      position: 2,
+      title: 'Extension',
+      branch: 'feature/ws/2-ext',
+      prUrl: 'https://github.example/repo-a/pull/2',
+      prState: 'open',
+      verdict: 'close',
+      deleteRemoteBranch: true,
+    });
+  });
+
+  it('accepts an entry without a pull request URL', () => {
+    const parsed = RewindPRConsequenceViewSchema.parse({
+      repo: 'repo-a',
+      position: 3,
+      title: 'Cleanup',
+      branch: 'feature/ws/3-cleanup',
+      prState: 'none',
+      verdict: 'none',
+      deleteRemoteBranch: false,
+    });
+    expect(parsed.prUrl).toBeUndefined();
+  });
+
+  it('rejects an unknown verdict or an unexpected snake_case alias', () => {
+    const base = {
+      repo: 'repo-a',
+      position: 2,
+      title: 'Extension',
+      branch: 'feature/ws/2-ext',
+      prState: 'open',
+      deleteRemoteBranch: true,
+    };
+    expect(RewindPRConsequenceViewSchema.safeParse({ ...base, verdict: 'destroy' }).success).toBe(
+      false,
+    );
+    expect(
+      RewindPRConsequenceViewSchema.safeParse({
+        ...base,
+        verdict: 'close',
+        pr_url: 'https://github.example/repo-a/pull/2',
+      }).success,
+    ).toBe(false);
   });
 });
 

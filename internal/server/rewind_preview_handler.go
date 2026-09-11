@@ -104,7 +104,16 @@ func rewindPreviewResponseFromResult(result feature.RewindPreviewResult) RewindP
 		})
 	}
 	for _, p := range result.PRConsequences {
-		resp.PrConsequences = append(resp.PrConsequences, RewindPRConsequence{Repo: p.Repo, PrURL: p.PRURL})
+		resp.PrConsequences = append(resp.PrConsequences, RewindPRConsequence{
+			Repo:               p.Repo,
+			Position:           p.Position,
+			Title:              p.Title,
+			Branch:             p.Branch,
+			PrURL:              p.PRURL,
+			PrState:            RewindPRConsequencePrState(p.PRState),
+			Verdict:            RewindPRConsequenceVerdict(p.Verdict),
+			DeleteRemoteBranch: p.DeleteRemoteBranch,
+		})
 	}
 	for _, wc := range result.WorktreeConsequences {
 		resp.WorktreeConsequences = append(resp.WorktreeConsequences, RewindWorktreeConsequence{

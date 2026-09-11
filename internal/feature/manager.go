@@ -80,17 +80,19 @@ type WorktreeOps interface {
 	UpdateRefsTransaction(repoPath string, updates []git.RefUpdate) error
 }
 
-// PRCloser abstracts the single git/gh operation the feature manager performs
-// against an open pull request (close on rewind).
-type PRCloser interface {
+// RewindRemoteOps abstracts the remote git/gh operations the feature manager
+// performs against published pull requests and layer branches on rewind.
+type RewindRemoteOps interface {
 	ClosePR(prURL string) error
+	PRState(prURL string) (string, error)
+	DeleteRemoteBranch(repoPath, branch string) error
 }
 
 type Manager struct {
 	Store     *Store
 	Config    *config.Config
-	Worktrees WorktreeOps // optional for basic lifecycle; required for child launch/integration safety checks
-	PRs       PRCloser    // optional; nil skips PR close on rewind
+	Worktrees WorktreeOps     // optional for basic lifecycle; required for child launch/integration safety checks
+	PRs       RewindRemoteOps // optional; nil skips remote consequences on rewind
 	// BranchProbeOptions and BranchProbeBudget are per-manager injection points
 	// for bounded feature-branch selection. Zero values use safe defaults.
 	BranchProbeOptions git.BranchProbeOptions
@@ -1211,34 +1213,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 	// Give running goroutines a moment to observe the interrupted status.
 	time.Sleep(500 * time.Millisecond)
 
-	// Close every PR on record (skip for unpublishable features — no PR exists).
-	// The close loop reads the highest layer's pull request per repository —
-	// the repository's primary reviewable artifact — so a partial pass on retry
-	// simply closes whatever top pull requests are still open without
-	// re-closing already-closed ones in any new way (gh pr close on a closed
-	// PR returns an error that surfaces as a warning, identical to the prior
-	// behavior).
-	if f.IsPublishable() && m.PRs != nil {
-		for _, repo := range f.Repos {
-			url := f.TopStackLayerPRURL(repo.Name)
-			if url == "" {
-				continue
-			}
-			if err := m.PRs.ClosePR(url); err != nil {
-				warns = append(warns, RewindWarning{
-					Kind:   RewindWarningPullRequestClose,
-					Repo:   repo.Name,
-					Branch: f.repoBranch(repo.Name),
-					Err:    err,
-				})
-			}
-		}
-	}
-
-	// Create backup branch if rewinding past Implement and worktree has work.
-	// Aggregate per-repo backup-branch names into a map for seal recording.
-	// Per-repo failures warn but do not abort — rewind continues so the user
-	// can still reach an uncorrupted new run.
+	// Create the pre-rewind backup branches before any remote copy of the
+	// layers' commits disappears: every local commit is preserved first, so
+	// the remote consequences below can never strand work. Aggregate
+	// per-repo backup-branch names into a map for seal recording. Per-repo
+	// failures warn but do not abort — rewind continues so the user can
+	// still reach an uncorrupted new run.
 	backupBranches := map[string]string{}
 	if targetPhase.LogicalOrder() <= PhaseImplement.LogicalOrder() {
 		for _, repo := range f.Repos {
@@ -1257,6 +1237,90 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 			}
 			if branchName != "" {
 				backupBranches[repo.Name] = branchName
+			}
+		}
+	}
+
+	// Remote consequences of the rewind, best-effort per publishable
+	// repository: the pull requests of the closing layers are closed and
+	// their remote layer branches deleted. The closing set is the layer
+	// containing the partial target phase and every layer above it for a
+	// partial rewind, and every layer for a full rewind (the forked run
+	// carries no stack at all, so no remote copy may survive to trip a
+	// later republish into a remote-diverged refusal). Both passes walk the
+	// closing layers from the highest position downward so a chained pull
+	// request is always closed before the branch it bases on disappears —
+	// GitHub would otherwise retarget or auto-close it on its own.
+	//
+	// Each closing layer's pull request is read live before acting (the
+	// recorded state may lag GitHub): a merged pull request skips the layer
+	// entirely — the base branch already contains that work, the same rule
+	// the rebase pass applies to merged layers — a closed one skips the
+	// close call but still deletes its branch, and an open or indeterminate
+	// answer is treated as open exactly as publish treats one. Branch
+	// deletion is unconditional for a non-merged closing layer that records
+	// a pull request URL or a last pushed SHA — the two facts that prove
+	// Agentico pushed it — and runs from the repository's worktree path,
+	// where the refs and the origin remote are shared with the main
+	// checkout; a remote ref that no longer exists counts as deleted, so
+	// retried rewinds stay idempotent. Every failure warns and the rewind
+	// still seals and forks; a nil remote-operations dependency skips the
+	// whole pass.
+	if f.IsPublishable() && m.PRs != nil && hasStack(f) {
+		closingPosition := rewindClosingLayerPosition(f, partial.enabled, partial.roadmapPhase)
+		if closingPosition > 0 {
+			layers := append([]StackLayer(nil), f.Stack...)
+			sort.Slice(layers, func(i, j int) bool { return layers[i].Position > layers[j].Position })
+			for _, repo := range f.Repos {
+				mergedLayers := map[int]bool{}
+				for _, layer := range layers {
+					if layer.Position < closingPosition {
+						continue
+					}
+					entry := layer.Repos[repo.Name]
+					if entry.PRURL == "" {
+						continue
+					}
+					state, err := m.PRs.PRState(entry.PRURL)
+					if err == nil && state == git.PRStateMerged {
+						mergedLayers[layer.Position] = true
+						continue
+					}
+					if err == nil && state == git.PRStateClosed {
+						continue
+					}
+					if err := m.PRs.ClosePR(entry.PRURL); err != nil {
+						warns = append(warns, RewindWarning{
+							Kind:   RewindWarningPullRequestClose,
+							Repo:   repo.Name,
+							Branch: layer.Branch,
+							Err:    err,
+						})
+					}
+				}
+				if repo.WorktreePath == "" {
+					continue
+				}
+				for _, layer := range layers {
+					if layer.Position < closingPosition || layer.Branch == "" {
+						continue
+					}
+					if mergedLayers[layer.Position] {
+						continue
+					}
+					entry := layer.Repos[repo.Name]
+					if entry.PRURL == "" && entry.LastPushedSHA == "" {
+						continue
+					}
+					if err := m.PRs.DeleteRemoteBranch(repo.WorktreePath, layer.Branch); err != nil {
+						warns = append(warns, RewindWarning{
+							Kind:   RewindWarningRemoteBranchDelete,
+							Repo:   repo.Name,
+							Branch: layer.Branch,
+							Err:    err,
+						})
+					}
+				}
 			}
 		}
 	}

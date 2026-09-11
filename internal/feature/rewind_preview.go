@@ -25,10 +25,43 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
-// RewindPRConsequence describes one PR that a rewind would close.
+// Rewind PR consequence verdicts: what a rewind would do to one stack
+// layer's pull request in one repository.
+const (
+	// RewindPRVerdictKeep marks a layer below the closing set: its pull
+	// request stays open and its remote branch stays.
+	RewindPRVerdictKeep = "keep"
+	// RewindPRVerdictClose marks a closing layer: its pull request is
+	// closed and its remote branch deleted.
+	RewindPRVerdictClose = "close"
+	// RewindPRVerdictMerged marks a closing layer whose pull request is
+	// already merged into the base branch: the rewind leaves it and its
+	// remote branch alone, the same rule the rebase pass applies to merged
+	// layers.
+	RewindPRVerdictMerged = "merged"
+	// RewindPRVerdictNone marks a layer without a pull request.
+	RewindPRVerdictNone = "none"
+)
+
+// RewindPRConsequence describes what a rewind would do to one stack layer's
+// pull request in one repository: the layer's position, title, and branch;
+// the recorded pull request URL and state when one exists; the verdict; and
+// the remote-deletion flag marking that the layer's remote branch would be
+// deleted. The preview computes every field from recorded state only — it
+// never inspects the remote — and the flag follows the execution rule
+// exactly: it is raised only for a closing layer whose entry records a
+// pull request URL or a last pushed SHA (the two facts that prove Agentico
+// pushed it), is not recorded merged, and belongs to a repository with a
+// worktree path, so preview and execution agree by construction.
 type RewindPRConsequence struct {
-	Repo  string `json:"repo"`
-	PRURL string `json:"pr_url"`
+	Repo               string `json:"repo"`
+	Position           int    `json:"position"`
+	Title              string `json:"title"`
+	Branch             string `json:"branch"`
+	PRURL              string `json:"pr_url,omitempty"`
+	PRState            string `json:"pr_state"`
+	Verdict            string `json:"verdict"`
+	DeleteRemoteBranch bool   `json:"delete_remote_branch"`
 }
 
 // ResetKind constants describe the worktree reset strategy a rewind would
@@ -87,7 +120,9 @@ type RewindPreviewResult struct {
 	// from the sealed run into the fork. CarriedFromRun is the source run.
 	CarriedPhases  []string `json:"carried_phases"`
 	CarriedFromRun int      `json:"carried_from_run"`
-	// PRConsequences lists PRs that would be closed (publishable features).
+	// PRConsequences lists, per publishable repository and per stack layer
+	// in position order, what the rewind would do to that layer's pull
+	// request and whether it would delete the layer's remote branch.
 	PRConsequences []RewindPRConsequence `json:"pr_consequences"`
 	// WorktreeConsequences lists worktree resets that would be performed.
 	WorktreeConsequences []RewindWorktreeConsequence `json:"worktree_consequences"`
@@ -154,6 +189,26 @@ func WorktreeResetKind(f *Feature, repo FeatureRepo, partial bool, roadmapPhase 
 	default:
 		return resetKindNone
 	}
+}
+
+// rewindClosingLayerPosition returns the lowest stack layer position whose
+// pull requests a rewind closes: the layer containing the partial target
+// phase for a partial rewind, and every layer (position 1) for a full
+// rewind. Zero when the feature carries no stack or the partial target
+// belongs to no layer. Shared by the preview and RewindWithRequest so the
+// closing set never drifts between them.
+func rewindClosingLayerPosition(f *Feature, partial bool, roadmapPhase int) int {
+	if !hasStack(f) {
+		return 0
+	}
+	if !partial {
+		return 1
+	}
+	layer, ok := f.StackLayerForPhase(roadmapPhase)
+	if !ok {
+		return 0
+	}
+	return layer.Position
 }
 
 // rewindTargetBranch returns the stack layer branch the worktrees would be
@@ -325,21 +380,49 @@ func RewindPreviewForFeature(f *Feature, sealedRunDir string, request RewindRequ
 	}
 	result.CarriedPhases = dirs
 
-	// PR consequences: which PRs would close (publishable features only).
-	// Each repository contributes its highest layer's pull request — the
-	// primary reviewable artifact the close loop targets.
-	if f.IsPublishable() {
+	// PR consequences: what the rewind would do to every stack layer's
+	// pull request in every publishable repository — one entry per layer
+	// per repository, positions never skipping, computed from recorded
+	// state only so the preview stays side-effect-free. A full rewind
+	// closes every layer; a partial one closes the target layer and every
+	// layer above it; layers below the closing set keep their pull
+	// requests. A feature without a stack yields no entries.
+	partial := request.RoadmapPhase > 0 && request.TargetPhase == PhaseImplement
+	closingPosition := rewindClosingLayerPosition(f, partial, request.RoadmapPhase)
+	if f.IsPublishable() && closingPosition > 0 {
 		for _, repo := range f.Repos {
-			prURL := f.TopStackLayerPRURL(repo.Name)
-			if prURL == "" {
-				continue
+			for _, layer := range orderedStackLayersForRead(f.Stack) {
+				entry := layer.Repos[repo.Name]
+				state := stackLayerPRState(entry)
+				verdict := RewindPRVerdictNone
+				if entry.PRURL != "" {
+					switch {
+					case layer.Position < closingPosition:
+						verdict = RewindPRVerdictKeep
+					case state == StackPRStateMerged:
+						verdict = RewindPRVerdictMerged
+					default:
+						verdict = RewindPRVerdictClose
+					}
+				}
+				result.PRConsequences = append(result.PRConsequences, RewindPRConsequence{
+					Repo:     repo.Name,
+					Position: layer.Position,
+					Title:    layer.Title,
+					Branch:   layer.Branch,
+					PRURL:    entry.PRURL,
+					PRState:  string(state),
+					Verdict:  verdict,
+					DeleteRemoteBranch: layer.Position >= closingPosition &&
+						(entry.PRURL != "" || entry.LastPushedSHA != "") &&
+						state != StackPRStateMerged &&
+						repo.WorktreePath != "",
+				})
 			}
-			result.PRConsequences = append(result.PRConsequences, RewindPRConsequence{Repo: repo.Name, PRURL: prURL})
 		}
 	}
 
 	// Worktree + backup consequences mirror RewindWithRequest's reset loop.
-	partial := request.RoadmapPhase > 0 && request.TargetPhase == PhaseImplement
 	branch := rewindTargetBranch(f, partial, request.RoadmapPhase)
 	for _, repo := range f.Repos {
 		if repo.WorktreePath == "" {

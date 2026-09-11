@@ -1455,6 +1455,16 @@ var catalog = map[Code]Entry{
 		},
 		Remediation: "Check the repository's branches; the rewind may be partially applied.",
 	},
+	RewindRemoteBranchDeleteFailed: {
+		Class:   ClassWarning,
+		Title:   "Remote branch deletion failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Deleting a remote branch failed during the rewind.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "Deleting the remote branch for %s failed during the rewind.")
+		},
+		Remediation: "Delete the remote branch on the remote yourself before republishing the rewound layers.",
+	},
 	RepositoryWorktreeUnavailable: {
 		Class:   ClassWarning,
 		Title:   "Worktree unavailable",

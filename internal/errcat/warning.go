@@ -58,6 +58,9 @@ const (
 	// deleting an upper layer's local ref, or renaming to the provisional
 	// layer-1 name.
 	RewindStackBranchFailed Code = "rewind_stack_branch_failed"
+	// RewindRemoteBranchDeleteFailed reports a repository whose remote layer
+	// branch could not be deleted during a rewind.
+	RewindRemoteBranchDeleteFailed Code = "rewind_remote_branch_delete_failed"
 	// RepositoryWorktreeUnavailable reports a repository whose worktree is
 	// not available for diff inspection.
 	RepositoryWorktreeUnavailable Code = "repository_worktree_unavailable"

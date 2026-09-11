@@ -102,9 +102,11 @@ func (m *MockRemoteOps) UpdatePRBody(prURL, body string) error {
 }
 
 type MockPRCloser struct {
-	ClosePRFn    func(prURL string) error
-	DefaultError error
-	Calls        []MockCall
+	ClosePRFn            func(prURL string) error
+	PRStateFn            func(prURL string) (string, error)
+	DeleteRemoteBranchFn func(repoPath, branch string) error
+	DefaultError         error
+	Calls                []MockCall
 }
 
 func NewMockPRCloser() *MockPRCloser { return &MockPRCloser{} }
@@ -113,6 +115,24 @@ func (m *MockPRCloser) ClosePR(prURL string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "ClosePR", Args: []any{prURL}})
 	if m.ClosePRFn != nil {
 		return m.ClosePRFn(prURL)
+	}
+	return m.DefaultError
+}
+
+// PRState defaults to the indeterminate answer, so tests that do not care
+// about pull-request state behave as if the lookup were unavailable.
+func (m *MockPRCloser) PRState(prURL string) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "PRState", Args: []any{prURL}})
+	if m.PRStateFn != nil {
+		return m.PRStateFn(prURL)
+	}
+	return "", m.DefaultError
+}
+
+func (m *MockPRCloser) DeleteRemoteBranch(repoPath, branch string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "DeleteRemoteBranch", Args: []any{repoPath, branch}})
+	if m.DeleteRemoteBranchFn != nil {
+		return m.DeleteRemoteBranchFn(repoPath, branch)
 	}
 	return m.DefaultError
 }

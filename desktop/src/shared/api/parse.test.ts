@@ -1509,6 +1509,89 @@ describe('Readiness repository identity contract', () => {
   });
 });
 
+describe('rewind preview PR consequences', () => {
+  const basePreview = {
+    api_version: 'v1',
+    eligible: true,
+    source_run_number: 3,
+    source_revision: 'abc123def456',
+    target_phase: 'implement',
+    effective_phase: 'implement',
+    roadmap_phase: 3,
+  };
+
+  it('accepts a per-layer entry carrying every field', () => {
+    const parsed = RewindPreviewResponseSchema.safeParse({
+      ...basePreview,
+      pr_consequences: [
+        {
+          repo: 'repo-a',
+          position: 2,
+          title: 'Extension',
+          branch: 'feature/ws/2-ext',
+          pr_url: 'https://github.example/repo-a/pull/2',
+          pr_state: 'open',
+          verdict: 'close',
+          delete_remote_branch: true,
+        },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.pr_consequences?.[0]).toStrictEqual({
+      repo: 'repo-a',
+      position: 2,
+      title: 'Extension',
+      branch: 'feature/ws/2-ext',
+      pr_url: 'https://github.example/repo-a/pull/2',
+      pr_state: 'open',
+      verdict: 'close',
+      delete_remote_branch: true,
+    });
+  });
+
+  it('accepts an entry without a pull request URL and flags its deletion', () => {
+    const parsed = RewindPreviewResponseSchema.safeParse({
+      ...basePreview,
+      pr_consequences: [
+        {
+          repo: 'repo-a',
+          position: 2,
+          title: 'Extension',
+          branch: 'feature/ws/2-ext',
+          pr_state: 'none',
+          verdict: 'none',
+          delete_remote_branch: true,
+        },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.pr_consequences?.[0]?.pr_url).toBeUndefined();
+  });
+
+  it('rejects an unknown verdict or state', () => {
+    const base = {
+      repo: 'repo-a',
+      position: 2,
+      title: 'Extension',
+      branch: 'feature/ws/2-ext',
+      pr_state: 'open',
+      delete_remote_branch: true,
+    };
+    expect(
+      RewindPreviewResponseSchema.safeParse({
+        ...basePreview,
+        pr_consequences: [{ ...base, verdict: 'destroy' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      RewindPreviewResponseSchema.safeParse({
+        ...basePreview,
+        pr_consequences: [{ ...base, verdict: 'close', pr_state: 'pending' }],
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe('rewind preview worktree consequences', () => {
   const basePreview = {
     api_version: 'v1',

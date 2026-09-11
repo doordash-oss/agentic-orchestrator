@@ -31,6 +31,7 @@ var warningCodeList = []Code{
 	RewindBackupBranchFailed,
 	RewindWorktreeResetFailed,
 	RewindStackBranchFailed,
+	RewindRemoteBranchDeleteFailed,
 	RepositoryWorktreeUnavailable,
 	RepositoryDiffFailed,
 	RoadmapBranchRenameFailed,
@@ -48,8 +49,8 @@ var orphanSessionCodeList = []Code{
 // for every warning code: warning class and no action references. A warning
 // never blocks progress, never gates a lane, and never offers an action.
 func TestWarningCodesAreWarningClassWithoutActions(t *testing.T) {
-	if len(warningCodeList) != 14 {
-		t.Fatalf("warning code list has %d entries; want 14", len(warningCodeList))
+	if len(warningCodeList) != 15 {
+		t.Fatalf("warning code list has %d entries; want 15", len(warningCodeList))
 	}
 	for _, code := range warningCodeList {
 		entry, ok := Lookup(code)
@@ -203,5 +204,33 @@ func TestWarningSummaryTemplates(t *testing.T) {
 		if len(entry.Blocks) != 1 || entry.Blocks[0] != BlockRepositories {
 			t.Errorf("%s: blocks = %#v; want exactly repositories", code, entry.Blocks)
 		}
+	}
+}
+
+// TestRewindRemoteBranchDeleteFailedRendersRepositorySummary pins the
+// remote-branch-delete rewind warning: the repo-keyed summary names the
+// repository and its branch, the remediation tells the user to delete the
+// remote branch before republishing, and the entry declares exactly the
+// repositories block.
+func TestRewindRemoteBranchDeleteFailedRendersRepositorySummary(t *testing.T) {
+	rendered := New(RewindRemoteBranchDeleteFailed, WithParams(WarningRepoParams{
+		Repositories: []CodeRepository{{Name: "web", Branch: "feature/x"}},
+	}))
+	if rendered.Title != "Remote branch deletion failed" {
+		t.Fatalf("title = %q; want %q", rendered.Title, "Remote branch deletion failed")
+	}
+	want := `Deleting the remote branch for repository "web" (branch "feature/x") failed during the rewind.`
+	if rendered.Summary != want {
+		t.Fatalf("rewind_remote_branch_delete_failed summary = %q; want %q", rendered.Summary, want)
+	}
+	if rendered.Remediation == nil || rendered.Remediation.Hint != "Delete the remote branch on the remote yourself before republishing the rewound layers." {
+		t.Fatalf("rewind_remote_branch_delete_failed remediation = %#v; want the delete-before-republish hint", rendered.Remediation)
+	}
+	entry, ok := Lookup(RewindRemoteBranchDeleteFailed)
+	if !ok {
+		t.Fatalf("rewind_remote_branch_delete_failed: missing from catalog")
+	}
+	if len(entry.Blocks) != 1 || entry.Blocks[0] != BlockRepositories {
+		t.Errorf("rewind_remote_branch_delete_failed: blocks = %#v; want exactly repositories", entry.Blocks)
 	}
 }

@@ -5934,8 +5934,23 @@ func TestRewindWithRequest_PartialPublishableClosesPRs(t *testing.T) {
 	if len(warns) != 0 {
 		t.Fatalf("warnings = %v, want none", warns)
 	}
-	if len(prs.Calls) != 2 {
-		t.Fatalf("PR calls = %+v, want two closes", prs.Calls)
+	// The remote pass records the live state lookup, the close, and the
+	// remote branch deletion per repository; layer 2 recorded no pull
+	// request, so only layer 1 is touched.
+	var closes, deletes int
+	for _, c := range prs.Calls {
+		switch c.Method {
+		case "ClosePR":
+			closes++
+		case "DeleteRemoteBranch":
+			if c.Args[1] != "feature/partial-closes/1-core" {
+				t.Fatalf("DeleteRemoteBranch(%v); want layer 1's branch", c.Args)
+			}
+			deletes++
+		}
+	}
+	if closes != 2 || deletes != 2 {
+		t.Fatalf("PR calls = %+v, want two closes and two layer-1 branch deletions", prs.Calls)
 	}
 }
 
@@ -7494,4 +7509,499 @@ func TestRewindToPhase_FullStackRewindToImplementWithoutRoadmapPhase(t *testing.
 	if newRun.Stack != nil {
 		t.Errorf("new run stack = %+v; want none after a full rewind", newRun.Stack)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Stack rewind remote consequences: per-layer PR close + remote branch delete
+// ---------------------------------------------------------------------------
+
+// stackRemoteRewindFixture is a two-repository, three-layer stack with open
+// pull requests on every layer, a stateful worktree double, and a recording
+// rewind remote-operations mock whose live pull-request state answers are
+// scripted per URL (open by default). The fake /tmp worktree paths make the
+// pre-rewind backup branches fail, which is expected warning noise here.
+type stackRemoteRewindFixture struct {
+	mgr       *feature.Manager
+	f         *feature.Feature
+	prs       *mocks.MockPRCloser
+	worktrees *mocks.MockWorktreeOps
+	branches  map[string]string
+	refs      map[string]map[string]bool
+	state     map[string]string
+	layer1    string
+	layer2    string
+	layer3    string
+}
+
+// stackPRURL is the recorded pull request URL of one repository's layer.
+func stackPRURL(repoName string, position int) string {
+	return fmt.Sprintf("https://github.com/org/%s/pull/%d", repoName, position)
+}
+
+func newStackRemoteRewindFixture(t *testing.T) *stackRemoteRewindFixture {
+	t.Helper()
+	mgr := newTestManager(t)
+	layer1 := "feature/stack-ws/1-bootstrap"
+	layer2 := "feature/stack-ws/2-extension"
+	layer3 := "feature/stack-ws/3-cleanup"
+	fx := &stackRemoteRewindFixture{
+		mgr:      mgr,
+		branches: map[string]string{stackWtA: layer3, stackWtB: layer3},
+		refs: map[string]map[string]bool{
+			stackWtA: {layer1: true, layer2: true, layer3: true},
+			stackWtB: {layer1: true, layer2: true, layer3: true},
+		},
+		state:  map[string]string{},
+		layer1: layer1,
+		layer2: layer2,
+		layer3: layer3,
+	}
+	stackEntry := func(repoName, sha string, position int) feature.StackRepoEntry {
+		return feature.StackRepoEntry{
+			TipSHA:        sha,
+			LastPushedSHA: sha,
+			PRURL:         stackPRURL(repoName, position),
+			PRState:       feature.StackPRStateOpen,
+		}
+	}
+	stack := []feature.StackLayer{
+		{
+			Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1, 2}, Branch: layer1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": stackEntry("repo-a", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1),
+				"repo-b": stackEntry("repo-b", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 1),
+			},
+		},
+		{
+			Position: 2, Title: "Extension", Slug: "extension", Phases: []int{3}, Branch: layer2,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": stackEntry("repo-a", "cccccccccccccccccccccccccccccccccccccccc", 2),
+				"repo-b": stackEntry("repo-b", "dddddddddddddddddddddddddddddddddddddddd", 2),
+			},
+		},
+		{
+			Position: 3, Title: "Cleanup", Slug: "cleanup", Phases: []int{4}, Branch: layer3,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": stackEntry("repo-a", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", 3),
+				"repo-b": stackEntry("repo-b", "ffffffffffffffffffffffffffffffffffffffff", 3),
+			},
+		},
+	}
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/stack-repo-a", WorktreePath: stackWtA, BaseBranch: "main", Branch: layer3},
+		{Name: "repo-b", Path: "/tmp/stack-repo-b", WorktreePath: stackWtB, BaseBranch: "main", Branch: layer3},
+	})
+	run1Dir := filepath.Join(mgr.Store.BaseDir, f.ID, "runs", "run-001")
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.CurrentRoadmapPhase = 4
+		ff.TotalRoadmapPhases = 4
+		ff.Stack = stack
+		ff.Run().RoadmapPhaseCommitAnchors = map[int]map[string]string{
+			1: {"repo-a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "repo-b": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			2: {"repo-a": "cccccccccccccccccccccccccccccccccccccccc", "repo-b": "dddddddddddddddddddddddddddddddddddddddd"},
+			3: {"repo-a": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "repo-b": "ffffffffffffffffffffffffffffffffffffffff"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	for _, dir := range []string{
+		filepath.Join(run1Dir, "roadmap"),
+		filepath.Join(run1Dir, "phase-01", "plan"),
+		filepath.Join(run1Dir, "phase-02", "plan"),
+		filepath.Join(run1Dir, "phase-03", "plan"),
+		filepath.Join(run1Dir, "phase-04", "plan"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	fx.f = f
+	fx.installMocks()
+	return fx
+}
+
+// installMocks wires the stateful worktree double (mirroring the local
+// stack-rewind fixture) and the rewind remote-operations mock, whose live
+// state answers read fx.state: a URL mapped to "error" fails the lookup, an
+// unmapped URL answers open.
+func (fx *stackRemoteRewindFixture) installMocks() {
+	w := mocks.NewMockWorktreeOps()
+	w.CurrentBranchFn = func(path string) string { return fx.branches[path] }
+	w.SwitchBranchFn = func(path, branch string) error {
+		fx.branches[path] = branch
+		return nil
+	}
+	w.DeleteBranchFn = func(path, branch string) error {
+		delete(fx.refs[path], branch)
+		return nil
+	}
+	w.RenameBranchFn = func(path, oldName, newName string) error {
+		if fx.refs[path][oldName] {
+			delete(fx.refs[path], oldName)
+			fx.refs[path][newName] = true
+		}
+		fx.branches[path] = newName
+		return nil
+	}
+	fx.worktrees = w
+	fx.mgr.Worktrees = w
+	prs := mocks.NewMockPRCloser()
+	fx.prs = prs
+	fx.mgr.PRs = prs
+}
+
+// prCalls returns the recorded remote-operations calls for one method.
+func (fx *stackRemoteRewindFixture) prCalls(method string) []mocks.MockCall {
+	var out []mocks.MockCall
+	for _, c := range fx.prs.Calls {
+		if c.Method == method {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// closedURLs returns the closed pull request URLs in call order.
+func (fx *stackRemoteRewindFixture) closedURLs() []string {
+	var out []string
+	for _, c := range fx.prCalls("ClosePR") {
+		out = append(out, c.Args[0].(string))
+	}
+	return out
+}
+
+// deletedBranches returns the (worktree path, branch) pairs deleted from the
+// remotes, in call order.
+func (fx *stackRemoteRewindFixture) deletedBranches() [][2]string {
+	var out [][2]string
+	for _, c := range fx.prCalls("DeleteRemoteBranch") {
+		out = append(out, [2]string{c.Args[0].(string), c.Args[1].(string)})
+	}
+	return out
+}
+
+func (fx *stackRemoteRewindFixture) modify(t *testing.T, fn func(ff *feature.Feature)) {
+	t.Helper()
+	if err := fx.mgr.Store.Modify(fx.f.ID, func(f *feature.Feature) error {
+		fn(f)
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+}
+
+// rewindPartial rewinds to roadmap phase 3 — the first phase of layer 2 —
+// so layers 2 and 3 are the closing set and layer 1 must stay untouched.
+func (fx *stackRemoteRewindFixture) rewindPartial(t *testing.T) []feature.RewindWarning {
+	t.Helper()
+	warns, _, err := fx.mgr.RewindWithRequest(fx.f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 3,
+	})
+	if err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+	return warns
+}
+
+func TestRewindWithRequest_PartialStackRewindClosesAndDeletesClosingLayersOnly(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	fx := newStackRemoteRewindFixture(t)
+
+	warns := fx.rewindPartial(t)
+
+	wantCloses := []string{
+		stackPRURL("repo-a", 3), stackPRURL("repo-a", 2),
+		stackPRURL("repo-b", 3), stackPRURL("repo-b", 2),
+	}
+	if got := fx.closedURLs(); !slicesEqual(got, wantCloses) {
+		t.Errorf("closed URLs = %v; want %v", got, wantCloses)
+	}
+	wantDeletes := [][2]string{
+		{stackWtA, fx.layer3}, {stackWtA, fx.layer2},
+		{stackWtB, fx.layer3}, {stackWtB, fx.layer2},
+	}
+	if got := fx.deletedBranches(); !pairsEqual(got, wantDeletes) {
+		t.Errorf("deleted branches = %v; want %v", got, wantDeletes)
+	}
+	if got := fx.prCalls("PRState"); len(got) != 4 {
+		t.Errorf("PRState calls = %v; want the four closing-layer lookups only", got)
+	}
+	for _, kind := range []feature.RewindWarningKind{feature.RewindWarningPullRequestClose, feature.RewindWarningRemoteBranchDelete} {
+		if got := stackWarnings(warns, kind); len(got) != 0 {
+			t.Errorf("%s warnings = %v; want none", kind, got)
+		}
+	}
+
+	newRun, err := fx.mgr.Store.LoadRun(fx.f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	for _, layer := range newRun.Stack {
+		switch layer.Position {
+		case 1:
+			if layer.Repos["repo-a"].PRURL == "" || layer.Repos["repo-b"].PRURL == "" {
+				t.Errorf("layer 1 entries = %+v; want layer 1 kept on a partial rewind into layer 2", layer.Repos)
+			}
+		case 2, 3:
+			if len(layer.Repos) != 0 {
+				t.Errorf("layer %d entries = %+v; want cleared for the closing layers", layer.Position, layer.Repos)
+			}
+		}
+	}
+}
+
+func TestRewindToPhase_FullStackRewindClosesAndDeletesEveryLayer(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	fx := newStackRemoteRewindFixture(t)
+
+	if _, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhaseImplement); err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+
+	wantCloses := []string{
+		stackPRURL("repo-a", 3), stackPRURL("repo-a", 2), stackPRURL("repo-a", 1),
+		stackPRURL("repo-b", 3), stackPRURL("repo-b", 2), stackPRURL("repo-b", 1),
+	}
+	if got := fx.closedURLs(); !slicesEqual(got, wantCloses) {
+		t.Errorf("closed URLs = %v; want %v", got, wantCloses)
+	}
+	wantDeletes := [][2]string{
+		{stackWtA, fx.layer3}, {stackWtA, fx.layer2}, {stackWtA, fx.layer1},
+		{stackWtB, fx.layer3}, {stackWtB, fx.layer2}, {stackWtB, fx.layer1},
+	}
+	if got := fx.deletedBranches(); !pairsEqual(got, wantDeletes) {
+		t.Errorf("deleted branches = %v; want %v", got, wantDeletes)
+	}
+
+	newRun, err := fx.mgr.Store.LoadRun(fx.f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if newRun.Stack != nil {
+		t.Errorf("new run stack = %+v; want none after a full rewind", newRun.Stack)
+	}
+}
+
+func TestRewindWithRequest_StackRewindLiveStateDrivesCloseAndDelete(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	mergedURL := stackPRURL("repo-a", 3)
+	for name, state := range map[string]string{
+		"merged":  git.PRStateMerged,
+		"closed":  git.PRStateClosed,
+		"unknown": "error",
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := newStackRemoteRewindFixture(t)
+			fx.prs.PRStateFn = func(prURL string) (string, error) {
+				if prURL != mergedURL {
+					return git.PRStateOpen, nil
+				}
+				if state == "error" {
+					return "", errors.New("state lookup failed")
+				}
+				return state, nil
+			}
+
+			warns := fx.rewindPartial(t)
+
+			closed := fx.closedURLs()
+			deleted := fx.deletedBranches()
+			if state == git.PRStateMerged {
+				if slicesContains(closed, mergedURL) {
+					t.Errorf("merged layer 3 pull request was closed: %v", closed)
+				}
+				if pairsContains(deleted, stackWtA, fx.layer3) {
+					t.Errorf("merged layer 3 remote branch was deleted: %v", deleted)
+				}
+			}
+			if state == git.PRStateClosed && slicesContains(closed, mergedURL) {
+				t.Errorf("already-closed layer 3 pull request was closed again: %v", closed)
+			}
+			if state == "error" && !slicesContains(closed, mergedURL) {
+				t.Errorf("indeterminate layer 3 state must be treated as open and closed: %v", closed)
+			}
+			if state != git.PRStateMerged && !pairsContains(deleted, stackWtA, fx.layer3) {
+				t.Errorf("non-merged layer 3 remote branch must be deleted: %v", deleted)
+			}
+			// Layer 2 is closing and open in every scenario: closed and
+			// deleted for both repositories, and the other repository's
+			// layer 3 follows the same rule as its own live state (open).
+			if !slicesContains(closed, stackPRURL("repo-a", 2)) || !slicesContains(closed, stackPRURL("repo-b", 2)) {
+				t.Errorf("layer 2 pull requests must be closed in every scenario: %v", closed)
+			}
+			if !slicesContains(closed, stackPRURL("repo-b", 3)) {
+				t.Errorf("repo-b's open layer 3 pull request must be closed: %v", closed)
+			}
+			if !pairsContains(deleted, stackWtA, fx.layer2) || !pairsContains(deleted, stackWtB, fx.layer2) {
+				t.Errorf("layer 2 remote branches must be deleted in every scenario: %v", deleted)
+			}
+			for _, kind := range []feature.RewindWarningKind{feature.RewindWarningPullRequestClose, feature.RewindWarningRemoteBranchDelete} {
+				if got := stackWarnings(warns, kind); len(got) != 0 {
+					t.Errorf("%s warnings = %v; want none (a lookup failure produces no warning of its own)", kind, got)
+				}
+			}
+		})
+	}
+}
+
+func TestRewindWithRequest_StackRewindRemoteFailuresWarnPerLayerAndStillSeal(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	fx := newStackRemoteRewindFixture(t)
+	fx.prs.ClosePRFn = func(prURL string) error {
+		if prURL == stackPRURL("repo-a", 2) {
+			return errors.New("close refused")
+		}
+		return nil
+	}
+	fx.prs.DeleteRemoteBranchFn = func(repoPath, branch string) error {
+		if repoPath == stackWtB && branch == fx.layer3 {
+			return errors.New("delete refused")
+		}
+		return nil
+	}
+
+	warns := fx.rewindPartial(t)
+
+	closeWarns := stackWarnings(warns, feature.RewindWarningPullRequestClose)
+	if len(closeWarns) != 1 || closeWarns[0].Repo != "repo-a" || closeWarns[0].Branch != fx.layer2 {
+		t.Errorf("close warnings = %+v; want one for repo-a naming layer 2's branch", closeWarns)
+	}
+	deleteWarns := stackWarnings(warns, feature.RewindWarningRemoteBranchDelete)
+	if len(deleteWarns) != 1 || deleteWarns[0].Repo != "repo-b" || deleteWarns[0].Branch != fx.layer3 {
+		t.Errorf("remote delete warnings = %+v; want one for repo-b naming layer 3's branch", deleteWarns)
+	}
+
+	// The rewind still seals and forks, and each repository completes every
+	// other remote consequence.
+	if _, err := fx.mgr.Store.LoadRun(fx.f.ID, 2); err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	sealed, err := fx.mgr.Store.LoadRun(fx.f.ID, 1)
+	if err != nil {
+		t.Fatalf("LoadRun(1): %v", err)
+	}
+	if !sealed.IsSealed() {
+		t.Errorf("run 1 sealed = false; want the rewind to seal despite remote failures")
+	}
+	closed := fx.closedURLs()
+	for _, want := range []string{
+		stackPRURL("repo-a", 3), stackPRURL("repo-a", 2),
+		stackPRURL("repo-b", 3), stackPRURL("repo-b", 2),
+	} {
+		if !slicesContains(closed, want) {
+			t.Errorf("closed URLs = %v; want %q present (best-effort close)", closed, want)
+		}
+	}
+	deleted := fx.deletedBranches()
+	for _, want := range [][2]string{
+		{stackWtA, fx.layer3}, {stackWtA, fx.layer2},
+		{stackWtB, fx.layer3}, {stackWtB, fx.layer2},
+	} {
+		if !pairsContains(deleted, want[0], want[1]) {
+			t.Errorf("deleted branches = %v; want %v present (best-effort delete)", deleted, want)
+		}
+	}
+}
+
+func TestRewindWithRequest_StackRewindSkipsDeletionWithoutPushEvidenceOrWorktree(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	fx := newStackRemoteRewindFixture(t)
+	// repo-a's layer 3 carries neither a pull request URL nor a pushed SHA:
+	// nothing proves Agentico pushed it, so no deletion call may happen.
+	// repo-b loses its worktree path: deletion runs from the worktree path
+	// only, so its branches stay — while its pull requests still close.
+	fx.modify(t, func(ff *feature.Feature) {
+		ff.Stack[2].Repos["repo-a"] = feature.StackRepoEntry{}
+		for i := range ff.Repos {
+			if ff.Repos[i].Name == "repo-b" {
+				ff.Repos[i].WorktreePath = ""
+			}
+		}
+	})
+
+	warns := fx.rewindPartial(t)
+
+	wantDeletes := [][2]string{{stackWtA, fx.layer2}}
+	if got := fx.deletedBranches(); !pairsEqual(got, wantDeletes) {
+		t.Errorf("deleted branches = %v; want %v", got, wantDeletes)
+	}
+	wantCloses := []string{
+		stackPRURL("repo-a", 2),
+		stackPRURL("repo-b", 3), stackPRURL("repo-b", 2),
+	}
+	if got := fx.closedURLs(); !slicesEqual(got, wantCloses) {
+		t.Errorf("closed URLs = %v; want %v", got, wantCloses)
+	}
+	for _, kind := range []feature.RewindWarningKind{feature.RewindWarningPullRequestClose, feature.RewindWarningRemoteBranchDelete} {
+		if got := stackWarnings(warns, kind); len(got) != 0 {
+			t.Errorf("%s warnings = %v; want none", kind, got)
+		}
+	}
+}
+
+func TestRewindToPhase_StacklessFeatureMakesNoRemoteCall(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	fx := newStackRemoteRewindFixture(t)
+	fx.modify(t, func(ff *feature.Feature) {
+		ff.Stack = nil
+	})
+
+	if _, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhaseImplement); err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+	if len(fx.prs.Calls) != 0 {
+		t.Errorf("remote calls = %+v; want none without a stack", fx.prs.Calls)
+	}
+}
+
+func slicesEqual(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func slicesContains(haystack []string, needle string) bool {
+	for _, item := range haystack {
+		if item == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func pairsEqual(got, want [][2]string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func pairsContains(haystack [][2]string, first, second string) bool {
+	for _, item := range haystack {
+		if item[0] == first && item[1] == second {
+			return true
+		}
+	}
+	return false
 }

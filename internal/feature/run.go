@@ -58,6 +58,9 @@ const (
 	// an upper layer's local ref, or renaming the checked-out branch to the
 	// provisional layer-1 name.
 	RewindWarningStackBranch RewindWarningKind = "stack_branch"
+	// RewindWarningRemoteBranchDelete marks a remote layer branch that could
+	// not be deleted from its repository's origin during the rewind.
+	RewindWarningRemoteBranchDelete RewindWarningKind = "remote_branch_delete"
 )
 
 // RewindWarning is one typed non-fatal rewind failure: the cause family, the

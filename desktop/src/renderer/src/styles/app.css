@@ -9884,6 +9884,105 @@ body {
   word-break: break-all;
 }
 
+/* The rewind's per-repository pull-request stack: one block per repository,
+ * one row per layer (position, title, verdict badge, external link only
+ * where the layer has a pull request), mirroring the repository
+ * instrument's stack rows so both surfaces read as the same list. */
+.rewind-journey__pr-repos {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rewind-journey__pr-repo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.rewind-journey__pr-repo-name {
+  color: var(--text);
+  font: 500 12px var(--bench-font-mono);
+}
+
+.rewind-journey__pr-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.rewind-journey__pr-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.rewind-journey__pr-position {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: var(--bench-font-mono);
+  font-size: 12px;
+}
+
+.rewind-journey__pr-title {
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.rewind-journey__pr-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.35rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+  white-space: nowrap;
+}
+
+.rewind-journey__pr-badge[data-verdict='keep'] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.rewind-journey__pr-badge[data-verdict='close'] {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.rewind-journey__pr-badge[data-verdict='merged'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.rewind-journey__pr-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.rewind-journey__pr-link:hover {
+  text-decoration: underline;
+}
+
 .rewind-journey__confirm-summary {
   display: flex;
   flex-direction: column;

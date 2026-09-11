@@ -1241,7 +1241,13 @@ export const ServerRewindChoiceSchema = z.object({
 
 export const ServerRewindPRConsequenceSchema = z.object({
   repo: z.string(),
-  pr_url: z.string(),
+  position: z.number().int().positive(),
+  title: z.string(),
+  branch: z.string(),
+  pr_url: z.string().optional(),
+  pr_state: z.enum(['none', 'open', 'merged', 'closed']),
+  verdict: z.enum(['keep', 'close', 'merged', 'none']),
+  delete_remote_branch: z.boolean(),
 });
 
 export const ServerRewindWorktreeConsequenceSchema = z.object({

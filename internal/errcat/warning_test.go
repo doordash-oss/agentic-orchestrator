@@ -34,6 +34,8 @@ var warningCodeList = []Code{
 	RepositoryWorktreeUnavailable,
 	RepositoryDiffFailed,
 	RoadmapBranchRenameFailed,
+	FixRelocatedAboveLayer,
+	FixManifestEntryIgnored,
 }
 
 // orphanSessionCodeList is the closed set of orphan-session recovery codes.
@@ -46,8 +48,8 @@ var orphanSessionCodeList = []Code{
 // for every warning code: warning class and no action references. A warning
 // never blocks progress, never gates a lane, and never offers an action.
 func TestWarningCodesAreWarningClassWithoutActions(t *testing.T) {
-	if len(warningCodeList) != 12 {
-		t.Fatalf("warning code list has %d entries; want 12", len(warningCodeList))
+	if len(warningCodeList) != 14 {
+		t.Fatalf("warning code list has %d entries; want 14", len(warningCodeList))
 	}
 	for _, code := range warningCodeList {
 		entry, ok := Lookup(code)
@@ -100,7 +102,8 @@ func TestOrphanSessionCodesAreNeedsActionResume(t *testing.T) {
 // TestWarningSummaryTemplates pins the param-driven warning summaries: the
 // effort-drift message names role, effort, and model; a stored relationship
 // record names its repository; an orphan code names its phase, iteration,
-// and repository.
+// and repository; the relocation codes name their repository and layers or
+// ignored manifest entry.
 func TestWarningSummaryTemplates(t *testing.T) {
 	rendered := New(EffortCapabilityDrift, WithParams(EffortDriftParams{
 		Role:   "Implementation",
@@ -156,5 +159,49 @@ func TestWarningSummaryTemplates(t *testing.T) {
 	}
 	if rendered.Remediation == nil || len(rendered.Remediation.Actions) != 1 || rendered.Remediation.Actions[0] != "resume" {
 		t.Fatalf("orphan_session_stale remediation = %#v; want the resume action", rendered.Remediation)
+	}
+
+	rendered = New(FixRelocatedAboveLayer, WithParams(WarningFixRelocatedParams{
+		Repositories:   []CodeRepository{{Name: "web", Branch: "agentico/layer-2"}},
+		RequestedLayer: 1,
+		RequestedTitle: "Foundation",
+		ActualLayer:    2,
+		ActualTitle:    "API surface",
+	}))
+	want = `The final review fix for repository "web" (branch "agentico/layer-2") landed in layer 2 ("API surface"), above the requested layer 1 ("Foundation").`
+	if rendered.Summary != want {
+		t.Fatalf("fix_relocated_above_layer summary is %q; want %q", rendered.Summary, want)
+	}
+
+	rendered = New(FixRelocatedAboveLayer)
+	if rendered.Summary != "A final review fix landed above its requested stack layer." {
+		t.Fatalf("fix_relocated_above_layer summary without params is %q; want the static summary", rendered.Summary)
+	}
+
+	rendered = New(FixManifestEntryIgnored, WithParams(WarningManifestIgnoredParams{
+		Repositories: []CodeRepository{{Name: "web"}},
+		Layer:        1,
+		Path:         "internal/web/handler.go",
+		Reason:       "duplicate path",
+	}))
+	want = `The fix manifest entry for repository "web" (layer 1, path "internal/web/handler.go") was ignored: duplicate path.`
+	if rendered.Summary != want {
+		t.Fatalf("fix_manifest_entry_ignored summary is %q; want %q", rendered.Summary, want)
+	}
+
+	rendered = New(FixManifestEntryIgnored, WithParams(WarningManifestIgnoredParams{Reason: "unparsable manifest"}))
+	want = `A fix manifest entry was ignored: unparsable manifest.`
+	if rendered.Summary != want {
+		t.Fatalf("fix_manifest_entry_ignored summary without a repository is %q; want %q", rendered.Summary, want)
+	}
+
+	for _, code := range []Code{FixRelocatedAboveLayer, FixManifestEntryIgnored} {
+		entry, ok := Lookup(code)
+		if !ok {
+			t.Fatalf("%s: missing from catalog", code)
+		}
+		if len(entry.Blocks) != 1 || entry.Blocks[0] != BlockRepositories {
+			t.Errorf("%s: blocks = %#v; want exactly repositories", code, entry.Blocks)
+		}
 	}
 }

@@ -85,6 +85,11 @@ type Hooks struct {
 	// — when the boundary split the worktrees — the next layer's position
 	// and branch.
 	OnLayerBoundaryCrossed func(featureID string, boundary observe.LayerBoundaryEvent)
+
+	// OnRestackWarning fires for every relocation warning a Final Review
+	// fix round's round-commit hook raises: a fix that landed above its
+	// requested stack layer, or an ignored fix manifest entry.
+	OnRestackWarning func(featureID string, warning observe.RestackWarningEvent)
 }
 
 // PhaseCompletionInput is a sum-type describing a phase completion. Exactly

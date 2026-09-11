@@ -44,6 +44,8 @@ var zeroParams = []Params{
 	EffortDriftParams{},
 	FeatureLoadFailedParams{},
 	WarningRepoParams{},
+	WarningFixRelocatedParams{},
+	WarningManifestIgnoredParams{},
 	OrphanSessionParams{},
 	ChatContextParams{},
 	CloneDestinationParams{},

@@ -71,6 +71,7 @@ type Outcome struct {
 	PlanMarkdownPath   string
 	PhaseArtifactPath  string
 	AxisApproval       *AxisApproval
+	FixManifest        *FixManifest
 }
 
 // Lookup returns the registered contract for a phase and role.

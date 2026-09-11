@@ -1342,3 +1342,70 @@ func (o *Observer) LayerBoundaryCrossed(sc SpanContext, boundary LayerBoundaryEv
 		Data:         data,
 	})
 }
+
+// RestackWarningEvent is the audit record one feature.restack_warning event
+// carries: the canonical warning code raised while a Final Review fix round
+// landed its commits onto the stack, the repository it concerns, and the
+// warning's specifics — the requested and actual layers for a relocated
+// fix, or the ignored entry's layer, path, and reason for a manifest entry.
+type RestackWarningEvent struct {
+	Code           string
+	Repository     string
+	RequestedLayer int
+	RequestedTitle string
+	ActualLayer    int
+	ActualTitle    string
+	Layer          int
+	Path           string
+	Reason         string
+	Diagnostics    string
+}
+
+// RestackWarning emits a feature.restack_warning audit event for one
+// relocation warning. Safe on nil receiver / disabled observer. Called from
+// the orchestrator's OnRestackWarning hook.
+func (o *Observer) RestackWarning(sc SpanContext, ev RestackWarningEvent) {
+	if o == nil || !o.enabled {
+		return
+	}
+	data := map[string]any{"code": ev.Code}
+	if ev.Repository != "" {
+		data["repository"] = ev.Repository
+	}
+	if ev.RequestedLayer > 0 {
+		data["requested_layer"] = ev.RequestedLayer
+	}
+	if ev.RequestedTitle != "" {
+		data["requested_title"] = ev.RequestedTitle
+	}
+	if ev.ActualLayer > 0 {
+		data["actual_layer"] = ev.ActualLayer
+	}
+	if ev.ActualTitle != "" {
+		data["actual_title"] = ev.ActualTitle
+	}
+	if ev.Layer > 0 {
+		data["layer"] = ev.Layer
+	}
+	if ev.Path != "" {
+		data["path"] = ev.Path
+	}
+	if ev.Reason != "" {
+		data["reason"] = ev.Reason
+	}
+	if ev.Diagnostics != "" {
+		data["diagnostics"] = ev.Diagnostics
+	}
+	status := "warning"
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "feature.restack_warning",
+		Status:       status,
+		FeatureID:    sc.FeatureID,
+		RepoName:     ev.Repository,
+		Data:         data,
+	})
+}

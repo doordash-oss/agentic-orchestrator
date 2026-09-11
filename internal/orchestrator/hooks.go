@@ -378,5 +378,15 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 			}
 			obs.LayerBoundaryCrossed(sc, boundary)
 		},
+		OnRestackWarning: func(featureID string, warning observe.RestackWarningEvent) {
+			if obs == nil {
+				return
+			}
+			sc, ok := loadSpan(featureID)
+			if !ok {
+				return
+			}
+			obs.RestackWarning(sc, warning)
+		},
 	}
 }

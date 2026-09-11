@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -43,9 +44,15 @@ import (
 // It then classifies every transaction journal target ref against its
 // journaled old and candidate SHAs, finishes fully applied transactions,
 // rolls back provable partials, and preserves unclassifiable externally
-// moved state as integration attention. Reconciliation errors follow the
-// existing fail-closed startup ordering so session recovery never acts on
-// an unreconciled transaction.
+// moved state as integration attention. Restack-journal reconciliation runs
+// after integration reconciliation and before promotion reconciliation so
+// session recovery never relaunches over an unfinished Final Review fix
+// relocation: every feature holding restack journal entries gets each entry
+// classified against its journaled old and new SHAs — landed transactions
+// are finished, never-landed ones dropped with a relocation warning, and
+// externally moved ones preserved with the same warning. Reconciliation
+// errors follow the existing fail-closed startup ordering so session
+// recovery never acts on an unreconciled transaction.
 func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {
 	if o.deps.Recovery == nil {
 		return nil, errors.New("recovery operator not configured")
@@ -111,6 +118,13 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 		if err := o.ReconcileIntegrationTransactions(); err != nil {
 			return nil, fmt.Errorf("reconcile integration transactions: %w", err)
 		}
+	}
+	// Reconcile interrupted restack journals before promotion reconciliation
+	// and ordinary session recovery: a Final Review fix relocation whose
+	// compare-and-swap ref transaction was interrupted mid-landing is
+	// finished, dropped, or preserved with a warning here.
+	if err := o.ReconcileRestackJournal(ctx); err != nil {
+		return nil, fmt.Errorf("reconcile restack journals: %w", err)
 	}
 	// Reconcile pending promotion journals after integration so a merged
 	// child with an unfinished promotion can be recovered before ordinary
@@ -501,4 +515,217 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 	}
 
 	return nil
+}
+
+// restackJournalLifecycle is the restack-journal capability the recovery pass
+// needs from the feature lifecycle. Satisfied by *feature.Manager; a
+// lifecycle without the capability skips the pass, mirroring the
+// optional-capability assertions the other reconciliation passes use.
+type restackJournalLifecycle interface {
+	SetRestackJournalEntry(featureID, repository string, entry feature.RestackJournalEntry) error
+	ApplyRestackJournalEntry(featureID, repository string) error
+	SetRestackJournalPendingSync(featureID, repository string, pending bool) error
+	DropRestackJournalEntry(featureID, repository string) error
+}
+
+// ReconcileRestackJournal is the idempotent startup reconciliation pass for
+// restack journals. It runs after integration reconciliation and before
+// promotion reconciliation so ordinary session recovery never relaunches a
+// session over an unfinished Final Review fix relocation.
+//
+// For each feature holding restack journal entries, it classifies every
+// entry's refs against their journaled old and new SHAs:
+//   - All refs at their new SHAs: the transaction landed. The remap is
+//     persisted and the entry removed (skipped when the entry is already
+//     applied or synced, whose remap a prior scan or the landing flow
+//     persisted), the repository's worktree is hard-reset to the rewritten
+//     chain's top, and a failed reset re-writes a prepared entry as applied
+//     with pending sync so the next scan retries.
+//   - All refs at their old SHAs: the transaction never landed. The entry
+//     is dropped and the fix-relocated-above-layer warning is emitted.
+//   - Anything else, including a ref that cannot be read or a repository
+//     the feature no longer records: external movement. Refs and entry are
+//     preserved and the same warning is emitted with the observed state as
+//     diagnostics.
+//
+// Reconciliation errors follow the existing fail-closed startup ordering.
+func (o *Orchestrator) ReconcileRestackJournal(ctx context.Context) error {
+	if o.deps.Store == nil {
+		return nil
+	}
+	lifecycle, ok := o.deps.Lifecycle.(restackJournalLifecycle)
+	if !ok {
+		return nil
+	}
+	features, listErr := o.deps.Store.List()
+	var partialIDs []string
+	if listErr != nil {
+		var ple *feature.PartialLoadError
+		if !errors.As(listErr, &ple) {
+			return fmt.Errorf("list features: %w", listErr)
+		}
+		for _, w := range ple.Warnings {
+			partialIDs = append(partialIDs, w.ID)
+		}
+	}
+	var errs []error
+	for _, f := range features {
+		if err := o.reconcileOneRestackJournal(f, lifecycle); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", f.ID, err))
+		}
+	}
+	for _, id := range partialIDs {
+		f, err := o.deps.Store.Load(id)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: load: %w", id, err))
+			continue
+		}
+		if f == nil {
+			continue
+		}
+		if err := o.reconcileOneRestackJournal(f, lifecycle); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", id, err))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+// reconcileOneRestackJournal reconciles a single feature's restack journal.
+// Entries are copied before iteration because the lifecycle operations
+// reload and rewrite the run underneath the listed feature.
+func (o *Orchestrator) reconcileOneRestackJournal(f *feature.Feature, lifecycle restackJournalLifecycle) error {
+	if f == nil || len(f.Run().RestackJournal) == 0 {
+		return nil
+	}
+	if o.deps.Worktrees == nil {
+		return fmt.Errorf("ref reads for restack reconciliation are not configured")
+	}
+	entries := append([]feature.RestackJournalEntry(nil), f.Run().RestackJournal...)
+	for _, entry := range entries {
+		if err := o.reconcileOneRestackEntry(f, entry, lifecycle); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// reconcileOneRestackEntry classifies one restack journal entry against the
+// repository's refs and finishes, drops, or preserves it as documented on
+// ReconcileRestackJournal. refs/heads/* are shared across the worktrees of
+// one repository, so the repository's worktree path resolves every listed
+// ref.
+func (o *Orchestrator) reconcileOneRestackEntry(f *feature.Feature, entry feature.RestackJournalEntry, lifecycle restackJournalLifecycle) error {
+	repo := featureRepoByName(f, entry.Repository)
+	if repo == nil {
+		o.emitRestackRelocationWarning(f, entry, fmt.Sprintf("repository %q is no longer recorded on the feature, so the restack landing was not reconciled", entry.Repository))
+		return nil
+	}
+	worktree := repo.WorktreePath
+	if worktree == "" {
+		worktree = repo.Path
+	}
+	allAtNew, allAtOld := true, true
+	var observed []string
+	for _, update := range entry.Updates {
+		current, err := o.deps.Worktrees.RefSHA(worktree, update.Ref)
+		if err != nil {
+			o.emitRestackRelocationWarning(f, entry, fmt.Sprintf("reading ref %s: %v", update.Ref, err))
+			return nil
+		}
+		observed = append(observed, fmt.Sprintf("%s=%s", update.Ref, current))
+		switch current {
+		case update.NewSHA:
+			// At its new SHA: the update landed. A no-op update whose old
+			// and new SHAs match leaves the ref at both, so it still
+			// counts as at its old SHA too.
+			if update.NewSHA != update.OldSHA {
+				allAtOld = false
+			}
+		case update.OldSHA:
+			allAtNew = false
+		default:
+			allAtNew = false
+			allAtOld = false
+		}
+	}
+	switch {
+	case allAtNew:
+		return o.finishRestackLanding(f, entry, worktree, lifecycle)
+	case allAtOld:
+		if err := lifecycle.DropRestackJournalEntry(f.ID, entry.Repository); err != nil {
+			return fmt.Errorf("dropping never-landed restack journal entry for %s: %w", entry.Repository, err)
+		}
+		o.emitRestackRelocationWarning(f, entry, "the restack transaction never landed; the final review fixes remain in the top layer")
+		return nil
+	default:
+		o.emitRestackRelocationWarning(f, entry, fmt.Sprintf("refs moved externally while the restack landing was in flight: %s", strings.Join(observed, ", ")))
+		return nil
+	}
+}
+
+// finishRestackLanding finishes one landed restack transaction: persist the
+// remap and remove the entry (unless the entry is already applied or
+// synced), hard-reset the repository's worktree to the rewritten chain's
+// top, and drop the entry. A failed reset re-writes a prepared entry as
+// applied with pending sync so the next scan retries; an entry whose remap
+// was already persisted is left carrying its pending-sync flag.
+func (o *Orchestrator) finishRestackLanding(f *feature.Feature, entry feature.RestackJournalEntry, worktree string, lifecycle restackJournalLifecycle) error {
+	remapPersisted := entry.State == feature.RestackJournalApplied || entry.State == feature.RestackJournalSynced
+	if !remapPersisted {
+		if err := lifecycle.ApplyRestackJournalEntry(f.ID, entry.Repository); err != nil {
+			return fmt.Errorf("applying restack journal entry for %s: %w", entry.Repository, err)
+		}
+	}
+	if entry.NewTopSHA != "" {
+		if err := o.deps.Worktrees.ResetToCommit(worktree, entry.NewTopSHA); err != nil {
+			if remapPersisted {
+				// The entry already records its applied state and pending
+				// sync flag; leave them set for the next scan to retry.
+				return nil
+			}
+			pending := entry
+			pending.State = feature.RestackJournalApplied
+			pending.PendingSync = true
+			if err := lifecycle.SetRestackJournalEntry(f.ID, entry.Repository, pending); err != nil {
+				return fmt.Errorf("marking restack journal entry for %s pending sync: %w", entry.Repository, err)
+			}
+			return nil
+		}
+	}
+	if err := lifecycle.DropRestackJournalEntry(f.ID, entry.Repository); err != nil {
+		return fmt.Errorf("dropping restack journal entry for %s: %w", entry.Repository, err)
+	}
+	o.emitEvent(ports.Event{
+		Type:      ports.RepoStatusChanged,
+		FeatureID: f.ID,
+		RepoName:  entry.Repository,
+		Branch:    topStackLayer(f.Run().Stack).Branch,
+		Message:   fmt.Sprintf("recovery finished the restack landing; worktree reset to %s", entry.NewTopSHA),
+	})
+	return nil
+}
+
+// emitRestackRelocationWarning emits the per-repository warning event for a
+// restack journal entry whose landing left the final review fixes above the
+// layer the fix round asked to relocate into: the repositories block names
+// the entry's repository on the top layer's branch, and the params name the
+// requested layer and the top layer the fixes actually remain in.
+func (o *Orchestrator) emitRestackRelocationWarning(f *feature.Feature, entry feature.RestackJournalEntry, diagnostic string) {
+	o.emitFixRelocatedWarning(f, entry.Repository, entry.RequestedLayer, topStackLayer(f.Run().Stack).Position, diagnostic)
+}
+
+// topStackLayer returns the stack layer with the highest position — the
+// layer final review fixes remain in when no relocation lands — or the zero
+// layer when the stack is empty.
+func topStackLayer(stack []feature.StackLayer) feature.StackLayer {
+	var top feature.StackLayer
+	for _, layer := range stack {
+		if layer.Position > top.Position {
+			top = layer
+		}
+	}
+	return top
 }

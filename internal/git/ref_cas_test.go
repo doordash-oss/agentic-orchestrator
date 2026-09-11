@@ -15,6 +15,7 @@
 package git_test
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -345,5 +346,94 @@ func TestReadRefSHAMissingRef(t *testing.T) {
 	_, err := gitpkg.ReadRefSHA(repo, "refs/heads/nonexistent")
 	if err == nil {
 		t.Fatal("ReadRefSHA() error = nil, want error for missing ref")
+	}
+}
+
+// TestUpdateRefsTransactionMovesTwoRefsAtomically proves a transaction moving
+// two branches — one checked out in a linked worktree — succeeds, both refs
+// resolve to the new SHAs, and the linked worktree keeps its branch name.
+func TestUpdateRefsTransactionMovesTwoRefsAtomically(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	runGitRefTest(t, repo, "branch", "feature/a")
+	runGitRefTest(t, repo, "branch", "feature/b")
+	oldA := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/a")
+	oldB := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/b")
+
+	linked := filepath.Join(t.TempDir(), "wt")
+	runGitRefTest(t, repo, "worktree", "add", linked, "feature/a")
+	t.Cleanup(func() {
+		runGitRefTest(t, repo, "worktree", "remove", "--force", linked)
+	})
+
+	newA := testutil.CommitFile(t, repo, "a.txt", "a\n", "commit for a")
+	newB := testutil.CommitFile(t, repo, "b.txt", "b\n", "commit for b")
+
+	err := gitpkg.UpdateRefsTransaction(repo, []gitpkg.RefUpdate{
+		{Ref: "refs/heads/feature/a", OldSHA: oldA, NewSHA: newA},
+		{Ref: "refs/heads/feature/b", OldSHA: oldB, NewSHA: newB},
+	})
+	if err != nil {
+		t.Fatalf("UpdateRefsTransaction() error = %v", err)
+	}
+	if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/a"); got != newA {
+		t.Fatalf("feature/a = %s, want %s", got, newA)
+	}
+	if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/b"); got != newB {
+		t.Fatalf("feature/b = %s, want %s", got, newB)
+	}
+	if got := runGitRefTest(t, linked, "rev-parse", "--abbrev-ref", "HEAD"); got != "feature/a" {
+		t.Fatalf("linked worktree branch = %q, want %q", got, "feature/a")
+	}
+}
+
+// TestUpdateRefsTransactionMismatchIsAtomic proves a stale expected SHA fails
+// with a mismatch naming the observed ref and SHA, and neither ref moved.
+func TestUpdateRefsTransactionMismatchIsAtomic(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	runGitRefTest(t, repo, "branch", "feature/a")
+	runGitRefTest(t, repo, "branch", "feature/b")
+	oldA := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/a")
+	oldB := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/b")
+
+	newA := testutil.CommitFile(t, repo, "a.txt", "a\n", "commit for a")
+	newB := testutil.CommitFile(t, repo, "b.txt", "b\n", "commit for b")
+
+	// feature/b moves after its expected SHA was captured.
+	movedB := testutil.CommitFile(t, repo, "b2.txt", "b2\n", "commit that moves b")
+	runGitRefTest(t, repo, "branch", "-f", "feature/b", movedB)
+
+	err := gitpkg.UpdateRefsTransaction(repo, []gitpkg.RefUpdate{
+		{Ref: "refs/heads/feature/a", OldSHA: oldA, NewSHA: newA},
+		{Ref: "refs/heads/feature/b", OldSHA: oldB, NewSHA: newB},
+	})
+	var mismatch *gitpkg.RefCASMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("UpdateRefsTransaction() error = %v, want *RefCASMismatchError", err)
+	}
+	if mismatch.Ref != "refs/heads/feature/b" {
+		t.Fatalf("mismatch ref = %q, want refs/heads/feature/b", mismatch.Ref)
+	}
+	if mismatch.Observed != movedB {
+		t.Fatalf("mismatch observed = %s, want %s", mismatch.Observed, movedB)
+	}
+	// Neither ref moved.
+	if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/a"); got != oldA {
+		t.Fatalf("feature/a moved to %s, want unchanged %s", got, oldA)
+	}
+	if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/b"); got != movedB {
+		t.Fatalf("feature/b = %s, want %s (externally moved value)", got, movedB)
+	}
+}
+
+// TestUpdateRefsTransactionEmptyIsNoOp proves an empty update list succeeds
+// without touching anything.
+func TestUpdateRefsTransactionEmptyIsNoOp(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	mainBefore := runGitRefTest(t, repo, "rev-parse", "refs/heads/main")
+	if err := gitpkg.UpdateRefsTransaction(repo, nil); err != nil {
+		t.Fatalf("UpdateRefsTransaction(nil) error = %v", err)
+	}
+	if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/main"); got != mainBefore {
+		t.Fatalf("main = %s, want unchanged %s", got, mainBefore)
 	}
 }

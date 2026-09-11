@@ -150,6 +150,43 @@ func TestFinalFixPromptCitesAcceptanceAuthority(t *testing.T) {
 	}
 }
 
+func TestFinalFixPromptCarriesStackAndManifestPath(t *testing.T) {
+	prompt := BuildFinalFixPrompt(FinalFixPromptOpts{
+		Feedback:     "feedback body",
+		FeedbackPath: "/iter/review-feedback.md",
+		Iteration:    1,
+		Publishable:  true,
+		Stack: []feature.StackLayer{
+			{Position: 1, Title: "Foundations", Phases: []int{1}, Branch: "feature/feat-x-1/bootstrap"},
+			{Position: 2, Title: "Review loop", Phases: []int{2}, Branch: "feature/feat-x-1/review-loop"},
+		},
+		IterationDir: "/state/feat-x/run-001/review/iteration-02",
+	})
+	for _, want := range []string{
+		"## Delivery Stack",
+		"- Layer 1: Foundations — phases [1], branch feature/feat-x-1/bootstrap",
+		"- Layer 2: Review loop (top layer) — phases [2], branch feature/feat-x-1/review-loop",
+		"/state/feat-x/run-001/review/iteration-02/fix-manifest.yaml",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("final fix prompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	without := BuildFinalFixPrompt(FinalFixPromptOpts{
+		Feedback:     "feedback body",
+		FeedbackPath: "/iter/review-feedback.md",
+		Iteration:    1,
+		Publishable:  true,
+		IterationDir: "/state/feat-x/run-001/review/iteration-02",
+	})
+	for _, unwanted := range []string{"## Delivery Stack", "fix-manifest.yaml"} {
+		if strings.Contains(without, unwanted) {
+			t.Fatalf("stackless final fix prompt must not contain %q:\n%s", unwanted, without)
+		}
+	}
+}
+
 func TestValidatorPromptUsesDistilledIntent(t *testing.T) {
 	designPath := writeArtifact(t, "design.md", "## Acceptance Criteria\ntext\n")
 	f := &feature.Feature{

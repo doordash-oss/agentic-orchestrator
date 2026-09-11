@@ -54,6 +54,7 @@ const (
 	ValidatorDesignDocument            ArtifactValidator = "design_document"
 	ValidatorReviewFeedback            ArtifactValidator = "review_feedback"
 	ValidatorPlanValidatorAxisApproval ArtifactValidator = "plan_validator_axis_approval"
+	ValidatorFixManifest               ArtifactValidator = "fix_manifest"
 )
 
 // RoleRuntime carries runtime paths used to resolve named output roots.

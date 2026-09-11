@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 func TestImplementPromptBranchBehavior(t *testing.T) {
@@ -142,6 +144,44 @@ func TestFinalFixPromptBranches(t *testing.T) {
 			},
 			wantContains: []string{"NOTE: Local-only repository"},
 			wantOmit:     []string{"## Manual Verification Outcomes"},
+		},
+		{
+			name: "stack_section_lists_layers_marks_top_and_includes_manifest_instructions",
+			input: FinalFixUserInput{
+				Iteration:       1,
+				Feedback:        "Tighten wording.",
+				Publishable:     true,
+				FixManifestPath: "/state/feat-x/run-001/review/iteration-02/fix-manifest.yaml",
+				Stack: []feature.StackLayer{
+					{Position: 1, Title: "Foundations", Phases: []int{1, 2}, Branch: "feature/feat-x-1/bootstrap"},
+					{Position: 2, Title: "Review loop", Phases: []int{3}, Branch: "feature/feat-x-1/review-loop"},
+				},
+			},
+			wantContains: []string{
+				"## Delivery Stack",
+				"- Layer 1: Foundations — phases [1 2], branch feature/feat-x-1/bootstrap",
+				"- Layer 2: Review loop (top layer) — phases [3], branch feature/feat-x-1/review-loop",
+				"/state/feat-x/run-001/review/iteration-02/fix-manifest.yaml",
+				"entries:",
+				"The manifest is optional",
+				"Files not listed in the manifest belong to the top layer",
+				"You still never run git write commands",
+			},
+			wantOmit: []string{"NOTE: Local-only repository"},
+		},
+		{
+			name: "feature_without_stack_gets_no_stack_section_or_manifest_instruction",
+			input: FinalFixUserInput{
+				Iteration:   1,
+				Feedback:    "Tighten wording.",
+				Publishable: true,
+			},
+			wantContains: []string{"# Fix Context"},
+			wantOmit: []string{
+				"## Delivery Stack",
+				"fix-manifest.yaml",
+				"(top layer)",
+			},
 		},
 	}
 

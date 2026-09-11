@@ -153,6 +153,15 @@ type Run struct {
 	// planning re-runs and re-persists it at the next approval.
 	Stack []StackLayer `yaml:"stack,omitempty"`
 
+	// RestackJournal records, per repository, the durable state of an
+	// in-flight restack landing: the ref updates a Final Review fix
+	// relocation wrote into a compare-and-swap transaction, the remapped
+	// roadmap-phase anchors and layer tips to persist once the transaction
+	// lands, and the landing state. Any rewind (partial or full) drops it:
+	// the rewind resets the worktree itself, so no landing is left to
+	// reconcile. Omitted when empty; nil when no restack is in flight.
+	RestackJournal []RestackJournalEntry `yaml:"restack_journal,omitempty"`
+
 	// Artifacts (moved from Feature) — entries are run-relative paths.
 	Artifacts map[string]string `yaml:"artifacts,omitempty"`
 

@@ -279,6 +279,89 @@ func CommitAllAndGetHead(worktreePath, message string) (string, error) {
 	return CurrentHeadSHA(worktreePath)
 }
 
+// UncommittedPaths returns every path with staged, unstaged, or untracked
+// changes in the worktree, plus the rename/copy counterpart map: for each
+// renamed or copied path, both directions (old→new and new→old). A caller
+// staging a subset reproduces a rename fully by staging both counterparts.
+// A probe failure is surfaced as an error so an indeterminate worktree
+// never reads as a path list.
+func UncommittedPaths(worktreePath string) ([]string, map[string]string, error) {
+	cmd := readGitCmd(worktreePath, "status", "--porcelain", "-z")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing uncommitted paths in %s: %w", worktreePath, err)
+	}
+	records := strings.Split(string(out), "\x00")
+	var paths []string
+	seen := make(map[string]bool)
+	counterparts := make(map[string]string)
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	}
+	for i := 0; i < len(records); i++ {
+		rec := records[i]
+		if len(rec) < 4 {
+			continue
+		}
+		add(rec[3:])
+		// Rename and copy records carry the original path as the next
+		// NUL-separated record.
+		if rec[0] == 'R' || rec[0] == 'C' || rec[1] == 'R' || rec[1] == 'C' {
+			if i+1 < len(records) {
+				add(records[i+1])
+				counterparts[rec[3:]] = records[i+1]
+				counterparts[records[i+1]] = rec[3:]
+				i++
+			}
+		}
+	}
+	return paths, counterparts, nil
+}
+
+// commitPathsChunk bounds the number of pathspecs staged in one git
+// invocation, keeping argument lists well below any OS limit.
+const commitPathsChunk = 64
+
+// CommitPathsAndGetHead stages only the given paths — modifications,
+// additions, and deletions — and creates a commit with the Agentic
+// signature trailer, returning the full HEAD SHA afterwards. A tree that is
+// clean after staging is not an error; the existing HEAD SHA is returned.
+func CommitPathsAndGetHead(worktreePath, message string, paths []string) (string, error) {
+	if len(paths) == 0 {
+		return CurrentHeadSHA(worktreePath)
+	}
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	for start := 0; start < len(paths); start += commitPathsChunk {
+		end := start + commitPathsChunk
+		if end > len(paths) {
+			end = len(paths)
+		}
+		args := append([]string{"add", "-A", "--"}, paths[start:end]...)
+		if out, err := runGitMutationWithLockRetry(worktreePath, args...); err != nil {
+			return "", fmt.Errorf("staging changes: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+	}
+	status := readGitCmd(worktreePath, "status", "--porcelain")
+	out, err := status.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("checking staged changes: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return CurrentHeadSHA(worktreePath)
+	}
+	message = message + "\n\n" + CommitSignatureTrailer
+	if out, err := runGitMutationWithLockRetry(worktreePath, "commit", "-m", message); err != nil {
+		return "", fmt.Errorf("creating commit: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return CurrentHeadSHA(worktreePath)
+}
+
 func worktreeMutationLock(worktreePath string) *sync.Mutex {
 	key := repositoryMutationKey(worktreePath)
 	actual, _ := worktreeMutationLocks.LoadOrStore(key, &sync.Mutex{})

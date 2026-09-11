@@ -24,7 +24,9 @@ import (
 // and never offers an action. The feature codes are computed at the boundary
 // that produces them; the relationship codes are the two optional records a
 // transaction journal entry can store; the rewind and repository-diff codes
-// classify their carriers' typed failures at the mutation-target boundary.
+// classify their carriers' typed failures at the mutation-target boundary;
+// the relocation codes report the Final Review fixer's best-effort fix
+// placement and manifest handling.
 const (
 	// BranchCollisionProbeUnavailable reports that feature creation proved a
 	// candidate locally unique but could not check one repository's origin.
@@ -73,6 +75,14 @@ const (
 	// branch could not be renamed to the approved layer-1 name during a
 	// no-gate auto-approval; that repository stays on the branch it is on.
 	RoadmapBranchRenameFailed Code = "roadmap_branch_rename_failed"
+	// FixRelocatedAboveLayer reports that a Final Review fix landed above
+	// the stack layer its fix manifest entry requested; the conflict or
+	// failure detail rides as bounded diagnostics.
+	FixRelocatedAboveLayer Code = "fix_relocated_above_layer"
+	// FixManifestEntryIgnored reports an ignored fix manifest entry: an
+	// invalid layer position, an unknown repository, a path that did not
+	// change, a duplicate path, or an unparsable manifest.
+	FixManifestEntryIgnored Code = "fix_manifest_entry_ignored"
 )
 
 // Orphan-session recovery codes. An orphan session is a recovery item whose
@@ -129,6 +139,30 @@ type WarningRepoParams struct {
 
 func (WarningRepoParams) params() {}
 
+// WarningFixRelocatedParams carries the repository, the requested layer, and
+// the layer a final review fix actually landed in, for a fix-relocation
+// summary.
+type WarningFixRelocatedParams struct {
+	Repositories   []CodeRepository
+	RequestedLayer int
+	RequestedTitle string
+	ActualLayer    int
+	ActualTitle    string
+}
+
+func (WarningFixRelocatedParams) params() {}
+
+// WarningManifestIgnoredParams carries the repository, the entry's layer
+// position and path, and the reason a fix manifest entry was ignored.
+type WarningManifestIgnoredParams struct {
+	Repositories []CodeRepository
+	Layer        int
+	Path         string
+	Reason       string
+}
+
+func (WarningManifestIgnoredParams) params() {}
+
 // OrphanSessionParams carries the phase name, iteration, and repository
 // names an orphan-session summary interpolates.
 type OrphanSessionParams struct {
@@ -176,6 +210,73 @@ func warningRepoSummary(p Params, format string) string {
 		return ""
 	}
 	return fmt.Sprintf(format, clause)
+}
+
+// firstWarningRepoClause renders the repository clause of the first entry,
+// or "" when none is present or the repository has no name, for the warning
+// params values that carry their repositories inline.
+func firstWarningRepoClause(repos []CodeRepository) string {
+	if len(repos) == 0 {
+		return ""
+	}
+	return warningRepoClause(repos[0])
+}
+
+// warningLayerClause renders `layer 2 ("API surface")` for the layer-keyed
+// warning summaries, or `layer 2` when the layer has no title.
+func warningLayerClause(position int, title string) string {
+	if title = strings.TrimSpace(title); title != "" {
+		return fmt.Sprintf("layer %d (%q)", position, title)
+	}
+	return fmt.Sprintf("layer %d", position)
+}
+
+// fixRelocatedAboveLayerSummary names the repository, the requested layer,
+// and the layer the final review fix actually landed in.
+func fixRelocatedAboveLayerSummary(p Params) string {
+	params, ok := p.(WarningFixRelocatedParams)
+	if !ok || params.RequestedLayer <= 0 || params.ActualLayer <= 0 {
+		return ""
+	}
+	clause := firstWarningRepoClause(params.Repositories)
+	if clause == "" {
+		return ""
+	}
+	return fmt.Sprintf(
+		"The final review fix for %s landed in %s, above the requested %s.",
+		clause,
+		warningLayerClause(params.ActualLayer, params.ActualTitle),
+		warningLayerClause(params.RequestedLayer, params.RequestedTitle),
+	)
+}
+
+// fixManifestEntryIgnoredSummary names the repository, the ignored entry's
+// layer and path, and why it was ignored. An entry without a named
+// repository, such as an unparsable manifest, still names the reason.
+func fixManifestEntryIgnoredSummary(p Params) string {
+	params, ok := p.(WarningManifestIgnoredParams)
+	if !ok {
+		return ""
+	}
+	reason := strings.TrimSpace(params.Reason)
+	path := strings.TrimSpace(params.Path)
+	if reason == "" {
+		return ""
+	}
+	clause := firstWarningRepoClause(params.Repositories)
+	if clause == "" {
+		return fmt.Sprintf("A fix manifest entry was ignored: %s.", reason)
+	}
+	entry := ""
+	switch {
+	case params.Layer > 0 && path != "":
+		entry = fmt.Sprintf(" (layer %d, path %q)", params.Layer, path)
+	case params.Layer > 0:
+		entry = fmt.Sprintf(" (layer %d)", params.Layer)
+	case path != "":
+		entry = fmt.Sprintf(" (path %q)", path)
+	}
+	return fmt.Sprintf("The fix manifest entry for %s%s was ignored: %s.", clause, entry, reason)
 }
 
 // effortCapabilityDriftSummary names the role, effort, and model of the

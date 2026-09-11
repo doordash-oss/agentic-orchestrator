@@ -265,6 +265,9 @@ type FinalFixUserInput struct {
 	IncludeManualVerificationOutcomes bool
 	Publishable                       bool
 	RefactorPassForkPoint             string
+
+	Stack           []feature.StackLayer
+	FixManifestPath string
 }
 
 type ValidateSpecializedUserInput struct {

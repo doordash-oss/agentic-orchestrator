@@ -65,6 +65,19 @@ type WorktreeOps interface {
 	// DeleteBranch deletes a local branch ref by name; an absent branch is
 	// success, and a branch checked out in any worktree is refused.
 	DeleteBranch(worktreePath, branch string) error
+	// RestackChain rewrites a linear chain described by labelled cut points
+	// through a list of operations, replaying affected segments with
+	// cherry-picks inside a detached temporary worktree. It never modifies
+	// refs or existing worktrees; a conflict returns
+	// *git.RestackConflictError.
+	RestackChain(mainRepo string, cutPoints []git.RestackCutPoint, ops []git.RestackOp) (*git.RestackResult, error)
+	// CommitTreeSHA returns a commit's tree identifier for byte-for-byte
+	// tree comparison.
+	CommitTreeSHA(repoPath, commitSHA string) (string, error)
+	// UpdateRefsTransaction atomically applies several compare-and-swap ref
+	// updates to one repository: either every ref moves or none does. A
+	// mismatch returns *git.RefCASMismatchError naming the observed ref.
+	UpdateRefsTransaction(repoPath string, updates []git.RefUpdate) error
 }
 
 // PRCloser abstracts the single git/gh operation the feature manager performs

@@ -245,6 +245,8 @@ func validatorForRoleArtifact(artifact RoleArtifactSpec) func(iterDir, path stri
 		}
 	case roles.ValidatorPlanValidatorAxisApproval:
 		return validatePlanValidatorAxisApprovalArtifact
+	case roles.ValidatorFixManifest:
+		return validateFixManifestArtifact
 	default:
 		return func(_, _ string, _ *Outcome) ([]ProtocolViolation, error) {
 			return []ProtocolViolation{{Artifact: artifact.DisplayPath, Reason: fmt.Sprintf("unknown RoleSpec validator %q", artifact.Validate)}}, nil

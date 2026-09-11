@@ -6,7 +6,9 @@
   Manual-verification-outcomes guidance is conditionally injected when
   the feedback mentions a manual-verification gate (so the fix agent
   knows the two valid YAML outcomes and stops re-emitting command-mode
-  evidence on a manual bullet).
+  evidence on a manual bullet). A delivery-stack section is injected
+  only for PR-stack features, carrying the layer list and the optional
+  fix-manifest instructions.
 */ -}}
 {{- define "final_fix.user" -}}
 {{ template "visual_references" .VisualReferences }}# Fix Context
@@ -16,6 +18,24 @@ This is fix iteration {{ .Iteration }}.
 {{ if .RefactorPassForkPoint }}## Refactor Pass Fork Point
 
 This feature is a refactor pass forked from its parent feature's delivered state at {{ .RefactorPassForkPoint }}. Anything that already exists at the fork point is the parent's approved work, not this pass's. Wherever the specification or reviewer feedback refers to prior, current, or existing state, resolve that reference against the fork point — this pass's own delta is `git diff <fork-sha>..HEAD` — never against the repository base branch. If feedback attributes fork-point content to this pass and asks you to change it beyond what the approved plan covers, that is misattribution: do not apply it silently — surface the conflict (AskUserQuestion if needed) instead of rewriting the parent's delivered state. All work is confined to the worktrees listed for this pass: other checkouts of the same repositories exist and are off-limits.
+
+{{ end }}{{ if .Stack }}## Delivery Stack
+
+This feature delivers as a stack of layered pull requests — one branch and pull request per layer below. The highest position is the top layer.
+
+{{ $top := 0 }}{{ range .Stack }}{{ if gt .Position $top }}{{ $top = .Position }}{{ end }}{{ end }}{{ range .Stack }}- Layer {{ .Position }}{{ if .Title }}: {{ .Title }}{{ end }}{{ if eq .Position $top }} (top layer){{ end }} — phases {{ .Phases }}{{ if .Branch }}, branch {{ .Branch }}{{ end }}
+{{ end }}
+When a fix changes files that belong to a lower stack layer, write an optional fix manifest at {{ .FixManifestPath }} naming the owning layer for every such changed file:
+
+```yaml
+entries:
+  - layer: 1
+    repository: <repository name>
+    paths:
+      - <repository-relative path>
+```
+
+Use each layer's branch name to inspect which layer introduced the code you are changing. Files not listed in the manifest belong to the top layer. The manifest is optional — write it only when a fix actually changes lower-layer files. You still never run git write commands (commit, push, branch, rebase); the orchestrator owns them.
 
 {{ end }}{{ if .AcceptanceClause }}**Acceptance**:
 {{ .AcceptanceClause }}

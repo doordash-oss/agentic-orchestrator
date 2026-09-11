@@ -1505,6 +1505,26 @@ var catalog = map[Code]Entry{
 		},
 		Remediation: "The repository stays on the branch it is checked out on; rename it yourself and re-run approval from the review gate if the names must match.",
 	},
+	FixRelocatedAboveLayer: {
+		Class:   ClassWarning,
+		Title:   "Fix landed above its requested layer",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A final review fix landed above its requested stack layer.",
+		summaryParams: func(p Params) string {
+			return fixRelocatedAboveLayerSummary(p)
+		},
+		Remediation: "Inspect the commits of the layer the fix landed in; the conflict or failure detail is in the details.",
+	},
+	FixManifestEntryIgnored: {
+		Class:   ClassWarning,
+		Title:   "Fix manifest entry ignored",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A fix manifest entry was ignored.",
+		summaryParams: func(p Params) string {
+			return fixManifestEntryIgnoredSummary(p)
+		},
+		Remediation: "Check the fix manifest format: each entry needs a layer position, a repository name, and repository-relative paths.",
+	},
 
 	// --- Orphan-session recovery codes ---------------------------------------
 	// An orphan session's recovery item carries one of these, picked by

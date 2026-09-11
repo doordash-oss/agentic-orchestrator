@@ -70,6 +70,11 @@ func (f *childFakeWorktrees) InspectCleanliness(path string, max int) (*git.Clea
 	}
 	return &git.CleanlinessReport{}, nil
 }
+func (f *childFakeWorktrees) RestackChain(string, []git.RestackCutPoint, []git.RestackOp) (*git.RestackResult, error) {
+	return nil, nil
+}
+func (f *childFakeWorktrees) CommitTreeSHA(string, string) (string, error)        { return "", nil }
+func (f *childFakeWorktrees) UpdateRefsTransaction(string, []git.RefUpdate) error { return nil }
 
 func newChildTestManager(t *testing.T, heads map[string]string, clean func(string, int) (*git.CleanlinessReport, error)) *feature.Manager {
 	t.Helper()
@@ -802,6 +807,11 @@ func (f *reuseWorktrees) CreateMergeCandidate(string, string, string, string) (*
 func (f *reuseWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport, error) {
 	return &git.CleanlinessReport{}, nil
 }
+func (f *reuseWorktrees) RestackChain(string, []git.RestackCutPoint, []git.RestackOp) (*git.RestackResult, error) {
+	return nil, nil
+}
+func (f *reuseWorktrees) CommitTreeSHA(string, string) (string, error)        { return "", nil }
+func (f *reuseWorktrees) UpdateRefsTransaction(string, []git.RefUpdate) error { return nil }
 
 func TestRunSetupValidatesExactBaseOnReuse(t *testing.T) {
 	t.Parallel()

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	gitpkg "github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -45,6 +46,61 @@ var _ ports.SessionManager = (*mocks.MockSessionManager)(nil)
 var _ orchestrator.RemoteOps = (*mocks.MockRemoteOps)(nil)
 var _ feature.PRCloser = (*mocks.MockPRCloser)(nil)
 var _ feature.WorktreeOps = (*mocks.MockWorktreeOps)(nil)
+
+// TestMockWorktreeOpsRestackAndTransactionOverrides proves the shared mock
+// exposes overrides for the restack primitive and the multi-ref transaction
+// and records their calls.
+func TestMockWorktreeOpsRestackAndTransactionOverrides(t *testing.T) {
+	m := mocks.NewMockWorktreeOps()
+	wantResult := &gitpkg.RestackResult{HeadSHA: "abc123"}
+	cutPoints := []gitpkg.RestackCutPoint{{Label: "base", SHA: "0000"}}
+	ops := []gitpkg.RestackOp{{Kind: gitpkg.RestackInsertAfter, CutPointLabel: "base", CommitSHAs: []string{"1111"}}}
+	m.RestackChainFn = func(mainRepo string, cps []gitpkg.RestackCutPoint, os []gitpkg.RestackOp) (*gitpkg.RestackResult, error) {
+		return wantResult, nil
+	}
+	m.CommitTreeSHAFn = func(repoPath, commitSHA string) (string, error) {
+		return "tree123", nil
+	}
+	updates := []gitpkg.RefUpdate{{Ref: "refs/heads/main", OldSHA: "0000", NewSHA: "1111"}}
+
+	gotResult, err := m.RestackChain("/repo", cutPoints, ops)
+	if err != nil {
+		t.Fatalf("RestackChain() error = %v", err)
+	}
+	if gotResult != wantResult {
+		t.Fatalf("RestackChain() = %v, want the configured result", gotResult)
+	}
+	tree, err := m.CommitTreeSHA("/repo", "abc123")
+	if err != nil || tree != "tree123" {
+		t.Fatalf("CommitTreeSHA() = %q, %v; want tree123, nil", tree, err)
+	}
+	if err := m.UpdateRefsTransaction("/repo", updates); err != nil {
+		t.Fatalf("UpdateRefsTransaction() error = %v", err)
+	}
+
+	methods := make(map[string]bool)
+	for _, call := range m.Calls {
+		methods[call.Method] = true
+	}
+	for _, want := range []string{"RestackChain", "CommitTreeSHA", "UpdateRefsTransaction"} {
+		if !methods[want] {
+			t.Errorf("mock did not record a %s call; calls = %v", want, m.Calls)
+		}
+	}
+
+	// Zero-value defaults: no override and no default error succeed with
+	// zero values.
+	bare := mocks.NewMockWorktreeOps()
+	if result, err := bare.RestackChain("/repo", nil, nil); err != nil || result != nil {
+		t.Errorf("default RestackChain() = %v, %v; want nil, nil", result, err)
+	}
+	if tree, err := bare.CommitTreeSHA("/repo", "abc"); err != nil || tree != "" {
+		t.Errorf("default CommitTreeSHA() = %q, %v; want empty, nil", tree, err)
+	}
+	if err := bare.UpdateRefsTransaction("/repo", nil); err != nil {
+		t.Errorf("default UpdateRefsTransaction() error = %v, want nil", err)
+	}
+}
 
 // Agent ports
 var _ ports.CommandRunner = (*mocks.MockCommandRunner)(nil)

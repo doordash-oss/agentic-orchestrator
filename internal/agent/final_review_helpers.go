@@ -42,6 +42,12 @@ type FinalFixPromptOpts struct {
 	// RefactorPassForkPoint resolves the spec's "fork point" references for a
 	// refactor child ("repo @ sha"). Empty for top-level features.
 	RefactorPassForkPoint string
+	// Stack is the feature's PR-stack layers; empty for features that do not
+	// deliver as a stack.
+	Stack []feature.StackLayer
+	// IterationDir is the fix iteration directory, used to resolve the
+	// optional fix manifest's artifact path.
+	IterationDir string
 }
 
 // BuildFinalFixPrompt constructs the prompt for the fix agent session.
@@ -63,6 +69,8 @@ func BuildFinalFixPrompt(opts FinalFixPromptOpts) string {
 		IncludeManualVerificationOutcomes: feedbackMentionsManualVerification(opts.Feedback),
 		Publishable:                       opts.Publishable,
 		RefactorPassForkPoint:             opts.RefactorPassForkPoint,
+		Stack:                             opts.Stack,
+		FixManifestPath:                   filepath.Join(opts.IterationDir, "fix-manifest.yaml"),
 	})
 }
 

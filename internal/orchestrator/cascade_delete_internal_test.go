@@ -72,6 +72,11 @@ func (*cascadeTestWorktrees) CreateMergeCandidate(string, string, string, string
 func (*cascadeTestWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport, error) {
 	return &git.CleanlinessReport{}, nil
 }
+func (*cascadeTestWorktrees) RestackChain(string, []git.RestackCutPoint, []git.RestackOp) (*git.RestackResult, error) {
+	return nil, nil
+}
+func (*cascadeTestWorktrees) CommitTreeSHA(string, string) (string, error)        { return "", nil }
+func (*cascadeTestWorktrees) UpdateRefsTransaction(string, []git.RefUpdate) error { return nil }
 
 func TestDeleteCascadePreservesExternallyMovedRefAndRecords(t *testing.T) {
 	t.Parallel()

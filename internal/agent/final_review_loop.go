@@ -377,7 +377,11 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 					Iteration: i,
 					Kind:      RoundCommitFinalReviewFix,
 					FixNumber: roundCommits.changesRequested,
-					Repos:     s.workspace.RepoPaths,
+					// The fixer's iteration directory, so the hook can
+					// locate the optional fix manifest the fixer may have
+					// written there.
+					FixIterationDir: iterDir,
+					Repos:           s.workspace.RepoPaths,
 				}); err != nil {
 					return &FeatureFinalReviewResult{
 						FinalStatus: "failed",
@@ -719,6 +723,8 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		DesignArtifactPath:    cfg.Feature.DesignArtifactPath(),
 		Images:                cfg.Feature.Images,
 		RefactorPassForkPoint: refactorPassForkPoint(cfg.Feature),
+		Stack:                 cfg.Feature.Stack,
+		IterationDir:          iterDir,
 	})
 
 	_ = os.WriteFile(filepath.Join(iterDir, "fix-prompt.md"), []byte(prompt), 0o644)

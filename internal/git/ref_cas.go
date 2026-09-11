@@ -80,6 +80,61 @@ func UpdateRefCAS(repoPath, ref, oldSHA, newSHA string) error {
 	return nil
 }
 
+// RefUpdate is one compare-and-swap ref update inside a transaction: the ref
+// moves to NewSHA only if it currently sits at OldSHA.
+type RefUpdate struct {
+	Ref    string
+	OldSHA string
+	NewSHA string
+}
+
+// UpdateRefsTransaction atomically updates several refs of one repository:
+// every update is applied in a single `update-ref --stdin` batch
+// (start, one update per ref, prepare, commit) through the lock-retrying
+// runner, so either every ref moves or none does. A branch checked out in a
+// linked worktree is updated like any other ref; the helper never touches
+// worktrees. An empty update list is a successful no-op.
+//
+// On a compare-and-swap mismatch the returned error is a
+// *RefCASMismatchError naming the ref that was observed at which SHA; refs
+// are re-read after a failed batch for diagnostics, like the single-ref
+// helper.
+func UpdateRefsTransaction(repoPath string, updates []RefUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	// Pre-read every ref so a mismatch is detected before any ref moves and
+	// the observed SHA is captured for diagnostics.
+	for _, u := range updates {
+		current, err := ReadRefSHA(repoPath, u.Ref)
+		if err != nil {
+			return fmt.Errorf("reading ref %s before transaction: %w", u.Ref, err)
+		}
+		if current != u.OldSHA {
+			return &RefCASMismatchError{Ref: u.Ref, Expected: u.OldSHA, Observed: current}
+		}
+	}
+	var stdin strings.Builder
+	stdin.WriteString("start\n")
+	for _, u := range updates {
+		fmt.Fprintf(&stdin, "update %s %s %s\n", u.Ref, u.NewSHA, u.OldSHA)
+	}
+	stdin.WriteString("prepare\ncommit\n")
+	out, err := runGitMutationWithLockRetryStdin(repoPath, stdin.String(), "update-ref", "--stdin")
+	if err != nil {
+		// The transaction protocol leaves no ref moved on failure, but a ref
+		// may have moved underneath the batch; re-read for diagnostics.
+		for _, u := range updates {
+			observed, _ := ReadRefSHA(repoPath, u.Ref)
+			if observed != u.OldSHA {
+				return &RefCASMismatchError{Ref: u.Ref, Expected: u.OldSHA, Observed: observed}
+			}
+		}
+		return fmt.Errorf("update-ref transaction: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 // RefSHA returns the full SHA of the named ref in the given repo path.
 func (m *WorktreeManager) RefSHA(repoPath, ref string) (string, error) {
 	return ReadRefSHA(repoPath, ref)
@@ -88,4 +143,10 @@ func (m *WorktreeManager) RefSHA(repoPath, ref string) (string, error) {
 // UpdateRef performs a compare-and-swap ref update on the given repo.
 func (m *WorktreeManager) UpdateRef(repoPath, ref, oldSHA, newSHA string) error {
 	return UpdateRefCAS(repoPath, ref, oldSHA, newSHA)
+}
+
+// UpdateRefsTransaction performs an atomic multi-ref compare-and-swap update
+// on the given repo.
+func (m *WorktreeManager) UpdateRefsTransaction(repoPath string, updates []RefUpdate) error {
+	return UpdateRefsTransaction(repoPath, updates)
 }

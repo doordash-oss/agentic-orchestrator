@@ -215,7 +215,7 @@ export default function App() {
     // The explain-in-chat provider rides at the renderer root so every
     // ErrorSurface — in the shell tree or the AMA panel — can route a
     // question without prop drilling the root requester through panels.
-    <ExplainChatProvider requestRoute={requestRoute}>
+    <ExplainChatProvider requestRoute={runtimeReady ? requestRoute : null}>
       <CreationDraftsContext.Provider value={creationDraftsStore.current}>
         <div className="app-frame">
           {runtimeReady ? (

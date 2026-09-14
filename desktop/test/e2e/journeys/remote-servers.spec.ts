@@ -880,10 +880,7 @@ test('remote cold start: an unusable link fails startup visibly instead of spawn
     const buttons = await shell.getByRole('button').allTextContents();
     // Retry re-attempts the link; the bundled runtime is only ever an
     // explicit choice, never an automatic fallback.
-    expect(buttons.filter((label) => label !== 'Explain in chat')).toEqual([
-      'Retry',
-      'Start bundled runtime',
-    ]);
+    expect(buttons).toEqual(['Retry', 'Choose another server', 'Start bundled runtime']);
     await evidenceShot(handle, 'remote-servers-cold-start-unusable');
     transcript.step(
       'startup failed on the connection surface with the pipeline error, Retry, and the escape hatch',
@@ -908,8 +905,13 @@ test('remote cold start: an unusable link fails startup visibly instead of spawn
     expect(readAppRegistry(world)).toEqual([]);
     transcript.step('still failed, still nothing spawned');
 
-    transcript.section('Start bundled runtime is the explicit way out');
-    await shell.getByRole('button', { name: 'Start bundled runtime' }).click();
+    transcript.section('The recovery picker can start the missing local runtime');
+    await shell.getByRole('button', { name: 'Choose another server' }).click();
+    await expect(
+      shell.getByRole('option', { name: /This machine at .+ — Not running/ }),
+    ).toBeVisible();
+    await evidenceShot(handle, 'remote-servers-recovery-picker');
+    await shell.getByRole('option', { name: /This machine at .+ — Not running/ }).click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 90_000,
     });

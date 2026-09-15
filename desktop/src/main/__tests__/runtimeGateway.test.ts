@@ -214,7 +214,7 @@ function makeEnv(options: EnvOptions = {}): Env {
         }
         return { status: 200, body: entry };
       }
-      if (url.endsWith('/api/v1/readiness')) {
+      if (url.endsWith('/api/v1/readiness') || url.endsWith('/api/v1/readiness/runtime')) {
         if (opts.token !== undefined && opts.token === readinessTokens[base]) {
           return { status: 200, body: { api_version: 'v1' } };
         }
@@ -430,7 +430,7 @@ describe('RuntimeGateway attach', () => {
       timeouts: { healthProbeMs: 11, apiRequestMs: 22 },
     });
     await env.gateway.start();
-    const readiness = env.fetchCalls.find((c) => c.url.endsWith('/api/v1/readiness'));
+    const readiness = env.fetchCalls.find((c) => c.url.endsWith('/api/v1/readiness/runtime'));
     expect(readiness?.token).toBe(EXTERNAL_TOKEN);
     expect(readiness?.timeoutMs).toBe(22);
     // The unauthenticated health probe never sends the token.
@@ -600,7 +600,7 @@ describe('RuntimeGateway launch', () => {
     const env = makeEnv();
     await env.gateway.start();
     expect(env.secrets).toContain(LAUNCH_TOKEN);
-    const readiness = env.fetchCalls.filter((c) => c.url.endsWith('/api/v1/readiness'));
+    const readiness = env.fetchCalls.filter((c) => c.url.endsWith('/api/v1/readiness/runtime'));
     expect(readiness.at(-1)?.token).toBe(LAUNCH_TOKEN);
     expectNoTokenLeak(env);
   });
@@ -2381,5 +2381,99 @@ describe('RuntimeGateway decoupled app-owned supervision', () => {
     // The retired runtime must not respawn after the explicit restart.
     expect(env.spawnCalls).toHaveLength(1);
     await env.gateway.shutdown();
+  });
+});
+
+describe('runtime-only readiness handoff', () => {
+  it('hands the attach snapshot to the gate once, then performs fresh runtime reads', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    const before = env.fetchCalls.length;
+    await expect(env.gateway.apiRequest('/api/v1/readiness/runtime')).resolves.toMatchObject({
+      status: 200,
+    });
+    expect(env.fetchCalls).toHaveLength(before);
+    await env.gateway.apiRequest('/api/v1/readiness/runtime');
+    expect(env.fetchCalls).toHaveLength(before + 1);
+    expect(env.fetchCalls.at(-1)?.url).toBe(`${EXTERNAL_BASE}/api/v1/readiness/runtime`);
+    expect(env.fetchCalls.some((call) => call.url === `${EXTERNAL_BASE}/api/v1/readiness`)).toBe(
+      false,
+    );
+  });
+
+  it('falls back only for an older server and reuses its combined attach snapshot', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    const fetch = env.deps.fetchJson;
+    const paths: string[] = [];
+    env.deps.fetchJson = async (url, options) => {
+      paths.push(url);
+      if (url.endsWith('/runtime')) return { status: 404, body: {} };
+      return fetch(url, options);
+    };
+    await env.gateway.start();
+    expect(env.gateway.getState().status).toBe('ready');
+    const before = paths.length;
+    await env.gateway.apiRequest('/api/v1/readiness/runtime');
+    expect(paths).toHaveLength(before);
+    await env.gateway.apiRequest('/api/v1/readiness/runtime');
+    expect(paths.at(-1)).toBe(`${EXTERNAL_BASE}/api/v1/readiness`);
+    expect(paths.filter((p) => p.endsWith('/runtime'))).toHaveLength(1);
+  });
+
+  it.each([401, 403, 500])('does not fall back on runtime readiness status %i', async (status) => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    const fetch = env.deps.fetchJson;
+    const paths: string[] = [];
+    env.deps.fetchJson = async (url, options) => {
+      paths.push(url);
+      return url.endsWith('/runtime') ? { status, body: {} } : fetch(url, options);
+    };
+    await env.gateway.start();
+    expect(env.gateway.getState().status).toBe('error');
+    expect(paths.some((p) => p.endsWith('/api/v1/readiness'))).toBe(false);
+  });
+
+  it('cancels old reads and replaces an unconsumed attach snapshot when switching servers', async () => {
+    const alpha = registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+    });
+    const beta = registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+    });
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha], pruned: 0, rejected: [] }],
+    });
+    const fetch = env.deps.fetchJson;
+    let readSignal: AbortSignal | undefined;
+    let resolveRead!: (result: { status: number; body: unknown }) => void;
+    env.deps.fetchJson = async (url, options) => {
+      if (url.endsWith('/api/v1/features')) {
+        readSignal = options.signal;
+        return new Promise((resolve) => {
+          resolveRead = resolve;
+        });
+      }
+      const result = await fetch(url, options);
+      return url.endsWith('/runtime')
+        ? { ...result, body: { server: url.startsWith(ALPHA_BASE) ? 'alpha' : 'beta' } }
+        : result;
+    };
+    await env.gateway.start();
+    const pending = env.gateway.apiRequest('/api/v1/features').catch((error: unknown) => error);
+    env.setRegistryScans([{ candidates: [alpha, beta], pruned: 0, rejected: [] }]);
+    await env.gateway.switchServer({ serverKey: beta.serverKey });
+    expect(readSignal?.aborted).toBe(true);
+    resolveRead({ status: 200, body: { server: 'alpha' } });
+    await expect(pending).resolves.toMatchObject({ canonical: { code: 'E_SERVER_SWITCHED' } });
+    const before = env.fetchCalls.length;
+    await expect(env.gateway.apiRequest('/api/v1/readiness/runtime')).resolves.toEqual({
+      status: 200,
+      body: { server: 'beta' },
+    });
+    expect(env.fetchCalls).toHaveLength(before);
   });
 });

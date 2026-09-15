@@ -591,6 +591,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/readiness/runtime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read runtime readiness without repository inspection.
+         * @description Authenticated provider, model and configuration readiness only. Does not discover repositories or invoke Git. Reuses cached provider probes.
+         */
+        get: operations["getRuntimeReadiness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/readiness/runtime/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh runtime readiness without repository inspection.
+         * @description Authenticated provider, model and configuration readiness only. Does not discover repositories or invoke Git. Re-probes provider readiness.
+         */
+        post: operations["refreshRuntimeReadiness"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/readiness/refresh": {
         parameters: {
             query?: never;
@@ -1699,7 +1739,7 @@ export interface components {
             roots: components["schemas"]["WorkspaceRootReadiness"][];
             repositories: components["schemas"]["RepositoryReadiness"][];
         };
-        ReadinessResponse: components["schemas"]["JSONResponse"] & {
+        RuntimeReadinessResponse: components["schemas"]["JSONResponse"] & {
             /** @description Mandatory readiness — true when at least one provider is usable, models are available, and the configuration is valid. Feature creation is gated on this value. */
             ready: boolean;
             /**
@@ -1710,9 +1750,11 @@ export interface components {
             providers: components["schemas"]["ProviderReadiness"][];
             models: components["schemas"]["ModelReadiness"];
             configuration: components["schemas"]["ConfigurationReadiness"];
-            workspace: components["schemas"]["WorkspaceReadiness"];
-            /** @description Flattened outstanding issues across all sections, each the canonical catalog-rendered error for its readiness code. */
+            /** @description Flattened outstanding issues across runtime sections, each the canonical catalog-rendered error for its readiness code. */
             issues?: components["schemas"]["Error"][];
+        };
+        ReadinessResponse: components["schemas"]["RuntimeReadinessResponse"] & {
+            workspace: components["schemas"]["WorkspaceReadiness"];
         };
         FeatureListResponse: components["schemas"]["JSONResponse"] & {
             features: components["schemas"]["FeatureSummary"][];
@@ -4064,6 +4106,51 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["ReadinessResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getRuntimeReadiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runtime readiness. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeReadinessResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    refreshRuntimeReadiness: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["JSONMutation"];
+        responses: {
+            /** @description Runtime readiness. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeReadinessResponse"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
         };
     };

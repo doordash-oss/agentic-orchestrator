@@ -355,8 +355,10 @@ type attemptResult struct {
 // plus the minimal execution context, and reads exactly one low-effort turn.
 //
 // One transient launch, handshake, transport, rate-limit, or server failure is
-// retried after a short jitter. Both attempts share the request timeout (or
-// defaultTimeout), so retry never extends the human-facing wait bound.
+// retried after a short jitter. An otherwise successful response with an invalid
+// decision token uses the same retry budget, with an explicit format reminder.
+// Both attempts share the request timeout (or defaultTimeout), so retry never
+// extends the human-facing wait bound.
 // Every control_request (tool permission, hook, question, or any other
 // interaction) is denied through the defensive deny-all boundary and fails
 // the review immediately. The handshake error and any non-success result
@@ -399,6 +401,11 @@ func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyReques
 		result = attempted.result
 		if !attempted.retryable || attempt == maxProviderAttempts {
 			return result
+		}
+		if result.Outcome == OutcomeMalformedResponse {
+			// Only invalid decision text is retryable; broken protocol streams
+			// remain terminal. Never feed raw reviewer output into the retry.
+			prompt += agentprompts.AutoReviewFormatRetryPrompt()
 		}
 		if !waitForProviderRetry(deadlineCtx) {
 			if err := ctx.Err(); err != nil {
@@ -579,11 +586,14 @@ func classifyAttempt(
 	}
 	decision, ok := parseDecision(rr.text)
 	if !ok {
-		return attemptResult{result: Result{
-			Outcome:       OutcomeMalformedResponse,
-			FailureReason: "reviewer response was not an exact decision token",
-			Timing:        timing,
-		}}
+		return attemptResult{
+			result: Result{
+				Outcome:       OutcomeMalformedResponse,
+				FailureReason: "reviewer response was not an exact decision token",
+				Timing:        timing,
+			},
+			retryable: true,
+		}
 	}
 	if decision == Allow {
 		return attemptResult{result: Result{Decision: decision, Outcome: OutcomeAllow, Timing: timing}}

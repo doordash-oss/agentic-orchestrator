@@ -18,7 +18,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ReadinessSnapshot } from '../../../../shared/ipc';
+import type { RuntimeReadinessSnapshot } from '../../../../shared/ipc';
 import {
   installAgenticoMock,
   ipcError,
@@ -35,7 +35,7 @@ beforeEach(() => {
 });
 
 /** Renders the wizard the way the gate does: snapshot state fed by actions. */
-function Harness({ initial }: { initial: ReadinessSnapshot }) {
+function Harness({ initial }: { initial: RuntimeReadinessSnapshot }) {
   const [snapshot, setSnapshot] = useState(initial);
   return <SetupWizard snapshot={snapshot} onSnapshot={setSnapshot} />;
 }
@@ -77,11 +77,11 @@ describe('SetupWizard provider step', () => {
 
   it('"Check again" refreshes from the server and advances to the derived step', async () => {
     const mock = installAgenticoMock();
-    mock.api.refreshReadiness.mockResolvedValue(modelsStep());
+    mock.api.refreshRuntimeReadiness.mockResolvedValue(modelsStep());
     render(<Harness initial={unreadySnapshot()} />);
 
     await userEvent.click(screen.getByRole('button', { name: /check again/i }));
-    expect(mock.api.refreshReadiness).toHaveBeenCalledTimes(1);
+    expect(mock.api.refreshRuntimeReadiness).toHaveBeenCalledTimes(1);
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /model availability/i })).toBeInTheDocument(),
     );
@@ -89,7 +89,7 @@ describe('SetupWizard provider step', () => {
 
   it('moves focus to a safe error region when the recheck fails', async () => {
     const mock = installAgenticoMock();
-    mock.api.refreshReadiness.mockRejectedValue(
+    mock.api.refreshRuntimeReadiness.mockRejectedValue(
       ipcError('E_NOT_CONNECTED', 'The app is not connected to an Agentico runtime.'),
     );
     render(<Harness initial={unreadySnapshot()} />);
@@ -145,7 +145,7 @@ describe('SetupWizard provider step', () => {
 describe('SetupWizard cross-cutting a11y and presentation', () => {
   it('is operable keyboard-only: tab order reaches help, copy, and check again', async () => {
     const mock = installAgenticoMock();
-    mock.api.refreshReadiness.mockResolvedValue(unreadySnapshot());
+    mock.api.refreshRuntimeReadiness.mockResolvedValue(unreadySnapshot());
     const user = userEvent.setup();
     render(<Harness initial={unreadySnapshot()} />);
 
@@ -158,7 +158,7 @@ describe('SetupWizard cross-cutting a11y and presentation', () => {
     await user.tab();
     expect(screen.getByRole('button', { name: /check again/i })).toHaveFocus();
     await user.keyboard('{Enter}');
-    expect(mock.api.refreshReadiness).toHaveBeenCalledTimes(1);
+    expect(mock.api.refreshRuntimeReadiness).toHaveBeenCalledTimes(1);
   });
 
   it('announces action outcomes via a polite live region', async () => {

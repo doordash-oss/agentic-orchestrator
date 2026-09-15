@@ -390,6 +390,8 @@ export interface AgenticoMock {
     updateSettings: ReturnType<typeof vi.fn>;
     openSettingsWindow: ReturnType<typeof vi.fn>;
     setThemePreference: ReturnType<typeof vi.fn>;
+    getRuntimeReadiness: ReturnType<typeof vi.fn>;
+    refreshRuntimeReadiness: ReturnType<typeof vi.fn>;
     getReadiness: ReturnType<typeof vi.fn>;
     refreshReadiness: ReturnType<typeof vi.fn>;
     pickWorkspaceDirectory: ReturnType<typeof vi.fn>;
@@ -571,6 +573,8 @@ export function installAgenticoMock(
       theme = { preference, resolved: preference === 'system' ? theme.resolved : preference };
       return Promise.resolve(theme);
     }),
+    getRuntimeReadiness: vi.fn(() => Promise.resolve(readiness)),
+    refreshRuntimeReadiness: vi.fn(() => Promise.resolve(readiness)),
     getReadiness: vi.fn(() => Promise.resolve(readiness)),
     refreshReadiness: vi.fn(() => Promise.resolve(readiness)),
     pickWorkspaceDirectory: vi.fn(() => Promise.resolve({ path: null })),

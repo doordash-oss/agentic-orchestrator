@@ -23,7 +23,7 @@ limitations under the License.
  * app never runs provider auth itself and never sees provider credentials.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ProviderReadiness, ReadinessSnapshot } from '../../../../shared/ipc';
+import type { ProviderReadiness, RuntimeReadinessSnapshot } from '../../../../shared/ipc';
 import { useNarrowViewport } from '../../hooks';
 import { deriveWizardState, type WizardStepId } from '../../wizard/deriveWizardState';
 import { parseIpcError } from '../../wizard/ipcError';
@@ -39,9 +39,9 @@ const STEP_LABELS: Record<WizardStepId, string> = {
 };
 
 export interface SetupWizardProps {
-  snapshot: ReadinessSnapshot;
+  snapshot: RuntimeReadinessSnapshot;
   /** Receives every fresh authoritative snapshot produced by an action. */
-  onSnapshot(next: ReadinessSnapshot): void;
+  onSnapshot(next: RuntimeReadinessSnapshot): void;
 }
 
 export function SetupWizard({ snapshot, onSnapshot }: SetupWizardProps) {
@@ -81,7 +81,7 @@ export function SetupWizard({ snapshot, onSnapshot }: SetupWizardProps) {
     setRefreshing(true);
     setError(null);
     void window.agentico
-      .refreshReadiness()
+      .refreshRuntimeReadiness()
       .then((snapshot) => {
         onSnapshot(snapshot);
         setAnnouncement('Readiness rechecked against the runtime.');
@@ -319,7 +319,7 @@ function ProviderRow({ provider, onCopy }: ProviderRowProps) {
 // --- Models ---------------------------------------------------------------------
 
 interface StepWithSnapshotProps {
-  snapshot: ReadinessSnapshot;
+  snapshot: RuntimeReadinessSnapshot;
   helpCollapsed: boolean;
   refreshing: boolean;
   onCheckAgain(): void;

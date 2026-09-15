@@ -5008,6 +5008,19 @@ body {
   padding: var(--space-2);
 }
 
+/* Recovery expands within the centered card so the list stays in its flow. */
+.shell-card__server-switcher {
+  display: block;
+}
+
+.shell-card__server-switcher .server-switcher {
+  position: relative;
+  bottom: auto;
+  width: 100%;
+  max-width: none;
+  margin-top: var(--space-2);
+}
+
 /* While the sidebar is collapsed (below the ~700px auto-collapse breakpoint
  * or by the user's explicit choice) its footer — the switcher's wide-layout
  * home — is display:none, so the shell re-homes the same control into this
@@ -13778,6 +13791,38 @@ body {
 .settings-panel__clone-operation-state.is-interrupted,
 .settings-panel__clone-operation-state.is-cleanup_pending {
   color: var(--bad);
+}
+
+.settings-panel__clone-progress-bar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 15%, var(--content));
+}
+
+.settings-panel__clone-progress-bar > span {
+  display: block;
+  width: 35%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  animation: clone-progress 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes clone-progress {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(185%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-panel__clone-progress-bar > span {
+    animation: none;
+    margin-inline: auto;
+  }
 }
 
 .settings-panel__clone-operation-progress,

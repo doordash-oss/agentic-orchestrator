@@ -164,12 +164,13 @@ const (
 // Readiness issue codes. They travel inside readiness payloads today; the
 // catalog owns their authored text so every layer shares one vocabulary.
 const (
-	InvalidConfiguration Code = "invalid_configuration"
-	InvalidRepository    Code = "invalid_repository"
-	MissingExecutable    Code = "missing_executable"
-	ModelsUnavailable    Code = "models_unavailable"
-	Unauthenticated      Code = "unauthenticated"
-	UnsupportedVersion   Code = "unsupported_version"
+	InvalidConfiguration       Code = "invalid_configuration"
+	InvalidRepository          Code = "invalid_repository"
+	RepositoryInspectionFailed Code = "repository_inspection_failed"
+	MissingExecutable          Code = "missing_executable"
+	ModelsUnavailable          Code = "models_unavailable"
+	Unauthenticated            Code = "unauthenticated"
+	UnsupportedVersion         Code = "unsupported_version"
 )
 
 // CLI error codes. Blocking failures of the agentico binary itself.
@@ -1032,6 +1033,12 @@ var catalog = map[Code]Entry{
 		Summary:     "The runtime configuration is unusable.",
 		Remediation: "Fix the configuration and restart the runtime.",
 	},
+	RepositoryInspectionFailed: {
+		Class:       ClassBlocking,
+		Title:       "Repository inspection failed",
+		Summary:     "Git could not inspect this repository.",
+		Remediation: "Check the Git executable and failure details, resolve the reported problem, then retry.",
+	},
 	InvalidRepository: {
 		Class:       ClassBlocking,
 		Title:       "Invalid repository",
@@ -1390,7 +1397,7 @@ var catalog = map[Code]Entry{
 		summaryParams: func(p Params) string {
 			return warningRepoSummary(p, "The review-feedback tail for %s did not finish.")
 		},
-		Remediation: "Retry the tail steps; each failure is listed in the details.",
+		Remediation: "The tail retries on the next server start or when the pass is integrated again; each failure is listed in the details.",
 	},
 	RewindPullRequestCloseFailed: {
 		Class:   ClassWarning,

@@ -22,6 +22,8 @@ limitations under the License.
 import { buildCanonicalError, CanonicalErrorException } from '../shared/errors';
 import {
   ReadinessResponseSchema,
+  RuntimeReadinessResponseSchema,
+  type RuntimeReadinessResponse,
   RuntimeConfigWorkspaceSchema,
   validateWithSchema,
   type ReadinessResponse,
@@ -31,6 +33,7 @@ import {
   type InitRepositoryRequest,
   type PickedDirectory,
   type ReadinessSnapshot,
+  type RuntimeReadinessSnapshot,
   type RepositoryState,
 } from '../shared/ipc';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
@@ -63,6 +66,16 @@ export class SetupService {
   private readonly locality: LocalitySource;
   constructor(private readonly deps: SetupServiceDeps) {
     this.locality = deps.locality ?? alwaysLocal;
+  }
+
+  async getRuntimeReadiness(): Promise<RuntimeReadinessSnapshot> {
+    const body = await this.api('/api/v1/readiness/runtime');
+    return toRuntimeReadinessSnapshot(validateWithSchema(body, RuntimeReadinessResponseSchema));
+  }
+
+  async refreshRuntimeReadiness(): Promise<RuntimeReadinessSnapshot> {
+    const body = await this.api('/api/v1/readiness/runtime/refresh', { method: 'POST', body: {} });
+    return toRuntimeReadinessSnapshot(validateWithSchema(body, RuntimeReadinessResponseSchema));
   }
 
   async getReadiness(): Promise<ReadinessSnapshot> {
@@ -238,24 +251,7 @@ export class SetupService {
  * so they pass through untouched — the strict IPC schema revalidates them. */
 export function toReadinessSnapshot(server: ReadinessResponse): ReadinessSnapshot {
   return {
-    ready: server.ready,
-    ...(server.probed_at === undefined ? {} : { probedAt: server.probed_at }),
-    providers: server.providers.map((provider) => ({
-      name: provider.name,
-      installed: provider.installed,
-      ...(provider.version === undefined ? {} : { version: provider.version }),
-      ready: provider.ready,
-      ...(provider.issue === undefined ? {} : { issue: provider.issue }),
-    })),
-    models: {
-      available: server.models.available,
-      ...(server.models.models === undefined ? {} : { models: server.models.models }),
-      ...(server.models.issue === undefined ? {} : { issue: server.models.issue }),
-    },
-    configuration: {
-      valid: server.configuration.valid,
-      ...(server.configuration.issue === undefined ? {} : { issue: server.configuration.issue }),
-    },
+    ...toRuntimeReadinessSnapshot(server),
     workspaceRoots: server.workspace.roots.map((root) => ({
       path: root.path,
       valid: root.valid,
@@ -282,5 +278,38 @@ export function toReadinessSnapshot(server: ReadinessResponse): ReadinessSnapsho
           }),
     })),
     issues: server.issues ?? [],
+  };
+}
+
+/** Legacy combined responses may include repository issues: they do not gate runtime setup. */
+export function toRuntimeReadinessSnapshot(
+  server: RuntimeReadinessResponse,
+): RuntimeReadinessSnapshot {
+  return {
+    ready: server.ready,
+    ...(server.probed_at === undefined ? {} : { probedAt: server.probed_at }),
+    providers: server.providers.map((provider) => ({
+      name: provider.name,
+      installed: provider.installed,
+      ...(provider.version === undefined ? {} : { version: provider.version }),
+      ready: provider.ready,
+      ...(provider.issue === undefined ? {} : { issue: provider.issue }),
+    })),
+    models: {
+      available: server.models.available,
+      ...(server.models.models === undefined ? {} : { models: server.models.models }),
+      ...(server.models.issue === undefined ? {} : { issue: server.models.issue }),
+    },
+    configuration: {
+      valid: server.configuration.valid,
+      ...(server.configuration.issue === undefined ? {} : { issue: server.configuration.issue }),
+    },
+    issues: [
+      ...server.providers.flatMap((provider) =>
+        provider.issue === undefined ? [] : [provider.issue],
+      ),
+      ...(server.models.issue === undefined ? [] : [server.models.issue]),
+      ...(server.configuration.issue === undefined ? [] : [server.configuration.issue]),
+    ],
   };
 }

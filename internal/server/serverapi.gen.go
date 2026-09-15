@@ -1352,6 +1352,21 @@ func (e RefreshReadinessParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for RefreshRuntimeReadinessParamsXAgenticoClient.
+const (
+	RefreshRuntimeReadinessParamsXAgenticoClientLocal RefreshRuntimeReadinessParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the RefreshRuntimeReadinessParamsXAgenticoClient enum.
+func (e RefreshRuntimeReadinessParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case RefreshRuntimeReadinessParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ExecuteRecoveryActionsParamsXAgenticoClient.
 const (
 	ExecuteRecoveryActionsParamsXAgenticoClientLocal ExecuteRecoveryActionsParamsXAgenticoClient = "local"
@@ -1534,13 +1549,13 @@ func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
 
 // Defines values for UpdateWorkspaceRepositorySourceParamsXAgenticoClient.
 const (
-	UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
+	Local UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the UpdateWorkspaceRepositorySourceParamsXAgenticoClient enum.
 func (e UpdateWorkspaceRepositorySourceParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -2823,7 +2838,7 @@ type ReadinessResponse struct {
 	APIVersion    string                 `json:"api_version"`
 	Configuration ConfigurationReadiness `json:"configuration"`
 
-	// Issues Flattened outstanding issues across all sections, each the canonical catalog-rendered error for its readiness code.
+	// Issues Flattened outstanding issues across runtime sections, each the canonical catalog-rendered error for its readiness code.
 	Issues []Error        `json:"issues,omitempty"`
 	Meta   ResponseMeta   `json:"meta,omitempty"`
 	Models ModelReadiness `json:"models"`
@@ -3824,6 +3839,24 @@ type RuntimeIdentity struct {
 	StateDir   string `json:"state_dir"`
 }
 
+// RuntimeReadinessResponse defines model for RuntimeReadinessResponse.
+type RuntimeReadinessResponse struct {
+	APIVersion    string                 `json:"api_version"`
+	Configuration ConfigurationReadiness `json:"configuration"`
+
+	// Issues Flattened outstanding issues across runtime sections, each the canonical catalog-rendered error for its readiness code.
+	Issues []Error        `json:"issues,omitempty"`
+	Meta   ResponseMeta   `json:"meta,omitempty"`
+	Models ModelReadiness `json:"models"`
+
+	// ProbedAt When provider probes last ran.
+	ProbedAt  *time.Time          `json:"probed_at,omitempty"`
+	Providers []ProviderReadiness `json:"providers"`
+
+	// Ready Mandatory readiness — true when at least one provider is usable, models are available, and the configuration is valid. Feature creation is gated on this value.
+	Ready bool `json:"ready"`
+}
+
 // SSEEvent defines model for SSEEvent.
 type SSEEvent struct {
 	APIVersion string    `json:"api_version"`
@@ -4464,6 +4497,18 @@ type RefreshReadinessParams struct {
 // RefreshReadinessParamsXAgenticoClient defines parameters for RefreshReadiness.
 type RefreshReadinessParamsXAgenticoClient string
 
+// RefreshRuntimeReadinessJSONBody defines parameters for RefreshRuntimeReadiness.
+type RefreshRuntimeReadinessJSONBody map[string]interface{}
+
+// RefreshRuntimeReadinessParams defines parameters for RefreshRuntimeReadiness.
+type RefreshRuntimeReadinessParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient RefreshRuntimeReadinessParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// RefreshRuntimeReadinessParamsXAgenticoClient defines parameters for RefreshRuntimeReadiness.
+type RefreshRuntimeReadinessParamsXAgenticoClient string
+
 // ExecuteRecoveryActionsJSONBody defines parameters for ExecuteRecoveryActions.
 type ExecuteRecoveryActionsJSONBody map[string]interface{}
 
@@ -4684,6 +4729,9 @@ type SendHelpPromptJSONRequestBody SendHelpPromptJSONBody
 
 // RefreshReadinessJSONRequestBody defines body for RefreshReadiness for application/json ContentType.
 type RefreshReadinessJSONRequestBody RefreshReadinessJSONBody
+
+// RefreshRuntimeReadinessJSONRequestBody defines body for RefreshRuntimeReadiness for application/json ContentType.
+type RefreshRuntimeReadinessJSONRequestBody RefreshRuntimeReadinessJSONBody
 
 // ExecuteRecoveryActionsJSONRequestBody defines body for ExecuteRecoveryActions for application/json ContentType.
 type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody

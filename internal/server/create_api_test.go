@@ -170,7 +170,7 @@ func TestWorkspaceRepositoryCreatePublishesResult(t *testing.T) {
 	if repo.Identity == nil {
 		t.Fatal("created repository carries no identity")
 	}
-	snapshot := workspaceReadiness(fx.cfg)
+	snapshot := workspaceReadiness(context.Background(), fx.cfg)
 	found := false
 	for _, entry := range snapshot.Repositories {
 		if entry.Name != "fresh" {

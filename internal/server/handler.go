@@ -204,21 +204,23 @@ type topLevelRoute struct {
 }
 
 const (
-	apiPathHealth           = "/api/v1/health"
-	apiPathFeatures         = "/api/v1/features"
-	apiPathConfigRuntime    = "/api/v1/config/runtime"
-	apiPathCatalogModels    = "/api/v1/catalog/models"
-	apiPathCatalogRefresh   = "/api/v1/catalog/models/refresh"
-	apiPathReadiness        = "/api/v1/readiness"
-	apiPathReadinessRefresh = "/api/v1/readiness/refresh"
-	apiPathPrompts          = "/api/v1/prompts"
-	apiPathPermissions      = "/api/v1/permissions"
-	apiPathSessions         = "/api/v1/sessions"
-	apiPathRecovery         = "/api/v1/recovery"
-	apiPathRecoveryActions  = "/api/v1/recovery/actions"
-	apiPathRecoveryLogs     = "/api/v1/recovery/logs"
-	apiPathEvents           = "/api/v1/events"
-	apiPathUploads          = "/api/v1/uploads"
+	apiPathHealth                  = "/api/v1/health"
+	apiPathFeatures                = "/api/v1/features"
+	apiPathConfigRuntime           = "/api/v1/config/runtime"
+	apiPathCatalogModels           = "/api/v1/catalog/models"
+	apiPathCatalogRefresh          = "/api/v1/catalog/models/refresh"
+	apiPathReadiness               = "/api/v1/readiness"
+	apiPathReadinessRefresh        = "/api/v1/readiness/refresh"
+	apiPathRuntimeReadiness        = "/api/v1/readiness/runtime"
+	apiPathRuntimeReadinessRefresh = "/api/v1/readiness/runtime/refresh"
+	apiPathPrompts                 = "/api/v1/prompts"
+	apiPathPermissions             = "/api/v1/permissions"
+	apiPathSessions                = "/api/v1/sessions"
+	apiPathRecovery                = "/api/v1/recovery"
+	apiPathRecoveryActions         = "/api/v1/recovery/actions"
+	apiPathRecoveryLogs            = "/api/v1/recovery/logs"
+	apiPathEvents                  = "/api/v1/events"
+	apiPathUploads                 = "/api/v1/uploads"
 )
 
 // routeSegmentConfig is the feature sub-route segment for the per-feature
@@ -250,6 +252,8 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathConfigRuntime, func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeConfigRoute }},
 	{apiPathCatalogModels, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleModelCatalog) }},
 	{apiPathCatalogRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleProviderModelRefreshRoute }},
+	{apiPathRuntimeReadiness, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleRuntimeReadiness) }},
+	{apiPathRuntimeReadinessRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeReadinessRefresh }},
 	{apiPathReadiness, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleReadiness) }},
 	{apiPathReadinessRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleReadinessRefreshRoute }},
 	{apiPathWorkspaceRepositoriesInit, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitRoute }},
@@ -589,7 +593,7 @@ func listFeatures(lister FeatureLister) ([]*feature.Feature, []Error, error) {
 	for _, w := range partial.Warnings {
 		var diagnostics string
 		if w.Err != nil {
-			diagnostics = SafeDisplayText(w.Err.Error(), 240)
+			diagnostics = SafeDisplayText(w.Err.Error(), maxStoredDiagnosticsLen)
 		}
 		warnings = append(warnings, wireError(errcat.New(
 			errcat.FeatureLoadFailed,

@@ -182,10 +182,16 @@ export async function addRemoteServer(
   deps.registerSecret(parsed.token);
   let readiness: HttpResult;
   try {
-    readiness = await deps.fetchJson(`${baseUrl}/api/v1/readiness`, {
+    readiness = await deps.fetchJson(`${baseUrl}/api/v1/readiness/runtime`, {
       token: parsed.token,
       timeoutMs: probeMs,
     });
+    if (readiness.status === 404) {
+      readiness = await deps.fetchJson(`${baseUrl}/api/v1/readiness`, {
+        token: parsed.token,
+        timeoutMs: probeMs,
+      });
+    }
   } catch {
     deps.log(`add-remote-server failed: ${E_REMOTE_UNREACHABLE} (readiness probe)`);
     fail(E_REMOTE_UNREACHABLE);

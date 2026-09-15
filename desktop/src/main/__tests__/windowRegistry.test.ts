@@ -29,6 +29,7 @@ interface FakeWindow {
   purpose: WindowPurpose;
   id: number;
   crashed?: boolean;
+  destroyed?: boolean;
 }
 
 function makeHarness(trusted?: Set<number>) {
@@ -45,7 +46,11 @@ function makeHarness(trusted?: Set<number>) {
     {
       create,
       focus,
-      isCrashed: (window) => window.crashed === true,
+      isDestroyed: (window) => window.destroyed === true,
+      isCrashed: (window) => {
+        if (window.destroyed) throw new Error('Object has been destroyed');
+        return window.crashed === true;
+      },
       reload,
       webContentsId: (window) => window.id,
     },
@@ -69,6 +74,25 @@ describe('WindowRegistry', () => {
     expect(focus).toHaveBeenCalledTimes(1);
     expect(focus).toHaveBeenCalledWith(first);
     expect(registry.all()).toEqual([first]);
+  });
+
+  it('replaces a destroyed renderer before its window closed event arrives', () => {
+    const trusted = new Set<number>();
+    const { registry, create, focus, reload } = makeHarness(trusted);
+    const closing = registry.openOrFocus('settings');
+    closing.destroyed = true;
+
+    const replacement = registry.openOrFocus('settings');
+    expect(replacement).not.toBe(closing);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(focus).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+    expect([...trusted]).toEqual([replacement.id]);
+
+    // The delayed native close must not remove its replacement or its trust.
+    registry.evict(closing);
+    expect(registry.peek('settings')).toBe(replacement);
+    expect([...trusted]).toEqual([replacement.id]);
   });
 
   it('keeps one window per purpose and reports them in insertion order', () => {
@@ -183,6 +207,7 @@ describe('WindowRegistry', () => {
       {
         create: () => settings,
         focus: () => {},
+        isDestroyed: () => destroyed,
         isCrashed: () => false,
         reload: () => {},
         webContentsId: (window) => {

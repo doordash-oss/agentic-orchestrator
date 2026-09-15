@@ -71,6 +71,7 @@ async function serveGitRemote(
   tmsDir: string,
   name: string,
   commits: number,
+  transferGate: Promise<void> = Promise.resolve(),
 ): Promise<{ url: string; close: () => void }> {
   const src = path.join(tmsDir, `${name}-src`);
   fs.mkdirSync(src, { recursive: true });
@@ -101,7 +102,7 @@ async function serveGitRemote(
       return;
     }
     res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
-    res.end(fs.readFileSync(target));
+    void transferGate.then(() => res.end(fs.readFileSync(target)));
   });
   const listening = new Promise<void>((resolve) => server.once('listening', () => resolve()));
   server.listen(0, '127.0.0.1');
@@ -142,7 +143,11 @@ test('picker clone: real remote, identity-safe adoption, unborn result', async (
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
     presetWorkspaceRoot: true,
   });
-  const populated = await serveGitRemote(world.root, 'populated', 2);
+  let releaseTransfer = () => {};
+  const transferGate = new Promise<void>((resolve) => {
+    releaseTransfer = resolve;
+  });
+  const populated = await serveGitRemote(world.root, 'populated', 2, transferGate);
   const empty = await serveGitRemote(world.root, 'empty', 0);
   let handle: AppHandle | null = null;
 
@@ -175,12 +180,19 @@ test('picker clone: real remote, identity-safe adoption, unborn result', async (
     await expect(sheet).toBeVisible();
     transcript.step('Escape closed the clone view without discarding the draft');
 
-    // Clone a usable repository from the controlled remote. A local clone
-    // can complete before the operation view ever renders, so the
-    // authoritative outcome is the adoption itself: the view closes and the
-    // published repository is selected in the initiating draft.
+    // Hold the remote response until the active progress presentation is verified.
     await sheet.getByRole('button', { name: /clone a repository/i }).click();
     await cloneFromPicker(page, populated.url, 'widget', world.workspaceRoot);
+    const progress = cloneDialogReduced.getByRole('progressbar', {
+      name: 'Clone progress for widget',
+    });
+    await expect(progress).toBeVisible();
+    await expect(progress).not.toHaveAttribute('aria-valuenow');
+    await expect(progress.locator('span')).toHaveCSS('animation-name', 'clone-progress');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(progress.locator('span')).toHaveCSS('animation-name', 'none');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    releaseTransfer();
     try {
       await expect(cloneDialogReduced).not.toBeVisible({ timeout: 120_000 });
     } catch (cloneFailure) {
@@ -201,6 +213,7 @@ test('picker clone: real remote, identity-safe adoption, unborn result', async (
       throw cloneFailure;
     }
     transcript.step('usable clone completed and the nested view closed through adoption');
+    await expect(progress).toHaveCount(0);
     const widgetRow = sheet.locator('.creation-sheet__row', { hasText: 'widget' });
     await expect(widgetRow).toBeVisible();
     const widgetCheckbox = widgetRow.getByRole('checkbox');
@@ -362,6 +375,7 @@ test('picker clone: real remote, identity-safe adoption, unborn result', async (
     await closeApp(handle);
     handle = null;
   } finally {
+    releaseTransfer();
     if (handle !== null) {
       await closeApp(handle).catch(() => undefined);
     }

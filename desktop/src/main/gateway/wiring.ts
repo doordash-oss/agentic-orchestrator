@@ -232,6 +232,7 @@ export async function fetchJson(
   url: string,
   requestOptions: {
     token?: string;
+    signal?: AbortSignal;
     timeoutMs: number;
     method?: 'GET' | 'POST' | 'PATCH' | 'PUT';
     body?: unknown;
@@ -259,7 +260,10 @@ export async function fetchJson(
     }
     const response = await fetch(url, {
       method,
-      signal: controller.signal,
+      signal:
+        requestOptions.signal === undefined
+          ? controller.signal
+          : AbortSignal.any([controller.signal, requestOptions.signal]),
       headers,
       redirect: 'error',
       ...(payload === undefined ? {} : { body: payload }),

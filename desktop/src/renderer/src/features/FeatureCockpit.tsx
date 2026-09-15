@@ -39,6 +39,7 @@ import {
   isPendingReviewStatus,
   isSyntheticHelpItem,
   type AttentionError,
+  type ErrorReference,
   type FeatureSnapshot,
   type RunDetailView,
   type RunSummaryView,
@@ -1568,10 +1569,23 @@ export function FeatureCockpit({
     void completion.refresh().then(() => setCompletionModal(verb));
   };
 
-  // An attention jump carrying an error item id resolves the item's
-  // reference through the owner-card registry, exactly like the chip: a
+  // Resolves an owned error's reference through the owner-card registry: a
   // repository entry opens the publish modal first, since that is where its
-  // card lives. Guarded by request id so one jump focuses once; the
+  // card lives. Shared by the status chip, attention jumps, and the inline
+  // banner's Open.
+  const focusErrorOwner = (ref: ErrorReference): void => {
+    if (ref.scope === 'repository') {
+      openCompletionModal('publish');
+    }
+    focusErrorCardWhenRegistered(ref);
+  };
+  const openAttentionOwner =
+    activeAttentionItem?.kind === 'error'
+      ? () => focusErrorOwner(activeAttentionItem.ref)
+      : undefined;
+
+  // An attention jump carrying an error item id focuses its owner exactly
+  // like the chip. Guarded by request id so one jump focuses once; the
   // registry retry keeps trying briefly while the cockpit loads.
   const handledErrorJumpRef = useRef<number | null>(null);
   useEffect(() => {
@@ -1587,10 +1601,7 @@ export function FeatureCockpit({
     if (item === undefined) return;
     if (handledErrorJumpRef.current === attentionPreviewRequest.requestId) return;
     handledErrorJumpRef.current = attentionPreviewRequest.requestId;
-    if (item.ref.scope === 'repository') {
-      openCompletionModal('publish');
-    }
-    focusErrorCardWhenRegistered(item.ref);
+    focusErrorOwner(item.ref);
   });
 
   if (state.phase === 'loading') {
@@ -2032,18 +2043,13 @@ export function FeatureCockpit({
       : [];
 
   // The single error chip: derived from the snapshot's highest-severity
-  // owned error, present exactly when one exists. Clicking resolves the
-  // entry's reference through the owner-card registry — a repository entry
-  // opens the publish modal first, since that is where its card lives.
+  // owned error, present exactly when one exists. Clicking focuses the
+  // entry's owning card.
   const chip = errorStatusChip(snapshot);
   const chipOverride =
     chip === undefined ? undefined : { label: chip.label, tone: chip.tone, title: chip.title };
   const focusChipTarget = (): void => {
-    if (chip === undefined) return;
-    if (chip.entry.ref.scope === 'repository') {
-      openCompletionModal('publish');
-    }
-    focusErrorCardWhenRegistered(chip.entry.ref);
+    if (chip !== undefined) focusErrorOwner(chip.entry.ref);
   };
 
   /**
@@ -2197,6 +2203,7 @@ export function FeatureCockpit({
               saveAttentionDraft(activeAttentionItem.id, action, options)
             }
             submit={(action, options) => void submitAttention(activeAttentionItem, action, options)}
+            onJump={openAttentionOwner}
           />
         </section>
       </OwnerAwareAttention>
@@ -2760,6 +2767,7 @@ export function FeatureCockpit({
                               submit={(action, options) =>
                                 void submitAttention(activeAttentionItem, action, options)
                               }
+                              onJump={openAttentionOwner}
                             />
                           </OwnerAwareAttention>
                         )
@@ -2823,6 +2831,7 @@ export function FeatureCockpit({
                     <ErrorSurface
                       error={durableError}
                       variant="full"
+                      expandDiagnostics={durableError.code === 'safety_rail_tripped'}
                       caption={durableErrorCaption}
                       resolveAction={resolveFailureAction}
                       onAction={handleFailureAction}

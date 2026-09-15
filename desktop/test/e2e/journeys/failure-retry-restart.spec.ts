@@ -382,3 +382,97 @@ function findSessionEntries(root: string): string[] {
   walk(root);
   return matches;
 }
+
+test('failed child review shows diagnostics and focuses its error card', async ({}, testInfo) => {
+  const world = createWorld('failed-child-review', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+  });
+  createRepo(world, 'alpha', { commit: true });
+  let handle: AppHandle | null = null;
+  try {
+    handle = await launchApp(world, testInfo);
+    await createFeatureViaForm(handle, {
+      name: 'Review parent',
+      repoPatterns: [/alpha/],
+      waitForReady: true,
+    });
+    const features = (await handle.page.evaluate(() => window.agentico.listFeatures())).features;
+    const parentId = features[0]!.id;
+    await closeApp(handle);
+    handle = null;
+    setFeatureStatus(world.stateDir, parentId, 'Published');
+
+    handle = await launchApp(world, testInfo);
+    await expect(handle.page.getByLabel('Feature Review parent')).toBeVisible({ timeout: 60_000 });
+    const { childId } = await handle.page.evaluate(
+      (id) =>
+        window.agentico.launchRefactorChild({
+          parentId: id,
+          name: 'Address review feedback',
+          description: 'Review failure fixture',
+          pipeline: 'medium',
+        }),
+      parentId,
+    );
+    await expect
+      .poll(
+        async () => {
+          const child = await handle!.page.evaluate(
+            (id) => window.agentico.getFeature(id),
+            childId,
+          );
+          return child.setup?.status;
+        },
+        { timeout: 60_000 },
+      )
+      .toBe('done');
+    await closeApp(handle);
+    handle = null;
+
+    setFeatureStatus(world.stateDir, childId, 'Failed');
+    const childPath = path.join(world.stateDir, childId, 'feature.yaml');
+    let childYaml = fs.readFileSync(childPath, 'utf8');
+    childYaml = upsertYamlScalar(childYaml, 'current_phase', '8');
+    childYaml = upsertYamlScalar(childYaml, 'review_iteration', '5');
+    fs.writeFileSync(childPath, childYaml);
+    const runPath = path.join(world.stateDir, childId, 'runs', 'run-001', 'run.yaml');
+    const diagnostics =
+      'running review helper: protocol handshake: opencode initialize timeout: context deadline exceeded';
+    fs.writeFileSync(
+      runPath,
+      replaceTopLevelBlock(fs.readFileSync(runPath, 'utf8'), 'failure', [
+        'failure:',
+        '  code: safety_rail_tripped',
+        '  context:',
+        '    phase:',
+        '      name: final_review',
+        '      iteration: 5',
+        `  diagnostics: ${JSON.stringify(diagnostics)}`,
+      ]),
+    );
+
+    handle = await launchApp(world, testInfo);
+    const cockpit = handle.page.getByLabel('Feature Review parent');
+    await expect(cockpit).toBeVisible({ timeout: 60_000 });
+    const card = cockpit.getByRole('alert').filter({ hasText: 'safety_rail_tripped' });
+    await expect(card).toBeVisible();
+    await expect(card.getByText(diagnostics, { exact: true })).toBeVisible();
+    await expect(card.locator('.error-surface__summary')).toContainText('iteration 5');
+    await expect(card.getByRole('button', { name: 'Restart', exact: true })).toBeEnabled();
+    await expect(cockpit.getByRole('button', { name: 'Open', exact: true })).toHaveCount(0);
+    await handle.page
+      .getByRole('button', { name: /Safety rail tripped. Focus the error card/ })
+      .click();
+    await expect(card).toBeFocused();
+    await evidenceShotBothThemes(handle, 'failed-child-review-details');
+    persistAppLogs(handle, 'failed-child-review');
+    await closeApp(handle);
+    handle = null;
+    assertNoLeakedProcesses(world);
+  } finally {
+    if (handle !== null) await closeApp(handle).catch(() => {});
+    assertNoLeakedProcesses(world);
+    destroyWorld(world);
+  }
+});

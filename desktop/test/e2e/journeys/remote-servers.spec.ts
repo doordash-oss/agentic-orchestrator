@@ -128,8 +128,14 @@ function connectionStringFor(record: DiscoveryRecord, name: string): string {
  * registry knowledge: its state dir lives outside the app's state-dir
  * conventions, and its own HOME keeps its registry entry out of the
  * `<world.home>/.agentic-orchestrator/servers` directory the app scans.
+ * The readiness journey can opt into normal local registry publication to
+ * exercise switching on hosts without an OS keychain.
  */
-async function startRemoteServer(world: JourneyWorld, name: string): Promise<RemoteTestServer> {
+async function startRemoteServer(
+  world: JourneyWorld,
+  name: string,
+  publishToAppRegistry = false,
+): Promise<RemoteTestServer> {
   const runtimeDir = path.join(world.root, `remote-${name}`);
   const homeDir = path.join(world.root, `remote-${name}-home`);
   const stateDir = path.join(runtimeDir, 'features');
@@ -152,7 +158,10 @@ async function startRemoteServer(world: JourneyWorld, name: string): Promise<Rem
       '--listen',
       `127.0.0.1:${String(port)}`,
     ],
-    { env: { ...minimalEnv(world), HOME: homeDir }, stdio: ['ignore', 'pipe', 'pipe'] },
+    {
+      env: { ...minimalEnv(world), HOME: publishToAppRegistry ? world.home : homeDir },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
   );
   proc.stdout?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
   proc.stderr?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
@@ -880,10 +889,7 @@ test('remote cold start: an unusable link fails startup visibly instead of spawn
     const buttons = await shell.getByRole('button').allTextContents();
     // Retry re-attempts the link; the bundled runtime is only ever an
     // explicit choice, never an automatic fallback.
-    expect(buttons.filter((label) => label !== 'Explain in chat')).toEqual([
-      'Retry',
-      'Start bundled runtime',
-    ]);
+    expect(buttons).toEqual(['Retry', 'Choose another server', 'Start bundled runtime']);
     await evidenceShot(handle, 'remote-servers-cold-start-unusable');
     transcript.step(
       'startup failed on the connection surface with the pipeline error, Retry, and the escape hatch',
@@ -908,8 +914,13 @@ test('remote cold start: an unusable link fails startup visibly instead of spawn
     expect(readAppRegistry(world)).toEqual([]);
     transcript.step('still failed, still nothing spawned');
 
-    transcript.section('Start bundled runtime is the explicit way out');
-    await shell.getByRole('button', { name: 'Start bundled runtime' }).click();
+    transcript.section('The recovery picker can start the missing local runtime');
+    await shell.getByRole('button', { name: 'Choose another server' }).click();
+    await expect(
+      shell.getByRole('option', { name: /This machine at .+ — Not running/ }),
+    ).toBeVisible();
+    await evidenceShot(handle, 'remote-servers-recovery-picker');
+    await shell.getByRole('option', { name: /This machine at .+ — Not running/ }).click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 90_000,
     });
@@ -1124,4 +1135,171 @@ for (const surface of ['Settings', 'footer'] as const) {
       destroyWorld(world);
     }
   });
+}
+
+// Repository inspection deliberately remains in flight across a real switch.
+// The released and failed-Git states also verify Settings and the feature picker.
+for (const origin of ['remote', 'registered local'] as const) {
+  test(
+    `${origin}→local opens the dashboard while repository inspection is stalled`,
+    { tag: '@smoke' },
+    async ({}, testInfo) => {
+      const world = createWorld('runtime-readiness', { auth: AUTH, presetWorkspaceRoot: true });
+      const repo = createRepo(world, 'readiness-lab', { commit: true });
+      // More than one worker batch makes the blocked scan outlive the UI
+      // assertion, even if an individual subprocess reaches its own deadline.
+      for (let i = 0; i < 24; i += 1) {
+        const checkout = path.join(world.workspaceRoot, `checkout-${String(i)}`);
+        fs.mkdirSync(checkout);
+        fs.symlinkSync(path.join(repo, '.git'), path.join(checkout, '.git'), 'dir');
+      }
+      const blocked = path.join(world.stubDir, 'block-git');
+      const started = path.join(world.stubDir, 'git-started');
+      const broken = path.join(world.stubDir, 'broken-git');
+      const quote = (value: string): string => "'" + value.replaceAll("'", "'\\''") + "'";
+      fs.writeFileSync(
+        path.join(world.stubDir, 'git'),
+        `#!/bin/sh
+# Copyright 2026 DoorDash, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+if [ -f ${quote(broken)} ]; then
+  echo 'Review the Xcode license agreements' >&2
+  exit 69
+fi
+case "$*" in
+  *rev-parse*)
+    if [ -f ${quote(blocked)} ]; then
+      echo started > ${quote(started)}
+      while [ -f ${quote(blocked)} ]; do /bin/sleep 0.05; done
+    fi
+    ;;
+esac
+exec /usr/bin/git "$@"
+`,
+        { mode: 0o755 },
+      );
+      let handle: AppHandle | null = null;
+      let remote: RemoteTestServer | null = null;
+      let catalog: Promise<unknown> | null = null;
+      const catalogAbort = new AbortController();
+      try {
+        handle = await launchApp(world, testInfo, {
+          env: { PATH: `${world.stubDir}:${minimalEnv(world)['PATH']}` },
+        });
+        await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+          timeout: 90_000,
+        });
+        const local = await connectionState(handle);
+        const localRecord = discoveryAt(world.runtimeDir)!;
+        // Publish a real local registry entry for the keychain-independent case.
+        // Start it after the app-owned child so startup cannot attach to it first.
+        remote = await startRemoteServer(world, REMOTE_NAME, origin === 'registered local');
+        const settings = await openSettings(handle);
+        if (origin === 'remote') {
+          await selectSettingsPane(settings, 'Servers');
+          const keychain = await keychainAvailable(handle);
+          await pasteAndProbe(settings, remote.connectionString);
+          if (!keychain) {
+            await expect(
+              settings.getByText(/OS keychain on this machine is unavailable/),
+            ).toBeVisible();
+            expect((await connectionState(handle)).serverKey).toBe(local.serverKey);
+            const prefs = await handle.page.evaluate(() => window.agentico.getSettings());
+            expect(prefs.servers.known.filter((entry) => entry.kind === 'remote')).toEqual([]);
+            testInfo.annotations.push({
+              type: 'capability',
+              description:
+                'No OS keychain: verified remote add refuses to switch; the registered-local case exercises the full blocked-Git journey.',
+            });
+            return;
+          }
+        } else {
+          await handle.page
+            .getByRole('button', { name: `${local.serverName!} — switch server` })
+            .click();
+          await handle.page
+            .getByRole('option', { name: new RegExp(`${REMOTE_NAME} at .+ — Available`) })
+            .click();
+        }
+        await expect(
+          handle.page.getByRole('button', { name: `${REMOTE_NAME} — switch server` }),
+        ).toBeVisible({ timeout: 60_000 });
+
+        fs.writeFileSync(blocked, '');
+        let catalogSettled = false;
+        catalog = fetch(`${localRecord.base_url}/api/v1/readiness`, {
+          headers: { Authorization: `Bearer ${localRecord.auth_token!}` },
+          signal: catalogAbort.signal,
+        })
+          .then((response) => response.json())
+          .catch(() => null)
+          .finally(() => {
+            catalogSettled = true;
+          });
+        await waitFor(
+          () => fs.existsSync(started),
+          'local repository inspection to enter Git',
+          10_000,
+        );
+
+        await handle.page.getByRole('button', { name: `${REMOTE_NAME} — switch server` }).click();
+        await handle.page
+          .getByRole('option', { name: new RegExp(`${local.serverName!} at .+ — Available`) })
+          .click();
+        await expect(
+          handle.page.getByRole('button', { name: `${local.serverName!} — switch server` }),
+        ).toBeVisible({ timeout: 5_000 });
+        await expect(handle.page.getByRole('option', { name: 'Overview' })).toBeVisible();
+        expect(catalogSettled).toBe(false);
+        await selectSettingsPane(settings, 'Workspace roots');
+        await expect(settings.getByText('Loading repositories…', { exact: true })).toBeVisible();
+        expect(catalogSettled).toBe(false);
+
+        fs.unlinkSync(blocked);
+        await catalog;
+        await expect(
+          settings
+            .getByRole('region', { name: 'Repositories', exact: true })
+            .getByText('readiness-lab', { exact: true }),
+        ).toBeVisible();
+        fs.writeFileSync(broken, '');
+        await settings.reload();
+        const repositories = settings.getByRole('region', { name: 'Repositories', exact: true });
+        await expect(
+          repositories.getByText('Repository inspection failed', { exact: true }).first(),
+        ).toBeVisible();
+        await expect(repositories.getByText(/No commits yet/)).toHaveCount(0);
+        await expect(
+          repositories.getByRole('button', { name: 'Create initial commit…' }),
+        ).toHaveCount(0);
+        await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
+        await handle.page.getByRole('button', { name: 'New feature' }).click();
+        await expect(handle.page.getByRole('checkbox', { name: /readiness-lab/ })).toBeDisabled();
+        await expect(
+          handle.page.getByText('Git could not inspect this repository.', { exact: true }).first(),
+        ).toBeVisible();
+        await expect(handle.page.getByText(/No commits yet/)).toHaveCount(0);
+        persistAppLogs(handle, 'runtime-readiness-app');
+      } finally {
+        fs.rmSync(blocked, { force: true });
+        catalogAbort.abort();
+        await catalog?.catch(() => null);
+        if (handle !== null) await closeApp(handle).catch(() => {});
+        if (remote !== null) await stopRemoteServer(remote);
+        assertNoLeakedProcesses(world);
+        destroyWorld(world);
+      }
+    },
+  );
 }

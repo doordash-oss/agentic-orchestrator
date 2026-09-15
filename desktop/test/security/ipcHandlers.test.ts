@@ -142,6 +142,8 @@ function makeServices(): IpcServices {
     openSettingsWindow: vi.fn(() => ({ opened: true })),
     getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
     setTheme: vi.fn((preference) => ({ preference, resolved: 'light' as const })),
+    getRuntimeReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    refreshRuntimeReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     getReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     refreshReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     pickWorkspaceDirectory: vi.fn(() => Promise.resolve({ path: null })),

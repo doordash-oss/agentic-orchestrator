@@ -21,7 +21,11 @@ limitations under the License.
  * the current step from the latest snapshot, so the wizard can never drift
  * from the server or trust stale renderer state.
  */
-import type { ReadinessIssue, ReadinessIssueCode, ReadinessSnapshot } from '../../../shared/ipc';
+import type {
+  ReadinessIssue,
+  ReadinessIssueCode,
+  RuntimeReadinessSnapshot,
+} from '../../../shared/ipc';
 
 export const WIZARD_STEPS = ['providers', 'models', 'ready'] as const;
 
@@ -65,7 +69,7 @@ export interface WizardState {
   blockers: readonly ReadinessIssue[];
 }
 
-export function deriveWizardState(snapshot: ReadinessSnapshot): WizardState {
+export function deriveWizardState(snapshot: RuntimeReadinessSnapshot): WizardState {
   const gates: Record<WizardGateId, boolean> = {
     providers: snapshot.providers.some((provider) => provider.ready),
     models: snapshot.models.available,

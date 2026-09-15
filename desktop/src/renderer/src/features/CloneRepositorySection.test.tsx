@@ -183,6 +183,15 @@ describe('CloneRepositorySection operations list', () => {
       renderSection();
       expect(await screen.findByText(`dest-${state}`)).toBeInTheDocument();
       expect(screen.getByText(label)).toBeInTheDocument();
+      const progress = screen.queryByRole('progressbar', {
+        name: `Clone progress for dest-${state}`,
+      });
+      if (['accepted', 'running', 'finalizing', 'cancelling'].includes(state)) {
+        expect(progress).toBeVisible();
+        expect(progress).not.toHaveAttribute('aria-valuenow');
+      } else {
+        expect(progress).not.toBeInTheDocument();
+      }
       if (action === undefined) {
         expect(
           screen.queryByRole('button', { name: /Cancel clone|Retry cleanup|Retry clone/ }),

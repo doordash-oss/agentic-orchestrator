@@ -146,3 +146,29 @@ decrypted:
   manual cleanup on disk is needed.
 - **Removing** a server from the Servers list also deletes its token blob;
   nothing of the credential is left behind.
+
+
+## Runtime readiness and repository inspection
+
+On compatible servers, connecting uses the authenticated
+`GET /api/v1/readiness/runtime` endpoint. It reports providers, models and
+configuration without discovering repositories or running Git. The dashboard
+uses that connection's initial snapshot; subsequent reads are fresh, and a
+server switch discards the snapshot and cancels outstanding reads. Provider
+setup rechecks use `POST /api/v1/readiness/runtime/refresh`.
+
+Repository views load the existing consolidated `/api/v1/readiness` response
+separately. Settings shows a loading state while its catalog is being inspected.
+A Git installation failure is checked once per scan and reported as
+`repository_inspection_failed`, including the executable and bounded failure
+diagnostics. It does not turn every checkout into an apparent empty repository
+or prevent opening the dashboard. Inspections use up to eight workers, a
+five-second deadline per Git command and a twenty-second Git inspection budget
+per scan; request cancellation terminates running Git process groups and skips
+queued commands. Filesystem discovery itself is outside that subprocess budget.
+
+An older server that returns 404 for runtime-only readiness falls back to the
+combined endpoint. Its initial response is still reused, but connecting to that
+older server can still incur repository inspection. Authentication errors and
+network failures do not trigger this fallback. Existing clients can continue
+using the combined endpoint unchanged.

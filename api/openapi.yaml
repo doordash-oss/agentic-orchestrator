@@ -774,6 +774,44 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/readiness/runtime:
+    get:
+      operationId: getRuntimeReadiness
+      summary: Read runtime readiness without repository inspection.
+      description: >-
+        Authenticated provider, model and configuration readiness only.
+        Does not discover repositories or invoke Git. Reuses cached provider probes.
+      responses:
+        "200":
+          description: Runtime readiness.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeReadinessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/readiness/runtime/refresh:
+    post:
+      operationId: refreshRuntimeReadiness
+      summary: Refresh runtime readiness without repository inspection.
+      description: >-
+        Authenticated provider, model and configuration readiness only.
+        Does not discover repositories or invoke Git. Re-probes provider readiness.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          description: Runtime readiness.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeReadinessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v1/readiness/refresh:
     post:
       operationId: refreshReadiness
@@ -3383,11 +3421,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RepositoryReadiness"
-    ReadinessResponse:
+    RuntimeReadinessResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
         - type: object
-          required: [ready, providers, models, configuration, workspace]
+          required: [ready, providers, models, configuration]
           properties:
             ready:
               type: boolean
@@ -3408,15 +3446,21 @@ components:
               $ref: "#/components/schemas/ModelReadiness"
             configuration:
               $ref: "#/components/schemas/ConfigurationReadiness"
-            workspace:
-              $ref: "#/components/schemas/WorkspaceReadiness"
             issues:
               type: array
               description: >-
-                Flattened outstanding issues across all sections, each the
+                Flattened outstanding issues across runtime sections, each the
                 canonical catalog-rendered error for its readiness code.
               items:
                 $ref: "#/components/schemas/Error"
+    ReadinessResponse:
+      allOf:
+        - $ref: "#/components/schemas/RuntimeReadinessResponse"
+        - type: object
+          required: [workspace]
+          properties:
+            workspace:
+              $ref: "#/components/schemas/WorkspaceReadiness"
     FeatureListResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

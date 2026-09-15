@@ -543,6 +543,23 @@ test('a killed target fails with retry and back-to-previous; back restores the s
     expect(restored.serverName).toBe('alpha');
     transcript.step('back-to-previous re-attached through the standard attach path');
 
+    transcript.section('Another failed attempt can recover through the configured server picker');
+    if (failedState.status !== 'error' || failedState.switchContext === undefined) {
+      throw new Error('Expected the failed switch to identify its target');
+    }
+    await handle.page.evaluate(
+      (serverKey) => window.agentico.switchConnectionServer({ serverKey }),
+      failedState.switchContext.attempted.serverKey,
+    );
+    await expect(errorCode).toHaveText('E_SWITCH_UNAVAILABLE', { timeout: 60_000 });
+    await expect(handle.page.getByRole('button', { name: 'Explain in chat' })).toHaveCount(0);
+    await handle.page.getByRole('button', { name: 'Choose another server' }).click();
+    await handle.page.getByRole('option', { name: /alpha at .+ — Available/ }).click();
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    expect((await connectionState(handle)).serverName).toBe('alpha');
+
     persistAppLogs(handle, 'server-switching-failure-app');
     transcript.write(testInfo);
   } finally {

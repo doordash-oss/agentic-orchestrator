@@ -267,6 +267,46 @@ function waitingChild(): FeatureSnapshot {
 }
 
 describe('RefactorPassWorkspace', () => {
+  it('renders a failed review pass with visible diagnostics and a working restart action', async () => {
+    const failure = {
+      code: 'safety_rail_tripped',
+      class: 'blocking' as const,
+      title: 'Safety rail tripped',
+      summary: 'The Final review phase was stopped by a safety rail at iteration 5.',
+      diagnostics: 'opencode initialize timeout: context deadline exceeded',
+      remediation: { hint: 'Review the failure and restart the phase.', actions: ['restart'] },
+      context: { phase: { name: 'final_review', iteration: 5 } },
+    };
+    const child = readyChild({
+      status: 'Failed',
+      currentPhase: 'Final Review',
+      failure,
+      actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+    });
+    installAgenticoMock({ feature: child });
+    const parent = parentWith({ kind: 'review-feedback', status: 'Failed' });
+    const pass = controllerFor(parent, child);
+    renderWorkspace(parent, pass, [
+      {
+        kind: 'error',
+        id: 'failed-review',
+        featureId: CHILD_ID,
+        parentFeatureId: parent.id,
+        waitingSince: '2026-09-15T17:03:09Z',
+        ref: { scope: 'run', code: failure.code, featureId: CHILD_ID },
+        class: failure.class,
+        code: failure.code,
+        title: failure.title,
+      },
+    ]);
+    const card = await screen.findByRole('alert');
+    expect(within(card).getByText(failure.diagnostics)).toBeVisible();
+    expect(screen.getAllByText(failure.summary)).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Open' })).not.toBeInTheDocument();
+    await userEvent.click(within(card).getByRole('button', { name: 'Restart' }));
+    expect(pass.dispatch).toHaveBeenCalledWith('restart');
+  });
+
   it('renders the owning setup task once with Retry setup dispatching setup', async () => {
     installAgenticoMock({ feature: setupFailedChild() });
     const parent = parentWith();

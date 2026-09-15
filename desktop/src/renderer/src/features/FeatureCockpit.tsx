@@ -2831,6 +2831,7 @@ export function FeatureCockpit({
                     <ErrorSurface
                       error={durableError}
                       variant="full"
+                      expandDiagnostics={durableError.code === 'safety_rail_tripped'}
                       caption={durableErrorCaption}
                       resolveAction={resolveFailureAction}
                       onAction={handleFailureAction}

@@ -65,6 +65,8 @@ export type ErrorSurfaceLocalAction =
 export interface ErrorSurfaceProps {
   error: CanonicalError;
   variant?: 'full' | 'compact';
+  /** Expand the underlying cause when the summary alone cannot explain the failure. */
+  expandDiagnostics?: boolean;
   /** Context caption, e.g. "Rebase was rejected". Rendered first, as a lead-in. */
   caption?: string;
   /**
@@ -238,6 +240,7 @@ function StructuredDetails({ context }: { context: ErrorContext }) {
 export function ErrorSurface({
   error,
   variant = 'full',
+  expandDiagnostics = false,
   caption,
   resolveAction,
   onAction,
@@ -405,7 +408,7 @@ export function ErrorSurface({
             </details>
           )}
           {diagnostics != null && (
-            <details className="error-surface__diagnostics">
+            <details className="error-surface__diagnostics" open={expandDiagnostics}>
               <summary>Diagnostics</summary>
               <pre className="error-surface__diagnostics-pre">{diagnostics}</pre>
             </details>

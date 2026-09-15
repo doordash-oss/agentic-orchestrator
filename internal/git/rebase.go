@@ -231,6 +231,16 @@ func Rebase(worktreePath, baseBranch string) error {
 // avoid real git-push operations.
 var ForcePushFunc = defaultForcePush
 
+// UnmappedBranchError reports a force push refused because the clone's fetch
+// refspec does not map the branch, so git cannot compute a safe lease.
+type UnmappedBranchError struct {
+	Branch string
+}
+
+func (e *UnmappedBranchError) Error() string {
+	return fmt.Sprintf("force push refused: the clone's fetch refspec does not map %s, so git cannot derive a safe lease; add it with `git remote set-branches --add origin %s`", e.Branch, e.Branch)
+}
+
 // ForcePush force-pushes the current branch to origin.
 func ForcePush(worktreePath, branch string) error {
 	return ForcePushFunc(worktreePath, branch)
@@ -244,6 +254,11 @@ func ForcePush(worktreePath, branch string) error {
 // reflog, which only holds when this clone actually had that commit — so it
 // rejects exactly the case where the remote carries work we never saw.
 func defaultForcePush(worktreePath, branch string) error {
+	// Without a fetch refspec mapping git has no remote-tracking ref to
+	// derive the lease from and rejects every push as "stale info".
+	if covered, err := FetchRefspecCoversBranch(worktreePath, branch); err == nil && !covered {
+		return &UnmappedBranchError{Branch: branch}
+	}
 	cmd := exec.Command("git", "-C", worktreePath,
 		"push", "--force-with-lease", "--force-if-includes", "-u", "origin", branch)
 	out, err := cmd.CombinedOutput()

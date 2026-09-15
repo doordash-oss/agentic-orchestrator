@@ -250,7 +250,7 @@ func defaultForcePush(worktreePath, branch string) error {
 	if err != nil {
 		return fmt.Errorf("force pushing branch: %s: %w", strings.TrimSpace(string(out)), err)
 	}
-	return nil
+	return syncRemoteTrackingRef(worktreePath, branch, "refs/heads/"+branch)
 }
 
 // PRBaseBranch returns the base branch of an open PR via the GitHub API.

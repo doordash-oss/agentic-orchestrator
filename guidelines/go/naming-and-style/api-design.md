@@ -56,6 +56,7 @@ srv := server.New(":8080", server.WithTimeout(10*time.Second))
 ```
 
 **Advantages:**
+
 - Default case requires zero arguments: `New(addr)`
 - Self-documenting at call sites
 - No `nil` parameters needed
@@ -97,12 +98,12 @@ have complex relationships.
 
 ## Choosing Between Patterns
 
-| Situation | Pattern |
-|-----------|---------|
-| Most callers need zero options | Functional options |
-| Most callers specify 2+ settings | Config struct |
-| Settings are tightly coupled | Config struct |
-| API must stay backward-compatible | Both work (prefer functional options) |
+| Situation                              | Pattern                                 |
+| -------------------------------------- | --------------------------------------- |
+| Most callers need zero options         | Functional options                      |
+| Most callers specify 2+ settings       | Config struct                           |
+| Settings are tightly coupled           | Config struct                           |
+| API must stay backward-compatible      | Both work (prefer functional options)   |
 | Need validation on option combinations | Config struct (validate in constructor) |
 
 ## Method Design

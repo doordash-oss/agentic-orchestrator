@@ -86,6 +86,7 @@ set_timeout(Timeout{500});    // Explicit — clear intent
 ```
 
 Same for conversion operators:
+
 ```cpp
 class Handle {
 public:
@@ -111,13 +112,13 @@ char c{val};  // OK: 42 fits in char
 
 ## Decision Matrix
 
-| Situation | Correct Tool |
-|-----------|-------------|
-| Numeric conversion (`int` -> `float`) | `static_cast` |
-| Intentional narrowing | `static_cast` with comment |
-| Downcast (type unknown) | `dynamic_cast` |
-| Downcast (type known) | `static_cast` (carefully) |
-| Const-incorrect legacy API | `const_cast` |
-| Bit-level reinterpretation | `std::bit_cast` (C++20) / `memcpy` |
-| Pointer to integer | `reinterpret_cast` |
-| C-style cast | Never in new code |
+| Situation                             | Correct Tool                       |
+| ------------------------------------- | ---------------------------------- |
+| Numeric conversion (`int` -> `float`) | `static_cast`                      |
+| Intentional narrowing                 | `static_cast` with comment         |
+| Downcast (type unknown)               | `dynamic_cast`                     |
+| Downcast (type known)                 | `static_cast` (carefully)          |
+| Const-incorrect legacy API            | `const_cast`                       |
+| Bit-level reinterpretation            | `std::bit_cast` (C++20) / `memcpy` |
+| Pointer to integer                    | `reinterpret_cast`                 |
+| C-style cast                          | Never in new code                  |

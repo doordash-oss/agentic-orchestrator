@@ -2,15 +2,15 @@
 
 ## Parameter Passing
 
-| Intent | Type | Example |
-|--------|------|---------|
-| Read-only, small | By value | `void f(int x)` |
-| Read-only, large | `const T&` | `void f(const std::string& s)` |
-| Read-only string | `std::string_view` | `void f(std::string_view s)` |
-| Read-only array | `std::span<const T>` | `void f(std::span<const int> data)` |
-| Modify in-place | `T&` | `void normalize(std::vector<double>& v)` |
-| Take ownership | By value + move | `void store(std::string s)` |
-| Optional | `const T*` or `std::optional<T>` | `void f(const Foo* opt)` |
+| Intent           | Type                             | Example                                  |
+| ---------------- | -------------------------------- | ---------------------------------------- |
+| Read-only, small | By value                         | `void f(int x)`                          |
+| Read-only, large | `const T&`                       | `void f(const std::string& s)`           |
+| Read-only string | `std::string_view`               | `void f(std::string_view s)`             |
+| Read-only array  | `std::span<const T>`             | `void f(std::span<const int> data)`      |
+| Modify in-place  | `T&`                             | `void normalize(std::vector<double>& v)` |
+| Take ownership   | By value + move                  | `void store(std::string s)`              |
+| Optional         | `const T*` or `std::optional<T>` | `void f(const Foo* opt)`                 |
 
 ## Return Values
 

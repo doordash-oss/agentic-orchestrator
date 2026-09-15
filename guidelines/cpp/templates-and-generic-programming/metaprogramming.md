@@ -87,6 +87,7 @@ constexpr auto ID = hash("my_resource");  // Zero runtime cost
 Core Guideline T.120: Use TMP only when you really need to.
 
 **Signs it's overengineering:**
+
 - Same logic achievable with `if constexpr` or `constexpr` functions
 - Writing recursive template structs to compute values (use `constexpr`)
 - Code requires macros to be readable

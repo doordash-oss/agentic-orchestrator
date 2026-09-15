@@ -58,29 +58,34 @@ Downstream AI agents will use your findings to write code that matches the exist
 ## Search Strategy
 
 ### Phase 1: Identify the Language and Tooling
+
 - Check the primary language (go.mod, package.json, pyproject.toml, Cargo.toml)
 - Find formatter/linter configs (.eslintrc, .golangci.yml, .prettierrc, biome.json)
 - Read style guides if present (CONTRIBUTING.md, STYLE.md, .editorconfig)
 
 ### Phase 2: Sample Error Handling
+
 - Search for error return patterns in 5-10 representative files
 - Look for sentinel errors (`var Err`, `errors.New`, custom error types)
 - Check error wrapping (`%w`, `errors.Wrap`, `.WithMessage`)
 - Note the dominant pattern, not the exceptions
 
 ### Phase 3: Sample Naming Patterns
+
 - List files in several packages to see file naming
 - Read type/function definitions in 5-10 files
 - Check test files for test naming conventions
 - Note any prefixes, suffixes, or abbreviations that recur
 
 ### Phase 4: Sample Testing Patterns
+
 - Find test files and read 3-5 representative ones
 - Identify the test framework and assertion library
 - Check for test helpers, factories, fixtures
 - Note mock generation tools (mockery config, generate directives)
 
 ### Phase 5: Sample Code Organization
+
 - Read a few complete files to see import ordering
 - Check for package-level doc comments
 - Look at constructor/factory patterns

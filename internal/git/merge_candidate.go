@@ -15,12 +15,19 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
+
+// ErrMergeCandidateNoChanges reports that childHead is already contained in
+// parentTip, so git has nothing to merge and no merge commit can be created.
+// Callers that expect this case should treat the parent tip as the candidate
+// instead of asking for a merge.
+var ErrMergeCandidateNoChanges = errors.New("child head is already contained in parent tip")
 
 // MergeCandidateResult holds the outcome of creating a merge candidate without
 // advancing the parent ref.
@@ -41,8 +48,14 @@ type MergeCandidateResult struct {
 // commit.
 //
 // On conflict, the temporary worktree is cleaned up and ConflictFiles is
-// populated; the returned error is a *MergeCandidateConflictError.
+// populated; the returned error is a *MergeCandidateConflictError. When
+// childHead is already contained in parentTip the error wraps
+// ErrMergeCandidateNoChanges.
 func CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*MergeCandidateResult, error) {
+	if childHead == parentTip || IsAncestor(mainRepo, childHead, parentTip) {
+		return nil, fmt.Errorf("merge candidate for %s into %s: %w", childHead, parentTip, ErrMergeCandidateNoChanges)
+	}
+
 	// Create a temporary worktree detached at the parent tip. This does not
 	// touch the parent's checked-out branch or worktree.
 	tmpDir, err := os.MkdirTemp("", "merge-candidate-*")

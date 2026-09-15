@@ -34,6 +34,8 @@ export interface WindowRegistryDeps<W> {
   create(purpose: WindowPurpose): W;
   /** Raises an already-open window (restore + show + focus). */
   focus(window: W): void;
+  /** True when the native window or its webContents has been destroyed. */
+  isDestroyed(window: W): boolean;
   /** True when the window's renderer has crashed and shows a blank page. */
   isCrashed(window: W): boolean;
   /** Reloads a crashed window's renderer so raising it never shows a blank page. */
@@ -72,7 +74,12 @@ export class WindowRegistry<W> {
    */
   openOrFocus(purpose: WindowPurpose): W {
     const existing = this.windows.get(purpose);
-    if (existing !== undefined) {
+    // Electron can destroy webContents before emitting the native window's
+    // `closed` event. Reopening in that interval must revoke the old trust
+    // and create a fresh window without touching the dead renderer.
+    if (existing !== undefined && this.deps.isDestroyed(existing)) {
+      this.evict(existing);
+    } else if (existing !== undefined) {
       // Focusing a dead renderer would raise a permanently blank window.
       if (this.deps.isCrashed(existing)) {
         this.deps.reload(existing);

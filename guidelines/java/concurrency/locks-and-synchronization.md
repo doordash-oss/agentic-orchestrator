@@ -2,14 +2,14 @@
 
 ## synchronized vs ReentrantLock
 
-| Feature | `synchronized` | `ReentrantLock` |
-|---------|---------------|-----------------|
-| Syntax | Block/method keyword | Explicit lock/unlock |
-| Fairness | Not configurable | Optional fair ordering |
-| Interruptible | No | `lockInterruptibly()` |
-| Try-lock | No | `tryLock(timeout)` |
-| Condition variables | Single (wait/notify) | Multiple `Condition` objects |
-| Virtual thread friendly | Java 24+ only | Java 21+ |
+| Feature                 | `synchronized`       | `ReentrantLock`              |
+| ----------------------- | -------------------- | ---------------------------- |
+| Syntax                  | Block/method keyword | Explicit lock/unlock         |
+| Fairness                | Not configurable     | Optional fair ordering       |
+| Interruptible           | No                   | `lockInterruptibly()`        |
+| Try-lock                | No                   | `tryLock(timeout)`           |
+| Condition variables     | Single (wait/notify) | Multiple `Condition` objects |
+| Virtual thread friendly | Java 24+ only        | Java 21+                     |
 
 **Use `synchronized`** for simple, short critical sections where you don't need
 advanced features. **Use `ReentrantLock`** when you need try-lock, timeout,
@@ -112,6 +112,7 @@ Config current = config.get();
 ## Common Concurrency Bugs
 
 ### Race Conditions
+
 ```java
 // Bug — check-then-act is not atomic
 if (!map.containsKey(key)) {      // Thread A checks
@@ -123,6 +124,7 @@ map.computeIfAbsent(key, k -> computeValue());
 ```
 
 ### Deadlocks
+
 ```java
 // Bug — inconsistent lock ordering
 // Thread 1: lock(A) -> lock(B)
@@ -132,6 +134,7 @@ map.computeIfAbsent(key, k -> computeValue());
 ```
 
 ### Memory Visibility
+
 ```java
 // Bug — running flag may never be seen as false by the thread
 private boolean running = true;  // not volatile!

@@ -92,6 +92,64 @@ describe('App theming', () => {
 });
 
 describe('App readiness gating', () => {
+  it.each(['local', 'remote', 'bundled-missing', 'bundled-stopped'] as const)(
+    'recovers from startup failure through the server picker (%s) without offering chat',
+    async (target) => {
+      const serverKey = 'a'.repeat(64);
+      const startsLocal = target.startsWith('bundled');
+      const mock = installAgenticoMock({
+        connection: connection({
+          status: 'error',
+          stage: 'connect',
+          detail: 'Could not connect.',
+          error: {
+            code: 'E_GATEWAY',
+            class: 'blocking',
+            title: 'Connection failed',
+            summary: 'The server is unavailable.',
+          },
+        }),
+      });
+      const snapshot = {
+        rows:
+          target === 'bundled-missing'
+            ? []
+            : [
+                {
+                  serverKey,
+                  kind: target === 'remote' ? ('remote' as const) : ('local' as const),
+                  name: 'Another server',
+                  ...(target === 'remote' ? {} : { runtimeDir: '/runtime' }),
+                  // A failed connection may still carry its previous identity.
+                  current: true,
+                  health: startsLocal ? ('unreachable' as const) : ('healthy' as const),
+                },
+              ],
+        ...(startsLocal ? { bundled: { serverKey, runtimeDir: '/runtime', running: false } } : {}),
+      };
+      mock.api.listServers.mockResolvedValue(snapshot);
+      mock.api.probeServers.mockResolvedValue(snapshot);
+      render(<App />);
+
+      await screen.findByText('Connection failed');
+      expect(screen.queryByRole('button', { name: 'Explain in chat' })).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Choose another server' }));
+      const option = await screen.findByRole('option', {
+        name: startsLocal ? /This machine.*Not running/ : /Another server.*Available/,
+      });
+      expect(option).toHaveAttribute('aria-disabled', 'false');
+      await userEvent.click(option);
+      if (startsLocal) {
+        expect(mock.api.startLocalRuntime).toHaveBeenCalledTimes(1);
+        expect(mock.api.switchConnectionServer).not.toHaveBeenCalled();
+      } else {
+        expect(mock.api.switchConnectionServer).toHaveBeenCalledWith({ serverKey });
+        expect(mock.api.startLocalRuntime).not.toHaveBeenCalled();
+      }
+      expect(mock.api.probeServers).toHaveBeenCalledWith({ open: false });
+    },
+  );
+
   it('does not call runtime-backed IPC until the connection is ready', async () => {
     const mock = installAgenticoMock({ readiness: readySnapshot() });
     render(<App />);
@@ -267,7 +325,7 @@ describe('App readiness gating', () => {
       expect(screen.getAllByRole('heading', { name: /^agentico$/i })).toHaveLength(1),
     );
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
-    expect(mock.api.getReadiness).not.toHaveBeenCalled();
+    expect(mock.api.getRuntimeReadiness).not.toHaveBeenCalled();
   });
 
   it('opens the mandatory wizard when the runtime is ready but setup is incomplete', async () => {
@@ -278,7 +336,7 @@ describe('App readiness gating', () => {
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /set up agentico/i })).toBeInTheDocument(),
     );
-    expect(mock.api.getReadiness).toHaveBeenCalled();
+    expect(mock.api.getRuntimeReadiness).toHaveBeenCalled();
     // No path into feature creation exists while gates are unsatisfied.
     expect(screen.queryByRole('button', { name: /create|new feature/i })).not.toBeInTheDocument();
   });
@@ -301,7 +359,7 @@ describe('App readiness gating', () => {
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /set up agentico/i })).toBeInTheDocument(),
     );
-    const fetchesBeforeCrash = mock.api.getReadiness.mock.calls.length;
+    const fetchesBeforeCrash = mock.api.getRuntimeReadiness.mock.calls.length;
 
     act(() => {
       mock.emitConnection(
@@ -320,6 +378,7 @@ describe('App readiness gating', () => {
     });
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/agentico connection/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Explain in chat' })).not.toBeInTheDocument();
 
     act(() => {
       mock.emitConnection(connection({ status: 'ready', stage: 'ready', ownership: 'app-owned' }));
@@ -327,7 +386,7 @@ describe('App readiness gating', () => {
     // Recovery refetches the authoritative snapshot instead of trusting
     // anything remembered from before the crash.
     await waitFor(() =>
-      expect(mock.api.getReadiness.mock.calls.length).toBeGreaterThan(fetchesBeforeCrash),
+      expect(mock.api.getRuntimeReadiness.mock.calls.length).toBeGreaterThan(fetchesBeforeCrash),
     );
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /set up agentico/i })).toBeInTheDocument(),

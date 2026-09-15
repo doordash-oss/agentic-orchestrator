@@ -314,7 +314,7 @@ export function RefactorLauncher({
             label="Brief"
             placeholder="Describe the refactor. Type @ to reference files in the inherited repositories; paste or drop files to attach them."
             value={description}
-            repoKeys={snapshot.repos}
+            searchRepositories={snapshot.repos.map((key) => ({ key }))}
             images={images}
             attachments={attachments}
             imageUploads={imageUploads}

@@ -35,13 +35,14 @@ function readiness(): ReadinessSnapshot {
     providers: [{ name: 'claude', installed: true, ready: true }],
     models: { available: true },
     configuration: { valid: true },
-    workspaceRoots: [{ path: '/work/space', valid: true }],
+    workspaceRoots: [{ path: '/work/space', valid: true, cloneEligible: true }],
     repositories: [
-      { name: 'repo-a', path: '/work/space/repo-a', valid: true },
+      { name: 'repo-a', path: '/work/space/repo-a', valid: true, featureReady: true },
       {
         name: 'repo-b',
         path: '/work/space/repo-b',
         valid: false,
+        featureReady: false,
         issue: {
           code: 'invalid_repository',
           class: 'blocking',
@@ -168,6 +169,484 @@ describe('FeatureService.creationDefaults', () => {
       { phase: 'Planning', effort: 'high' },
       { phase: 'Implementation', effort: 'max' },
     ]);
+  });
+});
+
+describe('FeatureService.inspectRepositorySources', () => {
+  it('posts structured selectors and maps the server-owned local source', async () => {
+    const identity = {
+      path: '/work/space/repo-a',
+      commonDir: '/work/space/repo-a/.git',
+      device: '1',
+      inode: '2',
+    };
+    const otherIdentity = {
+      path: '/work/space/repo-b',
+      commonDir: '/work/space/repo-b/.git',
+      device: '3',
+      inode: '4',
+    };
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        repositories: [
+          {
+            repo_key: 'repo-a',
+            identity: {
+              path: identity.path,
+              common_dir: identity.commonDir,
+              device: identity.device,
+              inode: identity.inode,
+            },
+            mode: 'current',
+            kind: 'branch',
+            branch: 'release/2026/q3',
+            observed_sha: 'a'.repeat(40),
+          },
+          {
+            repo_key: 'repo-b',
+            identity: {
+              path: otherIdentity.path,
+              common_dir: otherIdentity.commonDir,
+              device: otherIdentity.device,
+              inode: otherIdentity.inode,
+            },
+            mode: 'current',
+            kind: 'detached',
+            observed_sha: 'b'.repeat(40),
+          },
+        ],
+      },
+    }));
+
+    const result = await service.inspectRepositorySources({
+      mode: 'current',
+      repositories: [
+        { repoKey: 'repo-a', identity },
+        { repoKey: 'repo-b', identity: otherIdentity },
+      ],
+    });
+
+    expect(calls[0]).toEqual({
+      path: '/api/v1/workspace/repositories/sources',
+      init: {
+        method: 'POST',
+        body: {
+          mode: 'current',
+          repositories: [
+            {
+              repo_key: 'repo-a',
+              identity: {
+                path: identity.path,
+                common_dir: identity.commonDir,
+                device: identity.device,
+                inode: identity.inode,
+              },
+            },
+            {
+              repo_key: 'repo-b',
+              identity: {
+                path: otherIdentity.path,
+                common_dir: otherIdentity.commonDir,
+                device: otherIdentity.device,
+                inode: otherIdentity.inode,
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(result.repositories[0]).toMatchObject({
+      repoKey: 'repo-a',
+      identity,
+      mode: 'current',
+      kind: 'branch',
+      branch: 'release/2026/q3',
+      observedSha: 'a'.repeat(40),
+    });
+    expect(result.repositories[1]).toMatchObject({
+      repoKey: 'repo-b',
+      identity: otherIdentity,
+      mode: 'current',
+      kind: 'detached',
+      observedSha: 'b'.repeat(40),
+    });
+  });
+});
+
+describe('FeatureService.updateRepositorySource', () => {
+  const identity = {
+    path: '/work/space/repo-a',
+    commonDir: '/work/space/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+  const request = {
+    repoKey: 'repo-a',
+    identity,
+    mode: 'default' as const,
+    branch: 'release/2026/q3',
+    originBranch: 'upstream-main',
+    expectedLocalSha: 'a'.repeat(40),
+    expectedOriginSha: 'c'.repeat(40),
+    checkoutHeadRef: 'refs/heads/main',
+    checkoutHeadSha: 'e'.repeat(40),
+  };
+  const wireIdentity = {
+    path: identity.path,
+    common_dir: identity.commonDir,
+    device: identity.device,
+    inode: identity.inode,
+  };
+
+  it('posts the displayed expectations as the snake_case wire body with the source-update timeout', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        result: 'updated',
+        repo_key: 'repo-a',
+        identity: wireIdentity,
+        mode: 'default',
+        branch: 'release/2026/q3',
+        origin_branch: 'upstream-main',
+        previous_sha: 'a'.repeat(40),
+        local_sha: 'c'.repeat(40),
+        fetched_sha: 'c'.repeat(40),
+      },
+    }));
+
+    const result = await service.updateRepositorySource(request);
+
+    expect(calls[0]).toEqual({
+      path: '/api/v1/workspace/repositories/update-source',
+      init: {
+        method: 'POST',
+        // SOURCE_UPDATE_TIMEOUT_MS: the client allowance must exceed the
+        // server's two-minute attempt deadline.
+        timeoutMs: 3 * 60_000,
+        body: {
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          branch: 'release/2026/q3',
+          origin_branch: 'upstream-main',
+          expected_local_sha: 'a'.repeat(40),
+          expected_origin_sha: 'c'.repeat(40),
+          checkout_head_ref: 'refs/heads/main',
+          checkout_head_sha: 'e'.repeat(40),
+        },
+      },
+    });
+    expect(result).toEqual({
+      result: 'updated',
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default',
+      branch: 'release/2026/q3',
+      originBranch: 'upstream-main',
+      previousSha: 'a'.repeat(40),
+      localSha: 'c'.repeat(40),
+      fetchedSha: 'c'.repeat(40),
+    });
+  });
+
+  it('maps a stale refusal with its freshly resolved status snapshot', async () => {
+    const { service } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        result: 'stale',
+        reason: 'branch_checked_out',
+        repo_key: 'repo-a',
+        identity: wireIdentity,
+        mode: 'default',
+        branch: 'release/2026/q3',
+        origin_branch: 'upstream-main',
+        status: {
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          kind: 'branch',
+          branch: 'release/2026/q3',
+          local_sha: 'a'.repeat(40),
+          origin_branch: 'upstream-main',
+          status: 'behind',
+          ahead_count: 0,
+          behind_count: 3,
+          update_eligible: false,
+          update_blockers: ['branch_checked_out_in_worktree'],
+          checkout_head_ref: 'refs/heads/main',
+          checkout_head_sha: 'e'.repeat(40),
+        },
+      },
+    }));
+
+    const result = await service.updateRepositorySource(request);
+
+    expect(result.result).toBe('stale');
+    expect(result.reason).toBe('branch_checked_out');
+    expect(result.previousSha).toBeUndefined();
+    expect(result.status).toEqual({
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default',
+      kind: 'branch',
+      branch: 'release/2026/q3',
+      localSha: 'a'.repeat(40),
+      originBranch: 'upstream-main',
+      status: 'behind',
+      aheadCount: 0,
+      behindCount: 3,
+      updateEligible: false,
+      updateBlockers: ['branch_checked_out_in_worktree'],
+      checkoutHeadRef: 'refs/heads/main',
+      checkoutHeadSha: 'e'.repeat(40),
+    });
+  });
+
+  it('passes a canonical 503 source_update_unavailable rejection through unchanged', async () => {
+    const canonical = {
+      code: 'source_update_unavailable',
+      class: 'blocking' as const,
+      title: 'Source update unavailable',
+      summary: 'The update attempt could not be proved complete.',
+    };
+    const { service, calls } = makeService(() => ({
+      status: 503,
+      body: { api_version: 'v1', error: canonical },
+    }));
+
+    await expect(service.updateRepositorySource(request)).rejects.toMatchObject({
+      canonical,
+    });
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe('FeatureService.reconcileSourceUpdate', () => {
+  const identity = {
+    path: '/work/space/repo-a',
+    commonDir: '/work/space/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+  const request = {
+    repoKey: 'repo-a',
+    identity,
+    mode: 'default' as const,
+    branch: 'release/2026/q3',
+    originBranch: 'upstream-main',
+    expectedLocalSha: 'a'.repeat(40),
+    expectedOriginSha: 'c'.repeat(40),
+  };
+  const wireIdentity = {
+    path: identity.path,
+    common_dir: identity.commonDir,
+    device: identity.device,
+    inode: identity.inode,
+  };
+
+  it('posts the attempted binding as the snake_case wire body with the reconcile timeout', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        outcome: 'expected_target_present',
+        repo_key: 'repo-a',
+        identity: wireIdentity,
+        mode: 'default',
+        branch: 'release/2026/q3',
+        origin_branch: 'upstream-main',
+        local_sha: 'c'.repeat(40),
+        selection: {
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          kind: 'branch',
+          branch: 'release/2026/q3',
+          observed_sha: 'c'.repeat(40),
+        },
+      },
+    }));
+
+    const result = await service.reconcileSourceUpdate(request);
+
+    expect(calls[0]).toEqual({
+      path: '/api/v1/workspace/repositories/reconcile-source-update',
+      init: {
+        method: 'POST',
+        // SOURCE_RECONCILE_TIMEOUT_MS: the client allowance must exceed the
+        // server's three-minute settlement deadline.
+        timeoutMs: 4 * 60_000,
+        body: {
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          branch: 'release/2026/q3',
+          origin_branch: 'upstream-main',
+          expected_local_sha: 'a'.repeat(40),
+          expected_origin_sha: 'c'.repeat(40),
+        },
+      },
+    });
+    expect(result).toEqual({
+      outcome: 'expected_target_present',
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default',
+      branch: 'release/2026/q3',
+      originBranch: 'upstream-main',
+      localSha: 'c'.repeat(40),
+      selection: {
+        repoKey: 'repo-a',
+        identity,
+        mode: 'default',
+        kind: 'branch',
+        branch: 'release/2026/q3',
+        observedSha: 'c'.repeat(40),
+      },
+    });
+  });
+
+  it('passes the observed checkout binding through and maps the observed checkout state', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        outcome: 'expected_target_present',
+        repo_key: 'repo-a',
+        identity: wireIdentity,
+        mode: 'default',
+        branch: 'release/2026/q3',
+        origin_branch: 'upstream-main',
+        local_sha: 'c'.repeat(40),
+        checkout: {
+          state: 'clean',
+          head_ref: 'refs/heads/release/2026/q3',
+          head_sha: 'c'.repeat(40),
+        },
+      },
+    }));
+
+    const result = await service.reconcileSourceUpdate({
+      ...request,
+      checkoutHeadRef: 'refs/heads/release/2026/q3',
+      checkoutHeadSha: 'a'.repeat(40),
+    });
+
+    expect(calls[0]).toEqual({
+      path: '/api/v1/workspace/repositories/reconcile-source-update',
+      init: {
+        method: 'POST',
+        timeoutMs: 4 * 60_000,
+        body: {
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          branch: 'release/2026/q3',
+          origin_branch: 'upstream-main',
+          expected_local_sha: 'a'.repeat(40),
+          expected_origin_sha: 'c'.repeat(40),
+          checkout_head_ref: 'refs/heads/release/2026/q3',
+          checkout_head_sha: 'a'.repeat(40),
+        },
+      },
+    });
+    expect(result.checkout).toEqual({
+      state: 'clean',
+      headRef: 'refs/heads/release/2026/q3',
+      headSha: 'c'.repeat(40),
+    });
+  });
+
+  it('passes a canonical 503 source_reconcile_unavailable rejection through unchanged', async () => {
+    const canonical = {
+      code: 'source_reconcile_unavailable',
+      class: 'blocking' as const,
+      title: 'Source update outcome unresolved',
+      summary: 'The connected server could not establish the branch state.',
+    };
+    const { service, calls } = makeService(() => ({
+      status: 503,
+      body: { api_version: 'v1', error: canonical },
+    }));
+
+    await expect(service.reconcileSourceUpdate(request)).rejects.toMatchObject({
+      canonical,
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('discards a settlement that crossed a server switch instead of applying it', async () => {
+    let generation = 0;
+    const { service, calls } = makeService(
+      () => ({
+        status: 200,
+        body: {
+          api_version: 'v1',
+          outcome: 'original_tip_remains',
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          branch: 'release/2026/q3',
+          origin_branch: 'upstream-main',
+        },
+      }),
+      () => Promise.resolve([]),
+      {
+        identity: () => ({ serverKey: 'server-key-1', generation }),
+      },
+    );
+
+    // The transport resolves only after the generation bumped (a switch
+    // A → B happened while the settlement was running).
+    const flight = service.reconcileSourceUpdate(request);
+    generation += 1;
+    await expect(flight).rejects.toMatchObject({
+      canonical: { code: 'E_SERVER_SWITCHED' },
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('discards an update result that crossed a server switch, leaving the outcome unknown', async () => {
+    let serverKey: string | null = 'server-key-1';
+    const updateRequest = {
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default' as const,
+      branch: 'release/2026/q3',
+      originBranch: 'upstream-main',
+      expectedLocalSha: 'a'.repeat(40),
+      expectedOriginSha: 'c'.repeat(40),
+      checkoutHeadRef: 'refs/heads/main',
+      checkoutHeadSha: 'e'.repeat(40),
+    };
+    const { service } = makeService(
+      () => ({
+        status: 200,
+        body: {
+          api_version: 'v1',
+          result: 'updated',
+          repo_key: 'repo-a',
+          identity: wireIdentity,
+          mode: 'default',
+          branch: 'release/2026/q3',
+          origin_branch: 'upstream-main',
+        },
+      }),
+      () => Promise.resolve([]),
+      {
+        identity: () => ({ serverKey, generation: 0 }),
+      },
+    );
+
+    const flight = service.updateRepositorySource(updateRequest);
+    serverKey = 'server-key-2';
+    await expect(flight).rejects.toMatchObject({
+      canonical: { code: 'E_SERVER_SWITCHED' },
+    });
   });
 });
 
@@ -354,6 +833,7 @@ describe('FeatureService.createFeature', () => {
     expect(calls[0]?.init).toEqual(
       expect.objectContaining({
         method: 'POST',
+        timeoutMs: 3 * 60_000,
         body: expect.objectContaining({ name: 'Search revamp', repos: ['repo-a'] }),
       }),
     );
@@ -365,6 +845,37 @@ describe('FeatureService.createFeature', () => {
         idempotency_key: expect.stringMatching(/^[0-9a-f-]{36}$/),
       }),
     );
+  });
+
+  it('returns canonical nonblocking branch-probe warnings with diagnostics redacted', async () => {
+    const { service } = makeService(() => ({
+      status: 201,
+      body: {
+        api_version: 'v1',
+        result: 'created',
+        feature_id: 'abcd1234ef567890',
+        warnings: [
+          {
+            code: 'branch_collision_probe_unavailable',
+            class: 'warning',
+            title: 'Remote branch check unavailable',
+            summary: 'The branch could not be checked against its origin.',
+            diagnostics: 'offline at /Users/x/private/repo',
+            context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+          },
+        ],
+      },
+    }));
+
+    const result = await service.createFeature(input);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings?.[0]).toMatchObject({
+      code: 'branch_collision_probe_unavailable',
+      class: 'warning',
+      context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+    });
+    expect(result.warnings?.[0]?.diagnostics).toContain('[path]');
+    expect(result.warnings?.[0]?.diagnostics).not.toContain('/Users/x');
   });
 
   it('posts explicit per-phase effort without materializing untouched defaults', async () => {
@@ -491,6 +1002,9 @@ describe('FeatureService.dispatchSetup', () => {
     expect(result).toEqual({ result: 'setup_started' });
     expect(calls[0]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/setup');
     expect(calls[0]?.init?.method).toBe('POST');
+    // Setup serializes with in-flight origin checks on the server, so its
+    // client allowance covers the coordinated-mutation bound.
+    expect(calls[0]?.init?.timeoutMs).toBe(3 * 60_000);
   });
 
   it('rejects id shapes that could smuggle path segments, without a request', async () => {
@@ -538,6 +1052,7 @@ describe('FeatureService.dispatchAction', () => {
     await expect(second).resolves.toStrictEqual(await first);
     expect(request).toHaveBeenCalledWith(`/api/v1/features/${input.featureId}/actions/start`, {
       method: 'POST',
+      timeoutMs: 3 * 60_000,
       body: {},
     });
   });
@@ -667,12 +1182,27 @@ describe('FeatureService.dispatchAction', () => {
   it('keeps the ordinary bound for short lifecycle actions', async () => {
     const { service, calls } = makeService(() => ({
       status: 200,
-      body: { api_version: 'v1', feature_id: 'abcd1234ef567890', result: 'started' },
+      body: { api_version: 'v1', feature_id: 'abcd1234ef567890', result: 'paused' },
     }));
 
-    await service.dispatchAction({ featureId: 'abcd1234ef567890', action: 'start' });
+    await service.dispatchAction({ featureId: 'abcd1234ef567890', action: 'pause-stop' });
 
     expect(calls[0]?.init?.timeoutMs).toBeUndefined();
+  });
+
+  it('carries the coordinated bound for actions that serialize with origin checks', async () => {
+    // Setup and start run source acceptance or setup work, which waits out
+    // an in-flight origin check's server-side attempt deadline.
+    for (const action of ['setup', 'start', 'restart'] as const) {
+      const { service, calls } = makeService(() => ({
+        status: 200,
+        body: { api_version: 'v1', feature_id: 'abcd1234ef567890', result: 'started' },
+      }));
+
+      await service.dispatchAction({ featureId: 'abcd1234ef567890', action });
+
+      expect(calls[0]?.init?.timeoutMs).toBe(3 * 60_000);
+    }
   });
 
   it('retains the single-flight entry after a request timeout so no duplicate publish is issued', async () => {
@@ -763,6 +1293,7 @@ describe('FeatureService.dispatchAction', () => {
     expect(calls[0]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/restart');
     expect(calls[0]?.init).toStrictEqual({
       method: 'POST',
+      timeoutMs: 3 * 60_000,
       body: {
         max_iterations_delta: 10,
         max_plan_iterations_delta: 2,

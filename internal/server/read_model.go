@@ -589,6 +589,11 @@ func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSumma
 	return dto
 }
 
+// maxStoredDiagnosticsLen bounds raw diagnostics projected from stored
+// records. Remote rejections (GitHub rule violations, hook output) run to
+// several hundred characters; a tighter cap hid the line naming the cause.
+const maxStoredDiagnosticsLen = 2000
+
 // wireStoredError renders a stored failure record through the catalog onto
 // the canonical wire error, bounding raw diagnostics with the safe-display
 // helper. A nil record yields nil; every adapter that projects a stored
@@ -600,7 +605,7 @@ func wireStoredError(record *errcat.FailureRecord) *Error {
 	}
 	rendered := errcat.RenderRecord(*record)
 	wire := wireError(rendered)
-	wire.Diagnostics = SafeDisplayText(rendered.Diagnostics, 240)
+	wire.Diagnostics = SafeDisplayText(rendered.Diagnostics, maxStoredDiagnosticsLen)
 	return &wire
 }
 
@@ -1116,6 +1121,7 @@ func setupTaskDTO(task feature.SetupTask) SetupTask {
 		SourcePath:       SafeDisplayText(task.SourcePath, 1000),
 		Branch:           SafeDisplayText(task.Branch, 500),
 		StartPoint:       SafeDisplayText(task.StartPoint, 500),
+		ExactSha:         SafeDisplayText(task.ExactSHA, 64),
 		UseCurrentBranch: task.UseCurrentBranch,
 		Attempt:          task.Attempt,
 		StartedAt:        task.StartedAt,

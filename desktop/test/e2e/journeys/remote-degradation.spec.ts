@@ -27,8 +27,9 @@ limitations under the License.
  *   (2) the create→run→complete cycle runs against the remote-profile
  *       server, and the completion surface swaps Reveal in Finder for Copy
  *       Path, copying the server-reported worktree path to the clipboard
- *   (3) workspace-root text entry surfaces the server's own 4xx validation
- *       inline and accepts a valid path
+ *   (3) the remote's workspace roots are administrator-owned: the pane
+ *       lists them read-only with the shared explanation, and no local
+ *       entry point (typed path, chooser or add/remove/reorder) exists
  *   (4) the negative invariant: a request-capturing proxy between the app
  *       and the server records every mutation body — none may carry a
  *       local staged-artifact path
@@ -65,7 +66,6 @@ import {
 } from '../helpers/completionFixture';
 import { Transcript } from '../helpers/transcript';
 import {
-  createPlainFolder,
   createRepo,
   createWorld,
   destroyWorld,
@@ -299,7 +299,6 @@ test('remote degradation: gated affordances, copy-path completion, server-valida
   const transcript = new Transcript('remote-degradation', 'Remote-aware feature degradation');
   const world = createWorld('remote-degradation', { auth: AUTH, presetWorkspaceRoot: true });
   createRepo(world, REPO, { commit: true });
-  const extraRoot = createPlainFolder(world, 'degradation-extra-root');
   const remotePort = await freeLoopbackPort();
   let remote: RemoteTestServer | null = null;
   let proxy: CaptureProxy | null = null;
@@ -342,9 +341,10 @@ test('remote degradation: gated affordances, copy-path completion, server-valida
       timeout: 60_000,
     });
     await waitFor(
-      async () =>
-        (await handle!.page.evaluate(() => window.agentico.getConnectionStatus())).serverName ===
-        REMOTE_NAME,
+      async () => {
+        const state = await handle!.page.evaluate(() => window.agentico.getConnectionStatus());
+        return state.serverName === REMOTE_NAME && state.status === 'ready';
+      },
       'the auto-switch to the remote server',
       60_000,
     );
@@ -414,24 +414,21 @@ test('remote degradation: gated affordances, copy-path completion, server-valida
     expect(feature).toBeDefined();
     transcript.step('feature created and set up entirely on the remote server');
 
-    transcript.section('Workspace-root text entry: server 4xx inline, valid path saves');
+    transcript.section('Workspace roots on the remote server: administrator-owned, no local entry');
     settings = await openSettings(handle);
     await selectSettingsPane(settings, 'Workspace roots');
-    const rootField = settings.getByLabel('Folder path on the server');
-    await expect(rootField).toBeVisible();
+    // The remote's configured root (copied from the preset world config) is
+    // listed read-only with the shared explanation; every local entry
+    // point is absent.
+    const rootsSection = settings.locator('section[aria-label="Workspace roots"]');
+    await expect(rootsSection.getByText(world.workspaceRoot)).toBeVisible({ timeout: 30_000 });
+    await expect(rootsSection.getByText(/managed by the server administrator/i)).toBeVisible();
+    await expect(settings.getByLabel('Folder path on the server')).toHaveCount(0);
     await expect(settings.getByRole('button', { name: 'Add workspace root' })).toHaveCount(0);
-    await rootField.fill('/definitely/not/a/real/root');
-    await settings.getByRole('button', { name: 'Add root' }).click();
-    // The add-root rejection is a FieldError beside the input (no live-region
-    // role), naming the rejected path.
-    await expect(settings.locator('.field-error')).toContainText('/definitely/not/a/real/root', {
-      timeout: 30_000,
-    });
-    await evidenceShot(handle, 'remote-degradation-root-rejected', settings);
-    await rootField.fill(extraRoot);
-    await settings.getByRole('button', { name: 'Add root' }).click();
-    await expect(settings.getByText(extraRoot)).toBeVisible({ timeout: 30_000 });
-    transcript.step('server 4xx named the bad path inline; the valid path saved');
+    await expect(settings.getByRole('button', { name: 'Add root' })).toHaveCount(0);
+    await expect(settings.getByRole('button', { name: /^Remove\b/ })).toHaveCount(0);
+    await evidenceShot(handle, 'remote-degradation-readonly-roots', settings);
+    transcript.step('remote roots are read-only with the administrator explanation');
 
     transcript.section('Seed completion on the remote server while it is stopped, then restart');
     await stopRemoteServer(remote);

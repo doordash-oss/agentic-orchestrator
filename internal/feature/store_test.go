@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2909,4 +2910,88 @@ func TestStoreRelationshipScansSkipLegacyRecords(t *testing.T) {
 	if len(perParent.Closed) != 1 {
 		t.Fatalf("RelationshipChildren().Closed = %d entries, want 1", len(perParent.Closed))
 	}
+}
+
+func TestStoreLoadNeverObservesSetupDoneWithStaleLifecycleStatus(t *testing.T) {
+	t.Parallel()
+	// saveUnlocked commits feature.yaml before run.yaml while loadUnlocked
+	// reads both without the store mutex, so a plain feature-then-run read
+	// can interleave a save between the two renames and observe the newer
+	// run (setup done) under an older feature record (still
+	// SettingUpWorktrees) — the exact contradictory view that flaked the
+	// packaged review-feedback child journey under -race. The PersistSeq /
+	// FeatureSeq stamp must make that direction unobservable.
+	//
+	// Each feature transitions monotonically once (SettingUpWorktrees/running
+	// → Created/done), matching production setup completion: a cyclic writer
+	// that resets a done setup back to SettingUpWorktrees would legitimately
+	// expose (SettingUpWorktrees, done) as the half-committed window of its
+	// own reset write — the feature-newer-than-run skew the stamp
+	// deliberately accepts as a transient.
+	store := NewStore(t.TempDir())
+	const features = 2000
+	ids := make([]string, 0, features)
+	for i := range features {
+		f := &Feature{
+			ID:            fmt.Sprintf("tear-guard-%03d", i),
+			Name:          "Torn read guard",
+			Slug:          "torn-read-guard",
+			Created:       time.Now().Truncate(time.Second),
+			Status:        StatusSettingUpWorktrees,
+			ActiveRun:     1,
+			RunCount:      1,
+			SchemaVersion: SchemaVersionCurrent,
+			Repos:         []FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+		}
+		f.SetRun(&Run{RunNumber: 1, Setup: &SetupState{Status: SetupStatusRunning}})
+		if err := store.Save(f); err != nil {
+			t.Fatalf("Save() feature %d error = %v", i, err)
+		}
+		ids = append(ids, f.ID)
+	}
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var cursor atomic.Int64
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		defer close(stop)
+		for i, id := range ids {
+			cursor.Store(int64(i))
+			if err := store.Modify(id, func(ff *Feature) error {
+				ff.Status = StatusCreated
+				ff.Run().Setup.Status = SetupStatusDone
+				return nil
+			}); err != nil {
+				t.Errorf("Modify(%q) error = %v", id, err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for {
+			index := cursor.Load()
+			if index < 0 || index >= int64(len(ids)) {
+				index = 0
+			}
+			loaded, err := store.Load(ids[index])
+			if err != nil {
+				t.Errorf("Load() error = %v", err)
+				return
+			}
+			setup := loaded.Run().Setup
+			if loaded.Status == StatusSettingUpWorktrees && setup != nil && setup.Status == SetupStatusDone {
+				t.Errorf("torn read observed: status=%s with setup=%s", loaded.Status, setup.Status)
+				return
+			}
+			select {
+			case <-stop:
+				return
+			default:
+			}
+		}
+	}()
+	wg.Wait()
 }

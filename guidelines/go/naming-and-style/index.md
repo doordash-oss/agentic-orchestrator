@@ -5,8 +5,8 @@
 
 ## Topics
 
-| File | When to Read |
-|------|-------------|
-| [naming-conventions.md](naming-conventions.md) | Naming variables, functions, packages, receivers, constants, initialisms |
-| [code-formatting.md](code-formatting.md) | gofmt, import ordering, line length, comments, doc comments |
-| [api-design.md](api-design.md) | Functional options, config structs, constructor patterns, getter/setter naming |
+| File                                           | When to Read                                                                   |
+| ---------------------------------------------- | ------------------------------------------------------------------------------ |
+| [naming-conventions.md](naming-conventions.md) | Naming variables, functions, packages, receivers, constants, initialisms       |
+| [code-formatting.md](code-formatting.md)       | gofmt, import ordering, line length, comments, doc comments                    |
+| [api-design.md](api-design.md)                 | Functional options, config structs, constructor patterns, getter/setter naming |

@@ -4,11 +4,11 @@
 
 Every public function should provide one of these:
 
-| Guarantee | Meaning | How to Achieve |
-|-----------|---------|---------------|
-| **No-throw** | Never throws | `noexcept`, handle errors internally |
-| **Strong** | If it throws, state unchanged (commit-or-rollback) | Copy-and-swap, operate on temporaries |
-| **Basic** | If it throws, no leaks, invariants maintained | RAII for all resources |
+| Guarantee    | Meaning                                            | How to Achieve                        |
+| ------------ | -------------------------------------------------- | ------------------------------------- |
+| **No-throw** | Never throws                                       | `noexcept`, handle errors internally  |
+| **Strong**   | If it throws, state unchanged (commit-or-rollback) | Copy-and-swap, operate on temporaries |
+| **Basic**    | If it throws, no leaks, invariants maintained      | RAII for all resources                |
 
 ## RAII: Foundation of the Basic Guarantee
 

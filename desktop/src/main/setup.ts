@@ -22,6 +22,8 @@ limitations under the License.
 import { buildCanonicalError, CanonicalErrorException } from '../shared/errors';
 import {
   ReadinessResponseSchema,
+  RuntimeReadinessResponseSchema,
+  type RuntimeReadinessResponse,
   RuntimeConfigWorkspaceSchema,
   validateWithSchema,
   type ReadinessResponse,
@@ -31,10 +33,18 @@ import {
   type InitRepositoryRequest,
   type PickedDirectory,
   type ReadinessSnapshot,
+  type RuntimeReadinessSnapshot,
   type RepositoryState,
 } from '../shared/ipc';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
+import { assertLocalConnection, alwaysLocal, type LocalitySource } from './locality';
+import {
+  assertSameServer,
+  captureServerIdentity,
+  type ServerIdentity,
+  type ServerIdentitySource,
+} from './serverFence';
 
 /** The authenticated transport surface the gateway provides. */
 export type SetupTransport = ServerTransport;
@@ -47,10 +57,26 @@ export interface SetupDialogs {
 export interface SetupServiceDeps {
   transport: SetupTransport;
   dialogs: SetupDialogs;
+  locality?: LocalitySource;
+  /** Captures the current server identity for root-mutation fencing. */
+  identity?: ServerIdentitySource;
 }
 
 export class SetupService {
-  constructor(private readonly deps: SetupServiceDeps) {}
+  private readonly locality: LocalitySource;
+  constructor(private readonly deps: SetupServiceDeps) {
+    this.locality = deps.locality ?? alwaysLocal;
+  }
+
+  async getRuntimeReadiness(): Promise<RuntimeReadinessSnapshot> {
+    const body = await this.api('/api/v1/readiness/runtime');
+    return toRuntimeReadinessSnapshot(validateWithSchema(body, RuntimeReadinessResponseSchema));
+  }
+
+  async refreshRuntimeReadiness(): Promise<RuntimeReadinessSnapshot> {
+    const body = await this.api('/api/v1/readiness/runtime/refresh', { method: 'POST', body: {} });
+    return toRuntimeReadinessSnapshot(validateWithSchema(body, RuntimeReadinessResponseSchema));
+  }
 
   async getReadiness(): Promise<ReadinessSnapshot> {
     const body = await this.api('/api/v1/readiness');
@@ -63,6 +89,7 @@ export class SetupService {
   }
 
   async pickWorkspaceDirectory(): Promise<PickedDirectory> {
+    assertLocalConnection(this.locality);
     const picked = await this.deps.dialogs.pickDirectory();
     if (picked === null) {
       return { path: null };
@@ -78,11 +105,20 @@ export class SetupService {
   /**
    * Adds a workspace root through the server's runtime-config mutation
    * (which persists it and rediscovers repositories server-side), then
-   * returns the fresh authoritative readiness snapshot.
+   * returns the fresh authoritative readiness snapshot. The whole
+   * read-modify-write sequence is local-only (a remote server's roots are
+   * administrator-owned) and fenced by server identity and connection
+   * generation: an already dispatched mutation can affect only its
+   * original server, and a switch mid-sequence aborts before the write.
+   * A refresh failure right after a successful save is reconciled once
+   * against the same server before giving up.
    */
   async addWorkspaceRoot(path: string): Promise<ReadinessSnapshot> {
+    assertLocalConnection(this.locality);
     const validated = validateWithSchema(path, AbsolutePathSchema);
+    const before = this.captureIdentity();
     const configBody = await this.api('/api/v1/config/runtime');
+    this.assertSameServer(before);
     const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
     const roots = config.workspace_roots ?? [];
     if (!roots.includes(validated)) {
@@ -90,8 +126,9 @@ export class SetupService {
         method: 'PATCH',
         body: { workspace_roots: [...roots, validated] },
       });
+      this.assertSameServer(before);
     }
-    return this.getReadiness();
+    return this.refreshAfterRootMutation(before);
   }
 
   /**
@@ -99,8 +136,11 @@ export class SetupService {
    * Existing features remain intact; discovery refreshes from the server.
    */
   async removeWorkspaceRoot(path: string): Promise<ReadinessSnapshot> {
+    assertLocalConnection(this.locality);
     const validated = validateWithSchema(path, AbsolutePathSchema);
+    const before = this.captureIdentity();
     const configBody = await this.api('/api/v1/config/runtime');
+    this.assertSameServer(before);
     const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
     const roots = config.workspace_roots ?? [];
     const next = roots.filter((r) => r !== validated);
@@ -109,8 +149,9 @@ export class SetupService {
         method: 'PATCH',
         body: { workspace_roots: next },
       });
+      this.assertSameServer(before);
     }
-    return this.getReadiness();
+    return this.refreshAfterRootMutation(before);
   }
 
   /**
@@ -119,8 +160,11 @@ export class SetupService {
    * only the order changes.
    */
   async reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot> {
+    assertLocalConnection(this.locality);
     const validated = paths.map((p) => validateWithSchema(p, AbsolutePathSchema));
+    const before = this.captureIdentity();
     const configBody = await this.api('/api/v1/config/runtime');
+    this.assertSameServer(before);
     const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
     const current = (config.workspace_roots ?? []).slice().sort();
     const sorted = validated.slice().sort();
@@ -131,7 +175,31 @@ export class SetupService {
       method: 'PATCH',
       body: { workspace_roots: validated },
     });
-    return this.getReadiness();
+    this.assertSameServer(before);
+    return this.refreshAfterRootMutation(before);
+  }
+
+  /**
+   * Refreshes the authoritative readiness after a root mutation, fenced to
+   * the server the mutation targeted. A failure right after a successful
+   * save is retried once against that same server before surfacing: the
+   * renderer must never conclude the save itself failed from a refresh
+   * failure.
+   */
+  private async refreshAfterRootMutation(before: ServerIdentity): Promise<ReadinessSnapshot> {
+    try {
+      const snapshot = await this.getReadiness();
+      this.assertSameServer(before);
+      return snapshot;
+    } catch (err) {
+      if (err instanceof CanonicalErrorException && err.canonical.code === 'E_SERVER_SWITCHED') {
+        throw err;
+      }
+      // One reconcile attempt against the same server.
+      const snapshot = await this.getReadiness();
+      this.assertSameServer(before);
+      return snapshot;
+    }
   }
 
   /**
@@ -140,6 +208,7 @@ export class SetupService {
    * fresh discovery snapshot is returned so the renderer never infers state.
    */
   async initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot> {
+    assertLocalConnection(this.locality);
     if (request.consent !== true) {
       throw new CanonicalErrorException(buildCanonicalError('E_CONSENT_REQUIRED'));
     }
@@ -162,12 +231,60 @@ export class SetupService {
   private api(path: string, init?: ApiRequestInit): Promise<unknown> {
     return serverRequest(this.deps.transport, path, init);
   }
+
+  private captureIdentity(): ServerIdentity {
+    return captureServerIdentity(this.deps.identity);
+  }
+
+  /**
+   * Aborts a root-mutation sequence whose server changed mid-flight: an
+   * already dispatched mutation can affect only its original server, and
+   * stale results must never authorize or select a root on the new one.
+   */
+  private assertSameServer(before: ServerIdentity): void {
+    assertSameServer(before, this.deps.identity);
+  }
 }
 
 /** Maps the validated server readiness response to the renderer-facing shape.
  * Readiness issues are already canonical catalog-rendered errors on the wire,
  * so they pass through untouched — the strict IPC schema revalidates them. */
 export function toReadinessSnapshot(server: ReadinessResponse): ReadinessSnapshot {
+  return {
+    ...toRuntimeReadinessSnapshot(server),
+    workspaceRoots: server.workspace.roots.map((root) => ({
+      path: root.path,
+      valid: root.valid,
+      ...(root.issue === undefined ? {} : { issue: root.issue }),
+      cloneEligible: root.clone_eligible,
+      ...(root.clone_issue === undefined ? {} : { cloneIssue: root.clone_issue }),
+    })),
+    repositories: server.workspace.repositories.map((repository) => ({
+      name: repository.name,
+      path: repository.path,
+      valid: repository.valid,
+      featureReady: repository.feature_ready,
+      ...(repository.issue === undefined ? {} : { issue: repository.issue }),
+      ...(repository.identity === undefined
+        ? {}
+        : {
+            identity: {
+              path: repository.identity.path,
+              commonDir: repository.identity.common_dir,
+              device: repository.identity.device,
+              inode: repository.identity.inode,
+              birthTime: repository.identity.birth_time,
+            },
+          }),
+    })),
+    issues: server.issues ?? [],
+  };
+}
+
+/** Legacy combined responses may include repository issues: they do not gate runtime setup. */
+export function toRuntimeReadinessSnapshot(
+  server: RuntimeReadinessResponse,
+): RuntimeReadinessSnapshot {
   return {
     ready: server.ready,
     ...(server.probed_at === undefined ? {} : { probedAt: server.probed_at }),
@@ -187,17 +304,12 @@ export function toReadinessSnapshot(server: ReadinessResponse): ReadinessSnapsho
       valid: server.configuration.valid,
       ...(server.configuration.issue === undefined ? {} : { issue: server.configuration.issue }),
     },
-    workspaceRoots: server.workspace.roots.map((root) => ({
-      path: root.path,
-      valid: root.valid,
-      ...(root.issue === undefined ? {} : { issue: root.issue }),
-    })),
-    repositories: server.workspace.repositories.map((repository) => ({
-      name: repository.name,
-      path: repository.path,
-      valid: repository.valid,
-      ...(repository.issue === undefined ? {} : { issue: repository.issue }),
-    })),
-    issues: server.issues ?? [],
+    issues: [
+      ...server.providers.flatMap((provider) =>
+        provider.issue === undefined ? [] : [provider.issue],
+      ),
+      ...(server.models.issue === undefined ? [] : [server.models.issue]),
+      ...(server.configuration.issue === undefined ? [] : [server.configuration.issue]),
+    ],
   };
 }

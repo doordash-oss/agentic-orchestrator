@@ -110,7 +110,7 @@ function scriptHappyPath(harness: Harness, options: { name?: string } = {}): voi
     status: 200,
     body: healthyBody(options.name === undefined ? {} : { name: options.name }),
   }));
-  harness.answers.set(`${BASE_URL}/api/v1/readiness`, ({ token }) => ({
+  harness.answers.set(`${BASE_URL}/api/v1/readiness/runtime`, ({ token }) => ({
     status: token === TOKEN ? 200 : 401,
     body: {},
   }));
@@ -138,6 +138,20 @@ function registryCandidate(serverKey: string, stateDir: string) {
 }
 
 describe('addRemoteServer', () => {
+  it('accepts a legacy server only after a runtime endpoint 404', async () => {
+    const harness = makeHarness();
+    scriptHappyPath(harness);
+    harness.answers.set(`${BASE_URL}/api/v1/readiness/runtime`, () => ({ status: 404, body: {} }));
+    let legacyCalls = 0;
+    harness.answers.set(`${BASE_URL}/api/v1/readiness`, ({ token }) => {
+      legacyCalls += 1;
+      expect(token).toBe(TOKEN);
+      return { status: 200, body: {} };
+    });
+    expect(await harness.run()).toEqual({ status: 'added', serverKey: SERVER_KEY });
+    expect(legacyCalls).toBe(1);
+  });
+
   it('happy path: probe name wins, entry + token blob persisted, added returned', async () => {
     const harness = makeHarness();
     scriptHappyPath(harness, { name: 'buildbox' });
@@ -173,7 +187,7 @@ describe('addRemoteServer', () => {
       status: 200,
       body: { status: 'ok', compatibility: COMPATIBILITY },
     }));
-    harness.answers.set(`${BASE_URL}/api/v1/readiness`, () => ({ status: 200, body: {} }));
+    harness.answers.set(`${BASE_URL}/api/v1/readiness/runtime`, () => ({ status: 200, body: {} }));
 
     await harness.run();
 
@@ -183,7 +197,7 @@ describe('addRemoteServer', () => {
   it('wrong token (401): E_REMOTE_AUTH_REJECTED with remediation, nothing persisted', async () => {
     const harness = makeHarness();
     harness.answers.set(`${BASE_URL}/api/v1/health`, () => ({ status: 200, body: healthyBody() }));
-    harness.answers.set(`${BASE_URL}/api/v1/readiness`, () => ({ status: 401, body: {} }));
+    harness.answers.set(`${BASE_URL}/api/v1/readiness/runtime`, () => ({ status: 401, body: {} }));
 
     await expect(harness.run()).rejects.toMatchObject({
       canonical: {
@@ -221,7 +235,7 @@ describe('addRemoteServer', () => {
         compatibility: { ...COMPATIBILITY, runtime_policy: 'mystery-v9' },
       }),
     }));
-    harness.answers.set(`${BASE_URL}/api/v1/readiness`, () => ({ status: 200, body: {} }));
+    harness.answers.set(`${BASE_URL}/api/v1/readiness/runtime`, () => ({ status: 200, body: {} }));
 
     await expect(harness.run()).rejects.toMatchObject({
       canonical: { code: 'E_REMOTE_INCOMPATIBLE', class: 'blocking' },

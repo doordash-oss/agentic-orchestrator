@@ -56,6 +56,7 @@ public record Order(String id, Instant createdAt, Instant updatedAt, ...)
 ```
 
 **Rules for default methods**:
+
 - Use for **convenience methods** derived from other interface methods
 - Don't use for **complex logic** — move that to a utility class or abstract class
 - Don't use to **add state** — interfaces have no fields
@@ -80,13 +81,13 @@ Validator<Order> priceCheck = order ->
 
 Use standard functional interfaces when possible:
 
-| Interface | Signature | Use Case |
-|-----------|-----------|----------|
-| `Function<T,R>` | `R apply(T t)` | Transform a value |
-| `Predicate<T>` | `boolean test(T t)` | Filter/test a value |
-| `Consumer<T>` | `void accept(T t)` | Perform a side effect |
-| `Supplier<T>` | `T get()` | Lazy value production |
-| `UnaryOperator<T>` | `T apply(T t)` | Transform same type |
+| Interface           | Signature           | Use Case               |
+| ------------------- | ------------------- | ---------------------- |
+| `Function<T,R>`     | `R apply(T t)`      | Transform a value      |
+| `Predicate<T>`      | `boolean test(T t)` | Filter/test a value    |
+| `Consumer<T>`       | `void accept(T t)`  | Perform a side effect  |
+| `Supplier<T>`       | `T get()`           | Lazy value production  |
+| `UnaryOperator<T>`  | `T apply(T t)`      | Transform same type    |
 | `BiFunction<T,U,R>` | `R apply(T t, U u)` | Two inputs, one output |
 
 ## The Decorator Pattern

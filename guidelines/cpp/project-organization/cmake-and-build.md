@@ -17,11 +17,11 @@ include_directories(include/)  # Same problem
 
 ## PUBLIC / PRIVATE / INTERFACE
 
-| Keyword | Compiles into target | Propagates to consumers |
-|---------|---------------------|------------------------|
-| PRIVATE | Yes | No |
-| PUBLIC | Yes | Yes |
-| INTERFACE | No | Yes |
+| Keyword   | Compiles into target | Propagates to consumers |
+| --------- | -------------------- | ----------------------- |
+| PRIVATE   | Yes                  | No                      |
+| PUBLIC    | Yes                  | Yes                     |
+| INTERFACE | No                   | Yes                     |
 
 Warning flags must be **PRIVATE** — never force warnings on consumers.
 
@@ -56,17 +56,20 @@ Gate `-Werror` behind an option — enable only in CI.
   "version": 6,
   "configurePresets": [
     {
-      "name": "base", "hidden": true,
+      "name": "base",
+      "hidden": true,
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
     },
     {
-      "name": "debug", "inherits": "base",
+      "name": "debug",
+      "inherits": "base",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
     },
     {
-      "name": "ci-linux", "inherits": "debug",
+      "name": "ci-linux",
+      "inherits": "debug",
       "cacheVariables": { "ENABLE_WERROR": "ON" }
     }
   ]

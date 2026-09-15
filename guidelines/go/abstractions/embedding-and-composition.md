@@ -100,15 +100,15 @@ func (job *Job) Printf(format string, args ...any) {
 
 ## Pointer vs Value Receiver Rules
 
-| Condition | Receiver |
-|-----------|----------|
-| Method mutates the receiver | Pointer |
-| Contains `sync.Mutex` or similar | Pointer |
-| Large struct or array | Pointer (efficiency) |
-| Map, func, or chan | Value (never pointer to these) |
-| Slice without reslice/realloc | Value |
-| Small, naturally immutable (`time.Time`) | Value |
-| Any element is a pointer to mutating data | Pointer |
+| Condition                                 | Receiver                       |
+| ----------------------------------------- | ------------------------------ |
+| Method mutates the receiver               | Pointer                        |
+| Contains `sync.Mutex` or similar          | Pointer                        |
+| Large struct or array                     | Pointer (efficiency)           |
+| Map, func, or chan                        | Value (never pointer to these) |
+| Slice without reslice/realloc             | Value                          |
+| Small, naturally immutable (`time.Time`)  | Value                          |
+| Any element is a pointer to mutating data | Pointer                        |
 
 **Critical**: don't mix pointer and value receivers on the same type. If any
 method uses a pointer receiver, all should.

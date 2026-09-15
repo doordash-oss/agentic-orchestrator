@@ -53,6 +53,11 @@ func AutoReviewUserPrompt(in AutoReviewUserInput) string {
 	return MustRender("autoreview.user", in)
 }
 
+// AutoReviewFormatRetryPrompt reminds a fresh reviewer to obey the output contract.
+func AutoReviewFormatRetryPrompt() string {
+	return MustRender("autoreview.format_retry", nil)
+}
+
 // VisualReferences renders the visual_references partial. Returns "" when
 // Images is empty so callers can drop the result into a prompt
 // unconditionally.

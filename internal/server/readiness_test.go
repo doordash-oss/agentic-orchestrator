@@ -19,14 +19,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
@@ -927,5 +931,455 @@ func TestProviderModelRefreshHandlesUnknownUnreadyAndUnsupportedProviders(t *tes
 	})
 	if cannotRefresh.Code != http.StatusConflict {
 		t.Fatalf("unsupported provider status = %d body=%s; want 409", cannotRefresh.Code, cannotRefresh.Body.String())
+	}
+}
+
+func TestWorkspaceRootCloneEligibility(t *testing.T) {
+	t.Parallel()
+
+	// writableNonRepo: a plain writable directory — clone_eligible=true.
+	writableNonRepo := t.TempDir()
+
+	// gitRepoRoot: a directory that is itself a git repository —
+	// clone_eligible=false, clone_issue code root_is_repository.
+	gitRepoRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(gitRepoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git dir: %v", err)
+	}
+
+	// readOnlyDir: a directory without write permission —
+	// clone_eligible=false, clone_issue code root_not_writable.
+	readOnlyDir := t.TempDir()
+	if err := os.Chmod(readOnlyDir, 0o555); err != nil {
+		t.Fatalf("chmod read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(readOnlyDir, 0o755) })
+
+	// missingRoot: a path that does not exist —
+	// clone_eligible=false, clone_issue code invalid_workspace_root.
+	missingRoot := filepath.Join(t.TempDir(), "does-not-exist")
+
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{
+		writableNonRepo,
+		gitRepoRoot,
+		readOnlyDir,
+		missingRoot,
+	}
+
+	handler := NewHandler(HandlerOptions{
+		Config:                cfg,
+		Registry:              newReadinessRegistry(),
+		DisableHostValidation: true,
+	})
+
+	snapshot := getReadinessSnapshot(t, handler)
+
+	rootsByPath := map[string]WorkspaceRootReadiness{}
+	for _, r := range snapshot.Workspace.Roots {
+		rootsByPath[r.Path] = r
+	}
+
+	// Writable non-repo directory: clone_eligible=true, clone_issue=nil.
+	entry, ok := rootsByPath[writableNonRepo]
+	if !ok {
+		t.Fatalf("writable non-repo root missing from snapshot: %+v", snapshot.Workspace.Roots)
+	}
+	if !entry.Valid {
+		t.Fatalf("writable non-repo root valid = false; want true: %+v", entry)
+	}
+	if !entry.CloneEligible {
+		t.Fatalf("writable non-repo root clone_eligible = false; want true: %+v", entry)
+	}
+	if entry.CloneIssue != nil {
+		t.Fatalf("writable non-repo root clone_issue = %+v; want nil", entry.CloneIssue)
+	}
+
+	// Git repository root: clone_eligible=false, clone_issue root_is_repository.
+	entry, ok = rootsByPath[gitRepoRoot]
+	if !ok {
+		t.Fatalf("git-repo root missing from snapshot: %+v", snapshot.Workspace.Roots)
+	}
+	if !entry.Valid {
+		t.Fatalf("git-repo root valid = false; want true: %+v", entry)
+	}
+	if entry.CloneEligible {
+		t.Fatalf("git-repo root clone_eligible = true; want false: %+v", entry)
+	}
+	if entry.CloneIssue == nil || entry.CloneIssue.Code != string(errcat.RootIsRepository) {
+		t.Fatalf("git-repo root clone_issue = %+v; want root_is_repository", entry.CloneIssue)
+	}
+
+	// Read-only directory: clone_eligible=false, clone_issue root_not_writable.
+	entry, ok = rootsByPath[readOnlyDir]
+	if !ok {
+		t.Fatalf("read-only root missing from snapshot: %+v", snapshot.Workspace.Roots)
+	}
+	if !entry.Valid {
+		t.Fatalf("read-only root valid = false; want true: %+v", entry)
+	}
+	if entry.CloneEligible {
+		t.Fatalf("read-only root clone_eligible = true; want false: %+v", entry)
+	}
+	if entry.CloneIssue == nil || entry.CloneIssue.Code != string(errcat.RootNotWritable) {
+		t.Fatalf("read-only root clone_issue = %+v; want root_not_writable", entry.CloneIssue)
+	}
+
+	// Missing root: clone_eligible=false, clone_issue invalid_workspace_root.
+	// Also valid=false (the root itself is invalid for discovery).
+	entry, ok = rootsByPath[missingRoot]
+	if !ok {
+		t.Fatalf("missing root missing from snapshot: %+v", snapshot.Workspace.Roots)
+	}
+	if entry.Valid {
+		t.Fatalf("missing root valid = true; want false: %+v", entry)
+	}
+	if entry.CloneEligible {
+		t.Fatalf("missing root clone_eligible = true; want false: %+v", entry)
+	}
+	if entry.CloneIssue == nil || entry.CloneIssue.Code != string(errcat.InvalidWorkspaceRoot) {
+		t.Fatalf("missing root clone_issue = %+v; want invalid_workspace_root", entry.CloneIssue)
+	}
+
+	// A root valid for discovery but not clone-eligible does NOT
+	// invalidate the root for discovery: the git-repo root has
+	// valid=true and clone_eligible=false.
+	entry = rootsByPath[gitRepoRoot]
+	if !entry.Valid || entry.CloneEligible {
+		t.Fatalf("git-repo root should be valid=true clone_eligible=false: %+v", entry)
+	}
+}
+
+// unbornRepoFixture creates two discovered repositories under one root:
+// one with a commit and one freshly initialized without any commit.
+func unbornRepoFixture(t *testing.T) (root, populated, unborn string) {
+	t.Helper()
+	root = t.TempDir()
+	populated = filepath.Join(root, "populated")
+	unborn = filepath.Join(root, "unborn")
+	for _, dir := range []string{populated, unborn} {
+		cmd := exec.Command("git", "init", "--initial-branch=main", dir)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git init %s: %v\n%s", dir, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(populated, "README.md"), []byte("# x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "-C", populated, "add", ".")
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", populated, "commit", "-m", "initial")
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	return root, populated, unborn
+}
+
+func TestReadinessDistinguishesUnbornRepositories(t *testing.T) {
+	t.Parallel()
+	root, _, _ := unbornRepoFixture(t)
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{root}
+	handler := NewHandler(HandlerOptions{
+		Config:                cfg,
+		Registry:              newReadinessRegistry(),
+		DisableHostValidation: true,
+	})
+	snapshot := getReadinessSnapshot(t, handler)
+	byName := map[string]RepositoryReadiness{}
+	for _, repo := range snapshot.Workspace.Repositories {
+		byName[repo.Name] = repo
+	}
+	populatedEntry, ok := byName["populated"]
+	if !ok {
+		t.Fatalf("populated repository missing: %+v", snapshot.Workspace.Repositories)
+	}
+	unbornEntry, ok := byName["unborn"]
+	if !ok {
+		t.Fatalf("unborn repository not visible in readiness: %+v", snapshot.Workspace.Repositories)
+	}
+	if !unbornEntry.Valid {
+		t.Fatalf("unborn repository reported invalid: %+v", unbornEntry)
+	}
+	if unbornEntry.FeatureReady {
+		t.Fatalf("unborn repository reported feature_ready: %+v", unbornEntry)
+	}
+	if !populatedEntry.Valid || !populatedEntry.FeatureReady {
+		t.Fatalf("populated repository not valid+ready: %+v", populatedEntry)
+	}
+}
+
+// readinessIdentityRepo initializes a real committed repository at dir.
+func readinessIdentityRepo(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "init", "--initial-branch=main", dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v\n%s", dir, err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "."}, {"commit", "-m", "initial"}} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git -C %s %v: %v\n%s", dir, args, err, out)
+		}
+	}
+}
+
+func TestReadinessReportsServerResolvedRepositoryIdentity(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	mainRepo := filepath.Join(root, "service")
+	readinessIdentityRepo(t, mainRepo)
+	worktree := filepath.Join(root, "wt-service")
+	cmd := exec.Command("git", "-C", mainRepo, "worktree", "add", worktree, "-b", "topic")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git worktree add: %v\n%s", err, out)
+	}
+	broken := filepath.Join(t.TempDir(), "broken")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.Repos["broken"] = config.RepoConfig{Path: broken}
+	handler := NewHandler(HandlerOptions{
+		Config:                cfg,
+		Registry:              newReadinessRegistry(),
+		DisableHostValidation: true,
+	})
+
+	snapshot := getReadinessSnapshot(t, handler)
+	byName := map[string]RepositoryReadiness{}
+	for _, repo := range snapshot.Workspace.Repositories {
+		byName[repo.Name] = repo
+	}
+	service, ok := byName["service"]
+	if !ok {
+		t.Fatalf("service repository missing: %+v", snapshot.Workspace.Repositories)
+	}
+	if service.Identity == nil {
+		t.Fatalf("service repository carries no identity: %+v", service)
+	}
+	decimal := regexp.MustCompile(`^[0-9]{1,20}$`)
+	if !decimal.MatchString(service.Identity.Device) || !decimal.MatchString(service.Identity.Inode) {
+		t.Fatalf("identity filesystem fields must be decimal wire text: %+v", service.Identity)
+	}
+	canonical, err := filepath.EvalSymlinks(mainRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.Identity.Path != canonical {
+		t.Errorf("identity path = %q; want canonical %q", service.Identity.Path, canonical)
+	}
+
+	wt, ok := byName["wt-service"]
+	if !ok {
+		t.Fatalf("linked worktree missing from readiness: %+v", snapshot.Workspace.Repositories)
+	}
+	if wt.Identity == nil {
+		t.Fatalf("linked worktree carries no identity: %+v", wt)
+	}
+	if wt.Identity.CommonDir != service.Identity.CommonDir {
+		t.Errorf("linked worktree common dir = %q; want shared %q", wt.Identity.CommonDir, service.Identity.CommonDir)
+	}
+	if wt.Identity.Path == service.Identity.Path || *wt.Identity == *service.Identity {
+		t.Errorf("linked worktree must stay distinguishable: %+v vs %+v", wt.Identity, service.Identity)
+	}
+
+	brokenEntry, ok := byName["broken"]
+	if !ok || brokenEntry.Valid {
+		t.Fatalf("broken repository must be reported invalid: %+v (ok=%v)", brokenEntry, ok)
+	}
+	if brokenEntry.Identity != nil {
+		t.Errorf("invalid repository must not carry an identity: %+v", brokenEntry.Identity)
+	}
+
+	// Replacing the checkout's git directory invalidates the identity: the
+	// next snapshot must not report the prior identity for the same path.
+	if err := os.RemoveAll(filepath.Join(mainRepo, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	readinessIdentityRepo(t, mainRepo)
+	replacement := getReadinessSnapshot(t, handler)
+	for _, repo := range replacement.Workspace.Repositories {
+		if repo.Name != "service" {
+			continue
+		}
+		if repo.Identity == nil || *repo.Identity == *service.Identity {
+			t.Fatalf("replaced git directory must invalidate the identity: old %+v new %+v", service.Identity, repo.Identity)
+		}
+	}
+}
+
+// A broken Git installation must not gate connecting to a usable runtime.
+func TestRuntimeReadinessDoesNotInspectRepositories(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(root, "git-called")
+	script := "#!/bin/sh\necho called >> \"" + marker + "\"\necho 'Xcode license has not been accepted' >&2\nexit 69\n"
+	if err := os.WriteFile(filepath.Join(root, "git"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{root}
+	provider := &readinessProbeProvider{
+		MockProvider: &mocks.MockProvider{ProviderName: "ready", CLIDetected: true, Models: []string{"fake-model"}},
+		status:       staticReadiness(llm.ProviderReadiness{Ready: true}),
+	}
+	handler := NewHandler(HandlerOptions{Config: cfg, Registry: newReadinessRegistry(provider), Mutations: &createFeatureRecorder{}, DisableHostValidation: true})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/readiness/runtime", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("runtime readiness: %d %s", w.Code, w.Body.String())
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot["ready"] != true {
+		t.Fatalf("runtime must be ready: %s", w.Body.String())
+	}
+	if _, exists := snapshot["workspace"]; exists {
+		t.Fatal("runtime response must not contain workspace discovery")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("runtime readiness invoked Git: %v", err)
+	}
+	w = postTrustedJSON(handler, "/api/v1/readiness/runtime/refresh", map[string]any{})
+	if w.Code != http.StatusOK {
+		t.Fatalf("runtime refresh: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("runtime refresh invoked Git: %v", err)
+	}
+}
+
+func TestReadinessReportsOneSharedGitFailure(t *testing.T) {
+	root := t.TempDir()
+	for i := range 24 {
+		if err := os.MkdirAll(filepath.Join(root, fmt.Sprintf("repo-%02d", i), ".git"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	marker := filepath.Join(root, "calls")
+	t.Setenv("AGENTICO_GIT_PROBE_LOG", marker)
+	script := "#!/bin/sh\necho called >> \"$AGENTICO_GIT_PROBE_LOG\"\necho 'Review the Xcode license agreements' >&2\nexit 69\n"
+	if err := os.WriteFile(filepath.Join(root, "git"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{root}
+	snapshot := workspaceReadiness(context.Background(), cfg)
+	if len(snapshot.Repositories) != 24 {
+		t.Fatalf("repositories = %d", len(snapshot.Repositories))
+	}
+	for _, repo := range snapshot.Repositories {
+		if !repo.Valid || repo.FeatureReady || repo.Identity != nil || repo.Issue == nil || repo.Issue.Code != "repository_inspection_failed" {
+			t.Fatalf("Git failure must be explicit, never an unborn repository: %+v", repo)
+		}
+		if !strings.Contains(repo.Issue.Diagnostics, filepath.Join(root, "git")) || !strings.Contains(repo.Issue.Diagnostics, "Xcode license") {
+			t.Fatalf("missing executable or failure detail: %+v", repo.Issue)
+		}
+	}
+	calls, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(calls) != "called\n" {
+		t.Fatalf("expected one installation check, got %q", calls)
+	}
+}
+
+func TestWorkspaceReadinessBoundsConcurrentGitAndCancelsQueuedWork(t *testing.T) {
+	root := t.TempDir()
+	markers := filepath.Join(root, "started")
+	if err := os.Mkdir(markers, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 24 {
+		if err := os.MkdirAll(filepath.Join(root, fmt.Sprintf("repo-%02d", i), ".git"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("AGENTICO_GIT_PROBE_MARKERS", markers)
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'git version fixture'; exit 0; fi\necho started > \"$AGENTICO_GIT_PROBE_MARKERS/$$\"\nwhile :; do /bin/sleep 1; done\n"
+	if err := os.WriteFile(filepath.Join(root, "git"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{root}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan WorkspaceReadiness, 1)
+	finished := make(chan struct{})
+	go func() { defer close(finished); done <- workspaceReadiness(ctx, cfg) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(3 * time.Second):
+			t.Error("repository scan did not terminate during cleanup")
+		}
+	})
+	// All eight workers must enter their commands before any is released.
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		entries, err := os.ReadDir(markers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) == 8 {
+			break
+		}
+		if len(entries) > 8 {
+			t.Fatalf("too many simultaneous probes: %d", len(entries))
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			cancel()
+			<-done
+			t.Fatal("repository checks did not run concurrently")
+		}
+	}
+	cancel()
+	select {
+	case snapshot := <-done:
+		for _, repo := range snapshot.Repositories {
+			if repo.Issue == nil || repo.Identity != nil {
+				t.Fatalf("cancelled probe became usable: %+v", repo)
+			}
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled Git process groups did not terminate")
+	}
+	entries, err := os.ReadDir(markers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 8 {
+		t.Fatalf("queued work spawned commands after cancellation: %d", len(entries))
 	}
 }

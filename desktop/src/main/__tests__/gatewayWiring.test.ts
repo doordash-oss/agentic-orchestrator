@@ -38,6 +38,19 @@ function withStalledFetch(run: () => Promise<void>): Promise<void> {
 }
 
 describe('fetchJson', () => {
+  it('aborts an outstanding fetch when its connection is abandoned', async () => {
+    await withStalledFetch(async () => {
+      const controller = new AbortController();
+      const request = fetchJson('http://127.0.0.1:9/api/v1/readiness', {
+        timeoutMs: 30000,
+        signal: controller.signal,
+      });
+      const rejected = expect(request).rejects.toMatchObject({ name: 'AbortError' });
+      controller.abort();
+      await rejected;
+    });
+  });
+
   it('raises the typed timeout error when a request outruns its bound', async () => {
     await withStalledFetch(async () => {
       await expect(

@@ -43,6 +43,14 @@ import {
   type CreateFeatureInput,
   type CreateFeatureResult,
   type CreationDefaults,
+  type RepositorySourcesRequest,
+  type RepositorySourcesResult,
+  type RepositoryOriginStatusRequest,
+  type RepositoryOriginStatusResult,
+  type RepositoryUpdateSourceRequest,
+  type RepositorySourceReconcileRequest,
+  type RepositorySourceReconcileResult,
+  type RepositoryUpdateSourceResult,
   type CreationFileKind,
   type CreationFileSearchRequest,
   type CreationFileSearchResult,
@@ -53,10 +61,18 @@ import {
   type FeatureActionRequest,
   type FeatureActionResult,
   type InitRepositoryRequest,
+  type CloneStartRequest,
+  type CloneOperation,
+  type CreateRepositoryRequest,
+  type CreateRepositoryResult,
+  type InitializeRepositoryRequest,
+  type InitializeRepositoryResult,
+  type CloneOperationsList,
   type IpcChannel,
   type IpcEnvelope,
   type PickedDirectory,
   type ReadinessSnapshot,
+  type RuntimeReadinessSnapshot,
   type RepositoryState,
   type Settings,
   type SettingsOpenRequest,
@@ -168,6 +184,8 @@ export interface IpcServices {
   openSettingsWindow(request: SettingsOpenRequest): SettingsOpenResult;
   getTheme(): ThemeInfo;
   setTheme(preference: ThemePreference): ThemeInfo;
+  getRuntimeReadiness(): Promise<RuntimeReadinessSnapshot>;
+  refreshRuntimeReadiness(): Promise<RuntimeReadinessSnapshot>;
   getReadiness(): Promise<ReadinessSnapshot>;
   refreshReadiness(): Promise<ReadinessSnapshot>;
   pickWorkspaceDirectory(): Promise<PickedDirectory>;
@@ -175,6 +193,14 @@ export interface IpcServices {
   removeWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
   reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot>;
   initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
+  startClone(request: CloneStartRequest): Promise<CloneOperation>;
+  getCloneOperation(operationId: string): Promise<CloneOperation>;
+  listCloneOperations(): Promise<CloneOperationsList>;
+  cancelCloneOperation(operationId: string): Promise<CloneOperation>;
+  retryCloneCleanup(operationId: string): Promise<CloneOperation>;
+  retryCloneOperation(operationId: string): Promise<CloneOperation>;
+  createRepository(request: CreateRepositoryRequest): Promise<CreateRepositoryResult>;
+  initializeRepository(request: InitializeRepositoryRequest): Promise<InitializeRepositoryResult>;
   listRepositories(): Promise<RepositoryState[]>;
   listFeatures(): Promise<FeaturesListResult>;
   getFeature(featureId: string): Promise<FeatureSnapshot>;
@@ -190,6 +216,16 @@ export interface IpcServices {
   ): string;
   cancelSessionOutput(subscriptionId: string): boolean;
   getCreationDefaults(): Promise<CreationDefaults>;
+  inspectRepositorySources(request: RepositorySourcesRequest): Promise<RepositorySourcesResult>;
+  checkRepositoryOriginStatus(
+    request: RepositoryOriginStatusRequest,
+  ): Promise<RepositoryOriginStatusResult>;
+  updateRepositorySource(
+    request: RepositoryUpdateSourceRequest,
+  ): Promise<RepositoryUpdateSourceResult>;
+  reconcileSourceUpdate(
+    request: RepositorySourceReconcileRequest,
+  ): Promise<RepositorySourceReconcileResult>;
   pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
   uploadCreationFiles(
     kind: CreationFileKind,
@@ -337,6 +373,8 @@ export function registerIpcHandlers(
       services.openSettingsWindow(request),
     [IPC_CHANNELS.themeGet]: () => services.getTheme(),
     [IPC_CHANNELS.themeSet]: (_event, preference: ThemePreference) => services.setTheme(preference),
+    [IPC_CHANNELS.runtimeReadinessGet]: () => services.getRuntimeReadiness(),
+    [IPC_CHANNELS.runtimeReadinessRefresh]: () => services.refreshRuntimeReadiness(),
     [IPC_CHANNELS.readinessGet]: () => services.getReadiness(),
     [IPC_CHANNELS.readinessRefresh]: () => services.refreshReadiness(),
     [IPC_CHANNELS.workspacePickDirectory]: () => services.pickWorkspaceDirectory(),
@@ -347,6 +385,20 @@ export function registerIpcHandlers(
       services.reorderWorkspaceRoots(paths),
     [IPC_CHANNELS.workspaceInitRepository]: (_event, request: InitRepositoryRequest) =>
       services.initRepository(request),
+    [IPC_CHANNELS.cloneStart]: (_event, request: CloneStartRequest) => services.startClone(request),
+    [IPC_CHANNELS.cloneOperationGet]: (_event, operationId: string) =>
+      services.getCloneOperation(operationId),
+    [IPC_CHANNELS.cloneOperationsList]: () => services.listCloneOperations(),
+    [IPC_CHANNELS.cloneOperationCancel]: (_event, operationId: string) =>
+      services.cancelCloneOperation(operationId),
+    [IPC_CHANNELS.cloneOperationCleanup]: (_event, operationId: string) =>
+      services.retryCloneCleanup(operationId),
+    [IPC_CHANNELS.cloneOperationRetry]: (_event, operationId: string) =>
+      services.retryCloneOperation(operationId),
+    [IPC_CHANNELS.createRepository]: (_event, request: CreateRepositoryRequest) =>
+      services.createRepository(request),
+    [IPC_CHANNELS.initializeRepository]: (_event, request: InitializeRepositoryRequest) =>
+      services.initializeRepository(request),
     [IPC_CHANNELS.repositoriesList]: () => services.listRepositories(),
     [IPC_CHANNELS.featuresList]: () => services.listFeatures(),
     [IPC_CHANNELS.featuresGet]: (_event, featureId: string) => services.getFeature(featureId),
@@ -385,6 +437,16 @@ export function registerIpcHandlers(
       cancelled: services.cancelSessionOutput(request.subscriptionId),
     }),
     [IPC_CHANNELS.creationDefaults]: () => services.getCreationDefaults(),
+    [IPC_CHANNELS.creationSources]: (_event, request: RepositorySourcesRequest) =>
+      services.inspectRepositorySources(request),
+    [IPC_CHANNELS.creationOriginStatus]: (_event, request: RepositoryOriginStatusRequest) =>
+      services.checkRepositoryOriginStatus(request),
+    [IPC_CHANNELS.creationUpdateSource]: (_event, request: RepositoryUpdateSourceRequest) =>
+      services.updateRepositorySource(request),
+    [IPC_CHANNELS.creationReconcileSourceUpdate]: (
+      _event,
+      request: RepositorySourceReconcileRequest,
+    ) => services.reconcileSourceUpdate(request),
     [IPC_CHANNELS.creationPickFiles]: (_event, kind: CreationFileKind) =>
       services.pickCreationFiles(kind),
     [IPC_CHANNELS.creationUploadFiles]: (

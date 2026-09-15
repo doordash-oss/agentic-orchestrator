@@ -138,10 +138,10 @@ backreferences, consider a different approach.
 
 ## filepath vs path
 
-| Package | Use For |
-|---------|---------|
+| Package         | Use For                                  |
+| --------------- | ---------------------------------------- |
 | `path/filepath` | OS file system paths (uses OS separator) |
-| `path` | URL paths, logical paths (always `/`) |
+| `path`          | URL paths, logical paths (always `/`)    |
 
 ```go
 filepath.Join("dir", "file.txt")  // "dir/file.txt" or "dir\file.txt"

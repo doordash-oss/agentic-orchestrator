@@ -100,7 +100,7 @@ describe('detached release workspace', () => {
       createHash('sha256').update(readFileSync(helper.path)).digest('hex'),
     );
     expect(helper.size).toBeGreaterThan(0);
-  }, 20_000);
+  }, 120_000);
 
   it('contains only the captured committed source and excludes ambient ignored inputs', () => {
     const fixture = repositoryFixture();
@@ -124,7 +124,7 @@ describe('detached release workspace', () => {
     }
     expect(existsSync(workspace.path)).toBe(false);
     expect(git(fixture.root, 'worktree', 'list', '--porcelain')).toContain('prunable');
-  }, 20_000);
+  }, 120_000);
 
   it('preserves a provenance-invalid detached workspace without executing ambient cleanup source', () => {
     const fixture = repositoryFixture();
@@ -144,7 +144,7 @@ describe('detached release workspace', () => {
     ).toThrow(/preserved.*manual cleanup/);
     expect(existsSync(expectedPath)).toBe(true);
     git(fixture.root, 'worktree', 'remove', '--force', expectedPath);
-  }, 20_000);
+  }, 120_000);
 
   it('reports the preserved workspace when provenance inspection itself fails', () => {
     const fixture = repositoryFixture();

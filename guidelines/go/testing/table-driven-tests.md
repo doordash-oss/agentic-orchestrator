@@ -40,6 +40,7 @@ t.Errorf("Foo(%q) = %d; want %d", tt.in, got, tt.want)
 ## Subtests with t.Run
 
 `t.Run` creates named subtests, enabling:
+
 - **Fine-grained execution**: `go test -run=TestAdd/negative`
 - **Isolated failures**: `t.Fatal` in a subtest stops only that subtest
 - **Parallel execution**: each subtest can call `t.Parallel()`
@@ -58,6 +59,7 @@ if diff := cmp.Diff(want, got); diff != "" {
 ```
 
 Useful options:
+
 - `cmpopts.IgnoreFields(T{}, "CreatedAt")` — ignore volatile fields
 - `cmpopts.SortSlices(less)` — order-independent comparison
 - `cmpopts.EquateEmpty()` — treat nil and empty slices as equal

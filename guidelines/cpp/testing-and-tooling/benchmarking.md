@@ -63,22 +63,22 @@ BENCHMARK(BM_Sort)
 
 ## When to Benchmark vs Profile
 
-| Benchmark when... | Profile when... |
-|-------------------|-----------------|
-| Preventing regressions in CI | Investigating an observed problem |
-| Comparing two implementations | Finding where time is spent |
-| Validating complexity claims | Understanding cache/branch behavior |
+| Benchmark when...             | Profile when...                     |
+| ----------------------------- | ----------------------------------- |
+| Preventing regressions in CI  | Investigating an observed problem   |
+| Comparing two implementations | Finding where time is spent         |
+| Validating complexity claims  | Understanding cache/branch behavior |
 
 **Workflow**: profile first to identify hot paths, then write benchmarks to
 guide optimization and detect regressions.
 
 ### Profiling Tools
 
-| Tool | Platform | Strengths |
-|------|----------|-----------|
-| `perf` | Linux | Lightweight, hardware counters, flame graphs |
-| Intel VTune | Linux/Windows | Microarchitectural analysis, ~5% overhead |
-| Instruments | macOS | CPU Time Profiler, Allocations, integrated with Xcode |
-| Callgrind | Linux | Instruction-level, very slow (~20x) but accurate |
+| Tool        | Platform      | Strengths                                             |
+| ----------- | ------------- | ----------------------------------------------------- |
+| `perf`      | Linux         | Lightweight, hardware counters, flame graphs          |
+| Intel VTune | Linux/Windows | Microarchitectural analysis, ~5% overhead             |
+| Instruments | macOS         | CPU Time Profiler, Allocations, integrated with Xcode |
+| Callgrind   | Linux         | Instruction-level, very slow (~20x) but accurate      |
 
 Build for profiling: `-O2 -g` (optimizations + debug symbols).

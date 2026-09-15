@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
@@ -1728,23 +1729,40 @@ var backgroundTaskPollInterval = 2 * time.Second
 // continuation.
 var backgroundTaskQuietGrace = 15 * time.Second
 
+// atomicDuration is a race-safe duration knob. Tests overwrite these
+// package-level pacing values, and a background goroutine from an earlier
+// test can still be inside WaitForPhaseOutcome reading one when the next
+// test writes it, so unsynchronized plain vars are a data race under
+// -race even though production never mutates them.
+type atomicDuration struct{ v atomic.Int64 }
+
+func newAtomicDuration(d time.Duration) *atomicDuration {
+	var a atomicDuration
+	a.v.Store(int64(d))
+	return &a
+}
+
+func (d *atomicDuration) get() time.Duration { return time.Duration(d.v.Load()) }
+
+func (d *atomicDuration) set(x time.Duration) { d.v.Store(int64(x)) }
+
 // backgroundTaskStallGrace is how long live background tasks may stay silent
 // (no stdout, which carries all task activity) after the root outcome is
 // already present before the waiter stops the session — killing runaway
 // monitors with the process group — and commits the outcome. Var for tests.
-var backgroundTaskStallGrace = 10 * time.Minute
+var backgroundTaskStallGrace = newAtomicDuration(10 * time.Minute)
 
 // backgroundTaskDeferralCeiling bounds how long a turn may be deferred for live
 // background tasks, however chatty they are. Past it the tasks are killed with
 // the session and any present outcome is committed, so a never-true poll loop
 // cannot hold a finished phase open indefinitely. Var for tests.
-var backgroundTaskDeferralCeiling = 25 * time.Minute
+var backgroundTaskDeferralCeiling = newAtomicDuration(25 * time.Minute)
 
 // phaseOutcomeReclassifyInterval paces the fallback re-classification tick:
 // a session whose terminal Result status was coalesced away or mis-delivered
 // would otherwise wait forever, since Done never fires for multi-turn
 // keep-alive sessions. Var for tests.
-var phaseOutcomeReclassifyInterval = 45 * time.Second
+var phaseOutcomeReclassifyInterval = newAtomicDuration(45 * time.Second)
 
 // liveBackgroundTaskCounter is the optional session capability that reports
 // running background subagents. Provider sessions that do not track them
@@ -2202,7 +2220,7 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 	// terminal Result. classifiedSeq keeps the tick idempotent with the
 	// normal paths — a result handleStatus already saw is never re-classified,
 	// so no commit or nudge is ever duplicated.
-	reclassifyTicker := time.NewTicker(phaseOutcomeReclassifyInterval)
+	reclassifyTicker := time.NewTicker(phaseOutcomeReclassifyInterval.get())
 	defer reclassifyTicker.Stop()
 	var classifiedResult *llm.ResultMessage
 	var classifiedSeq uint64
@@ -2471,10 +2489,10 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 				// new. Stop kills the process group, taking the monitors
 				// with it; the outcome is committed as normal.
 				ceilingExpired := !awaitingSince.IsZero() &&
-					time.Since(awaitingSince) >= backgroundTaskDeferralCeiling
+					time.Since(awaitingSince) >= backgroundTaskDeferralCeiling.get()
 				intent := rootCompletionIntent(sess)
 				if intent.Found && !hasPendingRootQuestion(sess) &&
-					(ceilingExpired || silence() >= backgroundTaskStallGrace) {
+					(ceilingExpired || silence() >= backgroundTaskStallGrace.get()) {
 					_ = sess.Stop()
 					if result, done := commitIntent(intent, true); done {
 						return result

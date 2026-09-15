@@ -112,11 +112,9 @@ test('incompatible external runtime: blocked with guidance, never stopped', asyn
     await expect(shell.locator('[data-ownership="external"]')).toBeVisible();
     await expect(shell).toContainText('E_INCOMPATIBLE_SERVER');
     await expect(shell).toContainText('This app never shuts down a runtime it does not own');
-    // The only recovery affordance is Retry; there is no way to stop the
-    // foreign process. (The ErrorSurface also offers explain-in-chat — the
-    // app-root provider mounts it — which is a question, not a control.)
+    // Recovery offers retry or another server, without a disconnected chat action.
     const buttons = await shell.getByRole('button').allTextContents();
-    expect(buttons.filter((label) => label !== 'Explain in chat')).toEqual(['Retry']);
+    expect(buttons).toEqual(['Retry', 'Choose another server']);
     await evidenceShot(handle, 'incompatible-blocked');
     const connection = await handle.page.evaluate(() => window.agentico.getConnectionStatus());
     transcript.json('connection state (via IPC): blocked, external ownership', connection);

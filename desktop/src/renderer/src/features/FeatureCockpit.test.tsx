@@ -1025,6 +1025,60 @@ describe('FeatureCockpit snapshot rendering', () => {
     await waitFor(() => expect(card).toHaveFocus());
   });
 
+  it('opens the publish modal and focuses its repository card from the inline banner', async () => {
+    const repoError = {
+      code: 'publish_push_failed',
+      class: 'needs_action' as const,
+      title: 'Repository publish failed',
+      summary: 'Publishing repository "repo-a" failed.',
+    };
+    const ref = {
+      scope: 'repository' as const,
+      code: 'publish_push_failed',
+      featureId: FEATURE_ID,
+      repository: 'repo-a',
+    };
+    const bannerItem: AttentionItem = {
+      kind: 'error',
+      id: `error:${FEATURE_ID}:repository:repo-a:publish_push_failed`,
+      featureId: FEATURE_ID,
+      waitingSince: '2026-08-05T12:00:00.000Z',
+      ref,
+      class: 'needs_action',
+      code: 'publish_push_failed',
+      title: 'Repository publish failed',
+    };
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'CodeReady',
+        errors: [{ ref, error: repoError }],
+        actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-complete',
+      canMarkDone: true,
+      repos: [
+        { repo: 'repo-a', publishable: true, touched: true, status: 'eligible', error: repoError },
+      ],
+    });
+    renderCockpit(mock, true, [bannerItem]);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    // The banner stands in for the card while the publish modal is closed.
+    const banner = screen.getByRole('region', { name: 'Agent request' });
+    expect(banner).toHaveTextContent('Repository publish failed');
+    await user.click(within(banner).getByRole('button', { name: 'Open' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Publish reviewed changes' });
+    const card = await within(dialog).findByRole('alert');
+    await waitFor(() => expect(card).toHaveFocus());
+    // The owning card is mounted, so the stand-in banner withdraws.
+    expect(screen.queryByRole('region', { name: 'Agent request' })).not.toBeInTheDocument();
+  });
+
   it('opens the completed transcript from Run record', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
@@ -1692,6 +1746,36 @@ describe('FeatureCockpit warnings', () => {
     canonicalWarning({
       summary: `The Implement effort "high" is beyond what ${model} supports.`,
     });
+
+  it('renders an immediate creation warning in the same canonical status area', async () => {
+    const warning = canonicalWarning({
+      code: 'branch_collision_probe_unavailable',
+      title: 'Remote branch check unavailable',
+      summary: 'The feature branch could not be checked against its origin.',
+    });
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({ status: 'Created', warnings: [] }),
+    });
+    render(
+      <FeatureCockpit
+        featureId={FEATURE_ID}
+        titleHint="Search revamp"
+        onClose={vi.fn()}
+        onLoadedName={vi.fn()}
+        attentionItems={[]}
+        refreshAttention={() => Promise.resolve([])}
+        attentionDrafts={emptyAttentionDrafts()}
+        setAttentionDrafts={vi.fn()}
+        creationWarnings={[warning]}
+      />,
+    );
+
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    const notice = screen.getByText('Remote branch check unavailable').closest('.error-surface');
+    expect(notice).toHaveAttribute('role', 'status');
+    expect(notice).toHaveClass('error-surface--compact', 'error-surface--warning');
+    expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
+  });
 
   it('renders one compact status surface per effort-drift warning with no action', async () => {
     const mock = installAgenticoMock({

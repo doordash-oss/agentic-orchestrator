@@ -21,9 +21,8 @@ limitations under the License.
  * "Explain in chat" question into the AMA panel. Prop drilling the requester
  * through all of them would thread an app-root concern through every
  * intermediate surface, so the provider mounts once in App and any
- * ErrorSurface asks for it here. With no provider mounted the hook returns
- * null and the chat affordance is omitted, keeping isolated component
- * renders (and their tests) chat-free.
+ * ErrorSurface asks for it here. While disconnected, or with no provider
+ * mounted, the hook returns null and the chat affordance is omitted.
  */
 import { createContext, useContext, type ReactNode } from 'react';
 import type { AppRouteEvent } from '../../shared/ipc';
@@ -37,13 +36,14 @@ export function ExplainChatProvider({
   requestRoute,
   children,
 }: {
-  requestRoute: ExplainChatRequester;
+  /** Null while disconnected: chat requires a ready server. */
+  requestRoute: ExplainChatRequester | null;
   children: ReactNode;
 }): React.ReactElement {
   return <ExplainChatContext.Provider value={requestRoute}>{children}</ExplainChatContext.Provider>;
 }
 
-/** The app-root route requester, or null when no provider is mounted. */
+/** The app-root route requester, or null when chat is unavailable. */
 export function useExplainChat(): ExplainChatRequester | null {
   return useContext(ExplainChatContext);
 }

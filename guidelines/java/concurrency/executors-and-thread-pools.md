@@ -16,14 +16,14 @@ executor.submit(() -> processRequest(request));
 
 ## Choosing an Executor Type
 
-| Executor | Use Case |
-|----------|----------|
-| `newVirtualThreadPerTaskExecutor()` | IO-bound work (Java 21+) — preferred default |
-| `newFixedThreadPool(n)` | CPU-bound work with known parallelism |
-| `newCachedThreadPool()` | Short-lived tasks with variable load (be careful — unbounded) |
-| `newSingleThreadExecutor()` | Sequential task execution, event loops |
-| `newScheduledThreadPool(n)` | Delayed or periodic tasks |
-| `newWorkStealingPool()` | CPU-bound fork/join work |
+| Executor                            | Use Case                                                      |
+| ----------------------------------- | ------------------------------------------------------------- |
+| `newVirtualThreadPerTaskExecutor()` | IO-bound work (Java 21+) — preferred default                  |
+| `newFixedThreadPool(n)`             | CPU-bound work with known parallelism                         |
+| `newCachedThreadPool()`             | Short-lived tasks with variable load (be careful — unbounded) |
+| `newSingleThreadExecutor()`         | Sequential task execution, event loops                        |
+| `newScheduledThreadPool(n)`         | Delayed or periodic tasks                                     |
+| `newWorkStealingPool()`             | CPU-bound fork/join work                                      |
 
 **Java 21+ recommendation**: for IO-bound work, use virtual threads instead of
 fixed thread pools. Reserve platform thread pools for CPU-bound computation.
@@ -31,11 +31,13 @@ fixed thread pools. Reserve platform thread pools for CPU-bound computation.
 ## Thread Pool Sizing
 
 For **CPU-bound** tasks:
+
 ```
 threads = number of CPU cores (Runtime.getRuntime().availableProcessors())
 ```
 
 For **IO-bound** tasks (pre-Java 21):
+
 ```
 threads = CPU cores * (1 + wait_time / compute_time)
 ```

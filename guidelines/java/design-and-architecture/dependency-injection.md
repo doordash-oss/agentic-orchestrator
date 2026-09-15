@@ -19,6 +19,7 @@ public class OrderService {
 ```
 
 **Benefits**:
+
 - Dependencies are visible in the constructor signature
 - Fields can be `final` — immutable after construction
 - Objects are always fully initialized — no half-constructed state
@@ -58,6 +59,7 @@ public class OrderService {
 ```
 
 **When to use which**:
+
 - **Manual DI** — small services, libraries, CLIs, when you want zero framework magic
 - **Framework DI** — large applications with many components, when you benefit from auto-wiring and lifecycle management
 

@@ -17,6 +17,7 @@ defer mu.Unlock()
 - Not goroutine-tied: one goroutine can lock, another can unlock.
 
 **Rules:**
+
 - Always `defer mu.Unlock()` immediately after `Lock()` — prevents forgetting on
   early returns.
 - Keep critical sections small — don't call external functions while holding a lock.
@@ -135,6 +136,7 @@ cfg.Store(old)
 ```
 
 **When to use atomics vs mutexes:**
+
 - Atomics: single counter, flag, or pointer. One load/store/add/CAS.
 - Mutexes: multiple related variables that must change together, or complex
   invariants.

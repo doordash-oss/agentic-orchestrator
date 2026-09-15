@@ -1025,6 +1025,60 @@ describe('FeatureCockpit snapshot rendering', () => {
     await waitFor(() => expect(card).toHaveFocus());
   });
 
+  it('opens the publish modal and focuses its repository card from the inline banner', async () => {
+    const repoError = {
+      code: 'publish_push_failed',
+      class: 'needs_action' as const,
+      title: 'Repository publish failed',
+      summary: 'Publishing repository "repo-a" failed.',
+    };
+    const ref = {
+      scope: 'repository' as const,
+      code: 'publish_push_failed',
+      featureId: FEATURE_ID,
+      repository: 'repo-a',
+    };
+    const bannerItem: AttentionItem = {
+      kind: 'error',
+      id: `error:${FEATURE_ID}:repository:repo-a:publish_push_failed`,
+      featureId: FEATURE_ID,
+      waitingSince: '2026-08-05T12:00:00.000Z',
+      ref,
+      class: 'needs_action',
+      code: 'publish_push_failed',
+      title: 'Repository publish failed',
+    };
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'CodeReady',
+        errors: [{ ref, error: repoError }],
+        actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-complete',
+      canMarkDone: true,
+      repos: [
+        { repo: 'repo-a', publishable: true, touched: true, status: 'eligible', error: repoError },
+      ],
+    });
+    renderCockpit(mock, true, [bannerItem]);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    // The banner stands in for the card while the publish modal is closed.
+    const banner = screen.getByRole('region', { name: 'Agent request' });
+    expect(banner).toHaveTextContent('Repository publish failed');
+    await user.click(within(banner).getByRole('button', { name: 'Open' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Publish reviewed changes' });
+    const card = await within(dialog).findByRole('alert');
+    await waitFor(() => expect(card).toHaveFocus());
+    // The owning card is mounted, so the stand-in banner withdraws.
+    expect(screen.queryByRole('region', { name: 'Agent request' })).not.toBeInTheDocument();
+  });
+
   it('opens the completed transcript from Run record', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({

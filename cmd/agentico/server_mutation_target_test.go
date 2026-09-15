@@ -3153,7 +3153,7 @@ func TestServerMutationTargetCompletionPreflightCarriesRepoError(t *testing.T) {
 	target, _, store, f := newPublishActionTarget(t)
 	diagnostics := "creating pull request: POST /repos/org/repo-a/pulls: 502 Bad Gateway " +
 		"with a diagnostics tail well past the safe-display bound so the adapter must bound it " +
-		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		strings.Repeat("a", 2048)
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.RepoStates[testRepoAName].Error = &errcat.FailureRecord{
 			Code: errcat.PublishPullRequestFailed,

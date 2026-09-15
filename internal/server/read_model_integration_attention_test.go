@@ -24,7 +24,7 @@ import (
 
 // attentionDiagnosticsBudget is the safe-display bound wireIntegrationAttention
 // applies to raw attention diagnostics, plus the "..." truncation marker.
-const attentionDiagnosticsBudget = 243
+const attentionDiagnosticsBudget = maxStoredDiagnosticsLen + 3
 
 // removedEntryWireKeys are the per-entry journal properties deleted with the
 // free-form attention era; they must never reappear on the wire.
@@ -51,7 +51,7 @@ func mergeConflictRecord() *errcat.FailureRecord {
 				ChildHeadSHA:    "9b1e7a2c4d6f",
 			}},
 		},
-		Diagnostics: strings.Repeat("conflict hunk ", 40),
+		Diagnostics: strings.Repeat("conflict hunk ", 160),
 	}
 }
 

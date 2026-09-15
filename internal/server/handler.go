@@ -589,7 +589,7 @@ func listFeatures(lister FeatureLister) ([]*feature.Feature, []Error, error) {
 	for _, w := range partial.Warnings {
 		var diagnostics string
 		if w.Err != nil {
-			diagnostics = SafeDisplayText(w.Err.Error(), 240)
+			diagnostics = SafeDisplayText(w.Err.Error(), maxStoredDiagnosticsLen)
 		}
 		warnings = append(warnings, wireError(errcat.New(
 			errcat.FeatureLoadFailed,

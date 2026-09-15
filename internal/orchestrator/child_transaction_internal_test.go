@@ -1167,3 +1167,91 @@ func TestTransactionPassThroughSyncFailureRollsBackApplied(t *testing.T) {
 		t.Fatalf("repo 0: worktree HEAD = %s, want old SHA %s after rollback", wtHead, oldSHAs[0])
 	}
 }
+
+// TestTransactionUnchangedRepoPassesThrough proves a non-rebase child that
+// left one repository untouched integrates without asking git to merge a head
+// that is already the parent anchor: the untouched repo becomes a pass-through
+// candidate, the changed repo still gets a real two-parent merge, and the
+// apply phase advances only the changed repo's ref.
+func TestTransactionUnchangedRepoPassesThrough(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	tests := []struct {
+		name string
+		kind string
+	}{
+		{name: "review feedback child", kind: feature.ChildKindReviewFeedback},
+		{name: "refactor child", kind: feature.ChildKindRefactor},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fx := newMultiRepoTransactionFixture(t, 2)
+
+			// The child never touched repoA: its branch head is the parent anchor.
+			txGit(t, fx.childWTs[0], "reset", "--hard", fx.parentSHA[0])
+			child, _ := fx.store.Load(fx.child.ID)
+			child.Parent.Kind = tt.kind
+			if err := fx.store.Save(child); err != nil {
+				t.Fatalf("save child: %v", err)
+			}
+			parent, child := fx.reload()
+
+			o := fx.orchestrator()
+			journal, err := o.prepareTransactionCandidates(child, parent)
+			if err != nil {
+				t.Fatalf("prepareTransactionCandidates() error = %v", err)
+			}
+			if journal == nil {
+				t.Fatal("journal is nil")
+			}
+			if journal.Phase != feature.TransactionPhasePrepared {
+				t.Fatalf("journal phase = %q, want prepared", journal.Phase)
+			}
+			if journal.Attention != nil {
+				t.Fatalf("journal attention = %+v, want none", journal.Attention)
+			}
+
+			untouched := journal.Entries[0]
+			if untouched.PrepState != feature.RepoPrepPrepared {
+				t.Fatalf("repo 0: prep state = %q, want prepared", untouched.PrepState)
+			}
+			if untouched.CandidateSHA != untouched.ParentAnchorSHA || untouched.CandidateSHA != fx.parentSHA[0] {
+				t.Fatalf("repo 0: CandidateSHA = %s, want pass-through anchor %s", untouched.CandidateSHA, fx.parentSHA[0])
+			}
+
+			changed := journal.Entries[1]
+			if changed.PrepState != feature.RepoPrepPrepared {
+				t.Fatalf("repo 1: prep state = %q, want prepared", changed.PrepState)
+			}
+			parents := txGit(t, fx.repoDirs[1], "rev-list", "--parents", "-n", "1", changed.CandidateSHA)
+			if fields := strings.Fields(parents); len(fields) != 3 || fields[1] != changed.ParentAnchorSHA || fields[2] != changed.ChildHeadSHA {
+				t.Fatalf("repo 1: candidate parents = %q, want merge of %s and %s", parents, changed.ParentAnchorSHA, changed.ChildHeadSHA)
+			}
+
+			// Neither parent ref moves during preparation.
+			for i := range fx.repoDirs {
+				if got := fx.refSHA(i, "refs/heads/feature/parent"); got != fx.parentSHA[i] {
+					t.Fatalf("repo %d: ref = %s after prepare, want %s", i, got, fx.parentSHA[i])
+				}
+			}
+
+			if err := o.applyTransactionCandidates(child, parent, journal); err != nil {
+				t.Fatalf("applyTransactionCandidates() error = %v", err)
+			}
+			if journal.Phase != feature.TransactionPhaseApplied {
+				t.Fatalf("journal phase = %q after apply, want applied", journal.Phase)
+			}
+			if got := fx.refSHA(0, "refs/heads/feature/parent"); got != fx.parentSHA[0] {
+				t.Fatalf("repo 0: ref = %s after apply, want untouched anchor %s", got, fx.parentSHA[0])
+			}
+			if got := fx.refSHA(1, "refs/heads/feature/parent"); got != changed.CandidateSHA {
+				t.Fatalf("repo 1: ref = %s after apply, want candidate %s", got, changed.CandidateSHA)
+			}
+			_, reloaded := fx.reload()
+			if reloaded.Parent.Transaction == nil || reloaded.Parent.Transaction.Attention != nil {
+				t.Fatalf("persisted transaction = %+v, want applied journal without attention", reloaded.Parent.Transaction)
+			}
+		})
+	}
+}

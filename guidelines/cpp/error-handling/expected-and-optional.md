@@ -28,12 +28,12 @@ auto user = findUser(42).value_or(User::anonymous());
 
 Chain operations that short-circuit on the first error:
 
-| Operation | Applies to | Function returns | Result |
-|-----------|-----------|-----------------|--------|
-| `and_then(f)` | value | `expected<U,E>` | Chain that can fail |
-| `transform(f)` | value | `U` (plain) | Infallible transform |
-| `or_else(f)` | error | `expected<T,E2>` | Error recovery |
-| `transform_error(f)` | error | `E2` | Error mapping |
+| Operation            | Applies to | Function returns | Result               |
+| -------------------- | ---------- | ---------------- | -------------------- |
+| `and_then(f)`        | value      | `expected<U,E>`  | Chain that can fail  |
+| `transform(f)`       | value      | `U` (plain)      | Infallible transform |
+| `or_else(f)`         | error      | `expected<T,E2>` | Error recovery       |
+| `transform_error(f)` | error      | `E2`             | Error mapping        |
 
 ```cpp
 std::expected<Report, ReportError>

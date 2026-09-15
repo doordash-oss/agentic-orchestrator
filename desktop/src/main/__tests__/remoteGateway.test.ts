@@ -247,7 +247,7 @@ function makeEnv(options: EnvOptions = {}): Env {
         }
         return { status: 200, body: entry };
       }
-      if (url.endsWith('/api/v1/readiness')) {
+      if (url.endsWith('/api/v1/readiness') || url.endsWith('/api/v1/readiness/runtime')) {
         if (readinessErrors[base] === true) {
           return { status: 401, body: { code: 'unauthorized' } };
         }

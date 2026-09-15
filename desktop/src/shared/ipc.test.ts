@@ -75,6 +75,14 @@ import {
   ServerRemoveRequestSchema,
   ServerTokenStatusRequestSchema,
   ServerTokenStatusResultSchema,
+  RepositorySourcesRequestSchema,
+  RepositoryOriginStatusRequestSchema,
+  RepositoryOriginStatusResultSchema,
+  RepositoryUpdateSourceRequestSchema,
+  RepositoryUpdateSourceResultSchema,
+  RepositorySourceReconcileRequestSchema,
+  RepositorySourceReconcileResultSchema,
+  RepositorySourcesResultSchema,
 } from './ipc';
 import * as ipcModule from './ipc';
 import { assertNoPrototypePollution } from './sanitize';
@@ -86,6 +94,427 @@ const canonicalErrorFixture = {
   summary: 'The connection attempt failed unexpectedly: boom.',
   remediation: { hint: 'Retry.' },
 };
+
+describe('repository source IPC contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    commonDir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+
+  it('accepts structured selectors and independent branch and detached results', () => {
+    expect(
+      RepositorySourcesRequestSchema.parse({
+        mode: 'current',
+        repositories: [
+          { repoKey: 'repo-a', identity },
+          {
+            repoKey: 'repo-b',
+            identity: {
+              path: '/work/repo-b',
+              commonDir: '/work/repo-b/.git',
+              device: '3',
+              inode: '4',
+            },
+          },
+        ],
+      }),
+    ).toStrictEqual({
+      mode: 'current',
+      repositories: [
+        { repoKey: 'repo-a', identity },
+        {
+          repoKey: 'repo-b',
+          identity: {
+            path: '/work/repo-b',
+            commonDir: '/work/repo-b/.git',
+            device: '3',
+            inode: '4',
+          },
+        },
+      ],
+    });
+
+    expect(
+      RepositorySourcesResultSchema.parse({
+        repositories: [
+          {
+            repoKey: 'repo-a',
+            identity,
+            mode: 'default',
+            kind: 'branch',
+            branch: 'release/2026/q3',
+            observedSha: 'a'.repeat(40),
+          },
+          {
+            repoKey: 'repo-b',
+            identity: {
+              path: '/work/repo-b',
+              commonDir: '/work/repo-b/.git',
+              device: '3',
+              inode: '4',
+            },
+            mode: 'current',
+            kind: 'detached',
+            observedSha: 'b'.repeat(40),
+          },
+        ],
+      }).repositories.map(({ repoKey, kind, branch }) => ({ repoKey, kind, branch })),
+    ).toStrictEqual([
+      { repoKey: 'repo-a', kind: 'branch', branch: 'release/2026/q3' },
+      { repoKey: 'repo-b', kind: 'detached', branch: undefined },
+    ]);
+  });
+
+  it('rejects arbitrary revision authority and oversized selection batches', () => {
+    expect(
+      RepositorySourcesRequestSchema.safeParse({
+        mode: 'default',
+        repositories: [
+          {
+            repoKey: 'repo-a',
+            identity,
+            path: '/renderer/chosen/path',
+            revision: 'refs/tags/renderer-chosen',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourcesRequestSchema.safeParse({
+        mode: 'default',
+        repositories: Array.from({ length: 33 }, (_, index) => ({
+          repoKey: `repo-${index}`,
+          identity,
+        })),
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourcesResultSchema.safeParse({
+        repositories: [
+          {
+            repoKey: 'repo-a',
+            identity,
+            mode: 'current',
+            kind: 'detached',
+            observedSha: 'short',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('repository origin status IPC contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    commonDir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+
+  it('accepts selection requests with one-shot refresh keys', () => {
+    expect(
+      RepositoryOriginStatusRequestSchema.parse({
+        mode: 'default',
+        repositories: [{ repoKey: 'repo-a', identity }],
+        refresh: ['repo-a'],
+      }),
+    ).toStrictEqual({
+      mode: 'default',
+      repositories: [{ repoKey: 'repo-a', identity }],
+      refresh: ['repo-a'],
+    });
+    expect(
+      RepositoryOriginStatusRequestSchema.safeParse({
+        mode: 'default',
+        repositories: [{ repoKey: 'repo-a', identity, path: '/renderer/chosen/path' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryOriginStatusRequestSchema.safeParse({
+        mode: 'default',
+        repositories: [{ repoKey: 'repo-a', identity }],
+        refresh: Array.from({ length: 33 }, () => 'repo-a'),
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts typed snapshots and rejects unknown statuses or invented SHAs', () => {
+    expect(
+      RepositoryOriginStatusResultSchema.parse({
+        repositories: [
+          {
+            repoKey: 'repo-a',
+            identity,
+            mode: 'default',
+            kind: 'branch',
+            branch: 'main',
+            localSha: 'a'.repeat(40),
+            originBranch: 'main',
+            status: 'remote_branch_missing',
+            issue: {
+              code: 'origin_branch_missing',
+              class: 'warning',
+              title: 'Origin branch missing',
+              summary: 'The mapped origin branch no longer exists on the remote.',
+            },
+          },
+        ],
+      }).repositories[0],
+    ).toMatchObject({ status: 'remote_branch_missing', originBranch: 'main' });
+    expect(
+      RepositoryOriginStatusResultSchema.safeParse({
+        repositories: [
+          {
+            repoKey: 'repo-a',
+            identity,
+            mode: 'default',
+            kind: 'branch',
+            status: 'sideways',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryOriginStatusResultSchema.safeParse({
+        repositories: [
+          {
+            repoKey: 'repo-a',
+            identity,
+            mode: 'default',
+            kind: 'detached',
+            status: 'detached',
+            commit: 'short',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('repository update source IPC contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    commonDir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+  const request = {
+    repoKey: 'repo-a',
+    identity,
+    mode: 'default' as const,
+    branch: 'release/2026/q3',
+    originBranch: 'upstream-main',
+    expectedLocalSha: 'a'.repeat(40),
+    expectedOriginSha: 'c'.repeat(40),
+    checkoutHeadRef: 'refs/heads/main',
+    checkoutHeadSha: 'e'.repeat(40),
+  };
+
+  it('accepts one bound update request and rejects invented SHAs or authority fields', () => {
+    expect(RepositoryUpdateSourceRequestSchema.parse(request)).toStrictEqual(request);
+    expect(
+      RepositoryUpdateSourceRequestSchema.safeParse({
+        ...request,
+        expectedOriginSha: 'not-a-sha',
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryUpdateSourceRequestSchema.safeParse({
+        ...request,
+        checkoutHeadRef: '',
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryUpdateSourceRequestSchema.safeParse({
+        ...request,
+        path: '/renderer/chosen/path',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts typed results including a stale status snapshot and rejects unknown reasons', () => {
+    const result = RepositoryUpdateSourceResultSchema.parse({
+      result: 'stale',
+      reason: 'local_tip_changed',
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default',
+      branch: 'release/2026/q3',
+      originBranch: 'upstream-main',
+      status: {
+        repoKey: 'repo-a',
+        identity,
+        mode: 'default',
+        kind: 'branch',
+        branch: 'release/2026/q3',
+        status: 'behind',
+        updateBlockers: [
+          'dirty_target_checkout',
+          'checkout_operation_in_progress',
+          'ignored_path_collision',
+          'checkout_uninspectable',
+        ],
+        checkoutHeadRef: 'refs/heads/main',
+        checkoutHeadSha: 'e'.repeat(40),
+      },
+    });
+    expect(result.reason).toBe('local_tip_changed');
+    expect(result.status?.updateBlockers).toEqual([
+      'dirty_target_checkout',
+      'checkout_operation_in_progress',
+      'ignored_path_collision',
+      'checkout_uninspectable',
+    ]);
+    expect(result.status?.checkoutHeadRef).toBe('refs/heads/main');
+    expect(result.status?.checkoutHeadSha).toBe('e'.repeat(40));
+    // The removed Phase 8 original-checkout blocker must never parse again.
+    expect(
+      RepositoryUpdateSourceResultSchema.safeParse({
+        result: 'stale',
+        reason: 'branch_checked_out',
+        repoKey: 'repo-a',
+        identity,
+        mode: 'default',
+        branch: 'main',
+        originBranch: 'main',
+        status: {
+          repoKey: 'repo-a',
+          identity,
+          mode: 'default',
+          kind: 'branch',
+          branch: 'main',
+          status: 'behind',
+          updateBlockers: ['branch_checked_out_in_original_checkout'],
+        },
+      }).success,
+    ).toBe(false);
+    // The original-checkout safety refusal reasons cross IPC.
+    for (const reason of [
+      'dirty_checkout',
+      'checkout_operation_in_progress',
+      'ignored_path_collision',
+      'checkout_conflict',
+    ]) {
+      expect(
+        RepositoryUpdateSourceResultSchema.safeParse({
+          result: 'stale',
+          reason,
+          repoKey: 'repo-a',
+          identity,
+          mode: 'default',
+          branch: 'main',
+          originBranch: 'main',
+        }).success,
+      ).toBe(true);
+    }
+    expect(
+      RepositoryUpdateSourceResultSchema.safeParse({
+        result: 'stale',
+        reason: 'sideways',
+        repoKey: 'repo-a',
+        identity,
+        mode: 'default',
+        branch: 'main',
+        originBranch: 'main',
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryUpdateSourceResultSchema.safeParse({
+        result: 'updated',
+        repoKey: 'repo-a',
+        identity,
+        mode: 'default',
+        branch: 'main',
+        originBranch: 'main',
+        localSha: 'not-a-sha',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts an optional checkout binding on the settlement request and rejects malformed values', () => {
+    const request = {
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default' as const,
+      branch: 'release/2026/q3',
+      originBranch: 'upstream-main',
+      expectedLocalSha: 'a'.repeat(40),
+      expectedOriginSha: 'c'.repeat(40),
+    };
+    // An unoccupied attempt binds no checkout identity.
+    expect(RepositorySourceReconcileRequestSchema.parse(request)).toStrictEqual(request);
+    const originalCheckout = {
+      ...request,
+      checkoutHeadRef: 'refs/heads/release/2026/q3',
+      checkoutHeadSha: 'a'.repeat(40),
+    };
+    expect(RepositorySourceReconcileRequestSchema.parse(originalCheckout)).toStrictEqual(
+      originalCheckout,
+    );
+    expect(
+      RepositorySourceReconcileRequestSchema.safeParse({
+        ...originalCheckout,
+        checkoutHeadRef: '',
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourceReconcileRequestSchema.safeParse({
+        ...originalCheckout,
+        checkoutHeadSha: 'not-a-sha',
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourceReconcileRequestSchema.safeParse({
+        ...originalCheckout,
+        path: '/renderer/chosen/path',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts an observed checkout state on the settlement result and rejects unknown states', () => {
+    const base = {
+      outcome: 'expected_target_present' as const,
+      repoKey: 'repo-a',
+      identity,
+      mode: 'default' as const,
+      branch: 'main',
+      originBranch: 'main',
+      localSha: 'c'.repeat(40),
+    };
+    const result = RepositorySourceReconcileResultSchema.parse({
+      ...base,
+      checkout: { state: 'clean', headRef: 'refs/heads/main', headSha: 'c'.repeat(40) },
+    });
+    expect(result.checkout).toEqual({
+      state: 'clean',
+      headRef: 'refs/heads/main',
+      headSha: 'c'.repeat(40),
+    });
+    // An unoccupied settlement carries no checkout observation.
+    expect(RepositorySourceReconcileResultSchema.parse(base).checkout).toBeUndefined();
+    expect(
+      RepositorySourceReconcileResultSchema.safeParse({
+        ...base,
+        checkout: { state: 'sideways' },
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourceReconcileResultSchema.safeParse({
+        ...base,
+        checkout: { state: 'dirty', headSha: 'not-a-sha' },
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourceReconcileResultSchema.safeParse({
+        ...base,
+        checkout: { state: 'unobserved', path: '/renderer/chosen/path' },
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe('module surface', () => {
   it('exports no safe-error schema: the canonical error is the one error shape', () => {
@@ -1228,8 +1657,8 @@ describe('ReadinessSnapshotSchema', () => {
       },
     },
     configuration: { valid: true },
-    workspaceRoots: [{ path: '/w', valid: true }],
-    repositories: [{ name: 'r', path: '/w/r', valid: true }],
+    workspaceRoots: [{ path: '/w', valid: true, cloneEligible: true }],
+    repositories: [{ name: 'r', path: '/w/r', valid: true, featureReady: true }],
     issues: [issue],
   };
 

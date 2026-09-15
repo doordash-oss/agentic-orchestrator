@@ -162,12 +162,12 @@ for req := range requests {
 
 ## Channel vs Mutex Decision Guide
 
-| Use Case | Mechanism |
-|----------|-----------|
-| Transfer ownership of data | Channel |
-| Distribute work (fan-out) | Channel |
-| Signal events (done, ready) | Channel |
-| Protect shared data structure | Mutex |
-| Simple counter | sync/atomic |
-| Coordinate pipeline stages | Channel |
-| Guard multiple related variables | Mutex |
+| Use Case                         | Mechanism   |
+| -------------------------------- | ----------- |
+| Transfer ownership of data       | Channel     |
+| Distribute work (fan-out)        | Channel     |
+| Signal events (done, ready)      | Channel     |
+| Protect shared data structure    | Mutex       |
+| Simple counter                   | sync/atomic |
+| Coordinate pipeline stages       | Channel     |
+| Guard multiple related variables | Mutex       |

@@ -15,11 +15,13 @@
 package feature
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +63,10 @@ type Manager struct {
 	Config    *config.Config
 	Worktrees WorktreeOps // optional for basic lifecycle; required for child launch/integration safety checks
 	PRs       PRCloser    // optional; nil skips PR close on rewind
+	// BranchProbeOptions and BranchProbeBudget are per-manager injection points
+	// for bounded feature-branch selection. Zero values use safe defaults.
+	BranchProbeOptions git.BranchProbeOptions
+	BranchProbeBudget  time.Duration
 
 	setupMu    sync.Mutex
 	setupLocks map[string]struct{}
@@ -139,6 +145,35 @@ type CreateOptions struct {
 	RiskLevel               RiskLevel
 	Pipeline                PipelineProfile
 	QueueSetup              bool
+	SourceExpectations      []RepoSourceExpectation
+	PinLocalSources         bool
+}
+
+type RepoSourceExpectation struct {
+	RepoKey string
+	Source  git.LocalSourceExpectation
+}
+
+// RepoSourceAcceptanceError identifies the selected repository whose local
+// source could not be accepted while preserving the underlying Git error for
+// conflict classification and refreshed-source extraction at API boundaries.
+type RepoSourceAcceptanceError struct {
+	Repo string
+	Err  error
+}
+
+func (e *RepoSourceAcceptanceError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("accepting local source for repo %q: %v", e.Repo, e.Err)
+}
+
+func (e *RepoSourceAcceptanceError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 // Re-entrancy / crash recovery:
@@ -195,6 +230,14 @@ func (m *Manager) Create(name, description string, repos []string, models config
 
 	var featureRepos []FeatureRepo
 	allRepos := config.AllRepos(m.Config)
+	expectedByRepo := make(map[string]git.LocalSourceExpectation)
+	if len(opt.SourceExpectations) > 0 {
+		var err error
+		repos, expectedByRepo, err = reconcileSourceExpectations(repos, allRepos, opt.SourceExpectations)
+		if err != nil {
+			return nil, err
+		}
+	}
 	for _, repoName := range repos {
 		rc, ok := allRepos[repoName]
 		if !ok {
@@ -214,29 +257,93 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		})
 	}
 
-	// Ensure the branch name doesn't conflict with an existing upstream branch.
-	// If it does, append a random 4-char hex suffix and recheck (up to 5 attempts).
+	var branchProbeWarnings []git.BranchProbeWarning
+	// Ensure the branch name is locally unique in every usable selected checkout
+	// and does not conflict with a confirmed origin branch. Origin failures are
+	// warnings; local uniqueness failures are blocking.
 	if opt.QueueSetup || m.Worktrees != nil {
+		probeRepos := make([]git.BranchProbeRepository, 0, len(featureRepos))
+		for _, repo := range featureRepos {
+			if _, ok := git.ResolveRepoIdentity(repo.Path); !ok {
+				// Legacy mock-backed callers may not own real checkouts. Source-pinned
+				// creation rejects these below; valid production repositories always
+				// participate in local collision checking.
+				continue
+			}
+			probeRepos = append(probeRepos, git.BranchProbeRepository{
+				Name: repo.Name, Path: repo.Path,
+				ProbeOrigin: repo.Publishable != nil && *repo.Publishable,
+			})
+		}
+		budget := m.BranchProbeBudget
+		if budget <= 0 {
+			budget = 5 * time.Second
+		}
+		probeCtx, cancelProbe := context.WithTimeout(context.Background(), budget)
+		defer cancelProbe()
 		baseSlug := slug
+		selected := false
 		for attempt := 0; attempt < 5; attempt++ {
 			workspaceSlug = WorkspaceSlug(slug, id)
 			branch := git.BranchName(workspaceSlug)
-			conflict := false
-			for _, fr := range featureRepos {
-				if fr.Publishable != nil && !*fr.Publishable {
-					continue // no remote to check
-				}
-				if git.BranchExistsOnRemote(fr.Path, branch) {
-					conflict = true
-					break
-				}
+			result, err := git.ProbeBranchCandidate(probeCtx, probeRepos, branch, m.BranchProbeOptions)
+			if err != nil {
+				return nil, fmt.Errorf("checking generated feature branch %q: %w", branch, err)
 			}
-			if !conflict {
+			if result.State != git.BranchProbeCollision {
+				branchProbeWarnings = result.Warnings
+				selected = true
 				break
 			}
 			slug = baseSlug + "-" + randomSuffix()
 		}
+		if !selected {
+			return nil, fmt.Errorf("could not generate a unique feature branch after 5 attempts")
+		}
 		workspaceSlug = WorkspaceSlug(slug, id)
+	}
+
+	acceptedCommits := make(map[string]string, len(featureRepos))
+	if opt.PinLocalSources || len(expectedByRepo) > 0 {
+		repoPaths := make([]string, 0, len(featureRepos))
+		for _, repo := range featureRepos {
+			repoPaths = append(repoPaths, repo.Path)
+		}
+		unlockRepos := git.LockRepositories(repoPaths)
+		defer unlockRepos()
+		for i := range featureRepos {
+			repo := &featureRepos[i]
+			identity, ok := git.ResolveRepoIdentity(repo.Path)
+			if !ok {
+				return nil, fmt.Errorf("repo %q is no longer a usable git checkout", repo.Name)
+			}
+			mode := git.LocalSourceModeDefault
+			if opt.UseCurrentBranch {
+				mode = git.LocalSourceModeCurrent
+			}
+			if value, ok := opt.UseCurrentBranchPerRepo[repo.Name]; ok {
+				if value {
+					mode = git.LocalSourceModeCurrent
+				} else {
+					mode = git.LocalSourceModeDefault
+				}
+			}
+			var source git.LocalSource
+			var err error
+			if expected, ok := expectedByRepo[repo.Name]; ok {
+				source, err = git.AcceptLocalSource(context.Background(), repo.Path, expected)
+			} else {
+				source, err = git.InspectLocalSource(context.Background(), repo.Path, mode)
+			}
+			if err != nil {
+				return nil, &RepoSourceAcceptanceError{Repo: repo.Name, Err: err}
+			}
+			repo.Source = &AcceptedRepoSource{
+				Mode: string(source.Mode), Kind: source.Kind, Branch: source.Branch, Commit: source.Commit,
+				Path: identity.Path, CommonDir: identity.CommonDir, Device: identity.Device, Inode: identity.Inode, BirthTime: identity.BirthTime,
+			}
+			acceptedCommits[repo.Name] = source.Commit
+		}
 	}
 
 	if opt.QueueSetup || m.Worktrees != nil {
@@ -281,7 +388,8 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		ActiveRun: 1,
 		RunCount:  1,
 		// See SchemaVersionCurrent in feature.go for the version history.
-		SchemaVersion: SchemaVersionCurrent,
+		SchemaVersion:    SchemaVersionCurrent,
+		CreationWarnings: branchProbeWarnings,
 	}
 	// Pre-populate the active run with one (empty) RepoState entry per repo
 	// so downstream readers can iterate the map deterministically. The
@@ -298,6 +406,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		run.Setup = NewActiveSetupState(featureRepos, images, opt.Attachments, now, SetupInitOptions{
 			UseCurrentBranch:        opt.UseCurrentBranch,
 			UseCurrentBranchPerRepo: opt.UseCurrentBranchPerRepo,
+			ExactStartPointPerRepo:  acceptedCommits,
 		})
 	}
 	f.SetRun(run)
@@ -314,13 +423,15 @@ func (m *Manager) Create(name, description string, repos []string, models config
 	// Create worktrees for each repo if worktree manager is configured.
 	if m.Worktrees != nil {
 		for i, fr := range featureRepos {
-			startPoint := fr.BaseBranch
-			useCurrent := opt.UseCurrentBranch
-			if v, ok := opt.UseCurrentBranchPerRepo[fr.Name]; ok {
-				useCurrent = v
-			}
-			if useCurrent {
-				startPoint = "" // empty → HEAD in worktree.Create
+			startPoint := acceptedCommits[fr.Name]
+			if startPoint == "" {
+				startPoint = fr.BaseBranch
+				if opt.UseCurrentBranch {
+					startPoint = ""
+				}
+				if value, ok := opt.UseCurrentBranchPerRepo[fr.Name]; ok && value {
+					startPoint = ""
+				}
 			}
 			wtPath, err := m.Worktrees.Create(fr.Path, workspaceSlug, fr.Name, startPoint)
 			if err != nil {
@@ -381,6 +492,48 @@ func (m *Manager) Create(name, description string, repos []string, models config
 	}
 
 	return f, nil
+}
+
+func reconcileSourceExpectations(repos []string, allRepos map[string]config.RepoConfig, expectations []RepoSourceExpectation) ([]string, map[string]git.LocalSourceExpectation, error) {
+	if len(expectations) != len(repos) {
+		return nil, nil, fmt.Errorf("source expectations must describe every selected repository")
+	}
+	requested := make(map[string]struct{}, len(repos))
+	for _, repo := range repos {
+		requested[repo] = struct{}{}
+	}
+	keys := make([]string, 0, len(allRepos))
+	for key := range allRepos {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	resolvedRepos := make([]string, 0, len(expectations))
+	resolved := make(map[string]git.LocalSourceExpectation, len(expectations))
+	for _, expectation := range expectations {
+		if _, ok := requested[expectation.RepoKey]; !ok {
+			return nil, nil, fmt.Errorf("source expectation for unselected repo %q", expectation.RepoKey)
+		}
+		matched := ""
+		for _, key := range keys {
+			identity, ok := git.ResolveRepoIdentity(allRepos[key].Path)
+			if ok && identity.Equal(expectation.Source.Identity) {
+				matched = key
+				break
+			}
+		}
+		if matched == "" {
+			return nil, nil, &RepoSourceAcceptanceError{
+				Repo: expectation.RepoKey,
+				Err:  &git.LocalSourceStaleError{Reason: "the selected repository was removed or replaced"},
+			}
+		}
+		if _, duplicate := resolved[matched]; duplicate {
+			return nil, nil, fmt.Errorf("source expectations resolve to duplicate repo %q", matched)
+		}
+		resolvedRepos = append(resolvedRepos, matched)
+		resolved[matched] = expectation.Source
+	}
+	return resolvedRepos, resolved, nil
 }
 
 func (m *Manager) Get(id string) (*Feature, error) {

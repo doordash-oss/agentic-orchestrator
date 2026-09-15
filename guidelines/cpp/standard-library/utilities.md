@@ -2,11 +2,11 @@
 
 ## `std::optional` / `std::variant` / `std::any`
 
-| Type | Use when... |
-|------|-------------|
-| `optional<T>` | Value may or may not be present; single type |
-| `variant<T...>` | Value is one of a fixed set of types (compile-time) |
-| `any` | Types unknown at compile time; heterogeneous containers |
+| Type            | Use when...                                             |
+| --------------- | ------------------------------------------------------- |
+| `optional<T>`   | Value may or may not be present; single type            |
+| `variant<T...>` | Value is one of a fixed set of types (compile-time)     |
+| `any`           | Types unknown at compile time; heterogeneous containers |
 
 See [error-handling/expected-and-optional.md](../error-handling/expected-and-optional.md)
 and [type-safety/type-erasure-and-variants.md](../type-safety/type-erasure-and-variants.md)
@@ -57,6 +57,7 @@ auto elapsed = std::chrono::steady_clock::now() - start;
 ```
 
 **Rules:**
+
 - `steady_clock` for elapsed time (monotonic, never goes backward)
 - `system_clock` for wall clock / calendar display
 - Never `high_resolution_clock` for portability

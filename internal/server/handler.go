@@ -15,6 +15,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/clone"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -64,15 +66,45 @@ type apiHandler struct {
 	// uploads owns the octet-stream upload staging area under the runtime
 	// state dir; nil when the runtime identity has no state dir (tests that
 	// never stage uploads).
-	uploads               *uploadStore
+	uploads *uploadStore
+	// clones owns the repository clone lifecycle; nil when no clone
+	// service is available (tests, or a runtime without a state dir).
+	clones                CloneService
 	persistProviderModels func(llm.LLMProvider, []llm.ModelInfo) error
 	disableHostValidation bool
 	runtimePolicy         string
 	initGitRepository     func(path string) error
+	// initializeGitRepository is the injectable explicit-initialization
+	// adapter; nil means internal/git.InitializeRepository.
+	initializeGitRepository func(context.Context, string) (git.InitializeOutcome, error)
 
 	recoveryMu         sync.Mutex
 	recoverySnapshots  map[string][]ports.RecoveryItem
 	reviewSessionLocks *reviewSessionLockSet
+
+	// originChecks coordinates fetch-based origin checks for selected
+	// repository sources: coalesced attempts, completed snapshots, the
+	// global concurrency cap, and per-attempt deadlines.
+	originChecks *originCheckCoordinator
+
+	// updateSourceDeadline bounds one Update-from-origin attempt end to
+	// end; zero means defaultUpdateSourceDeadline. Injectable for
+	// deterministic deadline tests.
+	updateSourceDeadline time.Duration
+	// updateSourceOptions injects deterministic test controls (runners,
+	// pre-CAS hooks) for Update-from-origin; the zero value uses production
+	// defaults.
+	updateSourceOptions git.SourceUpdateOptions
+
+	// sourceUpdates tracks the lifetime of admitted Update-from-origin
+	// attempts so reconciliation reads and feature acceptance settle before
+	// concluding anything about a repository an admitted attempt may still
+	// mutate.
+	sourceUpdates *sourceUpdateTracker
+	// reconcileSourceDeadline bounds one settlement read end to end,
+	// including waiting out a full admitted update attempt; zero means
+	// defaultReconcileSourceDeadline. Injectable for deterministic tests.
+	reconcileSourceDeadline time.Duration
 
 	// readinessMu guards the cached provider readiness probe results served
 	// by /api/v1/readiness and refreshed by /api/v1/readiness/refresh.
@@ -109,31 +141,54 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		runtimePolicy = CompatibilityRuntimePolicy
 	}
 	handler := &apiHandler{
-		runtimePolicy:         runtimePolicy,
-		runtime:               opts.Runtime,
-		policy:                opts.LaunchPolicy,
-		startedAt:             startedAt,
-		owner:                 opts.Owner,
-		authToken:             opts.AuthToken,
-		name:                  opts.Name,
-		features:              features,
-		store:                 store,
-		freshness:             opts.Freshness,
-		worktrees:             opts.Worktrees,
-		cfg:                   opts.Config,
-		registry:              opts.Registry,
-		sessions:              opts.Sessions,
-		broker:                newEventBroker(opts.Events, opts.DomainEvents),
-		mutations:             opts.Mutations,
-		uploads:               newUploadStore(opts.Runtime.StateDir),
-		persistProviderModels: opts.PersistProviderModelCatalog,
-		disableHostValidation: opts.DisableHostValidation,
-		initGitRepository:     opts.InitGitRepository,
-		reviewSessionLocks:    newReviewSessionLockSet(),
-		creationResults:       make(map[string]creationResult),
+		runtimePolicy:           runtimePolicy,
+		runtime:                 opts.Runtime,
+		policy:                  opts.LaunchPolicy,
+		startedAt:               startedAt,
+		owner:                   opts.Owner,
+		authToken:               opts.AuthToken,
+		name:                    opts.Name,
+		features:                features,
+		store:                   store,
+		freshness:               opts.Freshness,
+		worktrees:               opts.Worktrees,
+		cfg:                     opts.Config,
+		registry:                opts.Registry,
+		sessions:                opts.Sessions,
+		broker:                  newEventBroker(opts.Events, opts.DomainEvents),
+		mutations:               opts.Mutations,
+		uploads:                 newUploadStore(opts.Runtime.StateDir),
+		persistProviderModels:   opts.PersistProviderModelCatalog,
+		disableHostValidation:   opts.DisableHostValidation,
+		initGitRepository:       opts.InitGitRepository,
+		initializeGitRepository: opts.InitializeGitRepository,
+		reviewSessionLocks:      newReviewSessionLockSet(),
+		creationResults:         make(map[string]creationResult),
+		originChecks:            newOriginCheckCoordinator(),
+		updateSourceDeadline:    defaultUpdateSourceDeadline,
+		sourceUpdates:           newSourceUpdateTracker(),
+		reconcileSourceDeadline: defaultReconcileSourceDeadline,
 	}
 	if opts.Worktrees != nil {
 		handler.cleanliness = git.NewCleanlinessCache(opts.Worktrees)
+	}
+	if opts.Clones != nil {
+		handler.clones = opts.Clones
+	} else if strings.TrimSpace(opts.Runtime.StateDir) != "" {
+		// The default clone service owns durable records under the state
+		// dir and publishes SSE invalidations through this handler's
+		// broker.
+		svc, err := clone.New(clone.Options{
+			StateDir: opts.Runtime.StateDir,
+			Config:   func() *config.Config { return handler.configOrDefault() },
+			Hooks: clone.Hooks{
+				OperationChanged: handler.publishOperationEvent,
+				WorkspaceChanged: handler.publishCloneWorkspaceEvent,
+			},
+		})
+		if err == nil {
+			handler.clones = svc
+		}
 	}
 	return handler
 }
@@ -149,21 +204,23 @@ type topLevelRoute struct {
 }
 
 const (
-	apiPathHealth           = "/api/v1/health"
-	apiPathFeatures         = "/api/v1/features"
-	apiPathConfigRuntime    = "/api/v1/config/runtime"
-	apiPathCatalogModels    = "/api/v1/catalog/models"
-	apiPathCatalogRefresh   = "/api/v1/catalog/models/refresh"
-	apiPathReadiness        = "/api/v1/readiness"
-	apiPathReadinessRefresh = "/api/v1/readiness/refresh"
-	apiPathPrompts          = "/api/v1/prompts"
-	apiPathPermissions      = "/api/v1/permissions"
-	apiPathSessions         = "/api/v1/sessions"
-	apiPathRecovery         = "/api/v1/recovery"
-	apiPathRecoveryActions  = "/api/v1/recovery/actions"
-	apiPathRecoveryLogs     = "/api/v1/recovery/logs"
-	apiPathEvents           = "/api/v1/events"
-	apiPathUploads          = "/api/v1/uploads"
+	apiPathHealth                  = "/api/v1/health"
+	apiPathFeatures                = "/api/v1/features"
+	apiPathConfigRuntime           = "/api/v1/config/runtime"
+	apiPathCatalogModels           = "/api/v1/catalog/models"
+	apiPathCatalogRefresh          = "/api/v1/catalog/models/refresh"
+	apiPathReadiness               = "/api/v1/readiness"
+	apiPathReadinessRefresh        = "/api/v1/readiness/refresh"
+	apiPathRuntimeReadiness        = "/api/v1/readiness/runtime"
+	apiPathRuntimeReadinessRefresh = "/api/v1/readiness/runtime/refresh"
+	apiPathPrompts                 = "/api/v1/prompts"
+	apiPathPermissions             = "/api/v1/permissions"
+	apiPathSessions                = "/api/v1/sessions"
+	apiPathRecovery                = "/api/v1/recovery"
+	apiPathRecoveryActions         = "/api/v1/recovery/actions"
+	apiPathRecoveryLogs            = "/api/v1/recovery/logs"
+	apiPathEvents                  = "/api/v1/events"
+	apiPathUploads                 = "/api/v1/uploads"
 )
 
 // routeSegmentConfig is the feature sub-route segment for the per-feature
@@ -182,9 +239,10 @@ const entityFeatureSubject = "Feature"
 
 // Resource type discriminators used by SSE refresh routing.
 const (
-	resourceTypeSession      = "session"
-	resourceTypeRuntime      = "runtime"
-	resourceTypeRelationship = "relationship"
+	resourceTypeSession        = "session"
+	resourceTypeRuntime        = "runtime"
+	resourceTypeRelationship   = "relationship"
+	resourceTypeCloneOperation = "clone_operation"
 )
 
 var topLevelServerRoutes = []topLevelRoute{
@@ -194,9 +252,19 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathConfigRuntime, func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeConfigRoute }},
 	{apiPathCatalogModels, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleModelCatalog) }},
 	{apiPathCatalogRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleProviderModelRefreshRoute }},
+	{apiPathRuntimeReadiness, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleRuntimeReadiness) }},
+	{apiPathRuntimeReadinessRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeReadinessRefresh }},
 	{apiPathReadiness, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleReadiness) }},
 	{apiPathReadinessRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleReadinessRefreshRoute }},
 	{apiPathWorkspaceRepositoriesInit, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitRoute }},
+	{apiPathWorkspaceRepositoriesCreate, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryCreateRoute }},
+	{apiPathWorkspaceRepositoriesInitialize, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitializeRoute }},
+	{apiPathWorkspaceRepositorySources, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositorySourcesRoute }},
+	{apiPathWorkspaceRepositoryOriginStatus, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryOriginStatusRoute }},
+	{apiPathWorkspaceRepositoryUpdateSource, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryUpdateSourceRoute }},
+	{apiPathWorkspaceRepositoryReconcileSourceUpdate, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryReconcileSourceUpdateRoute }},
+	{apiPathWorkspaceClone, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneRoute }},
+	{apiPathWorkspaceClone + "/", func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceCloneOperationRoutes }},
 	{apiPathPrompts, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},
 	{apiPathPrompts + "/", func(h *apiHandler) http.HandlerFunc { return h.handlePromptMutationRoutes }},
 	{apiPathPermissions, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePermissions) }},
@@ -525,7 +593,7 @@ func listFeatures(lister FeatureLister) ([]*feature.Feature, []Error, error) {
 	for _, w := range partial.Warnings {
 		var diagnostics string
 		if w.Err != nil {
-			diagnostics = SafeDisplayText(w.Err.Error(), 240)
+			diagnostics = SafeDisplayText(w.Err.Error(), maxStoredDiagnosticsLen)
 		}
 		warnings = append(warnings, wireError(errcat.New(
 			errcat.FeatureLoadFailed,

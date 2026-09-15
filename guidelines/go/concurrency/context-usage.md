@@ -36,6 +36,7 @@ ctx = context.WithoutCancel(parent) // inherits values but NOT cancellation
 ## Propagation Rules
 
 1. **First parameter, named `ctx`**:
+
    ```go
    func DoWork(ctx context.Context, id string) error
    ```
@@ -49,6 +50,7 @@ ctx = context.WithoutCancel(parent) // inherits values but NOT cancellation
    IDs. Not for optional function parameters or configuration.
 
 5. **Key types must be unexported** to prevent collisions:
+
    ```go
    type contextKey string
    const userIDKey contextKey = "userID"
@@ -98,6 +100,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 ## Common Mistakes
 
 **Storing context in a struct:**
+
 ```go
 // Wrong:
 type Server struct { ctx context.Context }
@@ -107,6 +110,7 @@ func (s *Server) Process(ctx context.Context) error { ... }
 ```
 
 **Using context values as function parameters:**
+
 ```go
 // Wrong:
 ctx = context.WithValue(ctx, "verbose", true)
@@ -116,6 +120,7 @@ func Process(ctx context.Context, verbose bool) error { ... }
 ```
 
 **Forgetting to cancel:**
+
 ```go
 // Wrong — context and its resources leak:
 ctx, _ := context.WithTimeout(parent, 5*time.Second)

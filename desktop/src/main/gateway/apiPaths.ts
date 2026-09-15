@@ -45,6 +45,7 @@ const REPOSITORY_DIFF_PATH_PATTERN = new RegExp(
   `^/api/v1/features/${SAFE_API_SEGMENT}/repositories/${SAFE_API_SEGMENT}/diff$`,
   'i',
 );
+const CLONE_LIST_PATH_PATTERN = /^\/api\/v1\/workspace\/repositories\/clone$/i;
 const UPLOADS_PATH_PATTERN = /^\/api\/v1\/uploads$/i;
 
 export function isAllowedApiPath(path: string): boolean {
@@ -79,6 +80,9 @@ export function isAllowedApiPath(path: string): boolean {
   if (parts.length === 2 && REPOSITORY_DIFF_PATH_PATTERN.test(pathname)) {
     return hasRepositoryDiffQuery(parts[1] ?? '');
   }
+  if (parts.length === 2 && CLONE_LIST_PATH_PATTERN.test(pathname)) {
+    return hasCloneListQuery(parts[1] ?? '');
+  }
   if (parts.length !== 2 || !SESSION_TRANSCRIPT_PATH_PATTERN.test(pathname)) {
     return false;
   }
@@ -86,6 +90,30 @@ export function isAllowedApiPath(path: string): boolean {
     offset: { min: 0 },
     limit: { min: 1, max: 500 },
   });
+}
+
+// The clone listing query: optional bounded `limit` (1..200) and opaque
+// continuation `after` token, each at most once.
+function hasCloneListQuery(rawQuery: string): boolean {
+  if (rawQuery === '') return false;
+  const seen = new Set<string>();
+  for (const [key, value] of new URLSearchParams(rawQuery)) {
+    if (seen.has(key)) return false;
+    if (key === 'limit') {
+      if (!/^\d+$/.test(value)) return false;
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 200) return false;
+      seen.add(key);
+      continue;
+    }
+    if (key === 'after') {
+      if (value === '' || value.length > 256) return false;
+      seen.add(key);
+      continue;
+    }
+    return false;
+  }
+  return seen.size > 0;
 }
 
 function hasBoundedIntegerQuery(

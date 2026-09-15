@@ -83,6 +83,7 @@ describe('deriveWizardState', () => {
         {
           path: '/gone',
           valid: false,
+          cloneEligible: false,
           issue: canonicalIssue(
             'invalid_workspace_root',
             'Invalid workspace root',
@@ -95,6 +96,7 @@ describe('deriveWizardState', () => {
           name: 'broken',
           path: '/work/space/broken',
           valid: false,
+          featureReady: false,
           issue: canonicalIssue('invalid_repository', 'Invalid repository', 'not a git repository'),
         },
       ],

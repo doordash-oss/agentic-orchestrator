@@ -148,6 +148,7 @@ go tool cover -func=cover.out           # per-function breakdown
 ```
 
 Coverage modes:
+
 - `set` — did each statement execute? (default, ~3% overhead)
 - `count` — how many times? (heat maps)
 - `atomic` — precise count for parallel code (highest cost)

@@ -253,6 +253,47 @@ func TestPullRebase_BehindRemote(t *testing.T) {
 	}
 }
 
+// TestPullRebase_SingleBranchClone pins the single-branch clone case: the
+// configured fetch refspec only maps main, so a plain fetch never writes
+// origin/<branch>. PullRebase must still rebase onto the remote branch
+// instead of treating it as absent.
+func TestPullRebase_SingleBranchClone(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping single-branch pull-rebase regression in short mode")
+	}
+	t.Parallel()
+
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+
+	testutil.CreateBranch(t, repo, "feature/test")
+	testutil.CommitFile(t, repo, "feature.txt", "feature work\n", "feature commit")
+	gitPush(t, repo, "feature/test")
+
+	// Narrow the clone to main only and drop the tracking ref the push left behind.
+	runGit(t, repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+	runGit(t, repo, "update-ref", "-d", "refs/remotes/origin/feature/test")
+
+	clone2 := t.TempDir()
+	gitClone(t, bare, clone2)
+	runGit(t, clone2, "checkout", "feature/test")
+	testutil.CommitFile(t, clone2, "remote-change.txt", "remote work\n", "remote commit")
+	gitPush(t, clone2, "feature/test")
+
+	testutil.CommitFile(t, repo, "local-change.txt", "local work\n", "local commit")
+
+	result := PullRebase(repo, "feature/test")
+	if result.Outcome != PullRebaseSuccess {
+		t.Fatalf("expected PullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
+	}
+	out, _ := exec.Command("git", "-C", repo, "log", "--oneline").Output()
+	if !strings.Contains(string(out), "remote commit") {
+		t.Errorf("expected remote commit in log after rebase, got:\n%s", out)
+	}
+	if !strings.Contains(string(out), "local commit") {
+		t.Errorf("expected local commit in log after rebase, got:\n%s", out)
+	}
+}
+
 func TestPullRebase_ConflictAbortsCleanly(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping second pull-rebase conflict regression in short mode")

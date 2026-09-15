@@ -27,6 +27,7 @@ public:
 ```
 
 **Key rules:**
+
 - Destructor must be `noexcept`
 - Delete copy operations for non-duplicable resources
 - Move operations transfer ownership using `std::exchange`

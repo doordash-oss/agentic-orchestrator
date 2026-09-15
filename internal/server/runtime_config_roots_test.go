@@ -81,6 +81,52 @@ func TestPatchRuntimeConfigAcceptsValidWorkspaceRoots(t *testing.T) {
 	}
 }
 
+func TestPatchRuntimeConfigRejectsDuplicateWorkspaceRoots(t *testing.T) {
+	t.Parallel()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(filepath.Dir(root), "root-alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		roots []string
+		want  string
+	}{
+		{"exact duplicate", []string{root, root}, root},
+		{"symlink alias of the same directory", []string{root, alias}, root},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &runtimeConfigRecorder{}
+			handler := newRuntimeConfigHandler(t, recorder)
+
+			w := patchTrustedJSON(handler, apiPathConfigRuntime, map[string]any{
+				"workspace_roots": tc.roots,
+			})
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s; want 400", w.Code, w.Body.String())
+			}
+			body := decodeErrorBody(t, w)
+			if body.Error.Code != string(errcat.InvalidWorkspaceRoot) {
+				t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.InvalidWorkspaceRoot)
+			}
+			wantReason := "names the same directory as the existing root " + tc.want
+			if !strings.Contains(body.Error.Diagnostics, wantReason) {
+				t.Fatalf("diagnostics = %q; want it to name %q", body.Error.Diagnostics, wantReason)
+			}
+			// A duplicate never reaches the mutation target, so the
+			// active configuration is unchanged.
+			if got := recorder.calls.Load(); got != 0 {
+				t.Fatalf("RuntimeConfig calls = %d; want none for duplicate roots", got)
+			}
+		})
+	}
+}
+
 func TestPatchRuntimeConfigRejectsInvalidWorkspaceRoots(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

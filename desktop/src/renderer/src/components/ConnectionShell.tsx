@@ -33,6 +33,7 @@ import { parseIpcError } from '../wizard/ipcError';
 import { PhaseRailTrack } from '../features/PhaseRailRow';
 import { stepSegments } from '../features/phaseRail';
 import { ErrorSurface } from './ErrorSurface';
+import { ServerSwitcher } from './ServerSwitcher';
 
 const STAGE_LABELS: Record<ConnectionStage, string> = {
   'resolve-runtime': 'Resolve',
@@ -336,6 +337,7 @@ export function ConnectionShell() {
                   : retry,
             }}
           />
+          <ServerSwitcher currentLabel="" tone="error" enabled variant="recovery" />
           {offerStartLocal ? (
             <button type="button" className="setup-wizard__action" onClick={startLocal}>
               Start bundled runtime

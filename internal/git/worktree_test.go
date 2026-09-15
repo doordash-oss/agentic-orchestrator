@@ -15,6 +15,8 @@
 package git
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +60,81 @@ func TestWorktreeCreateAndRemove(t *testing.T) {
 	// Remove worktree
 	if err := mgr.Remove(wtPath, true); err != nil {
 		t.Fatalf("remove worktree: %v", err)
+	}
+}
+
+func TestWorktreeCreateRejectsExistingBranchAtDifferentAcceptedCommit(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	accepted := gitOutput(t, repo, "rev-parse", "HEAD")
+	testutil.CommitFile(t, repo, "later.txt", "later\n", "later")
+	runGit(t, repo, "branch", "feature/pinned-mismatch")
+
+	mgr := NewWorktreeManager(t.TempDir())
+	if _, err := mgr.Create(repo, "pinned-mismatch", "repo", accepted); err == nil ||
+		!strings.Contains(err.Error(), "want accepted commit") {
+		t.Fatalf("Create() error = %v, want accepted-commit mismatch", err)
+	}
+}
+
+func TestAcceptLocalSourceAllowsOnlySameBranchFastForward(t *testing.T) {
+	repo := initRepoOnBranch(t, "release/2026/q3")
+	identity, ok := ResolveRepoIdentity(repo)
+	if !ok {
+		t.Fatal("ResolveRepoIdentity() = false")
+	}
+	observed := gitOutput(t, repo, "rev-parse", "HEAD")
+	testutil.CommitFile(t, repo, "next.txt", "next\n", "advance")
+	want := gitOutput(t, repo, "rev-parse", "HEAD")
+
+	accepted, err := AcceptLocalSource(context.Background(), repo, LocalSourceExpectation{
+		Identity:       identity,
+		Mode:           LocalSourceModeCurrent,
+		Kind:           LocalSourceBranch,
+		Branch:         "release/2026/q3",
+		ObservedCommit: observed,
+	})
+	if err != nil {
+		t.Fatalf("AcceptLocalSource() error = %v", err)
+	}
+	if accepted.Commit != want {
+		t.Fatalf("AcceptLocalSource().Commit = %q, want %q", accepted.Commit, want)
+	}
+
+	runGit(t, repo, "checkout", "-b", "other")
+	if _, err := AcceptLocalSource(context.Background(), repo, LocalSourceExpectation{
+		Identity:       identity,
+		Mode:           LocalSourceModeCurrent,
+		Kind:           LocalSourceBranch,
+		Branch:         "release/2026/q3",
+		ObservedCommit: observed,
+	}); !errors.Is(err, ErrLocalSourceStale) {
+		t.Fatalf("AcceptLocalSource() error = %v, want ErrLocalSourceStale", err)
+	}
+}
+
+func TestAcceptLocalSourceRejectsRewindAndDetachedMovement(t *testing.T) {
+	repo := initRepoOnBranch(t, "main")
+	identity, ok := ResolveRepoIdentity(repo)
+	if !ok {
+		t.Fatal("ResolveRepoIdentity() = false")
+	}
+	observed := gitOutput(t, repo, "rev-parse", "HEAD")
+	testutil.CommitFile(t, repo, "later.txt", "later\n", "later")
+	runGit(t, repo, "reset", "--hard", observed)
+	other := gitOutput(t, repo, "rev-parse", "HEAD")
+	if _, err := AcceptLocalSource(context.Background(), repo, LocalSourceExpectation{
+		Identity: identity, Mode: LocalSourceModeCurrent, Kind: LocalSourceBranch,
+		Branch: "main", ObservedCommit: gitOutput(t, repo, "rev-parse", "main@{1}"),
+	}); !errors.Is(err, ErrLocalSourceStale) {
+		t.Fatalf("rewound AcceptLocalSource() error = %v, want ErrLocalSourceStale", err)
+	}
+
+	runGit(t, repo, "checkout", "--detach", other)
+	if _, err := AcceptLocalSource(context.Background(), repo, LocalSourceExpectation{
+		Identity: identity, Mode: LocalSourceModeCurrent, Kind: LocalSourceDetached,
+		ObservedCommit: strings.Repeat("0", 40),
+	}); !errors.Is(err, ErrLocalSourceStale) {
+		t.Fatalf("moved detached AcceptLocalSource() error = %v, want ErrLocalSourceStale", err)
 	}
 }
 
@@ -315,11 +392,59 @@ func TestDefaultBranchPreferRemoteOverLocal(t *testing.T) {
 
 	// Set origin/HEAD to point to origin/main
 	runGit(t, localDir, "remote", "set-head", "origin", "main")
+	runGit(t, localDir, "branch", "main", "origin/main")
 
 	got := DefaultBranch(localDir)
 	if got != "main" {
 		t.Errorf("expected remote default branch %q to take precedence, got %q", "main", got)
 	}
+}
+
+func TestInspectLocalSource(t *testing.T) {
+	t.Run("default keeps full slash branch and resolves local commit", func(t *testing.T) {
+		repo := testutil.InitGitRepo(t)
+		runGit(t, repo, "branch", "release/2026/q3")
+		runGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release/2026/q3")
+
+		got, err := InspectLocalSource(context.Background(), repo, LocalSourceModeDefault)
+		if err != nil {
+			t.Fatalf("InspectLocalSource(default): %v", err)
+		}
+		if got.Kind != LocalSourceBranch || got.Branch != "release/2026/q3" {
+			t.Errorf("InspectLocalSource(default) source = %#v; want branch release/2026/q3", got)
+		}
+		if want := gitOutput(t, repo, "rev-parse", "refs/heads/release/2026/q3"); got.Commit != want {
+			t.Errorf("InspectLocalSource(default).Commit = %q; want %q", got.Commit, want)
+		}
+	})
+
+	t.Run("default refuses missing selected local branch despite cached remote ref", func(t *testing.T) {
+		repo := testutil.InitGitRepo(t)
+		runGit(t, repo, "update-ref", "refs/remotes/origin/release/2026/q3", "HEAD")
+		runGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release/2026/q3")
+
+		_, err := InspectLocalSource(context.Background(), repo, LocalSourceModeDefault)
+		if !errors.Is(err, ErrLocalSourceMissing) {
+			t.Fatalf("InspectLocalSource(default) error = %v; want ErrLocalSourceMissing", err)
+		}
+		if got := DefaultBranch(repo); got != "" {
+			t.Errorf("DefaultBranch() = %q; want empty for missing nominated local branch", got)
+		}
+	})
+
+	t.Run("current reports detached HEAD commit", func(t *testing.T) {
+		repo := testutil.InitGitRepo(t)
+		want := gitOutput(t, repo, "rev-parse", "HEAD")
+		runGit(t, repo, "checkout", "--detach", want)
+
+		got, err := InspectLocalSource(context.Background(), repo, LocalSourceModeCurrent)
+		if err != nil {
+			t.Fatalf("InspectLocalSource(current): %v", err)
+		}
+		if got.Kind != LocalSourceDetached || got.Branch != "" || got.Commit != want {
+			t.Errorf("InspectLocalSource(current) = %#v; want detached commit %q", got, want)
+		}
+	})
 }
 
 func TestResetToBaseLocal(t *testing.T) {

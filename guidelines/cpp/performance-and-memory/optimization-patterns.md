@@ -3,6 +3,7 @@
 ## Small Buffer Optimization (SBO/SSO)
 
 SBO stores small objects inline, avoiding heap allocation. Used by:
+
 - `std::string` (SSO): 15-23 chars inline depending on implementation
 - `std::function`: typically 16-24 bytes inline
 - `std::any`: implementation-defined
@@ -79,11 +80,11 @@ if (ptr == nullptr) [[unlikely]] {
 
 ## Link-Time Optimization and Profile-Guided Optimization
 
-| Technique | Typical Gain | Complexity |
-|-----------|-------------|------------|
-| `[[likely]]`/`[[unlikely]]` | 1-5% on annotated branches | Low |
-| LTO (`-flto`) | 5-15% whole-program | Low (compiler flag) |
-| PGO | 10-20% whole-program | Medium (extra build step) |
+| Technique                   | Typical Gain               | Complexity                |
+| --------------------------- | -------------------------- | ------------------------- |
+| `[[likely]]`/`[[unlikely]]` | 1-5% on annotated branches | Low                       |
+| LTO (`-flto`)               | 5-15% whole-program        | Low (compiler flag)       |
+| PGO                         | 10-20% whole-program       | Medium (extra build step) |
 
 ```bash
 # Enable LTO for all release builds

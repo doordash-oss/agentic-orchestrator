@@ -56,6 +56,7 @@ export class MyClass { /* ... */ };
 ```
 
 **Phases:**
+
 1. New code in modules; old code uses headers
 2. Isolate heavy headers — convert highest-impact ones first
 3. Convert internal headers to module implementation units
@@ -77,12 +78,12 @@ target_sources(math
 
 ## Compiler Support
 
-| Compiler | Minimum | Notes |
-|----------|---------|-------|
-| MSVC | 14.34 (VS 17.4) | Best support |
-| Clang | 16.0 | `.cppm` extension; Ninja required |
-| GCC | 14 | Ninja required |
-| Apple Clang | Not yet | Xcode generator unsupported |
+| Compiler    | Minimum         | Notes                             |
+| ----------- | --------------- | --------------------------------- |
+| MSVC        | 14.34 (VS 17.4) | Best support                      |
+| Clang       | 16.0            | `.cppm` extension; Ninja required |
+| GCC         | 14              | Ninja required                    |
+| Apple Clang | Not yet         | Xcode generator unsupported       |
 
 `import std;` (C++23) requires Clang 18+, MSVC 14.36+, GCC 15+.
 

@@ -142,6 +142,8 @@ function makeServices(): IpcServices {
     openSettingsWindow: vi.fn(() => ({ opened: true })),
     getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
     setTheme: vi.fn((preference) => ({ preference, resolved: 'light' as const })),
+    getRuntimeReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    refreshRuntimeReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     getReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     refreshReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     pickWorkspaceDirectory: vi.fn(() => Promise.resolve({ path: null })),
@@ -149,6 +151,14 @@ function makeServices(): IpcServices {
     removeWorkspaceRoot: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     reorderWorkspaceRoots: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     initRepository: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    startClone: vi.fn(() => Promise.reject(new Error('unused'))),
+    getCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    listCloneOperations: vi.fn(() => Promise.reject(new Error('unused'))),
+    cancelCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    retryCloneCleanup: vi.fn(() => Promise.reject(new Error('unused'))),
+    retryCloneOperation: vi.fn(() => Promise.reject(new Error('unused'))),
+    createRepository: vi.fn(() => Promise.reject(new Error('unused'))),
+    initializeRepository: vi.fn(() => Promise.reject(new Error('unused'))),
     listRepositories: vi.fn(() => Promise.resolve([])),
     listFeatures: vi.fn(() => Promise.resolve({ features: [], warnings: [] })),
     getFeature: vi.fn(() =>
@@ -196,7 +206,53 @@ function makeServices(): IpcServices {
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({
         repositories: [],
+        workspaceRoots: [],
         defaults: { models: [], effort: [], useCurrentBranch: false },
+      }),
+    ),
+    inspectRepositorySources: vi.fn(
+      async (request: Parameters<IpcServices['inspectRepositorySources']>[0]) => ({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          observedSha: 'a'.repeat(40),
+        })),
+      }),
+    ),
+    checkRepositoryOriginStatus: vi.fn(
+      async (request: Parameters<IpcServices['checkRepositoryOriginStatus']>[0]) => ({
+        repositories: request.repositories.map((repository) => ({
+          ...repository,
+          mode: request.mode,
+          kind: 'branch' as const,
+          branch: 'main',
+          localSha: 'a'.repeat(40),
+          status: 'no_origin' as const,
+        })),
+      }),
+    ),
+    updateRepositorySource: vi.fn(
+      async (request: Parameters<IpcServices['updateRepositorySource']>[0]) => ({
+        result: 'already_up_to_date' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
+      }),
+    ),
+    reconcileSourceUpdate: vi.fn(
+      async (request: Parameters<IpcServices['reconcileSourceUpdate']>[0]) => ({
+        outcome: 'original_tip_remains' as const,
+        repoKey: request.repoKey,
+        identity: request.identity,
+        mode: request.mode,
+        branch: request.branch,
+        originBranch: request.originBranch,
+        localSha: request.expectedLocalSha,
       }),
     ),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),

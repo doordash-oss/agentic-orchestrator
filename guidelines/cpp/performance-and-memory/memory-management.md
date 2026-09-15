@@ -50,12 +50,12 @@ void process_request() {
 
 ### Built-in Resources
 
-| Resource | Thread-Safe | Best For |
-|----------|-------------|----------|
-| `monotonic_buffer_resource` | No | Short-lived sequential allocations |
-| `unsynchronized_pool_resource` | No | Single-thread, varied sizes |
-| `synchronized_pool_resource` | Yes | Multi-threaded pool |
-| `new_delete_resource()` | Yes | Default/fallback heap |
+| Resource                       | Thread-Safe | Best For                           |
+| ------------------------------ | ----------- | ---------------------------------- |
+| `monotonic_buffer_resource`    | No          | Short-lived sequential allocations |
+| `unsynchronized_pool_resource` | No          | Single-thread, varied sizes        |
+| `synchronized_pool_resource`   | Yes         | Multi-threaded pool                |
+| `new_delete_resource()`        | Yes         | Default/fallback heap              |
 
 ### PMR Pitfalls
 

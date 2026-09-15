@@ -59,6 +59,9 @@ import {
 } from './testHooks';
 import { EventStreamSupervisor } from './gateway/events';
 import { FeatureService } from './features';
+import { CloneService } from './cloneService';
+import { CreateService } from './createService';
+import { InitializeService } from './initializeService';
 import { CompletionService } from './completion';
 import { RecoveryService } from './recovery';
 import { BulkService } from './bulk';
@@ -561,6 +564,11 @@ if (!hasSingleInstanceLock) {
           return result.canceled || picked === undefined ? null : picked;
         },
       },
+      locality: () => gateway.connectedLocality,
+      identity: () => ({
+        serverKey: gateway.connectedServerKey,
+        generation: gateway.connectionGeneration,
+      }),
     });
     const creationFiles = new CreationFilesService({
       pickFiles: pickCreationFiles,
@@ -585,6 +593,43 @@ if (!hasSingleInstanceLock) {
       readReadiness: () => setup.getReadiness(),
       resolveRepositoryFiles: (refs) => creationFiles.resolve(refs),
       locality: () => gateway.connectedLocality,
+      // Source updates and their reconciliation are fenced by the connected
+      // server's identity and connection generation: a result crossing a
+      // switch is discarded (an unknown outcome the renderer reconciles)
+      // instead of applied to the new server.
+      identity: () => ({
+        serverKey: gateway.connectedServerKey,
+        generation: gateway.connectionGeneration,
+      }),
+    });
+    // Clone lifecycle: every call is fenced by the connected server's
+    // identity and connection generation so a server switch discards stale
+    // responses instead of applying them to the new server.
+    const clones = new CloneService({
+      transport: gateway,
+      identity: () => ({
+        serverKey: gateway.connectedServerKey,
+        generation: gateway.connectionGeneration,
+      }),
+    });
+    // Repository creation shares the same fencing contract: a creation
+    // result from a previous server is never applied to the new one.
+    const creates = new CreateService({
+      transport: gateway,
+      identity: () => ({
+        serverKey: gateway.connectedServerKey,
+        generation: gateway.connectionGeneration,
+      }),
+    });
+    // Explicit initialization shares the same fencing contract: an
+    // initialization result from a previous server is never applied to
+    // the new one.
+    const initializes = new InitializeService({
+      transport: gateway,
+      identity: () => ({
+        serverKey: gateway.connectedServerKey,
+        generation: gateway.connectionGeneration,
+      }),
     });
     const completion = new CompletionService({
       transport: gateway,
@@ -680,7 +725,8 @@ if (!hasSingleInstanceLock) {
           app.focus({ steal: true });
           window.focus();
         },
-        isCrashed: (window) => !window.isDestroyed() && window.webContents.isCrashed(),
+        isDestroyed: (window) => window.isDestroyed() || window.webContents.isDestroyed(),
+        isCrashed: (window) => window.webContents.isCrashed(),
         reload: (window) => window.webContents.reload(),
         webContentsId: (window) => window.webContents.id,
       },
@@ -1399,6 +1445,8 @@ if (!hasSingleInstanceLock) {
         broadcastAppEvent({ type: 'theme', ...info });
         return info;
       },
+      getRuntimeReadiness: () => setup.getRuntimeReadiness(),
+      refreshRuntimeReadiness: () => setup.refreshRuntimeReadiness(),
       getReadiness: () => setup.getReadiness(),
       refreshReadiness: () => setup.refreshReadiness(),
       pickWorkspaceDirectory: () => setup.pickWorkspaceDirectory(),
@@ -1406,6 +1454,14 @@ if (!hasSingleInstanceLock) {
       removeWorkspaceRoot: (rootPath) => setup.removeWorkspaceRoot(rootPath),
       reorderWorkspaceRoots: (paths) => setup.reorderWorkspaceRoots(paths),
       initRepository: (request) => setup.initRepository(request),
+      startClone: (request) => clones.startClone(request),
+      getCloneOperation: (operationId) => clones.getCloneOperation(operationId),
+      listCloneOperations: () => clones.listCloneOperations(),
+      cancelCloneOperation: (operationId) => clones.cancelCloneOperation(operationId),
+      retryCloneCleanup: (operationId) => clones.retryCloneCleanup(operationId),
+      retryCloneOperation: (operationId) => clones.retryCloneOperation(operationId),
+      createRepository: (request) => creates.createRepository(request),
+      initializeRepository: (request) => initializes.initializeRepository(request),
       listRepositories: () => setup.listRepositories(),
       listFeatures: () => features.listFeatures(),
       getFeature: (featureId) => features.getFeature(featureId),
@@ -1438,6 +1494,10 @@ if (!hasSingleInstanceLock) {
       openSessionOutput: (request, emit) => sessions.subscribe(request, emit),
       cancelSessionOutput: (subscriptionId) => sessions.cancel(subscriptionId),
       getCreationDefaults: () => features.creationDefaults(),
+      inspectRepositorySources: (request) => features.inspectRepositorySources(request),
+      checkRepositoryOriginStatus: (request) => features.checkRepositoryOriginStatus(request),
+      updateRepositorySource: (request) => features.updateRepositorySource(request),
+      reconcileSourceUpdate: (request) => features.reconcileSourceUpdate(request),
       pickCreationFiles: (kind) => creationFiles.pickFiles(kind),
       uploadCreationFiles: (kind, paths) => uploads.stageFiles(kind, paths),
       readClipboardImage,

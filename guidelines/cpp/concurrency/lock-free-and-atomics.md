@@ -7,6 +7,7 @@ lock-free code under high contention (spinning wastes CPU cycles). Profile
 first, prove the mutex is the bottleneck, then consider lock-free.
 
 **Decision framework:**
+
 1. Multiple variables or complex invariants? Use `std::mutex`
 2. Single variable, simple operation (increment, flag, swap)? Use `std::atomic`
 3. Proven hot path where mutex contention is profiled bottleneck? Consider CAS-based lock-free
@@ -96,13 +97,13 @@ void record_hit() {
 
 ### Summary Table
 
-| Ordering | Used On | Guarantee | Typical Use |
-|----------|---------|-----------|-------------|
-| `relaxed` | Any | Atomicity only | Counters, stats, reference counts |
-| `release` | Store | Prior writes visible to acquirer | Publishing data |
-| `acquire` | Load | Sees writes before release store | Consuming published data |
-| `acq_rel` | RMW | Both acquire + release | Lock release, CAS in lock-free structures |
-| `seq_cst` | Any | Total global order | Default; use when unsure |
+| Ordering  | Used On | Guarantee                        | Typical Use                               |
+| --------- | ------- | -------------------------------- | ----------------------------------------- |
+| `relaxed` | Any     | Atomicity only                   | Counters, stats, reference counts         |
+| `release` | Store   | Prior writes visible to acquirer | Publishing data                           |
+| `acquire` | Load    | Sees writes before release store | Consuming published data                  |
+| `acq_rel` | RMW     | Both acquire + release           | Lock release, CAS in lock-free structures |
+| `seq_cst` | Any     | Total global order               | Default; use when unsure                  |
 
 ## `std::atomic_ref` (C++20)
 

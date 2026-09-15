@@ -14,6 +14,7 @@ List<String> activeEmails = users.stream()
 ```
 
 **Use loops** when you need:
+
 - Side effects (writing to a file, logging, mutating external state)
 - Early termination with complex conditions
 - Index-based access
@@ -101,6 +102,7 @@ List<String> results = stream
 
 Parallel streams add overhead for thread coordination. They're only beneficial
 for:
+
 - **Large datasets** (10,000+ elements)
 - **CPU-intensive operations** per element
 - **No shared mutable state**

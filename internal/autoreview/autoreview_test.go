@@ -16,6 +16,7 @@ package autoreview
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -81,8 +82,36 @@ type commandRecordingProvider struct {
 
 type sequencedCommandProvider struct {
 	testutil.FakeClaudeProvider
-	scripts []string
-	next    int
+	scripts       []string
+	next          int
+	prompts       []string
+	deadlines     []time.Time
+	protocolError bool
+}
+
+func (p *sequencedCommandProvider) NewProtocol(opts llm.ProtocolOpts) llm.Protocol {
+	p.prompts = append(p.prompts, opts.InitialPrompt)
+	if p.protocolError {
+		return malformedReviewProtocol{p.FakeClaudeProvider.NewProtocol(opts)}
+	}
+	return deadlineRecordingProtocol{p.FakeClaudeProvider.NewProtocol(opts), &p.deadlines}
+}
+
+type deadlineRecordingProtocol struct {
+	llm.Protocol
+	deadlines *[]time.Time
+}
+
+func (p deadlineRecordingProtocol) Handshake(ctx context.Context) error {
+	deadline, _ := ctx.Deadline()
+	*p.deadlines = append(*p.deadlines, deadline)
+	return p.Protocol.Handshake(ctx)
+}
+
+type malformedReviewProtocol struct{ llm.Protocol }
+
+func (malformedReviewProtocol) ParseLine([]byte) ([]llm.SDKMessage, error) {
+	return nil, errors.New("malformed protocol response")
 }
 
 func (p *sequencedCommandProvider) BuildCommand(llm.CommandBuildOpts) ([]string, []string, error) {
@@ -581,6 +610,90 @@ func TestClassifyMalformedFails(t *testing.T) {
 	reviewer, _, _ := ResolveReviewer(reg, "")
 	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
 		t.Fatalf("Classify(prose) = true, want false")
+	}
+}
+
+func TestClassifyDetailedRepairsMalformedDecisionOnce(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+		want Outcome
+	}{
+		{"allow", testutil.FakeClaudeAllowScriptBody(), OutcomeAllow},
+		{"defer", testutil.FakeClaudeDeferScriptBody(), OutcomeDefer},
+		{"still malformed", testutil.FakeClaudeMalformedScriptBody(), OutcomeMalformedResponse},
+		{"transient failure exhausts shared budget", testutil.FakeClaudeExitScriptBody(), OutcomeProviderError},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := &sequencedCommandProvider{scripts: []string{
+				testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeMalformedScriptBody()),
+				testutil.WriteFakeClaudeScript(t, tt.body),
+				testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody()),
+			}}
+			got := ClassifyDetailed(context.Background(), Reviewer{Provider: provider, Model: "haiku[200K]"}, ClassifyRequest{
+				ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir(),
+			})
+			if got.Outcome != tt.want || provider.next != 2 {
+				t.Fatalf("result=%+v attempts=%d, want outcome=%s and two attempts", got, provider.next, tt.want)
+			}
+			if len(provider.prompts) != 2 {
+				t.Fatalf("prompts=%d, want two fresh review prompts", len(provider.prompts))
+			}
+			initial, retry := provider.prompts[0], provider.prompts[1]
+			if !strings.HasPrefix(retry, initial) {
+				t.Fatal("retry lost the original safety policy or command context")
+			}
+			reminder := strings.TrimPrefix(retry, initial)
+			if !strings.Contains(reminder, "exactly ALLOW or DEFER") || !strings.Contains(reminder, "Either decision is valid") {
+				t.Fatalf("retry missing neutral format reminder: %q", reminder)
+			}
+			if strings.Contains(retry, "I think it is fine") {
+				t.Fatal("retry included raw reviewer output")
+			}
+		})
+	}
+}
+
+func TestClassifyDetailedDoesNotRepairTerminalResults(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		body          string
+		want          Outcome
+		protocolError bool
+	}{
+		{"valid defer", testutil.FakeClaudeDeferScriptBody(), OutcomeDefer, false},
+		{"protocol failure", testutil.FakeClaudeAllowScriptBody(), OutcomeMalformedResponse, true},
+		{"refusal", testutil.FakeClaudeRefusalScriptBody(), OutcomeProviderError, false},
+		{"interaction", testutil.FakeClaudeControlThenAllowScriptBody(), OutcomeUnexpectedInteraction, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := &sequencedCommandProvider{scripts: []string{
+				testutil.WriteFakeClaudeScript(t, tt.body),
+				testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody()),
+			}, protocolError: tt.protocolError}
+			got := ClassifyDetailed(context.Background(), Reviewer{Provider: provider, Model: "haiku[200K]"}, ClassifyRequest{
+				ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir(),
+			})
+			if got.Outcome != tt.want || provider.next != 1 {
+				t.Fatalf("result=%+v attempts=%d, want outcome=%s and one attempt", got, provider.next, tt.want)
+			}
+		})
+	}
+}
+
+func TestClassifyDetailedFormatRepairSharesOverallTimeout(t *testing.T) {
+	provider := &sequencedCommandProvider{scripts: []string{
+		testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeMalformedScriptBody()),
+		testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody()),
+	}}
+	got := ClassifyDetailed(context.Background(), Reviewer{Provider: provider, Model: "haiku[200K]"}, ClassifyRequest{
+		ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir(), Timeout: 10 * time.Second,
+	})
+	if got.Outcome != OutcomeAllow || provider.next != 2 {
+		t.Fatalf("result=%+v attempts=%d, want approval during the second attempt", got, provider.next)
+	}
+	if len(provider.deadlines) != 2 || provider.deadlines[0].IsZero() || !provider.deadlines[0].Equal(provider.deadlines[1]) {
+		t.Fatalf("attempt deadlines=%v, want the same nonzero deadline for both attempts", provider.deadlines)
 	}
 }
 

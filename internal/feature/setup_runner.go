@@ -339,6 +339,15 @@ func (m *Manager) executeWorktreeSetupTask(f *Feature, task SetupTask, logPath s
 		return task, fmt.Errorf("creating worktree for %s: %w", repo.Name, err)
 	}
 	task.Path = path
+	if task.ExactSHA != "" {
+		head, err := m.Worktrees.CurrentHeadSHA(path)
+		if err != nil {
+			return task, fmt.Errorf("verifying created worktree for %s: %w", repo.Name, err)
+		}
+		if !strings.EqualFold(head, task.ExactSHA) {
+			return task, fmt.Errorf("created worktree for %s is at commit %s, want accepted commit %s", repo.Name, head, task.ExactSHA)
+		}
+	}
 	appendSetupLog(logPath, "created worktree repo=%s path=%s branch=%s", repo.Name, task.Path, task.Branch)
 	return task, nil
 }

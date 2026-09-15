@@ -5,8 +5,8 @@
 
 ## Topics
 
-| File | When to Read |
-|------|-------------|
-| [naming-conventions.md](naming-conventions.md) | Classes, functions, variables, constants, namespaces, macros, files |
-| [code-formatting.md](code-formatting.md) | clang-format, brace placement, line length, include ordering, `auto` usage |
-| [api-design.md](api-design.md) | Parameter passing, return values, namespaces, operator overloading, `[[nodiscard]]` |
+| File                                           | When to Read                                                                        |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------- |
+| [naming-conventions.md](naming-conventions.md) | Classes, functions, variables, constants, namespaces, macros, files                 |
+| [code-formatting.md](code-formatting.md)       | clang-format, brace placement, line length, include ordering, `auto` usage          |
+| [api-design.md](api-design.md)                 | Parameter passing, return values, namespaces, operator overloading, `[[nodiscard]]` |

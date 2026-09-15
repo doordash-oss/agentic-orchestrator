@@ -57,7 +57,7 @@ function Harness() {
       label="Description"
       placeholder="Describe the work"
       value={value}
-      repoKeys={['repo-a']}
+      searchRepositories={[{ key: 'repo-a' }]}
       images={images}
       attachments={attachments}
       imageUploads={imageUploads}

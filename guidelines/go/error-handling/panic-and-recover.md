@@ -8,6 +8,7 @@ Panic is for **truly unrecoverable** situations. The Go FAQ explicitly states:
 > masked or worked around, it's better to let execution continue."
 
 **Acceptable uses of panic:**
+
 - Programmer errors that violate invariants (index out of bounds, nil dereference
   where it should be impossible)
 - Initialization failures in `init()` when a library cannot set itself up
@@ -15,6 +16,7 @@ Panic is for **truly unrecoverable** situations. The Go FAQ explicitly states:
   `regexp.MustCompile("^[a-z]+$")`
 
 **Never panic for:**
+
 - Recoverable conditions (file not found, network timeout, invalid user input)
 - Any error a caller might reasonably trigger
 - Resource exhaustion that could be handled gracefully

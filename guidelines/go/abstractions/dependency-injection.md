@@ -73,6 +73,7 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 ```
 
 **Rules from Peter Bourgon:**
+
 - Loggers are dependencies — pass them as parameters
 - Only `func main()` should read flags and environment variables
 - Library code receives configuration via parameters

@@ -187,6 +187,7 @@ thread_local int call_depth = 0;
 **Good for**: per-thread caches, buffers, RNG state.
 
 **Pitfalls**:
+
 - Non-trivial destructors can cause subtle lifecycle bugs (destroyed when thread exits)
 - Avoid with `std::async` on MSVC (thread pool reuses threads, TLS state bleeds)
 - Never share the address of a `thread_local` variable with another thread

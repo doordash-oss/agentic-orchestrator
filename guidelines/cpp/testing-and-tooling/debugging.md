@@ -22,6 +22,7 @@ thread apply all bt     Backtraces for all threads
 ### Conditional Breakpoints
 
 The highest-leverage debugging technique:
+
 ```
 (gdb)  break process.cc:142 if items > 1000
 (lldb) breakpoint set -f process.cc -l 142 -c "items > 1000"
@@ -44,6 +45,7 @@ gdb ./my_program /tmp/core.1234
 
 The binary must have been compiled with `-g`. For production binaries,
 maintain separate debug symbols:
+
 ```bash
 objcopy --only-keep-debug program program.debug
 objcopy --strip-debug --add-gnu-debuglink=program.debug program
@@ -51,14 +53,15 @@ objcopy --strip-debug --add-gnu-debuglink=program.debug program
 
 ## Debug vs Release Builds
 
-| Aspect | Debug (`-O0 -g`) | Release (`-O2 -DNDEBUG`) |
-|--------|-------------------|--------------------------|
-| Symbols | Full | Stripped |
-| Optimization | None | Aggressive |
-| Assertions | Active | Disabled |
-| Debuggability | Full | Variables may be optimized out |
+| Aspect        | Debug (`-O0 -g`) | Release (`-O2 -DNDEBUG`)       |
+| ------------- | ---------------- | ------------------------------ |
+| Symbols       | Full             | Stripped                       |
+| Optimization  | None             | Aggressive                     |
+| Assertions    | Active           | Disabled                       |
+| Debuggability | Full             | Variables may be optimized out |
 
 Maintain three configurations:
+
 1. **Debug** (`-O0 -g -DDEBUG`): interactive debugging
 2. **Sanitize** (`-O1 -g -fsanitize=address,undefined`): automated testing
 3. **Release** (`-O2 -DNDEBUG`): performance and production
@@ -75,6 +78,7 @@ void ProcessBuffer(const char* buf, size_t len) {
 ```
 
 **Never put side effects inside `assert()`** — they disappear in release:
+
 ```cpp
 // BAD: connection not established in release
 assert(connect() == 0);
@@ -95,9 +99,9 @@ Never disabled — fires at compile time regardless of build. Zero runtime cost.
 
 ### When to Use Each
 
-| Mechanism | When |
-|-----------|------|
-| `static_assert` | Compile-time invariants: sizes, alignments, type traits |
-| `assert` | Runtime invariants in debug builds |
-| Exceptions | User-facing errors, recoverable conditions |
-| Return codes / `std::expected` | Expected operation failures |
+| Mechanism                      | When                                                    |
+| ------------------------------ | ------------------------------------------------------- |
+| `static_assert`                | Compile-time invariants: sizes, alignments, type traits |
+| `assert`                       | Runtime invariants in debug builds                      |
+| Exceptions                     | User-facing errors, recoverable conditions              |
+| Return codes / `std::expected` | Expected operation failures                             |

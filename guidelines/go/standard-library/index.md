@@ -5,8 +5,8 @@
 
 ## Topics
 
-| File | When to Read |
-|------|-------------|
-| [io-and-http.md](io-and-http.md) | io.Reader/Writer, http server/client, middleware, timeouts, graceful shutdown |
-| [encoding-and-strings.md](encoding-and-strings.md) | encoding/json, string handling, regexp, strconv vs fmt |
-| [time-and-context.md](time-and-context.md) | time.Duration, monotonic clocks, time.After leaks, log/slog structured logging |
+| File                                               | When to Read                                                                   |
+| -------------------------------------------------- | ------------------------------------------------------------------------------ |
+| [io-and-http.md](io-and-http.md)                   | io.Reader/Writer, http server/client, middleware, timeouts, graceful shutdown  |
+| [encoding-and-strings.md](encoding-and-strings.md) | encoding/json, string handling, regexp, strconv vs fmt                         |
+| [time-and-context.md](time-and-context.md)         | time.Duration, monotonic clocks, time.After leaks, log/slog structured logging |

@@ -36,7 +36,7 @@ private:
 
 **Critical: move constructors must be `noexcept`.** `std::vector` checks
 `is_nothrow_move_constructible` at compile time. Without `noexcept`, vector
-*copies* instead of moves during reallocation.
+_copies_ instead of moves during reallocation.
 
 ## Rule of Zero: Implicit Move Generation
 
@@ -106,8 +106,9 @@ T* make_in_pool(Pool& pool, Args&&... args) {
 ```
 
 **Decision rule:**
-- `std::move` on *rvalue reference* parameters (`Buffer&&`)
-- `std::forward` on *forwarding reference* parameters (template `T&&`)
+
+- `std::move` on _rvalue reference_ parameters (`Buffer&&`)
+- `std::forward` on _forwarding reference_ parameters (template `T&&`)
 - Never `std::move` on a forwarding reference
 
 ## Pass-by-Value + Move vs Pass-by-Reference
@@ -130,6 +131,7 @@ public:
 ```
 
 **Guidelines:**
+
 - `const T&`: read-only access to any type
 - `T` by value + `std::move`: sink parameters, cheap-to-move types
 - `T&&`: sink parameters for move-only types (`unique_ptr`, `thread`)

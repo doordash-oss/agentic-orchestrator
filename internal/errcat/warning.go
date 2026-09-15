@@ -26,6 +26,9 @@ import (
 // transaction journal entry can store; the rewind and repository-diff codes
 // classify their carriers' typed failures at the mutation-target boundary.
 const (
+	// BranchCollisionProbeUnavailable reports that feature creation proved a
+	// candidate locally unique but could not check one repository's origin.
+	BranchCollisionProbeUnavailable Code = "branch_collision_probe_unavailable"
 	// EffortCapabilityDrift reports a role effort the resolved model does
 	// not support; Auto is in use until the configuration changes.
 	EffortCapabilityDrift Code = "effort_capability_drift"
@@ -54,6 +57,13 @@ const (
 	// RepositoryDiffFailed reports a repository whose diff could not be
 	// computed; the git error rides as bounded diagnostics.
 	RepositoryDiffFailed Code = "repository_diff_failed"
+	// OriginCheckUnavailable reports a selected repository whose local source
+	// could not be compared with its origin; creation can continue from the
+	// accepted local source.
+	OriginCheckUnavailable Code = "origin_check_unavailable"
+	// OriginBranchMissing reports a selected repository whose mapped origin
+	// branch was proved missing on the remote by the current check attempt.
+	OriginBranchMissing Code = "origin_branch_missing"
 )
 
 // Orphan-session recovery codes. An orphan session is a recovery item whose

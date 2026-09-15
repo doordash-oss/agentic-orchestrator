@@ -21,12 +21,14 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 )
@@ -48,6 +50,38 @@ func (h *apiHandler) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	revision := revisionForAny(snapshot)
 	snapshot.Meta = h.responseMeta(revision)
 	h.writeRevisionedJSON(w, r, revision, snapshot)
+}
+
+// handleRuntimeReadiness is the dashboard/attach gate. Its wire shape omits
+// workspace entirely so loading catalog data cannot be mistaken for no repos.
+func (h *apiHandler) handleRuntimeReadiness(w http.ResponseWriter, r *http.Request) {
+	h.writeRuntimeReadiness(w, r, false)
+}
+
+func (h *apiHandler) handleRuntimeReadinessRefresh(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) || !h.requireTrustedMutation(w, r) {
+		return
+	}
+	var req map[string]any
+	if !decodeMutationJSON(w, r, &req) {
+		return
+	}
+	h.writeRuntimeReadiness(w, r, true)
+}
+
+func (h *apiHandler) writeRuntimeReadiness(w http.ResponseWriter, r *http.Request, refresh bool) {
+	ready := h.runtimeReadinessSnapshot(r.Context(), refresh)
+	snapshot := RuntimeReadinessResponse{
+		APIVersion: ready.APIVersion, Ready: ready.Ready, ProbedAt: ready.ProbedAt,
+		Providers: ready.Providers, Models: ready.Models, Configuration: ready.Configuration, Issues: ready.Issues,
+	}
+	revision := revisionForAny(snapshot)
+	snapshot.Meta = h.responseMeta(revision)
+	if refresh {
+		writeJSON(w, http.StatusOK, snapshot)
+	} else {
+		h.writeRevisionedJSON(w, r, revision, snapshot)
+	}
 }
 
 // handleReadinessRefreshRoute serves POST /api/v1/readiness/refresh: it
@@ -81,7 +115,7 @@ func (h *apiHandler) rejectNotReadyForCreation(w http.ResponseWriter, r *http.Re
 	if h.registry == nil {
 		return false
 	}
-	snapshot := h.readinessSnapshot(r.Context(), false)
+	snapshot := h.runtimeReadinessSnapshot(r.Context(), false)
 	if snapshot.Ready {
 		return false
 	}
@@ -103,8 +137,18 @@ func (h *apiHandler) rejectNotReadyForCreation(w http.ResponseWriter, r *http.Re
 
 // readinessSnapshot assembles the consolidated readiness response. Provider
 // probe results are cached; forceProbe re-runs them. The cheap sections
-// (models, configuration, workspace) are recomputed on every call.
+// (models, configuration) are recomputed on every call; workspace inspection
+// is separate and is never part of the runtime-only connection gate.
 func (h *apiHandler) readinessSnapshot(ctx context.Context, forceProbe bool) ReadinessResponse {
+	resp := h.runtimeReadinessSnapshot(ctx, forceProbe)
+	resp.Workspace = workspaceReadiness(ctx, h.configOrDefault())
+	resp.Issues = flattenReadinessIssues(resp)
+	return resp
+}
+
+// runtimeReadinessSnapshot never performs workspace discovery or Git work.
+// The mandatory creation guard uses the same cheap runtime truth as connect.
+func (h *apiHandler) runtimeReadinessSnapshot(ctx context.Context, forceProbe bool) ReadinessResponse {
 	providers, probedAt := h.providerReadinessStatuses(ctx, forceProbe)
 	cfg := h.configOrDefault()
 	resp := ReadinessResponse{
@@ -112,7 +156,6 @@ func (h *apiHandler) readinessSnapshot(ctx context.Context, forceProbe bool) Rea
 		Providers:     providers,
 		Models:        h.modelReadiness(),
 		Configuration: configurationReadiness(cfg),
-		Workspace:     workspaceReadiness(cfg),
 	}
 	if !probedAt.IsZero() {
 		at := probedAt
@@ -308,7 +351,11 @@ func configurationReadiness(cfg *config.Config) ConfigurationReadiness {
 // workspaceReadiness validates each configured workspace root and each
 // configured/discovered repository. Paths reported here are the user's own
 // configured locations (the same surface as the runtime-config endpoint).
-func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
+// Each root also carries clone eligibility: a root suitable for discovery
+// (valid) may still be unsuitable as a clone destination (not writable or
+// itself a repository), and that distinction is surfaced separately so
+// discovery is not globally invalidated.
+func workspaceReadiness(ctx context.Context, cfg *config.Config) WorkspaceReadiness {
 	out := WorkspaceReadiness{
 		Roots:        []WorkspaceRootReadiness{},
 		Repositories: []RepositoryReadiness{},
@@ -318,12 +365,19 @@ func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 	}
 	for _, root := range cfg.WorkspaceRoots {
 		entry := WorkspaceRootReadiness{Path: root}
-		if info, err := os.Stat(workspace.ExpandHome(root)); err == nil && info.IsDir() {
+		expanded := workspace.ExpandHome(root)
+		if info, err := os.Stat(expanded); err == nil && info.IsDir() {
 			entry.Valid = true
+			entry.CloneEligible, entry.CloneIssue = cloneEligibility(expanded)
 		} else {
 			entry.Issue = readinessIssue(errcat.InvalidWorkspaceRoot,
 				errcat.WithParams(errcat.WorkspaceRootParams{Paths: []errcat.InvalidPath{{Path: root}}}),
 			)
+			entry.CloneEligible = false
+			cloneIssue := readinessIssue(errcat.InvalidWorkspaceRoot,
+				errcat.WithParams(errcat.WorkspaceRootParams{Paths: []errcat.InvalidPath{{Path: root}}}),
+			)
+			entry.CloneIssue = cloneIssue
 		}
 		out.Roots = append(out.Roots, entry)
 	}
@@ -334,17 +388,93 @@ func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for _, name := range names {
+	// Bound the Git inspection phase as well as each subprocess; cancellation stops
+	// queued work and kills running Git process groups when a client leaves.
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	entries := make([]RepositoryReadiness, len(names))
+	needsGit := false
+	for i, name := range names {
 		repo := allRepos[name]
-		entry := RepositoryReadiness{Name: name, Path: repo.Path}
+		entries[i] = RepositoryReadiness{Name: name, Path: repo.Path}
 		if workspace.IsGitRepo(workspace.ExpandHome(repo.Path)) {
-			entry.Valid = true
+			entries[i].Valid = true
+			needsGit = true
 		} else {
-			entry.Issue = readinessIssue(errcat.InvalidRepository)
+			entries[i].Issue = readinessIssue(errcat.InvalidRepository)
 		}
-		out.Repositories = append(out.Repositories, entry)
 	}
+	if needsGit {
+		prober, probeErr := git.NewReadinessProber(ctx)
+		var wg sync.WaitGroup
+		jobs := make(chan int)
+		// Each worker writes only its own indexed result; response order stays
+		// deterministic regardless of command completion order.
+		for range min(8, len(entries)) {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range jobs {
+					entry := &entries[i]
+					err := probeErr
+					if err == nil {
+						err = ctx.Err()
+					}
+					if err == nil {
+						var identity git.RepoIdentity
+						identity, entry.FeatureReady, err = prober.Inspect(ctx, workspace.ExpandHome(entry.Path))
+						if err == nil {
+							entry.Identity = &RepositoryIdentity{Path: identity.Path, CommonDir: identity.CommonDir,
+								Device: git.FormatIdentityDevice(identity.Device), Inode: git.FormatIdentityInode(identity.Inode), BirthTime: identity.BirthTime}
+						}
+					}
+					if err != nil {
+						entry.Issue = readinessIssue(errcat.RepositoryInspectionFailed,
+							errcat.WithDiagnostics(SafeDisplayText(err.Error(), 2048)))
+					}
+				}
+			}()
+		}
+		for i := range entries {
+			if entries[i].Valid {
+				jobs <- i
+			}
+		}
+		close(jobs)
+		wg.Wait()
+	}
+	out.Repositories = entries
+
 	return out
+}
+
+// cloneEligibility checks whether an existing directory is suitable as a
+// clone destination. A root is clone-eligible when it is writable and not
+// itself a git repository. Missing or non-directory roots are handled by the
+// caller before this function runs.
+func cloneEligibility(dir string) (bool, *Error) {
+	if workspace.IsGitRepo(dir) {
+		issue := readinessIssue(errcat.RootIsRepository)
+		return false, issue
+	}
+	if !isWritableDir(dir) {
+		issue := readinessIssue(errcat.RootNotWritable)
+		return false, issue
+	}
+	return true, nil
+}
+
+// isWritableDir checks whether the server process can write to a directory
+// by creating and removing a temporary file. The probe is atomic and does
+// not leave artifacts behind on success.
+func isWritableDir(dir string) bool {
+	tmp, err := os.CreateTemp(dir, ".agentico-clone-eligibility-*")
+	if err != nil {
+		return false
+	}
+	tmp.Close()
+	os.Remove(tmp.Name())
+	return true
 }
 
 // flattenReadinessIssues collects every outstanding issue across all

@@ -39,23 +39,27 @@ When you receive a research query, you will:
 ## Search Strategies
 
 ### For API/Library Documentation:
+
 - Search for official docs first: "[library name] official documentation [specific feature]"
 - Look for changelog or release notes for version-specific information
 - Find code examples in official repositories or trusted tutorials
 
 ### For Best Practices:
+
 - Search for recent articles (include year in search when relevant)
 - Look for content from recognized experts or organizations
 - Cross-reference multiple sources to identify consensus
 - Search for both "best practices" and "anti-patterns" to get full picture
 
 ### For Technical Solutions:
+
 - Use specific error messages or technical terms in quotes
 - Search Stack Overflow and technical forums for real-world solutions
 - Look for GitHub issues and discussions in relevant repositories
 - Find blog posts describing similar implementations
 
 ### For Comparisons:
+
 - Search for "X vs Y" comparisons
 - Look for migration guides between technologies
 - Find benchmarks and performance comparisons

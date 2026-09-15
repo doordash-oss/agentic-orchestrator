@@ -37,17 +37,18 @@ requires Concept5<T>;                        // Trailing requires clause
 
 Check `<concepts>`, `<ranges>`, and `<iterator>` before writing your own:
 
-| Concept | Meaning |
-|---------|---------|
-| `std::integral<T>` | T is an integral type |
-| `std::floating_point<T>` | T is floating-point |
-| `std::same_as<T, U>` | T and U are the same type |
-| `std::convertible_to<From, To>` | Implicit conversion exists |
-| `std::invocable<F, Args...>` | F callable with Args |
-| `std::ranges::range<T>` | T has begin/end |
-| `std::ranges::random_access_range<T>` | Random-access range |
+| Concept                               | Meaning                    |
+| ------------------------------------- | -------------------------- |
+| `std::integral<T>`                    | T is an integral type      |
+| `std::floating_point<T>`              | T is floating-point        |
+| `std::same_as<T, U>`                  | T and U are the same type  |
+| `std::convertible_to<From, To>`       | Implicit conversion exists |
+| `std::invocable<F, Args...>`          | F callable with Args       |
+| `std::ranges::range<T>`               | T has begin/end            |
+| `std::ranges::random_access_range<T>` | Random-access range        |
 
 Build on library concepts:
+
 ```cpp
 template<typename T>
 concept Numeric = std::integral<T> || std::floating_point<T>;

@@ -25,6 +25,11 @@ import {
   HealthResponseSchema,
   parseServerJson,
   PromptSnapshotResponseSchema,
+  ReadinessResponseSchema,
+  RepositorySourcesResponseSchema,
+  RepositoryOriginStatusResponseSchema,
+  RepositoryUpdateSourceResponseSchema,
+  RepositorySourceReconcileResponseSchema,
   RepositoryDiffResponseSchema,
   RewindActionResponseSchema,
   ServerFeatureDetailSchema,
@@ -54,6 +59,496 @@ const healthFixture = {
     server_build: { version: 'v0.9.0' },
   },
 };
+
+describe('repository source response contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    common_dir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+
+  it('accepts independent branch and detached sources with full local names and SHAs', () => {
+    const parsed = RepositorySourcesResponseSchema.parse({
+      api_version: 'v1',
+      repositories: [
+        {
+          repo_key: 'repo-a',
+          identity,
+          mode: 'default',
+          kind: 'branch',
+          branch: 'release/2026/q3',
+          observed_sha: 'a'.repeat(40),
+        },
+        {
+          repo_key: 'repo-b',
+          identity: {
+            path: '/work/repo-b',
+            common_dir: '/work/repo-b/.git',
+            device: '3',
+            inode: '4',
+          },
+          mode: 'current',
+          kind: 'detached',
+          observed_sha: 'b'.repeat(64),
+        },
+      ],
+    });
+
+    expect(
+      parsed.repositories.map(({ repo_key, kind, branch, observed_sha }) => ({
+        repo_key,
+        kind,
+        branch,
+        observed_sha,
+      })),
+    ).toStrictEqual([
+      {
+        repo_key: 'repo-a',
+        kind: 'branch',
+        branch: 'release/2026/q3',
+        observed_sha: 'a'.repeat(40),
+      },
+      {
+        repo_key: 'repo-b',
+        kind: 'detached',
+        branch: undefined,
+        observed_sha: 'b'.repeat(64),
+      },
+    ]);
+  });
+
+  it('rejects empty batches, invalid SHAs, and renderer-authority fields', () => {
+    expect(
+      RepositorySourcesResponseSchema.safeParse({ api_version: 'v1', repositories: [] }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourcesResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [
+          {
+            repo_key: 'repo-a',
+            identity,
+            mode: 'current',
+            kind: 'detached',
+            observed_sha: 'not-a-sha',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourcesResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [
+          {
+            repo_key: 'repo-a',
+            identity,
+            mode: 'default',
+            kind: 'branch',
+            branch: 'main',
+            observed_sha: 'a'.repeat(40),
+            path: '/renderer/chosen/path',
+            revision: 'refs/tags/renderer-chosen',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('repository origin status response contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    common_dir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+
+  it('accepts typed snapshots with comparisons, stale history, and advisory update state', () => {
+    const parsed = RepositoryOriginStatusResponseSchema.parse({
+      api_version: 'v1',
+      repositories: [
+        {
+          repo_key: 'repo-a',
+          identity,
+          mode: 'default',
+          kind: 'branch',
+          branch: 'release/2026/q3',
+          local_sha: 'a'.repeat(40),
+          origin_branch: 'upstream-main',
+          fetched_sha: 'c'.repeat(40),
+          checked_at: '2026-09-09T10:00:00Z',
+          status: 'behind',
+          ahead_count: 0,
+          behind_count: 2,
+          update_eligible: false,
+          update_blockers: [
+            'dirty_target_checkout',
+            'checkout_operation_in_progress',
+            'ignored_path_collision',
+            'checkout_uninspectable',
+          ],
+        },
+        {
+          repo_key: 'repo-b',
+          identity: {
+            path: '/work/repo-b',
+            common_dir: '/work/repo-b/.git',
+            device: '3',
+            inode: '4',
+          },
+          mode: 'current',
+          kind: 'detached',
+          commit: 'b'.repeat(40),
+          status: 'unknown',
+          issue: {
+            code: 'origin_check_unavailable',
+            class: 'warning',
+            title: 'Origin check unavailable',
+            summary: 'The local source could not be compared with its origin.',
+          },
+          stale_comparison: {
+            status: 'behind',
+            local_sha: 'b'.repeat(40),
+            fetched_sha: 'd'.repeat(40),
+            origin_branch: 'main',
+            ahead_count: 0,
+            behind_count: 1,
+            checked_at: '2026-09-09T09:00:00Z',
+          },
+        },
+        {
+          repo_key: 'repo-c',
+          identity: {
+            path: '/work/repo-c',
+            common_dir: '/work/repo-c/.git',
+            device: '5',
+            inode: '6',
+          },
+          mode: 'default',
+          kind: 'branch',
+          branch: 'main',
+          local_sha: 'e'.repeat(40),
+          origin_branch: 'main',
+          status: 'checking',
+        },
+      ],
+    });
+    expect(parsed.repositories[0]?.status).toBe('behind');
+    expect(parsed.repositories[0]?.update_blockers).toEqual([
+      'dirty_target_checkout',
+      'checkout_operation_in_progress',
+      'ignored_path_collision',
+      'checkout_uninspectable',
+    ]);
+    expect(parsed.repositories[1]?.stale_comparison?.behind_count).toBe(1);
+    expect(parsed.repositories[1]?.issue?.code).toBe('origin_check_unavailable');
+    expect(parsed.repositories[2]?.checked_at).toBeUndefined();
+  });
+
+  it('accepts observed checkout HEAD identity on rows', () => {
+    const parsed = RepositoryOriginStatusResponseSchema.parse({
+      api_version: 'v1',
+      repositories: [
+        {
+          repo_key: 'repo-a',
+          identity,
+          mode: 'default',
+          kind: 'branch',
+          branch: 'main',
+          local_sha: 'a'.repeat(40),
+          origin_branch: 'main',
+          status: 'behind',
+          update_eligible: true,
+          checkout_head_ref: 'refs/heads/main',
+          checkout_head_sha: 'a'.repeat(40),
+        },
+      ],
+    });
+    expect(parsed.repositories[0]?.checkout_head_ref).toBe('refs/heads/main');
+    expect(parsed.repositories[0]?.checkout_head_sha).toBe('a'.repeat(40));
+    expect(
+      RepositoryOriginStatusResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [
+          {
+            repo_key: 'repo-a',
+            identity,
+            mode: 'default',
+            kind: 'branch',
+            branch: 'main',
+            status: 'behind',
+            checkout_head_sha: 'not-a-sha',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects invented SHAs, unknown statuses, and renderer-authority fields', () => {
+    const base = {
+      repo_key: 'repo-a',
+      identity,
+      mode: 'default' as const,
+      kind: 'branch' as const,
+      branch: 'main',
+    };
+    expect(
+      RepositoryOriginStatusResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [{ ...base, status: 'sideways' }],
+      }).success,
+    ).toBe(false);
+    // The removed Phase 8 original-checkout blocker must never parse again.
+    expect(
+      RepositoryOriginStatusResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [
+          {
+            ...base,
+            status: 'behind',
+            update_blockers: ['branch_checked_out_in_original_checkout'],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryOriginStatusResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [{ ...base, status: 'behind', fetched_sha: 'not-a-sha' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryOriginStatusResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: [
+          {
+            ...base,
+            status: 'checking',
+            checked_at: '2026-09-09T10:00:00Z',
+            path: '/renderer/path',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryOriginStatusResponseSchema.safeParse({
+        api_version: 'v1',
+        repositories: Array.from({ length: 33 }, (_, index) => ({
+          ...base,
+          repo_key: `repo-${index}`,
+          status: 'checking',
+        })),
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('repository update source response contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    common_dir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+
+  it('accepts an updated result with previous, local, and fetched SHAs', () => {
+    const parsed = RepositoryUpdateSourceResponseSchema.parse({
+      api_version: 'v1',
+      result: 'updated',
+      repo_key: 'repo-a',
+      identity,
+      mode: 'default',
+      branch: 'release/2026/q3',
+      origin_branch: 'upstream-main',
+      previous_sha: 'a'.repeat(40),
+      local_sha: 'c'.repeat(40),
+      fetched_sha: 'c'.repeat(40),
+    });
+    expect(parsed.result).toBe('updated');
+    expect(parsed.reason).toBeUndefined();
+    expect(parsed.status).toBeUndefined();
+    expect(parsed.previous_sha).toBe('a'.repeat(40));
+    expect(parsed.local_sha).toBe('c'.repeat(40));
+    expect(parsed.fetched_sha).toBe('c'.repeat(40));
+  });
+
+  it('accepts a stale refusal carrying a freshly resolved status snapshot', () => {
+    const parsed = RepositoryUpdateSourceResponseSchema.parse({
+      api_version: 'v1',
+      result: 'stale',
+      reason: 'branch_checked_out',
+      repo_key: 'repo-a',
+      identity,
+      mode: 'default',
+      branch: 'release/2026/q3',
+      origin_branch: 'upstream-main',
+      status: {
+        repo_key: 'repo-a',
+        identity,
+        mode: 'default',
+        kind: 'branch',
+        branch: 'release/2026/q3',
+        local_sha: 'a'.repeat(40),
+        origin_branch: 'upstream-main',
+        status: 'behind',
+        ahead_count: 0,
+        behind_count: 3,
+        update_eligible: false,
+        update_blockers: ['branch_checked_out_in_worktree'],
+        checkout_head_ref: 'refs/heads/main',
+        checkout_head_sha: 'e'.repeat(40),
+      },
+    });
+    expect(parsed.result).toBe('stale');
+    expect(parsed.reason).toBe('branch_checked_out');
+    expect(parsed.status?.status).toBe('behind');
+    expect(parsed.status?.update_blockers).toEqual(['branch_checked_out_in_worktree']);
+    expect(parsed.status?.checkout_head_ref).toBe('refs/heads/main');
+    expect(parsed.status?.checkout_head_sha).toBe('e'.repeat(40));
+  });
+
+  it('accepts the original-checkout safety refusal reasons', () => {
+    for (const reason of [
+      'dirty_checkout',
+      'checkout_operation_in_progress',
+      'ignored_path_collision',
+      'checkout_conflict',
+    ]) {
+      const parsed = RepositoryUpdateSourceResponseSchema.parse({
+        api_version: 'v1',
+        result: 'stale',
+        reason,
+        repo_key: 'repo-a',
+        identity,
+        mode: 'default',
+        branch: 'main',
+        origin_branch: 'main',
+      });
+      expect(parsed.reason).toBe(reason);
+    }
+  });
+
+  it('rejects invented SHAs, unknown results and reasons, and renderer-authority fields', () => {
+    const base = {
+      repo_key: 'repo-a',
+      identity,
+      mode: 'default' as const,
+      branch: 'main',
+      origin_branch: 'main',
+    };
+    expect(
+      RepositoryUpdateSourceResponseSchema.safeParse({
+        api_version: 'v1',
+        result: 'sideways',
+        ...base,
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryUpdateSourceResponseSchema.safeParse({
+        api_version: 'v1',
+        result: 'stale',
+        reason: 'sideways',
+        ...base,
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositoryUpdateSourceResponseSchema.safeParse({
+        api_version: 'v1',
+        result: 'updated',
+        ...base,
+        local_sha: 'not-a-sha',
+      }).success,
+    ).toBe(false);
+    const withRendererPath = RepositoryUpdateSourceResponseSchema.safeParse({
+      api_version: 'v1',
+      result: 'updated',
+      ...base,
+      path: '/renderer/chosen/path',
+    });
+    expect(withRendererPath.success).toBe(true);
+    expect(withRendererPath.success && 'path' in withRendererPath.data).toBe(false);
+  });
+});
+
+describe('repository source reconcile response contract', () => {
+  const identity = {
+    path: '/work/repo-a',
+    common_dir: '/work/repo-a/.git',
+    device: '1',
+    inode: '2',
+  };
+  const base = {
+    api_version: 'v1',
+    repo_key: 'repo-a',
+    identity,
+    mode: 'default' as const,
+    branch: 'main',
+    origin_branch: 'main',
+  };
+
+  it('accepts an observed checkout state and stays valid without one', () => {
+    const parsed = RepositorySourceReconcileResponseSchema.parse({
+      ...base,
+      outcome: 'expected_target_present',
+      local_sha: 'c'.repeat(40),
+      checkout: {
+        state: 'clean',
+        head_ref: 'refs/heads/main',
+        head_sha: 'c'.repeat(40),
+      },
+    });
+    expect(parsed.checkout?.state).toBe('clean');
+    expect(parsed.checkout?.head_ref).toBe('refs/heads/main');
+    expect(parsed.checkout?.head_sha).toBe('c'.repeat(40));
+    // An unoccupied settlement carries no checkout observation at all.
+    const unoccupied = RepositorySourceReconcileResponseSchema.parse({
+      ...base,
+      outcome: 'original_tip_remains',
+      local_sha: 'a'.repeat(40),
+    });
+    expect(unoccupied.checkout).toBeUndefined();
+  });
+
+  it('rejects unknown checkout states, malformed SHAs, and renderer-authority fields', () => {
+    expect(
+      RepositorySourceReconcileResponseSchema.safeParse({
+        ...base,
+        outcome: 'expected_target_present',
+        checkout: { state: 'sideways' },
+      }).success,
+    ).toBe(false);
+    expect(
+      RepositorySourceReconcileResponseSchema.safeParse({
+        ...base,
+        outcome: 'expected_target_present',
+        checkout: { state: 'dirty', head_sha: 'not-a-sha' },
+      }).success,
+    ).toBe(false);
+    // An empty head_ref is truthful "could not be read"; an empty head_sha
+    // must never appear on the wire.
+    const emptyHeadRef = RepositorySourceReconcileResponseSchema.safeParse({
+      ...base,
+      outcome: 'expected_target_present',
+      checkout: { state: 'unobserved', head_ref: '' },
+    });
+    expect(emptyHeadRef.success).toBe(true);
+    expect(
+      RepositorySourceReconcileResponseSchema.safeParse({
+        ...base,
+        outcome: 'expected_target_present',
+        checkout: { state: 'unobserved', head_sha: '' },
+      }).success,
+    ).toBe(false);
+    const withRendererPath = RepositorySourceReconcileResponseSchema.safeParse({
+      ...base,
+      outcome: 'branch_missing',
+      path: '/renderer/chosen/path',
+    });
+    expect(withRendererPath.success).toBe(true);
+    expect(withRendererPath.success && 'path' in withRendererPath.data).toBe(false);
+  });
+});
 
 function failure(fn: () => unknown): CanonicalError {
   try {
@@ -880,5 +1375,61 @@ describe('owned error wire shapes on the feature summary', () => {
         errors: [{ ...runEntry, error: { ...runEntry.error, diagnostics: 'raw' } }],
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('Readiness repository identity contract', () => {
+  const baseRepository = {
+    name: 'service',
+    path: '/work/service',
+    valid: true,
+    feature_ready: true,
+  };
+  const validIdentity = {
+    path: '/work/service',
+    common_dir: '/work/service/.git',
+    device: '16777234',
+    inode: '982394',
+  };
+
+  function readinessWith(identity: unknown) {
+    return {
+      api_version: 'v1',
+      ready: true,
+      providers: [],
+      models: { available: true },
+      configuration: { valid: true },
+      workspace: {
+        roots: [],
+        repositories: [{ ...baseRepository, identity }],
+      },
+    };
+  }
+
+  it('accepts a well-formed identity and maps it through the readiness snapshot', () => {
+    const parsed = ReadinessResponseSchema.parse(readinessWith(validIdentity));
+    expect(parsed.workspace.repositories[0]?.identity).toEqual({
+      path: '/work/service',
+      common_dir: '/work/service/.git',
+      device: '16777234',
+      inode: '982394',
+    });
+  });
+
+  it('accepts a repository without an identity (unselectable, not malformed)', () => {
+    const parsed = ReadinessResponseSchema.parse(readinessWith(undefined));
+    expect(parsed.workspace.repositories[0]?.identity).toBeUndefined();
+  });
+
+  it.each([
+    ['non-decimal device', { ...validIdentity, device: '0x1f' }],
+    ['negative inode', { ...validIdentity, inode: '-4' }],
+    ['numeric device instead of text', { ...validIdentity, device: 16777234 }],
+    ['empty path', { ...validIdentity, path: '' }],
+    ['missing common_dir', { ...validIdentity, common_dir: undefined }],
+    ['oversized path', { ...validIdentity, path: 'x'.repeat(4097) }],
+    ['extra field', { ...validIdentity, extra: 'no' }],
+  ])('rejects malformed identity data: %s', (_label, identity) => {
+    expect(() => ReadinessResponseSchema.parse(readinessWith(identity))).toThrow();
   });
 });

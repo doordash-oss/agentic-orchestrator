@@ -4,11 +4,11 @@
 
 A function becomes a coroutine if it uses any of these:
 
-| Keyword | Meaning |
-|---------|---------|
-| `co_await expr` | Suspend until `expr` completes; return its result |
-| `co_yield value` | Produce `value` to the caller, then suspend |
-| `co_return value` | Complete the coroutine with a final result |
+| Keyword           | Meaning                                           |
+| ----------------- | ------------------------------------------------- |
+| `co_await expr`   | Suspend until `expr` completes; return its result |
+| `co_yield value`  | Produce `value` to the caller, then suspend       |
+| `co_return value` | Complete the coroutine with a final result        |
 
 C++20 defines the coroutine machinery (`promise_type`, `coroutine_handle`,
 awaitables) but provides no ready-made types. Use a library (cppcoro) or write
@@ -133,13 +133,13 @@ int main() {
 
 ## When to Use Coroutines vs Threads
 
-| Scenario | Recommendation |
-|----------|---------------|
-| I/O-bound (network, file, database) | Coroutines — suspend while waiting |
-| CPU-bound computation | Threads — parallel execution on multiple cores |
-| Thousands of concurrent operations | Coroutines — KB-sized frames vs MB-per-thread |
+| Scenario                                    | Recommendation                                    |
+| ------------------------------------------- | ------------------------------------------------- |
+| I/O-bound (network, file, database)         | Coroutines — suspend while waiting                |
+| CPU-bound computation                       | Threads — parallel execution on multiple cores    |
+| Thousands of concurrent operations          | Coroutines — KB-sized frames vs MB-per-thread     |
 | Complex async flows with multiple I/O steps | Coroutines — linear code that reads synchronously |
-| Mixed I/O + CPU work | Hybrid: coroutines for I/O, thread pool for CPU |
+| Mixed I/O + CPU work                        | Hybrid: coroutines for I/O, thread pool for CPU   |
 
 ## Coroutine Limitations
 

@@ -418,7 +418,7 @@ export function fieldForCreationError(error: {
   summary: string;
   diagnostics?: string;
 }): CreationErrorField {
-  if (error.code === 'not_ready') {
+  if (error.code === 'not_ready' || error.code === 'E_REPOSITORY_FILE_UNRESOLVED') {
     return 'form';
   }
   const detail = `${error.summary}\n${error.diagnostics ?? ''}`;

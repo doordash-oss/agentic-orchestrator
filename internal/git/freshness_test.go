@@ -152,3 +152,90 @@ func runFreshnessGit(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 }
+
+// narrowFreshnessClone turns repo into a single-branch clone that maps only
+// main, dropping the tracking ref an earlier push may have left for branch.
+func narrowFreshnessClone(t *testing.T, repo, branch string) {
+	t.Helper()
+	runFreshnessGit(t, repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+	runFreshnessGit(t, repo, "update-ref", "-d", "refs/remotes/origin/"+branch)
+}
+
+// TestRepoFreshnessUnmappedBranchTracksOrigin pins the single-branch clone
+// case: git cannot resolve @{upstream} for a branch the fetch refspec does
+// not map, so the probe compares against refs/remotes/origin/<branch> by name
+// and refreshes it from origin itself.
+func TestRepoFreshnessUnmappedBranchTracksOrigin(t *testing.T) {
+	t.Parallel()
+
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repo, "feature/narrow")
+	testutil.CommitFile(t, repo, "feature.txt", "feature\n", "feature commit")
+	testutil.SimulatePush(t, repo, bare, "feature/narrow", "feature/narrow")
+	narrowFreshnessClone(t, repo, "feature/narrow")
+
+	if got := RepoFreshness(repo); got != "in sync" {
+		t.Fatalf("RepoFreshness() = %q, want %q after the probe fetched the unmapped branch", got, "in sync")
+	}
+
+	// A second clone advances the remote branch. Nothing fetches in repo;
+	// the probe must notice on its own once the refresh interval allows.
+	other := cloneFreshnessRepo(t, bare)
+	runFreshnessGit(t, other, "checkout", "feature/narrow")
+	testutil.CommitFile(t, other, "remote.txt", "remote\n", "remote commit")
+	testutil.SimulatePush(t, other, bare, "feature/narrow", "feature/narrow")
+	trackingRefreshes.Delete(repo + "\x00feature/narrow")
+
+	if got := RepoFreshness(repo); got != FreshnessLocalChanges {
+		t.Fatalf("RepoFreshness() = %q, want %q once the remote moved", got, FreshnessLocalChanges)
+	}
+}
+
+// TestRepoFreshnessUnmappedBranchWithoutRemote pins that an unmapped branch
+// with no remote counterpart still reads "local only" instead of failing.
+func TestRepoFreshnessUnmappedBranchWithoutRemote(t *testing.T) {
+	t.Parallel()
+
+	repo, _ := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repo, "feature/unpushed")
+	testutil.CommitFile(t, repo, "feature.txt", "feature\n", "feature commit")
+	narrowFreshnessClone(t, repo, "feature/unpushed")
+
+	if got := RepoFreshness(repo); got != "local only" {
+		t.Fatalf("RepoFreshness() = %q, want %q", got, "local only")
+	}
+}
+
+func TestFetchRefspecCoversBranch(t *testing.T) {
+	t.Parallel()
+
+	repo, _ := testutil.InitPublishReadyGitRepo(t)
+	tests := []struct {
+		name     string
+		refspecs []string
+		branch   string
+		want     bool
+	}{
+		{"wildcard", []string{"+refs/heads/*:refs/remotes/origin/*"}, "feature/x", true},
+		{"single branch main only", []string{"+refs/heads/main:refs/remotes/origin/main"}, "feature/x", false},
+		{"single branch matches itself", []string{"+refs/heads/main:refs/remotes/origin/main"}, "main", true},
+		{"explicit extra mapping", []string{"+refs/heads/main:refs/remotes/origin/main", "+refs/heads/feature/x:refs/remotes/origin/feature/x"}, "feature/x", true},
+		{"prefix wildcard", []string{"+refs/heads/feature/*:refs/remotes/origin/feature/*"}, "feature/x", true},
+		{"prefix wildcard misses", []string{"+refs/heads/feature/*:refs/remotes/origin/feature/*"}, "main", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runFreshnessGit(t, repo, "config", "--unset-all", "remote.origin.fetch")
+			for _, spec := range tt.refspecs {
+				runFreshnessGit(t, repo, "config", "--add", "remote.origin.fetch", spec)
+			}
+			got, err := FetchRefspecCoversBranch(repo, tt.branch)
+			if err != nil {
+				t.Fatalf("FetchRefspecCoversBranch() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("FetchRefspecCoversBranch(%q) = %v, want %v for %v", tt.branch, got, tt.want, tt.refspecs)
+			}
+		})
+	}
+}

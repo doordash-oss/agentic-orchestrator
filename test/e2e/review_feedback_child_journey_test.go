@@ -310,7 +310,8 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	// Selected comments are both inline (CommentTypeReview) → direct thread replies.
 	replyA := 0
 	replyB := 0
-	graphqlCount := 0
+	threadMaps := 0
+	resolutions := 0
 	for _, inv := range tailRequests {
 		if strings.Contains(inv, "repos/example/api/pulls/1/comments/11/replies") {
 			replyA++
@@ -318,8 +319,11 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 		if strings.Contains(inv, "repos/example/web/pulls/2/comments/21/replies") {
 			replyB++
 		}
-		if strings.Contains(inv, "graphql") {
-			graphqlCount++
+		switch {
+		case strings.Contains(inv, "resolveReviewThread"):
+			resolutions++
+		case strings.Contains(inv, "graphql"):
+			threadMaps++
 		}
 	}
 	if replyA != 1 {
@@ -328,9 +332,13 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	if replyB != 1 {
 		t.Errorf("reply to comment 21 = %d requests, want 1", replyB)
 	}
-	// 2 thread-map fetches + 2 thread resolutions = 4 graphql calls.
-	if graphqlCount != 4 {
-		t.Errorf("graphql requests = %d, want 4 (2 thread maps + 2 resolutions)", graphqlCount)
+	// Thread maps: 2 from the launch's reconciliation fetch (resolved-thread
+	// filter) + 2 from the tail. Resolutions: one per selected inline comment.
+	if threadMaps != 4 {
+		t.Errorf("thread-map requests = %d, want 4 (2 launch reconciliation + 2 tail)", threadMaps)
+	}
+	if resolutions != 2 {
+		t.Errorf("thread resolutions = %d, want 2", resolutions)
 	}
 	// Unselected comments (12, 13) must receive no replies.
 	for _, inv := range tailRequests {

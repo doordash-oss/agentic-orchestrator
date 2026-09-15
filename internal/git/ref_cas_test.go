@@ -15,6 +15,7 @@
 package git_test
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -345,5 +346,43 @@ func TestReadRefSHAMissingRef(t *testing.T) {
 	_, err := gitpkg.ReadRefSHA(repo, "refs/heads/nonexistent")
 	if err == nil {
 		t.Fatal("ReadRefSHA() error = nil, want error for missing ref")
+	}
+}
+
+// TestCreateMergeCandidateRejectsContainedChildHead pins the no-op case: when
+// the child head is already contained in the parent tip, git has nothing to
+// merge and no commit is created. The call must fail with the typed sentinel
+// rather than the misleading parent-count message, and the parent ref must
+// not move.
+func TestCreateMergeCandidateRejectsContainedChildHead(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	testutil.CommitFile(t, repo, "base.txt", "base\n", "parent base")
+	baseSHA := runGitRefTest(t, repo, "rev-parse", "HEAD")
+	testutil.CommitFile(t, repo, "next.txt", "next\n", "parent advanced")
+	parentTip := runGitRefTest(t, repo, "rev-parse", "HEAD")
+
+	tests := []struct {
+		name      string
+		childHead string
+	}{
+		{name: "child head equals parent tip", childHead: parentTip},
+		{name: "child head is an ancestor of parent tip", childHead: baseSHA},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := gitpkg.CreateMergeCandidate(repo, parentTip, tt.childHead, "merge candidate")
+			if !errors.Is(err, gitpkg.ErrMergeCandidateNoChanges) {
+				t.Fatalf("CreateMergeCandidate() error = %v, want ErrMergeCandidateNoChanges", err)
+			}
+			if result != nil {
+				t.Fatalf("CreateMergeCandidate() result = %+v, want nil", result)
+			}
+			if strings.Contains(err.Error(), "want 2") {
+				t.Fatalf("CreateMergeCandidate() error = %q leaks the parent-count diagnostic", err)
+			}
+			if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/main"); got != parentTip {
+				t.Fatalf("parent ref moved to %s, want %s", got, parentTip)
+			}
+		})
 	}
 }

@@ -32,7 +32,10 @@ import {
   type ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
 import { ErrorSurface, type ErrorSurfaceAction } from '../../components/ErrorSurface';
-import { useRegisteredErrorCard } from '../../components/errorCardRegistry';
+import {
+  focusErrorCardWhenRegistered,
+  useRegisteredErrorCard,
+} from '../../components/errorCardRegistry';
 import { retryAction, type LoadState } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
 import { buildCanonicalError } from '../../../../shared/errors';
@@ -434,6 +437,12 @@ export function RefactorPassWorkspace({
     return catalogErrorAction(child, actionId, 'Retry setup');
   };
 
+  const runFailure = failedSetupTaskError === null ? child?.failure : undefined;
+  const openAttentionOwner =
+    inlineAttention?.kind === 'error'
+      ? () => focusErrorCardWhenRegistered(inlineAttention.ref)
+      : undefined;
+
   const submitQuestionAnswers = () => {
     if (questionsAttention === undefined) return;
     void submitAttention(questionsAttention, () =>
@@ -544,7 +553,10 @@ export function RefactorPassWorkspace({
               variant="compact"
               localAction={retryAction(pass.reload)}
             />
-          ) : state !== null && state.id !== 'working' && state.sentence !== '' ? (
+          ) : state !== null &&
+            state.id !== 'working' &&
+            runFailure === undefined &&
+            state.sentence !== '' ? (
             <p className="refactor-pass__state" role="status" data-tone={state.tone}>
               {state.sentence}
               {gate !== undefined && activeGate === undefined ? (
@@ -578,6 +590,28 @@ export function RefactorPassWorkspace({
                   taskKey: failedSetupTask.key,
                 },
                 featureName: view.name,
+              }}
+            />
+          ) : null}
+
+          {runFailure !== undefined && child !== null ? (
+            <ErrorSurface
+              error={runFailure}
+              variant="full"
+              expandDiagnostics={runFailure.code === 'safety_rail_tripped'}
+              resolveAction={(actionId) =>
+                catalogErrorAction(
+                  child,
+                  actionId,
+                  actionId === 'setup' ? 'Retry setup' : 'Restart',
+                )
+              }
+              onAction={(actionId) => {
+                if (actionId === 'restart' || actionId === 'setup') void pass.dispatch(actionId);
+              }}
+              explain={{
+                reference: { scope: 'run', code: runFailure.code, featureId: child.id },
+                featureName: child.name,
               }}
             />
           ) : null}
@@ -622,6 +656,7 @@ export function RefactorPassWorkspace({
                 <AttentionDetail
                   key={`${inlineAttention.kind}:${inlineAttention.id}`}
                   item={inlineAttention}
+                  onJump={openAttentionOwner}
                   busy={attentionBusy === inlineAttention.id}
                   drafts={attentionDrafts}
                   setDrafts={setAttentionDrafts}
@@ -703,6 +738,7 @@ export function RefactorPassWorkspace({
                       <AttentionDetail
                         key={`${inlineAttention.kind}:${inlineAttention.id}`}
                         item={inlineAttention}
+                        onJump={openAttentionOwner}
                         busy={attentionBusy === inlineAttention.id}
                         drafts={attentionDrafts}
                         setDrafts={setAttentionDrafts}

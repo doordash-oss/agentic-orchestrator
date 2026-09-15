@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -49,6 +50,38 @@ func (h *apiHandler) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	revision := revisionForAny(snapshot)
 	snapshot.Meta = h.responseMeta(revision)
 	h.writeRevisionedJSON(w, r, revision, snapshot)
+}
+
+// handleRuntimeReadiness is the dashboard/attach gate. Its wire shape omits
+// workspace entirely so loading catalog data cannot be mistaken for no repos.
+func (h *apiHandler) handleRuntimeReadiness(w http.ResponseWriter, r *http.Request) {
+	h.writeRuntimeReadiness(w, r, false)
+}
+
+func (h *apiHandler) handleRuntimeReadinessRefresh(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) || !h.requireTrustedMutation(w, r) {
+		return
+	}
+	var req map[string]any
+	if !decodeMutationJSON(w, r, &req) {
+		return
+	}
+	h.writeRuntimeReadiness(w, r, true)
+}
+
+func (h *apiHandler) writeRuntimeReadiness(w http.ResponseWriter, r *http.Request, refresh bool) {
+	ready := h.runtimeReadinessSnapshot(r.Context(), refresh)
+	snapshot := RuntimeReadinessResponse{
+		APIVersion: ready.APIVersion, Ready: ready.Ready, ProbedAt: ready.ProbedAt,
+		Providers: ready.Providers, Models: ready.Models, Configuration: ready.Configuration, Issues: ready.Issues,
+	}
+	revision := revisionForAny(snapshot)
+	snapshot.Meta = h.responseMeta(revision)
+	if refresh {
+		writeJSON(w, http.StatusOK, snapshot)
+	} else {
+		h.writeRevisionedJSON(w, r, revision, snapshot)
+	}
 }
 
 // handleReadinessRefreshRoute serves POST /api/v1/readiness/refresh: it
@@ -82,7 +115,7 @@ func (h *apiHandler) rejectNotReadyForCreation(w http.ResponseWriter, r *http.Re
 	if h.registry == nil {
 		return false
 	}
-	snapshot := h.readinessSnapshot(r.Context(), false)
+	snapshot := h.runtimeReadinessSnapshot(r.Context(), false)
 	if snapshot.Ready {
 		return false
 	}
@@ -104,8 +137,18 @@ func (h *apiHandler) rejectNotReadyForCreation(w http.ResponseWriter, r *http.Re
 
 // readinessSnapshot assembles the consolidated readiness response. Provider
 // probe results are cached; forceProbe re-runs them. The cheap sections
-// (models, configuration, workspace) are recomputed on every call.
+// (models, configuration) are recomputed on every call; workspace inspection
+// is separate and is never part of the runtime-only connection gate.
 func (h *apiHandler) readinessSnapshot(ctx context.Context, forceProbe bool) ReadinessResponse {
+	resp := h.runtimeReadinessSnapshot(ctx, forceProbe)
+	resp.Workspace = workspaceReadiness(ctx, h.configOrDefault())
+	resp.Issues = flattenReadinessIssues(resp)
+	return resp
+}
+
+// runtimeReadinessSnapshot never performs workspace discovery or Git work.
+// The mandatory creation guard uses the same cheap runtime truth as connect.
+func (h *apiHandler) runtimeReadinessSnapshot(ctx context.Context, forceProbe bool) ReadinessResponse {
 	providers, probedAt := h.providerReadinessStatuses(ctx, forceProbe)
 	cfg := h.configOrDefault()
 	resp := ReadinessResponse{
@@ -113,7 +156,6 @@ func (h *apiHandler) readinessSnapshot(ctx context.Context, forceProbe bool) Rea
 		Providers:     providers,
 		Models:        h.modelReadiness(),
 		Configuration: configurationReadiness(cfg),
-		Workspace:     workspaceReadiness(cfg),
 	}
 	if !probedAt.IsZero() {
 		at := probedAt
@@ -313,7 +355,7 @@ func configurationReadiness(cfg *config.Config) ConfigurationReadiness {
 // (valid) may still be unsuitable as a clone destination (not writable or
 // itself a repository), and that distinction is surfaced separately so
 // discovery is not globally invalidated.
-func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
+func workspaceReadiness(ctx context.Context, cfg *config.Config) WorkspaceReadiness {
 	out := WorkspaceReadiness{
 		Roots:        []WorkspaceRootReadiness{},
 		Repositories: []RepositoryReadiness{},
@@ -346,33 +388,63 @@ func workspaceReadiness(cfg *config.Config) WorkspaceReadiness {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for _, name := range names {
+	// Bound the Git inspection phase as well as each subprocess; cancellation stops
+	// queued work and kills running Git process groups when a client leaves.
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	entries := make([]RepositoryReadiness, len(names))
+	needsGit := false
+	for i, name := range names {
 		repo := allRepos[name]
-		entry := RepositoryReadiness{Name: name, Path: repo.Path}
-		expanded := workspace.ExpandHome(repo.Path)
-		if workspace.IsGitRepo(expanded) {
-			entry.Valid = true
-			// A repository without commits (an unborn clone of an empty
-			// remote) is valid and visible but cannot start feature work.
-			entry.FeatureReady = git.HasHead(expanded)
-			// The identity binds the catalog entry to the actual checkout:
-			// clients reconcile selections by it across discovery refreshes
-			// and renames. It is omitted when it cannot be resolved, which
-			// makes the repository unselectable rather than mis-bound.
-			if identity, ok := git.ResolveRepoIdentity(expanded); ok {
-				entry.Identity = &RepositoryIdentity{
-					Path:      identity.Path,
-					CommonDir: identity.CommonDir,
-					Device:    git.FormatIdentityDevice(identity.Device),
-					Inode:     git.FormatIdentityInode(identity.Inode),
-					BirthTime: identity.BirthTime,
-				}
-			}
+		entries[i] = RepositoryReadiness{Name: name, Path: repo.Path}
+		if workspace.IsGitRepo(workspace.ExpandHome(repo.Path)) {
+			entries[i].Valid = true
+			needsGit = true
 		} else {
-			entry.Issue = readinessIssue(errcat.InvalidRepository)
+			entries[i].Issue = readinessIssue(errcat.InvalidRepository)
 		}
-		out.Repositories = append(out.Repositories, entry)
 	}
+	if needsGit {
+		prober, probeErr := git.NewReadinessProber(ctx)
+		var wg sync.WaitGroup
+		jobs := make(chan int)
+		// Each worker writes only its own indexed result; response order stays
+		// deterministic regardless of command completion order.
+		for range min(8, len(entries)) {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range jobs {
+					entry := &entries[i]
+					err := probeErr
+					if err == nil {
+						err = ctx.Err()
+					}
+					if err == nil {
+						var identity git.RepoIdentity
+						identity, entry.FeatureReady, err = prober.Inspect(ctx, workspace.ExpandHome(entry.Path))
+						if err == nil {
+							entry.Identity = &RepositoryIdentity{Path: identity.Path, CommonDir: identity.CommonDir,
+								Device: git.FormatIdentityDevice(identity.Device), Inode: git.FormatIdentityInode(identity.Inode), BirthTime: identity.BirthTime}
+						}
+					}
+					if err != nil {
+						entry.Issue = readinessIssue(errcat.RepositoryInspectionFailed,
+							errcat.WithDiagnostics(SafeDisplayText(err.Error(), 2048)))
+					}
+				}
+			}()
+		}
+		for i := range entries {
+			if entries[i].Valid {
+				jobs <- i
+			}
+		}
+		close(jobs)
+		wg.Wait()
+	}
+	out.Repositories = entries
+
 	return out
 }
 

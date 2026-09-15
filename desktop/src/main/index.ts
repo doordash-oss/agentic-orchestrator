@@ -1444,6 +1444,8 @@ if (!hasSingleInstanceLock) {
         broadcastAppEvent({ type: 'theme', ...info });
         return info;
       },
+      getRuntimeReadiness: () => setup.getRuntimeReadiness(),
+      refreshRuntimeReadiness: () => setup.refreshRuntimeReadiness(),
       getReadiness: () => setup.getReadiness(),
       refreshReadiness: () => setup.refreshReadiness(),
       pickWorkspaceDirectory: () => setup.pickWorkspaceDirectory(),

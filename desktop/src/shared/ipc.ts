@@ -45,6 +45,8 @@ export const IPC_CHANNELS = {
   windowOpenSettings: 'agentico:window:open-settings',
   themeGet: 'agentico:theme:get',
   themeSet: 'agentico:theme:set',
+  runtimeReadinessGet: 'agentico:readiness:runtime:get',
+  runtimeReadinessRefresh: 'agentico:readiness:runtime:refresh',
   readinessGet: 'agentico:readiness:get',
   readinessRefresh: 'agentico:readiness:refresh',
   workspacePickDirectory: 'agentico:workspace:pick-directory',
@@ -768,6 +770,12 @@ export const ReadinessSnapshotSchema = z.strictObject({
 });
 
 export type ReadinessSnapshot = z.output<typeof ReadinessSnapshotSchema>;
+/** Mandatory runtime truth, independent of the asynchronously loaded catalog. */
+export const RuntimeReadinessSnapshotSchema = ReadinessSnapshotSchema.omit({
+  workspaceRoots: true,
+  repositories: true,
+});
+export type RuntimeReadinessSnapshot = z.output<typeof RuntimeReadinessSnapshotSchema>;
 
 // --- Theme ------------------------------------------------------------------
 // Declared ahead of the pushed app-event union so the cross-window theme
@@ -4004,6 +4012,14 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([ThemePreferenceSchema]),
     response: ThemeInfoSchema,
   },
+  [IPC_CHANNELS.runtimeReadinessGet]: {
+    request: z.tuple([]),
+    response: RuntimeReadinessSnapshotSchema,
+  },
+  [IPC_CHANNELS.runtimeReadinessRefresh]: {
+    request: z.tuple([]),
+    response: RuntimeReadinessSnapshotSchema,
+  },
   [IPC_CHANNELS.readinessGet]: {
     request: z.tuple([]),
     response: ReadinessSnapshotSchema,
@@ -4448,6 +4464,8 @@ export interface AgenticoApi {
   openSettingsWindow(request: SettingsOpenRequest): Promise<SettingsOpenResult>;
   getThemePreference(): Promise<ThemeInfo>;
   setThemePreference(preference: ThemePreference): Promise<ThemeInfo>;
+  getRuntimeReadiness(): Promise<RuntimeReadinessSnapshot>;
+  refreshRuntimeReadiness(): Promise<RuntimeReadinessSnapshot>;
   getReadiness(): Promise<ReadinessSnapshot>;
   refreshReadiness(): Promise<ReadinessSnapshot>;
   pickWorkspaceDirectory(): Promise<PickedDirectory>;

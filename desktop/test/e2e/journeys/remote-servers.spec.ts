@@ -1127,3 +1127,135 @@ for (const surface of ['Settings', 'footer'] as const) {
     }
   });
 }
+
+// Repository inspection deliberately remains in flight across a real switch.
+// The released and failed-Git states also verify the Settings-only UX.
+test('remote→local opens the dashboard while repository inspection is stalled', async ({}, testInfo) => {
+  const world = createWorld('runtime-readiness', { auth: AUTH, presetWorkspaceRoot: true });
+  const repo = createRepo(world, 'readiness-lab', { commit: true });
+  // More than one worker batch makes the blocked scan outlive the UI
+  // assertion, even if an individual subprocess reaches its own deadline.
+  for (let i = 0; i < 24; i += 1) {
+    const checkout = path.join(world.workspaceRoot, `checkout-${String(i)}`);
+    fs.mkdirSync(checkout);
+    fs.symlinkSync(path.join(repo, '.git'), path.join(checkout, '.git'), 'dir');
+  }
+  const blocked = path.join(world.stubDir, 'block-git');
+  const started = path.join(world.stubDir, 'git-started');
+  const broken = path.join(world.stubDir, 'broken-git');
+  const quote = (value: string): string => "'" + value.replaceAll("'", "'\\''") + "'";
+  fs.writeFileSync(
+    path.join(world.stubDir, 'git'),
+    `#!/bin/sh
+# Copyright 2026 DoorDash, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+if [ -f ${quote(broken)} ]; then
+  echo 'Review the Xcode license agreements' >&2
+  exit 69
+fi
+case "$*" in
+  *rev-parse*)
+    if [ -f ${quote(blocked)} ]; then
+      echo started > ${quote(started)}
+      while [ -f ${quote(blocked)} ]; do /bin/sleep 0.05; done
+    fi
+    ;;
+esac
+exec /usr/bin/git "$@"
+`,
+    { mode: 0o755 },
+  );
+  let handle: AppHandle | null = null;
+  let remote: RemoteTestServer | null = null;
+  let catalog: Promise<unknown> | null = null;
+  const catalogAbort = new AbortController();
+  try {
+    remote = await startRemoteServer(world, REMOTE_NAME);
+    handle = await launchApp(world, testInfo, {
+      env: { PATH: `${world.stubDir}:${minimalEnv(world)['PATH']}` },
+    });
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 90_000,
+    });
+    const local = await connectionState(handle);
+    const localRecord = discoveryAt(world.runtimeDir)!;
+    const settings = await openSettings(handle);
+    await selectSettingsPane(settings, 'Servers');
+    // A session-only token is sufficient; this regression never needs a relaunch.
+    await pasteAndProbe(settings, remote.connectionString);
+    await expect(
+      handle.page.getByRole('button', { name: `${REMOTE_NAME} — switch server` }),
+    ).toBeVisible({ timeout: 60_000 });
+
+    fs.writeFileSync(blocked, '');
+    let catalogSettled = false;
+    catalog = fetch(`${localRecord.base_url}/api/v1/readiness`, {
+      headers: { Authorization: `Bearer ${localRecord.auth_token!}` },
+      signal: catalogAbort.signal,
+    })
+      .then((response) => response.json())
+      .catch(() => null)
+      .finally(() => {
+        catalogSettled = true;
+      });
+    await waitFor(() => fs.existsSync(started), 'local repository inspection to enter Git', 10_000);
+
+    await handle.page.getByRole('button', { name: `${REMOTE_NAME} — switch server` }).click();
+    await handle.page
+      .getByRole('option', { name: new RegExp(`${local.serverName!} at .+ — Available`) })
+      .click();
+    await expect(
+      handle.page.getByRole('button', { name: `${local.serverName!} — switch server` }),
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(handle.page.getByRole('option', { name: 'Overview' })).toBeVisible();
+    expect(catalogSettled).toBe(false);
+    await selectSettingsPane(settings, 'Workspace roots');
+    await expect(settings.getByText('Loading repositories…', { exact: true })).toBeVisible();
+    expect(catalogSettled).toBe(false);
+
+    fs.unlinkSync(blocked);
+    await catalog;
+    await expect(
+      settings
+        .getByRole('region', { name: 'Repositories', exact: true })
+        .getByText('readiness-lab', { exact: true }),
+    ).toBeVisible();
+    fs.writeFileSync(broken, '');
+    await settings.reload();
+    const repositories = settings.getByRole('region', { name: 'Repositories', exact: true });
+    await expect(
+      repositories.getByText('Repository inspection failed', { exact: true }).first(),
+    ).toBeVisible();
+    await expect(repositories.getByText(/No commits yet/)).toHaveCount(0);
+    await expect(repositories.getByRole('button', { name: 'Create initial commit…' })).toHaveCount(
+      0,
+    );
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
+    await handle.page.getByRole('button', { name: 'New feature' }).click();
+    await expect(handle.page.getByRole('checkbox', { name: /readiness-lab/ })).toBeDisabled();
+    await expect(
+      handle.page.getByText('Git could not inspect this repository.', { exact: true }).first(),
+    ).toBeVisible();
+    await expect(handle.page.getByText(/No commits yet/)).toHaveCount(0);
+    persistAppLogs(handle, 'runtime-readiness-app');
+  } finally {
+    fs.rmSync(blocked, { force: true });
+    catalogAbort.abort();
+    await catalog?.catch(() => null);
+    if (handle !== null) await closeApp(handle).catch(() => {});
+    if (remote !== null) await stopRemoteServer(remote);
+    assertNoLeakedProcesses(world);
+    destroyWorld(world);
+  }
+});

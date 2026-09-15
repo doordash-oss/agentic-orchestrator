@@ -72,6 +72,7 @@ import {
   type IpcEnvelope,
   type PickedDirectory,
   type ReadinessSnapshot,
+  type RuntimeReadinessSnapshot,
   type RepositoryState,
   type Settings,
   type SettingsOpenRequest,
@@ -183,6 +184,8 @@ export interface IpcServices {
   openSettingsWindow(request: SettingsOpenRequest): SettingsOpenResult;
   getTheme(): ThemeInfo;
   setTheme(preference: ThemePreference): ThemeInfo;
+  getRuntimeReadiness(): Promise<RuntimeReadinessSnapshot>;
+  refreshRuntimeReadiness(): Promise<RuntimeReadinessSnapshot>;
   getReadiness(): Promise<ReadinessSnapshot>;
   refreshReadiness(): Promise<ReadinessSnapshot>;
   pickWorkspaceDirectory(): Promise<PickedDirectory>;
@@ -370,6 +373,8 @@ export function registerIpcHandlers(
       services.openSettingsWindow(request),
     [IPC_CHANNELS.themeGet]: () => services.getTheme(),
     [IPC_CHANNELS.themeSet]: (_event, preference: ThemePreference) => services.setTheme(preference),
+    [IPC_CHANNELS.runtimeReadinessGet]: () => services.getRuntimeReadiness(),
+    [IPC_CHANNELS.runtimeReadinessRefresh]: () => services.refreshRuntimeReadiness(),
     [IPC_CHANNELS.readinessGet]: () => services.getReadiness(),
     [IPC_CHANNELS.readinessRefresh]: () => services.refreshReadiness(),
     [IPC_CHANNELS.workspacePickDirectory]: () => services.pickWorkspaceDirectory(),

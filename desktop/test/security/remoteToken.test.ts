@@ -164,7 +164,7 @@ function makeRemoteEnv(options: {
         }
         return { status: 200, body: remoteHealth };
       }
-      if (url.endsWith('/api/v1/readiness')) {
+      if (url.endsWith('/api/v1/readiness/runtime')) {
         return {
           status: options.readinessStatus ?? 200,
           body: options.readinessBody ?? { api_version: 'v1' },
@@ -366,7 +366,7 @@ describe('add-remote-server paste flow hygiene', () => {
         if (url.endsWith('/api/v1/health')) {
           return { status: 200, body: healthBody(record.healthOverrides ?? {}) };
         }
-        if (url.endsWith('/api/v1/readiness')) {
+        if (url.endsWith('/api/v1/readiness/runtime')) {
           return { status: 200, body: { api_version: 'v1' } };
         }
         throw new Error(`unexpected url ${url}`);

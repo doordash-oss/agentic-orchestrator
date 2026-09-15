@@ -16,6 +16,7 @@ limitations under the License.
 
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   featureConfigSnapshot,
@@ -147,8 +148,8 @@ async function renderWorkspace({
 }: {
   mock?: AgenticoMock;
   draft?: ReviewFeedbackDraftView;
-  onBack?: ReturnType<typeof vi.fn>;
-  onDispatched?: ReturnType<typeof vi.fn>;
+  onBack?: ComponentProps<typeof ReviewFeedbackWorkspace>['onBack'];
+  onDispatched?: ComponentProps<typeof ReviewFeedbackWorkspace>['onDispatched'];
 } = {}) {
   mock.api.getFeatureConfig.mockResolvedValue(featureConfigSnapshot({}));
   mock.api.fetchReviewFeedback.mockResolvedValue(draft);

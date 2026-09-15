@@ -15,6 +15,8 @@
 package git
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -81,5 +83,28 @@ func TestForcePush_RejectsWhenFetchRefreshedTheLease(t *testing.T) {
 	}
 	if got := remoteBranchSHA(t, bare, "feature/lease-fetched"); got != remoteSHA {
 		t.Fatalf("remote tip = %s; want unseen remote work %s preserved", got, remoteSHA)
+	}
+}
+
+// A clone whose fetch refspec does not map the branch gives git nothing to
+// derive the lease from; every force push would be rejected as "stale info".
+// ForcePush must refuse up front with the remedy instead.
+func TestForcePush_RefusesUnmappedBranch(t *testing.T) {
+	t.Parallel()
+
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repo, "feature/narrow")
+	testutil.CommitFile(t, repo, "first.txt", "first\n", "first commit")
+	testutil.SimulatePush(t, repo, bare, "feature/narrow", "feature/narrow")
+	runFreshnessGit(t, repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+	testutil.CommitFile(t, repo, "second.txt", "second\n", "second commit")
+
+	err := ForcePush(repo, "feature/narrow")
+	var unmapped *UnmappedBranchError
+	if !errors.As(err, &unmapped) || unmapped.Branch != "feature/narrow" {
+		t.Fatalf("ForcePush() error = %v, want UnmappedBranchError for feature/narrow", err)
+	}
+	if !strings.Contains(err.Error(), "git remote set-branches --add origin feature/narrow") {
+		t.Fatalf("ForcePush() error = %q, want the remedy command", err)
 	}
 }

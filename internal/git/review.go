@@ -40,6 +40,7 @@ type ReviewComment struct {
 	Body string `json:"body"`
 	User struct {
 		Login string `json:"login"`
+		Type  string `json:"type"`
 	} `json:"user"`
 	CreatedAt string `json:"created_at"`
 	DiffHunk  string `json:"diff_hunk"`
@@ -47,6 +48,9 @@ type ReviewComment struct {
 	Type      string `json:"type"`
 	RepoName  string `json:"repo_name,omitempty"`
 }
+
+// githubBotUserType is the REST user type GitHub assigns to app accounts.
+const githubBotUserType = "Bot"
 
 // ParsePRURL extracts owner, repo, and PR number from a GitHub PR URL.
 // Expected format: https://github.com/owner/repo/pull/123
@@ -92,18 +96,32 @@ func FetchPRComments(_ string, prURL string) ([]ReviewComment, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetching PR review comments: %w", err)
 	}
+	// Resolved threads are finished feedback. When the thread map is
+	// unavailable every top-level comment is kept.
+	unresolved, threadErr := client.ReviewThreadMap(owner, repo, number)
 	var result []ReviewComment
 	for _, c := range inline {
-		if c.InReplyTo == 0 {
-			result = append(result, apiComment(c, CommentTypeReview))
+		if c.InReplyTo != 0 {
+			continue
 		}
+		if threadErr == nil {
+			if _, open := unresolved[c.ID]; !open {
+				continue
+			}
+		}
+		result = append(result, apiComment(c, CommentTypeReview))
 	}
 
+	// Conversation comments and review summaries from apps (CI, merge
+	// queues, review bots) are status noise, not feedback to address.
 	issue, err := client.ListIssueComments(owner, repo, number)
 	if err != nil {
 		return nil, fmt.Errorf("fetching PR issue comments: %w", err)
 	}
 	for _, c := range issue {
+		if c.User.Type == githubBotUserType {
+			continue
+		}
 		result = append(result, apiComment(c, CommentTypeIssue))
 	}
 
@@ -113,11 +131,12 @@ func FetchPRComments(_ string, prURL string) ([]ReviewComment, error) {
 	}
 	for _, review := range reviews {
 		body := strings.TrimSpace(review.Body)
-		if body == "" {
+		if body == "" || review.User.Type == githubBotUserType {
 			continue
 		}
 		comment := ReviewComment{ID: review.ID, Body: body, CreatedAt: review.SubmittedAt, Type: CommentTypeReviewBody}
 		comment.User.Login = review.User.Login
+		comment.User.Type = review.User.Type
 		result = append(result, comment)
 	}
 
@@ -133,6 +152,7 @@ func apiComment(c githubapi.PRComment, commentType string) ReviewComment {
 		Type: commentType,
 	}
 	comment.User.Login = c.User.Login
+	comment.User.Type = c.User.Type
 	return comment
 }
 

@@ -433,3 +433,31 @@ func TestPullRebase_NonConflictFailureIsNotConflict(t *testing.T) {
 		t.Error("expected non-nil error")
 	}
 }
+
+// TestPush_SyncsRemoteTrackingRefOnSingleBranchClone pins that a successful
+// push moves refs/remotes/origin/<branch> even when the clone's fetch
+// refspec only maps main, so freshness probes see the branch as in sync.
+func TestPush_SyncsRemoteTrackingRefOnSingleBranchClone(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real-push tracking-ref regression in short mode")
+	}
+	t.Parallel()
+
+	repo, _ := testutil.InitPublishReadyGitRepo(t)
+	runGit(t, repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+	testutil.CreateBranch(t, repo, "feature/test")
+	testutil.CommitFile(t, repo, "feature.txt", "feature work\n", "feature commit")
+
+	if err := defaultPush(repo, "feature/test"); err != nil {
+		t.Fatalf("defaultPush() error = %v", err)
+	}
+	head, _ := gitCmd(repo, "rev-parse", "feature/test").Output()
+	tracking, err := gitCmd(repo, "rev-parse", "refs/remotes/origin/feature/test").Output()
+	if err != nil {
+		t.Fatalf("remote-tracking ref missing after push: %v", err)
+	}
+	if strings.TrimSpace(string(tracking)) != strings.TrimSpace(string(head)) {
+		t.Fatalf("origin/feature/test = %s, want pushed tip %s", tracking, head)
+	}
+
+}

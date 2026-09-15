@@ -421,10 +421,10 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 		return fmt.Errorf("parent %s not found", f.Parent.ParentID)
 	}
 
-	// Classify each ref against journaled old and candidate SHAs. Every
-	// unclassifiable condition becomes a finding for the stored attention
-	// record; a ref race or a missing repository park exactly as the
-	// transaction boundary would.
+	// Classify every listed ref of every entry against its journaled anchor
+	// and candidate SHAs. Every unclassifiable condition becomes a finding
+	// for the stored attention record; a ref race or a missing repository
+	// park exactly as the transaction boundary would.
 	allAtCandidate := true
 	anyApplied := false
 	findings := []integrationFinding{}
@@ -437,36 +437,68 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 				fmt.Sprintf("parent no longer has repository %s", entry.Repo)))
 			continue
 		}
-		ref := "refs/heads/" + entry.ParentBranch
-		current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
-		if err != nil {
-			findings = append(findings, entryFinding(entry, errcat.IntegrationCandidateFailed,
-				fmt.Sprintf("reading ref %s: %v", ref, err)))
+
+		// Read and classify every listed ref. An entry is at-candidate only
+		// when every ref sits at its candidate, at-anchor only when every
+		// ref sits at its anchor; anything mixed is a race.
+		entryAllAtCandidate := len(entry.Refs) > 0
+		entryAllAtAnchor := len(entry.Refs) > 0
+		entryRaced := false
+		for j := range entry.Refs {
+			ref := &entry.Refs[j]
+			refName := "refs/heads/" + ref.Branch
+			current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, refName)
+			if err != nil {
+				findings = append(findings, entryFinding(entry, errcat.IntegrationCandidateFailed,
+					fmt.Sprintf("reading ref %s: %v", refName, err)))
+				entryRaced = true
+				entryAllAtCandidate = false
+				entryAllAtAnchor = false
+				continue
+			}
+			ref.ObservedSHA = current
+			switch ref.Classify(current) {
+			case feature.RefAtCandidate:
+				entryAllAtAnchor = false
+			case feature.RefAtAnchor:
+				entryAllAtCandidate = false
+			default:
+				findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
+					fmt.Sprintf("ref %s externally moved: anchor %s candidate %s observed %s",
+						refName, ref.AnchorSHA, ref.CandidateSHA, current)))
+				entryRaced = true
+				entryAllAtCandidate = false
+				entryAllAtAnchor = false
+			}
+		}
+		if entryRaced || len(entry.Refs) == 0 {
+			allAtCandidate = false
 			continue
 		}
-		entry.ObservedSHA = current
-		if passThroughCandidate(entry) {
-			if current != entry.ParentAnchorSHA {
-				findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
-					fmt.Sprintf("ref %s externally moved: pass-through anchor %s observed %s",
-						ref, entry.ParentAnchorSHA, current)))
-			}
+
+		// A pass-through entry's candidates equal its anchors; its refs
+		// classify as both. Only a durably applied pass-through counts as
+		// applied — otherwise the transaction stays retryable.
+		if entry.IsPassThrough() {
 			if entry.ApplyState != feature.RepoApplyApplied {
 				allAtCandidate = false
+			} else {
+				anyApplied = true
 			}
 			continue
 		}
+
 		switch {
-		case current == entry.CandidateSHA:
+		case entryAllAtCandidate:
 			entry.ApplyState = feature.RepoApplyApplied
 			anyApplied = true
-		case current == entry.ParentAnchorSHA:
-			// Ref is at the old SHA.
+		case entryAllAtAnchor:
+			// Every ref is at its old SHA.
 			switch {
 			case entry.ApplyState == feature.RepoApplyApplied &&
 				journal.Phase == feature.TransactionPhaseRollingBack:
-				// The rollback CAS restored the ref but the state was
-				// not persisted before the crash. Mark it rolled back
+				// The rollback transaction restored the refs but the state
+				// was not persisted before the crash. Mark it rolled back
 				// and continue the rollback.
 				entry.ApplyState = feature.RepoApplyRolledBack
 				anyRolledBack = true
@@ -477,16 +509,10 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 				// remaining applied entries).
 				anyRolledBack = true
 			case entry.ApplyState == feature.RepoApplyApplied:
-				// Was applied but ref moved back — external reset.
+				// Was applied but a ref moved back — external reset.
 				findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
-					fmt.Sprintf("ref %s was applied but regressed to old SHA", ref)))
+					fmt.Sprintf("refs of %s were applied but regressed to their old SHAs", entry.Repo)))
 			}
-		default:
-			findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
-				fmt.Sprintf("ref %s externally moved: old %s candidate %s observed %s",
-					ref, entry.ParentAnchorSHA, entry.CandidateSHA, current)))
-		}
-		if entry.ApplyState != feature.RepoApplyApplied {
 			allAtCandidate = false
 		}
 	}

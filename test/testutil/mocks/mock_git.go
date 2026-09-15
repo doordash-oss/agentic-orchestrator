@@ -22,7 +22,6 @@ import (
 // operations.
 type MockRemoteOps struct {
 	PushFn            func(worktreePath, branch string) error
-	PullRebaseFn      func(worktreePath, branch string) error
 	PushLayerBranchFn func(repoPath, branch, localSHA, lastPushedSHA string) (string, error)
 	CreatePRFn        func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
 	PRBaseBranchFn    func(repoPath, prURL string) string
@@ -39,14 +38,6 @@ func (m *MockRemoteOps) Push(worktreePath, branch string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "Push", Args: []any{worktreePath, branch}})
 	if m.PushFn != nil {
 		return m.PushFn(worktreePath, branch)
-	}
-	return m.DefaultError
-}
-
-func (m *MockRemoteOps) PullRebase(worktreePath, branch string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "PullRebase", Args: []any{worktreePath, branch}})
-	if m.PullRebaseFn != nil {
-		return m.PullRebaseFn(worktreePath, branch)
 	}
 	return m.DefaultError
 }

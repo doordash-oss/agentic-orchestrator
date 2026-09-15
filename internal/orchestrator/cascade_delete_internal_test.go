@@ -479,9 +479,11 @@ func saveCascadeSymlinkFixture(t *testing.T, stateDir string) (*feature.Store, *
 		Parent: &feature.ChildRelationship{
 			ParentID: parent.ID,
 			Transaction: &feature.TransactionJournal{Entries: []feature.RepoTransactionEntry{{
-				Repo: "repo-a", ParentBranch: "feature/parent",
-				ParentAnchorSHA: "anchor", ExpectedRefSHA: "anchor",
-				CandidateSHA: "candidate", ApplyState: feature.RepoApplyApplied,
+				Repo: "repo-a",
+				Refs: []feature.RepoTransactionRef{{
+					Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate",
+				}},
+				ApplyState: feature.RepoApplyApplied,
 			}}},
 		},
 		Repos: []feature.FeatureRepo{{
@@ -528,9 +530,11 @@ func saveCascadeTestRelationship(t *testing.T) (*feature.Store, *feature.Feature
 		Parent: &feature.ChildRelationship{
 			ParentID: parent.ID,
 			Transaction: &feature.TransactionJournal{Entries: []feature.RepoTransactionEntry{{
-				Repo: "repo-a", ParentBranch: "feature/parent",
-				ParentAnchorSHA: "anchor", ExpectedRefSHA: "anchor",
-				CandidateSHA: "candidate", ApplyState: feature.RepoApplyApplied,
+				Repo: "repo-a",
+				Refs: []feature.RepoTransactionRef{{
+					Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate",
+				}},
+				ApplyState: feature.RepoApplyApplied,
 			}}},
 		},
 		Repos: []feature.FeatureRepo{{

@@ -63,6 +63,7 @@ func TestImplementRoleSpecShape(t *testing.T) {
 		presence ArtifactPresence
 	}{
 		{name: "progress", root: "phase_dir", path: "progress.md", presence: ArtifactRequired},
+		{name: "fix_manifest", root: "iteration_dir", path: "fix-manifest.yaml", presence: ArtifactOptional},
 	}
 	for _, tt := range checks {
 		got, ok := artifacts[tt.name]

@@ -393,8 +393,9 @@ paths:
         machine codes include 400 `review_feedback_empty_selection`,
         `review_feedback_zero_launchable_selection`,
         `review_feedback_unsupported_comment_type`,
-        `review_feedback_unknown_repo`, and
-        `review_feedback_repo_has_no_pull_request`; 404 `parent_not_found`;
+        `review_feedback_unknown_repo`,
+        `review_feedback_repo_has_no_pull_request`, and
+        `review_feedback_comment_pr_not_open`; 404 `parent_not_found`;
         and 409 `review_feedback_revision_conflict`, `parent_is_child`,
         `parent_status_ineligible`, `active_child_exists`, and
         `parent_worktrees_dirty`.
@@ -431,17 +432,20 @@ paths:
       operationId: fetchReviewFeedback
       summary: Fetch unaddressed pull-request feedback and establish the pending draft.
       description: >-
-        Aggregates every repository carrying a PR URL, silently skips parent
-        repositories without one, and reconciles the result with the
-        parent-scoped durable pending draft: first fetch selects every
-        visible unaddressed reference, later fetches retain prior selections
-        for known stable references, select newly observed ones, and prune
-        references that disappeared. Repositories are returned in the
-        parent's stable repository order with comments oldest-first inside
-        each group (stable reference as the deterministic tie-breaker). Any
-        single-repository GitHub failure fails the operation atomically with
-        that repository identified. The response carries the authoritative
-        pending-draft revision.
+        Aggregates every open layer pull request of every repository,
+        silently skips parent repositories without one, and reconciles the
+        result with the parent-scoped durable pending draft: first fetch
+        selects every visible unaddressed reference, later fetches retain
+        prior selections for known stable references, select newly observed
+        ones, and prune references that disappeared. Repositories are
+        returned in the parent's stable repository order; inside each
+        repository the comments are grouped by open layer pull request in
+        ascending layer position order, oldest-first within a group (stable
+        reference as the deterministic tie-breaker), and every comment
+        carries its pull request URL, number, layer position, and layer
+        title. Any single-repository GitHub failure fails the operation
+        atomically with that repository identified. The response carries the
+        authoritative pending-draft revision.
       parameters:
         - $ref: "#/components/parameters/FeatureID"
         - $ref: "#/components/parameters/TrustedMutationHeader"
@@ -2100,15 +2104,9 @@ components:
           type: array
           items:
             type: string
-        parent_anchor_sha:
-          type: string
-        expected_ref_sha:
-          type: string
         child_head_sha:
           type: string
         candidate_sha:
-          type: string
-        merge_head:
           type: string
         observed_sha:
           type: string
@@ -4354,7 +4352,8 @@ components:
       additionalProperties: false
       description: >-
         Intentionally empty: review feedback is always fetched across every
-        parent repository with a PR URL and has no mode selector.
+        open layer pull request of every parent repository and has no mode
+        selector.
     ReviewFeedbackComment:
       x-go-type: feature.ReviewFeedbackComment
       x-go-type-import:
@@ -4385,6 +4384,20 @@ components:
         created_at:
           type: string
           description: GitHub creation timestamp of the comment.
+        pr_url:
+          type: string
+          description: >-
+            URL of the open layer pull request the comment was left on;
+            absent on drafts persisted before layer tagging.
+        pr_number:
+          type: integer
+          description: GitHub pull request number parsed from the URL.
+        layer_position:
+          type: integer
+          description: Stack layer position of the pull request's layer.
+        layer_title:
+          type: string
+          description: Title of the pull request's stack layer.
     ReviewFeedbackDraftComment:
       type: object
       required: [stable_ref, selected, repo, id, type]
@@ -4394,7 +4407,8 @@ components:
         `stable_ref` is the repository identity plus supported comment type
         plus GitHub database comment ID; `selected` is the committed draft
         selection. The remaining fields snapshot the reviewed child-visible
-        content used to reconcile launch-time changes.
+        content used to reconcile launch-time changes, plus the open layer
+        pull request the comment was left on.
       properties:
         stable_ref:
           type: string
@@ -4421,19 +4435,51 @@ components:
           type: integer
         created_at:
           type: string
-    ReviewFeedbackRepoComments:
-      type: object
-      required: [repo, pr_url, comments]
-      additionalProperties: false
-      properties:
-        repo:
-          type: string
         pr_url:
           type: string
+        pr_number:
+          type: integer
+        layer_position:
+          type: integer
+        layer_title:
+          type: string
+    ReviewFeedbackPullRequestGroup:
+      type: object
+      required: [position, title, url, comments]
+      additionalProperties: false
+      description: >-
+        One open layer pull request's comments inside a repository's
+        pending-draft view: the stack layer's position and title, the pull
+        request's URL, and that pull request's draft comments.
+      properties:
+        position:
+          type: integer
+          description: Stack layer position of the pull request's layer.
+        title:
+          type: string
+          description: Title of the pull request's stack layer.
+        url:
+          type: string
+          description: The pull request's URL.
         comments:
           type: array
           items:
             $ref: "#/components/schemas/ReviewFeedbackDraftComment"
+    ReviewFeedbackRepoComments:
+      type: object
+      required: [repo, pull_requests]
+      additionalProperties: false
+      description: >-
+        One repository's pending-draft view: its open layer pull requests in
+        ascending layer position order, each holding that pull request's
+        draft comments.
+      properties:
+        repo:
+          type: string
+        pull_requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewFeedbackPullRequestGroup"
     ReviewFeedbackFetchResponse:
       type: object
       required: [api_version, revision, snapshot_id, repos]
@@ -6034,29 +6080,38 @@ components:
       properties:
         repo:
           type: string
-        parent_branch:
-          type: string
-        parent_anchor_sha:
-          type: string
-        expected_ref_sha:
-          type: string
+        refs:
+          type: array
+          description: >-
+            Ordered per-layer ref updates this entry's transaction rewrites,
+            ascending by layer position; the highest-position ref is the top
+            ref the parent worktree syncs to.
+          items:
+            $ref: "#/components/schemas/RepoTransactionRef"
         child_head_sha:
-          type: string
-        candidate_sha:
-          type: string
-        merge_head:
           type: string
         prep_state:
           type: string
         apply_state:
-          type: string
-        observed_sha:
           type: string
         pending_sync:
           type: boolean
           description: >-
             True when this applied entry's parent worktree sync failed after
             the ref update; closure retries the sync automatically.
+    RepoTransactionRef:
+      type: object
+      properties:
+        branch:
+          type: string
+        layer_position:
+          type: integer
+        anchor_sha:
+          type: string
+        candidate_sha:
+          type: string
+        observed_sha:
+          type: string
     Usage:
       type: object
       properties:

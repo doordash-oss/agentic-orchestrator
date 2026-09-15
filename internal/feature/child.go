@@ -64,6 +64,11 @@ var (
 	// ErrReviewFeedbackRepoHasNoPR rejects a comment whose parent repository
 	// does not have a pull request to receive the eventual integration tail.
 	ErrReviewFeedbackRepoHasNoPR = errors.New("review feedback repository has no pull request")
+	// ErrReviewFeedbackCommentPRNotOpen rejects a comment whose recorded pull
+	// request is not an open layer pull request of its repository: merged and
+	// closed layers are never rewritten, so their comments cannot receive a
+	// relocated fix.
+	ErrReviewFeedbackCommentPRNotOpen = errors.New("review feedback comment pull request is not an open layer pull request")
 	// ErrRefactorParentNotFound: the requested parent feature does not exist.
 	ErrRefactorParentNotFound = errors.New("refactor parent feature not found")
 	// ErrRefactorParentIsChild: children are one level deep; a child cannot
@@ -446,7 +451,13 @@ type RefactorChildSpec struct {
 }
 
 // ReviewFeedbackComment is the complete selected GitHub comment payload that
-// a review-feedback child needs for planning and later reply routing.
+// a review-feedback child needs for planning and later reply routing. The
+// PRURL, PRNumber, LayerPosition, and LayerTitle fields identify the open
+// layer pull request the comment was left on, resolved from the parent's
+// stack at fetch time and again at launch; the stable reference stays
+// `<repo>:<type>:<id>` because GitHub comment identifiers are global, so a
+// draft persisted before these fields existed loads with them absent and is
+// reconciled against a fresh fetch.
 type ReviewFeedbackComment struct {
 	Repo      string `yaml:"repo" json:"repo"`
 	ID        int    `yaml:"id" json:"id"`
@@ -458,6 +469,12 @@ type ReviewFeedbackComment struct {
 	DiffHunk  string `yaml:"diff_hunk,omitempty" json:"diff_hunk,omitempty"`
 	InReplyTo int    `yaml:"in_reply_to_id,omitempty" json:"in_reply_to_id,omitempty"`
 	CreatedAt string `yaml:"created_at,omitempty" json:"created_at,omitempty"`
+	PRURL     string `yaml:"pr_url,omitempty" json:"pr_url,omitempty"`
+	PRNumber  int    `yaml:"pr_number,omitempty" json:"pr_number,omitempty"`
+	// LayerPosition is the stack layer position of the PR the comment was
+	// left on; zero for a comment recorded before layer tagging existed.
+	LayerPosition int    `yaml:"layer_position,omitempty" json:"layer_position,omitempty"`
+	LayerTitle    string `yaml:"layer_title,omitempty" json:"layer_title,omitempty"`
 }
 
 // ReviewFeedbackChildSpec carries the only launch-time choices supported by
@@ -782,8 +799,28 @@ func validateReviewFeedbackCommentRepos(parent *Feature, comments []ReviewFeedba
 		if _, ok := parentRepos[comment.Repo]; !ok {
 			return fmt.Errorf("%w: %q", ErrReviewFeedbackUnknownRepo, comment.Repo)
 		}
-		if parent.TopStackLayerPRURL(comment.Repo) == "" {
+		openPRs := parent.OpenReviewFeedbackLayerPRs(comment.Repo)
+		if len(openPRs) == 0 {
 			return fmt.Errorf("%w: %q", ErrReviewFeedbackRepoHasNoPR, comment.Repo)
+		}
+		// A comment that records its pull request must name one of the
+		// repository's open layer pull requests. Comments without PR fields
+		// (a draft persisted before layer tagging) validate against the
+		// repository-level check only; the launch path re-resolves every
+		// selected comment from a fresh walk of the open layer PRs, so a
+		// comment whose PR closed since the draft is omitted there instead.
+		if comment.PRURL == "" {
+			continue
+		}
+		open := false
+		for _, pr := range openPRs {
+			if pr.URL == comment.PRURL {
+				open = true
+				break
+			}
+		}
+		if !open {
+			return fmt.Errorf("%w: %q", ErrReviewFeedbackCommentPRNotOpen, comment.PRURL)
 		}
 	}
 	return nil

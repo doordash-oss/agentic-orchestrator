@@ -1837,10 +1837,23 @@ export const ReviewFeedbackDraftCommentViewSchema = z.strictObject({
 });
 export type ReviewFeedbackDraftCommentView = z.output<typeof ReviewFeedbackDraftCommentViewSchema>;
 
+/**
+ * One open layer pull request's comment group inside a repository's draft
+ * view: the stack layer's position and title, the pull request's URL, and
+ * that pull request's comments. The position is required — a group without
+ * one never crosses the boundary.
+ */
+export const ReviewFeedbackPullRequestGroupSchema = z.strictObject({
+  position: z.number().int().nonnegative(),
+  title: z.string().max(500),
+  url: z.string().max(2048),
+  comments: z.array(ReviewFeedbackDraftCommentViewSchema).max(2000),
+});
+export type ReviewFeedbackPullRequestGroup = z.output<typeof ReviewFeedbackPullRequestGroupSchema>;
+
 export const ReviewFeedbackRepoGroupSchema = z.strictObject({
   repo: z.string().min(1).max(200),
-  prUrl: z.string().max(2048),
-  comments: z.array(ReviewFeedbackDraftCommentViewSchema).max(2000),
+  pullRequests: z.array(ReviewFeedbackPullRequestGroupSchema).max(200),
 });
 export type ReviewFeedbackRepoGroup = z.output<typeof ReviewFeedbackRepoGroupSchema>;
 

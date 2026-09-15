@@ -62,6 +62,42 @@ func TestImplementPromptBranchBehavior(t *testing.T) {
 				"Q: Which library?",
 			},
 		},
+		{
+			name: "parent_stack_section_lists_layers_marks_top_and_instructs_manifest_default",
+			input: ImplementUserInput{
+				PlanPath:        "/plan.md",
+				ExitCriteria:    "Relevant tests pass.",
+				Iteration:       1,
+				FixManifestPath: "/state/parent-x/run-001/phase-01/implement/iteration-01/fix-manifest.yaml",
+				Stack: []feature.StackLayer{
+					{Position: 1, Title: "Foundations", Phases: []int{1, 2}, Branch: "feature/parent-x-1/bootstrap"},
+					{Position: 2, Title: "Review loop", Phases: []int{3}, Branch: "feature/parent-x-1/review-loop"},
+				},
+			},
+			wantContains: []string{
+				"## Parent Delivery Stack",
+				"- Layer 1: Foundations — phases [1 2], branch feature/parent-x-1/bootstrap",
+				"- Layer 2: Review loop (top layer) — phases [3], branch feature/parent-x-1/review-loop",
+				"/state/parent-x/run-001/phase-01/implement/iteration-01/fix-manifest.yaml",
+				"The default target layer for a review comment's fix is the layer of the pull request that comment was left on",
+				"Files not listed in the manifest follow that same default",
+				"You never run git write commands",
+			},
+		},
+		{
+			name: "feature_without_stack_gets_no_stack_section",
+			input: ImplementUserInput{
+				PlanPath:     "/plan.md",
+				ExitCriteria: "Relevant tests pass.",
+				Iteration:    1,
+			},
+			wantContains: []string{"# Implementation Context"},
+			wantOmit: []string{
+				"## Parent Delivery Stack",
+				"fix-manifest.yaml",
+				"(top layer)",
+			},
+		},
 	}
 
 	for _, tt := range tests {

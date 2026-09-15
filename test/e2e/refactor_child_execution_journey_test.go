@@ -187,11 +187,19 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 	tx := child1Detail["transaction"].(map[string]any)
 	entries := tx["entries"].([]any)
 	entry := entries[0].(map[string]any)
-	if entry["merge_head"] != mergeHEAD {
-		t.Fatalf("child1 detail transaction.merge_head = %v, want parent tip %s", entry["merge_head"], mergeHEAD)
+	refs, _ := entry["refs"].([]any)
+	if len(refs) != 1 {
+		t.Fatalf("child1 transaction entry = %#v, want one ref", entry)
 	}
-	if entry["child_head_sha"] == "" || entry["parent_anchor_sha"] == "" || entry["parent_branch"] != "feature/journey-parent" {
-		t.Fatalf("child1 transaction anchors = %+v, want recorded", entry)
+	ref := refs[0].(map[string]any)
+	if ref["observed_sha"] != mergeHEAD {
+		t.Fatalf("child1 detail transaction ref observed_sha = %v, want parent tip %s", ref["observed_sha"], mergeHEAD)
+	}
+	if ref["anchor_sha"] == "" || ref["branch"] != "feature/journey-parent" {
+		t.Fatalf("child1 transaction ref = %+v, want recorded anchor on feature/journey-parent", ref)
+	}
+	if entry["child_head_sha"] == "" {
+		t.Fatalf("child1 transaction entry = %#v, want recorded child head", entry)
 	}
 	if warning, _ := entry["cleanup_warning"].(string); warning != "" {
 		t.Fatalf("child1 unexpected cleanup warning = %v", warning)
@@ -254,7 +262,7 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 	localTip := journeyGit(t, repoDir, "rev-parse", "feature/journey-parent")
 	if len(originTipFields) != 2 || originTipFields[0] != localTip {
 		t.Fatalf("origin feature/journey-parent = %q, want pushed local tip %s (integration merge head %s, parent status %s, checkpoints %+v, repo state %+v)",
-			originTipFields, localTip, child2.Parent.Transaction.Entries[0].MergeHEAD, parentState.Status, parentState.Checkpoints, parentState.RepoStates["repoA"])
+			originTipFields, localTip, child2.Parent.Transaction.Entries[0].TopRef().CandidateSHA, parentState.Status, parentState.Checkpoints, parentState.RepoStates["repoA"])
 	}
 	if got := journeyGit(t, repoDir, "show", originTipFields[0]+":child-output.txt"); got != "child work" {
 		t.Fatalf("pushed child-output.txt = %q, want integrated child work", got)
@@ -278,11 +286,6 @@ func (failingPRRemoteOps) Push(worktreePath, branch string) error {
 
 func (failingPRRemoteOps) PushLayerBranch(worktreePath, branch, localSHA, lastPushedSHA string) (string, error) {
 	return git.PushLayerBranch(worktreePath, branch, localSHA, lastPushedSHA)
-}
-
-func (failingPRRemoteOps) PullRebase(worktreePath, branch string) error {
-	res := git.PullRebase(worktreePath, branch)
-	return res.Err
 }
 
 func (failingPRRemoteOps) CreatePR(string, string, string, string, string, bool) (string, error) {

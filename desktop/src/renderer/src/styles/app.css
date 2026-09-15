@@ -11402,7 +11402,41 @@ body {
   color: var(--muted);
 }
 
-.review-feedback-section__pr {
+/* One open layer pull request inside a repository section: a quieter
+   sub-header than the repository's own, so the stack hierarchy stays
+   legible — repository first, layer second. */
+.review-feedback-pr {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  gap: var(--space-2);
+}
+
+.review-feedback-pr__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 32px;
+  padding: var(--space-1) var(--space-2);
+}
+
+.review-feedback-pr__title {
+  margin: 0;
+  font: 600 12px var(--bench-font-text);
+  color: var(--muted);
+}
+
+.review-feedback-pr__name {
+  font: 600 12px var(--bench-font-text);
+  color: var(--text);
+}
+
+.review-feedback-pr__ledger {
+  font: 12px var(--bench-font-text);
+  color: var(--muted);
+}
+
+.review-feedback-pr__open {
   margin-left: auto;
   font-family: var(--bench-font-text);
   font-size: 12px;
@@ -11414,7 +11448,7 @@ body {
   text-decoration: none;
 }
 
-.review-feedback-section__pr:hover {
+.review-feedback-pr__open:hover {
   text-decoration: underline;
 }
 

@@ -23,10 +23,11 @@ limitations under the License.
  * there is exactly one filtering implementation.
  */
 import { COMMENT_TYPE_LABEL } from '../refactor/refactorPassModel';
-import type {
-  ReviewFeedbackDraftCommentView,
-  ReviewFeedbackDraftRepoGroup,
-  ReviewFeedbackSelectionUpdate,
+import {
+  repoDraftComments,
+  type ReviewFeedbackDraftCommentView,
+  type ReviewFeedbackDraftRepoGroup,
+  type ReviewFeedbackSelectionUpdate,
 } from './reviewFeedbackDraftApi';
 
 export interface ReviewFeedbackFilters {
@@ -64,12 +65,12 @@ export interface FacetOptions {
   types: ReviewFeedbackDraftCommentView['type'][];
 }
 
-/** Facet choices derived from the comments in the active repository scope. */
+/** Facet choices derived from the comments in the active repository scope, flattened across its pull-request groups. */
 export function facetOptions(groups: ReviewFeedbackDraftRepoGroup[]): FacetOptions {
   const authors = new Set<string>();
   const types = new Set<ReviewFeedbackDraftCommentView['type']>();
   for (const group of groups) {
-    for (const comment of group.comments) {
+    for (const comment of repoDraftComments(group)) {
       if (comment.author !== undefined && comment.author !== '') authors.add(comment.author);
       types.add(comment.type);
     }

@@ -16,6 +16,8 @@ package feature
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -135,6 +137,66 @@ func TestReconcileLaterFetchRetainsSelectsNewPrunesGone(t *testing.T) {
 	for _, item := range draft.Items {
 		if selected, ok := want[item.StableRef]; !ok || selected != item.Selected {
 			t.Fatalf("item %q selected=%v, want %v", item.StableRef, item.Selected, want[item.StableRef])
+		}
+	}
+}
+
+// A draft persisted before layer tagging — items whose comments lack the
+// PR and layer fields — still loads and reconciles against a fresh fetch:
+// the stable reference is unchanged, committed selections survive, and
+// every reconciled item carries its PR and layer identity.
+func TestLegacyDraftWithoutPRFieldsLoadsAndReconciles(t *testing.T) {
+	store := NewStore(t.TempDir())
+	dir := filepath.Join(store.BaseDir, "parent-1", "review-feedback")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(draft dir): %v", err)
+	}
+	legacy := `{"revision":4,"snapshot_id":"legacy","items":[` +
+		`{"stable_ref":"api:review:11","selected":false,` +
+		`"comment":{"repo":"api","id":11,"type":"review","body":"earlier","created_at":"2026-08-02T08:00:00Z"}}]}`
+	if err := os.WriteFile(filepath.Join(dir, "draft.json"), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy draft): %v", err)
+	}
+
+	loaded, err := store.LoadReviewFeedbackDraft("parent-1")
+	if err != nil || loaded == nil {
+		t.Fatalf("LoadReviewFeedbackDraft(legacy) = %+v (err %v), want the pre-phase draft", loaded, err)
+	}
+	if loaded.Revision != 4 || len(loaded.Items) != 1 || loaded.Items[0].Comment.PRURL != "" {
+		t.Fatalf("legacy draft = %+v, want revision 4 with one PR-less item", loaded)
+	}
+
+	layer := ReviewFeedbackLayerPR{Position: 2, Title: "Extension", URL: "https://github.example/acme/api/pull/18", Number: 18}
+	api11 := ReviewFeedbackComment{Repo: "api", ID: 11, Type: "review", Body: "earlier", CreatedAt: "2026-08-02T08:00:00Z",
+		PRURL: layer.URL, PRNumber: layer.Number, LayerPosition: layer.Position, LayerTitle: layer.Title}
+	api13 := ReviewFeedbackComment{Repo: "api", ID: 13, Type: "issue", Body: "brand new", CreatedAt: "2026-08-02T10:00:00Z",
+		PRURL: layer.URL, PRNumber: layer.Number, LayerPosition: layer.Position, LayerTitle: layer.Title}
+	draft := ReconcileReviewFeedbackDraft(draftParent(), loaded, map[string][]ReviewFeedbackComment{
+		"api": {api11, api13},
+	})
+
+	if draft.Revision != 5 {
+		t.Fatalf("revision = %d, want 5 (continuing the persisted revision)", draft.Revision)
+	}
+	byRef := map[StableReviewFeedbackRef]ReviewFeedbackDraftItem{}
+	for _, item := range draft.Items {
+		byRef[item.StableRef] = item
+	}
+	if len(draft.Items) != 2 {
+		t.Fatalf("items = %+v, want the retained and the newly observed comment", draft.Items)
+	}
+	retained, ok := byRef["api:review:11"]
+	if !ok || retained.Selected {
+		t.Fatalf("retained item = %+v, want the committed deselect", retained)
+	}
+	fresh, ok := byRef["api:issue:13"]
+	if !ok || !fresh.Selected {
+		t.Fatalf("new item = %+v, want selected on first observation", fresh)
+	}
+	for _, item := range draft.Items {
+		c := item.Comment
+		if c.PRURL != layer.URL || c.PRNumber != 18 || c.LayerPosition != 2 || c.LayerTitle != "Extension" {
+			t.Fatalf("reconciled item %q = %+v, want the layer identity of the fresh fetch", item.StableRef, c)
 		}
 	}
 }

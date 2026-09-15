@@ -743,6 +743,7 @@ func TestReviewFeedbackActionTypedValidationErrorCodes(t *testing.T) {
 		{name: "unsupported comment", err: feature.ErrReviewFeedbackUnsupportedCommentType, wantCode: "review_feedback_unsupported_comment_type"},
 		{name: "unknown repository", err: feature.ErrReviewFeedbackUnknownRepo, wantCode: "review_feedback_unknown_repo"},
 		{name: "repository without pull request", err: feature.ErrReviewFeedbackRepoHasNoPR, wantCode: "review_feedback_repo_has_no_pull_request"},
+		{name: "comment pull request not open", err: feature.ErrReviewFeedbackCommentPRNotOpen, wantCode: "review_feedback_comment_pr_not_open"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

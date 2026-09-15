@@ -545,11 +545,7 @@ func writeChildLaunchError(w http.ResponseWriter, err error) bool {
 		for _, target := range upToDate.Targets {
 			// The target ref is where the rebase would land, not the
 			// repository's own branch: RebaseTarget is its carrier.
-			repo := errcat.CodeRepository{Name: target.Repo, RebaseTarget: target.Target}
-			if target.TargetSHA != "" {
-				repo.ExpectedRefSHA = target.TargetSHA
-			}
-			repos = append(repos, repo)
+			repos = append(repos, errcat.CodeRepository{Name: target.Repo, RebaseTarget: target.Target})
 		}
 		writeAPIError(w, http.StatusConflict, errcat.RebaseAlreadyUpToDate,
 			errcat.WithRepositories(repos...))
@@ -568,6 +564,8 @@ func writeChildLaunchError(w http.ResponseWriter, err error) bool {
 		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackUnknownRepo)
 	case errors.Is(err, feature.ErrReviewFeedbackRepoHasNoPR):
 		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackRepoHasNoPR)
+	case errors.Is(err, feature.ErrReviewFeedbackCommentPRNotOpen):
+		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackCommentPRNotOpen)
 	case errors.Is(err, feature.ErrReviewFeedbackDraftNotFound):
 		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackDraftNotFound)
 	case errors.Is(err, feature.ErrReviewFeedbackUnknownReference):

@@ -74,6 +74,7 @@ const (
 	ReviewFeedbackUnsupportedCommentType Code = "review_feedback_unsupported_comment_type"
 	ReviewFeedbackUnknownRepo            Code = "review_feedback_unknown_repo"
 	ReviewFeedbackRepoHasNoPR            Code = "review_feedback_repo_has_no_pull_request"
+	ReviewFeedbackCommentPRNotOpen       Code = "review_feedback_comment_pr_not_open"
 	ReviewFeedbackDraftNotFound          Code = "review_feedback_draft_not_found"
 	ReviewFeedbackUnknownReference       Code = "review_feedback_unknown_reference"
 	ReviewFeedbackRevisionConflict       Code = "review_feedback_revision_conflict"
@@ -892,6 +893,12 @@ var catalog = map[Code]Entry{
 		Class:   ClassBlocking,
 		Title:   "No pull request",
 		Summary: "The repository has no pull request to fetch feedback from.",
+	},
+	ReviewFeedbackCommentPRNotOpen: {
+		Class:       ClassBlocking,
+		Title:       "Pull request not open",
+		Summary:     "The comment's pull request is not an open layer pull request of its repository.",
+		Remediation: "Refresh the review feedback and retry.",
 	},
 	ReviewFeedbackDraftNotFound: {
 		Class:       ClassBlocking,

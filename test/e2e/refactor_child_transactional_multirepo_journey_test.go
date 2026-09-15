@@ -183,10 +183,12 @@ func (fx *multiRepoE2EFixture) manualPrepare(t *testing.T) *feature.TransactionJ
 			t.Fatalf("create merge candidate repo %d: %v", i, err)
 		}
 		journal.Entries = append(journal.Entries, feature.RepoTransactionEntry{
-			Repo: childRepo.Name, ParentBranch: parentRepo.Branch,
-			ParentAnchorSHA: parentTip, ExpectedRefSHA: parentTip,
-			ChildHeadSHA: childHead, CandidateSHA: result.CandidateSHA,
-			PrepState: feature.RepoPrepPrepared,
+			Repo: childRepo.Name,
+			Refs: []feature.RepoTransactionRef{{
+				Branch: parentRepo.Branch, AnchorSHA: parentTip, CandidateSHA: result.CandidateSHA,
+			}},
+			ChildHeadSHA: childHead,
+			PrepState:    feature.RepoPrepPrepared,
 		})
 	}
 	fx.saveJournal(journal)
@@ -197,12 +199,13 @@ func (fx *multiRepoE2EFixture) manualPrepare(t *testing.T) *feature.TransactionJ
 // the worktree, simulating a completed apply step before a crash.
 func (fx *multiRepoE2EFixture) manualApplyRef(t *testing.T, idx int, entry *feature.RepoTransactionEntry) {
 	t.Helper()
-	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
+	top := entry.TopRef()
+	ref := "refs/heads/" + top.Branch
+	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, top.AnchorSHA, top.CandidateSHA); err != nil {
 		t.Fatalf("manual apply repo %d: %v", idx, err)
 	}
 	multiRepoGit(t, fx.repoDirs[idx], "checkout", "feature/parent")
-	multiRepoGit(t, fx.repoDirs[idx], "reset", "--hard", entry.CandidateSHA)
+	multiRepoGit(t, fx.repoDirs[idx], "reset", "--hard", top.CandidateSHA)
 }
 
 // manualApplyRefNoSync moves a repo's parent ref to the candidate SHA
@@ -210,8 +213,9 @@ func (fx *multiRepoE2EFixture) manualApplyRef(t *testing.T, idx int, entry *feat
 // write and the worktree sync.
 func (fx *multiRepoE2EFixture) manualApplyRefNoSync(t *testing.T, idx int, entry *feature.RepoTransactionEntry) {
 	t.Helper()
-	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
+	top := entry.TopRef()
+	ref := "refs/heads/" + top.Branch
+	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, top.AnchorSHA, top.CandidateSHA); err != nil {
 		t.Fatalf("manual apply no sync repo %d: %v", idx, err)
 	}
 }
@@ -221,8 +225,9 @@ func (fx *multiRepoE2EFixture) manualApplyRefNoSync(t *testing.T, idx int, entry
 // worktree reset during rollback.
 func (fx *multiRepoE2EFixture) manualRollbackRef(t *testing.T, idx int, entry *feature.RepoTransactionEntry) {
 	t.Helper()
-	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, entry.CandidateSHA, entry.ParentAnchorSHA); err != nil {
+	top := entry.TopRef()
+	ref := "refs/heads/" + top.Branch
+	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, top.CandidateSHA, top.AnchorSHA); err != nil {
 		t.Fatalf("manual rollback repo %d: %v", idx, err)
 	}
 }
@@ -451,13 +456,13 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	if driftRec == nil || driftRec.Code != errcat.IntegrationParentRefDrift {
 		t.Fatalf("attention record = %+v, want code %s", driftRec, errcat.IntegrationParentRefDrift)
 	}
-	// The drift block carries the creation-time base as the anchor and the
-	// moved tip as the observed SHA.
+	// The drift block carries the top ref's branch and the moved tip as
+	// the observed SHA.
 	if block := attentionRepoBlock(driftRec, child.Repos[1].Name); block == nil ||
-		block.ParentAnchorSHA != child.BaseSHA(child.Repos[1].Name) ||
+		block.Branch != "feature/parent" ||
 		block.ObservedSHA != preRefs[1] {
-		t.Fatalf("repo 1: drift repositories block = %+v, want anchor %s and observed %s",
-			block, child.BaseSHA(child.Repos[1].Name), preRefs[1])
+		t.Fatalf("repo 1: drift repositories block = %+v, want branch feature/parent and observed %s",
+			block, preRefs[1])
 	}
 
 	// Acknowledged retry: hits the staged conflict on repo 1.
@@ -601,8 +606,8 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	if repo0Entry == nil {
 		t.Fatal("repo 0 entry missing")
 	}
-	if repo0Entry.ParentAnchorSHA != newerRepo0Tip {
-		t.Fatalf("repo 0 anchor = %s, want newer parent tip %s", repo0Entry.ParentAnchorSHA, newerRepo0Tip)
+	if top := repo0Entry.TopRef(); top == nil || top.AnchorSHA != newerRepo0Tip {
+		t.Fatalf("repo 0 anchor = %+v, want newer parent tip %s", repo0Entry.TopRef(), newerRepo0Tip)
 	}
 }
 
@@ -680,24 +685,25 @@ func TestRefactorChildTransactionalMultiRepoExternalRaceRollbackAndAttention(t *
 	if racedEntry.ApplyState != feature.RepoApplyAttention {
 		t.Fatalf("raced entry apply state = %q, want attention", racedEntry.ApplyState)
 	}
-	if racedEntry.ObservedSHA == "" {
+	racedTop := racedEntry.TopRef()
+	if racedTop == nil || racedTop.ObservedSHA == "" {
 		t.Fatal("raced entry observed SHA empty; want the externally moved ref SHA")
 	}
-	if racedEntry.ObservedSHA == racedEntry.ExpectedRefSHA {
-		t.Fatal("raced entry observed SHA equals expected; want externally moved SHA")
+	if racedTop.ObservedSHA == racedTop.AnchorSHA {
+		t.Fatal("raced entry observed SHA equals anchor; want externally moved SHA")
 	}
 	if block := attentionRepoBlock(raceRec, racedEntry.Repo); block == nil ||
-		block.ExpectedRefSHA != racedEntry.ExpectedRefSHA ||
-		block.CandidateSHA != racedEntry.CandidateSHA ||
-		block.ObservedSHA != racedEntry.ObservedSHA {
-		t.Fatalf("raced repo repositories block = %+v, want entry SHAs (expected %s candidate %s observed %s)",
-			block, racedEntry.ExpectedRefSHA, racedEntry.CandidateSHA, racedEntry.ObservedSHA)
+		block.Branch != racedTop.Branch ||
+		block.CandidateSHA != racedTop.CandidateSHA ||
+		block.ObservedSHA != racedTop.ObservedSHA {
+		t.Fatalf("raced repo repositories block = %+v, want entry SHAs (branch %s candidate %s observed %s)",
+			block, racedTop.Branch, racedTop.CandidateSHA, racedTop.ObservedSHA)
 	}
 	for _, needle := range []string{
 		racedEntry.Repo,
-		"refs/heads/" + racedEntry.ParentBranch,
-		racedEntry.ExpectedRefSHA,
-		racedEntry.ObservedSHA,
+		"refs/heads/" + racedTop.Branch,
+		racedTop.AnchorSHA,
+		racedTop.ObservedSHA,
 	} {
 		if !strings.Contains(raceRec.Diagnostics, needle) {
 			t.Fatalf("attention diagnostics %q missing %q", raceRec.Diagnostics, needle)
@@ -746,15 +752,21 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 			Phase: feature.TransactionPhasePreparing,
 			Entries: []feature.RepoTransactionEntry{
 				{
-					Repo: child.Repos[0].Name, ParentBranch: parent.Repos[0].Branch,
-					ParentAnchorSHA: parentTip0, ExpectedRefSHA: parentTip0,
-					ChildHeadSHA: childHead0, CandidateSHA: result0.CandidateSHA,
-					PrepState: feature.RepoPrepPrepared,
+					Repo: child.Repos[0].Name,
+					Refs: []feature.RepoTransactionRef{{
+						Branch: parent.Repos[0].Branch, AnchorSHA: parentTip0,
+						CandidateSHA: result0.CandidateSHA,
+					}},
+					ChildHeadSHA: childHead0,
+					PrepState:    feature.RepoPrepPrepared,
 				},
 				{
-					Repo: child.Repos[1].Name, ParentBranch: parent.Repos[1].Branch,
-					ParentAnchorSHA: parentTip1, ExpectedRefSHA: parentTip1,
-					ChildHeadSHA: childHead1, PrepState: feature.RepoPrepPending,
+					Repo: child.Repos[1].Name,
+					Refs: []feature.RepoTransactionRef{{
+						Branch: parent.Repos[1].Branch, AnchorSHA: parentTip1,
+					}},
+					ChildHeadSHA: childHead1,
+					PrepState:    feature.RepoPrepPending,
 				},
 			},
 		}
@@ -825,7 +837,7 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		// Manually apply the first repo's ref and sync worktree.
 		fx.manualApplyRef(t, 0, &journal.Entries[0])
 		journal.Entries[0].ApplyState = feature.RepoApplyApplied
-		journal.Entries[0].ObservedSHA = journal.Entries[0].CandidateSHA
+		journal.Entries[0].TopRef().ObservedSHA = journal.Entries[0].TopRef().CandidateSHA
 		journal.Phase = feature.TransactionPhaseApplying
 		fx.saveJournal(journal)
 
@@ -835,7 +847,7 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		}
 
 		// The first repo's ref should be rolled back to the old SHA.
-		oldSHA := journal.Entries[0].ParentAnchorSHA
+		oldSHA := journal.Entries[0].TopRef().AnchorSHA
 		if got := fx.refSHA(0, "refs/heads/feature/parent"); got != oldSHA {
 			t.Fatalf("repo 0: ref = %s after reconciliation, want old SHA %s", got, oldSHA)
 		}
@@ -863,7 +875,7 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		for i := range journal.Entries {
 			fx.manualApplyRef(t, i, &journal.Entries[i])
 			journal.Entries[i].ApplyState = feature.RepoApplyApplied
-			journal.Entries[i].ObservedSHA = journal.Entries[i].CandidateSHA
+			journal.Entries[i].TopRef().ObservedSHA = journal.Entries[i].TopRef().CandidateSHA
 		}
 		journal.Phase = feature.TransactionPhaseApplied
 		fx.saveJournal(journal)
@@ -892,12 +904,12 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		// Apply repo 0 fully (CAS + worktree sync).
 		fx.manualApplyRef(t, 0, &journal.Entries[0])
 		journal.Entries[0].ApplyState = feature.RepoApplyApplied
-		journal.Entries[0].ObservedSHA = journal.Entries[0].CandidateSHA
+		journal.Entries[0].TopRef().ObservedSHA = journal.Entries[0].TopRef().CandidateSHA
 		// Apply repo 1's ref only (CAS without worktree sync — crash
 		// between the progress write and the worktree sync).
 		fx.manualApplyRefNoSync(t, 1, &journal.Entries[1])
 		journal.Entries[1].ApplyState = feature.RepoApplyApplied
-		journal.Entries[1].ObservedSHA = journal.Entries[1].CandidateSHA
+		journal.Entries[1].TopRef().ObservedSHA = journal.Entries[1].TopRef().CandidateSHA
 		journal.Phase = feature.TransactionPhaseApplied
 		fx.saveJournal(journal)
 
@@ -955,7 +967,7 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 			t.Fatalf("repo 0: worktree dirty after reconciliation: %s", clean)
 		}
 		// The ref should be at the anchor.
-		anchorSHA := journal.Entries[0].ParentAnchorSHA
+		anchorSHA := journal.Entries[0].TopRef().AnchorSHA
 		if got := fx.refSHA(0, "refs/heads/feature/parent"); got != anchorSHA {
 			t.Fatalf("repo 0: ref = %s, want anchor SHA %s after rollback convergence", got, anchorSHA)
 		}
@@ -995,12 +1007,14 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		if movedEntry == nil {
 			t.Fatal("moved entry missing from journal")
 		}
+		movedTop := movedEntry.TopRef()
 		if block := attentionRepoBlock(tx.AttentionRecord(), movedEntry.Repo); block == nil ||
-			block.ParentAnchorSHA != movedEntry.ParentAnchorSHA ||
-			block.CandidateSHA != movedEntry.CandidateSHA ||
+			movedTop == nil ||
+			block.Branch != movedTop.Branch ||
+			block.CandidateSHA != movedTop.CandidateSHA ||
 			block.ObservedSHA != externalSHA {
-			t.Fatalf("moved repo repositories block = %+v, want old %s candidate %s observed %s",
-				block, movedEntry.ParentAnchorSHA, movedEntry.CandidateSHA, externalSHA)
+			t.Fatalf("moved repo repositories block = %+v, want branch %s candidate %s observed %s",
+				block, movedTop.Branch, movedTop.CandidateSHA, externalSHA)
 		}
 	})
 
@@ -1031,7 +1045,7 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		// All refs and parent worktrees converge to their candidates; none
 		// are compensated merely because the post-CAS sync was transient.
 		for i := range fx.repoDirs {
-			candidate := child.Parent.Transaction.Entries[i].CandidateSHA
+			candidate := child.Parent.Transaction.Entries[i].TopRef().CandidateSHA
 			got := fx.refSHA(i, "refs/heads/feature/parent")
 			if got != candidate {
 				t.Fatalf("repo %d: ref = %s, want candidate %s", i, got, candidate)
@@ -1259,14 +1273,14 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		for i := range journal.Entries {
 			fx.manualApplyRef(t, i, &journal.Entries[i])
 			journal.Entries[i].ApplyState = feature.RepoApplyApplied
-			journal.Entries[i].ObservedSHA = journal.Entries[i].CandidateSHA
+			journal.Entries[i].TopRef().ObservedSHA = journal.Entries[i].TopRef().CandidateSHA
 		}
 
 		// Roll back both repos' refs (CAS from candidate to anchor).
 		for i := range journal.Entries {
 			fx.manualRollbackRef(t, i, &journal.Entries[i])
 			journal.Entries[i].ApplyState = feature.RepoApplyRolledBack
-			journal.Entries[i].ObservedSHA = journal.Entries[i].ParentAnchorSHA
+			journal.Entries[i].TopRef().ObservedSHA = journal.Entries[i].TopRef().AnchorSHA
 		}
 
 		// Leave the aggregate phase as rolling_back — simulating a crash
@@ -1312,13 +1326,13 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		for i := range journal.Entries {
 			fx.manualApplyRef(t, i, &journal.Entries[i])
 			journal.Entries[i].ApplyState = feature.RepoApplyApplied
-			journal.Entries[i].ObservedSHA = journal.Entries[i].CandidateSHA
+			journal.Entries[i].TopRef().ObservedSHA = journal.Entries[i].TopRef().CandidateSHA
 		}
 
 		// Roll back only repo 0.
 		fx.manualRollbackRef(t, 0, &journal.Entries[0])
 		journal.Entries[0].ApplyState = feature.RepoApplyRolledBack
-		journal.Entries[0].ObservedSHA = journal.Entries[0].ParentAnchorSHA
+		journal.Entries[0].TopRef().ObservedSHA = journal.Entries[0].TopRef().AnchorSHA
 
 		journal.Phase = feature.TransactionPhaseRollingBack
 		fx.saveJournal(journal)
@@ -1329,7 +1343,7 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		}
 
 		// Repo 1 should be rolled back by reconciliation.
-		oldSHA1 := journal.Entries[1].ParentAnchorSHA
+		oldSHA1 := journal.Entries[1].TopRef().AnchorSHA
 		if got := fx.refSHA(1, "refs/heads/feature/parent"); got != oldSHA1 {
 			t.Fatalf("repo 1: ref = %s after reconciliation, want old SHA %s", got, oldSHA1)
 		}

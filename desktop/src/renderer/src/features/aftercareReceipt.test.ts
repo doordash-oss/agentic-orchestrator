@@ -164,10 +164,24 @@ describe('pullRequestRows', () => {
         repos: [
           {
             repo: 'api',
-            prUrl: 'https://github.com/x/api/pull/412',
-            comments: [
-              { stableRef: 'api:review:1', selected: true, repo: 'api', id: 1, type: 'review' },
-              { stableRef: 'api:issue:2', selected: true, repo: 'api', id: 2, type: 'issue' },
+            pullRequests: [
+              {
+                position: 1,
+                title: 'Bootstrap',
+                url: 'https://github.com/x/api/pull/412',
+                comments: [
+                  { stableRef: 'api:review:1', selected: true, repo: 'api', id: 1, type: 'review' },
+                  { stableRef: 'api:issue:2', selected: true, repo: 'api', id: 2, type: 'issue' },
+                ],
+              },
+              {
+                position: 3,
+                title: 'Search revamp',
+                url: 'https://github.com/x/api/pull/413',
+                comments: [
+                  { stableRef: 'api:review:3', selected: true, repo: 'api', id: 3, type: 'review' },
+                ],
+              },
             ],
           },
         ],
@@ -180,7 +194,7 @@ describe('pullRequestRows', () => {
         title: 'Bootstrap',
         url: 'https://github.com/x/api/pull/412',
         number: '#412',
-        clauses: ['Published from this run', 'in sync', '2 unresolved comments'],
+        clauses: ['Published from this run', 'in sync', '3 unresolved comments'],
       },
       {
         repo: 'api',
@@ -188,7 +202,7 @@ describe('pullRequestRows', () => {
         title: 'Search revamp',
         url: 'https://github.com/x/api/pull/415',
         number: '#415',
-        clauses: ['Published from this run', 'in sync', '2 unresolved comments'],
+        clauses: ['Published from this run', 'in sync', '3 unresolved comments'],
       },
       {
         repo: 'web',

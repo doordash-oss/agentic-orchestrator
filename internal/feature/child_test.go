@@ -1286,10 +1286,12 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 			Transaction: &feature.TransactionJournal{
 				Phase: feature.TransactionPhaseMerged,
 				Entries: []feature.RepoTransactionEntry{{
-					ParentBranch:    "feature/parent",
-					ParentAnchorSHA: "aaaa1111",
-					ChildHeadSHA:    "bbbb2222",
-					MergeHEAD:       "cccc3333",
+					Repo:         "repoA",
+					ChildHeadSHA: "bbbb2222",
+					Refs: []feature.RepoTransactionRef{{
+						Branch: "feature/parent", AnchorSHA: "aaaa1111",
+						CandidateSHA: "cccc3333", ObservedSHA: "cccc3333",
+					}},
 					Cleanup: &errcat.FailureRecord{
 						Code:        errcat.ChildCleanupIncomplete,
 						Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: "repoA"}}},
@@ -1301,11 +1303,10 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 					Code: errcat.IntegrationMergeConflict,
 					Context: &errcat.RecordContext{
 						Repositories: []errcat.CodeRepository{{
-							Name:            "repoA",
-							Branch:          "feature/parent",
-							ConflictFiles:   []string{"internal/api.go"},
-							ParentAnchorSHA: "aaaa1111",
-							ChildHeadSHA:    "bbbb2222",
+							Name:          "repoA",
+							Branch:        "feature/parent",
+							ConflictFiles: []string{"internal/api.go"},
+							ChildHeadSHA:  "bbbb2222",
 						}},
 					},
 					Diagnostics: "repoA: merge conflict: [internal/api.go]",
@@ -1332,8 +1333,9 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 		t.Fatalf("transaction entries = %d, want 1", len(tx.Entries))
 	}
 	entry := tx.Entries[0]
-	if entry.ParentBranch != "feature/parent" || entry.ParentAnchorSHA != "aaaa1111" ||
-		entry.ChildHeadSHA != "bbbb2222" || entry.MergeHEAD != "cccc3333" ||
+	if len(entry.Refs) != 1 || entry.Refs[0].Branch != "feature/parent" ||
+		entry.Refs[0].AnchorSHA != "aaaa1111" || entry.Refs[0].CandidateSHA != "cccc3333" ||
+		entry.ChildHeadSHA != "bbbb2222" ||
 		entry.Cleanup == nil || entry.Cleanup.Code != errcat.ChildCleanupIncomplete ||
 		entry.Cleanup.Diagnostics != "worktree busy" || !entry.PendingSync {
 		t.Fatalf("transaction entry = %+v, want full round-trip", entry)
@@ -1348,7 +1350,7 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 	repo := rec.Context.Repositories[0]
 	if repo.Name != "repoA" || repo.Branch != "feature/parent" ||
 		len(repo.ConflictFiles) != 1 || repo.ConflictFiles[0] != "internal/api.go" ||
-		repo.ParentAnchorSHA != "aaaa1111" || repo.ChildHeadSHA != "bbbb2222" {
+		repo.ChildHeadSHA != "bbbb2222" {
 		t.Fatalf("attention repository = %+v, want round-trip", repo)
 	}
 }
@@ -1370,7 +1372,9 @@ func TestIntegrationResumable(t *testing.T) {
 			},
 		}
 	}
-	merged := &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{MergeHEAD: "cccc3333"}}}
+	merged := &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{
+		Refs: []feature.RepoTransactionRef{{Branch: "main", CandidateSHA: "cccc3333", ObservedSHA: "cccc3333"}},
+	}}}
 	for _, tc := range []struct {
 		name string
 		f    *feature.Feature
@@ -1382,7 +1386,9 @@ func TestIntegrationResumable(t *testing.T) {
 		{"active phase attention", mk("", &feature.TransactionJournal{Phase: feature.TransactionPhaseAttention}, "/tmp/wt"), true},
 		{"active phase merged", mk("", merged, "/tmp/wt"), true},
 		{"closed completed settled", mk(feature.ChildCloseOutcomeCompleted, merged, ""), false},
-		{"closed completed with cleanup warning", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{MergeHEAD: "cccc3333", Cleanup: &errcat.FailureRecord{Code: errcat.ChildCleanupIncomplete, Diagnostics: "worktree busy"}}}}, ""), false},
+		{"closed completed with cleanup warning", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{
+			Refs:    []feature.RepoTransactionRef{{Branch: "main", CandidateSHA: "cccc3333"}},
+			Cleanup: &errcat.FailureRecord{Code: errcat.ChildCleanupIncomplete, Diagnostics: "worktree busy"}}}}, ""), false},
 		{"closed completed with pending worktree", mk(feature.ChildCloseOutcomeCompleted, merged, "/tmp/wt"), false},
 		{"closed completed without merge head", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhasePreparing}, ""), false},
 	} {

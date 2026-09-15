@@ -278,9 +278,6 @@ func appendCascadeRefs(intent *CascadeDeleteIntent, parent, child *Feature) {
 		return
 	}
 	for _, entry := range child.Parent.Transaction.Entries {
-		if entry.CandidateSHA == "" {
-			continue
-		}
 		repoPath := ""
 		for _, repo := range parent.Repos {
 			if repo.Name == entry.Repo {
@@ -288,15 +285,16 @@ func appendCascadeRefs(intent *CascadeDeleteIntent, parent, child *Feature) {
 				break
 			}
 		}
-		anchor := entry.ExpectedRefSHA
-		if anchor == "" {
-			anchor = entry.ParentAnchorSHA
+		for _, ref := range entry.Refs {
+			if ref.CandidateSHA == "" {
+				continue
+			}
+			intent.Refs = append(intent.Refs, CascadeRef{
+				ChildID: child.ID, Repo: entry.Repo, RepoPath: repoPath,
+				Ref: "refs/heads/" + ref.Branch, AnchorSHA: ref.AnchorSHA,
+				CandidateSHA: ref.CandidateSHA,
+			})
 		}
-		intent.Refs = append(intent.Refs, CascadeRef{
-			ChildID: child.ID, Repo: entry.Repo, RepoPath: repoPath,
-			Ref: "refs/heads/" + entry.ParentBranch, AnchorSHA: anchor,
-			CandidateSHA: entry.CandidateSHA,
-		})
 	}
 }
 

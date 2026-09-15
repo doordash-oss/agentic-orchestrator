@@ -151,7 +151,7 @@ func TestFprintRendersContextBlocksAsKeyValuesBetweenHintAndDetail(t *testing.T)
 	e.Context = &Context{
 		Repositories: []CodeRepository{
 			{Name: "web", Branch: "main", DirtyFiles: []string{"a.go", "b.go"}},
-			{Name: "api", ConflictFiles: []string{"go.mod"}, MergeHEAD: "abc123"},
+			{Name: "api", ConflictFiles: []string{"go.mod"}, CandidateSHA: "abc123"},
 		},
 		SetupTask: &CodeSetupTask{Key: "worktree:beta", Kind: "worktree", Label: "Worktree: beta"},
 		Phase:     &CodePhase{Name: "implement", Iteration: 2},
@@ -167,7 +167,7 @@ func TestFprintRendersContextBlocksAsKeyValuesBetweenHintAndDetail(t *testing.T)
 		"    dirty_files: a.go, b.go",
 		"  repository: api",
 		"    conflict_files: go.mod",
-		"    merge_head: abc123",
+		"    candidate_sha: abc123",
 		"  setup_task: Worktree: beta, kind worktree",
 		"  phase: implement (iteration 2)",
 		"  exit_code: 1",

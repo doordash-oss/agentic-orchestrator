@@ -35,4 +35,25 @@ Reviewer feedback from previous iteration:
 Answers to NEED_HELP questions:
 {{ .HelpAnswers }}
 {{ end -}}
+{{- if .Stack }}
+
+## Parent Delivery Stack
+
+This feature is a review-feedback child of a parent that delivers as a stack of layered pull requests — one branch and pull request per layer below. The highest position is the top layer.
+
+{{ $top := 0 }}{{ range .Stack }}{{ if gt .Position $top }}{{ $top = .Position }}{{ end }}{{ end }}{{ range .Stack }}- Layer {{ .Position }}{{ if .Title }}: {{ .Title }}{{ end }}{{ if eq .Position $top }} (top layer){{ end }} — phases {{ .Phases }}{{ if .Branch }}, branch {{ .Branch }}{{ end }}
+{{ end }}
+The default target layer for a review comment's fix is the layer of the pull request that comment was left on. When a fix changes files that belong to a lower stack layer, write an optional fix manifest at {{ .FixManifestPath }} naming the owning layer for every such changed file:
+
+```yaml
+entries:
+  - layer: 1
+    repository: <repository name>
+    paths:
+      - <repository-relative path>
+```
+
+Files not listed in the manifest follow that same default: they land on the layer of the pull request the comment was left on. The manifest is optional — write it only when a fix actually changes lower-layer files. You never run git write commands (commit, push, branch, rebase); the harness owns them.
+
+{{- end }}
 {{ end -}}

@@ -310,12 +310,13 @@ func TestChildIntegrationHappyPath(t *testing.T) {
 	if tx == nil {
 		t.Fatal("child transaction record missing")
 	}
-	if len(tx.Entries) != 1 || tx.Entries[0].ParentBranch != fx.parentBranch || tx.Entries[0].ParentAnchorSHA == "" || tx.Entries[0].ChildHeadSHA == "" {
+	top := tx.Entries[0].TopRef()
+	if len(tx.Entries) != 1 || top == nil || top.Branch != fx.parentBranch || top.AnchorSHA == "" || tx.Entries[0].ChildHeadSHA == "" {
 		t.Fatalf("transaction anchors incomplete: %+v", tx)
 	}
 	mergeHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
-	if tx.Entries[0].MergeHEAD != mergeHEAD {
-		t.Fatalf("transaction merge head = %s, want parent tip %s", tx.Entries[0].MergeHEAD, mergeHEAD)
+	if top.ObservedSHA != mergeHEAD {
+		t.Fatalf("transaction merge head = %s, want parent tip %s", top.ObservedSHA, mergeHEAD)
 	}
 	if tx.Entries[0].Cleanup != nil {
 		t.Fatalf("unexpected cleanup warning record: %#v", tx.Entries[0].Cleanup)
@@ -376,11 +377,12 @@ func TestChildIntegrationDirtyParentBlocksMerge(t *testing.T) {
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
-	if len(tx.Entries) != 1 || tx.Entries[0].ChildHeadSHA == "" || tx.Entries[0].ParentAnchorSHA == "" {
+	top := tx.Entries[0].TopRef()
+	if len(tx.Entries) != 1 || tx.Entries[0].ChildHeadSHA == "" || top == nil || top.AnchorSHA == "" {
 		t.Fatalf("anchors must be durable before parent mutation: %+v", tx)
 	}
-	if tx.Entries[0].MergeHEAD != "" {
-		t.Fatalf("merge head recorded (%s) although the merge was blocked", tx.Entries[0].MergeHEAD)
+	if top.CandidateSHA != "" {
+		t.Fatalf("candidate recorded (%s) although the merge was blocked", top.CandidateSHA)
 	}
 	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationParentDirty {
 		t.Fatalf("attention record = %+v, want integration_parent_dirty", tx.Attention)
@@ -492,8 +494,8 @@ func TestChildIntegrationConflictAttentionAndRetry(t *testing.T) {
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 		t.Fatalf("child close outcome = %q after conflict retry, want completed", child.Parent.CloseOutcome)
 	}
-	if child.Parent.Transaction.Entries[0].MergeHEAD == "" {
-		t.Fatal("merge head not recorded after retry")
+	if top := child.Parent.Transaction.Entries[0].TopRef(); top == nil || top.CandidateSHA == "" {
+		t.Fatal("candidate not recorded after retry")
 	}
 }
 
@@ -828,10 +830,11 @@ func TestChildIntegrationAutoPublishFailureKeepsCodeReady(t *testing.T) {
 	}
 }
 
-// TestReviewFeedbackIntegrationTailReturnsParentPublished proves the
-// review-feedback closure tail never enters the ordinary publish path, even
-// when the parent's checkpoints would otherwise enable auto-publish.
-func TestReviewFeedbackIntegrationTailReturnsParentPublished(t *testing.T) {
+// TestReviewFeedbackIntegrationTailRepublishesJournalRepos proves the
+// review-feedback closure tail routes every journal-refs repository through
+// the publish walk (never the plain auto-publish path of other child kinds)
+// and settles with the parent Published and the child completed.
+func TestReviewFeedbackIntegrationTailRepublishesJournalRepos(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-git integration test")
 	}
@@ -864,25 +867,34 @@ func TestReviewFeedbackIntegrationTailReturnsParentPublished(t *testing.T) {
 	}, Hooks{OnPublishStarted: func(string) { publishStarts++ }})
 	publishCalls := 0
 	o.publishRepoFn = func(featureID, repoName string) error {
+		if featureID != fx.parent.ID {
+			t.Errorf("publish walk ran for feature %q, want parent %s", featureID, fx.parent.ID)
+		}
+		if repoName != "repoA" {
+			t.Errorf("publish walk ran for repo %q, want repoA only", repoName)
+		}
 		publishCalls++
-		return errors.New("review-feedback tail must not publish")
+		return nil
 	}
 
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("RunChildIntegration() error = %v", err)
 	}
 	parent, child := fx.reload()
-	if publishCalls != 0 {
-		t.Fatalf("publish calls = %d, want 0", publishCalls)
+	if publishCalls != 1 {
+		t.Fatalf("publish calls = %d, want 1 (the journal's repository)", publishCalls)
 	}
-	if publishStarts != 0 {
-		t.Fatalf("publish starts = %d, want 0", publishStarts)
+	if publishStarts != 1 {
+		t.Fatalf("publish starts = %d, want 1", publishStarts)
 	}
 	if parent.Status != feature.StatusPublished {
 		t.Fatalf("parent status = %s, want Published", parent.Status)
 	}
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 		t.Fatalf("child close outcome = %q, want completed", child.Parent.CloseOutcome)
+	}
+	if child.Parent.Transaction == nil || !child.Parent.Transaction.TailSettled {
+		t.Fatalf("tail-settled marker = %v, want true", child.Parent.Transaction)
 	}
 }
 
@@ -898,8 +910,9 @@ func TestRecordTransactionTailWarningAccumulates(t *testing.T) {
 	o := fx.orchestrator()
 	if err := fx.store.Modify(fx.child.ID, func(f *feature.Feature) error {
 		f.Parent.Transaction = &feature.TransactionJournal{
-			Phase:   feature.TransactionPhaseMerged,
-			Entries: []feature.RepoTransactionEntry{{Repo: "repoA", ParentBranch: fx.parentBranch}},
+			Phase: feature.TransactionPhaseMerged,
+			Entries: []feature.RepoTransactionEntry{{Repo: "repoA",
+				Refs: []feature.RepoTransactionRef{{Branch: fx.parentBranch}}}},
 		}
 		return nil
 	}); err != nil {
@@ -1037,8 +1050,8 @@ func TestChildIntegrationParentBranchMismatch(t *testing.T) {
 		t.Fatalf("child close outcome = %q, want completed after restoring the recorded branch", child.Parent.CloseOutcome)
 	}
 	mergeHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "feature/parent")
-	if child.Parent.Transaction.Entries[0].MergeHEAD != mergeHEAD {
-		t.Fatalf("merge head = %s, want recorded %s on feature/parent", mergeHEAD, child.Parent.Transaction.Entries[0].MergeHEAD)
+	if top := child.Parent.Transaction.Entries[0].TopRef(); top == nil || top.ObservedSHA != mergeHEAD {
+		t.Fatalf("merge head = %+v, want recorded %s on feature/parent", top, mergeHEAD)
 	}
 	parents := childIntegrationGit(t, fx.repoDir, "rev-list", "--parents", "-n", "1", "feature/parent")
 	if fields := len(strings.Fields(parents)); fields != 3 {

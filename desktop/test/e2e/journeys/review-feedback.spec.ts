@@ -357,8 +357,25 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     await expect(alphaSection.getByText('This function could be simplified.')).toBeVisible();
     await expect(betaSection.getByText('Has this been tested with large inputs?')).toBeVisible();
     await expect(betaSection.getByText('Overall looks good, just a few nits.')).toBeVisible();
-    await expect(alphaSection.getByText('2 of 2 selected')).toBeVisible();
-    await expect(betaSection.getByText('2 of 2 selected')).toBeVisible();
+    // The repository ledger counts across the repository's pull-request
+    // groups; the single seeded layer renders one PR sub-header with its
+    // own open-pull-request action.
+    await expect(
+      alphaSection.locator('.review-feedback-section__ledger', { hasText: '2 of 2 selected' }),
+    ).toBeVisible();
+    await expect(
+      betaSection.locator('.review-feedback-section__ledger', { hasText: '2 of 2 selected' }),
+    ).toBeVisible();
+    await expect(
+      alphaSection.getByRole('button', {
+        name: 'Open pull request: layer 1 Review feedback fixture',
+      }),
+    ).toBeVisible();
+    await expect(
+      betaSection.getByRole('button', {
+        name: 'Open pull request: layer 1 Review feedback fixture',
+      }),
+    ).toBeVisible();
     // First fetch pre-selects everything; the ledger starts full.
     const boxes = feed.getByRole('checkbox', { name: /^Select feedback/ });
     await expect(boxes).toHaveCount(4);
@@ -437,7 +454,9 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     await expect(commentDialog.getByRole('button', { name: 'Close comment' })).toBeFocused();
     // Reading the complete comment never touches selection state.
     await expect(feed.getByLabel(/This function could be simplified/)).toBeChecked();
-    await expect(alphaSection.getByText('2 of 2 selected')).toBeVisible();
+    await expect(
+      alphaSection.locator('.review-feedback-section__ledger', { hasText: '2 of 2 selected' }),
+    ).toBeVisible();
     await handle.page.keyboard.press('Escape');
     await expect(commentDialog).toHaveCount(0);
     await expect(hugeCardToggle).toBeFocused();

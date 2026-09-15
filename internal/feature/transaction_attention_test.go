@@ -30,11 +30,10 @@ func attentionRecordFixture() *errcat.FailureRecord {
 		Code: errcat.IntegrationMergeConflict,
 		Context: &errcat.RecordContext{
 			Repositories: []errcat.CodeRepository{{
-				Name:            "repo-a",
-				Branch:          "main",
-				ConflictFiles:   []string{"internal/api.go"},
-				ParentAnchorSHA: "3f2c1ab",
-				ChildHeadSHA:    "9b1e445",
+				Name:          "repo-a",
+				Branch:        "main",
+				ConflictFiles: []string{"internal/api.go"},
+				ChildHeadSHA:  "9b1e445",
 			}},
 		},
 		Diagnostics: "repo-a: merge conflict: [internal/api.go]",
@@ -48,9 +47,9 @@ func TestTransactionJournalRoundTripsAttentionRecord(t *testing.T) {
 	journal := &TransactionJournal{
 		Phase: TransactionPhaseAttention,
 		Entries: []RepoTransactionEntry{{
-			Repo:         "repo-a",
-			ParentBranch: "main",
-			PrepState:    RepoPrepFailed,
+			Repo:      "repo-a",
+			Refs:      []RepoTransactionRef{{Branch: "main"}},
+			PrepState: RepoPrepFailed,
 		}},
 		Attention: attentionRecordFixture(),
 	}
@@ -106,7 +105,7 @@ entries:
 		t.Fatalf("legacy journal lost its phase or entries: %+v", got)
 	}
 	entry := got.Entries[0]
-	if entry.Repo != "repo-a" || entry.ParentBranch != "main" || entry.PrepState != RepoPrepFailed {
+	if entry.Repo != "repo-a" || entry.PrepState != RepoPrepFailed {
 		t.Fatalf("legacy entry lost its progress state: %+v", entry)
 	}
 }
@@ -127,9 +126,9 @@ func TestSavedJournalWritesNoDeletedEntryKeys(t *testing.T) {
 			Transaction: &TransactionJournal{
 				Phase: TransactionPhaseAttention,
 				Entries: []RepoTransactionEntry{{
-					Repo:         "repo-a",
-					ParentBranch: "main",
-					PrepState:    RepoPrepFailed,
+					Repo:      "repo-a",
+					Refs:      []RepoTransactionRef{{Branch: "main"}},
+					PrepState: RepoPrepFailed,
 				}},
 				Attention: attentionRecordFixture(),
 			},
@@ -188,8 +187,9 @@ func TestIntegrationAttentionAccessors(t *testing.T) {
 		Entries: []RepoTransactionEntry{{Repo: "repo-a", ApplyState: RepoApplyAttention}},
 	})
 	cleanPrepared := newChild(&TransactionJournal{
-		Phase:   TransactionPhasePrepared,
-		Entries: []RepoTransactionEntry{{Repo: "repo-a", PrepState: RepoPrepPrepared, CandidateSHA: "abc"}},
+		Phase: TransactionPhasePrepared,
+		Entries: []RepoTransactionEntry{{Repo: "repo-a", PrepState: RepoPrepPrepared,
+			Refs: []RepoTransactionRef{{Branch: "main", AnchorSHA: "aaa", CandidateSHA: "abc"}}}},
 	})
 	merged := newChild(&TransactionJournal{Phase: TransactionPhaseMerged})
 	noJournal := newChild(nil)

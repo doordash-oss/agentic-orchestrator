@@ -381,6 +381,7 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 					// locate the optional fix manifest the fixer may have
 					// written there.
 					FixIterationDir: iterDir,
+					IterationDir:    iterDir,
 					Repos:           s.workspace.RepoPaths,
 				}); err != nil {
 					return &FeatureFinalReviewResult{
@@ -713,6 +714,13 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 
 	feedbackPath := filepath.Join(iterDir, "review-feedback.md")
 	intent := resolvePromptIntent(cfg.Feature)
+	// A review-feedback child's own stack is empty/provisional: its fixes
+	// target the parent's layers, so the fixer prompt lists the parent's
+	// stack. Every other feature lists its own stack as before.
+	fixStack := cfg.Feature.Stack
+	if parentStack, ok := reviewFeedbackParentStack(cfg.FeatureStore, cfg.Feature); ok {
+		fixStack = parentStack
+	}
 	prompt := BuildFinalFixPrompt(FinalFixPromptOpts{
 		Feedback:              feedback,
 		FeedbackPath:          feedbackPath,
@@ -723,7 +731,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		DesignArtifactPath:    cfg.Feature.DesignArtifactPath(),
 		Images:                cfg.Feature.Images,
 		RefactorPassForkPoint: refactorPassForkPoint(cfg.Feature),
-		Stack:                 cfg.Feature.Stack,
+		Stack:                 fixStack,
 		IterationDir:          iterDir,
 	})
 

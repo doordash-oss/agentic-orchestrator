@@ -24,82 +24,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 )
 
-// PullRebaseOutcome categorises the result of a PullRebase operation.
-type PullRebaseOutcome int
-
-const (
-	// PullRebaseSuccess means the rebase succeeded or was a no-op.
-	PullRebaseSuccess PullRebaseOutcome = iota
-	// PullRebaseConflict means the rebase encountered merge conflicts and was aborted.
-	PullRebaseConflict
-	// PullRebaseFailure means a non-conflict failure occurred.
-	PullRebaseFailure
-)
-
-// PullRebaseResult is the outcome and error from a PullRebase operation.
-type PullRebaseResult struct {
-	Outcome PullRebaseOutcome
-	Err     error
-}
-
-// PullRebase fetches from origin and rebases the current branch onto the
-// remote tracking branch. This syncs local commits on top of any remote
-// changes to the same branch before pushing.
-//
-// Outcomes:
-//   - Success: remote branch absent (first publish), already up-to-date, or rebase succeeded
-//   - Conflict: rebase had conflicts; rebase aborted, worktree left clean
-//   - Failure: network/auth/fetch error or other non-conflict failure
-func PullRebase(worktreePath, branch string) PullRebaseResult {
-	// 1. Fetch from origin
-	fetchCmd := exec.Command("git", "-C", worktreePath, "fetch", "origin")
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		return PullRebaseResult{
-			Outcome: PullRebaseFailure,
-			Err:     fmt.Errorf("fetch failed: %s: %w", strings.TrimSpace(string(out)), err),
-		}
-	}
-
-	// 2. Check if origin/<branch> exists
-	verifyCmd := readGitCmd(worktreePath, "rev-parse", "--verify", "origin/"+branch)
-	if err := verifyCmd.Run(); err != nil {
-		// Remote branch doesn't exist (first publish) — no-op
-		return PullRebaseResult{Outcome: PullRebaseSuccess}
-	}
-
-	// 3. Rebase onto origin/<branch>
-	target := "origin/" + branch
-	rebaseCmd := exec.Command("git", "-C", worktreePath, "rebase", target)
-	if out, err := rebaseCmd.CombinedOutput(); err != nil {
-		// 4. Check if this is a conflict (rebase-merge or rebase-apply directory exists)
-		gitDir := resolveGitDir(worktreePath)
-		isConflict := false
-		for _, dir := range []string{"rebase-merge", "rebase-apply"} {
-			if _, statErr := os.Stat(filepath.Join(gitDir, dir)); statErr == nil {
-				isConflict = true
-				break
-			}
-		}
-
-		// Abort the rebase to leave the worktree clean
-		abortCmd := exec.Command("git", "-C", worktreePath, "rebase", "--abort")
-		_ = abortCmd.Run()
-
-		if isConflict {
-			return PullRebaseResult{
-				Outcome: PullRebaseConflict,
-				Err:     fmt.Errorf("pull-rebase conflict: %s", strings.TrimSpace(string(out))),
-			}
-		}
-		return PullRebaseResult{
-			Outcome: PullRebaseFailure,
-			Err:     fmt.Errorf("rebase failed: %s: %w", strings.TrimSpace(string(out)), err),
-		}
-	}
-
-	return PullRebaseResult{Outcome: PullRebaseSuccess}
-}
-
 // resolveGitDir returns the .git directory for a worktree path.
 // For worktrees, .git is a file pointing to the actual git dir.
 func resolveGitDir(worktreePath string) string {
@@ -125,65 +49,6 @@ func Fetch(worktreePath string) error {
 	return nil
 }
 
-// RebaseOutcome categorises the result of a RebaseOnto operation.
-type RebaseOutcome int
-
-const (
-	// RebaseSuccess means the rebase completed without conflicts.
-	RebaseSuccess RebaseOutcome = iota
-	// RebaseConflict means conflicts remain in the worktree.
-	RebaseConflict
-	// RebaseFailed means a non-conflict failure occurred and the rebase was aborted.
-	RebaseFailed
-)
-
-// RebaseResult is the outcome, conflict files, and error from RebaseOnto.
-type RebaseResult struct {
-	Outcome       RebaseOutcome
-	ConflictFiles []string
-	Err           error
-}
-
-// RebaseOnto rebases the current branch onto the given target ref (e.g.
-// "origin/master"). Unlike Rebase, on conflict the rebase is NOT aborted —
-// the worktree is left mid-rebase with conflict markers in the files so an
-// agent can resolve them and run "git rebase --continue".
-func RebaseOnto(worktreePath, target string) RebaseResult {
-	cmd := exec.Command("git", "-C", worktreePath, "rebase", target)
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		return RebaseResult{Outcome: RebaseSuccess}
-	}
-
-	// Check if this is a conflict (rebase-merge or rebase-apply directory exists)
-	gitDir := resolveGitDir(worktreePath)
-	isConflict := false
-	for _, dir := range []string{"rebase-merge", "rebase-apply"} {
-		if _, statErr := os.Stat(filepath.Join(gitDir, dir)); statErr == nil {
-			isConflict = true
-			break
-		}
-	}
-
-	if isConflict {
-		// List conflicted files — leave rebase in progress
-		conflictFiles := listConflictFiles(worktreePath)
-		return RebaseResult{
-			Outcome:       RebaseConflict,
-			ConflictFiles: conflictFiles,
-			Err:           fmt.Errorf("rebase conflicts: %s", strings.TrimSpace(string(out))),
-		}
-	}
-
-	// Non-conflict failure — abort to leave worktree clean
-	abortCmd := exec.Command("git", "-C", worktreePath, "rebase", "--abort")
-	_ = abortCmd.Run()
-	return RebaseResult{
-		Outcome: RebaseFailed,
-		Err:     fmt.Errorf("rebase failed: %s: %w", strings.TrimSpace(string(out)), err),
-	}
-}
-
 // listConflictFiles returns the list of files with unmerged conflicts.
 func listConflictFiles(worktreePath string) []string {
 	cmd := readGitCmd(worktreePath, "diff", "--name-only", "--diff-filter=U")
@@ -198,22 +63,6 @@ func listConflictFiles(worktreePath string) []string {
 		}
 	}
 	return files
-}
-
-// Rebase rebases the current branch onto the specified base branch.
-// Returns nil on success. If there are conflicts, returns an error and
-// aborts the rebase to leave the worktree clean.
-func Rebase(worktreePath, baseBranch string) error {
-	target := "origin/" + baseBranch
-	cmd := exec.Command("git", "-C", worktreePath, "rebase", target)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		// Abort the rebase to leave the worktree clean
-		abortCmd := exec.Command("git", "-C", worktreePath, "rebase", "--abort")
-		_ = abortCmd.Run()
-		return fmt.Errorf("rebase failed (conflicts likely): %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	return nil
 }
 
 // PRBaseBranch returns the base branch of an open PR via the GitHub API.
@@ -287,19 +136,6 @@ func MergeFeatureBranch(repoPath, featureBranch, baseBranch string) error {
 	backCmd := exec.Command("git", "-C", repoPath, "checkout", featureBranch)
 	_ = backCmd.Run()
 
-	return nil
-}
-
-// RebaseLocal rebases the current branch onto a local base branch (no origin/ prefix).
-// Used for repos without a remote. Aborts on conflict to leave the worktree clean.
-func RebaseLocal(worktreePath, baseBranch string) error {
-	cmd := exec.Command("git", "-C", worktreePath, "rebase", baseBranch)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		abortCmd := exec.Command("git", "-C", worktreePath, "rebase", "--abort")
-		_ = abortCmd.Run()
-		return fmt.Errorf("rebase failed (conflicts likely): %s: %w", strings.TrimSpace(string(out)), err)
-	}
 	return nil
 }
 

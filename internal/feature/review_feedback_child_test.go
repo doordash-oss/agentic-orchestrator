@@ -393,6 +393,73 @@ func TestCreateReviewFeedbackChildRejectsInvalidCommentRepositoryBeforeWrites(t 
 	}
 }
 
+// Launch validation requires the comment's pull request to be an open layer
+// pull request of its repository: a repository whose every layer pull
+// request is merged counts as having no open layer pull request (the
+// existing no-PR error), and a comment naming a pull request that is not
+// one of the repository's open layer pull requests is rejected outright.
+func TestCreateReviewFeedbackChildValidatesCommentPullRequest(t *testing.T) {
+	t.Parallel()
+
+	heads := map[string]string{"/wt/api": "aaaaaaaa", "/wt/web": "bbbbbbbb"}
+	mgr := newChildTestManager(t, heads, cleanEverywhere())
+	parent := &feature.Feature{
+		ID:     "parent-pr-validation",
+		Slug:   "parent-pr-validation",
+		Status: feature.StatusPublished,
+		Repos: []feature.FeatureRepo{
+			{Name: "api", Path: "/src/api", WorktreePath: "/wt/api", Branch: "main"},
+			{Name: "web", Path: "/src/web", WorktreePath: "/wt/web", Branch: "main"},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"api": {Touched: true},
+			"web": {Touched: true},
+		},
+		// api layer 1 is open and layer 2 is merged; web's only layer pull
+		// request is merged, so web has no open layer pull request at all.
+		Stack: []feature.StackLayer{
+			{
+				Position: 1,
+				Title:    "Foundation",
+				Repos: map[string]feature.StackRepoEntry{
+					"api": {PRURL: "https://github.example/acme/api/pull/1", PRState: feature.StackPRStateOpen},
+					"web": {PRURL: "https://github.example/acme/web/pull/5", PRState: feature.StackPRStateMerged},
+				},
+			},
+			{
+				Position: 2,
+				Title:    "Extension",
+				Repos: map[string]feature.StackRepoEntry{
+					"api": {PRURL: "https://github.example/acme/api/pull/2", PRState: feature.StackPRStateMerged},
+				},
+			},
+		},
+	}
+	saveChildTestParent(t, mgr, parent)
+
+	if _, err := mgr.CreateReviewFeedbackChild(parent.ID, feature.ReviewFeedbackChildSpec{Comments: []feature.ReviewFeedbackComment{
+		{Repo: "web", ID: 7, Type: "issue"},
+	}}); !errors.Is(err, feature.ErrReviewFeedbackRepoHasNoPR) {
+		t.Fatalf("CreateReviewFeedbackChild() error = %v, want the existing no-PR error for a repository without an open layer PR", err)
+	}
+
+	if _, err := mgr.CreateReviewFeedbackChild(parent.ID, feature.ReviewFeedbackChildSpec{Comments: []feature.ReviewFeedbackComment{
+		{Repo: "api", ID: 8, Type: "issue", PRURL: "https://github.example/acme/api/pull/2", PRNumber: 2, LayerPosition: 2, LayerTitle: "Extension"},
+	}}); !errors.Is(err, feature.ErrReviewFeedbackCommentPRNotOpen) {
+		t.Fatalf("CreateReviewFeedbackChild() error = %v, want the not-open error for a comment naming a merged layer PR", err)
+	}
+
+	child, err := mgr.CreateReviewFeedbackChild(parent.ID, feature.ReviewFeedbackChildSpec{Comments: []feature.ReviewFeedbackComment{
+		{Repo: "api", ID: 9, Type: "issue", PRURL: "https://github.example/acme/api/pull/1", PRNumber: 1, LayerPosition: 1, LayerTitle: "Foundation"},
+	}})
+	if err != nil {
+		t.Fatalf("CreateReviewFeedbackChild() error = %v, want acceptance for a comment on the open layer PR", err)
+	}
+	if len(child.ReviewFeedback) != 1 || child.ReviewFeedback[0].PRURL != "https://github.example/acme/api/pull/1" {
+		t.Fatalf("child comments = %+v, want the open layer PR's comment with its identity", child.ReviewFeedback)
+	}
+}
+
 func TestReconcilePendingReviewFeedbackChildCreation(t *testing.T) {
 	t.Parallel()
 

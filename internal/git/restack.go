@@ -209,6 +209,15 @@ func RestackChain(mainRepo string, cutPoints []RestackCutPoint, ops []RestackOp)
 				}
 				for _, c := range commits {
 					result.Dropped = append(result.Dropped, c)
+					// A commit inserted elsewhere in this same restack (a
+					// move: insert after the new position, drop the old
+					// segment) keeps the mapping its insert recorded — the
+					// surviving copy is where the commit's content lives on
+					// the rewritten chain. Only commits removed outright map
+					// to their predecessor's new SHA.
+					if _, moved := result.CommitMap[c]; moved {
+						continue
+					}
 					result.CommitMap[c] = head
 				}
 			} else {

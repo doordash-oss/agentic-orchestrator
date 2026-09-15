@@ -184,11 +184,8 @@ func writeRepositoryFields(w io.Writer, repo CodeRepository) error {
 		value string
 	}{
 		{"rebase_target", repo.RebaseTarget},
-		{"parent_anchor_sha", repo.ParentAnchorSHA},
-		{"expected_ref_sha", repo.ExpectedRefSHA},
 		{"child_head_sha", repo.ChildHeadSHA},
 		{"candidate_sha", repo.CandidateSHA},
-		{"merge_head", repo.MergeHEAD},
 		{"observed_sha", repo.ObservedSHA},
 	}
 	for _, scalar := range scalars {

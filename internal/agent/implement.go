@@ -457,13 +457,24 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if createErr != nil {
 				return nil, createErr
 			}
-			// Build prompt
+			// Build prompt. A review-feedback child whose parent
+			// delivers as a stack additionally receives the parent's
+			// layer list and the fix-manifest default instruction;
+			// every other feature renders the prompt unchanged.
+			var parentStack []feature.StackLayer
+			fixManifestPath := ""
+			if stack, ok := reviewFeedbackParentStack(cfg.FeatureStore, cfg.Feature); ok {
+				parentStack = stack
+				fixManifestPath = filepath.Join(iterDir, FixManifestFilename)
+			}
 			prompt := BuildImplementPrompt(
 				cfg.PlanPath,
 				cfg.ExitCriteria,
 				reviewerFeedback,
 				helpAnswers,
 				i,
+				parentStack,
+				fixManifestPath,
 			)
 			// Re-inject user-attached visual references (mockups, design
 			// comps, desired-state screenshots) on every implement
@@ -769,6 +780,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					Kind:                 RoundCommitImplement,
 					FixNumber:            roundFixNumber,
 					FirstImplementCommit: roundFirstImplement,
+					IterationDir:         iterDir,
 					Repos:                implementRoundCommitRepos(cfg),
 				}
 				if roundIsFix {
@@ -1661,7 +1673,11 @@ func phaseReposForImplementationContract(f *feature.Feature, planPath string) []
 // iteration. Role-internal artifact paths, resource catalogs, and static
 // verification discovery live in the RoleSpec-backed system prompt, the
 // pre-seeded verification report, and skills/implement/SKILL.md.
-func BuildImplementPrompt(planPath, exitCriteria, feedback, helpAnswers string, iteration int) string {
+//
+// stack and fixManifestPath are populated only for a review-feedback child
+// whose parent delivers as a stack (see reviewFeedbackParentStack); empty
+// values render the prompt without the parent-stack section.
+func BuildImplementPrompt(planPath, exitCriteria, feedback, helpAnswers string, iteration int, stack []feature.StackLayer, fixManifestPath string) string {
 	return roles.BuildImplementPrompt(roles.ImplementUserInput{
 		PlanPath:             planPath,
 		ExitCriteria:         exitCriteria,
@@ -1669,7 +1685,30 @@ func BuildImplementPrompt(planPath, exitCriteria, feedback, helpAnswers string, 
 		PlanRevisionFeedback: implementationPlanRevisionFeedback(planPath, iteration),
 		HelpAnswers:          helpAnswers,
 		Iteration:            iteration,
+		Stack:                stack,
+		FixManifestPath:      fixManifestPath,
 	})
+}
+
+// reviewFeedbackParentStack returns the parent feature's stack layers in
+// ascending position order when f is a review-feedback child whose parent
+// loads with a non-empty stack. It returns false for top-level features,
+// other child kinds, and parents that cannot be loaded or carry no stack;
+// callers leave the prompt's stack section unpopulated in those cases so
+// the prompt renders exactly as it did before.
+func reviewFeedbackParentStack(store ports.FeatureStore, f *feature.Feature) ([]feature.StackLayer, bool) {
+	if store == nil || f == nil || f.Parent == nil || f.Parent.Kind != feature.ChildKindReviewFeedback {
+		return nil, false
+	}
+	parent, err := store.Load(f.Parent.ParentID)
+	if err != nil || parent == nil || len(parent.Stack) == 0 {
+		return nil, false
+	}
+	stack := feature.CopyStackLayers(parent.Stack)
+	slices.SortFunc(stack, func(a, b feature.StackLayer) int {
+		return a.Position - b.Position
+	})
+	return stack, true
 }
 
 func implementationPlanRevisionFeedback(planPath string, iteration int) string {

@@ -3363,15 +3363,21 @@ describe('FeatureCockpit review-feedback aftercare', () => {
       repos: [
         {
           repo: 'repo-a',
-          prUrl: 'https://github.com/org/repo-a/pull/1',
-          comments: [
+          pullRequests: [
             {
-              stableRef: 'repo-a:review:1',
-              selected: true,
-              repo: 'repo-a',
-              id: 1,
-              type: 'review',
-              body: 'fix',
+              position: 1,
+              title: 'Core runtime',
+              url: 'https://github.com/org/repo-a/pull/1',
+              comments: [
+                {
+                  stableRef: 'repo-a:review:1',
+                  selected: true,
+                  repo: 'repo-a',
+                  id: 1,
+                  type: 'review',
+                  body: 'fix',
+                },
+              ],
             },
           ],
         },
@@ -3506,15 +3512,21 @@ describe('FeatureCockpit review-feedback aftercare', () => {
       repos: [
         {
           repo: 'repo-a',
-          prUrl: 'https://github.com/org/repo-a/pull/1',
-          comments: [
+          pullRequests: [
             {
-              stableRef: 'repo-a:review:1',
-              selected: true,
-              repo: 'repo-a',
-              id: 1,
-              type: 'review',
-              body: 'fix the query',
+              position: 1,
+              title: 'Core runtime',
+              url: 'https://github.com/org/repo-a/pull/1',
+              comments: [
+                {
+                  stableRef: 'repo-a:review:1',
+                  selected: true,
+                  repo: 'repo-a',
+                  id: 1,
+                  type: 'review',
+                  body: 'fix the query',
+                },
+              ],
             },
           ],
         },

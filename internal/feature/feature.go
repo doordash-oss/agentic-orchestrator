@@ -231,8 +231,10 @@ type RepoState struct {
 // onto fresh features at Manager.Create time. Schema 7 added
 // Run.RoadmapPhaseFrontendByPhase. Schema 8 added StackLayer.Repos, the
 // per-repository layer entries (tip SHA, last pushed SHA, PR URL, PR state)
-// the layer boundaries record.
-const SchemaVersionCurrent = 8
+// the layer boundaries record. Schema 9 reshaped the child transaction
+// journal entry into an ordered list of per-layer ref updates with the
+// closure remap and relocated-commit map.
+const SchemaVersionCurrent = 9
 
 // RiskLevel classifies the blast radius of a feature change.
 // Autonomy scales inversely with risk: low-risk changes get lightweight

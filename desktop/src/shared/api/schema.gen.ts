@@ -304,7 +304,7 @@ export interface paths {
         put?: never;
         /**
          * Launch a child feature from the pending review-feedback draft.
-         * @description Constant-size request: accepts only the expected pending-draft revision plus an optional coupled roadmap/phase-plan gate. The server re-fetches GitHub at launch, reconciles the draft's selected stable references against current data, and injects the complete current comment content into the child-creation path. Failure machine codes include 400 `review_feedback_empty_selection`, `review_feedback_zero_launchable_selection`, `review_feedback_unsupported_comment_type`, `review_feedback_unknown_repo`, and `review_feedback_repo_has_no_pull_request`; 404 `parent_not_found`; and 409 `review_feedback_revision_conflict`, `parent_is_child`, `parent_status_ineligible`, `active_child_exists`, and `parent_worktrees_dirty`.
+         * @description Constant-size request: accepts only the expected pending-draft revision plus an optional coupled roadmap/phase-plan gate. The server re-fetches GitHub at launch, reconciles the draft's selected stable references against current data, and injects the complete current comment content into the child-creation path. Failure machine codes include 400 `review_feedback_empty_selection`, `review_feedback_zero_launchable_selection`, `review_feedback_unsupported_comment_type`, `review_feedback_unknown_repo`, `review_feedback_repo_has_no_pull_request`, and `review_feedback_comment_pr_not_open`; 404 `parent_not_found`; and 409 `review_feedback_revision_conflict`, `parent_is_child`, `parent_status_ineligible`, `active_child_exists`, and `parent_worktrees_dirty`.
          */
         post: operations["reviewFeedbackFeature"];
         delete?: never;
@@ -324,7 +324,7 @@ export interface paths {
         put?: never;
         /**
          * Fetch unaddressed pull-request feedback and establish the pending draft.
-         * @description Aggregates every repository carrying a PR URL, silently skips parent repositories without one, and reconciles the result with the parent-scoped durable pending draft: first fetch selects every visible unaddressed reference, later fetches retain prior selections for known stable references, select newly observed ones, and prune references that disappeared. Repositories are returned in the parent's stable repository order with comments oldest-first inside each group (stable reference as the deterministic tie-breaker). Any single-repository GitHub failure fails the operation atomically with that repository identified. The response carries the authoritative pending-draft revision.
+         * @description Aggregates every open layer pull request of every repository, silently skips parent repositories without one, and reconciles the result with the parent-scoped durable pending draft: first fetch selects every visible unaddressed reference, later fetches retain prior selections for known stable references, select newly observed ones, and prune references that disappeared. Repositories are returned in the parent's stable repository order; inside each repository the comments are grouped by open layer pull request in ascending layer position order, oldest-first within a group (stable reference as the deterministic tie-breaker), and every comment carries its pull request URL, number, layer position, and layer title. Any single-repository GitHub failure fails the operation atomically with that repository identified. The response carries the authoritative pending-draft revision.
          */
         post: operations["fetchReviewFeedback"];
         delete?: never;
@@ -1203,11 +1203,8 @@ export interface components {
             remote_only_commits?: number;
             conflict_files?: string[];
             dirty_files?: string[];
-            parent_anchor_sha?: string;
-            expected_ref_sha?: string;
             child_head_sha?: string;
             candidate_sha?: string;
-            merge_head?: string;
             observed_sha?: string;
         };
         /** @description Phase a code references. */
@@ -2074,7 +2071,7 @@ export interface components {
         ChildFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             parent_id: string;
         };
-        /** @description Intentionally empty: review feedback is always fetched across every parent repository with a PR URL and has no mode selector. */
+        /** @description Intentionally empty: review feedback is always fetched across every open layer pull request of every parent repository and has no mode selector. */
         ReviewFeedbackFetchRequest: Record<string, never>;
         ReviewFeedbackComment: {
             repo: string;
@@ -2089,8 +2086,16 @@ export interface components {
             in_reply_to_id?: number;
             /** @description GitHub creation timestamp of the comment. */
             created_at?: string;
+            /** @description URL of the open layer pull request the comment was left on; absent on drafts persisted before layer tagging. */
+            pr_url?: string;
+            /** @description GitHub pull request number parsed from the URL. */
+            pr_number?: number;
+            /** @description Stack layer position of the pull request's layer. */
+            layer_position?: number;
+            /** @description Title of the pull request's stack layer. */
+            layer_title?: string;
         };
-        /** @description One review-feedback comment inside the revisioned pending-draft view. `stable_ref` is the repository identity plus supported comment type plus GitHub database comment ID; `selected` is the committed draft selection. The remaining fields snapshot the reviewed child-visible content used to reconcile launch-time changes. */
+        /** @description One review-feedback comment inside the revisioned pending-draft view. `stable_ref` is the repository identity plus supported comment type plus GitHub database comment ID; `selected` is the committed draft selection. The remaining fields snapshot the reviewed child-visible content used to reconcile launch-time changes, plus the open layer pull request the comment was left on. */
         ReviewFeedbackDraftComment: {
             stable_ref: string;
             selected: boolean;
@@ -2105,11 +2110,25 @@ export interface components {
             diff_hunk?: string;
             in_reply_to_id?: number;
             created_at?: string;
+            pr_url?: string;
+            pr_number?: number;
+            layer_position?: number;
+            layer_title?: string;
         };
+        /** @description One open layer pull request's comments inside a repository's pending-draft view: the stack layer's position and title, the pull request's URL, and that pull request's draft comments. */
+        ReviewFeedbackPullRequestGroup: {
+            /** @description Stack layer position of the pull request's layer. */
+            position: number;
+            /** @description Title of the pull request's stack layer. */
+            title: string;
+            /** @description The pull request's URL. */
+            url: string;
+            comments: components["schemas"]["ReviewFeedbackDraftComment"][];
+        };
+        /** @description One repository's pending-draft view: its open layer pull requests in ascending layer position order, each holding that pull request's draft comments. */
         ReviewFeedbackRepoComments: {
             repo: string;
-            pr_url: string;
-            comments: components["schemas"]["ReviewFeedbackDraftComment"][];
+            pull_requests: components["schemas"]["ReviewFeedbackPullRequestGroup"][];
         };
         ReviewFeedbackFetchResponse: {
             api_version: string;
@@ -2810,17 +2829,20 @@ export interface components {
         };
         RepoTransactionEntry: {
             repo?: string;
-            parent_branch?: string;
-            parent_anchor_sha?: string;
-            expected_ref_sha?: string;
+            /** @description Ordered per-layer ref updates this entry's transaction rewrites, ascending by layer position; the highest-position ref is the top ref the parent worktree syncs to. */
+            refs?: components["schemas"]["RepoTransactionRef"][];
             child_head_sha?: string;
-            candidate_sha?: string;
-            merge_head?: string;
             prep_state?: string;
             apply_state?: string;
-            observed_sha?: string;
             /** @description True when this applied entry's parent worktree sync failed after the ref update; closure retries the sync automatically. */
             pending_sync?: boolean;
+        };
+        RepoTransactionRef: {
+            branch?: string;
+            layer_position?: number;
+            anchor_sha?: string;
+            candidate_sha?: string;
+            observed_sha?: string;
         };
         Usage: {
             input_tokens?: number;

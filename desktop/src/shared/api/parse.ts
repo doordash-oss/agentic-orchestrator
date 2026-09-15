@@ -1023,6 +1023,10 @@ export const ServerReviewFeedbackCommentSchema = z.object({
   diff_hunk: z.string().optional(),
   in_reply_to_id: z.number().int().optional(),
   created_at: z.string().optional(),
+  pr_url: z.string().optional(),
+  pr_number: z.number().int().optional(),
+  layer_position: z.number().int().optional(),
+  layer_title: z.string().optional(),
 });
 export type ServerReviewFeedbackComment = z.output<typeof ServerReviewFeedbackCommentSchema>;
 
@@ -1035,10 +1039,25 @@ export type ServerReviewFeedbackDraftComment = z.output<
   typeof ServerReviewFeedbackDraftCommentSchema
 >;
 
+/**
+ * One open layer pull request's comment group inside a repository's draft
+ * view. The position is required: a group without it is a malformed view
+ * and fails closed at the boundary instead of rendering an unplaced
+ * section.
+ */
+export const ServerReviewFeedbackPullRequestGroupSchema = z.object({
+  position: z.number().int(),
+  title: z.string(),
+  url: z.string(),
+  comments: z.array(ServerReviewFeedbackDraftCommentSchema),
+});
+export type ServerReviewFeedbackPullRequestGroup = z.output<
+  typeof ServerReviewFeedbackPullRequestGroupSchema
+>;
+
 const ServerReviewFeedbackRepoCommentsSchema = z.object({
   repo: z.string(),
-  pr_url: z.string(),
-  comments: z.array(ServerReviewFeedbackDraftCommentSchema),
+  pull_requests: z.array(ServerReviewFeedbackPullRequestGroupSchema),
 });
 
 export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({

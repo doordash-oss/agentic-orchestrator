@@ -106,10 +106,10 @@ func closedCompletedChild(cleanupPending bool) *feature.Feature {
 	child.Parent.Transaction = &feature.TransactionJournal{
 		Phase: feature.TransactionPhaseMerged,
 		Entries: []feature.RepoTransactionEntry{{
-			ParentBranch:    "main",
-			ParentAnchorSHA: "aaaa1111",
-			ChildHeadSHA:    "bbbb2222",
-			MergeHEAD:       "cccc3333",
+			ChildHeadSHA: "bbbb2222",
+			Refs: []feature.RepoTransactionRef{{
+				Branch: "main", AnchorSHA: "aaaa1111", CandidateSHA: "cccc3333", ObservedSHA: "cccc3333",
+			}},
 		}},
 	}
 	if !cleanupPending {

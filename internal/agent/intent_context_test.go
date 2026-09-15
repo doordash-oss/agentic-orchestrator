@@ -124,11 +124,11 @@ func TestResolvePromptIntentMissingHeadingFallsBackToRaw(t *testing.T) {
 }
 
 func TestBuildImplementPromptOmitsEmptyExitCriteria(t *testing.T) {
-	without := BuildImplementPrompt("/plan.md", "", "", "", 1)
+	without := BuildImplementPrompt("/plan.md", "", "", "", 1, nil, "")
 	if strings.Contains(without, "**Exit criteria**") {
 		t.Fatalf("empty exit criteria must not render a header:\n%s", without)
 	}
-	with := BuildImplementPrompt("/plan.md", "cycle-scoped criteria", "", "", 1)
+	with := BuildImplementPrompt("/plan.md", "cycle-scoped criteria", "", "", 1, nil, "")
 	if !strings.Contains(with, "**Exit criteria**: cycle-scoped criteria") {
 		t.Fatalf("non-empty exit criteria must render:\n%s", with)
 	}

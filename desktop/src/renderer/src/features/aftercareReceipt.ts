@@ -232,7 +232,9 @@ function freshnessClause(freshness: string | undefined): string | null {
 function unresolvedClause(repo: string, feedback: FetchReviewFeedbackResult | null): string | null {
   if (feedback === null) return null;
   const group = feedback.repos.find((candidate) => candidate.repo === repo);
-  const count = group?.comments.length ?? 0;
+  // The unresolved count spans every open layer pull request of the
+  // repository; the scope rail's per-repository counts flatten the same way.
+  const count = group?.pullRequests.reduce((sum, pr) => sum + pr.comments.length, 0) ?? 0;
   if (count === 0) return 'no unresolved comments';
   return `${count} unresolved comment${count === 1 ? '' : 's'}`;
 }

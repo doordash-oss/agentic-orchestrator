@@ -75,8 +75,8 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 		// Verify the refs actually moved to candidates before discard.
 		for i := range fx.repoDirs {
 			got := fx.refSHA(i, "refs/heads/feature/parent")
-			if got != journal.Entries[i].CandidateSHA {
-				t.Fatalf("repo %d: ref = %s before discard, want candidate %s", i, got, journal.Entries[i].CandidateSHA)
+			if want := journal.Entries[i].TopRef().CandidateSHA; got != want {
+				t.Fatalf("repo %d: ref = %s before discard, want candidate %s", i, got, want)
 			}
 		}
 
@@ -162,7 +162,7 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 		multiRepoGit(t, fx.repoDirs[2], "checkout", "feature/parent")
 		testutil.CommitFile(t, fx.repoDirs[2], "external.txt", "external\n", "external ref movement")
 		externalSHA := fx.refSHA(2, "refs/heads/feature/parent")
-		if externalSHA == anchorSHAs[2] || externalSHA == journal.Entries[2].CandidateSHA {
+		if externalSHA == anchorSHAs[2] || externalSHA == journal.Entries[2].TopRef().CandidateSHA {
 			t.Fatal("external SHA should differ from both anchor and candidate")
 		}
 
@@ -225,23 +225,23 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 		if movedEntry.ApplyState != feature.RepoApplyApplied {
 			t.Fatalf("moved entry apply_state = %q, want applied (not rolled back)", movedEntry.ApplyState)
 		}
-		if movedEntry.ObservedSHA != externalSHA {
-			t.Fatalf("moved entry observed_sha = %s, want external %s", movedEntry.ObservedSHA, externalSHA)
+		movedTop := movedEntry.TopRef()
+		if movedTop == nil || movedTop.ObservedSHA != externalSHA {
+			t.Fatalf("moved entry top ref = %+v, want observed %s", movedEntry.TopRef(), externalSHA)
 		}
 		if block := attentionRepoBlock(raceRec, movedEntry.Repo); block == nil ||
-			block.ParentAnchorSHA != movedEntry.ParentAnchorSHA ||
-			block.ExpectedRefSHA != movedEntry.ExpectedRefSHA ||
-			block.CandidateSHA != movedEntry.CandidateSHA ||
+			block.Branch != movedTop.Branch ||
+			block.CandidateSHA != movedTop.CandidateSHA ||
 			block.ObservedSHA != externalSHA {
-			t.Fatalf("moved repo repositories block = %+v, want anchor %s expected %s candidate %s observed %s",
-				block, movedEntry.ParentAnchorSHA, movedEntry.ExpectedRefSHA, movedEntry.CandidateSHA, externalSHA)
+			t.Fatalf("moved repo repositories block = %+v, want branch %s candidate %s observed %s",
+				block, movedTop.Branch, movedTop.CandidateSHA, externalSHA)
 		}
 		for _, needle := range []string{
 			movedEntry.Repo,
-			"refs/heads/" + movedEntry.ParentBranch,
-			movedEntry.ParentAnchorSHA,
-			movedEntry.CandidateSHA,
-			movedEntry.ObservedSHA,
+			"refs/heads/" + movedTop.Branch,
+			movedTop.AnchorSHA,
+			movedTop.CandidateSHA,
+			movedTop.ObservedSHA,
 		} {
 			if !strings.Contains(raceRec.Diagnostics, needle) {
 				t.Fatalf("attention diagnostics %q missing %q", raceRec.Diagnostics, needle)
@@ -414,8 +414,8 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 		fx.saveJournal(journal)
 
 		// Verify repo 0's ref is at the candidate.
-		if got := fx.refSHA(0, "refs/heads/feature/parent"); got != journal.Entries[0].CandidateSHA {
-			t.Fatalf("repo 0 ref = %s, want candidate %s", got, journal.Entries[0].CandidateSHA)
+		if got := fx.refSHA(0, "refs/heads/feature/parent"); got != journal.Entries[0].TopRef().CandidateSHA {
+			t.Fatalf("repo 0 ref = %s, want candidate %s", got, journal.Entries[0].TopRef().CandidateSHA)
 		}
 
 		o := fx.orchestrator()

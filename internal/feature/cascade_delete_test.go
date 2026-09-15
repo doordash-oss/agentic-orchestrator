@@ -39,9 +39,11 @@ func TestBeginCascadeDeletePersistsCompleteStableManifest(t *testing.T) {
 		Parent: &ChildRelationship{
 			ParentID: "parent",
 			Transaction: &TransactionJournal{Entries: []RepoTransactionEntry{{
-				Repo: "repo-a", ParentBranch: "feature/parent",
-				ParentAnchorSHA: "anchor", ExpectedRefSHA: "anchor",
-				CandidateSHA: "candidate", ApplyState: RepoApplyApplied,
+				Repo: "repo-a",
+				Refs: []RepoTransactionRef{{
+					Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate",
+				}},
+				ApplyState: RepoApplyApplied,
 			}}},
 		},
 		Repos: []FeatureRepo{{

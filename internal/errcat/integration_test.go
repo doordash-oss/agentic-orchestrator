@@ -121,13 +121,11 @@ func TestIntegrationAttentionSummaryTemplates(t *testing.T) {
 	drift := New(
 		IntegrationParentRefDrift,
 		WithParams(IntegrationRepoParams{Repositories: []CodeRepository{{
-			Name:            "repo-c",
-			ParentAnchorSHA: "3f2c1ab88def777",
-			ObservedSHA:     "9b1e4455aa00321",
+			Name:        "repo-c",
+			ObservedSHA: "9b1e4455aa00321",
 		}}}),
 	)
 	if !strings.Contains(drift.Summary, "repo-c") ||
-		!strings.Contains(drift.Summary, "3f2c1ab") ||
 		!strings.Contains(drift.Summary, "9b1e445") {
 		t.Fatalf("drift summary does not name repo and moved tips: %q", drift.Summary)
 	}
@@ -135,12 +133,11 @@ func TestIntegrationAttentionSummaryTemplates(t *testing.T) {
 	race := New(
 		IntegrationRefRace,
 		WithParams(IntegrationRepoParams{Repositories: []CodeRepository{{
-			Name:           "repo-d",
-			ExpectedRefSHA: "1111111",
-			ObservedSHA:    "2222222",
+			Name:        "repo-d",
+			ObservedSHA: "2222222",
 		}}}),
 	)
-	if !strings.Contains(race.Summary, "repo-d") || !strings.Contains(race.Summary, "moved from 1111111 to 2222222") {
+	if !strings.Contains(race.Summary, "repo-d") || !strings.Contains(race.Summary, "moved to 2222222") {
 		t.Fatalf("ref-race summary does not name repo and moved tips: %q", race.Summary)
 	}
 

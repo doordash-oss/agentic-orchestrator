@@ -2451,21 +2451,27 @@ function makeMockApi(
           ? [
               {
                 repo: 'agentic-orchestrator',
-                prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
-                comments: [
+                pullRequests: [
                   {
-                    stableRef: 'agentic-orchestrator:review:1',
-                    selected: true,
-                    repo: 'agentic-orchestrator',
-                    id: 1,
-                    type: 'review' as const,
-                  },
-                  {
-                    stableRef: 'agentic-orchestrator:issue:2',
-                    selected: true,
-                    repo: 'agentic-orchestrator',
-                    id: 2,
-                    type: 'issue' as const,
+                    position: 1,
+                    title: 'Core runtime',
+                    url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+                    comments: [
+                      {
+                        stableRef: 'agentic-orchestrator:review:1',
+                        selected: true,
+                        repo: 'agentic-orchestrator',
+                        id: 1,
+                        type: 'review' as const,
+                      },
+                      {
+                        stableRef: 'agentic-orchestrator:issue:2',
+                        selected: true,
+                        repo: 'agentic-orchestrator',
+                        id: 2,
+                        type: 'issue' as const,
+                      },
+                    ],
                   },
                 ],
               },

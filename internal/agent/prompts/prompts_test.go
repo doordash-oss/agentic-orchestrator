@@ -218,6 +218,8 @@ type ImplementUserInput struct {
 	PlanRevisionFeedback string
 	HelpAnswers          string
 	Iteration            int
+	Stack                []feature.StackLayer
+	FixManifestPath      string
 }
 
 type ReviewUserInput struct {

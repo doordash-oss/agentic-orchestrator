@@ -77,11 +77,15 @@ func TestClientFetchReviewFeedbackReturnsTypedGroups(t *testing.T) {
 			Revision:   1,
 			SnapshotID: "snapshot-1",
 			Repos: []ReviewFeedbackRepoComments{{
-				Repo:  "api",
-				PrURL: "https://github.com/example/api/pull/1",
-				Comments: []ReviewFeedbackDraftComment{{
-					StableRef: "api:issue:11", Selected: true,
-					Repo: "api", ID: 11, Type: ReviewFeedbackDraftCommentType("issue"), Body: "please adjust",
+				Repo: "api",
+				PullRequests: []ReviewFeedbackPullRequestGroup{{
+					Position: 1,
+					Title:    "Foundation",
+					URL:      "https://github.com/example/api/pull/1",
+					Comments: []ReviewFeedbackDraftComment{{
+						StableRef: "api:issue:11", Selected: true,
+						Repo: "api", ID: 11, Type: ReviewFeedbackDraftCommentType("issue"), Body: "please adjust",
+					}},
 				}},
 			}},
 		})
@@ -96,7 +100,8 @@ func TestClientFetchReviewFeedbackReturnsTypedGroups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchReviewFeedback() error = %v", err)
 	}
-	if len(result.Repos) != 1 || result.Repos[0].Repo != "api" || len(result.Repos[0].Comments) != 1 || result.Repos[0].Comments[0].ID != 11 {
+	if len(result.Repos) != 1 || result.Repos[0].Repo != "api" || len(result.Repos[0].PullRequests) != 1 ||
+		len(result.Repos[0].PullRequests[0].Comments) != 1 || result.Repos[0].PullRequests[0].Comments[0].ID != 11 {
 		t.Fatalf("FetchReviewFeedback() = %+v, want typed api group with comment 11", result)
 	}
 }

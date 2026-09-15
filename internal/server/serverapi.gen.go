@@ -2307,16 +2307,13 @@ type ErrorRemediation struct {
 
 // ErrorRepositoryContext Repository a code references.
 type ErrorRepositoryContext struct {
-	Branch          string   `json:"branch,omitempty"`
-	CandidateSha    string   `json:"candidate_sha,omitempty"`
-	ChildHeadSha    string   `json:"child_head_sha,omitempty"`
-	ConflictFiles   []string `json:"conflict_files,omitempty"`
-	DirtyFiles      []string `json:"dirty_files,omitempty"`
-	ExpectedRefSha  string   `json:"expected_ref_sha,omitempty"`
-	MergeHead       string   `json:"merge_head,omitempty"`
-	Name            string   `json:"name"`
-	ObservedSha     string   `json:"observed_sha,omitempty"`
-	ParentAnchorSha string   `json:"parent_anchor_sha,omitempty"`
+	Branch        string   `json:"branch,omitempty"`
+	CandidateSha  string   `json:"candidate_sha,omitempty"`
+	ChildHeadSha  string   `json:"child_head_sha,omitempty"`
+	ConflictFiles []string `json:"conflict_files,omitempty"`
+	DirtyFiles    []string `json:"dirty_files,omitempty"`
+	Name          string   `json:"name"`
+	ObservedSha   string   `json:"observed_sha,omitempty"`
 
 	// RebaseTarget Rebase target branch of a conflicted publish pull-rebase, when known.
 	RebaseTarget string `json:"rebase_target,omitempty"`
@@ -3171,19 +3168,25 @@ type RepoStatus struct {
 
 // RepoTransactionEntry defines model for RepoTransactionEntry.
 type RepoTransactionEntry struct {
-	ApplyState      string `json:"apply_state,omitempty"`
-	CandidateSha    string `json:"candidate_sha,omitempty"`
-	ChildHeadSha    string `json:"child_head_sha,omitempty"`
-	ExpectedRefSha  string `json:"expected_ref_sha,omitempty"`
-	MergeHead       string `json:"merge_head,omitempty"`
-	ObservedSha     string `json:"observed_sha,omitempty"`
-	ParentAnchorSha string `json:"parent_anchor_sha,omitempty"`
-	ParentBranch    string `json:"parent_branch,omitempty"`
+	ApplyState   string `json:"apply_state,omitempty"`
+	ChildHeadSha string `json:"child_head_sha,omitempty"`
 
 	// PendingSync True when this applied entry's parent worktree sync failed after the ref update; closure retries the sync automatically.
 	PendingSync bool   `json:"pending_sync,omitempty"`
 	PrepState   string `json:"prep_state,omitempty"`
-	Repo        string `json:"repo,omitempty"`
+
+	// Refs Ordered per-layer ref updates this entry's transaction rewrites, ascending by layer position; the highest-position ref is the top ref the parent worktree syncs to.
+	Refs []RepoTransactionRef `json:"refs,omitempty"`
+	Repo string               `json:"repo,omitempty"`
+}
+
+// RepoTransactionRef defines model for RepoTransactionRef.
+type RepoTransactionRef struct {
+	AnchorSha     string `json:"anchor_sha,omitempty"`
+	Branch        string `json:"branch,omitempty"`
+	CandidateSha  string `json:"candidate_sha,omitempty"`
+	LayerPosition int    `json:"layer_position,omitempty"`
+	ObservedSha   string `json:"observed_sha,omitempty"`
 }
 
 // RepositoryDiffFile defines model for RepositoryDiffFile.
@@ -3645,20 +3648,24 @@ type ReviewDraftValidationResponse struct {
 // ReviewFeedbackComment defines model for ReviewFeedbackComment.
 type ReviewFeedbackComment = feature.ReviewFeedbackComment
 
-// ReviewFeedbackDraftComment One review-feedback comment inside the revisioned pending-draft view. `stable_ref` is the repository identity plus supported comment type plus GitHub database comment ID; `selected` is the committed draft selection. The remaining fields snapshot the reviewed child-visible content used to reconcile launch-time changes.
+// ReviewFeedbackDraftComment One review-feedback comment inside the revisioned pending-draft view. `stable_ref` is the repository identity plus supported comment type plus GitHub database comment ID; `selected` is the committed draft selection. The remaining fields snapshot the reviewed child-visible content used to reconcile launch-time changes, plus the open layer pull request the comment was left on.
 type ReviewFeedbackDraftComment struct {
-	Author      string                         `json:"author,omitempty"`
-	Body        string                         `json:"body,omitempty"`
-	CreatedAt   string                         `json:"created_at,omitempty"`
-	DiffHunk    string                         `json:"diff_hunk,omitempty"`
-	ID          int                            `json:"id"`
-	InReplyToID int                            `json:"in_reply_to_id,omitempty"`
-	Line        int                            `json:"line,omitempty"`
-	Path        string                         `json:"path,omitempty"`
-	Repo        string                         `json:"repo"`
-	Selected    bool                           `json:"selected"`
-	StableRef   string                         `json:"stable_ref"`
-	Type        ReviewFeedbackDraftCommentType `json:"type"`
+	Author        string                         `json:"author,omitempty"`
+	Body          string                         `json:"body,omitempty"`
+	CreatedAt     string                         `json:"created_at,omitempty"`
+	DiffHunk      string                         `json:"diff_hunk,omitempty"`
+	ID            int                            `json:"id"`
+	InReplyToID   int                            `json:"in_reply_to_id,omitempty"`
+	LayerPosition int                            `json:"layer_position,omitempty"`
+	LayerTitle    string                         `json:"layer_title,omitempty"`
+	Line          int                            `json:"line,omitempty"`
+	Path          string                         `json:"path,omitempty"`
+	PrNumber      int                            `json:"pr_number,omitempty"`
+	PrURL         string                         `json:"pr_url,omitempty"`
+	Repo          string                         `json:"repo"`
+	Selected      bool                           `json:"selected"`
+	StableRef     string                         `json:"stable_ref"`
+	Type          ReviewFeedbackDraftCommentType `json:"type"`
 }
 
 // ReviewFeedbackDraftCommentType defines model for ReviewFeedbackDraftComment.Type.
@@ -3694,7 +3701,7 @@ type ReviewFeedbackFeatureResponse struct {
 	Result   string `json:"result"`
 }
 
-// ReviewFeedbackFetchRequest Intentionally empty: review feedback is always fetched across every parent repository with a PR URL and has no mode selector.
+// ReviewFeedbackFetchRequest Intentionally empty: review feedback is always fetched across every open layer pull request of every parent repository and has no mode selector.
 type ReviewFeedbackFetchRequest = map[string]interface{}
 
 // ReviewFeedbackFetchResponse defines model for ReviewFeedbackFetchResponse.
@@ -3710,11 +3717,24 @@ type ReviewFeedbackFetchResponse struct {
 	SnapshotID string `json:"snapshot_id"`
 }
 
-// ReviewFeedbackRepoComments defines model for ReviewFeedbackRepoComments.
-type ReviewFeedbackRepoComments struct {
+// ReviewFeedbackPullRequestGroup One open layer pull request's comments inside a repository's pending-draft view: the stack layer's position and title, the pull request's URL, and that pull request's draft comments.
+type ReviewFeedbackPullRequestGroup struct {
 	Comments []ReviewFeedbackDraftComment `json:"comments"`
-	PrURL    string                       `json:"pr_url"`
-	Repo     string                       `json:"repo"`
+
+	// Position Stack layer position of the pull request's layer.
+	Position int `json:"position"`
+
+	// Title Title of the pull request's stack layer.
+	Title string `json:"title"`
+
+	// URL The pull request's URL.
+	URL string `json:"url"`
+}
+
+// ReviewFeedbackRepoComments One repository's pending-draft view: its open layer pull requests in ascending layer position order, each holding that pull request's draft comments.
+type ReviewFeedbackRepoComments struct {
+	PullRequests []ReviewFeedbackPullRequestGroup `json:"pull_requests"`
+	Repo         string                           `json:"repo"`
 }
 
 // ReviewFeedbackSelectionRequest defines model for ReviewFeedbackSelectionRequest.

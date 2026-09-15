@@ -779,9 +779,6 @@ type realGitPublishRemoteOps struct {
 }
 
 func (realGitPublishRemoteOps) Push(path, branch string) error { return git.Push(path, branch) }
-func (realGitPublishRemoteOps) PullRebase(path, branch string) error {
-	return git.PullRebase(path, branch).Err
-}
 func (realGitPublishRemoteOps) PushLayerBranch(path, branch, localSHA, lastPushedSHA string) (string, error) {
 	return git.PushLayerBranch(path, branch, localSHA, lastPushedSHA)
 }

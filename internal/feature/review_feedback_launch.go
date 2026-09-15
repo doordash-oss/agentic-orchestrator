@@ -25,6 +25,66 @@ import (
 // fetchPRCommentsFunc is substitutable in tests that cannot reach GitHub.
 var fetchPRCommentsFunc = gitadapter.FetchPRComments
 
+// ReviewFeedbackLayerPR identifies one open layer pull request of one
+// repository: the stack layer's position and title plus the pull request's
+// URL and parsed number. Only layers whose recorded pull request state is
+// open are ever offered — merged layers are never rewritten and
+// closed-unmerged pull requests block the stack, so neither can receive a
+// relocated fix.
+type ReviewFeedbackLayerPR struct {
+	Position int
+	Title    string
+	URL      string
+	Number   int
+}
+
+// OpenReviewFeedbackLayerPRs returns repoName's stack layers whose recorded
+// pull request state is open, ascending by layer position. Repositories
+// without a stack or without any open layer pull request yield nil.
+func (f *Feature) OpenReviewFeedbackLayerPRs(repoName string) []ReviewFeedbackLayerPR {
+	var prs []ReviewFeedbackLayerPR
+	for _, entry := range f.StackRepoPullRequestEntries(repoName) {
+		if entry.State != StackPRStateOpen || entry.URL == "" {
+			continue
+		}
+		number := 0
+		if _, _, parsed, err := gitadapter.ParsePRURL(entry.URL); err == nil {
+			number = parsed
+		}
+		prs = append(prs, ReviewFeedbackLayerPR{
+			Position: entry.Position,
+			Title:    entry.Title,
+			URL:      entry.URL,
+			Number:   number,
+		})
+	}
+	return prs
+}
+
+// NewReviewFeedbackCommentFromAPI tags one fetched GitHub comment with its
+// repository and the open layer pull request it was left on, so the durable
+// draft and the created child both carry the comment's PR and layer
+// identity. The stable reference stays repository + type + ID because GitHub
+// comment identifiers are global.
+func NewReviewFeedbackCommentFromAPI(repoName string, pr ReviewFeedbackLayerPR, comment gitadapter.ReviewComment) ReviewFeedbackComment {
+	return ReviewFeedbackComment{
+		Repo:          repoName,
+		ID:            comment.ID,
+		Type:          comment.Type,
+		Path:          comment.Path,
+		Line:          comment.Line,
+		Author:        comment.User.Login,
+		Body:          comment.Body,
+		DiffHunk:      comment.DiffHunk,
+		InReplyTo:     comment.InReplyTo,
+		CreatedAt:     comment.CreatedAt,
+		PRURL:         pr.URL,
+		PRNumber:      pr.Number,
+		LayerPosition: pr.Position,
+		LayerTitle:    pr.Title,
+	}
+}
+
 // ReviewFeedbackZeroLaunchableSelectionError reports a launch whose
 // reconciliation left no selected reviewed reference still present. No child
 // is created and the pending draft is preserved.
@@ -289,17 +349,18 @@ func (s *Store) ActiveReviewFeedbackLaunchReceipt(parentID string) (*Feature, *R
 	return active, active.Parent.LaunchReceipt, nil
 }
 
-// resolveCurrentReviewFeedback re-fetches GitHub for every parent repository
-// with a pull request on its stack and indexes the currently unaddressed
-// comments by stable reference. A repository's comments are read from its
-// highest layer's pull request — the primary reviewable artifact.
-// Repositories without a pull request contribute nothing.
+// resolveCurrentReviewFeedback re-fetches GitHub for every open layer pull
+// request of every parent repository and indexes the currently unaddressed
+// comments by stable reference. Repositories without an open layer pull
+// request contribute nothing; comments on merged or closed layer pull
+// requests are never offered, so a selected comment whose pull request
+// closed since the draft is simply absent here and counts as omitted.
 func (m *Manager) resolveCurrentReviewFeedback(parent *Feature) (map[StableReviewFeedbackRef]ReviewFeedbackComment, error) {
 	resolver := m.Store
 	current := make(map[StableReviewFeedbackRef]ReviewFeedbackComment)
 	for _, repo := range parent.Repos {
-		prURL := parent.TopStackLayerPRURL(repo.Name)
-		if prURL == "" {
+		layerPRs := parent.OpenReviewFeedbackLayerPRs(repo.Name)
+		if len(layerPRs) == 0 {
 			continue
 		}
 		addressed, err := resolver.LoadAddressedReviewFeedbackIDs(parent.ID, repo.Name)
@@ -310,29 +371,20 @@ func (m *Manager) resolveCurrentReviewFeedback(parent *Feature) (map[StableRevie
 		if repoPath == "" {
 			repoPath = repo.Path
 		}
-		fetched, err := fetchPRCommentsFunc(repoPath, prURL)
-		if err != nil {
-			return nil, fmt.Errorf("fetch review feedback for repo %q: %w", repo.Name, err)
-		}
-		for _, comment := range fetched {
-			if addressed[comment.ID] {
-				continue
-			}
-			ref, err := NewStableReviewFeedbackRef(repo.Name, comment.Type, comment.ID)
+		for _, pr := range layerPRs {
+			fetched, err := fetchPRCommentsFunc(repoPath, pr.URL)
 			if err != nil {
-				continue // unsupported types never contribute to launch
+				return nil, fmt.Errorf("fetch review feedback for repo %q: %w", repo.Name, err)
 			}
-			current[ref] = ReviewFeedbackComment{
-				Repo:      repo.Name,
-				ID:        comment.ID,
-				Type:      comment.Type,
-				Path:      comment.Path,
-				Line:      comment.Line,
-				Author:    comment.User.Login,
-				Body:      comment.Body,
-				DiffHunk:  comment.DiffHunk,
-				InReplyTo: comment.InReplyTo,
-				CreatedAt: comment.CreatedAt,
+			for _, comment := range fetched {
+				if addressed[comment.ID] {
+					continue
+				}
+				ref, err := NewStableReviewFeedbackRef(repo.Name, comment.Type, comment.ID)
+				if err != nil {
+					continue // unsupported types never contribute to launch
+				}
+				current[ref] = NewReviewFeedbackCommentFromAPI(repo.Name, pr, comment)
 			}
 		}
 	}

@@ -136,12 +136,11 @@ func shortSHA(sha string) string {
 	return sha
 }
 
-// integrationMovedRef renders the "moved from <old> to <new>" clause when
-// both SHAs are known, falling back to the bare moved clause.
-func integrationMovedRef(oldSHA, newSHA string) string {
-	old, newv := shortSHA(oldSHA), shortSHA(newSHA)
-	if old != "" && newv != "" {
-		return fmt.Sprintf("moved from %s to %s", old, newv)
+// integrationMovedRefTo renders the "moved to <new>" clause when the new SHA
+// is known, falling back to the bare moved clause.
+func integrationMovedRefTo(newSHA string) string {
+	if newv := shortSHA(newSHA); newv != "" {
+		return fmt.Sprintf("moved to %s", newv)
 	}
 	return "moved"
 }
@@ -211,7 +210,7 @@ func integrationParentRefDriftSummary(p Params) string {
 	return integrationOneOrMany(repos, func(repo CodeRepository) string {
 		return integrationNamedRepo(repo, fmt.Sprintf(
 			"The parent branch for repository %%q %s since the pass started.",
-			integrationMovedRef(repo.ParentAnchorSHA, repo.ObservedSHA),
+			integrationMovedRefTo(repo.ObservedSHA),
 		))
 	}, "Parent branches moved since the pass started in repositories:")
 }
@@ -227,7 +226,7 @@ func integrationRefRaceSummary(p Params) string {
 	return integrationOneOrMany(repos, func(repo CodeRepository) string {
 		return integrationNamedRepo(repo, fmt.Sprintf(
 			"The parent ref for repository %%q %s while the pass was integrating.",
-			integrationMovedRef(repo.ExpectedRefSHA, repo.ObservedSHA),
+			integrationMovedRefTo(repo.ObservedSHA),
 		))
 	}, "Parent refs moved while the pass was integrating in repositories:")
 }

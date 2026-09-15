@@ -72,42 +72,91 @@ const (
 	RepoApplyAttention  RepoApplyState = "attention"
 )
 
+// RepoTransactionRef is one parent-layer ref update recorded on a
+// repository's journal entry: the layer's branch name and stack position, the
+// anchor SHA captured before the transaction staged anything, the candidate
+// SHA the transaction plans to move the ref to (equal to the anchor for a
+// pass-through ref), and the observed SHA read at apply, rollback, or
+// recovery time to diagnose external races.
+type RepoTransactionRef struct {
+	// Branch is the parent layer's branch name the update targets.
+	Branch string `yaml:"branch"`
+	// Layer is the stack position of the layer owning the branch; 0 for the
+	// single ref of a stackless parent.
+	Layer int `yaml:"layer_position"`
+	// AnchorSHA is the full ref SHA captured immediately before preparation;
+	// the ref must never regress past it outside the transaction.
+	AnchorSHA string `yaml:"anchor_sha"`
+	// CandidateSHA is the full SHA the transaction plans for the ref. For a
+	// merge-candidate ref this is the staged merge commit; for a pass-through
+	// ref it equals the anchor.
+	CandidateSHA string `yaml:"candidate_sha,omitempty"`
+	// ObservedSHA is the actual ref SHA observed at apply or rollback time.
+	ObservedSHA string `yaml:"observed_sha,omitempty"`
+}
+
+// RefClassification classifies an observed ref SHA against a ref's recorded
+// anchor and candidate.
+type RefClassification int
+
+const (
+	// RefAtCandidate: the observed SHA equals the ref's candidate.
+	RefAtCandidate RefClassification = iota
+	// RefAtAnchor: the observed SHA equals the ref's anchor.
+	RefAtAnchor
+	// RefElsewhere: the observed SHA matches neither.
+	RefElsewhere
+)
+
+// Classify classifies an observed ref SHA against the ref's recorded anchor
+// and candidate: at-candidate first (a pass-through ref's candidate equals
+// its anchor), then at-anchor, then elsewhere.
+func (r *RepoTransactionRef) Classify(observedSHA string) RefClassification {
+	switch {
+	case r.CandidateSHA != "" && observedSHA == r.CandidateSHA:
+		return RefAtCandidate
+	case observedSHA == r.AnchorSHA:
+		return RefAtAnchor
+	default:
+		return RefElsewhere
+	}
+}
+
 // RepoTransactionEntry is the per-repository journal entry in a transaction.
 // It preserves inherited repository order and durably records the per-repo
-// target ref, initial anchor, expected ref, child head, candidate commit,
-// preparation state, and apply/rollback state. Parking conditions live on the
-// journal's single attention record, not on entries; entries carry progress
-// state, the two optional stored warning records, and the typed pending-sync
-// flag only.
+// ordered list of parent-layer ref updates (branch, stack position, anchor,
+// candidate, observed), the child head, preparation state, apply/rollback
+// state, the anchor/tip remap to persist on the parent run at closure, and
+// the map from child commit SHA to relocated SHA. Parking conditions live on
+// the journal's single attention record, not on entries; entries carry
+// progress state, the two optional stored warning records, and the typed
+// pending-sync flag only.
 type RepoTransactionEntry struct {
 	// Repo is the repository name, matching the inherited parent repo.
 	Repo string `yaml:"repo"`
-	// ParentBranch is the recorded parent branch the merge targets.
-	ParentBranch string `yaml:"parent_branch"`
-	// ParentAnchorSHA is the full parent-branch HEAD captured immediately
-	// before preparation; the parent ref must never regress past it.
-	ParentAnchorSHA string `yaml:"parent_anchor_sha"`
-	// ExpectedRefSHA is the latest expected parent tip at apply time; the
-	// compare-and-swap ref update must match this SHA.
-	ExpectedRefSHA string `yaml:"expected_ref_sha,omitempty"`
+	// Refs is the ordered list of parent-layer refs this entry's transaction
+	// rewrites, ascending by layer position. The highest-position ref is the
+	// top ref: the one the parent worktree must have checked out and the one
+	// the worktree sync resets to. Refactor and rebase children record a
+	// one-ref list naming the parent's checked-out branch; review-feedback
+	// children record one ref per parent layer at or above the lowest changed
+	// layer.
+	Refs []RepoTransactionRef `yaml:"refs"`
 	// ChildHeadSHA is the full child HEAD after committing every remaining
 	// child change; recorded before any parent branch is touched.
 	ChildHeadSHA string `yaml:"child_head_sha"`
-	// CandidateSHA is the full SHA staged for this repository without
-	// advancing the parent ref. Usually this is an explicit two-parent
-	// no-fast-forward merge commit; for a rebase pass-through repo that was
-	// already up to date at launch, this can equal ParentAnchorSHA.
-	CandidateSHA string `yaml:"candidate_sha,omitempty"`
-	// MergeHEAD is the full SHA confirmed on the parent ref after apply. For
-	// a successful apply, this equals CandidateSHA.
-	MergeHEAD string `yaml:"merge_head,omitempty"`
 	// PrepState records whether the candidate is pending, prepared, or failed.
 	PrepState RepoPrepState `yaml:"prep_state,omitempty"`
 	// ApplyState records the per-repo apply or rollback outcome.
 	ApplyState RepoApplyState `yaml:"apply_state,omitempty"`
-	// ObservedSHA is the actual ref SHA observed at apply or rollback time;
-	// used to diagnose external races.
-	ObservedSHA string `yaml:"observed_sha,omitempty"`
+	// Remap is the roadmap-phase anchor and layer tip remap to persist on the
+	// parent run once closure confirms every ref at its candidate. Absolute
+	// SHAs keyed by phase and position, so persisting is idempotent and a
+	// crash before it is repaired by the existing merged-phase re-entry.
+	Remap RestackRemap `yaml:"remap,omitempty"`
+	// Relocated maps every child commit SHA to the SHA it was relocated to in
+	// the parent chain; empty for merge-candidate preparation.
+	Relocated map[string]string `yaml:"relocated,omitempty"`
 	// PendingSync marks an applied entry whose parent worktree sync failed
 	// after the ref update; closure retries the sync automatically and clears
 	// the flag on success. It carries no attention record.
@@ -227,14 +276,60 @@ func (f *Feature) HasIntegrationAttention() bool {
 }
 
 // AllCandidatesPrepared reports whether every per-repo entry has a durable
-// candidate SHA (PrepState == prepared and CandidateSHA non-empty).
+// candidate (PrepState == prepared and at least one ref carrying a
+// candidate SHA).
 func (t *TransactionJournal) AllCandidatesPrepared() bool {
 	if t == nil || len(t.Entries) == 0 {
 		return false
 	}
 	for i := range t.Entries {
 		e := &t.Entries[i]
-		if e.PrepState != RepoPrepPrepared || e.CandidateSHA == "" {
+		if e.PrepState != RepoPrepPrepared || !e.HasCandidateRef() {
+			return false
+		}
+	}
+	return true
+}
+
+// HasCandidateRef reports whether the entry records at least one ref with a
+// non-empty candidate SHA.
+func (e *RepoTransactionEntry) HasCandidateRef() bool {
+	if e == nil {
+		return false
+	}
+	for i := range e.Refs {
+		if e.Refs[i].CandidateSHA != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// TopRef returns the entry's highest-position ref — the parent worktree's
+// checked-out layer branch and the sync target — or nil when the entry
+// records no refs.
+func (e *RepoTransactionEntry) TopRef() *RepoTransactionRef {
+	if e == nil || len(e.Refs) == 0 {
+		return nil
+	}
+	top := &e.Refs[0]
+	for i := range e.Refs {
+		if e.Refs[i].Layer > top.Layer {
+			top = &e.Refs[i]
+		}
+	}
+	return top
+}
+
+// IsPassThrough reports whether every ref of the entry has its candidate
+// equal to its anchor — a repository the transaction rewrites nothing for;
+// apply only syncs its worktree.
+func (e *RepoTransactionEntry) IsPassThrough() bool {
+	if e == nil || len(e.Refs) == 0 {
+		return false
+	}
+	for i := range e.Refs {
+		if e.Refs[i].CandidateSHA != e.Refs[i].AnchorSHA {
 			return false
 		}
 	}

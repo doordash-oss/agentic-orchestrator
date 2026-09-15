@@ -176,8 +176,8 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 	)
 	assertSchemaProperties(
 		t, spec, "ErrorRepositoryContext",
-		"name", "branch", "conflict_files", "dirty_files", "parent_anchor_sha",
-		"expected_ref_sha", "child_head_sha", "candidate_sha", "merge_head", "observed_sha",
+		"name", "branch", "conflict_files", "dirty_files",
+		"child_head_sha", "candidate_sha", "observed_sha",
 	)
 	errorProps := schemaProperties(spec.Components.Schemas["Error"])
 	for _, forbidden := range []string{"message", "status", "target"} {
@@ -308,6 +308,26 @@ func TestReviewFeedbackFetchOperationBindsTypedSchemas(t *testing.T) {
 	declaredOpenAPIResponse(t, op, "400")
 	declaredOpenAPIResponse(t, op, "404")
 	declaredOpenAPIResponse(t, op, "502")
+}
+
+// TestReviewFeedbackDraftViewSchemaCarriesPullRequestGroups pins the
+// stack-aware fetch/selection view: each repository entry groups its
+// comments by open layer pull request (position, title, URL) in position
+// order, every draft comment carries its PR and layer identity, and the
+// removed group-level single PR URL stays gone.
+func TestReviewFeedbackDraftViewSchemaCarriesPullRequestGroups(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	assertSchemaProperties(t, spec, "ReviewFeedbackRepoComments", "repo", "pull_requests")
+	repoProps := schemaProperties(spec.Components.Schemas["ReviewFeedbackRepoComments"])
+	if repoProps["pr_url"] {
+		t.Fatal("ReviewFeedbackRepoComments must not carry the removed group-level pr_url")
+	}
+	if repoProps["comments"] {
+		t.Fatal("ReviewFeedbackRepoComments must not carry a repository-level comment list; comments live inside pull-request groups")
+	}
+	assertSchemaProperties(t, spec, "ReviewFeedbackPullRequestGroup", "position", "title", "url", "comments")
+	assertSchemaProperties(t, spec, "ReviewFeedbackDraftComment", "pr_url", "pr_number", "layer_position", "layer_title")
+	assertSchemaProperties(t, spec, "ReviewFeedbackComment", "pr_url", "pr_number", "layer_position", "layer_title")
 }
 
 func TestReviewFeedbackLaunchOperationBindsTypedSchemas(t *testing.T) {

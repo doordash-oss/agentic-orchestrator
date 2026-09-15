@@ -166,12 +166,12 @@ func applyRestackRemap(f *Feature, remap RestackRemap, repository string) {
 		}
 		anchors[repository] = remap.Anchors[phase]
 	}
-	positions := make([]int, 0, len(remap.Tips))
+	tips := make([]int, 0, len(remap.Tips))
 	for position := range remap.Tips {
-		positions = append(positions, position)
+		tips = append(tips, position)
 	}
-	sort.Ints(positions)
-	for _, position := range positions {
+	sort.Ints(tips)
+	for _, position := range tips {
 		for i := range f.Stack {
 			if f.Stack[i].Position != position {
 				continue
@@ -184,6 +184,20 @@ func applyRestackRemap(f *Feature, remap RestackRemap, repository string) {
 			f.Stack[i].Repos[repository] = entry
 		}
 	}
+}
+
+// ApplyTransactionRemap writes one repository's transaction-journal remap —
+// the anchor and tip remap a child transaction records on its journal entry —
+// onto the parent feature, inside the caller's single Store.Modify write.
+// The remap carries absolute SHAs keyed by roadmap phase and layer position,
+// so applying it is idempotent: re-applying after a crash writes the same
+// values. Phases, layers, and repositories the remap does not name are
+// untouched.
+func ApplyTransactionRemap(f *Feature, remap RestackRemap, repository string) {
+	if f == nil {
+		return
+	}
+	applyRestackRemap(f, remap, repository)
 }
 
 // RestackRemapForRepository computes the anchor and tip remap for one

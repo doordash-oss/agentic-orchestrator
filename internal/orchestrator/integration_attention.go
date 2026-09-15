@@ -34,54 +34,50 @@ import (
 
 // integrationRepoContext is the structured per-repository context a parking
 // site contributes to the attention record's repositories block. Each site
-// fills the fields it knows; the rest stay empty.
+// fills the fields it knows; the rest stay empty. Per-ref detail (branch,
+// anchor, candidate, observed SHAs of the individual layer refs) lives in
+// the raw diagnostics lines, which name the ref.
 type integrationRepoContext struct {
-	Name            string
-	Branch          string
-	ConflictFiles   []string
-	DirtyFiles      []string
-	ParentAnchorSHA string
-	ExpectedRefSHA  string
-	ChildHeadSHA    string
-	CandidateSHA    string
-	MergeHEAD       string
-	ObservedSHA     string
+	Name          string
+	Branch        string
+	ConflictFiles []string
+	DirtyFiles    []string
+	ChildHeadSHA  string
+	CandidateSHA  string
+	ObservedSHA   string
 }
 
 // block converts the context into the record's repositories-block entry.
 func (c integrationRepoContext) block() errcat.CodeRepository {
 	return errcat.CodeRepository{
-		Name:            c.Name,
-		Branch:          c.Branch,
-		ConflictFiles:   c.ConflictFiles,
-		DirtyFiles:      c.DirtyFiles,
-		ParentAnchorSHA: c.ParentAnchorSHA,
-		ExpectedRefSHA:  c.ExpectedRefSHA,
-		ChildHeadSHA:    c.ChildHeadSHA,
-		CandidateSHA:    c.CandidateSHA,
-		MergeHEAD:       c.MergeHEAD,
-		ObservedSHA:     c.ObservedSHA,
+		Name:          c.Name,
+		Branch:        c.Branch,
+		ConflictFiles: c.ConflictFiles,
+		DirtyFiles:    c.DirtyFiles,
+		ChildHeadSHA:  c.ChildHeadSHA,
+		CandidateSHA:  c.CandidateSHA,
+		ObservedSHA:   c.ObservedSHA,
 	}
 }
 
 // repoContextFromEntry derives the block context from a journal entry's
-// durable progress state: name, parent branch, and the SHAs the entry
-// recorded. Conflict and dirty files are contributed by the parking site,
-// which observed them.
+// durable progress state: name, the top ref's branch and SHAs, and the child
+// head. Conflict and dirty files are contributed by the parking site, which
+// observed them.
 func repoContextFromEntry(entry *feature.RepoTransactionEntry) integrationRepoContext {
 	if entry == nil {
 		return integrationRepoContext{}
 	}
-	return integrationRepoContext{
-		Name:            entry.Repo,
-		Branch:          entry.ParentBranch,
-		ParentAnchorSHA: entry.ParentAnchorSHA,
-		ExpectedRefSHA:  entry.ExpectedRefSHA,
-		ChildHeadSHA:    entry.ChildHeadSHA,
-		CandidateSHA:    entry.CandidateSHA,
-		MergeHEAD:       entry.MergeHEAD,
-		ObservedSHA:     entry.ObservedSHA,
+	ctx := integrationRepoContext{
+		Name:         entry.Repo,
+		ChildHeadSHA: entry.ChildHeadSHA,
 	}
+	if top := entry.TopRef(); top != nil {
+		ctx.Branch = top.Branch
+		ctx.CandidateSHA = top.CandidateSHA
+		ctx.ObservedSHA = top.ObservedSHA
+	}
+	return ctx
 }
 
 // integrationFinding is one affected repository's classification at a

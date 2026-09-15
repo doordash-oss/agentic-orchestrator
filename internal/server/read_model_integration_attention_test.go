@@ -27,8 +27,13 @@ import (
 const attentionDiagnosticsBudget = 243
 
 // removedEntryWireKeys are the per-entry journal properties deleted with the
-// free-form attention era; they must never reappear on the wire.
-var removedEntryWireKeys = []string{"conflict_files", "dirty", "diagnostics", "gate_code"}
+// free-form attention era and the single-ref journal era; they must never
+// reappear on the entry (per-ref detail lives in the refs list).
+var removedEntryWireKeys = []string{
+	"conflict_files", "dirty", "diagnostics", "gate_code",
+	"parent_branch", "parent_anchor_sha", "expected_ref_sha",
+	"candidate_sha", "merge_head", "observed_sha",
+}
 
 // removedAttentionItemCodes are the synthesized per-repository attention item
 // codes the read model no longer emits; attention is one canonical object or
@@ -44,11 +49,10 @@ func mergeConflictRecord() *errcat.FailureRecord {
 		Code: errcat.IntegrationMergeConflict,
 		Context: &errcat.RecordContext{
 			Repositories: []errcat.CodeRepository{{
-				Name:            repoNameSelf,
-				Branch:          "main",
-				ConflictFiles:   []string{"internal/api.go", "internal/server/handler.go"},
-				ParentAnchorSHA: "3f2c1d0b7e9a",
-				ChildHeadSHA:    "9b1e7a2c4d6f",
+				Name:          repoNameSelf,
+				Branch:        "main",
+				ConflictFiles: []string{"internal/api.go", "internal/server/handler.go"},
+				ChildHeadSHA:  "9b1e7a2c4d6f",
 			}},
 		},
 		Diagnostics: strings.Repeat("conflict hunk ", 40),
@@ -114,8 +118,11 @@ func assertCanonicalMergeConflict(t *testing.T, attention map[string]any) {
 	if repo["name"] != repoNameSelf || repo["branch"] != "main" {
 		t.Fatalf("attention repository = %#v, want %q on main", repo, repoNameSelf)
 	}
-	if repo["parent_anchor_sha"] != "3f2c1d0b7e9a" || repo["child_head_sha"] != "9b1e7a2c4d6f" {
-		t.Fatalf("attention repository SHAs = %#v, want the recorded anchor and child head", repo)
+	if _, has := repo["parent_anchor_sha"]; has {
+		t.Fatalf("attention repository = %#v, want no parent_anchor_sha on the wire", repo)
+	}
+	if repo["child_head_sha"] != "9b1e7a2c4d6f" {
+		t.Fatalf("attention repository SHAs = %#v, want the recorded child head", repo)
 	}
 	files, _ := repo["conflict_files"].([]any)
 	if len(files) != 2 || files[0] != "internal/api.go" || files[1] != "internal/server/handler.go" {
@@ -174,9 +181,9 @@ func TestIntegrationAttentionProjectsCanonicalRecordOnBothSurfaces(t *testing.T)
 			Phase:     feature.TransactionPhaseAttention,
 			Attention: mergeConflictRecord(),
 			Entries: []feature.RepoTransactionEntry{{
-				Repo:         repoNameSelf,
-				ParentBranch: "main",
-				PrepState:    feature.RepoPrepFailed,
+				Repo:      repoNameSelf,
+				Refs:      []feature.RepoTransactionRef{{Branch: "main"}},
+				PrepState: feature.RepoPrepFailed,
 			}},
 		})
 		handler := NewHandler(baseReadHandlerOptions(store))
@@ -220,11 +227,10 @@ func TestIntegrationAttentionProjectsCanonicalRecordOnBothSurfaces(t *testing.T)
 		seedIntegrationChild(t, store, parent.ID, &feature.TransactionJournal{
 			Phase: feature.TransactionPhaseApplied,
 			Entries: []feature.RepoTransactionEntry{{
-				Repo:         repoNameSelf,
-				ParentBranch: "main",
-				ApplyState:   feature.RepoApplyApplied,
-				MergeHEAD:    "cccc3333",
-				PendingSync:  true,
+				Repo:        repoNameSelf,
+				Refs:        []feature.RepoTransactionRef{{Branch: "main", CandidateSHA: "cccc3333", ObservedSHA: "cccc3333"}},
+				ApplyState:  feature.RepoApplyApplied,
+				PendingSync: true,
 			}},
 		})
 		handler := NewHandler(baseReadHandlerOptions(store))
@@ -279,9 +285,10 @@ func TestRelationshipProjectionCarriesNoAttentionItemStrings(t *testing.T) {
 		seedIntegrationChild(t, store, parent.ID, &feature.TransactionJournal{
 			Phase: feature.TransactionPhaseMerged,
 			Entries: []feature.RepoTransactionEntry{{
-				Repo:         repoNameSelf,
-				ParentBranch: "main",
-				MergeHEAD:    "cccc3333",
+				Repo: repoNameSelf,
+				Refs: []feature.RepoTransactionRef{{
+					Branch: "main", CandidateSHA: "cccc3333", ObservedSHA: "cccc3333",
+				}},
 				Cleanup: &errcat.FailureRecord{
 					Code:        errcat.ChildCleanupIncomplete,
 					Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: repoNameSelf}}},

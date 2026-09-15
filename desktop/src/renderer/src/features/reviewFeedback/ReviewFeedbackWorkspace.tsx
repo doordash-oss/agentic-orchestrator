@@ -20,8 +20,10 @@ limitations under the License.
  * durable pending draft. A repository/filter rail (wide) or drawer (narrow)
  * owns repository scope, author/type/path filters, and the visible-only bulk
  * actions; the feed renders one labelled section per repository in the
- * server's stable order, with comments oldest-first. `All feedback` shows
- * every section; a repository scope shows just that section.
+ * server's stable order and, inside it, one sub-section per open layer pull
+ * request in position order, with that pull request's comments
+ * oldest-first. `All feedback` shows every section; a repository scope
+ * shows just that section.
  *
  * Selection semantics: toggles and bulk actions apply to the visible choice
  * immediately and are serialized through a single promise-queue lane — each
@@ -77,6 +79,7 @@ import {
 import {
   launchReceiptText,
   launchReviewFeedbackDraft,
+  repoDraftComments,
   type ReviewFeedbackDraftCommentView,
 } from './reviewFeedbackDraftApi';
 
@@ -170,11 +173,14 @@ export function ReviewFeedbackWorkspace({
 
   const selectedOf = draft.selectedOf;
 
+  // Selection and filter targets act on the flattened comment list: every
+  // count below flattens each repository's pull-request groups, while the
+  // scope rail keeps counting per repository.
   const counts = useMemo(() => {
     let selected = 0;
     let total = 0;
     for (const group of draft.repos) {
-      for (const comment of group.comments) {
+      for (const comment of repoDraftComments(group)) {
         total += 1;
         if (selectedOf(comment)) selected += 1;
       }
@@ -185,12 +191,15 @@ export function ReviewFeedbackWorkspace({
   const ledger = useMemo<ScopeLedgerEntry[]>(
     () => [
       { scope: 'all', label: 'All feedback', selected: counts.selected, total: counts.total },
-      ...draft.repos.map((group) => ({
-        scope: group.repo,
-        label: group.repo,
-        total: group.comments.length,
-        selected: group.comments.filter(selectedOf).length,
-      })),
+      ...draft.repos.map((group) => {
+        const comments = repoDraftComments(group);
+        return {
+          scope: group.repo,
+          label: group.repo,
+          total: comments.length,
+          selected: comments.filter(selectedOf).length,
+        };
+      }),
     ],
     [draft.repos, counts, selectedOf],
   );
@@ -198,25 +207,34 @@ export function ReviewFeedbackWorkspace({
   /** Groups in the active repository scope, before filters. */
   const scopedGroups = useMemo(() => scopeGroups(draft.repos, scope), [draft.repos, scope]);
   const scopedCount = useMemo(
-    () => scopedGroups.reduce((sum, group) => sum + group.comments.length, 0),
+    () => scopedGroups.reduce((sum, group) => sum + repoDraftComments(group).length, 0),
     [scopedGroups],
   );
   const options = useMemo(() => facetOptions(scopedGroups), [scopedGroups]);
 
-  /** Per-section matches: filtering never reorders what it keeps. */
+  /** Per-section matches: filtering never reorders what it keeps, and never breaks a pull-request group apart. */
   const matchedSections = useMemo<FeedSection[]>(
     () =>
       scopedGroups
         .map((group) => ({
           group,
-          comments: group.comments.filter((comment) => matchesFilters(comment, filters)),
+          // Pull-request sub-sections render in position order regardless
+          // of the order the draft carried them in.
+          pullRequests: group.pullRequests
+            .slice()
+            .sort((a, b) => a.position - b.position)
+            .map((pr) => ({
+              pr,
+              comments: pr.comments.filter((comment) => matchesFilters(comment, filters)),
+            }))
+            .filter((section) => section.comments.length > 0),
         }))
-        .filter((section) => section.comments.length > 0),
+        .filter((section) => section.pullRequests.length > 0),
     [scopedGroups, filters],
   );
 
   const visibleComments = useMemo(
-    () => matchedSections.flatMap((section) => section.comments),
+    () => matchedSections.flatMap((section) => section.pullRequests.flatMap((pr) => pr.comments)),
     [matchedSections],
   );
   const visibleCount = visibleComments.length;

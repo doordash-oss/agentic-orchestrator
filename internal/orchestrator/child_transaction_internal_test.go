@@ -268,8 +268,8 @@ func TestTransactionThreeRepoHappyPath(t *testing.T) {
 		if entry == nil {
 			t.Fatalf("repo %d: journal entry missing", i)
 		}
-		if fields[1] != entry.ParentAnchorSHA {
-			t.Fatalf("repo %d: first parent = %s, want anchor %s", i, fields[1], entry.ParentAnchorSHA)
+		if top := entry.TopRef(); top == nil || fields[1] != top.AnchorSHA {
+			t.Fatalf("repo %d: first parent = %s, want anchor %+v", i, fields[1], entry.TopRef())
 		}
 	}
 }
@@ -442,8 +442,8 @@ func TestTransactionExternalParentAdvancementParksDrift(t *testing.T) {
 		t.Fatalf("repo 0: prep state = %s, want failed", entry.PrepState)
 	}
 	for i := range tx.Entries {
-		if tx.Entries[i].CandidateSHA != "" {
-			t.Fatalf("repo %d: candidate %s staged despite drift", i, tx.Entries[i].CandidateSHA)
+		if tx.Entries[i].HasCandidateRef() {
+			t.Fatalf("repo %d: candidate staged despite drift: %+v", i, tx.Entries[i].Refs)
 		}
 	}
 }
@@ -528,9 +528,8 @@ func TestTransactionParentDriftMultiRepoAggregation(t *testing.T) {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
 	for i := range tx.Entries {
-		entry := &tx.Entries[i]
-		if entry.CandidateSHA != "" {
-			t.Fatalf("repo %d: candidate %s staged despite drift", i, entry.CandidateSHA)
+		if tx.Entries[i].HasCandidateRef() {
+			t.Fatalf("repo %d: candidate staged despite drift: %+v", i, tx.Entries[i].Refs)
 		}
 	}
 	// Both drifted repos join the record's repositories block; the clean
@@ -572,11 +571,12 @@ func TestTransactionParentDriftExemptsPriorCandidate(t *testing.T) {
 	// Manually apply only the first repo (simulating a crash after its ref
 	// CAS and worktree sync but before durable apply progress).
 	entry := &journal.Entries[0]
-	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[0], ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
+	top := entry.TopRef()
+	ref := "refs/heads/" + top.Branch
+	if err := git.UpdateRefCAS(fx.repoDirs[0], ref, top.AnchorSHA, top.CandidateSHA); err != nil {
 		t.Fatalf("manual apply repo 0: %v", err)
 	}
-	txGit(t, fx.repoDirs[0], "reset", "--hard", entry.CandidateSHA)
+	txGit(t, fx.repoDirs[0], "reset", "--hard", top.CandidateSHA)
 
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("RunChildIntegration() resume error = %v", err)
@@ -688,7 +688,7 @@ func TestTransactionRollbackOnLaterFailure(t *testing.T) {
 	// Record old SHAs for rollback verification.
 	oldSHAs := make([]string, len(journal.Entries))
 	for i := range journal.Entries {
-		oldSHAs[i] = journal.Entries[i].ParentAnchorSHA
+		oldSHAs[i] = journal.Entries[i].TopRef().AnchorSHA
 	}
 
 	// Externally move the third repo's ref to simulate a CAS failure.
@@ -769,9 +769,9 @@ func TestTransactionStartupReconciliationApplied(t *testing.T) {
 	// Manually apply every ref (simulating a crash after all ref updates
 	// but before closure).
 	for i := range journal.Entries {
-		entry := &journal.Entries[i]
-		ref := "refs/heads/" + entry.ParentBranch
-		if err := git.UpdateRefCAS(fx.repoDirs[i], ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
+		top := journal.Entries[i].TopRef()
+		ref := "refs/heads/" + top.Branch
+		if err := git.UpdateRefCAS(fx.repoDirs[i], ref, top.AnchorSHA, top.CandidateSHA); err != nil {
 			t.Fatalf("manual apply repo %d: %v", i, err)
 		}
 	}
@@ -875,12 +875,13 @@ func TestTransactionStartupReconciliationExternalMovement(t *testing.T) {
 		t.Fatalf("attention repositories = %+v, want the externally moved repo", tx.Attention.Context)
 	}
 	repo := tx.Attention.Context.Repositories[0]
+	top := journal.Entries[0].TopRef()
 	if repo.Name != child.Repos[0].Name ||
-		repo.ParentAnchorSHA != journal.Entries[0].ParentAnchorSHA ||
-		repo.CandidateSHA != journal.Entries[0].CandidateSHA ||
+		repo.Branch != top.Branch ||
+		repo.CandidateSHA != top.CandidateSHA ||
 		repo.ObservedSHA != externalSHA {
-		t.Fatalf("attention repository = %+v, want old %s candidate %s observed %s",
-			repo, journal.Entries[0].ParentAnchorSHA, journal.Entries[0].CandidateSHA, externalSHA)
+		t.Fatalf("attention repository = %+v, want branch %s candidate %s observed %s",
+			repo, top.Branch, top.CandidateSHA, externalSHA)
 	}
 }
 
@@ -1002,8 +1003,8 @@ func TestTransactionApplySyncFailureContinuesForward(t *testing.T) {
 	// Every ref advances despite the environmental sync failure.
 	for i := range fx.repoDirs {
 		got := fx.refSHA(i, "refs/heads/feature/parent")
-		if got != journal.Entries[i].CandidateSHA {
-			t.Fatalf("repo %d: ref = %s, want candidate %s", i, got, journal.Entries[i].CandidateSHA)
+		if want := journal.Entries[i].TopRef().CandidateSHA; got != want {
+			t.Fatalf("repo %d: ref = %s, want candidate %s", i, got, want)
 		}
 	}
 	stored, _ := fx.store.Load(fx.child.ID)
@@ -1054,8 +1055,8 @@ func TestTransactionApplySyncFailureContinuesForward(t *testing.T) {
 		t.Fatalf("child failure record after resume = %+v, want none", rec)
 	}
 	for i := range fx.repoDirs {
-		if got := txGit(t, fx.repoDirs[i], "rev-parse", "HEAD"); got != journal.Entries[i].CandidateSHA {
-			t.Fatalf("repo %d worktree HEAD = %s, want candidate %s", i, got, journal.Entries[i].CandidateSHA)
+		if got := txGit(t, fx.repoDirs[i], "rev-parse", "HEAD"); got != journal.Entries[i].TopRef().CandidateSHA {
+			t.Fatalf("repo %d worktree HEAD = %s, want candidate %s", i, got, journal.Entries[i].TopRef().CandidateSHA)
 		}
 	}
 }
@@ -1072,7 +1073,7 @@ func TestTransactionApplyingJournalSkipsParentTipRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareTransactionCandidates() error = %v", err)
 	}
-	originalCandidate := journal.Entries[0].CandidateSHA
+	originalCandidate := journal.Entries[0].TopRef().CandidateSHA
 	journal.Phase = feature.TransactionPhaseApplying
 	if err := o.persistTransaction(child.ID, journal); err != nil {
 		t.Fatalf("persist applying journal: %v", err)
@@ -1084,8 +1085,8 @@ func TestTransactionApplyingJournalSkipsParentTipRebuild(t *testing.T) {
 		t.Fatalf("RunChildIntegration() error = %v, want retryable attention", err)
 	}
 	stored, _ := fx.store.Load(child.ID)
-	if stored.Parent.Transaction.Entries[0].CandidateSHA != originalCandidate {
-		t.Fatalf("applying journal candidate was rebuilt from %s to %s", originalCandidate, stored.Parent.Transaction.Entries[0].CandidateSHA)
+	if got := stored.Parent.Transaction.Entries[0].TopRef().CandidateSHA; got != originalCandidate {
+		t.Fatalf("applying journal candidate was rebuilt from %s to %s", originalCandidate, got)
 	}
 	if stored.Parent.Transaction.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("phase = %s, want attention after CAS detects moved ref", stored.Parent.Transaction.Phase)
@@ -1128,12 +1129,12 @@ func TestTransactionPassThroughSyncFailureRollsBackApplied(t *testing.T) {
 	if journal == nil {
 		t.Fatal("journal is nil")
 	}
-	if got := journal.Entries[1].CandidateSHA; got != journal.Entries[1].ParentAnchorSHA {
-		t.Fatalf("repo 1: CandidateSHA = %s, want pass-through anchor %s", got, journal.Entries[1].ParentAnchorSHA)
+	if top := journal.Entries[1].TopRef(); top == nil || top.CandidateSHA != top.AnchorSHA {
+		t.Fatalf("repo 1: refs = %+v, want pass-through candidate equal to anchor", journal.Entries[1].Refs)
 	}
 	oldSHAs := make([]string, len(journal.Entries))
 	for i := range journal.Entries {
-		oldSHAs[i] = journal.Entries[i].ParentAnchorSHA
+		oldSHAs[i] = journal.Entries[i].TopRef().AnchorSHA
 	}
 
 	// Apply with a worktree manager that fails ResetToCommit for repoB's

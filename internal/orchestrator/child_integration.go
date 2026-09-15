@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -165,17 +167,17 @@ func (o *Orchestrator) runTransactionIntegration(childID string, child, parent *
 	journal := child.Parent.Transaction
 
 	// If the journal has candidates prepared against an old parent-tip
-	// vector, check whether the parent tips have moved. If they moved
+	// vector, check whether the parent refs have moved. If they moved
 	// cleanly and child code did not change, rebuild the candidate vector.
 	// If child code changed, invalidate final review.
 	if journal != nil &&
 		(journal.Phase == feature.TransactionPhasePrepared || journal.Phase == feature.TransactionPhaseAttention) &&
 		journal.AllCandidatesPrepared() && !journal.AllApplied() {
-		currentTips, err := o.transactionParentTipVector(parent, journal)
+		currentRefs, err := o.transactionRefVector(parent, journal)
 		if err != nil {
 			return err
 		}
-		if transactionNeedsRebuild(journal, currentTips) {
+		if transactionNeedsRebuild(journal, currentRefs) {
 			changed, err := o.commitAndCompareChildHeads(child, journal)
 			if err != nil {
 				return err
@@ -348,7 +350,9 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 		return fmt.Errorf("transaction journal missing during closure")
 	}
 
-	// Confirm every parent ref is at its candidate commit.
+	// Confirm every listed parent ref is at its candidate commit, sync the
+	// worktree to the top candidate, and persist the entry's remap onto the
+	// parent run.
 	if o.deps.Worktrees == nil {
 		return fmt.Errorf("transaction: ref CAS operations are not configured")
 	}
@@ -362,24 +366,31 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 		if parentRepo == nil {
 			return fmt.Errorf("parent no longer has repository %s during closure", entry.Repo)
 		}
-		ref := "refs/heads/" + entry.ParentBranch
-		current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
-		if err != nil {
-			return fmt.Errorf("confirming ref %s during closure: %w", ref, err)
+		for j := range entry.Refs {
+			ref := &entry.Refs[j]
+			refName := "refs/heads/" + ref.Branch
+			current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, refName)
+			if err != nil {
+				return fmt.Errorf("confirming ref %s during closure: %w", refName, err)
+			}
+			if current != ref.CandidateSHA {
+				return fmt.Errorf("ref %s is at %s, expected candidate %s; closure impossible", refName, current, ref.CandidateSHA)
+			}
 		}
-		if current != entry.CandidateSHA {
-			return fmt.Errorf("ref %s is at %s, expected candidate %s; closure impossible", ref, current, entry.CandidateSHA)
-		}
-		entry.MergeHEAD = entry.CandidateSHA
-		// Ensure the parent worktree is synced to the candidate. A crash
-		// between the apply-progress write and the worktree sync can leave
-		// the worktree at the old tree even though the ref is at the
-		// candidate. This is idempotent when the worktree is already current.
+		// Ensure the parent worktree is synced to the top ref's candidate. A
+		// crash between the apply-progress write and the worktree sync can
+		// leave the worktree at the old tree even though every ref is at
+		// its candidate. This is idempotent when the worktree is already
+		// current.
 		parentWorktree := parentRepo.WorktreePath
 		if parentWorktree == "" {
 			parentWorktree = parentRepo.Path
 		}
-		if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.CandidateSHA); err != nil {
+		top := entry.TopRef()
+		if top == nil {
+			return fmt.Errorf("repo %s records no refs during closure", entry.Repo)
+		}
+		if err := o.deps.Worktrees.ResetToCommit(parentWorktree, top.CandidateSHA); err != nil {
 			syncErr := fmt.Errorf("syncing parent worktree for repo %s: %w", entry.Repo, err)
 			// The journal's attention record and the relationship event own
 			// this failure; the phase stays applied so recovery semantics
@@ -398,6 +409,19 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 				return fmt.Errorf("clearing pending worktree sync for repo %s: %w", entry.Repo, err)
 			}
 		}
+	}
+
+	// Persist every entry's remap onto the parent run. The remap carries
+	// absolute SHAs keyed by roadmap phase and layer position, so the write
+	// is idempotent and a crash before it is repaired by this merged-phase
+	// re-entry.
+	if err := o.deps.Store.Modify(parentID, func(f *feature.Feature) error {
+		for i := range journal.Entries {
+			feature.ApplyTransactionRemap(f, journal.Entries[i].Remap, journal.Entries[i].Repo)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("applying transaction remap to parent: %w", err)
 	}
 
 	// Parent → CodeReady first (failure leaves child open, retryable).
@@ -562,14 +586,21 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 }
 
 // reviewFeedbackIntegrationTail is the real ending for a review-feedback
-// child after the shared transactional merge has closed the child. For each
-// repo that had selected comments it pull-rebases and pushes the parent
-// branch to the existing PR, replies to every selected comment with
-// type-appropriate routing, resolves inline review threads whose reply
-// succeeded, and records the addressed comment IDs. Repos without selected
-// comments are not pushed. Failures are terminal warnings: the tail
-// attempts every step once, records per-repo failures in the entry's stored
-// tail warning record, and marks itself settled regardless. The parent ends
+// child after the shared transactional merge has closed the child. Every
+// repository whose journal entry lists refs is republished first, through
+// the stack publish walk restricted to those repositories, so each layer
+// the transaction rewrote lands on its remote with the lease on its last
+// pushed SHA before any reply names a commit. Then, for each repository
+// whose republish succeeded, the tail replies to every selected comment on
+// the pull request it was left on — citing the relocated SHA of the newest
+// child commit whose target layer equals the comment's layer (else the
+// newest relocated commit) — resolves inline review threads whose reply
+// succeeded, and records the addressed comment IDs. A repository whose
+// republish failed records the tail-incomplete warning and posts no
+// replies, leaving its comments unaddressed for a later pass; other
+// repositories continue. Failures are terminal warnings: the tail attempts
+// every step once, records per-repo failures in the entry's stored tail
+// warning record, and marks itself settled regardless. The parent ends
 // Published whether or not any step failed.
 func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feature) error {
 	// Group selected comments by repo, preserving the parent repo order.
@@ -586,26 +617,38 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 	// the nil-ledger path silently skips both the load and the appends.
 	ledger, _ := o.deps.Store.(reviewFeedbackLedger)
 
+	// Republish before replying: only repositories whose journal entry
+	// lists refs go through the walk, unchanged layers are no-ops, and
+	// rewritten layers push with the lease on their last pushed SHA. The
+	// walk runs under the relationship read lock the integration boundary
+	// already holds.
+	entryByRepo := make(map[string]*feature.RepoTransactionEntry)
+	var republishRepos []string
+	if child.Parent.Transaction != nil {
+		for _, repo := range parent.Repos {
+			entry := child.Parent.Transaction.EntryByRepo(repo.Name)
+			if entry == nil || len(entry.Refs) == 0 {
+				continue
+			}
+			entryByRepo[repo.Name] = entry
+			republishRepos = append(republishRepos, repo.Name)
+		}
+	}
+	republishFailed := o.republishReviewFeedbackStacks(child.ID, parent.ID, republishRepos)
+
 	for _, repo := range parent.Repos {
 		comments := commentsByRepo[repo.Name]
 		if len(comments) == 0 {
 			continue
 		}
-
-		// Get the merge SHA for this repo from the transaction journal.
-		mergeSHA := ""
-		if child.Parent.Transaction != nil {
-			if entry := child.Parent.Transaction.EntryByRepo(repo.Name); entry != nil {
-				mergeSHA = entry.MergeHEAD
-			}
+		// A failed republish already recorded the tail warning; its
+		// comments stay unaddressed for a later pass.
+		if republishFailed[repo.Name] {
+			continue
 		}
-
-		// Get the PR URL from the parent's stack: the highest layer's pull
-		// request for this repository — the one the comments were fetched
-		// from.
-		prURL := parent.TopStackLayerPRURL(repo.Name)
-		if prURL == "" {
-			o.recordTransactionTailWarning(child.ID, repo.Name, "no PR URL for review-feedback tail")
+		entry := entryByRepo[repo.Name]
+		if entry == nil {
+			o.recordTransactionTailWarning(child.ID, repo.Name, "no transaction refs recorded for repository")
 			continue
 		}
 
@@ -617,20 +660,25 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 			o.recordTransactionTailWarning(child.ID, repo.Name, "parent repo has no worktree path")
 			continue
 		}
-		branch := repo.Branch
 
-		// Pull-rebase and push the parent branch to the existing PR remote.
-		if o.deps.Remote == nil {
-			o.recordTransactionTailWarning(child.ID, repo.Name, "remote operations not configured")
-			continue
-		}
-		if err := o.deps.Remote.PullRebase(worktree, branch); err != nil {
-			o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("pull-rebase failed: %v", err))
-			continue
-		}
-		if err := o.deps.Remote.Push(worktree, branch); err != nil {
-			o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("push failed: %v", err))
-			continue
+		// Resolve the per-layer reply SHAs from the landed chain in the
+		// parent worktree, filtered to the journal's relocated commits.
+		replyByLayer, newestRelocated := reviewFeedbackReplySHAs(worktree, entry)
+		top := entry.TopRef()
+		replySHA := func(comment feature.ReviewFeedbackComment) string {
+			if sha := replyByLayer[comment.LayerPosition]; sha != "" {
+				return sha
+			}
+			if newestRelocated != "" {
+				return newestRelocated
+			}
+			// No relocated commit for this repository (a pass-through
+			// entry): cite the top ref's candidate, which the republish
+			// confirmed exists on the remote.
+			if top != nil {
+				return top.CandidateSHA
+			}
+			return ""
 		}
 
 		// Load addressed ledger for recovery dedup.
@@ -647,21 +695,25 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 			addressed = make(map[int]bool)
 		}
 
-		// Reply to each selected comment.
+		// Reply to each selected comment on the pull request it was left on.
 		replied := make(map[int]bool)
 		for _, comment := range comments {
 			if addressed[comment.ID] {
 				replied[comment.ID] = true
 				continue
 			}
+			if comment.PRURL == "" {
+				o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("comment %d has no pull request", comment.ID))
+				continue
+			}
 			outcome, ok := outcomes[comment.ID]
-			body := feature.ReviewFeedbackReplyBody(outcome, ok, mergeSHA)
+			body := feature.ReviewFeedbackReplyBody(outcome, ok, replySHA(comment))
 			var replyErr error
 			switch comment.Type {
 			case git.CommentTypeReview:
-				replyErr = git.ReplyToPRComment(worktree, prURL, comment.ID, body)
+				replyErr = git.ReplyToPRComment(worktree, comment.PRURL, comment.ID, body)
 			case git.CommentTypeIssue, git.CommentTypeReviewBody:
-				replyErr = git.ReplyToIssueComment(worktree, prURL, body)
+				replyErr = git.ReplyToIssueComment(worktree, comment.PRURL, body)
 			default:
 				replyErr = fmt.Errorf("unsupported comment type %q", comment.Type)
 			}
@@ -679,30 +731,40 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 			}
 		}
 
-		// Fetch the unresolved-thread map and resolve inline threads whose
-		// replies succeeded.
-		threadMap, err := git.FetchReviewThreadMap(worktree, prURL)
-		if err != nil {
-			o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("fetch thread map: %v", err))
-			continue
-		}
+		// Fetch the unresolved-thread map once per pull request that
+		// received an inline reply, and resolve those threads.
+		repliedByPR := make(map[string][]feature.ReviewFeedbackComment)
 		for _, comment := range comments {
-			if !replied[comment.ID] || comment.Type != git.CommentTypeReview {
+			if !replied[comment.ID] || comment.Type != git.CommentTypeReview || comment.PRURL == "" {
 				continue
 			}
-			threadNodeID, ok := threadMap[comment.ID]
-			if !ok {
+			repliedByPR[comment.PRURL] = append(repliedByPR[comment.PRURL], comment)
+		}
+		for _, prURL := range sortedPRURLs(repliedByPR) {
+			threadMap, err := git.FetchReviewThreadMap(worktree, prURL)
+			if err != nil {
+				o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("fetch thread map: %v", err))
 				continue
 			}
-			if err := git.ResolveReviewThread(worktree, threadNodeID); err != nil {
-				o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("resolve thread for comment %d: %v", comment.ID, err))
+			for _, comment := range repliedByPR[prURL] {
+				threadNodeID, ok := threadMap[comment.ID]
+				if !ok {
+					continue
+				}
+				if err := git.ResolveReviewThread(worktree, threadNodeID); err != nil {
+					o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("resolve thread for comment %d: %v", comment.ID, err))
+				}
 			}
 		}
 	}
 
-	// The parent ends Published whether or not any step failed.
-	if err := o.deps.Lifecycle.MarkPublished(parent.ID); err != nil {
-		return fmt.Errorf("returning review-feedback parent to published: %w", err)
+	// The parent ends Published whether or not any step failed. The
+	// republish walk may have already completed the transition, so an
+	// already-published parent needs no second one.
+	if freshParent, getErr := o.deps.Lifecycle.Get(parent.ID); getErr != nil || freshParent == nil || freshParent.Status != feature.StatusPublished {
+		if err := o.deps.Lifecycle.MarkPublished(parent.ID); err != nil {
+			return fmt.Errorf("returning review-feedback parent to published: %w", err)
+		}
 	}
 
 	// Persist the durable tail-settled marker regardless of warnings. The
@@ -718,6 +780,128 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 	}
 
 	return nil
+}
+
+// republishReviewFeedbackStacks runs the stack publish walk over exactly
+// the named repositories and reports, per repository, whether its
+// republish failed. The walk stores a canonical failure record on each
+// failing repository, so classification re-reads the parent: a repository
+// carrying a stored record failed, every other named repository succeeded.
+// A publish error with no stored record is a pass-level failure (guard,
+// load, or selection) that touched no repository, so every named
+// repository is treated as failed. Each failure records the terminal
+// tail-incomplete warning; the caller skips replies for failed
+// repositories.
+func (o *Orchestrator) republishReviewFeedbackStacks(childID, parentID string, repos []string) map[string]bool {
+	failed := make(map[string]bool)
+	if len(repos) == 0 {
+		return failed
+	}
+	if o.deps.Remote == nil {
+		for _, name := range repos {
+			failed[name] = true
+			o.recordTransactionTailWarning(childID, name, "remote operations not configured")
+		}
+		return failed
+	}
+	publishErr := o.publishWithOptionsLocked(parentID, PublishOptions{Repos: repos})
+	if publishErr == nil {
+		return failed
+	}
+	fresh, freshErr := o.deps.Lifecycle.Get(parentID)
+	// A pass-level failure (guard, load, or selection error) walked no
+	// repository, so no named repository carries a stored record; every
+	// other shape of publish error left at least one stored record.
+	passLevelFailure := freshErr != nil || fresh == nil
+	if !passLevelFailure {
+		passLevelFailure = true
+		for _, name := range repos {
+			if state, ok := fresh.RepoStates[name]; ok && state != nil && state.Error != nil {
+				passLevelFailure = false
+				break
+			}
+		}
+	}
+	for _, name := range repos {
+		cause := ""
+		if passLevelFailure {
+			cause = fmt.Sprintf("republish failed: %v", publishErr)
+		} else if fresh != nil && freshErr == nil {
+			if state, ok := fresh.RepoStates[name]; ok && state != nil && state.Error != nil {
+				cause = "republish failed: " + state.Error.Diagnostics
+			}
+		}
+		if cause == "" {
+			continue
+		}
+		failed[name] = true
+		o.recordTransactionTailWarning(childID, name, cause)
+	}
+	return failed
+}
+
+// reviewFeedbackReplySHAs resolves the per-layer reply SHAs for one
+// repository's journal entry from the landed chain in the parent worktree:
+// the range between the lowest listed ref's anchor and the top ref's
+// candidate holds exactly the relocated child commits (and the replayed
+// parent commits above them), so filtering to the journal's relocated
+// values and reading each commit's Stack-Layer trailer yields, per layer
+// position, the newest child commit targeted at that layer, plus the
+// newest relocated commit overall for comments whose layer received no
+// commit. A pass-through entry (candidate equal to the lowest anchor, an
+// empty range) yields no entries and callers fall back to the top
+// candidate. Failures degrade to the same fallback: the reply must name a
+// SHA that exists on the remote, and the republish already delivered the
+// top candidate.
+func reviewFeedbackReplySHAs(worktree string, entry *feature.RepoTransactionEntry) (map[int]string, string) {
+	byLayer := make(map[int]string)
+	top := entry.TopRef()
+	if top == nil || worktree == "" || top.CandidateSHA == "" {
+		return byLayer, ""
+	}
+	lowestAnchor := ""
+	lowestLayer := 0
+	for i := range entry.Refs {
+		ref := &entry.Refs[i]
+		if lowestAnchor == "" || ref.Layer < lowestLayer {
+			lowestAnchor = ref.AnchorSHA
+			lowestLayer = ref.Layer
+		}
+	}
+	if lowestAnchor == "" || lowestAnchor == top.CandidateSHA {
+		return byLayer, ""
+	}
+	relocated := make(map[string]bool, len(entry.Relocated))
+	for _, sha := range entry.Relocated {
+		relocated[sha] = true
+	}
+	commits, err := git.CommitsBetweenWithStackLayer(worktree, lowestAnchor, top.CandidateSHA)
+	if err != nil {
+		return byLayer, ""
+	}
+	newest := ""
+	for _, commit := range commits {
+		if !relocated[commit.SHA] {
+			continue
+		}
+		if pos, err := strconv.Atoi(commit.Layer); err == nil && pos > 0 {
+			byLayer[pos] = commit.SHA
+		}
+		newest = commit.SHA
+	}
+	return byLayer, newest
+}
+
+// sortedPRURLs returns the keys of a pull-request group map in sorted order
+// so per-PR steps (thread maps, resolutions) run and record warnings
+// deterministically.
+func sortedPRURLs(groups map[string][]feature.ReviewFeedbackComment) []string {
+	urls := make([]string, 0, len(groups))
+	for url := range groups {
+		urls = append(urls, url)
+	}
+	sort.Strings(urls)
+	return urls
 }
 
 // recordTransactionCleanupWarning durably records the outcome of a per-repo
@@ -785,12 +969,16 @@ func (o *Orchestrator) recordTransactionTailWarning(childID, repoName, cause str
 					continue
 				}
 				if entry.Tail == nil {
+					branch := ""
+					if top := entry.TopRef(); top != nil {
+						branch = top.Branch
+					}
 					entry.Tail = &errcat.FailureRecord{
 						Code: errcat.ReviewFeedbackTailIncomplete,
 						Context: &errcat.RecordContext{
 							Repositories: []errcat.CodeRepository{{
 								Name:   repoName,
-								Branch: entry.ParentBranch,
+								Branch: branch,
 							}},
 						},
 						Diagnostics: cause,

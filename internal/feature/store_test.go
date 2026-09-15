@@ -1650,16 +1650,16 @@ func TestStoreLoadIgnoresLegacyRepoLastErrorKeys(t *testing.T) {
 	}
 }
 
-// TestStoreLoadIgnoresLegacyRepoPRURLKeys pins the no-schema-bump contract
+// TestStoreLoadIgnoresLegacyRepoPRURLKeys pins the lenient-load contract
 // for the removed per-repo PR URL projection: a legacy pr_url key under
 // repo_states in a hand-written run.yaml loads without error (unknown YAML
 // keys are ignored) and contributes no pull-request state, while the
-// current schema stays at 8.
+// current schema is 9 — the child transaction journal's per-layer ref list.
 func TestStoreLoadIgnoresLegacyRepoPRURLKeys(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs isolate filesystem state.
-	if SchemaVersionCurrent != 8 {
-		t.Errorf("SchemaVersionCurrent = %d, want 8 (the per-repo pr_url removal needs no schema bump)", SchemaVersionCurrent)
+	if SchemaVersionCurrent != 9 {
+		t.Errorf("SchemaVersionCurrent = %d, want 9 (the transaction journal ref-list reshape)", SchemaVersionCurrent)
 	}
 	store := NewStore(t.TempDir())
 

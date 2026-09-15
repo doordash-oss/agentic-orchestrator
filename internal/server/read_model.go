@@ -154,17 +154,20 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 			}
 			for _, e := range tx.Entries {
 				entry := RepoTransactionEntry{
-					Repo:            e.Repo,
-					ParentBranch:    e.ParentBranch,
-					ParentAnchorSha: e.ParentAnchorSHA,
-					ExpectedRefSha:  e.ExpectedRefSHA,
-					ChildHeadSha:    e.ChildHeadSHA,
-					CandidateSha:    e.CandidateSHA,
-					MergeHead:       e.MergeHEAD,
-					PrepState:       string(e.PrepState),
-					ApplyState:      string(e.ApplyState),
-					ObservedSha:     e.ObservedSHA,
-					PendingSync:     e.PendingSync,
+					Repo:         e.Repo,
+					ChildHeadSha: e.ChildHeadSHA,
+					PrepState:    string(e.PrepState),
+					ApplyState:   string(e.ApplyState),
+					PendingSync:  e.PendingSync,
+				}
+				for _, r := range e.Refs {
+					entry.Refs = append(entry.Refs, RepoTransactionRef{
+						Branch:        r.Branch,
+						LayerPosition: r.Layer,
+						AnchorSha:     r.AnchorSHA,
+						CandidateSha:  r.CandidateSHA,
+						ObservedSha:   r.ObservedSHA,
+					})
 				}
 				detail.Transaction.Entries = append(detail.Transaction.Entries, entry)
 			}

@@ -25,6 +25,7 @@ limitations under the License.
  * `dispatchAction`.
  */
 import {
+  buildCanonicalError,
   CanonicalErrorException,
   isRequestTimeout,
   redactText,
@@ -106,6 +107,7 @@ import {
   type LaunchReviewFeedbackChildResult,
   type ReviewFeedbackCommentView,
   type ReviewFeedbackDraftCommentView,
+  type ReviewFeedbackPullRequestGroup,
   type ReviewFeedbackRepoGroup,
   type SetupDispatchResult,
   type SetupTaskView,
@@ -966,16 +968,49 @@ function toReviewFeedbackDraftCommentView(
   };
 }
 
+/**
+ * Maps a server pull-request group (snake_case) to the renderer-facing view
+ * (camelCase). A group missing its position is a malformed view and fails
+ * closed instead of rendering an unplaced section.
+ */
+function toReviewFeedbackPullRequestGroupView(group: {
+  position?: number;
+  title?: string;
+  url?: string;
+  comments: ServerReviewFeedbackDraftComment[];
+}): ReviewFeedbackPullRequestGroup {
+  if (
+    typeof group.position !== 'number' ||
+    !Number.isInteger(group.position) ||
+    group.position < 0
+  ) {
+    throw new CanonicalErrorException(
+      buildCanonicalError('E_SCHEMA_MISMATCH', {
+        params: { paths: 'pull_requests.position' },
+      }),
+    );
+  }
+  return {
+    position: group.position,
+    title: group.title ?? '',
+    url: group.url ?? '',
+    comments: group.comments.map(toReviewFeedbackDraftCommentView),
+  };
+}
+
 /** Maps a server repo group (snake_case) to the renderer-facing view (camelCase). */
 function toReviewFeedbackRepoGroupView(group: {
   repo: string;
-  pr_url: string;
-  comments: ServerReviewFeedbackDraftComment[];
+  pull_requests?: Array<{
+    position?: number;
+    title?: string;
+    url?: string;
+    comments: ServerReviewFeedbackDraftComment[];
+  }>;
 }): ReviewFeedbackRepoGroup {
   return {
     repo: group.repo,
-    prUrl: group.pr_url,
-    comments: group.comments.map(toReviewFeedbackDraftCommentView),
+    pullRequests: (group.pull_requests ?? []).map(toReviewFeedbackPullRequestGroupView),
   };
 }
 

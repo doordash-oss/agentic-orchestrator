@@ -693,8 +693,8 @@ func TestRebaseChildMultiRepoJourney(t *testing.T) {
 	if entry == nil {
 		t.Fatalf("repoB transaction entry missing: %+v", child.Parent.Transaction)
 	}
-	if entry.CandidateSHA != repoBHeadBefore || entry.MergeHEAD != repoBHeadBefore {
-		t.Fatalf("repoB transaction candidate=%s merge_head=%s, want pass-through SHA %s", entry.CandidateSHA, entry.MergeHEAD, repoBHeadBefore)
+	if top := entry.TopRef(); top == nil || top.CandidateSHA != repoBHeadBefore || top.ObservedSHA != repoBHeadBefore {
+		t.Fatalf("repoB transaction refs=%+v, want pass-through SHA %s", entry.Refs, repoBHeadBefore)
 	}
 }
 

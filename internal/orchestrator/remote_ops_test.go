@@ -21,7 +21,7 @@ import (
 
 func TestRemoteOpsContainsOnlyUnavoidablyRemoteOperations(t *testing.T) {
 	typeOf := reflect.TypeOf((*RemoteOps)(nil)).Elem()
-	want := []string{"CreatePR", "GetPRBody", "PRBaseBranch", "PRState", "PullRebase", "Push", "PushLayerBranch", "UpdatePRBody"}
+	want := []string{"CreatePR", "GetPRBody", "PRBaseBranch", "PRState", "Push", "PushLayerBranch", "UpdatePRBody"}
 	if typeOf.NumMethod() != len(want) {
 		t.Fatalf("RemoteOps methods = %d, want %d", typeOf.NumMethod(), len(want))
 	}

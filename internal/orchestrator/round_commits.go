@@ -43,6 +43,14 @@ import (
 // primitive with the fallback-upward policy. Rounds of any other kind, and
 // repositories without lower-layer entries, commit exactly as above; a
 // stacked feature still gets its top layer's tip recorded live.
+//
+// Review-feedback children whose parent has a stack run their own mode for
+// every round kind: the round's fix manifest partitions each repository's
+// dirty paths against the parent's stack, one commit is created per target
+// layer in ascending order, and each commit message carries a Stack-Layer
+// trailer. Nothing is relocated and no parent ref or worktree is touched;
+// see round_commits_child.go. Rounds of every other feature kind behave
+// exactly as above.
 func (o *Orchestrator) commitRound(input agent.RoundCommitInput) error {
 	if len(input.Repos) == 0 {
 		return nil
@@ -79,6 +87,14 @@ func (o *Orchestrator) commitRound(input agent.RoundCommitInput) error {
 		return fmt.Errorf("load feature %s for round commit: %w", input.FeatureID, err)
 	}
 	msg := o.roundCommitMessage(f, input)
+
+	// Review-feedback children whose parent has a stack run the child mode:
+	// every round partitions its dirty paths against the parent's stack and
+	// tags each commit with its target layer. Every other feature keeps the
+	// paths below.
+	if parentStack := o.reviewFeedbackParentStack(f); len(parentStack) > 0 {
+		return o.commitReviewFeedbackChildRound(input, f, parentStack, pending, msg)
+	}
 
 	// The stack-aware path runs only for Final Review fix rounds carrying
 	// the fixer's iteration directory on a feature with more than one layer.

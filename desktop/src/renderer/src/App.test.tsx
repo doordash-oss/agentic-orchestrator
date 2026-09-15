@@ -325,7 +325,7 @@ describe('App readiness gating', () => {
       expect(screen.getAllByRole('heading', { name: /^agentico$/i })).toHaveLength(1),
     );
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
-    expect(mock.api.getReadiness).not.toHaveBeenCalled();
+    expect(mock.api.getRuntimeReadiness).not.toHaveBeenCalled();
   });
 
   it('opens the mandatory wizard when the runtime is ready but setup is incomplete', async () => {
@@ -336,7 +336,7 @@ describe('App readiness gating', () => {
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /set up agentico/i })).toBeInTheDocument(),
     );
-    expect(mock.api.getReadiness).toHaveBeenCalled();
+    expect(mock.api.getRuntimeReadiness).toHaveBeenCalled();
     // No path into feature creation exists while gates are unsatisfied.
     expect(screen.queryByRole('button', { name: /create|new feature/i })).not.toBeInTheDocument();
   });
@@ -359,7 +359,7 @@ describe('App readiness gating', () => {
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /set up agentico/i })).toBeInTheDocument(),
     );
-    const fetchesBeforeCrash = mock.api.getReadiness.mock.calls.length;
+    const fetchesBeforeCrash = mock.api.getRuntimeReadiness.mock.calls.length;
 
     act(() => {
       mock.emitConnection(
@@ -386,7 +386,7 @@ describe('App readiness gating', () => {
     // Recovery refetches the authoritative snapshot instead of trusting
     // anything remembered from before the crash.
     await waitFor(() =>
-      expect(mock.api.getReadiness.mock.calls.length).toBeGreaterThan(fetchesBeforeCrash),
+      expect(mock.api.getRuntimeReadiness.mock.calls.length).toBeGreaterThan(fetchesBeforeCrash),
     );
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /set up agentico/i })).toBeInTheDocument(),

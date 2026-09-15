@@ -216,7 +216,7 @@ func TestWorkspaceRepositoryInitializeCreatesInitialCommit(t *testing.T) {
 	}
 
 	// Readiness flips to feature-ready under the same catalog key.
-	snapshot := workspaceReadiness(fx.cfg)
+	snapshot := workspaceReadiness(context.Background(), fx.cfg)
 	found := false
 	for _, r := range snapshot.Repositories {
 		if r.Name == "seedrepo" {

@@ -419,6 +419,12 @@ export const ReadinessResponseSchema = z.object({
 });
 
 export type ReadinessResponse = z.output<typeof ReadinessResponseSchema>;
+export const RuntimeReadinessResponseSchema = ReadinessResponseSchema.omit({ workspace: true });
+export type RuntimeReadinessResponse = z.output<typeof RuntimeReadinessResponseSchema>;
+const _runtimeReadinessSubset = (
+  value: components['schemas']['RuntimeReadinessResponse'],
+): RuntimeReadinessResponse => value;
+void _runtimeReadinessSubset;
 
 export const RepositorySourcesResponseSchema = z.object({
   api_version: z.string(),

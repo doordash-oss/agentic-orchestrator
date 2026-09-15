@@ -202,6 +202,8 @@ const api: AgenticoApi = {
     call(IPC_CHANNELS.windowOpenSettings, request),
   getThemePreference: () => call(IPC_CHANNELS.themeGet),
   setThemePreference: (preference: ThemePreference) => call(IPC_CHANNELS.themeSet, preference),
+  getRuntimeReadiness: () => call(IPC_CHANNELS.runtimeReadinessGet),
+  refreshRuntimeReadiness: () => call(IPC_CHANNELS.runtimeReadinessRefresh),
   getReadiness: () => call(IPC_CHANNELS.readinessGet),
   refreshReadiness: () => call(IPC_CHANNELS.readinessRefresh),
   pickWorkspaceDirectory: () => call(IPC_CHANNELS.workspacePickDirectory),

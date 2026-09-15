@@ -164,12 +164,13 @@ const (
 // Readiness issue codes. They travel inside readiness payloads today; the
 // catalog owns their authored text so every layer shares one vocabulary.
 const (
-	InvalidConfiguration Code = "invalid_configuration"
-	InvalidRepository    Code = "invalid_repository"
-	MissingExecutable    Code = "missing_executable"
-	ModelsUnavailable    Code = "models_unavailable"
-	Unauthenticated      Code = "unauthenticated"
-	UnsupportedVersion   Code = "unsupported_version"
+	InvalidConfiguration       Code = "invalid_configuration"
+	InvalidRepository          Code = "invalid_repository"
+	RepositoryInspectionFailed Code = "repository_inspection_failed"
+	MissingExecutable          Code = "missing_executable"
+	ModelsUnavailable          Code = "models_unavailable"
+	Unauthenticated            Code = "unauthenticated"
+	UnsupportedVersion         Code = "unsupported_version"
 )
 
 // CLI error codes. Blocking failures of the agentico binary itself.
@@ -1031,6 +1032,12 @@ var catalog = map[Code]Entry{
 		Title:       "Invalid configuration",
 		Summary:     "The runtime configuration is unusable.",
 		Remediation: "Fix the configuration and restart the runtime.",
+	},
+	RepositoryInspectionFailed: {
+		Class:       ClassBlocking,
+		Title:       "Repository inspection failed",
+		Summary:     "Git could not inspect this repository.",
+		Remediation: "Check the Git executable and failure details, resolve the reported problem, then retry.",
 	},
 	InvalidRepository: {
 		Class:       ClassBlocking,

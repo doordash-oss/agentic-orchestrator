@@ -46,7 +46,7 @@ describe('ReadinessGate first snapshot', () => {
   it('shows a loading state and never flashes the wizard before the snapshot arrives', async () => {
     const mock = installAgenticoMock();
     const gate = deferred<ReadinessSnapshot>();
-    mock.api.getReadiness.mockReturnValueOnce(gate.promise);
+    mock.api.getRuntimeReadiness.mockReturnValueOnce(gate.promise);
     render(<ReadinessGate />);
 
     expect(screen.getByRole('status')).toHaveTextContent(/checking runtime readiness/i);
@@ -56,6 +56,15 @@ describe('ReadinessGate first snapshot', () => {
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /set up agentico/i })).toBeInTheDocument(),
     );
+  });
+
+  it('opens the dashboard while repository readiness remains unresolved', async () => {
+    const mock = installAgenticoMock({ readiness: readySnapshot() });
+    mock.api.getReadiness.mockReturnValue(new Promise(() => {}));
+    render(<ReadinessGate />);
+    expect(await screen.findByRole('option', { name: 'Overview' })).toBeVisible();
+    expect(mock.api.getReadiness).not.toHaveBeenCalled();
+    expect(mock.api.getRuntimeReadiness).toHaveBeenCalledTimes(1);
   });
 
   it('sends an already-ready runtime straight to the main view without the wizard', async () => {
@@ -69,7 +78,7 @@ describe('ReadinessGate first snapshot', () => {
 
   it('renders an actionable error with retry when the readiness fetch fails', async () => {
     const mock = installAgenticoMock();
-    mock.api.getReadiness
+    mock.api.getRuntimeReadiness
       .mockRejectedValueOnce(ipcError('E_NOT_CONNECTED', 'The app is not connected.'))
       .mockResolvedValueOnce(unreadySnapshot());
     render(<ReadinessGate />);
@@ -99,7 +108,7 @@ describe('ReadinessGate gating', () => {
 
   it('yields the main view when a recheck satisfies the provider gate', async () => {
     const mock = installAgenticoMock({ readiness: unreadySnapshot() });
-    mock.api.refreshReadiness.mockResolvedValue(readySnapshot());
+    mock.api.refreshRuntimeReadiness.mockResolvedValue(readySnapshot());
     render(<ReadinessGate />);
 
     await waitFor(() =>

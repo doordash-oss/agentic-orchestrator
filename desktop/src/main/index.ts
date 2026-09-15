@@ -725,7 +725,8 @@ if (!hasSingleInstanceLock) {
           app.focus({ steal: true });
           window.focus();
         },
-        isCrashed: (window) => !window.isDestroyed() && window.webContents.isCrashed(),
+        isDestroyed: (window) => window.isDestroyed() || window.webContents.isDestroyed(),
+        isCrashed: (window) => window.webContents.isCrashed(),
         reload: (window) => window.webContents.reload(),
         webContentsId: (window) => window.webContents.id,
       },
@@ -1444,6 +1445,8 @@ if (!hasSingleInstanceLock) {
         broadcastAppEvent({ type: 'theme', ...info });
         return info;
       },
+      getRuntimeReadiness: () => setup.getRuntimeReadiness(),
+      refreshRuntimeReadiness: () => setup.refreshRuntimeReadiness(),
       getReadiness: () => setup.getReadiness(),
       refreshReadiness: () => setup.refreshReadiness(),
       pickWorkspaceDirectory: () => setup.pickWorkspaceDirectory(),

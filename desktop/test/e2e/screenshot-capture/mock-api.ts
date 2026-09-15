@@ -1726,6 +1726,8 @@ function makeMockApi(
       theme = { preference, resolved: preference === 'system' ? theme.resolved : preference };
       return Promise.resolve(theme);
     },
+    getRuntimeReadiness: () => Promise.resolve(READY_SNAPSHOT),
+    refreshRuntimeReadiness: () => Promise.resolve(READY_SNAPSHOT),
     getReadiness: () => Promise.resolve(READY_SNAPSHOT),
     refreshReadiness: () => Promise.resolve(READY_SNAPSHOT),
     pickWorkspaceDirectory: () => Promise.resolve({ path: null } as PickedDirectory),

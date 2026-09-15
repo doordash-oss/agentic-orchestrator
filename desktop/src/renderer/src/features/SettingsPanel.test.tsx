@@ -25,11 +25,25 @@ import type {
 } from '../../../shared/ipc';
 import {
   defaultUpdateState,
-  installAgenticoMock,
+  installAgenticoMock as installBaseAgenticoMock,
   ipcError,
   readySnapshot,
 } from '../test/agenticoMock';
 import { SettingsPanel } from './SettingsPanel';
+
+function installAgenticoMock(overrides: Parameters<typeof installBaseAgenticoMock>[0] = {}) {
+  return installBaseAgenticoMock({
+    connection: {
+      status: 'ready',
+      stage: 'ready',
+      detail: 'Connected.',
+      ownership: 'external',
+      kind: 'local',
+      serverKey: 'a'.repeat(32),
+    },
+    ...overrides,
+  });
+}
 
 afterEach(cleanup);
 

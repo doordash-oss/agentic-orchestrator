@@ -221,6 +221,7 @@ export default function App() {
           {runtimeReady ? (
             <>
               <ReadinessGate
+                key={serverKey}
                 attentionItems={attentionItems}
                 refreshAttention={refreshAttention}
                 attentionDrafts={attentionDrafts}

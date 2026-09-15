@@ -171,8 +171,10 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 
 	// Stage candidates for every repository without advancing any parent ref.
 	// Most candidates are explicit two-parent no-ff merge commits created in a
-	// temporary detached worktree. A rebase repo that was already up to date at
-	// child creation is a pass-through candidate whose SHA is the parent anchor.
+	// temporary detached worktree. A repo whose child head is already contained
+	// in the parent anchor (the child left it untouched, or a rebase repo was
+	// already up to date at launch) is a pass-through candidate whose SHA is
+	// the parent anchor: git has nothing to merge there.
 	for i := range journal.Entries {
 		entry := &journal.Entries[i]
 		parentRepo := featureRepoByName(parent, entry.Repo)
@@ -183,14 +185,16 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 				fmt.Sprintf("parent no longer has repository %s", entry.Repo))
 			return nil, o.parkIntegrationAttention(child, journal, []integrationFinding{finding})
 		}
-		if rebasePassThroughRepo(child, entry.Repo) {
-			if !git.IsAncestor(parentRepo.Path, entry.ChildHeadSHA, entry.ParentAnchorSHA) {
-				entry.PrepState = feature.RepoPrepFailed
-				journal.Phase = feature.TransactionPhaseAttention
-				finding := entryFinding(entry, errcat.RebaseGatePassthroughModified,
-					fmt.Sprintf("rebase child modified up-to-date repo %s; only repos behind at launch may change", entry.Repo))
-				return nil, o.parkIntegrationAttention(child, journal, []integrationFinding{finding})
-			}
+		contained := entry.ChildHeadSHA == entry.ParentAnchorSHA ||
+			git.IsAncestor(parentRepo.Path, entry.ChildHeadSHA, entry.ParentAnchorSHA)
+		if rebasePassThroughRepo(child, entry.Repo) && !contained {
+			entry.PrepState = feature.RepoPrepFailed
+			journal.Phase = feature.TransactionPhaseAttention
+			finding := entryFinding(entry, errcat.RebaseGatePassthroughModified,
+				fmt.Sprintf("rebase child modified up-to-date repo %s; only repos behind at launch may change", entry.Repo))
+			return nil, o.parkIntegrationAttention(child, journal, []integrationFinding{finding})
+		}
+		if contained {
 			entry.CandidateSHA = entry.ParentAnchorSHA
 			entry.PrepState = feature.RepoPrepPrepared
 			if err := o.persistTransaction(child.ID, journal); err != nil {

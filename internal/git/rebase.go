@@ -15,6 +15,7 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -42,17 +43,35 @@ type PullRebaseResult struct {
 	Err     error
 }
 
-// PullRebase fetches from origin and rebases the current branch onto the
-// remote tracking branch. This syncs local commits on top of any remote
-// changes to the same branch before pushing.
+// PullRebase fetches the remote counterpart of branch and rebases the
+// current branch onto it so local commits sit on top of remote changes
+// before a push. The branch is fetched by explicit refspec because a
+// single-branch clone's configured refspec never writes origin/<branch>,
+// which would make the rebase a silent no-op.
 //
 // Outcomes:
 //   - Success: remote branch absent (first publish), already up-to-date, or rebase succeeded
 //   - Conflict: rebase had conflicts; rebase aborted, worktree left clean
 //   - Failure: network/auth/fetch error or other non-conflict failure
 func PullRebase(worktreePath, branch string) PullRebaseResult {
-	// 1. Fetch from origin
-	fetchCmd := exec.Command("git", "-C", worktreePath, "fetch", "origin")
+	// 1. ls-remote exit code 2 proves the remote branch is absent.
+	probeCmd := exec.Command("git", "-C", worktreePath, "ls-remote", "--exit-code", "--heads", "origin", "refs/heads/"+branch)
+	if out, err := probeCmd.CombinedOutput(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
+			// Remote branch doesn't exist (first publish) — no-op
+			return PullRebaseResult{Outcome: PullRebaseSuccess}
+		}
+		return PullRebaseResult{
+			Outcome: PullRebaseFailure,
+			Err:     fmt.Errorf("fetch failed: probing origin/%s: %s: %w", branch, strings.TrimSpace(string(out)), err),
+		}
+	}
+
+	// 2. Fetch the branch into its remote-tracking ref by explicit refspec.
+	target := "origin/" + branch
+	refspec := "+refs/heads/" + branch + ":refs/remotes/" + target
+	fetchCmd := exec.Command("git", "-C", worktreePath, "fetch", "--no-tags", "origin", refspec)
 	if out, err := fetchCmd.CombinedOutput(); err != nil {
 		return PullRebaseResult{
 			Outcome: PullRebaseFailure,
@@ -60,15 +79,7 @@ func PullRebase(worktreePath, branch string) PullRebaseResult {
 		}
 	}
 
-	// 2. Check if origin/<branch> exists
-	verifyCmd := readGitCmd(worktreePath, "rev-parse", "--verify", "origin/"+branch)
-	if err := verifyCmd.Run(); err != nil {
-		// Remote branch doesn't exist (first publish) — no-op
-		return PullRebaseResult{Outcome: PullRebaseSuccess}
-	}
-
 	// 3. Rebase onto origin/<branch>
-	target := "origin/" + branch
 	rebaseCmd := exec.Command("git", "-C", worktreePath, "rebase", target)
 	if out, err := rebaseCmd.CombinedOutput(); err != nil {
 		// 4. Check if this is a conflict (rebase-merge or rebase-apply directory exists)

@@ -142,11 +142,11 @@ type TransactionJournal struct {
 	// conflict files, dirty files, and SHAs, and raw diagnostics. Rendered
 	// text is never persisted; the catalog stays authoritative.
 	Attention *errcat.FailureRecord `yaml:"attention,omitempty"`
-	// TailSettled is the durable marker that the review-feedback integration
-	// tail has finished attempting all steps. The startup reconciler skips
-	// settled tails entirely so historical children trigger no pushes, no
-	// gh invocations, and no journal churn on later startups. Refactor
-	// children never set this marker.
+	// TailSettled is the durable marker that every step of the review-feedback
+	// integration tail succeeded. The startup reconciler skips settled tails
+	// entirely so historical children trigger no pushes, no gh invocations,
+	// and no journal churn on later startups; an unsettled tail is retried.
+	// Refactor children never set this marker.
 	TailSettled bool `yaml:"tail_settled,omitempty"`
 }
 

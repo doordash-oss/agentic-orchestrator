@@ -1397,7 +1397,7 @@ var catalog = map[Code]Entry{
 		summaryParams: func(p Params) string {
 			return warningRepoSummary(p, "The review-feedback tail for %s did not finish.")
 		},
-		Remediation: "Retry the tail steps; each failure is listed in the details.",
+		Remediation: "The tail retries on the next server start or when the pass is integrated again; each failure is listed in the details.",
 	},
 	RewindPullRequestCloseFailed: {
 		Class:   ClassWarning,

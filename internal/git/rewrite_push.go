@@ -171,7 +171,7 @@ func pushRewrittenBranch(worktreePath, branch string, beforePush func()) error {
 		return fmt.Errorf("pushing rewritten branch: %w", pushErr)
 	}
 
-	return nil
+	return syncRemoteTrackingRef(worktreePath, branch, "HEAD")
 }
 
 func sanitizeOrdinaryPushError(err error) error {

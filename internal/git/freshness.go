@@ -17,7 +17,18 @@ package git
 import (
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
+
+// TrackingRefreshInterval bounds how often RepoFreshness fetches a branch the
+// clone's fetch refspec does not map. TrackingRefreshTimeout bounds one fetch.
+var (
+	TrackingRefreshInterval = time.Minute
+	TrackingRefreshTimeout  = 10 * time.Second
+)
+
+var trackingRefreshes sync.Map // worktree + branch → time.Time of last fetch
 
 // Freshness status values returned by RepoFreshness. Exported since callers
 // outside this package (e.g. cmd/agentico) switch on these literal strings.
@@ -38,12 +49,19 @@ func RepoFreshness(worktreePath string) string {
 	} else if strings.TrimSpace(string(out)) != "" {
 		return FreshnessLocalChanges
 	}
-	if _, timedOut, err := runProbe("-C", worktreePath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); timedOut {
+	remote := "@{upstream}"
+	if _, timedOut, err := runProbe("-C", worktreePath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", remote); timedOut {
 		return FreshnessUnknown
 	} else if err != nil {
-		return "local only"
+		// git only resolves @{upstream} through the fetch refspec. A
+		// single-branch clone never maps feature branches, so fall back to
+		// the remote-tracking ref by name.
+		remote = unmappedTrackingRef(worktreePath)
+		if remote == "" {
+			return "local only"
+		}
 	}
-	out, _, err := runProbe("-C", worktreePath, "rev-list", "--left-right", "--count", "HEAD...@{upstream}")
+	out, _, err := runProbe("-C", worktreePath, "rev-list", "--left-right", "--count", "HEAD..."+remote)
 	if err != nil {
 		return FreshnessUnknown
 	}
@@ -60,6 +78,78 @@ func RepoFreshness(worktreePath string) string {
 		return "in sync"
 	}
 	return FreshnessLocalChanges
+}
+
+// unmappedTrackingRef returns refs/remotes/origin/<branch> for the checked-out
+// branch when the clone's fetch refspec does not map it, refreshing that ref
+// from origin at most once per TrackingRefreshInterval so the comparison
+// reflects the remote rather than the last time something fetched the
+// branch by hand. It returns "" when HEAD is detached, the refspec already
+// maps the branch (git would have resolved @{upstream}), or the remote
+// branch does not exist.
+func unmappedTrackingRef(worktreePath string) string {
+	out, _, err := runProbe("-C", worktreePath, "symbolic-ref", "--short", "-q", "HEAD")
+	if err != nil {
+		return ""
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "" {
+		return ""
+	}
+	if covered, err := FetchRefspecCoversBranch(worktreePath, branch); err != nil || covered {
+		return ""
+	}
+	ref := "refs/remotes/origin/" + branch
+	refreshTrackingRef(worktreePath, branch, ref)
+	if _, _, err := runProbe("-C", worktreePath, "rev-parse", "--verify", "-q", ref+"^{commit}"); err != nil {
+		return ""
+	}
+	return ref
+}
+
+func refreshTrackingRef(worktreePath, branch, ref string) {
+	key := worktreePath + "\x00" + branch
+	now := time.Now()
+	if last, ok := trackingRefreshes.Load(key); ok && now.Sub(last.(time.Time)) < TrackingRefreshInterval {
+		return
+	}
+	trackingRefreshes.Store(key, now)
+	// Failures leave the previous ref in place; the label then reflects the
+	// last successful refresh rather than failing the probe.
+	_, _, _ = runProbeBounded(TrackingRefreshTimeout, "-C", worktreePath, "fetch", "--no-tags", "origin", "+refs/heads/"+branch+":"+ref)
+}
+
+// FetchRefspecCoversBranch reports whether any configured origin fetch
+// refspec maps refs/heads/<branch> to a remote-tracking ref. Single-branch
+// clones map only their default branch, so git maintains no tracking ref
+// for other branches and cannot derive an implicit force-with-lease.
+func FetchRefspecCoversBranch(worktreePath, branch string) (bool, error) {
+	out, _, err := runProbe("-C", worktreePath, "config", "--get-all", "remote.origin.fetch")
+	if err != nil {
+		return false, err
+	}
+	want := "refs/heads/" + branch
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		src := strings.TrimPrefix(strings.TrimSpace(line), "+")
+		if i := strings.Index(src, ":"); i >= 0 {
+			src = src[:i]
+		}
+		if refspecSourceMatches(src, want) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// refspecSourceMatches implements git's refspec source matching: an exact
+// ref name, or a pattern with a single "*" standing for any non-empty
+// path segment sequence.
+func refspecSourceMatches(pattern, ref string) bool {
+	if !strings.Contains(pattern, "*") {
+		return pattern == ref
+	}
+	prefix, suffix, _ := strings.Cut(pattern, "*")
+	return len(ref) > len(prefix)+len(suffix) && strings.HasPrefix(ref, prefix) && strings.HasSuffix(ref, suffix)
 }
 
 // FreshnessCache decorates RepoFreshness with a bounded, deduplicated,

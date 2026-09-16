@@ -1441,8 +1441,16 @@ export class RuntimeGateway {
       return;
     }
 
-    const args = ['server', '--config', selected.configPath, '--state-dir', selected.stateDir];
-    this.launchCommandContext = 'bundled agentico server --config [path] --state-dir [path]';
+    const args = [
+      'server',
+      '--config',
+      selected.configPath,
+      '--state-dir',
+      selected.stateDir,
+      '--updates=off',
+    ];
+    this.launchCommandContext =
+      'bundled agentico server --config [path] --state-dir [path] --updates=off';
     let child: ServerChildLike;
     try {
       child = this.deps.spawnServer(resolved.path, args);

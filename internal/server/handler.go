@@ -96,6 +96,10 @@ type apiHandler struct {
 	// defaults.
 	updateSourceOptions git.SourceUpdateOptions
 
+	// updates owns the release-availability snapshot, the metadata check
+	// worker, and the periodic scheduler behind /api/v1/update.
+	updates *updateCoordinator
+
 	// sourceUpdates tracks the lifetime of admitted Update-from-origin
 	// attempts so reconciliation reads and feature acceptance settle before
 	// concluding anything about a repository an admitted attempt may still
@@ -168,7 +172,9 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		updateSourceDeadline:    defaultUpdateSourceDeadline,
 		sourceUpdates:           newSourceUpdateTracker(),
 		reconcileSourceDeadline: defaultReconcileSourceDeadline,
+		updates:                 newUpdateCoordinator(opts.Updates),
 	}
+	handler.updates.publish = handler.publishUpdateEvent
 	if opts.Worktrees != nil {
 		handler.cleanliness = git.NewCleanlinessCache(opts.Worktrees)
 	}
@@ -219,6 +225,8 @@ const (
 	apiPathRecovery                = "/api/v1/recovery"
 	apiPathRecoveryActions         = "/api/v1/recovery/actions"
 	apiPathRecoveryLogs            = "/api/v1/recovery/logs"
+	apiPathUpdate                  = "/api/v1/update"
+	apiPathUpdateCheck             = "/api/v1/update/check"
 	apiPathEvents                  = "/api/v1/events"
 	apiPathUploads                 = "/api/v1/uploads"
 )
@@ -243,6 +251,7 @@ const (
 	resourceTypeRuntime        = "runtime"
 	resourceTypeRelationship   = "relationship"
 	resourceTypeCloneOperation = "clone_operation"
+	resourceTypeUpdate         = "update"
 )
 
 var topLevelServerRoutes = []topLevelRoute{
@@ -274,6 +283,8 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathRecovery, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryRoute }},
 	{apiPathRecoveryActions, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryActionRoute }},
 	{apiPathRecoveryLogs, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryLogRoute }},
+	{apiPathUpdate, func(h *apiHandler) http.HandlerFunc { return h.handleUpdateRoute }},
+	{apiPathUpdateCheck, func(h *apiHandler) http.HandlerFunc { return h.handleUpdateCheckRoute }},
 	{apiPathEvents, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleEvents) }},
 	{apiPathUploads, func(h *apiHandler) http.HandlerFunc { return h.handleUploadsRoute }},
 }

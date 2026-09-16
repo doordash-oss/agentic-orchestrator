@@ -53,6 +53,10 @@ type driverConfig struct {
 	barrier       string
 	barrierFile   string
 	prepareOnly   bool
+	// updateFeedURL routes the release-availability feed to a local test
+	// fixture. Empty keeps the fixed production feed. The fixture receives
+	// no credentials.
+	updateFeedURL string
 	serverFlags   launchOptions
 }
 
@@ -131,6 +135,12 @@ func init() {
 	// The adopted image prints its fingerprints once adoption succeeds so
 	// the e2e harness can compare args/env digests across the exec boundary.
 	selfUpdateAdoptedStartHook = func() { printDriverFingerprints(os.Stderr) }
+	// Fixture feed routing is armed only by the --update-feed driver flag
+	// parsed above; ordinary builds keep the nil hook and the fixed
+	// production feed.
+	updateFeedHook = func() serverruntime.FeedChecker {
+		return selfupdate.NewFixtureFeedClient(driver.updateFeedURL, selfupdate.ProductionFeedSlug)
+	}
 }
 
 // parseDriverArgs recognizes the selfupdate-driver subcommand and parses the
@@ -152,6 +162,7 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 	driver.barrier = ""
 	driver.barrierFile = ""
 	driver.prepareOnly = false
+	driver.updateFeedURL = ""
 	rest := args[1:]
 	for i := 0; i < len(rest); i++ {
 		arg := rest[i]
@@ -190,6 +201,12 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 			}
 			i++
 			opts.serverName = rest[i]
+		case "--updates":
+			if i+1 >= len(rest) {
+				return opts, true, fmt.Errorf("--updates requires a value")
+			}
+			i++
+			opts.updatesPolicy = rest[i]
 		case "--help", "-h":
 			opts.mode = launchModeHelp
 			driver.serverFlags = opts
@@ -246,11 +263,32 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 			driver.barrierFile = rest[i]
 		case "--prepare-only":
 			driver.prepareOnly = true
+		case "--update-feed":
+			// Driver-only fixture routing for availability journeys: a
+			// deliberately built test binary points the metadata feed at a
+			// local fixture server. No credential is ever sent there.
+			if i+1 >= len(rest) {
+				return opts, true, fmt.Errorf("--update-feed requires a value")
+			}
+			i++
+			driver.updateFeedURL = rest[i]
+			if !strings.HasPrefix(driver.updateFeedURL, "http://127.0.0.1:") {
+				return opts, true, fmt.Errorf("--update-feed only accepts a loopback http fixture URL")
+			}
 		default:
+			if strings.HasPrefix(arg, "--updates=") {
+				opts.updatesPolicy = strings.TrimPrefix(arg, "--updates=")
+				continue
+			}
 			if strings.HasPrefix(arg, "-") {
 				return opts, true, fmt.Errorf("unknown flag: %s", arg)
 			}
 			return opts, true, fmt.Errorf("unknown selfupdate-driver argument: %s", arg)
+		}
+	}
+	if opts.updatesPolicy != "" {
+		if _, ok := selfupdate.ParsePolicyValue(opts.updatesPolicy); !ok {
+			return opts, true, fmt.Errorf("invalid --updates value %q: expected off, notify, or auto", opts.updatesPolicy)
 		}
 	}
 	if driver.barrier != "" && driver.anyFailArmed() {

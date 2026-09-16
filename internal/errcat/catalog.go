@@ -178,11 +178,20 @@ const (
 	InvalidUsage            Code = "invalid_usage"
 	DesktopLaunchFailed     Code = "desktop_launch_failed"
 	UpdateCheckFailed       Code = "update_check_failed"
+	UpdateUnsupportedPolicy Code = "update_unsupported_policy"
+	UpdateConfigInvalid     Code = "update_config_invalid"
 	ContractInputUnreadable Code = "contract_input_unreadable"
 	RuntimeAlreadyRunning   Code = "runtime_already_running"
 	RuntimeInitFailed       Code = "runtime_init_failed"
 	ServerStartFailed       Code = "server_start_failed"
 	ProtocolViolation       Code = "protocol_violation"
+)
+
+// Update-availability codes for the release-availability REST surface: the
+// explicit-check refusals under the off policy and ineligible installations.
+const (
+	UpdateDisabled           Code = "update_disabled"
+	UpdateUnsupportedInstall Code = "update_unsupported_install"
 )
 
 // CLI degradation warning codes, one per startup degradation family.
@@ -325,6 +334,23 @@ type UpdateRolledBackParams struct {
 }
 
 func (UpdateRolledBackParams) params() {}
+
+// UpdateUnsupportedInstallParams carries the machine-readable remediation
+// code and actionable next step for UpdateUnsupportedInstall.
+type UpdateUnsupportedInstallParams struct {
+	Reason      string
+	Remediation string
+}
+
+func (UpdateUnsupportedInstallParams) params() {}
+
+// UpdateRetryDeadlineParams carries the human-readable retry hint for a
+// refused manual check inside a server-imposed retry deadline.
+type UpdateRetryDeadlineParams struct {
+	RetryAfter string
+}
+
+func (UpdateRetryDeadlineParams) params() {}
 
 // AlreadyRunningParams names the state directory or running base URL for
 // RuntimeAlreadyRunning.
@@ -1112,6 +1138,44 @@ var catalog = map[Code]Entry{
 			return params.Reason
 		},
 		Remediation: "Check network access to the GitHub API, or update through your package manager.",
+	},
+	UpdateUnsupportedPolicy: {
+		Class:       ClassBlocking,
+		Title:       "Update policy not supported",
+		Summary:     "The requested update policy is not supported by this runtime.",
+		Remediation: "Use --updates=off or --updates=notify (or the matching AGENTICO_UPDATES / server.updates.policy value); automatic updates are a later release.",
+	},
+	UpdateConfigInvalid: {
+		Class:   ClassBlocking,
+		Title:   "Update configuration invalid",
+		Summary: "An update startup setting failed validation.",
+		summaryParams: func(p Params) string {
+			params, ok := p.(UsageParams)
+			if !ok || strings.TrimSpace(params.Reason) == "" {
+				return ""
+			}
+			return params.Reason
+		},
+		Remediation: "Correct the flagged setting in --updates, AGENTICO_UPDATES, or the server.updates config section, then relaunch.",
+	},
+	UpdateDisabled: {
+		Class:       ClassWarning,
+		Title:       "Update checks disabled",
+		Summary:     "Update checks are disabled by this runtime's startup policy.",
+		Remediation: "Relaunch the server with --updates=notify (or without the desktop's --updates=off flag) to enable metadata-only checks.",
+	},
+	UpdateUnsupportedInstall: {
+		Class:   ClassNeedsAction,
+		Title:   "Update unsupported for this installation",
+		Summary: "This installation cannot be updated in place, so update checks are refused.",
+		summaryParams: func(p Params) string {
+			params, ok := p.(UpdateUnsupportedInstallParams)
+			if !ok || strings.TrimSpace(params.Reason) == "" {
+				return ""
+			}
+			return fmt.Sprintf("This installation cannot be updated in place (%s), so update checks are refused.", params.Reason)
+		},
+		Remediation: "See the snapshot's remediation field for the installation-specific next step.",
 	},
 	ContractInputUnreadable: {
 		Class:       ClassBlocking,

@@ -971,6 +971,210 @@ func (e TaskActivityState) Valid() bool {
 	}
 }
 
+// Defines values for UpdatePublicReceiptOutcome.
+const (
+	UpdatePublicReceiptOutcomeConfirmed  UpdatePublicReceiptOutcome = "confirmed"
+	UpdatePublicReceiptOutcomePending    UpdatePublicReceiptOutcome = "pending"
+	UpdatePublicReceiptOutcomeRolledBack UpdatePublicReceiptOutcome = "rolled_back"
+)
+
+// Valid indicates whether the value is a known member of the UpdatePublicReceiptOutcome enum.
+func (e UpdatePublicReceiptOutcome) Valid() bool {
+	switch e {
+	case UpdatePublicReceiptOutcomeConfirmed:
+		return true
+	case UpdatePublicReceiptOutcomePending:
+		return true
+	case UpdatePublicReceiptOutcomeRolledBack:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotChannel.
+const (
+	Stable UpdateSnapshotChannel = "stable"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotChannel enum.
+func (e UpdateSnapshotChannel) Valid() bool {
+	switch e {
+	case Stable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotInstallation.
+const (
+	UpdateSnapshotInstallationAppBundle   UpdateSnapshotInstallation = "app_bundle"
+	UpdateSnapshotInstallationDevelopment UpdateSnapshotInstallation = "development"
+	UpdateSnapshotInstallationGoInstall   UpdateSnapshotInstallation = "go_install"
+	UpdateSnapshotInstallationHomebrew    UpdateSnapshotInstallation = "homebrew"
+	UpdateSnapshotInstallationTarball     UpdateSnapshotInstallation = "tarball"
+	UpdateSnapshotInstallationUnknown     UpdateSnapshotInstallation = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotInstallation enum.
+func (e UpdateSnapshotInstallation) Valid() bool {
+	switch e {
+	case UpdateSnapshotInstallationAppBundle:
+		return true
+	case UpdateSnapshotInstallationDevelopment:
+		return true
+	case UpdateSnapshotInstallationGoInstall:
+		return true
+	case UpdateSnapshotInstallationHomebrew:
+		return true
+	case UpdateSnapshotInstallationTarball:
+		return true
+	case UpdateSnapshotInstallationUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotPolicy.
+const (
+	Notify UpdateSnapshotPolicy = "notify"
+	Off    UpdateSnapshotPolicy = "off"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotPolicy enum.
+func (e UpdateSnapshotPolicy) Valid() bool {
+	switch e {
+	case Notify:
+		return true
+	case Off:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotSignature.
+const (
+	Unverified UpdateSnapshotSignature = "unverified"
+	Verified   UpdateSnapshotSignature = "verified"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotSignature enum.
+func (e UpdateSnapshotSignature) Valid() bool {
+	switch e {
+	case Unverified:
+		return true
+	case Verified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotStatus.
+const (
+	UpdateSnapshotStatusAvailable   UpdateSnapshotStatus = "available"
+	UpdateSnapshotStatusChecking    UpdateSnapshotStatus = "checking"
+	UpdateSnapshotStatusConfirmed   UpdateSnapshotStatus = "confirmed"
+	UpdateSnapshotStatusDisabled    UpdateSnapshotStatus = "disabled"
+	UpdateSnapshotStatusDownloading UpdateSnapshotStatus = "downloading"
+	UpdateSnapshotStatusDraining    UpdateSnapshotStatus = "draining"
+	UpdateSnapshotStatusFailed      UpdateSnapshotStatus = "failed"
+	UpdateSnapshotStatusIdle        UpdateSnapshotStatus = "idle"
+	UpdateSnapshotStatusRestarting  UpdateSnapshotStatus = "restarting"
+	UpdateSnapshotStatusScheduled   UpdateSnapshotStatus = "scheduled"
+	UpdateSnapshotStatusUnsupported UpdateSnapshotStatus = "unsupported"
+	UpdateSnapshotStatusUpToDate    UpdateSnapshotStatus = "up_to_date"
+	UpdateSnapshotStatusVerified    UpdateSnapshotStatus = "verified"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotStatus enum.
+func (e UpdateSnapshotStatus) Valid() bool {
+	switch e {
+	case UpdateSnapshotStatusAvailable:
+		return true
+	case UpdateSnapshotStatusChecking:
+		return true
+	case UpdateSnapshotStatusConfirmed:
+		return true
+	case UpdateSnapshotStatusDisabled:
+		return true
+	case UpdateSnapshotStatusDownloading:
+		return true
+	case UpdateSnapshotStatusDraining:
+		return true
+	case UpdateSnapshotStatusFailed:
+		return true
+	case UpdateSnapshotStatusIdle:
+		return true
+	case UpdateSnapshotStatusRestarting:
+		return true
+	case UpdateSnapshotStatusScheduled:
+		return true
+	case UpdateSnapshotStatusUnsupported:
+		return true
+	case UpdateSnapshotStatusUpToDate:
+		return true
+	case UpdateSnapshotStatusVerified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotStrategy.
+const (
+	Idle    UpdateSnapshotStrategy = "idle"
+	Quiesce UpdateSnapshotStrategy = "quiesce"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotStrategy enum.
+func (e UpdateSnapshotStrategy) Valid() bool {
+	switch e {
+	case Idle:
+		return true
+	case Quiesce:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotUnsupportedReason.
+const (
+	UpdateSnapshotUnsupportedReasonBundled             UpdateSnapshotUnsupportedReason = "bundled"
+	UpdateSnapshotUnsupportedReasonDevelopmentVersion  UpdateSnapshotUnsupportedReason = "development_version"
+	UpdateSnapshotUnsupportedReasonHomebrew            UpdateSnapshotUnsupportedReason = "homebrew"
+	UpdateSnapshotUnsupportedReasonLeaseUnavailable    UpdateSnapshotUnsupportedReason = "lease_unavailable"
+	UpdateSnapshotUnsupportedReasonNonReplaceable      UpdateSnapshotUnsupportedReason = "non_replaceable"
+	UpdateSnapshotUnsupportedReasonOwnershipContention UpdateSnapshotUnsupportedReason = "ownership_contention"
+	UpdateSnapshotUnsupportedReasonUnsupportedPlatform UpdateSnapshotUnsupportedReason = "unsupported_platform"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotUnsupportedReason enum.
+func (e UpdateSnapshotUnsupportedReason) Valid() bool {
+	switch e {
+	case UpdateSnapshotUnsupportedReasonBundled:
+		return true
+	case UpdateSnapshotUnsupportedReasonDevelopmentVersion:
+		return true
+	case UpdateSnapshotUnsupportedReasonHomebrew:
+		return true
+	case UpdateSnapshotUnsupportedReasonLeaseUnavailable:
+		return true
+	case UpdateSnapshotUnsupportedReasonNonReplaceable:
+		return true
+	case UpdateSnapshotUnsupportedReasonOwnershipContention:
+		return true
+	case UpdateSnapshotUnsupportedReasonUnsupportedPlatform:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FeatureSubaction.
 const (
 	FeatureSubactionDescription FeatureSubaction = "description"
@@ -1382,6 +1586,21 @@ func (e ExecuteRecoveryActionsParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for CheckForUpdateParamsXAgenticoClient.
+const (
+	CheckForUpdateParamsXAgenticoClientLocal CheckForUpdateParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CheckForUpdateParamsXAgenticoClient enum.
+func (e CheckForUpdateParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CheckForUpdateParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for StageUploadParamsXAgenticoClient.
 const (
 	StageUploadParamsXAgenticoClientLocal StageUploadParamsXAgenticoClient = "local"
@@ -1549,13 +1768,13 @@ func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
 
 // Defines values for UpdateWorkspaceRepositorySourceParamsXAgenticoClient.
 const (
-	Local UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
+	UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the UpdateWorkspaceRepositorySourceParamsXAgenticoClient enum.
 func (e UpdateWorkspaceRepositorySourceParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case Local:
+	case UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -4111,6 +4330,111 @@ type TranscriptResponse struct {
 	Meta       ResponseMeta        `json:"meta,omitempty"`
 }
 
+// UpdatePublicReceipt Public view of the durable installation receipt: versions, outcome, times, and a sanitized error only. Transaction paths, descriptors, process environment, credentials, and raw receipt internals never cross this boundary.
+type UpdatePublicReceipt struct {
+	// CompletedAt When the receipt reached its settled outcome.
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+
+	// Error Sanitized failure reason for rolled_back receipts.
+	Error       *string                    `json:"error,omitempty"`
+	FromVersion string                     `json:"from_version"`
+	Outcome     UpdatePublicReceiptOutcome `json:"outcome"`
+	ToVersion   string                     `json:"to_version"`
+}
+
+// UpdatePublicReceiptOutcome defines model for UpdatePublicReceipt.Outcome.
+type UpdatePublicReceiptOutcome string
+
+// UpdateSnapshot Metadata-only release availability for this runtime. Availability is advisory: no package, manifest, checksum, or signature is fetched, nothing is staged, and the executable is never modified by a check. Activity and admission counters belong to the later installation slice and are deliberately absent.
+type UpdateSnapshot struct {
+	// Channel Release channel consulted by checks. Only stable is supported.
+	Channel UpdateSnapshotChannel `json:"channel"`
+
+	// CheckIntervalSeconds Configured periodic check interval in seconds.
+	CheckIntervalSeconds int `json:"check_interval_seconds"`
+
+	// CurrentVersion Running build version as reported at startup.
+	CurrentVersion string `json:"current_version"`
+
+	// Error Canonical error for the current state: update_rolled_back for a validated rollback or suppressed newest release, update_check_failed for transient check failures. Absent when availability is healthy.
+	Error *Error `json:"error,omitempty"`
+
+	// Installation Classified installation method of the running executable.
+	Installation UpdateSnapshotInstallation `json:"installation"`
+
+	// LastCheckAt When the last check attempt finished, successful or not.
+	LastCheckAt *time.Time `json:"last_check_at,omitempty"`
+
+	// LastSuccessAt When the last successful check finished. Retained across later failed refreshes together with the metadata it produced.
+	LastSuccessAt *time.Time `json:"last_success_at,omitempty"`
+
+	// LatestReleaseURL Public release page for the discovered latest version. Never a signed download URL and never credential-bearing.
+	LatestReleaseURL *string `json:"latest_release_url,omitempty"`
+
+	// LatestVersion Greatest clean stable release discovered by the last successful check; unknown (absent) before discovery. A suppressed newest release remains visible here.
+	LatestVersion *string `json:"latest_version,omitempty"`
+
+	// NextCheckAt When the next periodic check is scheduled. Absent when no periodic check will run (policy off, unsupported, or shutdown).
+	NextCheckAt *time.Time `json:"next_check_at,omitempty"`
+
+	// Policy Effective startup update policy. `auto` is not supported and fails configuration at startup.
+	Policy UpdateSnapshotPolicy `json:"policy"`
+
+	// Receipt Sanitized public projection of the durable installation receipt history. Absent when no installation receipt exists for this executable. Metadata-only runs never create receipts.
+	Receipt *UpdatePublicReceipt `json:"receipt,omitempty"`
+
+	// Remediation Actionable next step for an unsupported installation.
+	Remediation *string `json:"remediation,omitempty"`
+
+	// RetryNotBefore Server-imposed retry floor from a 403/429 response. Local backoff and jitter never shorten it; explicit checks inside the deadline are refused without a request.
+	RetryNotBefore *time.Time `json:"retry_not_before,omitempty"`
+
+	// Signature Signature trust state for a would-be target. Checks are metadata-only, so this phase always reports unverified.
+	Signature UpdateSnapshotSignature `json:"signature"`
+
+	// Status Coarse availability state. downloading, verified, scheduled, draining, and restarting are reserved for the later installation slice and never emitted by the availability endpoints.
+	Status UpdateSnapshotStatus `json:"status"`
+
+	// Strategy Reserved startup setting, reported for transparency. It never schedules work and never affects manual installation.
+	Strategy UpdateSnapshotStrategy `json:"strategy"`
+
+	// TargetVersion Version a pending installation targets. Always absent in this phase: no target contract is ever trusted from feed metadata.
+	TargetVersion *string `json:"target_version,omitempty"`
+
+	// UnsupportedReason Machine-readable remediation code present only while status is unsupported. ownership_contention means another live runtime owns this binary's update lease; lease_unavailable covers other lease acquisition failures.
+	UnsupportedReason *UpdateSnapshotUnsupportedReason `json:"unsupported_reason,omitempty"`
+}
+
+// UpdateSnapshotChannel Release channel consulted by checks. Only stable is supported.
+type UpdateSnapshotChannel string
+
+// UpdateSnapshotInstallation Classified installation method of the running executable.
+type UpdateSnapshotInstallation string
+
+// UpdateSnapshotPolicy Effective startup update policy. `auto` is not supported and fails configuration at startup.
+type UpdateSnapshotPolicy string
+
+// UpdateSnapshotSignature Signature trust state for a would-be target. Checks are metadata-only, so this phase always reports unverified.
+type UpdateSnapshotSignature string
+
+// UpdateSnapshotStatus Coarse availability state. downloading, verified, scheduled, draining, and restarting are reserved for the later installation slice and never emitted by the availability endpoints.
+type UpdateSnapshotStatus string
+
+// UpdateSnapshotStrategy Reserved startup setting, reported for transparency. It never schedules work and never affects manual installation.
+type UpdateSnapshotStrategy string
+
+// UpdateSnapshotUnsupportedReason Machine-readable remediation code present only while status is unsupported. ownership_contention means another live runtime owns this binary's update lease; lease_unavailable covers other lease acquisition failures.
+type UpdateSnapshotUnsupportedReason string
+
+// UpdateSnapshotResponse defines model for UpdateSnapshotResponse.
+type UpdateSnapshotResponse struct {
+	APIVersion string       `json:"api_version"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+
+	// Update Metadata-only release availability for this runtime. Availability is advisory: no package, manifest, checksum, or signature is fetched, nothing is staged, and the executable is never modified by a check. Activity and admission counters belong to the later installation slice and are deliberately absent.
+	Update UpdateSnapshot `json:"update"`
+}
+
 // Usage defines model for Usage.
 type Usage struct {
 	CostUSD      float64 `json:"cost_usd,omitempty"`
@@ -4544,6 +4868,18 @@ type GetSessionTranscriptParams struct {
 	Limit  Limit `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// CheckForUpdateJSONBody defines parameters for CheckForUpdate.
+type CheckForUpdateJSONBody map[string]interface{}
+
+// CheckForUpdateParams defines parameters for CheckForUpdate.
+type CheckForUpdateParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CheckForUpdateParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CheckForUpdateParamsXAgenticoClient defines parameters for CheckForUpdate.
+type CheckForUpdateParamsXAgenticoClient string
+
 // StageUploadParams defines parameters for StageUpload.
 type StageUploadParams struct {
 	// Kind Staged upload kind: image or attachment.
@@ -4735,6 +5071,9 @@ type RefreshRuntimeReadinessJSONRequestBody RefreshRuntimeReadinessJSONBody
 
 // ExecuteRecoveryActionsJSONRequestBody defines body for ExecuteRecoveryActions for application/json ContentType.
 type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody
+
+// CheckForUpdateJSONRequestBody defines body for CheckForUpdate for application/json ContentType.
+type CheckForUpdateJSONRequestBody CheckForUpdateJSONBody
 
 // StartWorkspaceCloneJSONRequestBody defines body for StartWorkspaceClone for application/json ContentType.
 type StartWorkspaceCloneJSONRequestBody = CloneStartSchema

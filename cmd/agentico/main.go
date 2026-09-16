@@ -139,7 +139,10 @@ type launchOptions struct {
 	refreshModels        bool
 	listenAddr           string
 	serverName           string
-	mode                 launchMode
+	// updatesPolicy carries the raw --updates value (both --updates=v and
+	// --updates v forms normalize here). Empty means the flag was not passed.
+	updatesPolicy string
+	mode          launchMode
 	validateArtifacts    validateArtifactsOptions
 	verifyEvidence       verifyEvidenceOptions
 	// updateCheck is set when update mode was selected with --check / -n,
@@ -158,7 +161,7 @@ type verifyEvidenceOptions struct {
 	dir      string
 }
 
-type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName string) int
+type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName, updatesPolicy string) int
 
 // updater is the injectable update seam. Production
 // wiring passes the real updater, tests pass a fake. It returns the process
@@ -241,7 +244,7 @@ func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop d
 		if !ok {
 			return 1
 		}
-		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, providers, opts.refreshModels, opts.listenAddr, opts.serverName)
+		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, providers, opts.refreshModels, opts.listenAddr, opts.serverName, opts.updatesPolicy)
 	default:
 		if err := launchDesktop(); err != nil {
 			renderError(stderr, errcat.DesktopLaunchFailed, errcat.WithDiagnostics(err.Error()))
@@ -385,7 +388,19 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 			}
 			i++
 			opts.serverName = args[i]
+		case "--updates":
+			// Separate-value form: --updates off.
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--updates requires a value")
+			}
+			i++
+			opts.updatesPolicy = args[i]
 		default:
+			if strings.HasPrefix(arg, "--updates=") {
+				// Equals form: --updates=off.
+				opts.updatesPolicy = strings.TrimPrefix(arg, "--updates=")
+				continue
+			}
 			if strings.HasPrefix(arg, "-") {
 				return opts, fmt.Errorf("unknown flag: %s", arg)
 			}
@@ -394,6 +409,20 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	}
 	if opts.mode == launchModeDesktop && serverOnlyFlag != "" {
 		return opts, fmt.Errorf("%s is available only with the headless server; run 'agentico server %s ...'", serverOnlyFlag, serverOnlyFlag)
+	}
+	// The equals form bypasses the server-only flag probe above, so reject
+	// any parsed --updates value outside server mode here.
+	if opts.updatesPolicy != "" && opts.mode != launchModeServer {
+		return opts, fmt.Errorf("--updates is available only with the headless server; run 'agentico server --updates ...'")
+	}
+	// --updates values are syntax-checked here so a typo fails fast, before
+	// any socket is opened. The effective value still resolves later —
+	// flag over AGENTICO_UPDATES over server.updates.policy — so an
+	// overridden source's "auto" never fails a launch that never uses it.
+	if opts.updatesPolicy != "" {
+		if _, ok := selfupdate.ParsePolicyValue(opts.updatesPolicy); !ok {
+			return opts, fmt.Errorf("invalid --updates value %q: expected off, notify, or auto", opts.updatesPolicy)
+		}
 	}
 	// --listen/--name values are normalized and validated here at parse time
 	// (after the server-only check above) so bad values fail fast, before any
@@ -416,7 +445,7 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 
 func isServerOnlyLaunchFlag(flag string) bool {
 	switch flag {
-	case "--config", "--state-dir", "--dangerously-skip-permissions", "--providers", "--refresh-models", "--listen", "--name":
+	case "--config", "--state-dir", "--dangerously-skip-permissions", "--providers", "--refresh-models", "--listen", "--name", "--updates":
 		return true
 	default:
 		return false
@@ -554,7 +583,15 @@ Server flags (use with 'agentico server'):
                                    Wildcards (0.0.0.0, ::) expose the server on the
                                    network and print a bearer-token connection string;
   --name <name>                    Server display name (default: generated, persisted per
-                                   runtime directory)
+                                    runtime directory)
+  --updates <policy>               Release-availability policy for the server: off or notify
+                                    (default: notify; also accepts both --updates=off and
+                                    --updates off forms). 'auto' fails startup explicitly.
+                                    Precedence: this flag, then AGENTICO_UPDATES, then
+                                    server.updates.policy in config.yaml. The related
+                                    server.updates.strategy and server.updates.window config
+                                    settings are reserved: they are validated and reported by
+                                    GET /api/v1/update but never schedule work in this release.
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
   --check, -n                      With 'update': check for a newer release without installing
 Global flags:
@@ -989,6 +1026,19 @@ type runtimeBootstrap struct {
 	recoveryScanOK  bool
 	selfUpdateExec  selfupdate.Executable
 	updateLease     *selfupdate.Lease
+	// updateLeaseErr records why the binary lease was not acquired when it
+	// is nil, so eligibility can distinguish ownership contention from
+	// other failures.
+	updateLeaseErr error
+}
+
+// serverUpdates returns the raw server.updates config values, tolerating a
+// missing config so policy resolution still runs with defaults.
+func (b *runtimeBootstrap) serverUpdates() config.ServerUpdatesConfig {
+	if b == nil || b.cfg == nil {
+		return config.ServerUpdatesConfig{}
+	}
+	return b.cfg.Server.Updates
 }
 
 // StopServices stops the fx graph without releasing the instance lock: an
@@ -2759,6 +2809,8 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 			ExecutableIno:    exec.ID.Ino,
 		}); leaseErr == nil {
 			boot.updateLease = lease
+		} else {
+			boot.updateLeaseErr = leaseErr
 		}
 	}
 	success := false
@@ -2960,15 +3012,15 @@ func normalizeProviderNames(enabled []string, warnBlank bool, warn func(name str
 	return valid
 }
 
-func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName string) int {
-	return runServerWithJourney(configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, listenAddr, serverName)
+func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName, updatesPolicy string) int {
+	return runServerWithJourney(configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, listenAddr, serverName, updatesPolicy)
 }
 
 // runServerWithJourney is the server body. Ordinary builds adopt inherited
 // update handoffs and resolve interrupted transactions as production
 // behavior; driver builds (agentico_selfupdate_driver tag) additionally
 // install failure-injection and barrier seams.
-func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName string) int {
+func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName, updatesPolicy string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	runtimeCtx, requestShutdown := context.WithCancel(ctx)
@@ -3089,6 +3141,59 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 		rt.boot = boot
 	}
 
+	// Release-availability startup configuration resolves after mandatory
+	// recovery and bootstrap, from the captured executable identity and this
+	// runtime's ownership lease. An effective 'auto' policy is an explicit
+	// unsupported-policy configuration error, never a silent fallback.
+	updateSettings, updateErr := selfupdate.ResolveStartupSettings(selfupdate.SettingsSources{
+		Flag:                updatesPolicy,
+		Env:                 os.Getenv("AGENTICO_UPDATES"),
+		ConfigPolicy:        boot.serverUpdates().Policy,
+		ConfigChannel:       boot.serverUpdates().Channel,
+		ConfigCheckInterval: boot.serverUpdates().CheckInterval,
+		ConfigStrategy:      boot.serverUpdates().Strategy,
+		ConfigWindow:        boot.serverUpdates().Window,
+	})
+	if updateErr != nil {
+		code := errcat.UpdateConfigInvalid
+		var unsupported *selfupdate.UnsupportedPolicyError
+		if errors.As(updateErr, &unsupported) {
+			code = errcat.UpdateUnsupportedPolicy
+		}
+		return targetStartupFailure(func(e error) {
+			renderError(os.Stderr, code, errcat.WithParams(errcat.UsageParams{Reason: updateErr.Error()}))
+		}, updateErr)
+	}
+	eligibility := classifyRuntimeEligibility(boot)
+	var startupUpdateReceipt *selfupdate.Receipt
+	switch {
+	case restoredRollback != nil:
+		startupUpdateReceipt = restoredRollback
+	case adopted != nil:
+		receiptCopy := adoptedReceipt
+		startupUpdateReceipt = &receiptCopy
+	}
+	var updateFeed serverruntime.FeedChecker
+	if updateFeedHook != nil {
+		// Driver-only fixture routing: deliberately built test binaries
+		// inject a local metadata feed that receives no credentials.
+		updateFeed = updateFeedHook()
+	} else {
+		slug, _ := moduleSlug()
+		updateFeed = selfupdate.NewProductionFeedClient(slug, githubToken)
+	}
+	updateOptions := serverruntime.UpdateOptions{
+		Policy:         updateSettings.Policy,
+		Settings:       updateSettings,
+		CurrentVersion: buildinfo.Version(),
+		Eligibility:    eligibility,
+		ExecPath:       boot.selfUpdateExec.Path,
+		StartupReceipt: startupUpdateReceipt,
+		Feed:           updateFeed,
+		Log:            func(line string) { fmt.Fprintln(os.Stderr, line) },
+		Observer:       boot.observer,
+	}
+
 	if shouldInterruptRunningOnStartup(
 		boot.recoveryScanOK,
 		len(boot.recoveryItems),
@@ -3173,6 +3278,7 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
 		},
 		Worktrees: boot.worktrees,
+		Updates:   updateOptions,
 	})
 	if err != nil {
 		return targetStartupFailure(func(e error) {
@@ -3236,10 +3342,14 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 		// health wait, and discovery publication. A failure to persist
 		// confirmation stays unconfirmed and enters the recovery boundary
 		// when safe.
-		if _, err := confirmAdoptedTransaction(adoptedHandoff.ExecutablePath, adoptedHandoff.TransactionID); err != nil {
+		confirmedReceipt, err := confirmAdoptedTransaction(adoptedHandoff.ExecutablePath, adoptedHandoff.TransactionID)
+		if err != nil {
 			rt.reason = fmt.Sprintf("target %s could not durably confirm its update: %v", adoptedReceipt.ToVersion, err)
 			return rt.recover()
 		}
+		// The public update snapshot now exposes the confirmed outcome and
+		// its sanitized receipt.
+		runtimeServer.SetUpdateReceipt(confirmedReceipt)
 		// Cleanup failure retains the healthy target and the confirmed
 		// outcome: warn and keep serving; a later launch retries the
 		// validated cleanup.

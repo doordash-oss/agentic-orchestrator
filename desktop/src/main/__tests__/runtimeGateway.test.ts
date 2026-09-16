@@ -583,6 +583,7 @@ describe('RuntimeGateway launch', () => {
           '/home/ü ser/.agentic-orchestrator/config.yaml',
           '--state-dir',
           '/home/ü ser/.agentic-orchestrator/features',
+          '--updates=off',
         ],
       },
     ]);
@@ -593,6 +594,16 @@ describe('RuntimeGateway launch', () => {
     expect(statuses).toContain('launching');
     expect(statuses).toContain('waiting-health');
     expect(statuses).toContain('connecting');
+    expectNoTokenLeak(env);
+  });
+
+  it('launches the bundled server with update checks disabled and advertises that in diagnostics', async () => {
+    const env = makeEnv({ spawnError: new Error('EACCES: permission denied') });
+    await env.gateway.start();
+    const error = requireError(env.gateway.getState());
+    expect(error.diagnostics).toContain(
+      'bundled agentico server --config [path] --state-dir [path] --updates=off',
+    );
     expectNoTokenLeak(env);
   });
 
@@ -667,7 +678,7 @@ describe('RuntimeGateway launch', () => {
     expect(error.code).toBe('E_LAUNCH_FAILED');
     expect(error.diagnostics).toContain('EACCES: permission denied');
     expect(error.diagnostics).toContain(
-      'bundled agentico server --config [path] --state-dir [path]',
+      'bundled agentico server --config [path] --state-dir [path] --updates=off',
     );
     const lines = (error.diagnostics ?? '').split('\n');
     expect(lines).toHaveLength(22);
@@ -726,7 +737,9 @@ describe('RuntimeGateway supervision', () => {
     const diagnostics = state.error.diagnostics ?? '';
     const lines = diagnostics.split('\n');
     expect(lines).toHaveLength(21);
-    expect(lines[0]).toBe('bundled agentico server --config [path] --state-dir [path]');
+    expect(lines[0]).toBe(
+      'bundled agentico server --config [path] --state-dir [path] --updates=off',
+    );
     expect(lines[0]!.length).toBeLessThanOrEqual(256);
     expect(lines[1]).toContain('line 5');
     expect(lines.slice(1).every((line) => line.length <= 512)).toBe(true);
@@ -1936,6 +1949,7 @@ describe('RuntimeGateway startLocal', () => {
       SELECTED.configPath,
       '--state-dir',
       SELECTED.stateDir,
+      '--updates=off',
     ]);
     const transition = env.states.slice(before).map((s) => s.status);
     expect(transition).toContain('launching');
@@ -2324,6 +2338,29 @@ describe('RuntimeGateway decoupled app-owned supervision', () => {
     expect(env.states.length).toBe(before);
     expect(env.gateway.getState().status).toBe('ready');
     expect(env.gateway.getState().serverKey).toBe(serverKeyFor(BETA_RUNTIME_DIR));
+  });
+
+  it('a detached background relaunch after a crash keeps update checks disabled', async () => {
+    const env = await startAppOwned();
+    env.setRegistryScans([{ candidates: [betaCandidate()], pruned: 0, rejected: [] }]);
+    await env.gateway.switchServer({ serverKey: serverKeyFor(BETA_RUNTIME_DIR) });
+    expect(env.gateway.getState().ownership).toBe('external');
+
+    env.spawned[0]!.emitExit(1, null);
+    const tick = async () => {
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    };
+    await tick();
+    expect(env.spawnCalls).toHaveLength(2);
+    expect(env.logs.some((line) => line.includes('relaunched silently'))).toBe(true);
+    expect(env.spawnCalls[1]!.args).toEqual([
+      'server',
+      '--config',
+      SELECTED.configPath,
+      '--state-dir',
+      SELECTED.stateDir,
+      '--updates=off',
+    ]);
   });
 
   it('re-attaches to the still-running child when switching back, restoring app-owned supervision', async () => {

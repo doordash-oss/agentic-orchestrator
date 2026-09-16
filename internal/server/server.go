@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 )
 
 type RuntimeServer struct {
@@ -38,6 +39,7 @@ type RuntimeServer struct {
 	broker       *eventBroker
 	clones       CloneService
 	originChecks *originCheckCoordinator
+	updates      *updateCoordinator
 	done         chan error
 }
 
@@ -93,9 +95,10 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		PersistProviderModelCatalog: opts.PersistProviderModelCatalog,
 		InitGitRepository:           opts.InitGitRepository,
 		InitializeGitRepository:     opts.InitializeGitRepository,
-		Clones:                      opts.Clones,
-		Worktrees:                   opts.Worktrees,
-		RuntimePolicy:               policy,
+		Clones:                     opts.Clones,
+		Worktrees:                  opts.Worktrees,
+		Updates:                    opts.Updates,
+		RuntimePolicy:              policy,
 	})
 	httpServer := &http.Server{
 		Handler: handler.routes(),
@@ -136,6 +139,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		broker:       handler.broker,
 		clones:       handler.clones,
 		originChecks: handler.originChecks,
+		updates:      handler.updates,
 		done:         make(chan error, 1),
 	}
 	go func() {
@@ -158,6 +162,12 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		defer cancel()
 		_ = s.Close(shutdownCtx)
 		return nil, err
+	}
+	// The availability scheduler starts only after health/discovery startup
+	// and never blocks readiness: the initial release check runs
+	// asynchronously inside the coordinator loop.
+	if handler.updates != nil {
+		handler.updates.start(ctx)
 	}
 	return s, nil
 }
@@ -251,6 +261,22 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 			originErr = ctx.Err()
 		}
 	}
+	// The availability scheduler and any in-flight metadata check cancel and
+	// drain before HTTP shutdown; generation fencing already blocks stale
+	// completions, so a deadline expiry here only reports the wait.
+	var updateErr error
+	if s.updates != nil {
+		updateDone := make(chan struct{})
+		go func() {
+			s.updates.shutdown(ctx)
+			close(updateDone)
+		}()
+		select {
+		case <-updateDone:
+		case <-ctx.Done():
+			updateErr = ctx.Err()
+		}
+	}
 	shutdownErr := srv.Shutdown(ctx)
 	if shutdownErr != nil {
 		// Open event and session-output SSE streams never become idle, so a
@@ -265,7 +291,17 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 	case <-ctx.Done():
 		serveErr = ctx.Err()
 	}
-	return errors.Join(cloneErr, originErr, shutdownErr, serveErr)
+	return errors.Join(cloneErr, originErr, updateErr, shutdownErr, serveErr)
+}
+
+// SetUpdateReceipt settles the public update receipt after a write-once
+// handoff confirmation, exposing the confirmed outcome on the snapshot. It
+// is a no-op on a server whose coordinator already shut down.
+func (s *RuntimeServer) SetUpdateReceipt(receipt selfupdate.Receipt) {
+	if s == nil || s.updates == nil {
+		return
+	}
+	s.updates.confirmReceipt(receipt)
 }
 
 // cloneSweepLoop prunes expired clone records once at startup and hourly

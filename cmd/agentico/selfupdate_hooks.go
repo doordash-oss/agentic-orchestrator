@@ -19,12 +19,27 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/buildinfo"
 	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
+)
+
+// runtimeGOOS/runtimeGOARCH are the platform signals of the running binary,
+// split out so classification tests can pin them.
+func runtimeGOOS() string   { return runtime.GOOS }
+func runtimeGOARCH() string { return runtime.GOARCH }
+
+// updatesBuildInfoVersion and updatesInjectedVersion are the version signals
+// feeding eligibility classification, split out for the same reason.
+var (
+	updatesBuildInfoVersion = buildInfoMainVersion
+	updatesInjectedVersion  = buildinfo.InjectedVersion
 )
 
 // The selfupdate driver hooks below are nil in ordinary builds and are wired
@@ -101,6 +116,41 @@ var serverJourneyHook func() serverJourney
 // publishDiscoveryFn is the discovery publish seam (the real function by
 // default) so the tagged driver can inject a publication failure.
 var publishDiscoveryFn = serverruntime.PublishDiscovery
+
+// updateFeedHook lets a tagged build route the release-availability feed to a
+// local test fixture. Nil in ordinary builds: production always uses the
+// fixed production feed configuration, and no flag or environment value of
+// an ordinarily built binary can redirect it or send credentials anywhere
+// but api.github.com.
+var updateFeedHook func() serverruntime.FeedChecker
+
+// classifyRuntimeEligibility gathers the real classification signals for the
+// running server — captured executable identity, lease state (held, live
+// contention, or other failure), build versions, platform, and file
+// replaceability — and runs the pure classifier.
+func classifyRuntimeEligibility(boot *runtimeBootstrap) selfupdate.Eligibility {
+	exec := boot.selfUpdateExec
+	leaseState := selfupdate.LeaseStateFromError(boot.updateLease != nil, boot.updateLeaseErr)
+	if exec.Path == "" {
+		return selfupdate.ClassifyInstallation(selfupdate.ClassifyInputs{Lease: leaseState})
+	}
+	binaryDir := filepath.Dir(exec.Path)
+	return selfupdate.ClassifyInstallation(selfupdate.ClassifyInputs{
+		ExecPath:         exec.Path,
+		HasExec:          true,
+		BinaryDir:        binaryDir,
+		GoBinDir:         normalizeDir(resolveGoBinDir(os.Getenv, os.UserHomeDir)),
+		BuildInfoVersion: updatesBuildInfoVersion(),
+		InjectedVersion:  updatesInjectedVersion(),
+		GOOS:             runtimeGOOS(),
+		GOARCH:           runtimeGOARCH(),
+		EUID:             os.Geteuid(),
+		FileUID:          exec.ID.UID,
+		FileMode:         exec.ID.Mode,
+		DirWritable:      selfupdate.DirWritable(binaryDir),
+		Lease:            leaseState,
+	})
+}
 
 // serverJourney is one driver-owned lifecycle executed while the server is
 // fully up: boot completed, discovery published, HTTP server listening.

@@ -1427,6 +1427,52 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/update:
+    get:
+      operationId: getUpdateSnapshot
+      summary: Read the authenticated, metadata-only update availability snapshot.
+      description: >-
+        Reports release availability for this runtime under its effective
+        startup update policy without triggering a check. The snapshot is
+        metadata-only: notification checks never download packages or
+        manifests, probe candidates, create installation receipts or staging,
+        or change executable bytes. The strategy field is reserved for a
+        later release and never schedules work here.
+      responses:
+        "200":
+          $ref: "#/components/responses/UpdateSnapshotResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/update/check:
+    post:
+      operationId: checkForUpdate
+      summary: Trigger one explicit release-availability check.
+      description: >-
+        Accepts an empty JSON object and returns 202 with the current
+        snapshot promptly. The accepted check runs asynchronously, tied to
+        the runtime lifetime rather than the requesting connection:
+        concurrent requests coalesce into one metadata worker and a
+        disconnecting caller never cancels accepted work. Rejected with 409
+        when the effective policy is off (update_disabled) or the
+        installation is ineligible (update_unsupported_install), and with
+        429 update_check_failed while a server-imposed retry deadline is
+        still in force. Installation and cancellation routes are a later
+        roadmap phase.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "202":
+          $ref: "#/components/responses/UpdateSnapshotResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "429":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/events:
     get:
       operationId: streamEvents
@@ -1850,6 +1896,19 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RecoverySnapshotResponse"
+    UpdateSnapshotResponse:
+      description: >-
+        Metadata-only update availability snapshot. Served with 200 by the
+        read endpoint and with 202 by the accepted explicit-check endpoint.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/UpdateSnapshotResponse"
     CompletionPreflightResponse:
       description: Read-only, server-authored completion preflight — eligible repository set, outcomes, blockers, PR URLs, source revision.
       headers:
@@ -6278,3 +6337,195 @@ components:
               type: boolean
             log_available:
               type: boolean
+    UpdateSnapshotResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [update]
+          properties:
+            update:
+              $ref: "#/components/schemas/UpdateSnapshot"
+    UpdateSnapshot:
+      type: object
+      description: >-
+        Metadata-only release availability for this runtime. Availability is
+        advisory: no package, manifest, checksum, or signature is fetched,
+        nothing is staged, and the executable is never modified by a check.
+        Activity and admission counters belong to the later installation
+        slice and are deliberately absent.
+      required:
+        [
+          status,
+          policy,
+          channel,
+          strategy,
+          current_version,
+          installation,
+          signature,
+          check_interval_seconds,
+        ]
+      properties:
+        status:
+          type: string
+          description: >-
+            Coarse availability state. downloading, verified, scheduled,
+            draining, and restarting are reserved for the later installation
+            slice and never emitted by the availability endpoints.
+          enum:
+            - idle
+            - checking
+            - up_to_date
+            - available
+            - downloading
+            - verified
+            - scheduled
+            - draining
+            - restarting
+            - confirmed
+            - failed
+            - unsupported
+            - disabled
+        policy:
+          type: string
+          description: Effective startup update policy. `auto` is not supported and fails configuration at startup.
+          enum: [off, notify]
+        channel:
+          type: string
+          description: Release channel consulted by checks. Only stable is supported.
+          enum: [stable]
+        strategy:
+          type: string
+          description: >-
+            Reserved startup setting, reported for transparency. It never
+            schedules work and never affects manual installation.
+          enum: [idle, quiesce]
+        current_version:
+          type: string
+          description: Running build version as reported at startup.
+        latest_version:
+          type: string
+          description: >-
+            Greatest clean stable release discovered by the last successful
+            check; unknown (absent) before discovery. A suppressed newest
+            release remains visible here.
+          x-go-type-skip-optional-pointer: false
+        target_version:
+          type: string
+          description: >-
+            Version a pending installation targets. Always absent in this
+            phase: no target contract is ever trusted from feed metadata.
+          x-go-type-skip-optional-pointer: false
+        installation:
+          type: string
+          description: Classified installation method of the running executable.
+          enum:
+            - tarball
+            - go_install
+            - homebrew
+            - app_bundle
+            - development
+            - unknown
+        unsupported_reason:
+          type: string
+          description: >-
+            Machine-readable remediation code present only while status is
+            unsupported. ownership_contention means another live runtime owns
+            this binary's update lease; lease_unavailable covers other lease
+            acquisition failures.
+          enum:
+            - bundled
+            - homebrew
+            - development_version
+            - unsupported_platform
+            - non_replaceable
+            - ownership_contention
+            - lease_unavailable
+          x-go-type-skip-optional-pointer: false
+        remediation:
+          type: string
+          description: Actionable next step for an unsupported installation.
+          x-go-type-skip-optional-pointer: false
+        signature:
+          type: string
+          description: >-
+            Signature trust state for a would-be target. Checks are
+            metadata-only, so this phase always reports unverified.
+          enum: [unverified, verified]
+        last_check_at:
+          type: string
+          format: date-time
+          description: When the last check attempt finished, successful or not.
+          x-go-type-skip-optional-pointer: false
+        last_success_at:
+          type: string
+          format: date-time
+          description: >-
+            When the last successful check finished. Retained across later
+            failed refreshes together with the metadata it produced.
+          x-go-type-skip-optional-pointer: false
+        next_check_at:
+          type: string
+          format: date-time
+          description: >-
+            When the next periodic check is scheduled. Absent when no
+            periodic check will run (policy off, unsupported, or shutdown).
+          x-go-type-skip-optional-pointer: false
+        retry_not_before:
+          type: string
+          format: date-time
+          description: >-
+            Server-imposed retry floor from a 403/429 response. Local
+            backoff and jitter never shorten it; explicit checks inside the
+            deadline are refused without a request.
+          x-go-type-skip-optional-pointer: false
+        check_interval_seconds:
+          type: integer
+          description: Configured periodic check interval in seconds.
+          minimum: 1
+        latest_release_url:
+          type: string
+          format: uri
+          description: >-
+            Public release page for the discovered latest version. Never a
+            signed download URL and never credential-bearing.
+          x-go-type-skip-optional-pointer: false
+        error:
+          $ref: "#/components/schemas/Error"
+          description: >-
+            Canonical error for the current state: update_rolled_back for a
+            validated rollback or suppressed newest release,
+            update_check_failed for transient check failures. Absent when
+            availability is healthy.
+          x-go-type-skip-optional-pointer: false
+        receipt:
+          $ref: "#/components/schemas/UpdatePublicReceipt"
+          description: >-
+            Sanitized public projection of the durable installation receipt
+            history. Absent when no installation receipt exists for this
+            executable. Metadata-only runs never create receipts.
+          x-go-type-skip-optional-pointer: false
+    UpdatePublicReceipt:
+      type: object
+      description: >-
+        Public view of the durable installation receipt: versions, outcome,
+        times, and a sanitized error only. Transaction paths, descriptors,
+        process environment, credentials, and raw receipt internals never
+        cross this boundary.
+      required: [outcome, from_version, to_version]
+      properties:
+        outcome:
+          type: string
+          enum: [pending, confirmed, rolled_back]
+        from_version:
+          type: string
+        to_version:
+          type: string
+        completed_at:
+          type: string
+          format: date-time
+          description: When the receipt reached its settled outcome.
+          x-go-type-skip-optional-pointer: false
+        error:
+          type: string
+          description: Sanitized failure reason for rolled_back receipts.
+          x-go-type-skip-optional-pointer: false

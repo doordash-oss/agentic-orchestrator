@@ -83,6 +83,10 @@ type Options struct {
 	// Nil is tolerated: the dirty_parent disabled reason then ships without
 	// a diagnostics target.
 	Worktrees feature.WorktreeOps
+	// Updates carries the resolved release-availability startup inputs
+	// (policy, settings, eligibility, recovery outcome, feed). The zero
+	// value serves a disabled snapshot.
+	Updates UpdateOptions
 }
 
 type HandlerOptions struct {
@@ -124,6 +128,9 @@ type HandlerOptions struct {
 	// runtime has no state dir).
 	Clones    CloneService
 	Worktrees feature.WorktreeOps
+	// Updates carries the resolved release-availability startup inputs. The
+	// zero value serves a disabled snapshot.
+	Updates UpdateOptions
 }
 
 type FeatureLister interface {

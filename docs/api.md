@@ -41,6 +41,38 @@ SSE endpoints. Mutations also keep the trusted local header,
 
 The MCP adapter has been removed. The supported client surface is REST plus SSE.
 
+## Release Availability
+
+`GET /api/v1/update` returns the authenticated, metadata-only release
+availability snapshot. It never triggers a check and never mutates anything:
+notification checks never download packages or manifests, probe candidates,
+create installation receipts or staging, or change executable bytes.
+
+`POST /api/v1/update/check` (empty JSON object, trusted-mutation headers)
+accepts one explicit check and returns `202` with the current snapshot
+immediately; the accepted check runs asynchronously tied to the runtime
+lifetime, concurrent requests coalesce into one metadata worker, and a
+disconnecting caller never cancels accepted work. It is refused with `409`
+`update_disabled` under the off policy, `409`
+`update_unsupported_install` for ineligible installations, and `429`
+`update_check_failed` with a retry hint while a server-imposed retry deadline
+is in force — the last without making any request. Installation and
+cancellation routes belong to a later release.
+
+Every visible snapshot change emits an `update.updated` event (resource type
+`update`); clients re-GET the snapshot. The snapshot reports the effective
+startup policy (`--updates` over `AGENTICO_UPDATES` over
+`server.updates.policy`, default `notify`; `auto` fails startup explicitly),
+the reserved `server.updates.strategy` and `server.updates.window` settings
+(validated and reported, never scheduling work), the classified installation,
+check timing, and — when one exists — the sanitized public receipt
+(`versions`, `outcome`, `times`, and a sanitized error only). A suppressed
+newest release stays visible as `latest_version` with
+`failed`/`update_rolled_back` until a newer unsuppressed release becomes
+available; failed refreshes retain the last successful metadata and its
+timestamp. These startup settings never appear on the runtime-config REST
+surface.
+
 ## Snapshot Then Subscribe
 
 Clients bootstrap from a snapshot and then consume ordered event deltas:

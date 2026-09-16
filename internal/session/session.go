@@ -1811,9 +1811,28 @@ func (s *Session) ClearRootCompletionIntent() {
 // RespondToControl sends a control response to a pending control request.
 func (s *Session) RespondToControl(requestID string, allow bool, reason string) error {
 	s.mu.Lock()
+	pending := s.findPendingControlRequestLocked(requestID)
+
 	var originalInput json.RawMessage
-	if cr := s.findPendingControlRequestLocked(requestID); cr != nil {
-		originalInput = cr.Request.Input
+	if pending != nil {
+		originalInput = pending.Request.Input
+	}
+	s.mu.Unlock()
+
+	var err error
+	if s.protocol != nil {
+		err = s.protocol.RespondToControl(requestID, allow, originalInput, reason)
+	} else if allow {
+		err = s.writeJSON(llm.NewAllowResponse(requestID, originalInput))
+	} else {
+		err = s.writeJSON(llm.NewDenyResponse(requestID, reason))
+	}
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	if pending != nil && s.findPendingControlRequestLocked(requestID) == pending {
 		s.removePendingControlRequestLocked(requestID)
 	}
 	if s.status == SessionWaitingPermission && len(s.pendingControlRequests) == 0 {
@@ -1821,14 +1840,7 @@ func (s *Session) RespondToControl(requestID string, allow bool, reason string) 
 	}
 	s.mu.Unlock()
 
-	if s.protocol != nil {
-		return s.protocol.RespondToControl(requestID, allow, originalInput, reason)
-	}
-
-	if allow {
-		return s.writeJSON(llm.NewAllowResponse(requestID, originalInput))
-	}
-	return s.writeJSON(llm.NewDenyResponse(requestID, reason))
+	return nil
 }
 
 // RespondToAskUser sends a control response that allows an AskUserQuestion

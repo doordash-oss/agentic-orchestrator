@@ -1088,3 +1088,154 @@ func TestRespondToAskUser_CodexProvider_SendsCodexFormat(t *testing.T) {
 		t.Errorf("qaLog[0] = %+v, want {Which DB? PostgreSQL}", s.qaLog[0])
 	}
 }
+
+// parallel-candidate: isolated session state with no subprocess or shared globals.
+func TestRespondToControl_FailedWritePreservesPendingPermission(t *testing.T) {
+	t.Parallel()
+
+	sess := NewSession("permission-write-failure", "feat-1", feature.PhaseImplement)
+	req := &llm.ControlRequestMessage{
+		RequestID: "permission-1",
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: "Bash",
+			Input:    json.RawMessage(`{"command":"ls"}`),
+		},
+	}
+
+	sess.mu.Lock()
+	sess.status = SessionWaitingPermission
+	sess.recordPendingControlRequestLocked(req)
+	waitingSince := req.WaitingSince
+	sess.mu.Unlock()
+
+	// With no protocol or stdin, delivery fails deterministically.
+	if err := sess.RespondToControl("permission-1", true, ""); err == nil {
+		t.Fatal("RespondToControl should fail without a provider transport")
+	}
+
+	pending := sess.PendingControlRequests()
+	if len(pending) != 1 || pending[0] != req {
+		t.Fatalf("failed response should preserve pending permission, got %v", pending)
+	}
+	if !pending[0].WaitingSince.Equal(waitingSince) {
+		t.Fatalf("failed response changed WaitingSince: got %v, want %v",
+			pending[0].WaitingSince, waitingSince)
+	}
+	if status := sess.Status(); status != SessionWaitingPermission {
+		t.Fatalf("status = %v, want SessionWaitingPermission", status)
+	}
+}
+
+// parallel-candidate: isolated session and in-process protocol double.
+func TestRespondToControl_RetryAfterFailedWriteSucceeds(t *testing.T) {
+	t.Parallel()
+
+	sess := NewSession("permission-retry", "feat-1", feature.PhaseImplement)
+	req := &llm.ControlRequestMessage{
+		RequestID: "permission-1",
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: "Bash",
+			Input:    json.RawMessage(`{"command":"ls"}`),
+		},
+	}
+
+	sess.mu.Lock()
+	sess.status = SessionWaitingPermission
+	sess.recordPendingControlRequestLocked(req)
+	sess.mu.Unlock()
+
+	if err := sess.RespondToControl("permission-1", true, ""); err == nil {
+		t.Fatal("first RespondToControl should fail")
+	}
+
+	sess.protocol = &wireRecordingProtocol{}
+	if err := sess.RespondToControl("permission-1", true, ""); err != nil {
+		t.Fatalf("retry RespondToControl: %v", err)
+	}
+
+	if pending := sess.PendingControlRequests(); len(pending) != 0 {
+		t.Fatalf("successful retry left pending requests: %v", pending)
+	}
+	if status := sess.Status(); status != SessionRunning {
+		t.Fatalf("status = %v, want SessionRunning", status)
+	}
+}
+
+type blockingControlProtocol struct {
+	wireRecordingProtocol
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p *blockingControlProtocol) RespondToControl(
+	string,
+	bool,
+	json.RawMessage,
+	string,
+) error {
+	close(p.started)
+	<-p.release
+	return nil
+}
+
+// parallel-candidate: isolated session and synchronized in-process protocol double.
+func TestRespondToControl_SuccessPreservesNewerSameID(t *testing.T) {
+	t.Parallel()
+
+	proto := &blockingControlProtocol{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	sess := NewSession("permission-same-id", "feat-1", feature.PhaseImplement)
+	sess.protocol = proto
+
+	old := &llm.ControlRequestMessage{
+		RequestID: "permission-1",
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: "Bash",
+			Input:    json.RawMessage(`{"command":"old"}`),
+		},
+	}
+
+	sess.mu.Lock()
+	sess.status = SessionWaitingPermission
+	sess.recordPendingControlRequestLocked(old)
+	sess.mu.Unlock()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- sess.RespondToControl("permission-1", true, "")
+	}()
+
+	<-proto.started
+
+	newer := &llm.ControlRequestMessage{
+		RequestID: "permission-1",
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: "Bash",
+			Input:    json.RawMessage(`{"command":"new"}`),
+		},
+	}
+
+	sess.mu.Lock()
+	sess.recordPendingControlRequestLocked(newer)
+	sess.mu.Unlock()
+
+	close(proto.release)
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("RespondToControl: %v", err)
+	}
+
+	pending := sess.PendingControlRequests()
+	if len(pending) != 1 || pending[0] != newer {
+		t.Fatalf("successful old response should preserve newer request, got %v", pending)
+	}
+	if status := sess.Status(); status != SessionWaitingPermission {
+		t.Fatalf("status = %v, want SessionWaitingPermission", status)
+	}
+}

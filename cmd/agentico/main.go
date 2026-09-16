@@ -2964,10 +2964,10 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	return runServerWithJourney(configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, listenAddr, serverName)
 }
 
-// runServerWithJourney is the server body. Ordinary builds run it with no
-// adopted handoff and no journey; driver builds (agentico_selfupdate_driver
-// tag) install hooks that adopt an inherited handoff, rebind its recorded
-// endpoint, and run the replace/confirm journeys.
+// runServerWithJourney is the server body. Ordinary builds adopt inherited
+// update handoffs and resolve interrupted transactions as production
+// behavior; driver builds (agentico_selfupdate_driver tag) additionally
+// install failure-injection and barrier seams.
 func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -2976,43 +2976,98 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 
 	// Handoff adoption precedes general bootstrap so no child process can
 	// spawn before the inherited lease descriptor is validated and made
-	// close-on-exec again. The hook returns nils when no handoff entry is
-	// present; a present-but-invalid handoff fails the launch closed.
+	// close-on-exec again. This is production behavior: ordinary binaries
+	// adopt and recover legitimate handoffs. A present-but-invalid handoff
+	// fails the launch closed.
 	var adopted *selfupdate.Lease
 	var adoptedHandoff selfupdate.HandoffMetadata
 	var adoptedReceipt selfupdate.Receipt
-	if handoffAdoptHook != nil {
-		lease, meta, receipt, err := handoffAdoptHook()
-		if err != nil {
-			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("adopting update handoff: %w", err)})
-			return 1
-		}
-		adopted, adoptedHandoff, adoptedReceipt = lease, meta, receipt
+	lease, meta, receipt, err := adoptHandoffForLaunch()
+	if err != nil {
+		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("adopting update handoff: %w", err)})
+		return 1
 	}
-	// Reject a competing launch while a live handoff owns this executable —
-	// but never the adopted owner itself, which holds the lease through the
-	// inherited descriptor. A failed executable capture is tolerated: it
-	// disables the check, never the launch.
+	adopted, adoptedHandoff, adoptedReceipt = lease, meta, receipt
+	if adopted != nil && selfUpdateAdoptedStartHook != nil {
+		selfUpdateAdoptedStartHook()
+	}
+
+	// Mandatory recovery resolution for non-adopted (operator) launches runs
+	// before configuration loading, fx construction, bootstrap children,
+	// update-policy selection, and any ownership-record overwrite. A restore
+	// decision execs onto the restored build and never returns; an unsafe
+	// record refuses nonzero with a sanitized diagnostic; absence of a
+	// transaction preserves ordinary startup, including serving without
+	// update ownership.
+	var recoveryLease *selfupdate.Lease
+	var restoredRollback *selfupdate.Receipt
+	recoveredChain := false
 	if adopted == nil {
-		if exec, execErr := selfupdate.CaptureExecutable(); execErr == nil {
-			if err := checkLiveHandoff(exec.Path); err != nil {
-				renderStartupFailure(os.Stderr, err)
-				return 1
-			}
+		res := resolveRecoveryOnBoot(stateDir, configPath, listenAddr)
+		if res.exit {
+			return res.code
 		}
+		recoveryLease = res.lease
+		restoredRollback = res.restoredRollback
+		if res.listenOverride != "" {
+			listenAddr = res.listenOverride
+			recoveredChain = true
+		}
+		if res.recoveredChain {
+			recoveredChain = true
+		}
+	} else if override := handoffListenAddr(adoptedHandoff); override != "" {
+		// The adopted target rebinds its recorded concrete endpoint; argv's
+		// --listen may still name an ephemeral port.
+		listenAddr = override
 	}
-	// An adopted handoff rebinds its recorded concrete endpoint; argv's
-	// --listen may still name an ephemeral port.
-	if adopted != nil && handoffListenOverrideHook != nil {
-		if override := handoffListenOverrideHook(); override != "" {
-			listenAddr = override
+
+	// Driver-only deterministic abort for a recovered or restarted image's
+	// own startup: the chain guard already forbids another automatic
+	// recovery, so this terminates nonzero. Nil (no-op) in ordinary builds.
+	if selfUpdateStartupAbortHook != nil {
+		if err := selfUpdateStartupAbortHook(); err != nil {
+			renderStartupFailure(os.Stderr, &runtimeInitError{err})
+			return 1
 		}
 	}
 
-	boot, err := bootstrapRuntime(ctx, configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, os.Stderr)
+	// The adopted target boots under a cooperative startup deadline: expiry
+	// routes through the recovery boundary like any other startup failure.
+	bootCtx := ctx
+	var cancelBootCtx context.CancelFunc
+	if adopted != nil {
+		bootCtx, cancelBootCtx = context.WithTimeout(ctx, startupDeadline())
+		defer cancelBootCtx()
+	}
+
+	// The one-shot recovery boundary for this launch chain. Every handled
+	// failure of the adopted target's startup — configuration/bootstrap
+	// errors, cooperative deadline expiry, preserved-endpoint bind failure,
+	// health failure, mandatory discovery publication failure, confirmation
+	// persistence failure, and direct target-exec failure — funnels here:
+	// tear down, restore the previous build, and exec it once with the chain
+	// guard. Ordinary launches keep their existing failure behavior.
+	rt := failedTargetRecovery{
+		lease:      adopted,
+		receipt:    adoptedReceipt,
+		exec:       selfupdate.Executable{Path: adoptedHandoff.ExecutablePath},
+		runtimeDir: adoptedHandoff.RuntimeDir,
+		bind:       adoptedReceipt.Bind,
+		reason:     fmt.Sprintf("target %s failed to return to service; previous build %s restored", adoptedReceipt.ToVersion, adoptedReceipt.FromVersion),
+	}
+	targetStartupFailure := func(render func(error), err error) int {
+		if adopted == nil {
+			render(err)
+			return 1
+		}
+		rt.reason = fmt.Sprintf("target %s failed to return to service: %v", adoptedReceipt.ToVersion, err)
+		return rt.recover()
+	}
+
+	boot, err := bootstrapRuntime(bootCtx, configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, os.Stderr)
 	if err != nil {
-		renderStartupFailure(os.Stderr, err)
-		return 1
+		return targetStartupFailure(func(e error) { renderStartupFailure(os.Stderr, e) }, err)
 	}
 	defer func() {
 		if err := boot.Close(context.Background()); err != nil {
@@ -3025,6 +3080,13 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 		// flock, so its fresh non-blocking attempt cannot succeed. The
 		// adopted lease is this process's true owner.
 		boot.updateLease = adopted
+	} else if recoveryLease != nil {
+		// Recovery resolution acquired the lease before bootstrap: ownership
+		// stays continuous for this process's lifetime.
+		boot.updateLease = recoveryLease
+	}
+	if rt.boot == nil {
+		rt.boot = boot
 	}
 
 	if shouldInterruptRunningOnStartup(
@@ -3040,26 +3102,32 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 
 	listen, err := serverruntime.ResolveListen(listenAddr)
 	if err != nil {
-		renderStartupFailure(os.Stderr, &serverStartError{err})
-		return 1
+		return targetStartupFailure(func(e error) { renderStartupFailure(os.Stderr, &serverStartError{e}) }, err)
 	}
 	networkBind := listen.Policy == serverruntime.CompatibilityNetworkRuntimePolicy
 
 	policy := runtimeLaunchPolicy(boot.registry, dangerouslySkipPerms)
 	discoveryClient := &http.Client{Timeout: time.Second}
-	decision, err := serverruntime.PrepareDiscovery(ctx, boot.runtime.RuntimeDir, boot.runtime, policy, discoveryClient, networkBind)
+	decision, err := serverruntime.PrepareDiscovery(bootCtx, boot.runtime.RuntimeDir, boot.runtime, policy, discoveryClient, networkBind)
 	if err != nil {
-		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("validating discovery metadata: %w", err)})
-		return 1
+		return targetStartupFailure(func(e error) {
+			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("validating discovery metadata: %w", e)})
+		}, err)
 	}
 	if decision.AlreadyRunning {
+		if adopted != nil {
+			// The target could not take over its own runtime: recover.
+			rt.reason = "target startup found the runtime already served by another process"
+			return rt.recover()
+		}
 		renderStartupFailure(os.Stderr, alreadyRunningError{baseURL: decision.Record.BaseURL})
 		return 1
 	}
 	authToken, err := serverruntime.EnsureAuthToken(boot.runtime.RuntimeDir)
 	if err != nil {
-		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("preparing server auth token: %w", err)})
-		return 1
+		return targetStartupFailure(func(e error) {
+			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("preparing server auth token: %w", e)})
+		}, err)
 	}
 	var configName string
 	if boot.cfg != nil {
@@ -3067,11 +3135,12 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 	}
 	resolvedName, err := serverruntime.ResolveServerName(serverName, configName, boot.runtime.RuntimeDir)
 	if err != nil {
-		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("resolving server name: %w", err)})
-		return 1
+		return targetStartupFailure(func(e error) {
+			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("resolving server name: %w", e)})
+		}, err)
 	}
 
-	runtimeServer, err := serverruntime.Start(ctx, serverruntime.Options{
+	runtimeServer, err := serverruntime.Start(bootCtx, serverruntime.Options{
 		Runtime:      boot.runtime,
 		LaunchPolicy: policy,
 		StartMode:    cliSubcommandServer,
@@ -3106,9 +3175,12 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 		Worktrees: boot.worktrees,
 	})
 	if err != nil {
-		renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("starting server: %w", err)})
-		return 1
+		return targetStartupFailure(func(e error) {
+			renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("starting server: %w", e)})
+		}, err)
 	}
+	rt.server = runtimeServer
+	rt.authToken = authToken
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -3120,8 +3192,9 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 	now := time.Now().UTC()
 	record := registryRecord(boot, runtimeServer, authToken, resolvedName, policy, now)
 	if err := publishDiscoveryFn(boot.runtime.RuntimeDir, record); err != nil {
-		renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("publishing discovery metadata: %w", err)})
-		return 1
+		return targetStartupFailure(func(e error) {
+			renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("publishing discovery metadata: %w", e)})
+		}, err)
 	}
 
 	// The central registry entry is a verbatim copy of the published
@@ -3129,6 +3202,7 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 	// Publication failure never affects serving: the server stays fully
 	// attachable via its per-runtime discovery file.
 	registryDir := serverruntime.RegistryDir(resolveRegistryParent())
+	rt.registryDir = registryDir
 	if err := serverruntime.PublishRegistryEntry(registryDir, record); err != nil {
 		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
 			errcat.WithDiagnostics(fmt.Sprintf("publishing server registry entry: %v", err)))
@@ -3141,13 +3215,59 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 		}()
 	}
 
+	// No ordinary work is admitted before full bootstrap, the mandatory
+	// discovery publication, and — for the adopted target and the recovered
+	// build — the self-health wait.
+	if adopted != nil || recoveredChain {
+		if err := waitSelfHealthy(selfHealthProbeURLs(runtimeServer), 30*time.Second); err != nil {
+			if adopted != nil {
+				rt.reason = fmt.Sprintf("target %s failed its health wait: %v", adoptedReceipt.ToVersion, err)
+				return rt.recover()
+			}
+			// The recovered build's own startup failure terminates nonzero:
+			// the chain guard forbids another automatic recovery.
+			renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("recovered build health wait: %w", err)})
+			return 1
+		}
+	}
+
+	if adopted != nil {
+		// Confirmation is write-once and only happens after full bootstrap,
+		// health wait, and discovery publication. A failure to persist
+		// confirmation stays unconfirmed and enters the recovery boundary
+		// when safe.
+		if _, err := confirmAdoptedTransaction(adoptedHandoff.ExecutablePath, adoptedHandoff.TransactionID); err != nil {
+			rt.reason = fmt.Sprintf("target %s could not durably confirm its update: %v", adoptedReceipt.ToVersion, err)
+			return rt.recover()
+		}
+		// Cleanup failure retains the healthy target and the confirmed
+		// outcome: warn and keep serving; a later launch retries the
+		// validated cleanup.
+		if err := selfupdate.CleanupSettledTransaction(adoptedHandoff.ExecutablePath, adoptedHandoff.TransactionID, selfUpdateCleanupSeams); err != nil {
+			renderError(os.Stderr, errcat.StartupMaintenanceFailed,
+				errcat.WithDiagnostics(fmt.Sprintf("selfupdate cleanup for confirmed transaction %s: %v", adoptedHandoff.TransactionID, err)))
+		}
+		fmt.Fprintf(os.Stderr, "selfupdate: confirmed %s\n", adoptedHandoff.TransactionID)
+	}
+
 	fmt.Fprintf(os.Stderr, "Agentic server %q listening at %s\n", resolvedName, runtimeServer.BaseURL())
+	if restoredRollback != nil {
+		// The restored runtime reports the consumed update result as the
+		// canonical update_rolled_back failure while continuing to serve on
+		// the previous build.
+		renderError(os.Stderr, errcat.UpdateRolledBack,
+			errcat.WithParams(errcat.UpdateRolledBackParams{
+				FromVersion: restoredRollback.FromVersion,
+				ToVersion:   restoredRollback.ToVersion,
+			}),
+			errcat.WithDiagnostics(restoredRollback.Error))
+	}
 	if err := writeNetworkAccessNotice(os.Stderr, runtimeServer.RuntimePolicy(), runtimeServer.BaseURL(), runtimeServer.WildcardBind(), authToken, resolvedName); err != nil {
 		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
 			errcat.WithDiagnostics(fmt.Sprintf("writing network access notice: %v", err)))
 	}
 	var journey serverJourney
-	if serverJourneyHook != nil {
+	if serverJourneyHook != nil && adopted == nil {
 		journey = serverJourneyHook()
 	}
 	if journey != nil {

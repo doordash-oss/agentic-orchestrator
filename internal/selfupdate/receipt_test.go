@@ -193,3 +193,107 @@ func TestSanitizeError(t *testing.T) {
 		t.Fatalf("SanitizeError length = %d, want %d", len(got), maxErrorMessage)
 	}
 }
+
+func TestWriteReceiptDurableRecoveryFieldsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "receipt.json")
+	now := time.Now().UTC()
+	r := sampleReceipt(now)
+	r.RecoveryAttemptID = "abcdef1234567890abcdef1234567890"
+	r.RecoveryKind = RecoveryKindRestore
+	r.RecoveryAttemptBy = 4242
+	r.RecoveryStartedAt = now.Add(-time.Minute)
+	r.RestorePath = "/runtime/bin/.agentico-selfupdate/tx-x/restore-abc"
+	restoreID := FileIdentity{Dev: 9, Ino: 10, Mode: 0o755, UID: 501, GID: 20, Size: 128}
+	r.RestoreID = &restoreID
+	r.Resolution = ResolutionAbandonedPreReplacement
+	r.ResolvedAt = now
+	r.InstallFailed = true
+
+	if err := WriteReceiptDurable(path, r); err != nil {
+		t.Fatalf("WriteReceiptDurable: %v", err)
+	}
+	got, err := ReadReceipt(path)
+	if err != nil {
+		t.Fatalf("ReadReceipt: %v", err)
+	}
+	assertReceiptEqual(t, got, r)
+	if got.RecoveryAttemptID != r.RecoveryAttemptID || got.RecoveryKind != r.RecoveryKind || got.RecoveryAttemptBy != r.RecoveryAttemptBy {
+		t.Fatalf("attempt metadata round trip: %+v", got)
+	}
+	if !got.RecoveryStartedAt.Equal(r.RecoveryStartedAt) || !got.ResolvedAt.Equal(r.ResolvedAt) {
+		t.Fatalf("attempt timestamps = %s/%s, want %s/%s", got.RecoveryStartedAt, got.ResolvedAt, r.RecoveryStartedAt, r.ResolvedAt)
+	}
+	if got.RestorePath != r.RestorePath || got.RestoreID == nil || *got.RestoreID != restoreID {
+		t.Fatalf("restore copy identity round trip: %s %+v", got.RestorePath, got.RestoreID)
+	}
+	if got.Resolution != r.Resolution || got.InstallFailed != r.InstallFailed {
+		t.Fatalf("settlement round trip: %q %v", got.Resolution, got.InstallFailed)
+	}
+	if !got.Settled() || got.ActionablePending() {
+		t.Fatalf("pending+resolution receipt must be settled and not actionable")
+	}
+}
+
+func TestReceiptPhaseOneRecordUnmarshalsAdditively(t *testing.T) {
+	// A Phase 1-shaped record: none of the recovery fields exist on disk.
+	phase1 := `{
+  "schema_version": 1,
+  "transaction_id": "0123456789abcdef0123456789abcdef",
+  "runtime_dir": "/runtime",
+  "executable_path": "/runtime/bin/agentico",
+  "old_digest": "aaaa",
+  "new_digest": "bbbb",
+  "original_mode": 493,
+  "outcome": "pending",
+  "phase": "backup-ready"
+}`
+	path := filepath.Join(t.TempDir(), "receipt.json")
+	if err := os.WriteFile(path, []byte(phase1), 0o600); err != nil {
+		t.Fatalf("write phase 1 receipt: %v", err)
+	}
+	r, err := ReadReceipt(path)
+	if err != nil {
+		t.Fatalf("ReadReceipt: %v", err)
+	}
+	if r.SchemaVersion != receiptSchemaVersion || r.Outcome != OutcomePending || r.Phase != PhaseBackupReady {
+		t.Fatalf("phase 1 receipt = %d %s/%s", r.SchemaVersion, r.Outcome, r.Phase)
+	}
+	if r.RecoveryAttemptID != "" || r.RecoveryKind != "" || r.RecoveryAttemptBy != 0 || r.RestorePath != "" || r.RestoreID != nil || r.Resolution != ResolutionNone || r.InstallFailed {
+		t.Fatalf("recovery fields must unmarshal to zero values: %+v", r)
+	}
+	if !r.RecoveryStartedAt.IsZero() || !r.ResolvedAt.IsZero() {
+		t.Fatalf("recovery timestamps must be zero: %s %s", r.RecoveryStartedAt, r.ResolvedAt)
+	}
+	if !r.ActionablePending() || r.Settled() {
+		t.Fatal("phase 1 pending record must be actionable pending")
+	}
+}
+
+func TestReceiptSettledAndActionablePendingMatrix(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name       string
+		mutate     func(r *Receipt)
+		settled    bool
+		actionable bool
+	}{
+		{"pending unresolved", func(r *Receipt) {}, false, true},
+		{"pending abandoned", func(r *Receipt) { r.Resolution = ResolutionAbandonedPreReplacement }, true, false},
+		{"confirmed", func(r *Receipt) { r.Outcome = OutcomeConfirmed }, true, false},
+		{"rolled back", func(r *Receipt) { r.Outcome = OutcomeRolledBack }, true, false},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := sampleReceipt(now)
+			tc.mutate(&r)
+			if r.Settled() != tc.settled {
+				t.Fatalf("Settled() = %v, want %v", r.Settled(), tc.settled)
+			}
+			if r.ActionablePending() != tc.actionable {
+				t.Fatalf("ActionablePending() = %v, want %v", r.ActionablePending(), tc.actionable)
+			}
+		})
+	}
+}

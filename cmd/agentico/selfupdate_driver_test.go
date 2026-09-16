@@ -28,21 +28,38 @@ import (
 )
 
 // resetDriverState clears the package-level driver state and registers a
-// cleanup restoring it (and the discovery publish seam) after the test.
-// These tests touch package-level mutable globals, so none of them may run
-// in parallel.
+// cleanup restoring it (and every production seam the driver can arm) after
+// the test. These tests touch package-level mutable globals, so none of
+// them may run in parallel.
 func resetDriverState(t *testing.T) {
 	t.Helper()
 	origPublish := publishDiscoveryFn
+	origDeadline := startupDeadlineHook
+	origHealth := selfUpdateHealthWaitFn
+	origConfirm := selfUpdateConfirmFn
+	origRecoverySeams := selfUpdateRecoverySeams
+	origBarrier := selfUpdateRecoveryBarrier
+	origRecoveryExec := selfUpdateRecoveryExecFn
+	origStartupAbort := selfUpdateStartupAbortHook
+	origCleanupSeams := selfUpdateCleanupSeams
+	origArmOnAdoption := driverArmOnAdoption
 	reset := func() {
 		publishDiscoveryFn = origPublish
+		startupDeadlineHook = origDeadline
+		selfUpdateHealthWaitFn = origHealth
+		selfUpdateConfirmFn = origConfirm
+		selfUpdateRecoverySeams = origRecoverySeams
+		selfUpdateRecoveryBarrier = origBarrier
+		selfUpdateRecoveryExecFn = origRecoveryExec
+		selfUpdateStartupAbortHook = origStartupAbort
+		selfUpdateCleanupSeams = origCleanupSeams
+		driverArmOnAdoption = origArmOnAdoption
 		driver.candidatePath = ""
 		driver.triggerFile = ""
-		driver.failAt = ""
+		driver.failAt = nil
+		driver.barrier = ""
+		driver.barrierFile = ""
 		driver.prepareOnly = false
-		driver.adopted = nil
-		driver.adoptedMeta = selfupdate.HandoffMetadata{}
-		driver.adoptedReceipt = selfupdate.Receipt{}
 	}
 	reset()
 	t.Cleanup(reset)
@@ -67,8 +84,8 @@ func TestSelfUpdateDriverArgParse(t *testing.T) {
 	if driver.candidatePath != "x" || driver.triggerFile != "y" {
 		t.Fatalf("driver candidate/trigger = %q/%q; want x/y", driver.candidatePath, driver.triggerFile)
 	}
-	if driver.failAt != "" || driver.prepareOnly {
-		t.Fatalf("driver failAt/prepareOnly = %q/%v; want defaults", driver.failAt, driver.prepareOnly)
+	if driver.anyFailArmed() || driver.prepareOnly {
+		t.Fatalf("driver failAt/prepareOnly = %v/%v; want defaults", driver.failAt, driver.prepareOnly)
 	}
 	if driver.serverFlags.mode != launchModeServer {
 		t.Fatalf("driver.serverFlags.mode = %v; want launchModeServer", driver.serverFlags.mode)
@@ -109,6 +126,29 @@ func TestSelfUpdateDriverArgParse(t *testing.T) {
 		t.Fatalf("invalid fail-at: handled %v, err %v; want rejection", handled, err)
 	}
 
+	// Comma-separated fail points all arm.
+	if _, _, err := driverArgParseHook([]string{cliSubcommandSelfUpdateDriver, "--fail-at", "discovery,recovered-startup"}); err != nil {
+		t.Fatalf("comma fail-at parse: %v", err)
+	}
+	if !driver.failAtSet("discovery") || !driver.failAtSet("recovered-startup") {
+		t.Fatalf("comma fail-at armed = %v; want discovery and recovered-startup", driver.failAt)
+	}
+
+	// Invalid --barrier points are rejected, and barrier/fail-at are
+	// mutually exclusive.
+	_, handled, err = driverArgParseHook([]string{cliSubcommandSelfUpdateDriver, "--barrier", "nonsense", "--barrier-file", "f"})
+	if !handled || err == nil || !strings.Contains(err.Error(), "unknown --barrier point") {
+		t.Fatalf("invalid barrier: handled %v, err %v; want rejection", handled, err)
+	}
+	_, handled, err = driverArgParseHook([]string{cliSubcommandSelfUpdateDriver, "--fail-at", "drain", "--barrier", "prepared", "--barrier-file", "f"})
+	if !handled || err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("barrier+fail-at: handled %v, err %v; want rejection", handled, err)
+	}
+	_, handled, err = driverArgParseHook([]string{cliSubcommandSelfUpdateDriver, "--barrier", "prepared"})
+	if !handled || err == nil || !strings.Contains(err.Error(), "requires --barrier-file") {
+		t.Fatalf("barrier without file: handled %v, err %v; want rejection", handled, err)
+	}
+
 	// --prepare-only records the flag.
 	if _, _, err := driverArgParseHook([]string{cliSubcommandSelfUpdateDriver, "--candidate", "x", "--prepare-only"}); err != nil {
 		t.Fatalf("prepare-only parse: %v", err)
@@ -118,21 +158,27 @@ func TestSelfUpdateDriverArgParse(t *testing.T) {
 	}
 }
 
-func TestSelfUpdateDriverFailAtDiscoveryStubsPublish(t *testing.T) {
+func TestSelfUpdateDriverFailAtDiscoveryStubsPublishOnlyOnAdoption(t *testing.T) {
 	resetDriverState(t)
+	// The real publish writes into its runtime dir: keep it inside the
+	// test's temp tree, never the package's working directory.
+	runtimeDir := t.TempDir()
 
 	// Parsing alone must NOT arm the stub: the old image still publishes its
 	// own discovery record normally.
 	if _, _, err := driverArgParseHook([]string{cliSubcommandSelfUpdateDriver, "--fail-at", "discovery"}); err != nil {
 		t.Fatalf("parse --fail-at discovery: %v", err)
 	}
-	if err := publishDiscoveryFn("irrelevant", serverruntime.DiscoveryRecord{}); err != nil {
+	if err := publishDiscoveryFn(runtimeDir, serverruntime.DiscoveryRecord{}); err != nil {
 		t.Fatalf("publishDiscoveryFn() error = %v; want the real function after parse alone", err)
+	}
+	if selfUpdateRecoveryBarrier != nil {
+		t.Fatal("fail-at arming must not install a barrier hook")
 	}
 
 	// Arming happens only on the adopted image.
 	armDiscoveryFailure()
-	err := publishDiscoveryFn("irrelevant", serverruntime.DiscoveryRecord{})
+	err := publishDiscoveryFn(runtimeDir, serverruntime.DiscoveryRecord{})
 	if err == nil || !strings.Contains(err.Error(), "injected") {
 		t.Fatalf("publishDiscoveryFn() error = %v; want injected discovery publish failure", err)
 	}
@@ -153,9 +199,6 @@ func TestSelfUpdateDriverAdoptionHookWithoutEnvReturnsNils(t *testing.T) {
 	if meta != (selfupdate.HandoffMetadata{}) || receipt != (selfupdate.Receipt{}) {
 		t.Fatalf("handoffAdoptHook() meta/receipt = %+v/%+v; want zero values", meta, receipt)
 	}
-	if driver.adopted != nil {
-		t.Fatal("driver.adopted != nil after no-handoff adoption probe")
-	}
 }
 
 func TestSelfUpdateDriverAdoptionHookFailsClosedOnMalformedEnv(t *testing.T) {
@@ -169,22 +212,6 @@ func TestSelfUpdateDriverAdoptionHookFailsClosedOnMalformedEnv(t *testing.T) {
 	if lease != nil {
 		t.Fatal("handoffAdoptHook() lease != nil on malformed entry")
 	}
-	if driver.adopted != nil {
-		t.Fatal("malformed handoff must not be stashed in driver state")
-	}
-}
-
-func TestSelfUpdateDriverListenOverride(t *testing.T) {
-	resetDriverState(t)
-
-	if got := handoffListenOverrideHook(); got != "" {
-		t.Fatalf("handoffListenOverrideHook() = %q; want empty without adoption", got)
-	}
-	driver.adopted = &selfupdate.Lease{}
-	driver.adoptedMeta = selfupdate.HandoffMetadata{Bind: selfupdate.BindEndpoint{Host: "127.0.0.1", Port: 54321}}
-	if got := handoffListenOverrideHook(); got != "127.0.0.1:54321" {
-		t.Fatalf("handoffListenOverrideHook() = %q; want 127.0.0.1:54321", got)
-	}
 }
 
 func TestSelfUpdateDriverHandoffListenAddrFormatting(t *testing.T) {
@@ -197,6 +224,8 @@ func TestSelfUpdateDriverHandoffListenAddrFormatting(t *testing.T) {
 		{"wildcard v4", selfupdate.BindEndpoint{Host: "0.0.0.0", Port: 8080}, "0.0.0.0:8080"},
 		{"ipv6", selfupdate.BindEndpoint{Host: "::1", Port: 8080}, "[::1]:8080"},
 		{"hostname", selfupdate.BindEndpoint{Host: "myhost", Port: 9090}, "myhost:9090"},
+		{"no endpoint", selfupdate.BindEndpoint{}, ""},
+		{"portless", selfupdate.BindEndpoint{Host: "myhost"}, ""},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -211,19 +240,23 @@ func TestSelfUpdateDriverHandoffListenAddrFormatting(t *testing.T) {
 
 func TestSelfUpdateDriverJourneySelection(t *testing.T) {
 	resetDriverState(t)
+	if handoffEnvPresent(os.Environ()) {
+		t.Skip("handoff environment entry present; cannot test journey selection")
+	}
 
 	if journey := serverJourneyHook(); journey != nil {
-		t.Fatalf("serverJourneyHook() = %T; want nil without adoption or candidate", journey)
+		t.Fatalf("serverJourneyHook() = %T; want nil without a candidate", journey)
 	}
 	driver.candidatePath = "candidate"
 	if _, ok := serverJourneyHook().(replaceJourney); !ok {
 		t.Fatalf("serverJourneyHook() = %T; want replaceJourney", serverJourneyHook())
 	}
-	// Adoption takes priority over a candidate: the new image confirms, it
-	// never starts a second replacement.
-	driver.adopted = &selfupdate.Lease{}
-	if _, ok := serverJourneyHook().(confirmJourney); !ok {
-		t.Fatalf("serverJourneyHook() = %T; want confirmJourney", serverJourneyHook())
+
+	// A recovery chain never re-attempts installation without fresh consent:
+	// the guard entry suppresses the journey even with a candidate armed.
+	t.Setenv(selfupdate.RecoveryGuardEnvVar, `{"schema_version":1,"transaction_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attempt_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","kind":"restore"}`)
+	if journey := serverJourneyHook(); journey != nil {
+		t.Fatalf("serverJourneyHook() = %T; want nil in a recovery chain", journey)
 	}
 }
 
@@ -233,7 +266,7 @@ func TestSelfUpdateDriverSeamsForFailAt(t *testing.T) {
 		t.Fatalf("write sync target: %v", err)
 	}
 
-	seams := seamsForFailAt("backup-sync")
+	seams := seamsForFailAt(map[string]bool{"backup-sync": true})
 	if seams.SyncFile == nil {
 		t.Fatal("backup-sync seam must override SyncFile")
 	}
@@ -244,7 +277,7 @@ func TestSelfUpdateDriverSeamsForFailAt(t *testing.T) {
 		t.Fatalf("second SyncFile = %v; want the real sync", err)
 	}
 
-	seams = seamsForFailAt("receipt-write")
+	seams = seamsForFailAt(map[string]bool{"receipt-write": true})
 	if seams.WriteReceipt == nil {
 		t.Fatal("receipt-write seam must override WriteReceipt")
 	}
@@ -252,11 +285,60 @@ func TestSelfUpdateDriverSeamsForFailAt(t *testing.T) {
 		t.Fatalf("WriteReceipt = %v; want injected failure", err)
 	}
 
-	if seams := seamsForFailAt(""); seams.SyncFile != nil || seams.WriteReceipt != nil {
+	if seams := seamsForFailAt(nil); seams.SyncFile != nil || seams.WriteReceipt != nil {
 		t.Fatal("no fail-at must yield zero seams")
 	}
-	if seams := seamsForFailAt("post-rename"); seams.SyncFile != nil || seams.WriteReceipt != nil {
+	if seams := seamsForFailAt(map[string]bool{"post-rename": true}); seams.SyncFile != nil || seams.WriteReceipt != nil {
 		t.Fatal("post-rename needs no transaction seam")
+	}
+}
+
+func TestSelfUpdateDriverRecoverySeamsForFailAt(t *testing.T) {
+	attemptPending := selfupdate.Receipt{
+		Outcome:           selfupdate.OutcomePending,
+		RecoveryAttemptID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		RecoveryKind:      selfupdate.RecoveryKindRestore,
+	}
+	rolledBack := selfupdate.Receipt{Outcome: selfupdate.OutcomeRolledBack}
+
+	seams := recoverySeamsForFailAt(map[string]bool{"restore-attempt-write": true})
+	if err := seams.WriteReceipt("unused", attemptPending); err == nil || !strings.Contains(err.Error(), "injected") {
+		t.Fatalf("attempt write = %v; want injected failure", err)
+	}
+	other := selfupdate.Receipt{Outcome: selfupdate.OutcomePending}
+	dir := t.TempDir()
+	receiptPath := filepath.Join(dir, "receipt.json")
+	if err := seams.WriteReceipt(receiptPath, other); err != nil {
+		t.Fatalf("non-attempt write must run the real implementation: %v", err)
+	}
+
+	seams = recoverySeamsForFailAt(map[string]bool{"restore-rolledback": true})
+	if err := seams.WriteReceipt(receiptPath, rolledBack); err == nil || !strings.Contains(err.Error(), "injected") {
+		t.Fatalf("rolled-back write = %v; want injected failure", err)
+	}
+	if err := seams.WriteReceipt(receiptPath, other); err != nil {
+		t.Fatalf("non-rolledback write must run the real implementation: %v", err)
+	}
+
+	seams = recoverySeamsForFailAt(map[string]bool{"restore-rename": true})
+	if err := seams.Rename("a", "b"); err == nil || !strings.Contains(err.Error(), "injected") {
+		t.Fatalf("restore rename = %v; want injected failure", err)
+	}
+
+	seams = recoverySeamsForFailAt(map[string]bool{"restore-sync": true})
+	txLike := filepath.Join(t.TempDir(), "tx-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err := os.Mkdir(txLike, 0o700); err != nil {
+		t.Fatalf("mkdir tx-like dir: %v", err)
+	}
+	if err := seams.SyncDir(txLike); err != nil {
+		t.Fatalf("tx-dir sync must run the real implementation: %v", err)
+	}
+	if err := seams.SyncDir(t.TempDir()); err == nil || !strings.Contains(err.Error(), "injected") {
+		t.Fatalf("installed-dir sync = %v; want injected failure", err)
+	}
+
+	if seams := recoverySeamsForFailAt(map[string]bool{"drain": true}); seams.WriteReceipt != nil || seams.Rename != nil || seams.SyncDir != nil {
+		t.Fatal("unrelated fail points must not install recovery seams")
 	}
 }
 
@@ -303,7 +385,11 @@ func TestSelfUpdateDriverFingerprintDigests(t *testing.T) {
 	base := []string{"PATH=/usr/bin", "HOME=/tmp"}
 	withHandoff := append(append([]string(nil), base...), selfupdate.HandoffEnvVar+"="+"{\"schema_version\":1}")
 	if envDigest(base) != envDigest(withHandoff) {
-		t.Fatal("env digest must ignore the handoff entry: it is the one entry exec may add")
+		t.Fatal("env digest must ignore the handoff entry: it is the one entry exec may replace")
+	}
+	withGuard := append(append([]string(nil), base...), selfupdate.RecoveryGuardEnvVar+"="+"{\"schema_version\":1}")
+	if envDigest(base) != envDigest(withGuard) {
+		t.Fatal("env digest must ignore the recovery guard entry: it is the other entry exec may replace")
 	}
 	if envDigest([]string{"A=1", "B=2"}) == envDigest([]string{"B=2", "A=1"}) {
 		t.Fatal("env digest must be order-sensitive")

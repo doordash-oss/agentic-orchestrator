@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -335,5 +336,104 @@ func TestAdoptHandoffFailureMatrix(t *testing.T) {
 				t.Fatalf("AdoptHandoff returned lease contention: %v", err)
 			}
 		})
+	}
+}
+
+func TestParseRecoveryGuardEnv(t *testing.T) {
+	t.Parallel()
+	g := RecoveryGuard{
+		SchemaVersion: 1,
+		TransactionID: "0123456789abcdef0123456789abcdef",
+		AttemptID:     "abcdef1234567890abcdef1234567890",
+		Kind:          RecoveryKindRestore,
+		Bind:          BindEndpoint{Host: "127.0.0.1", Port: 54321},
+		AuthTokenPath: "/runtime/token-path",
+	}
+	env := []string{"PATH=/usr/bin", RecoveryGuardEnvVar + "=" + EncodeRecoveryGuard(g), "HOME=/home"}
+
+	got, present, err := ParseRecoveryGuardEnv(env)
+	if err != nil || !present || !reflect.DeepEqual(got, g) {
+		t.Fatalf("ParseRecoveryGuardEnv = (%+v, %v, %v), want the recorded guard", got, present, err)
+	}
+
+	got, present, err = ParseRecoveryGuardEnv([]string{"PATH=/usr/bin"})
+	if err != nil || present || !reflect.DeepEqual(got, RecoveryGuard{}) {
+		t.Fatalf("ParseRecoveryGuardEnv without entry = (%+v, %v, %v), want absent zero guard", got, present, err)
+	}
+
+	// A present-but-unparseable entry fails closed while still reporting
+	// presence: the chain cannot prove which transaction it attempted.
+	got, present, err = ParseRecoveryGuardEnv([]string{RecoveryGuardEnvVar + "={broken"})
+	if err == nil {
+		t.Fatal("ParseRecoveryGuardEnv on garbage = nil error, want fail-closed")
+	}
+	if !present {
+		t.Fatal("ParseRecoveryGuardEnv on garbage = present false, want true")
+	}
+	if !reflect.DeepEqual(got, RecoveryGuard{}) {
+		t.Fatalf("ParseRecoveryGuardEnv on garbage = %+v, want zero guard", got)
+	}
+}
+
+func TestBuildRecoveryEnvDropsStaleEntriesAndAppendsOneGuard(t *testing.T) {
+	t.Parallel()
+	g := RecoveryGuard{
+		SchemaVersion: 1,
+		TransactionID: "0123456789abcdef0123456789abcdef",
+		AttemptID:     "abcdef1234567890abcdef1234567890",
+		Kind:          RecoveryKindRestore,
+	}
+	stale := RecoveryGuard{SchemaVersion: 1, TransactionID: "ffffffffffffffffffffffffffffffff", AttemptID: "old", Kind: RecoveryKindRestart}
+	env := []string{
+		"PATH=/usr/bin",
+		HandoffEnvVar + "=" + EncodeHandoff(HandoffMetadata{SchemaVersion: 1}),
+		RecoveryGuardEnvVar + "=" + EncodeRecoveryGuard(stale),
+		"HOME=/home",
+		RecoveryGuardEnvVar + "=garbage",
+	}
+
+	out := BuildRecoveryEnv(env, g)
+	want := []string{"PATH=/usr/bin", "HOME=/home", RecoveryGuardEnvVar + "=" + EncodeRecoveryGuard(g)}
+	if !reflect.DeepEqual(out, want) {
+		t.Fatalf("BuildRecoveryEnv = %v, want %v", out, want)
+	}
+	guardEntries := 0
+	for _, entry := range out {
+		if strings.HasPrefix(entry, HandoffEnvVar+"=") {
+			t.Fatalf("handoff entry leaked into recovery env: %s", entry)
+		}
+		if strings.HasPrefix(entry, RecoveryGuardEnvVar+"=") {
+			guardEntries++
+		}
+	}
+	if guardEntries != 1 {
+		t.Fatalf("recovery env carries %d guard entries, want exactly one", guardEntries)
+	}
+	parsed, present, err := ParseRecoveryGuardEnv(out)
+	if err != nil || !present || !reflect.DeepEqual(parsed, g) {
+		t.Fatalf("ParseRecoveryGuardEnv(recovery env) = (%+v, %v, %v), want the appended guard", parsed, present, err)
+	}
+}
+
+func TestExecRecoveryUsesSeam(t *testing.T) {
+	t.Parallel()
+	execErr := errors.New("exec boom")
+	var gotPath string
+	var gotArgv, gotEnv []string
+	err := ExecRecovery("/installed", []string{"argv0", "flag"}, []string{"PATH=/usr/bin"}, func(path string, argv, env []string) error {
+		gotPath, gotArgv, gotEnv = path, argv, env
+		return execErr
+	})
+	if !errors.Is(err, execErr) {
+		t.Fatalf("ExecRecovery error = %v, want %v", err, execErr)
+	}
+	if gotPath != "/installed" {
+		t.Fatalf("exec path = %q, want /installed", gotPath)
+	}
+	if !reflect.DeepEqual(gotArgv, []string{"argv0", "flag"}) {
+		t.Fatalf("exec argv = %v", gotArgv)
+	}
+	if !reflect.DeepEqual(gotEnv, []string{"PATH=/usr/bin"}) {
+		t.Fatalf("exec env = %v", gotEnv)
 	}
 }

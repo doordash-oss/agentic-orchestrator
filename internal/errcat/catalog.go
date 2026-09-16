@@ -194,6 +194,7 @@ const (
 	GithubCredentialsMissing   Code = "github_credentials_missing"
 	StartupMaintenanceFailed   Code = "startup_maintenance_failed"
 	ShutdownIncomplete         Code = "shutdown_incomplete"
+	UpdateRolledBack           Code = "update_rolled_back"
 )
 
 // Terminal run-failure codes. Blocking failures that end a feature's active
@@ -315,6 +316,15 @@ type UpdateCheckParams struct {
 }
 
 func (UpdateCheckParams) params() {}
+
+// UpdateRolledBackParams carries the original and target versions for
+// UpdateRolledBack so the summary names the exact failed update.
+type UpdateRolledBackParams struct {
+	FromVersion string
+	ToVersion   string
+}
+
+func (UpdateRolledBackParams) params() {}
 
 // AlreadyRunningParams names the state directory or running base URL for
 // RuntimeAlreadyRunning.
@@ -1346,6 +1356,25 @@ var catalog = map[Code]Entry{
 		Title:       "Shutdown incomplete",
 		Summary:     "The runtime shut down with pending close errors.",
 		Remediation: "The exit status is unaffected; check the runtime directory before restarting.",
+	},
+	UpdateRolledBack: {
+		Class:   ClassWarning,
+		Title:   "Update rolled back",
+		Summary: "The update to a new version failed and the previous version was restored; the runtime continues on the restored build.",
+		summaryParams: func(p Params) string {
+			params, ok := p.(UpdateRolledBackParams)
+			if !ok || (params.FromVersion == "" && params.ToVersion == "") {
+				return ""
+			}
+			if params.FromVersion == "" {
+				return fmt.Sprintf("The update to %s failed and the previous version was restored; the runtime continues on the restored build.", params.ToVersion)
+			}
+			if params.ToVersion == "" {
+				return fmt.Sprintf("The update from %s failed and the previous version was restored; the runtime continues on the restored build.", params.FromVersion)
+			}
+			return fmt.Sprintf("The update from %s to %s failed and the previous version was restored; the runtime continues on the restored build.", params.FromVersion, params.ToVersion)
+		},
+		Remediation: "The failed version stays ineligible until a fresh, consented update attempt; check the runtime's update receipt for the sanitized failure reason.",
 	},
 
 	// --- Warning codes ------------------------------------------------------

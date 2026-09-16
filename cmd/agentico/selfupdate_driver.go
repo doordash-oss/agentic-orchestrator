@@ -23,10 +23,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
@@ -38,50 +36,101 @@ import (
 // This file is the compile-time-isolated selfupdate test driver. It exists
 // only in agentico_selfupdate_driver builds: an ordinarily built binary has
 // no driver code at all, so no flag, environment value, or HTTP request can
-// activate any journey below.
+// activate any journey below. The driver injects failures and barriers into
+// the production recovery machinery through the seams declared in
+// selfupdate_hooks.go; it never reimplements recovery.
 
 // cliSubcommandSelfUpdateDriver is the driver-only first argument.
 const cliSubcommandSelfUpdateDriver = "selfupdate-driver"
 
 // driverConfig carries the driver-only controls parsed from argv plus the
 // handoff state stashed by the adoption hook. serverFlags is the parsed
-// server-shaped launch options; adopted/adoptedMeta/adoptedReceipt mirror
-// what the adoption hook returned to runServerWithJourney.
+// server-shaped launch options.
 type driverConfig struct {
-	candidatePath  string
-	triggerFile    string
-	failAt         string
-	prepareOnly    bool
-	serverFlags    launchOptions
-	adopted        *selfupdate.Lease
-	adoptedMeta    selfupdate.HandoffMetadata
-	adoptedReceipt selfupdate.Receipt
+	candidatePath string
+	triggerFile   string
+	failAt        map[string]bool
+	barrier       string
+	barrierFile   string
+	prepareOnly   bool
+	serverFlags   launchOptions
 }
 
 // driver is the driver's process-lifetime state.
 var driver driverConfig
 
-// driverFailPoints is the closed set of --fail-at injection points.
+// driverFailPoints is the closed set of --fail-at injection points. Points
+// may be combined comma-separated so one journey can fail the target and
+// then fail the recovered build.
 var driverFailPoints = map[string]bool{
-	"backup-sync":    true,
-	"receipt-write":  true,
+	// Preparation (Begin) failures: no receipt, untouched bytes.
+	"backup-sync":   true,
+	"receipt-write": true,
+	// Aborted-shutdown failures on the old image. A failure while the old
+	// runtime is still usable aborts the installation and keeps serving; a
+	// failure after serving resources closed restarts the unchanged build
+	// through the guarded recovery path.
 	"drain":          true,
+	"server-close":   true,
+	"shutdown-mixed": true,
 	"stop":           true,
-	"post-rename":    true,
-	"exec-error":     true,
-	"target-startup": true,
-	"discovery":      true,
-	"confirm":        true,
+	// Handoff failures: the old image recovers through the boundary —
+	// restore the previous build and exec it with the chain guard.
+	"post-rename": true,
+	"exec-error":  true,
+	// Target startup failures: the adopted image fails and the production
+	// recovery boundary restores the previous build.
+	"target-startup":   true,
+	"startup-deadline": true,
+	"discovery":        true,
+	"health":           true,
+	"confirm":          true,
+	// Recovery failures: the boundary itself fails; the process exits
+	// nonzero with actionable metadata retained and no second exec.
+	"restore-attempt-write": true,
+	"restore-rename":        true,
+	"restore-sync":          true,
+	"restore-rolledback":    true,
+	"recovery-exec":         true,
+	// The recovered build itself fails startup: nonzero exit, no loop.
+	"recovered-startup": true,
+	// Post-confirmation cleanup failure: warn and keep serving.
+	"cleanup-remove": true,
+	"cleanup-sync":   true,
+}
+
+// driverBarrierPoints is the closed set of --barrier stages. A barrier
+// writes the barrier file and blocks forever so the harness can SIGKILL at
+// a deterministic point.
+var driverBarrierPoints = map[string]bool{
+	"prepared":           true, // after Begin, before any shutdown
+	"pre-commit":         true, // after teardown, before Commit
+	"commit-receipt":     true, // inside Commit, after rename, before receipt advance
+	"post-rename":        true, // after Commit, before handoff exec
+	"restore-attempt":    true, // after the recovery attempt receipt is durable
+	"restore-rename":     true, // after the restore rename, before dir sync
+	"restore-sync":       true, // after the installed-dir sync, before rolled_back
+	"restore-rolledback": true, // after rolled_back is durable, before exec
+	"restart-marked":     true, // after the restart attempt is durable, before exec
+}
+
+// driverFailAt reports whether the named injection point is armed.
+func (d *driverConfig) failAtSet(point string) bool {
+	return d.failAt[point]
+}
+
+// driverArmed reports whether any fail point is armed.
+func (d *driverConfig) anyFailArmed() bool {
+	return len(d.failAt) > 0
 }
 
 func init() {
 	driverArgParseHook = parseDriverArgs
 	handoffAdoptHook = adoptDriverHandoff
-	handoffListenOverrideHook = driverListenOverride
 	serverJourneyHook = driverJourney
-	// The discovery publish stub is armed by adoptDriverHandoff, not here:
-	// --fail-at discovery must fail the ADOPTED image's publication, never
-	// the old image's own boot.
+	// The adopted image prints its fingerprints once adoption succeeds so
+	// the e2e harness can compare args/env digests across the exec boundary.
+	selfUpdateAdoptedStartHook = func() { printDriverFingerprints(os.Stderr) }
 }
 
 // parseDriverArgs recognizes the selfupdate-driver subcommand and parses the
@@ -90,8 +139,7 @@ func init() {
 // parseLaunchArgs continues its ordinary parsing; a non-nil error is a
 // recognized-but-invalid driver invocation that renders through the normal
 // invalid-usage path. A candidate is deliberately not required at parse
-// time: a handoff-env launch (the confirm journey) carries no candidate, so
-// the replace journey validates it instead.
+// time: a handoff-env or recovery launch carries no candidate.
 func parseDriverArgs(args []string) (launchOptions, bool, error) {
 	if len(args) == 0 || args[0] != cliSubcommandSelfUpdateDriver {
 		return launchOptions{}, false, nil
@@ -100,7 +148,9 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 	opts.mode = launchModeServer
 	driver.candidatePath = ""
 	driver.triggerFile = ""
-	driver.failAt = ""
+	driver.failAt = nil
+	driver.barrier = ""
+	driver.barrierFile = ""
 	driver.prepareOnly = false
 	rest := args[1:]
 	for i := 0; i < len(rest); i++ {
@@ -165,11 +215,35 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 				return opts, true, fmt.Errorf("--fail-at requires a value")
 			}
 			i++
-			point := rest[i]
-			if !driverFailPoints[point] {
-				return opts, true, fmt.Errorf("unknown --fail-at point: %s", point)
+			for _, point := range strings.Split(rest[i], ",") {
+				point = strings.TrimSpace(point)
+				if point == "" {
+					continue
+				}
+				if !driverFailPoints[point] {
+					return opts, true, fmt.Errorf("unknown --fail-at point: %s", point)
+				}
+				if driver.failAt == nil {
+					driver.failAt = make(map[string]bool)
+				}
+				driver.failAt[point] = true
 			}
-			driver.failAt = point
+		case "--barrier":
+			if i+1 >= len(rest) {
+				return opts, true, fmt.Errorf("--barrier requires a value")
+			}
+			i++
+			point := rest[i]
+			if !driverBarrierPoints[point] {
+				return opts, true, fmt.Errorf("unknown --barrier point: %s", point)
+			}
+			driver.barrier = point
+		case "--barrier-file":
+			if i+1 >= len(rest) {
+				return opts, true, fmt.Errorf("--barrier-file requires a value")
+			}
+			i++
+			driver.barrierFile = rest[i]
 		case "--prepare-only":
 			driver.prepareOnly = true
 		default:
@@ -178,6 +252,12 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 			}
 			return opts, true, fmt.Errorf("unknown selfupdate-driver argument: %s", arg)
 		}
+	}
+	if driver.barrier != "" && driver.anyFailArmed() {
+		return opts, true, fmt.Errorf("--barrier and --fail-at are mutually exclusive")
+	}
+	if driver.barrier != "" && driver.barrierFile == "" {
+		return opts, true, fmt.Errorf("--barrier requires --barrier-file")
 	}
 	// The same parse-time normalization the server path applies, so bad
 	// values fail before any socket is opened.
@@ -194,8 +274,75 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 		}
 		opts.serverName = name
 	}
+	armDriverSeams()
 	driver.serverFlags = opts
 	return opts, true, nil
+}
+
+// armDriverSeams wires the driver's failure injections and barriers into the
+// production seams. Only the armed points are installed; everything else
+// keeps the real implementation.
+func armDriverSeams() {
+	if driver.anyFailArmed() {
+		if driver.failAtSet("target-startup") || driver.failAtSet("startup-deadline") {
+			// Cooperative startup deadline expiry: the adopted target gets a
+			// deadline that expires before bootstrap can complete, routing
+			// through the recovery boundary.
+			startupDeadlineHook = func() time.Duration { return time.Millisecond }
+		}
+		if driver.failAtSet("discovery") {
+			// Armed only for the ADOPTED image: the old image must still
+			// publish its own discovery record normally, and the failure
+			// must land on the target's post-exec publication.
+			armDiscoveryFailureOnAdoption()
+		}
+		if driver.failAtSet("health") {
+			// Armed only for the ADOPTED image, like the discovery injection:
+			// the recovered build's own mandatory health wait must still pass.
+			armOnAdoption(func() {
+				selfUpdateHealthWaitFn = func([]string) error {
+					return errors.New("injected health wait failure")
+				}
+			})
+		}
+		if driver.failAtSet("confirm") {
+			selfUpdateConfirmFn = func(string, string) (selfupdate.Receipt, error) {
+				return selfupdate.Receipt{}, errors.New("injected confirm failure")
+			}
+		}
+		if driver.failAtSet("recovery-exec") {
+			selfUpdateRecoveryExecFn = func(string, []string, []string) error {
+				return errors.New("injected recovery exec failure")
+			}
+		}
+		if driver.failAtSet("recovered-startup") {
+			// Abort the startup of the recovered or restarted image itself:
+			// the chain guard forbids another automatic recovery, so the
+			// process must terminate nonzero. The first image of the chain
+			// carries no guard entry and is not affected.
+			selfUpdateStartupAbortHook = func() error {
+				if _, present, perr := selfupdate.ParseRecoveryGuardEnv(os.Environ()); present && perr == nil {
+					return errors.New("injected recovered-startup failure")
+				}
+				return nil
+			}
+		}
+		if driver.failAtSet("cleanup-remove") {
+			selfUpdateCleanupSeams = selfupdate.CleanupSeams{
+				Remove: func(string) error { return errors.New("injected cleanup remove failure") },
+			}
+		}
+		if driver.failAtSet("cleanup-sync") {
+			selfUpdateCleanupSeams = selfupdate.CleanupSeams{
+				SyncDir: func(string) error { return errors.New("injected cleanup sync failure") },
+			}
+		}
+		selfUpdateRecoverySeams = recoverySeamsForFailAt(driver.failAt)
+	}
+	if driver.barrier != "" {
+		selfUpdateRecoveryBarrier = barrierHook
+		selfUpdateRecoverySeams = recoverySeamsForBarrier(driver.barrier)
+	}
 }
 
 // armDiscoveryFailure installs the injected discovery-publish failure. It is
@@ -208,22 +355,133 @@ func armDiscoveryFailure() {
 	}
 }
 
-// handoffEnvPresent reports whether the handoff entry exists in env,
-// regardless of parseability.
-func handoffEnvPresent(env []string) bool {
-	prefix := selfupdate.HandoffEnvVar + "="
-	for _, entry := range env {
-		if strings.HasPrefix(entry, prefix) {
-			return true
+// armDiscoveryFailureOnAdoption defers the discovery failure arming to the
+// adoption hook so it never affects the old image's own boot.
+func armDiscoveryFailureOnAdoption() {
+	armOnAdoption(armDiscoveryFailure)
+}
+
+// armOnAdoption defers one failure arming to the adoption hook so an
+// adopted-image injection never affects the old image's boot or the
+// recovered build's own boot either.
+func armOnAdoption(fn func()) {
+	if driverArmOnAdoption == nil {
+		driverArmOnAdoption = fn
+		return
+	}
+	prev := driverArmOnAdoption
+	driverArmOnAdoption = func() { prev(); fn() }
+}
+
+// driverArmOnAdoption is armed by armDriverSeams and invoked by
+// adoptDriverHandoff once a handoff is adopted.
+var driverArmOnAdoption func()
+
+// barrierHook writes the barrier marker and blocks forever: the harness
+// SIGKILLs the process at this deterministic stage.
+func barrierHook(stage string) {
+	if stage != driver.barrier {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "selfupdate-driver: barrier %s\n", stage)
+	_ = os.WriteFile(driver.barrierFile, []byte(stage), 0o644)
+	select {}
+}
+
+// barrierSeam runs the real implementation, then writes the marker and
+// blocks when the wrapped point is the armed barrier stage.
+func barrierSeam(stage string, run func() error) error {
+	err := run()
+	barrierHook(stage)
+	return err
+}
+
+// recoverySeamsForBarrier wraps the recovery seams so the armed barrier
+// blocks at the matching deterministic stage inside the production
+// restoration.
+func recoverySeamsForBarrier(stage string) selfupdate.RecoverySeams {
+	return selfupdate.RecoverySeams{
+		WriteReceipt: func(path string, r selfupdate.Receipt) error {
+			return barrierSeam(barrierStageForReceiptWrite(r), func() error {
+				return selfupdate.WriteReceiptDurable(path, r)
+			})
+		},
+		Rename: func(oldpath, newpath string) error {
+			return barrierSeam("restore-rename", func() error {
+				return os.Rename(oldpath, newpath)
+			})
+		},
+		SyncDir: func(path string) error {
+			stageForSync := "restore-sync"
+			if selfupdate.IsTxDirPath(path) {
+				stageForSync = "restore-prepared-sync"
+			}
+			return barrierSeam(stageForSync, func() error {
+				return selfupdate.SyncDir(path)
+			})
+		},
+		Copy: func(dst, src string, mode uint32) error {
+			return selfupdate.CopyFile(dst, src, mode)
+		},
+		SyncFile: func(path string) error {
+			return selfupdate.SyncFile(path)
+		},
+	}
+}
+
+// barrierStageForReceiptWrite maps one recovery receipt write to its
+// barrier stage name.
+func barrierStageForReceiptWrite(r selfupdate.Receipt) string {
+	switch {
+	case r.Outcome == selfupdate.OutcomeRolledBack:
+		return "restore-rolledback"
+	case r.RecoveryAttemptID != "" && r.RecoveryKind == selfupdate.RecoveryKindRestore:
+		return "restore-attempt"
+	default:
+		return "restore-receipt-other"
+	}
+}
+
+// recoverySeamsForFailAt builds the recovery failure seams for the armed
+// injection points: each armed point fails exactly once at its boundary,
+// leaving the durable receipt truthful for the furthest completed step.
+func recoverySeamsForFailAt(points map[string]bool) selfupdate.RecoverySeams {
+	seams := selfupdate.RecoverySeams{}
+	if points["restore-attempt-write"] {
+		seams.WriteReceipt = func(path string, r selfupdate.Receipt) error {
+			if r.Outcome == selfupdate.OutcomePending && r.RecoveryAttemptID != "" && r.RecoveryKind == selfupdate.RecoveryKindRestore {
+				return errors.New("injected recovery attempt write failure")
+			}
+			return selfupdate.WriteReceiptDurable(path, r)
 		}
 	}
-	return false
+	if points["restore-rename"] {
+		seams.Rename = func(oldpath, newpath string) error {
+			return errors.New("injected restore rename failure")
+		}
+	}
+	if points["restore-sync"] {
+		seams.SyncDir = func(path string) error {
+			if selfupdate.IsTxDirPath(path) {
+				return selfupdate.SyncDir(path)
+			}
+			return errors.New("injected restore dir sync failure")
+		}
+	}
+	if points["restore-rolledback"] {
+		seams.WriteReceipt = func(path string, r selfupdate.Receipt) error {
+			if r.Outcome == selfupdate.OutcomeRolledBack {
+				return errors.New("injected rolled-back receipt write failure")
+			}
+			return selfupdate.WriteReceiptDurable(path, r)
+		}
+	}
+	return seams
 }
 
 // adoptDriverHandoff validates and adopts an inherited handoff before
-// general bootstrap. No handoff entry means an ordinary driver launch:
-// nils with a nil error. A present-but-unparseable entry fails closed — an
-// arbitrary record must never authorize adoption.
+// general bootstrap, with the driver's adoption-time injection. No handoff
+// entry means an ordinary driver launch.
 func adoptDriverHandoff() (*selfupdate.Lease, selfupdate.HandoffMetadata, selfupdate.Receipt, error) {
 	env := os.Environ()
 	if !handoffEnvPresent(env) {
@@ -241,73 +499,31 @@ func adoptDriverHandoff() (*selfupdate.Lease, selfupdate.HandoffMetadata, selfup
 	if err != nil {
 		return nil, m, selfupdate.Receipt{}, err
 	}
-	if driver.failAt == "target-startup" {
-		// The new image booted but must not confirm or serve: release the
-		// adopted lease so the pending receipt and backup stay actionable.
-		_ = lease.Close()
-		return nil, m, selfupdate.Receipt{}, errors.New("injected target-startup failure")
-	}
-	driver.adopted = lease
-	driver.adoptedMeta = m
-	driver.adoptedReceipt = receipt
-	if driver.failAt == "discovery" {
-		armDiscoveryFailure()
+	if driverArmOnAdoption != nil {
+		driverArmOnAdoption()
 	}
 	return lease, m, receipt, nil
 }
 
-// driverListenOverride returns the rebind address recorded in the adopted
-// handoff — the concrete bound host (wildcard form preserved) and assigned
-// port — or "" when nothing was adopted, keeping argv's --listen.
-func driverListenOverride() string {
-	if driver.adopted == nil {
-		return ""
-	}
-	return handoffListenAddr(driver.adoptedMeta)
-}
-
-// handoffListenAddr renders the rebind address from handoff metadata.
-func handoffListenAddr(m selfupdate.HandoffMetadata) string {
-	return net.JoinHostPort(m.Bind.Host, strconv.Itoa(m.Bind.Port))
-}
-
-// driverJourney selects the journey: the confirm journey when this process
-// adopted a handoff, else the replace journey when a candidate was
-// configured, else none — a tagged binary run as a plain server behaves
-// like an ordinary server.
+// driverJourney selects the journey: the replace journey when a candidate
+// was configured and this is a fresh operator launch. An adopted image, a
+// recovered or restarted image, and a plain tagged server all run the
+// production lifecycle (adoption, recovery resolution, confirmation,
+// serving); a recovered chain never re-attempts installation without fresh
+// consent.
 func driverJourney() serverJourney {
-	if driver.adopted != nil {
-		return confirmJourney{}
+	if driver.candidatePath == "" {
+		return nil
 	}
-	if driver.candidatePath != "" {
-		return replaceJourney{}
+	env := os.Environ()
+	if handoffEnvPresent(env) {
+		return nil
 	}
-	return nil
-}
-
-// seamsForFailAt returns transaction seams that inject the requested
-// preparation failure. "backup-sync" fails Begin's first SyncFile call —
-// the rollback backup's sync — while later syncs (staging) still run so the
-// failure is attributable to the backup alone. "receipt-write" fails the
-// pending receipt write. Every other point needs no seam.
-func seamsForFailAt(failAt string) selfupdate.TxSeams {
-	switch failAt {
-	case "backup-sync":
-		calls := 0
-		return selfupdate.TxSeams{SyncFile: func(path string) error {
-			calls++
-			if calls == 1 {
-				return errors.New("injected backup sync failure")
-			}
-			return selfupdate.SyncFile(path)
-		}}
-	case "receipt-write":
-		return selfupdate.TxSeams{WriteReceipt: func(string, selfupdate.Receipt) error {
-			return errors.New("injected receipt write failure")
-		}}
-	default:
-		return selfupdate.TxSeams{}
+	if _, guardPresent, _ := selfupdate.ParseRecoveryGuardEnv(env); guardPresent {
+		fmt.Fprintln(os.Stderr, "selfupdate-driver: refusing update journey in a recovery chain; fresh consent required")
+		return nil
 	}
+	return replaceJourney{}
 }
 
 // waitForTriggerFile polls for path's existence every 25ms until deadline.
@@ -361,8 +577,9 @@ func parseAgenticoVersion(output string) string {
 }
 
 // printDriverFingerprints prints the args/env digests the e2e harness
-// compares across the exec boundary. The env digest excludes the handoff
-// entry, so the pre-exec and post-exec application environments must match.
+// compares across the exec boundary. The env digest excludes the handoff and
+// recovery-guard entries, so the pre-exec and post-exec application
+// environments must match.
 func printDriverFingerprints(w io.Writer) {
 	fmt.Fprintf(w, "selfupdate-driver: args-digest %s\n", argsDigest(os.Args))
 	fmt.Fprintf(w, "selfupdate-driver: env-digest %s\n", envDigest(os.Environ()))
@@ -375,12 +592,14 @@ func argsDigest(argv []string) string {
 }
 
 // envDigest digests the environment entries, NUL-separated, excluding the
-// handoff entry: it is the one entry exec is allowed to add.
+// private handoff and recovery-guard entries: they are the only entries
+// exec is allowed to replace.
 func envDigest(env []string) string {
 	h := sha256.New()
-	prefix := selfupdate.HandoffEnvVar + "="
+	handoffPrefix := selfupdate.HandoffEnvVar + "="
+	guardPrefix := selfupdate.RecoveryGuardEnvVar + "="
 	for _, entry := range env {
-		if strings.HasPrefix(entry, prefix) {
+		if strings.HasPrefix(entry, handoffPrefix) || strings.HasPrefix(entry, guardPrefix) {
 			continue
 		}
 		h.Write([]byte(entry))
@@ -390,7 +609,10 @@ func envDigest(env []string) string {
 }
 
 // replaceJourney is the old-image journey: prepare a durable replacement,
-// shut down orderly, commit, and exec onto the newly installed binary.
+// shut down orderly, commit, and exec onto the newly installed binary — or,
+// when a shutdown step fails, abort the installation (keeping the still
+// usable runtime in service) or restart the unchanged build through the
+// guarded recovery path.
 type replaceJourney struct{}
 
 func (replaceJourney) run(r serverRun) int {
@@ -409,13 +631,20 @@ func (replaceJourney) run(r serverRun) int {
 	}
 
 	// Per-runtime serialization of update work, separate from the instance
-	// lock and the binary lease.
+	// lock and the binary lease. Released before any recovery boundary: the
+	// boundary's restoration acquires the same lock itself.
 	rlock, err := selfupdate.AcquireRuntimeUpdateLock(r.boot.runtime.RuntimeDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "selfupdate-driver: runtime update lock unavailable: %v\n", err)
 		return 1
 	}
 	defer func() { _ = rlock.Close() }()
+	releaseUpdateLock := func() {
+		if rlock != nil {
+			_ = rlock.Close()
+			rlock = nil
+		}
+	}
 
 	if err := waitForTriggerFile(driver.triggerFile, 120*time.Second); err != nil {
 		fmt.Fprintf(os.Stderr, "selfupdate-driver: trigger wait failed: %v\n", err)
@@ -460,65 +689,106 @@ func (replaceJourney) run(r serverRun) int {
 	}
 	txid := tx.Receipt().TransactionID
 	_ = r.boot.updateLease.SetTransactionID(txid)
+	planFor := func() selfupdate.RecoveryPlan {
+		return selfupdate.RecoveryPlan{
+			Receipt:     tx.Receipt(),
+			ReceiptPath: selfupdate.ReceiptPath(r.boot.selfUpdateExec.Path),
+		}
+	}
 
 	if driver.prepareOnly {
 		fmt.Fprintf(os.Stderr, "selfupdate-driver: prepared %s\n", txid)
+		driverBarrierJourney("prepared")
 		shutdownSequence(r)
 		return 0
+	}
+	driverBarrierJourney("prepared")
+
+	// Draining fails while the old runtime is still usable: abort the
+	// installation, settle the truthful installation failure, and keep
+	// serving the unchanged build. No serving resource is closed, the
+	// target is never executed, and the target is never suppressed.
+	if driver.failAtSet("drain") {
+		reason := "injected drain failure: installation aborted before any serving resource closed"
+		settled, serr := selfupdate.ResolveAbandoned(r.boot.selfUpdateExec, r.boot.updateLease, planFor(), reason, selfupdate.RecoverySeams{})
+		if serr != nil {
+			fmt.Fprintf(os.Stderr, "selfupdate-driver: settling aborted installation failed: %v\n", serr)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: installation aborted pre-replacement (%s); still serving\n", settled.TransactionID)
+		fmt.Fprintln(os.Stderr, "selfupdate-driver: drain failed (injected)")
+		return -1
 	}
 
 	// Drain and stop before any installed-path mutation. The executable is
 	// never replaced unless all of these succeed.
 	shutdownFeatures(r.boot.orchestrator, r.boot.sessionManager)
-	if driver.failAt == "drain" {
-		_ = tx.RecordError("injected drain failure")
-		fmt.Fprintln(os.Stderr, "selfupdate-driver: drain failed (injected)")
-		shutdownSequence(r)
-		return 1
-	}
 	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelDrain()
-	if err := r.server.Close(drainCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
-		_ = tx.RecordError(fmt.Sprintf("server shutdown: %v", err), r.authToken)
-		fmt.Fprintf(os.Stderr, "selfupdate-driver: server shutdown failed: %v\n", err)
-		shutdownSequence(r)
-		return 1
+	closeErr := r.server.Close(drainCtx)
+	// A graceful SSE deadline permits progress only when every joined error
+	// is the cooperative deadline itself (RuntimeServer.Close force-terminates
+	// the remaining streams); unrelated joined errors are never discarded
+	// merely because they include a timeout.
+	tolerable := tolerableShutdownDeadline(closeErr)
+	if driver.failAtSet("server-close") {
+		tolerable = false
+		if closeErr == nil {
+			closeErr = errors.New("injected server close failure")
+		}
 	}
-	// The graceful phase may end at its deadline when never-idle SSE streams
-	// are open; RuntimeServer.Close then force-terminates them, so draining
-	// still completed within the budget. Only real failures abort above.
-	if driver.failAt == "stop" {
-		_ = tx.RecordError("injected stop failure")
-		fmt.Fprintln(os.Stderr, "selfupdate-driver: stop failed (injected)")
-		shutdownSequence(r)
-		return 1
+	if driver.failAtSet("shutdown-mixed") {
+		tolerable = false
+		closeErr = errors.Join(closeErr, context.DeadlineExceeded, errors.New("injected unfinished stream closure"))
 	}
-	stopCtx, cancelStop := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelStop()
-	if err := r.boot.StopServices(stopCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
-		_ = tx.RecordError(fmt.Sprintf("stop services: %v", err))
-		fmt.Fprintf(os.Stderr, "selfupdate-driver: stop services failed: %v\n", err)
-		return 1
+	if closeErr != nil && !tolerable {
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: server shutdown failed: %v\n", closeErr)
+		releaseUpdateLock()
+		return restartUnchangedBuild(r, planFor(), fmt.Sprintf("server shutdown failed: %v", closeErr), bind)
 	}
 	// Idempotent release of the owned registry resource. The instance lock
 	// is deliberately NOT released: it is close-on-exec and must stay held
 	// until the exec boundary so no competing runtime can slip in.
 	_ = serverruntime.RemoveRegistryEntry(r.registryDir, r.boot.runtime.RuntimeDir)
 
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelStop()
+	if err := r.boot.StopServices(stopCtx); err != nil && !tolerableShutdownDeadline(err) {
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: stop services failed: %v\n", err)
+		releaseUpdateLock()
+		return restartUnchangedBuild(r, planFor(), fmt.Sprintf("stop services failed: %v", err), bind)
+	}
+	if driver.failAtSet("stop") {
+		fmt.Fprintln(os.Stderr, "selfupdate-driver: stop failed (injected)")
+		releaseUpdateLock()
+		return restartUnchangedBuild(r, planFor(), "injected stop failure after serving resources closed", bind)
+	}
+
+	driverBarrierJourney("pre-commit")
+
 	if err := tx.Commit(); err != nil {
-		// A rename-succeeds-but-sync-fails case keeps a truthful backup-ready
-		// receipt; selfupdate documents that honesty contract.
-		_ = tx.RecordError(fmt.Sprintf("commit: %v", err))
+		// The rename may or may not have landed: decide by the installed
+		// bytes. Old bytes still installed restart the unchanged build;
+		// candidate bytes installed restore the previous build.
 		fmt.Fprintf(os.Stderr, "selfupdate-driver: commit failed: %v\n", err)
-		return 1
+		_ = tx.RecordError(fmt.Sprintf("commit: %v", err))
+		if got, derr := selfupdate.DigestFile(r.boot.selfUpdateExec.Path); derr == nil && got == tx.Receipt().OldDigest {
+			releaseUpdateLock()
+			return restartUnchangedBuild(r, planFor(), fmt.Sprintf("commit failed before replacement: %v", err), bind)
+		}
+		releaseUpdateLock()
+		return recoverPreviousBuild(r, planFor(), fmt.Sprintf("commit failed after replacement: %v", err))
 	}
 	fmt.Fprintf(os.Stderr, "selfupdate-driver: committed %s\n", txid)
 
-	if driver.failAt == "post-rename" {
-		// Pending receipt and backup are retained; the target is never invoked.
+	if driver.failAtSet("post-rename") {
+		// The target is never invoked: recover through the boundary —
+		// restore the previous build and exec it with the chain guard.
 		fmt.Fprintln(os.Stderr, "selfupdate-driver: post-rename failure (injected)")
-		return 1
+		releaseUpdateLock()
+		return recoverPreviousBuild(r, planFor(), "injected post-rename failure: target never invoked")
 	}
+	driverBarrierJourney("post-rename")
 
 	meta := selfupdate.HandoffMetadata{
 		SchemaVersion:  1,
@@ -540,73 +810,112 @@ func (replaceJourney) run(r serverRun) int {
 	fmt.Fprintf(os.Stderr, "selfupdate-driver: exec %s\n", r.boot.selfUpdateExec.Path)
 
 	entry := selfupdate.HandoffEnvVar + "=" + selfupdate.EncodeHandoff(meta)
-	if driver.failAt == "exec-error" {
+	if driver.failAtSet("exec-error") {
 		// Simulate exec returning an error without calling exec: ExecReplace
 		// clears CLOEXEC on the lease fd, the seam fails, and ExecReplace
-		// restores CLOEXEC before returning.
+		// restores CLOEXEC before returning. The boundary then restores the
+		// previous build and execs it with the guard.
 		err := selfupdate.ExecReplace(r.boot.selfUpdateExec.Path, os.Args, os.Environ(), entry, meta.LeaseFD, func(string, []string, []string) error {
 			return errors.New("injected exec failure")
 		})
-		_ = tx.RecordError("injected exec failure")
 		fmt.Fprintf(os.Stderr, "selfupdate-driver: exec failed: %v\n", err)
-		return 1
+		releaseUpdateLock()
+		return recoverPreviousBuild(r, planFor(), "injected exec failure: target never started")
 	}
 	if err := selfupdate.ExecReplace(r.boot.selfUpdateExec.Path, os.Args, os.Environ(), entry, meta.LeaseFD, nil); err != nil {
-		_ = tx.RecordError(fmt.Sprintf("exec: %v", err), r.authToken)
 		fmt.Fprintf(os.Stderr, "selfupdate-driver: exec failed: %v\n", err)
-		return 1
+		releaseUpdateLock()
+		return recoverPreviousBuild(r, planFor(), fmt.Sprintf("exec: %v", err))
 	}
 	// A successful exec never returns; this line only guards a seam
 	// implementation that wrongly returns nil.
 	return 0
 }
 
-// confirmJourney is the new-image journey: confirm the adopted transaction
-// durably, clean up the recognized transaction objects, and keep serving.
-type confirmJourney struct{}
+// driverBarrierJourney blocks at a journey-level barrier stage.
+func driverBarrierJourney(stage string) {
+	if driver.barrier == stage {
+		barrierHook(stage)
+	}
+}
 
-func (confirmJourney) run(r serverRun) int {
-	printDriverFingerprints(os.Stderr)
+// restartUnchangedBuild returns an old runtime whose serving resources
+// already closed to service: the unchanged executable is re-executed under
+// the durable recovery-attempt tracking of the guarded recovery path — an
+// installation failure, never a fictitious rollback.
+func restartUnchangedBuild(r serverRun, plan selfupdate.RecoveryPlan, reason string, bind selfupdate.BindEndpoint) int {
+	rt := failedTargetRecovery{
+		boot:             r.boot,
+		server:           r.server,
+		registryDir:      r.registryDir,
+		authToken:        r.authToken,
+		exec:             r.boot.selfUpdateExec,
+		lease:            r.boot.updateLease,
+		receipt:          plan.Receipt,
+		runtimeDir:       r.boot.runtime.RuntimeDir,
+		reason:           reason,
+		restartUnchanged: true,
+		bind:             bind,
+	}
+	fmt.Fprintf(os.Stderr, "selfupdate-driver: restarting unchanged build after aborted shutdown\n")
+	return rt.recover()
+}
 
-	txid := r.adoptedHandoff.TransactionID
-	if driver.failAt == "confirm" {
-		// Never report confirmed from listening alone: the pending receipt
-		// and backup stay actionable for a later retry.
-		fmt.Fprintln(os.Stderr, "selfupdate-driver: confirm failed (injected)")
-		shutdownSequence(r)
-		return 1
+// recoverPreviousBuild runs the recovery boundary from the old image: the
+// candidate is installed but the target failed before or at exec — restore
+// the previous build and exec it with the chain guard.
+func recoverPreviousBuild(r serverRun, plan selfupdate.RecoveryPlan, reason string) int {
+	rt := failedTargetRecovery{
+		boot:        r.boot,
+		server:      r.server,
+		registryDir: r.registryDir,
+		authToken:   r.authToken,
+		exec:        r.boot.selfUpdateExec,
+		lease:       r.boot.updateLease,
+		receipt:     plan.Receipt,
+		runtimeDir:  r.boot.runtime.RuntimeDir,
+		reason:      reason,
+		bind:        plan.Receipt.Bind,
 	}
+	return rt.recover()
+}
 
-	// Re-read the receipt: confirmation is write-once against the exact
-	// adopted transaction. A tampered or advanced receipt aborts without
-	// touching anything.
-	receipt, err := selfupdate.ReadReceipt(r.adoptedHandoff.ReceiptPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "selfupdate-driver: re-reading receipt failed: %v\n", err)
-		shutdownSequence(r)
-		return 1
+// seamsForFailAt returns transaction seams that inject the requested
+// preparation failure. "backup-sync" fails Begin's first SyncFile call —
+// the rollback backup's sync — while later syncs (staging) still run so the
+// failure is attributable to the backup alone. "receipt-write" fails the
+// pending receipt write. "commit-receipt" is a barrier, not a failure: it
+// blocks inside Commit after the rename, before the receipt advances.
+func seamsForFailAt(points map[string]bool) selfupdate.TxSeams {
+	switch {
+	case points["backup-sync"]:
+		calls := 0
+		return selfupdate.TxSeams{SyncFile: func(path string) error {
+			calls++
+			if calls == 1 {
+				return errors.New("injected backup sync failure")
+			}
+			return selfupdate.SyncFile(path)
+		}}
+	case points["receipt-write"]:
+		return selfupdate.TxSeams{WriteReceipt: func(string, selfupdate.Receipt) error {
+			return errors.New("injected receipt write failure")
+		}}
+	default:
+		if driver.barrier == "commit-receipt" {
+			calls := 0
+			return selfupdate.TxSeams{WriteReceipt: func(path string, r selfupdate.Receipt) error {
+				calls++
+				if calls >= 2 {
+					// Begin wrote the pending receipt (call 1); this is
+					// Commit's advancement after the rename.
+					barrierHook("commit-receipt")
+				}
+				return selfupdate.WriteReceiptDurable(path, r)
+			}}
+		}
+		return selfupdate.TxSeams{}
 	}
-	if receipt.TransactionID != txid || receipt.Outcome != selfupdate.OutcomePending {
-		fmt.Fprintln(os.Stderr, "selfupdate-driver: receipt no longer matches the adopted transaction")
-		shutdownSequence(r)
-		return 1
-	}
-
-	if _, err := selfupdate.ConfirmTransaction(r.adoptedHandoff.ExecutablePath, txid); err != nil {
-		fmt.Fprintf(os.Stderr, "selfupdate-driver: confirm failed: %v\n", err)
-		shutdownSequence(r)
-		return 1
-	}
-	if err := selfupdate.CleanupTransaction(r.adoptedHandoff.ExecutablePath, txid); err != nil {
-		// A cleanup failure after confirmation retains the healthy target
-		// and truthful metadata: warn and keep serving.
-		fmt.Fprintf(os.Stderr, "selfupdate-driver: cleanup failed: %v\n", err)
-		fmt.Fprintf(os.Stderr, "selfupdate-driver: confirmed %s\n", txid)
-		return -1
-	}
-	fmt.Fprintf(os.Stderr, "selfupdate-driver: confirmed %s\n", txid)
-	fmt.Fprintln(os.Stderr, "selfupdate-driver: cleanup-done")
-	return -1
 }
 
 // shutdownSequence performs the orderly pre-exec/abort shutdown the driver

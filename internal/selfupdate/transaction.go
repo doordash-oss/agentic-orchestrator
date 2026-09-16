@@ -227,12 +227,12 @@ func Begin(exec Executable, opts BeginOptions, seams TxSeams) (*Transaction, err
 	if err := VerifyCandidate(opts.CandidatePath, opts.CandidateDigest); err != nil {
 		return nil, err
 	}
-	txID, err := newTransactionID()
-	if err != nil {
-		return nil, err
-	}
 	t := &Transaction{exec: exec, opts: opts, seams: seams}
 	if err := ensureLeaseDir(exec.Path); err != nil {
+		return nil, err
+	}
+	txID, err := newTransactionID()
+	if err != nil {
 		return nil, err
 	}
 	t.txDir = filepath.Join(LeaseDir(exec.Path), txDirPrefix+txID)
@@ -243,6 +243,20 @@ func Begin(exec Executable, opts BeginOptions, seams TxSeams) (*Transaction, err
 		return nil, fmt.Errorf("repair transaction dir permissions: %w", err)
 	}
 	if err := t.syncDir(LeaseDir(exec.Path)); err != nil {
+		return nil, err
+	}
+	// Durable staging ownership precedes every staged byte and the install
+	// receipt: a dir whose record never became durable is never guessed to
+	// be owned by a later launch, and a dir whose record did is recognized
+	// abandoned staging once its transaction is settled or gone. The stamp
+	// is captured once so the staging record and the receipt share it.
+	startedAt := t.now()
+	if err := writeStagingRecord(t.txDir, StagingRecord{
+		TransactionID:    txID,
+		ExecutablePath:   exec.Path,
+		ExecutableDigest: exec.Digest,
+		CreatedAt:        startedAt,
+	}); err != nil {
 		return nil, err
 	}
 
@@ -276,7 +290,6 @@ func Begin(exec Executable, opts BeginOptions, seams TxSeams) (*Transaction, err
 		return nil, err
 	}
 
-	now := t.now()
 	t.receipt = Receipt{
 		SchemaVersion:  receiptSchemaVersion,
 		TransactionID:  txID,
@@ -299,8 +312,8 @@ func Begin(exec Executable, opts BeginOptions, seams TxSeams) (*Transaction, err
 		StagingPath:    stagingPath,
 		StagingID:      stagingID,
 		Bind:           opts.Bind,
-		StartedAt:      now,
-		UpdatedAt:      now,
+		StartedAt:      startedAt,
+		UpdatedAt:      startedAt,
 		Outcome:        OutcomePending,
 		Phase:          PhaseBackupReady,
 	}
@@ -431,50 +444,52 @@ func validTransactionID(txID string) bool {
 }
 
 // ConfirmTransaction durably records outcome=confirmed for the latest
-// receipt at ReceiptPath(execPath) when it still matches txID and is
-// pending. It returns the confirmed receipt. Mismatched or advanced
-// receipts are an error — confirmation is write-once, so a caller can never
-// confirm another process's transaction or re-confirm a settled one.
+// receipt of the executable when it still matches txID and is pending. The
+// keyed receipt path is preferred, with the Phase 1 legacy path as fallback;
+// the settlement is written back to the path the record was found at.
+// Mismatched or advanced receipts are an error — confirmation is write-once,
+// so a caller can never confirm another process's transaction or re-confirm
+// a settled one.
 func ConfirmTransaction(execPath, txID string) (Receipt, error) {
 	if !validTransactionID(txID) {
 		return Receipt{}, fmt.Errorf("invalid transaction id %q", txID)
 	}
-	path := ReceiptPath(execPath)
-	receipt, err := ReadReceipt(path)
-	if err != nil {
+	r, loc, found, err := locateLatestReceipt(execPath)
+	if err != nil || !found {
+		if err == nil {
+			err = fmt.Errorf("no receipt binds to executable %s", execPath)
+		}
 		return Receipt{}, err
 	}
-	if receipt.TransactionID != txID {
-		return Receipt{}, fmt.Errorf("latest receipt transaction %q does not match %q", receipt.TransactionID, txID)
+	path := loc.Path
+	if r.TransactionID != txID {
+		return Receipt{}, fmt.Errorf("latest receipt transaction %q does not match %q", r.TransactionID, txID)
 	}
-	if receipt.Outcome != OutcomePending {
-		return Receipt{}, fmt.Errorf("receipt outcome %q is not pending", receipt.Outcome)
+	if !r.ActionablePending() {
+		return Receipt{}, fmt.Errorf("receipt outcome %q (resolution %q) is not actionable pending", r.Outcome, r.Resolution)
 	}
-	receipt.Outcome = OutcomeConfirmed
-	receipt.UpdatedAt = time.Now()
-	if err := writeReceiptAtomic(path, receipt, receipt.UpdatedAt); err != nil {
+	r.Outcome = OutcomeConfirmed
+	r.UpdatedAt = time.Now()
+	if err := writeReceiptAtomic(path, r, r.UpdatedAt); err != nil {
 		return Receipt{}, err
 	}
-	return receipt, nil
+	if loc.Legacy {
+		// Keep historical binaries observing the settlement.
+		if err := writeReceiptAtomic(ReceiptPath(execPath), r, r.UpdatedAt); err != nil {
+			return Receipt{}, err
+		}
+	}
+	return r, nil
 }
 
-// CleanupTransaction removes the recognized transaction objects for txID —
-// the transaction dir holding the rollback backup and any remaining staged
-// candidate. Lease, lock, ownership-record, and receipt files are never
-// removed. It is idempotent.
-func CleanupTransaction(execPath, txID string) error {
-	if !validTransactionID(txID) {
-		return fmt.Errorf("invalid transaction id %q", txID)
-	}
-	txDir := filepath.Join(LeaseDir(execPath), txDirPrefix+txID)
-	if err := os.RemoveAll(txDir); err != nil {
-		return fmt.Errorf("remove transaction dir %s: %w", txDir, err)
-	}
-	return nil
-}
+// CleanupSettledTransaction (in staging.go) is the validated, idempotent
+// cleanup for settled transactions. It replaces Phase 1's unconditional
+// RemoveAll: only recognized owned objects are removed and unexpected
+// entries are retained.
 
 // Cleanup removes only objects this transaction created: the backup, the
-// staged candidate (if still present), and the transaction dir. Lease, lock,
+// staged candidate (if still present), any prepared restore copy, the
+// staging ownership record, and the transaction dir. Lease, lock,
 // ownership-record, and receipt files are never removed. It is idempotent.
 func (t *Transaction) Cleanup() error {
 	removeIfExists := func(path string) error {
@@ -487,6 +502,12 @@ func (t *Transaction) Cleanup() error {
 		return err
 	}
 	if err := removeIfExists(t.receipt.StagingPath); err != nil {
+		return err
+	}
+	if err := removeIfExists(t.receipt.RestorePath); err != nil {
+		return err
+	}
+	if err := removeIfExists(filepath.Join(t.txDir, stagingRecordName)); err != nil {
 		return err
 	}
 	return removeIfExists(t.txDir)

@@ -525,13 +525,13 @@ func TestConfirmTransactionRejectsInvalidTxIDShape(t *testing.T) {
 		if _, err := ConfirmTransaction(f.exec.Path, txID); err == nil {
 			t.Fatalf("ConfirmTransaction(%q) = nil error; want shape rejection", txID)
 		}
-		if err := CleanupTransaction(f.exec.Path, txID); err == nil {
-			t.Fatalf("CleanupTransaction(%q) = nil error; want shape rejection", txID)
+		if err := CleanupSettledTransaction(f.exec.Path, txID, CleanupSeams{}); err == nil {
+			t.Fatalf("CleanupSettledTransaction(%q) = nil error; want shape rejection", txID)
 		}
 	}
 }
 
-func TestCleanupTransactionRemovesTxDirOnlyAndIsIdempotent(t *testing.T) {
+func TestCleanupSettledTransactionRemovesTxDirOnlyAndIsIdempotent(t *testing.T) {
 	f := newTxFixture(t)
 	// The lease/record files must be real so the assertion that they survive
 	// cleanup proves scoping, not absence.
@@ -549,20 +549,20 @@ func TestCleanupTransactionRemovesTxDirOnlyAndIsIdempotent(t *testing.T) {
 	}
 	txID := tx.Receipt().TransactionID
 
-	if err := CleanupTransaction(f.exec.Path, txID); err != nil {
-		t.Fatalf("CleanupTransaction: %v", err)
+	if err := CleanupSettledTransaction(f.exec.Path, txID, CleanupSeams{}); err != nil {
+		t.Fatalf("CleanupSettledTransaction: %v", err)
 	}
 	if _, err := os.Stat(tx.TxDir()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("tx dir must be removed, stat error = %v", err)
 	}
 	for _, path := range []string{LeasePath(f.exec.Path), OwnershipRecordPath(f.exec.Path), f.opts.ReceiptDest} {
 		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("CleanupTransaction must never remove %s: %v", path, err)
+			t.Fatalf("cleanup must never remove %s: %v", path, err)
 		}
 	}
 
 	// Idempotent: a second cleanup of the same transaction is a no-op.
-	if err := CleanupTransaction(f.exec.Path, txID); err != nil {
-		t.Fatalf("CleanupTransaction must be idempotent: %v", err)
+	if err := CleanupSettledTransaction(f.exec.Path, txID, CleanupSeams{}); err != nil {
+		t.Fatalf("cleanup must be idempotent: %v", err)
 	}
 }

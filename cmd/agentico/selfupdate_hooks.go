@@ -15,7 +15,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"net"
+	"os"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
@@ -24,7 +30,10 @@ import (
 // The selfupdate driver hooks below are nil in ordinary builds and are wired
 // only by the agentico_selfupdate_driver-tagged test driver. Activation is
 // compile-time: in an ordinarily built binary no flag, environment value, or
-// HTTP request can reach driver behavior.
+// HTTP request can reach driver behavior. Handoff adoption, endpoint
+// rebinding, boot-time recovery resolution, the recovery boundary, and
+// confirmation are production behavior; the driver only injects failures
+// and barriers through the seams below.
 
 // driverArgParseHook lets a tagged build recognize the selfupdate-driver
 // subcommand. handled is false (with a nil error) for any other argument
@@ -35,21 +44,58 @@ import (
 var driverArgParseHook func(args []string) (opts launchOptions, handled bool, err error)
 
 // handoffAdoptHook lets a tagged build validate and adopt an inherited
-// handoff from the environment before general bootstrap. It returns
-// (nil, zero, zero, nil) when no handoff entry is present. Supplied only by
-// the agentico_selfupdate_driver build; nil in ordinary builds.
+// handoff from the environment before general bootstrap, with driver
+// failure injection. It returns (nil, zero, zero, nil) when no handoff entry
+// is present. When nil (ordinary builds), adoptHandoffForLaunch performs the
+// same production adoption without injection.
 var handoffAdoptHook func() (adopted *selfupdate.Lease, meta selfupdate.HandoffMetadata, receipt selfupdate.Receipt, err error)
 
-// handoffListenOverrideHook lets a tagged build rebind the handoff's
-// recorded endpoint. It returns "host:port" to override argv's --listen, or
-// "" to keep it. Supplied only by the agentico_selfupdate_driver build; nil
-// in ordinary builds.
-var handoffListenOverrideHook func() string
+// startupDeadlineHook lets a tagged build shrink the adopted-image startup
+// deadline to force cooperative deadline expiry. Nil in ordinary builds.
+var startupDeadlineHook func() time.Duration
+
+// selfUpdateHealthWaitFn lets a tagged build inject the adopted image's
+// self-health wait failure. Nil in ordinary builds.
+var selfUpdateHealthWaitFn func(urls []string) error
+
+// selfUpdateConfirmFn lets a tagged build inject the confirmation failure.
+// Nil in ordinary builds: production always runs the real write-once
+// confirm.
+var selfUpdateConfirmFn func(execPath, txID string) (selfupdate.Receipt, error)
+
+// selfUpdateRecoverySeams lets a tagged build inject recovery persistence
+// failures and deterministic barriers. The zero value runs the real
+// implementation for every seam.
+var selfUpdateRecoverySeams selfupdate.RecoverySeams
+
+// selfUpdateRecoveryBarrier lets a tagged build block production recovery at
+// deterministic stages for kill journeys. Nil in ordinary builds.
+var selfUpdateRecoveryBarrier func(stage string)
+
+// selfUpdateRecoveryExecFn lets a tagged build inject the recovery exec
+// failure. Nil in ordinary builds: production always performs the real
+// exec(2).
+var selfUpdateRecoveryExecFn selfupdate.ExecFunc
+
+// selfUpdateStartupAbortHook lets a tagged build abort the startup of a
+// recovered or restarted image deterministically (the recovered build's own
+// startup failure terminates nonzero without another automatic exec). Nil in
+// ordinary builds.
+var selfUpdateStartupAbortHook func() error
+
+// selfUpdateAdoptedStartHook lets a tagged build print its process
+// fingerprints once an inherited handoff is adopted (the e2e harness
+// compares them across the exec boundary). Nil in ordinary builds.
+var selfUpdateAdoptedStartHook func()
+
+// selfUpdateCleanupSeams lets a tagged build inject validated-cleanup
+// failures (individual removals, directory sync). The zero value runs the
+// real implementation for every seam.
+var selfUpdateCleanupSeams selfupdate.CleanupSeams
 
 // serverJourneyHook lets a tagged build run the old-image replace journey
-// or the new-image confirm journey while the server is fully up; nil means
-// ordinary serving. Supplied only by the agentico_selfupdate_driver build;
-// nil in ordinary builds.
+// while the server is fully up; nil means ordinary serving. Supplied only by
+// the agentico_selfupdate_driver build; nil in ordinary builds.
 var serverJourneyHook func() serverJourney
 
 // publishDiscoveryFn is the discovery publish seam (the real function by
@@ -78,6 +124,55 @@ type serverRun struct {
 	adoptedLease   *selfupdate.Lease
 	adoptedHandoff selfupdate.HandoffMetadata
 	adoptedReceipt selfupdate.Receipt
+}
+
+// handoffEnvPresent reports whether the handoff entry exists in env,
+// regardless of parseability.
+func handoffEnvPresent(env []string) bool {
+	prefix := selfupdate.HandoffEnvVar + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// adoptHandoffForLaunch validates and adopts an inherited handoff before
+// general bootstrap — production behavior in every build, with the tagged
+// driver's hook adding compile-time failure injection. No handoff entry
+// means an ordinary launch. A present-but-unparseable entry fails closed: an
+// arbitrary record must never authorize adoption.
+func adoptHandoffForLaunch() (*selfupdate.Lease, selfupdate.HandoffMetadata, selfupdate.Receipt, error) {
+	if handoffAdoptHook != nil {
+		return handoffAdoptHook()
+	}
+	env := os.Environ()
+	if !handoffEnvPresent(env) {
+		return nil, selfupdate.HandoffMetadata{}, selfupdate.Receipt{}, nil
+	}
+	m, ok := selfupdate.ParseHandoffEnv(env)
+	if !ok {
+		return nil, m, selfupdate.Receipt{}, errors.New("selfupdate handoff entry is present but unparseable")
+	}
+	exec, err := selfupdate.CaptureExecutable()
+	if err != nil {
+		return nil, m, selfupdate.Receipt{}, err
+	}
+	lease, receipt, err := selfupdate.AdoptHandoff(m, exec)
+	if err != nil {
+		return nil, m, selfupdate.Receipt{}, err
+	}
+	return lease, m, receipt, nil
+}
+
+// handoffListenAddr renders the rebind address from handoff metadata — the
+// concrete bound host (wildcard form preserved) and assigned port.
+func handoffListenAddr(m selfupdate.HandoffMetadata) string {
+	if m.Bind.Host == "" || m.Bind.Port <= 0 {
+		return ""
+	}
+	return net.JoinHostPort(m.Bind.Host, strconv.Itoa(m.Bind.Port))
 }
 
 // liveHandoffError reports a rejected launch during a live handoff: another

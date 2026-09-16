@@ -140,6 +140,91 @@ func ExecReplace(installedPath string, argv []string, env []string, extraEnvEntr
 	return nil
 }
 
+// RecoveryGuardEnvVar carries the recovery-chain guard through the recovery
+// exec boundary. It marks that this launch chain already attempted
+// recovering one transaction, so a second automatic recovery attempt for the
+// same transaction in the same chain exits nonzero instead of looping. A
+// separately initiated operator launch carries no guard entry and may retry
+// validated unfinished recovery.
+const RecoveryGuardEnvVar = "AGENTICO_SELFUPDATE_RECOVERY_GUARD"
+
+// recoveryGuardSchemaVersion is the schema of RecoveryGuard.
+const recoveryGuardSchemaVersion = 1
+
+// RecoveryGuard is the private recovery-chain marker crossing the recovery
+// exec. It carries a token path, never a token, and never the launch
+// environment. Bind preserves the recovered build's concrete endpoint
+// (wildcard form kept) so the re-executed image rebinds the same address.
+type RecoveryGuard struct {
+	SchemaVersion int          `json:"schema_version"`
+	TransactionID string       `json:"transaction_id"`
+	AttemptID     string       `json:"attempt_id"`
+	Kind          string       `json:"kind"`
+	Bind          BindEndpoint `json:"bind_endpoint"`
+	AuthTokenPath string       `json:"auth_token_path,omitempty"`
+}
+
+// EncodeRecoveryGuard marshals the guard to its JSON form.
+func EncodeRecoveryGuard(g RecoveryGuard) string {
+	data, _ := json.Marshal(g)
+	return string(data)
+}
+
+// ParseRecoveryGuard parses guard metadata from its JSON form.
+func ParseRecoveryGuard(value string) (RecoveryGuard, error) {
+	var g RecoveryGuard
+	if err := json.Unmarshal([]byte(value), &g); err != nil {
+		return RecoveryGuard{}, fmt.Errorf("parse recovery guard: %w", err)
+	}
+	return g, nil
+}
+
+// ParseRecoveryGuardEnv finds and parses the guard entry in an environment
+// slice. A present-but-unparseable entry fails closed: the launch refuses
+// automatic recovery rather than trusting a corrupted guard.
+func ParseRecoveryGuardEnv(env []string) (RecoveryGuard, bool, error) {
+	prefix := RecoveryGuardEnvVar + "="
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		g, err := ParseRecoveryGuard(strings.TrimPrefix(entry, prefix))
+		if err != nil {
+			return RecoveryGuard{}, true, err
+		}
+		return g, true, nil
+	}
+	return RecoveryGuard{}, false, nil
+}
+
+// BuildRecoveryEnv assembles the environment for a recovery exec: the
+// caller's application environment minus the consumed private handoff entry
+// (never accumulating stale metadata), plus exactly one guard entry.
+func BuildRecoveryEnv(env []string, guard RecoveryGuard) []string {
+	out := make([]string, 0, len(env)+1)
+	handoffPrefix := HandoffEnvVar + "="
+	guardPrefix := RecoveryGuardEnvVar + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, handoffPrefix) || strings.HasPrefix(entry, guardPrefix) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return append(out, guardPrefix+EncodeRecoveryGuard(guard))
+}
+
+// ExecRecovery performs the recovery exec onto the installed path — never a
+// backup or restore path. No descriptor is made inheritable: the lease is
+// released before this call, and the restored build takes ownership itself
+// on its own boot. If exec returns an error, the caller exits nonzero with
+// actionable metadata retained.
+func ExecRecovery(installedPath string, argv, env []string, execFn ExecFunc) error {
+	if execFn == nil {
+		execFn = SysExec
+	}
+	return execFn(installedPath, argv, env)
+}
+
 // AdoptHandoff validates and adopts an inherited handoff in the new image.
 // Every identity in the metadata must match the durable receipt, the current
 // process (exec preserves PID), and the freshly captured installed

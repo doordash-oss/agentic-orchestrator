@@ -436,3 +436,126 @@ func TestProcessAlive(t *testing.T) {
 		t.Fatalf("ProcessAlive(reaped pid %d) = true, want false", cmd.Process.Pid)
 	}
 }
+
+func TestReadLatestReceiptKeyedLegacyPrecedence(t *testing.T) {
+	keyedTx := "11111111111111111111111111111111"
+	legacyTx := "22222222222222222222222222222222"
+	writeReceiptBinding := func(t *testing.T, execPath, path, execPathInRecord, txID string) {
+		t.Helper()
+		if err := ensureLeaseDir(execPath); err != nil {
+			t.Fatalf("ensureLeaseDir: %v", err)
+		}
+		r := Receipt{
+			SchemaVersion:  receiptSchemaVersion,
+			TransactionID:  txID,
+			ExecutablePath: execPathInRecord,
+			Outcome:        OutcomePending,
+			Phase:          PhaseBackupReady,
+		}
+		if err := writeReceiptAtomic(path, r, time.Now()); err != nil {
+			t.Fatalf("write receipt at %s: %v", path, err)
+		}
+	}
+
+	t.Run("keyed only", func(t *testing.T) {
+		exec := installExecutable(t, "v1")
+		writeReceiptBinding(t, exec.Path, ReceiptPath(exec.Path), exec.Path, keyedTx)
+		r, found, err := ReadLatestReceipt(exec.Path)
+		if err != nil || !found || r.TransactionID != keyedTx {
+			t.Fatalf("ReadLatestReceipt = (%v, %v, %v), want keyed record", found, err, r.TransactionID)
+		}
+	})
+	t.Run("keyed takes precedence over legacy", func(t *testing.T) {
+		exec := installExecutable(t, "v1")
+		writeReceiptBinding(t, exec.Path, LegacyReceiptPath(exec.Path), exec.Path, legacyTx)
+		writeReceiptBinding(t, exec.Path, ReceiptPath(exec.Path), exec.Path, keyedTx)
+		r, found, err := ReadLatestReceipt(exec.Path)
+		if err != nil || !found || r.TransactionID != keyedTx {
+			t.Fatalf("ReadLatestReceipt = (%v, %v, tx %s), want the keyed record %s", found, err, r.TransactionID, keyedTx)
+		}
+	})
+	t.Run("legacy only", func(t *testing.T) {
+		exec := installExecutable(t, "v1")
+		writeReceiptBinding(t, exec.Path, LegacyReceiptPath(exec.Path), exec.Path, legacyTx)
+		r, found, err := ReadLatestReceipt(exec.Path)
+		if err != nil || !found || r.TransactionID != legacyTx {
+			t.Fatalf("ReadLatestReceipt = (%v, %v, tx %s), want the legacy record %s", found, err, r.TransactionID, legacyTx)
+		}
+	})
+	t.Run("legacy record of another executable is not ours", func(t *testing.T) {
+		exec := installExecutable(t, "v1")
+		writeReceiptBinding(t, exec.Path, LegacyReceiptPath(exec.Path), "/elsewhere/bin/agentico", legacyTx)
+		r, found, err := ReadLatestReceipt(exec.Path)
+		if err != nil || found {
+			t.Fatalf("ReadLatestReceipt = (%v, %v, %+v), want not found without error", found, err, r)
+		}
+	})
+	t.Run("keyed record of another executable errors", func(t *testing.T) {
+		exec := installExecutable(t, "v1")
+		writeReceiptBinding(t, exec.Path, ReceiptPath(exec.Path), "/elsewhere/bin/agentico", keyedTx)
+		if _, found, err := ReadLatestReceipt(exec.Path); err == nil || found {
+			t.Fatalf("ReadLatestReceipt = (%v, %v), want an unsafe mismatch error", found, err)
+		}
+	})
+	t.Run("corrupt keyed record errors", func(t *testing.T) {
+		exec := installExecutable(t, "v1")
+		if err := ensureLeaseDir(exec.Path); err != nil {
+			t.Fatalf("ensureLeaseDir: %v", err)
+		}
+		if err := os.WriteFile(ReceiptPath(exec.Path), []byte("{not json"), 0o600); err != nil {
+			t.Fatalf("write garbage receipt: %v", err)
+		}
+		if _, found, err := ReadLatestReceipt(exec.Path); err == nil || found {
+			t.Fatalf("ReadLatestReceipt = (%v, %v), want an unreadable-record error", found, err)
+		}
+	})
+	t.Run("no record at all", func(t *testing.T) {
+		exec := installExecutable(t, "v1")
+		if _, found, err := ReadLatestReceipt(exec.Path); err != nil || found {
+			t.Fatalf("ReadLatestReceipt = (%v, %v), want not found without error", found, err)
+		}
+	})
+}
+
+func TestLiveHandoffRequiresActionablePendingReceipt(t *testing.T) {
+	exec := installExecutable(t, "v1")
+	lease, err := AcquireLease(exec, testRecordFor(exec, t.TempDir()))
+	if err != nil {
+		t.Fatalf("AcquireLease: %v", err)
+	}
+	t.Cleanup(func() { _ = lease.Close() })
+
+	base := Receipt{
+		SchemaVersion:  receiptSchemaVersion,
+		TransactionID:  "0123456789abcdef0123456789abcdef",
+		ExecutablePath: exec.Path,
+		Outcome:        OutcomePending,
+		Phase:          PhaseBackupReady,
+	}
+	writeAt := func(t *testing.T, r Receipt) {
+		t.Helper()
+		if err := writeReceiptAtomic(ReceiptPath(exec.Path), r, time.Now()); err != nil {
+			t.Fatalf("write receipt: %v", err)
+		}
+	}
+
+	abandoned := base
+	abandoned.Resolution = ResolutionAbandonedPreReplacement
+	writeAt(t, abandoned)
+	if live, _, err := LiveHandoff(exec.Path); err != nil || live {
+		t.Fatalf("LiveHandoff with abandoned receipt = (%v, %v), want (false, nil)", live, err)
+	}
+
+	rolledBack := base
+	rolledBack.Outcome = OutcomeRolledBack
+	rolledBack.Phase = PhaseRollbackAttempted
+	writeAt(t, rolledBack)
+	if live, _, err := LiveHandoff(exec.Path); err != nil || live {
+		t.Fatalf("LiveHandoff with rolled-back receipt = (%v, %v), want (false, nil)", live, err)
+	}
+
+	writeAt(t, base)
+	if live, _, err := LiveHandoff(exec.Path); err != nil || !live {
+		t.Fatalf("LiveHandoff with actionable pending receipt = (%v, %v), want (true, nil)", live, err)
+	}
+}

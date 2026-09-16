@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -31,12 +32,14 @@ import (
 const ownershipSchemaVersion = 1
 
 const (
-	leaseDirName     = ".agentico-selfupdate"
-	receiptName      = "receipt.json"
-	txDirPrefix      = "tx-"
-	backupName       = "backup"
-	stagedName       = "staged"
-	updateLockSuffix = ".update.lock"
+	leaseDirName      = ".agentico-selfupdate"
+	receiptName       = "receipt.json"
+	txDirPrefix       = "tx-"
+	backupName        = "backup"
+	stagedName        = "staged"
+	restorePrefix     = "restore-"
+	stagingRecordName = "staging.json"
+	updateLockSuffix  = ".update.lock"
 )
 
 // OwnershipRecord binds the lease holder to a runtime, process, executable,
@@ -87,9 +90,59 @@ func OwnershipRecordPath(execPath string) string {
 }
 
 // ReceiptPath returns the stable latest-transaction receipt path for the
-// executable.
+// executable. The receipt is keyed by the executable's canonical path so
+// independent executable copies in one directory never share or overwrite
+// each other's transaction authority; the lease, ownership record, and
+// receipt all key identically.
 func ReceiptPath(execPath string) string {
+	return filepath.Join(LeaseDir(execPath), "receipt-"+leaseKey(execPath)+".json")
+}
+
+// LegacyReceiptPath returns the Phase 1 receipt path: one shared receipt.json
+// per lease directory. It is read-only vocabulary: existing Phase 1 records
+// are recognized here, but every Phase 2 write lands at the keyed path (and,
+// when settling a legacy record, at the legacy path too so historical
+// binaries keep observing the settlement).
+func LegacyReceiptPath(execPath string) string {
 	return filepath.Join(LeaseDir(execPath), receiptName)
+}
+
+// ReadLatestReceipt reads the executable's latest receipt with Phase 1
+// legacy fallback. The keyed path takes precedence whenever it exists and is
+// parseable; a keyed record that does not bind to this executable is an
+// unsafe mismatch, never silently skipped. When the keyed path is absent the
+// legacy receipt.json is consulted and recognized only when it binds to this
+// executable — a legacy record naming another executable belongs to that
+// other binary and is left untouched. found is false when no record binds.
+func ReadLatestReceipt(execPath string) (receipt Receipt, found bool, err error) {
+	keyed := ReceiptPath(execPath)
+	if r, rerr := ReadReceipt(keyed); rerr == nil {
+		if r.ExecutablePath != execPath {
+			return Receipt{}, false, fmt.Errorf("receipt at %s does not bind to executable %s", keyed, execPath)
+		}
+		return r, true, nil
+	} else if !errors.Is(rerr, os.ErrNotExist) {
+		return Receipt{}, false, fmt.Errorf("read receipt %s: %w", keyed, rerr)
+	}
+	legacy := LegacyReceiptPath(execPath)
+	r, rerr := ReadReceipt(legacy)
+	if rerr != nil {
+		if errors.Is(rerr, os.ErrNotExist) {
+			return Receipt{}, false, nil
+		}
+		return Receipt{}, false, fmt.Errorf("read receipt %s: %w", legacy, rerr)
+	}
+	if r.ExecutablePath != execPath {
+		// Another executable's Phase 1 record: not ours, untouched.
+		return Receipt{}, false, nil
+	}
+	return r, true, nil
+}
+
+// IsTxDirPath reports whether path names a transaction directory under a
+// lease dir (base name carries the tx- prefix).
+func IsTxDirPath(path string) bool {
+	return strings.HasPrefix(filepath.Base(path), txDirPrefix)
 }
 
 // ensureLeaseDir creates the lease directory owner-only and self-heals its
@@ -364,12 +417,14 @@ func (l *RuntimeUpdateLock) Close() error {
 
 // LiveHandoff reports whether a live handoff is in progress for the
 // executable: true only when another open file description currently holds
-// the lease and the latest receipt is still pending. Every other observation
-// (no lease dir, free lease, missing/unparseable/confirmed receipt) reports
-// false. Only real I/O errors opening the lease file itself are returned as
-// errors.
+// the lease and the latest receipt is an actionable pending transaction. A
+// settled receipt (confirmed, rolled back, or explicitly abandoned) never
+// blocks a competing launch. Every other observation (no lease dir, free
+// lease, missing/unparseable receipt) reports false. Only real I/O errors
+// opening the lease file itself are returned as errors. Stale PID metadata
+// proves nothing here: the flock is the liveness authority.
 func LiveHandoff(execPath string) (bool, Receipt, error) {
-	receipt, _ := ReadReceipt(ReceiptPath(execPath))
+	receipt, found := readReceiptForLiveHandoff(execPath)
 	f, err := os.OpenFile(LeasePath(execPath), os.O_RDWR, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -380,7 +435,7 @@ func LiveHandoff(execPath string) (bool, Receipt, error) {
 	defer f.Close()
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
-			return receipt.Outcome == OutcomePending, receipt, nil
+			return found && receipt.ActionablePending(), receipt, nil
 		}
 		return false, receipt, fmt.Errorf("probe lease: %w", err)
 	}
@@ -388,4 +443,17 @@ func LiveHandoff(execPath string) (bool, Receipt, error) {
 		return false, receipt, fmt.Errorf("release lease probe: %w", err)
 	}
 	return false, receipt, nil
+}
+
+// readReceiptForLiveHandoff reads the best receipt for the live-handoff
+// probe without failing the launch on an unreadable record: an unparseable
+// receipt cannot be trusted to prove liveness either way, so the probe
+// reports no receipt and the recovery inspection (which must fail closed)
+// is the authority for unsafe metadata.
+func readReceiptForLiveHandoff(execPath string) (Receipt, bool) {
+	r, found, err := ReadLatestReceipt(execPath)
+	if err != nil {
+		return Receipt{}, false
+	}
+	return r, found
 }

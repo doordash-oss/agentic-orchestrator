@@ -266,6 +266,19 @@ func (p *driverProcess) digestTokens(label string) []string {
 	return tokens
 }
 
+// stderrPrefixCount counts the collected stderr lines carrying prefix: one
+// "selfupdate-driver: exec /path" line marks one crossed exec boundary (the
+// "exec failed:" line never matches).
+func (p *driverProcess) stderrPrefixCount(prefix string) int {
+	n := 0
+	for _, line := range p.stderrLines() {
+		if strings.HasPrefix(line, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
 // alive reports whether the process is still running (signal 0 probe).
 func (p *driverProcess) alive() bool {
 	if p.cmd.Process == nil || p.cmd.ProcessState != nil {
@@ -407,6 +420,8 @@ type selfupdateStartOptions struct {
 	listen      string
 	failAt      string
 	prepareOnly bool
+	barrier     string
+	barrierFile string
 }
 
 // start launches the installed driver copy with the journey's candidate and
@@ -427,6 +442,9 @@ func (j *selfupdateJourney) start(opts selfupdateStartOptions) *driverProcess {
 	}
 	if opts.prepareOnly {
 		args = append(args, "--prepare-only")
+	}
+	if opts.barrier != "" {
+		args = append(args, "--barrier", opts.barrier, "--barrier-file", opts.barrierFile)
 	}
 	return startDriverProcess(j.t, j.installPath, selfupdateDriverEnv(j.home), args...)
 }
@@ -592,6 +610,75 @@ func (j *selfupdateJourney) waitReceiptOutcome(want selfupdate.Outcome, timeout 
 			j.t.Fatalf("receipt at %s never became %q (last read: %+v, err: %v)", j.receiptPath(), want, r, err)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// waitReceiptResolution polls until the receipt carries the wanted explicit
+// settlement resolution (an abandoned transaction keeps Outcome=pending).
+func (j *selfupdateJourney) waitReceiptResolution(want selfupdate.Resolution, timeout time.Duration) selfupdate.Receipt {
+	j.t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		r, err := selfupdate.ReadReceipt(j.receiptPath())
+		if err == nil && r.Resolution == want {
+			return r
+		}
+		if time.Now().After(deadline) {
+			j.t.Fatalf("receipt at %s never carried resolution %q (last read: %+v, err: %v)", j.receiptPath(), want, r, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// waitReceiptRolledBack polls until the receipt is durably rolled back.
+func (j *selfupdateJourney) waitReceiptRolledBack(timeout time.Duration) selfupdate.Receipt {
+	j.t.Helper()
+	return j.waitReceiptOutcome(selfupdate.OutcomeRolledBack, timeout)
+}
+
+// requireSuppressedTarget asserts the exact failed target version of a
+// rolled-back receipt is durably suppressed for the installed executable
+// while any other version stays eligible.
+func requireSuppressedTarget(t *testing.T, j *selfupdateJourney, r selfupdate.Receipt) {
+	t.Helper()
+	lookup, err := selfupdate.LookupSuppression(j.installPath, r.ToVersion)
+	if err != nil {
+		t.Fatalf("lookup suppression for %s: %v", r.ToVersion, err)
+	}
+	if !lookup.Suppressed {
+		t.Fatalf("target version %s is not suppressed after an actual rollback", r.ToVersion)
+	}
+	if lookup.Target.TransactionID != r.TransactionID {
+		t.Fatalf("suppression records transaction %q; want the rolled-back %q", lookup.Target.TransactionID, r.TransactionID)
+	}
+	other := selfupdateVersionProd
+	if other == r.ToVersion {
+		other = selfupdateVersionLower
+	}
+	lookup, err = selfupdate.LookupSuppression(j.installPath, other)
+	if err != nil {
+		t.Fatalf("lookup suppression for %s: %v", other, err)
+	}
+	if lookup.Suppressed {
+		t.Fatalf("version %s must not be suppressed by the rollback of %s", other, r.ToVersion)
+	}
+}
+
+// requireNoSuppression asserts no version is suppressed for the installed
+// executable: installation failures never suppress their target.
+func requireNoSuppression(t *testing.T, j *selfupdateJourney, target string) {
+	t.Helper()
+	if lookup, err := selfupdate.LookupSuppression(j.installPath, target); err != nil {
+		t.Fatalf("lookup suppression for %s: %v", target, err)
+	} else if lookup.Suppressed {
+		t.Fatalf("version %s is suppressed; an installation failure must never suppress its target", target)
+	}
+	targets, err := selfupdate.SuppressedVersions(j.installPath)
+	if err != nil {
+		t.Fatalf("read suppression store: %v", err)
+	}
+	if len(targets) != 0 {
+		t.Fatalf("suppression store = %+v; want empty", targets)
 	}
 }
 
@@ -1030,7 +1117,7 @@ func TestSelfUpdateJourneyPrepareOnly(t *testing.T) {
 	if !p.stderrContains("selfupdate-driver: prepared ") {
 		t.Fatalf("no prepared milestone in stderr:\n%s", p.stderrTail())
 	}
-	if p.stderrContains("selfupdate-driver: exec ") {
+	if p.stderrContains("selfupdate-driver: exec /") {
 		t.Fatal("prepare-only unexpectedly crossed the exec boundary")
 	}
 	receipt := j.waitReceipt(10 * time.Second)
@@ -1058,10 +1145,14 @@ func TestSelfUpdateJourneyPrepareOnly(t *testing.T) {
 	}
 }
 
-// TestSelfUpdateJourneyFailureInjection proves failure containment at every
-// injection point: the installed bytes and the receipt stay truthful for the
-// furthest durably completed step, and the rollback backup survives every
-// unconfirmed handoff.
+// TestSelfUpdateJourneyFailureInjection proves failure containment and
+// recovery at every injection point: preparation failures leave no receipt
+// and untouched bytes; an aborted drain settles an installation failure while
+// the old build keeps serving; aborted shutdowns after serving resources
+// closed restart the unchanged build through the guarded recovery path; and
+// every failure at or after the handoff boundary funnels through the
+// production recovery boundary, restoring the previous build to service with
+// a truthful rolled_back receipt and exact-target suppression.
 func TestSelfUpdateJourneyFailureInjection(t *testing.T) {
 	selfupdateJourneyGuard(t)
 
@@ -1083,12 +1174,6 @@ func TestSelfUpdateJourneyFailureInjection(t *testing.T) {
 			t.Fatalf("receipt unexpectedly present at %s (err = %v)", j.receiptPath(), err)
 		}
 	}
-	requireBackupRetained := func(t *testing.T, j *selfupdateJourney, r selfupdate.Receipt) {
-		t.Helper()
-		if _, err := os.Stat(r.BackupPath); err != nil {
-			t.Fatalf("rollback backup not retained: %v", err)
-		}
-	}
 
 	// Preparation failures: Begin aborts before any receipt exists and the
 	// installed bytes never change.
@@ -1108,143 +1193,254 @@ func TestSelfUpdateJourneyFailureInjection(t *testing.T) {
 		})
 	}
 
-	// Drain and stop failures: the receipt stays pending backup-ready with
-	// the sanitized injected error recorded, and the installed bytes never
-	// change.
-	for _, point := range []string{"drain", "stop"} {
+	// Drain failure while the old runtime is still usable: the installation
+	// is settled as an installation failure before any serving resource
+	// closed and the unchanged build keeps serving. The target is never
+	// installed or executed, nothing is suppressed, and SIGTERM exits zero.
+	t.Run("drain", func(t *testing.T) {
+		selfupdateJourneyGuard(t)
+		bins := selfupdateTestBinaries(t)
+		j := newSelfupdateJourney(t, bins.lower)
+		port := selfupdateFreePort(t, "127.0.0.1")
+		baseURL := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+		p := j.start(selfupdateStartOptions{failAt: "drain", listen: "127.0.0.1:" + strconv.Itoa(port)})
+		j.waitHealthy(p, baseURL, selfupdateVersionLower, 30*time.Second)
+
+		j.trigger()
+
+		r := j.waitReceiptResolution(selfupdate.ResolutionAbandonedPreReplacement, 20*time.Second)
+		if r.Outcome != selfupdate.OutcomePending || r.Phase != selfupdate.PhaseBackupReady {
+			t.Fatalf("receipt = %q/%q; want pending/backup-ready", r.Outcome, r.Phase)
+		}
+		if !r.InstallFailed {
+			t.Fatal("abandoned drain receipt must record the installation failure")
+		}
+		if r.RecoveryKind != "" || r.RecoveryAttemptID != "" {
+			t.Fatalf("drain receipt records recovery metadata %q/%q; want none (no restart, no restore)", r.RecoveryKind, r.RecoveryAttemptID)
+		}
+		if r.Error == "" {
+			t.Fatal("receipt carries no sanitized error")
+		}
+		if got := j.installDigest(); got != bins.lowerDigest {
+			t.Fatalf("installed digest = %s; want untouched lower digest %s", got, bins.lowerDigest)
+		}
+		requireNoSuppression(t, j, selfupdateVersionHigher)
+		if !p.alive() {
+			t.Fatal("drain-aborted driver died before SIGTERM")
+		}
+		if code := p.terminate(); code != 0 {
+			t.Fatalf("SIGTERM exit code = %d; want 0 (stderr tail:\n%s)", code, p.stderrTail())
+		}
+		if !p.stderrContains("selfupdate-driver: drain failed (injected)") {
+			t.Fatalf("no injected drain milestone in stderr:\n%s", p.stderrTail())
+		}
+		if !p.stderrContains("selfupdate-driver: installation aborted pre-replacement") {
+			t.Fatalf("no aborted-installation milestone in stderr:\n%s", p.stderrTail())
+		}
+	})
+
+	// Shutdown failures after serving resources closed: the unchanged build
+	// is re-executed through the guarded recovery path — an installation
+	// failure under durable restart tracking, never a rollback. The process
+	// keeps its pid, rebinds the same endpoint, serves the lower version
+	// again, and the pending receipt is settled as abandoned on its boot.
+	for _, point := range []string{"server-close", "shutdown-mixed", "stop"} {
 		t.Run(point, func(t *testing.T) {
 			selfupdateJourneyGuard(t)
 			bins := selfupdateTestBinaries(t)
 			j := newSelfupdateJourney(t, bins.lower)
-			p := j.start(selfupdateStartOptions{failAt: point})
+			port := selfupdateFreePort(t, "127.0.0.1")
+			baseURL := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+			p := j.start(selfupdateStartOptions{failAt: point, listen: "127.0.0.1:" + strconv.Itoa(port)})
+			pre := j.waitHealthy(p, baseURL, selfupdateVersionLower, 30*time.Second)
+
 			j.trigger()
-			waitExitNonZero(t, p)
-			if !p.stderrContains("selfupdate-driver: " + point + " failed (injected)") {
-				t.Fatalf("no injected %s milestone in stderr:\n%s", point, p.stderrTail())
+
+			// The durable restart settlement is the unambiguous marker: wait for
+			// it before any live-server assertion (the old server may still be
+			// serving when the journey begins).
+			r := j.waitReceiptResolution(selfupdate.ResolutionAbandonedPreReplacement, 45*time.Second)
+			post := j.waitHealthy(p, baseURL, selfupdateVersionLower, 30*time.Second)
+			if pre.Owner.PID != p.pid() || post.Owner.PID != p.pid() {
+				t.Fatalf("owner pid moved across the restart: pre=%d post=%d pid=%d", pre.Owner.PID, post.Owner.PID, p.pid())
 			}
-			r := j.waitReceipt(10 * time.Second)
 			if r.Outcome != selfupdate.OutcomePending || r.Phase != selfupdate.PhaseBackupReady {
 				t.Fatalf("receipt = %q/%q; want pending/backup-ready", r.Outcome, r.Phase)
 			}
-			if r.Error == "" {
-				t.Fatal("receipt carries no sanitized error")
+			if r.RecoveryKind != selfupdate.RecoveryKindRestart || r.RecoveryAttemptID == "" {
+				t.Fatalf("receipt recovery = %q/%q; want restart kind with attempt id", r.RecoveryKind, r.RecoveryAttemptID)
 			}
-			requireBackupRetained(t, j, r)
-			requireInstalledDigest(t, j, j.bins.lowerDigest)
+			if !r.InstallFailed {
+				t.Fatal("restarted installation must be recorded as an installation failure")
+			}
+			if got := j.installDigest(); got != bins.lowerDigest {
+				t.Fatalf("installed digest = %s; want untouched lower digest %s", got, bins.lowerDigest)
+			}
+			requireNoSuppression(t, j, selfupdateVersionHigher)
+			if code := p.terminate(); code != 0 {
+				t.Fatalf("SIGTERM exit code = %d; want 0 (stderr tail:\n%s)", code, p.stderrTail())
+			}
+			if n := p.stderrPrefixCount("selfupdate-driver: exec /"); n != 0 {
+				t.Fatalf("exec milestones = %d; want 0 (the target is never executed)", n)
+			}
+			if p.stderrContains("selfupdate-driver: committed") {
+				t.Fatal("restart journey must never reach commit")
+			}
+			if !p.stderrContains("selfupdate-driver: restarting unchanged build after aborted shutdown") {
+				t.Fatalf("no restart milestone in stderr:\n%s", p.stderrTail())
+			}
+			wantMilestone := map[string]string{
+				"server-close":   "selfupdate-driver: server shutdown failed",
+				"shutdown-mixed": "selfupdate-driver: server shutdown failed",
+				"stop":           "selfupdate-driver: stop failed (injected)",
+			}[point]
+			if !p.stderrContains(wantMilestone) {
+				t.Fatalf("no %s milestone in stderr:\n%s", point, p.stderrTail())
+			}
 		})
 	}
 
-	// Post-rename and exec failures: the rename already happened, so the
-	// receipt truthfully reports replacement-complete while still pending.
+	// Handoff failures on the old image (post-rename, exec-error): the
+	// candidate is committed but the target is never invoked, so the
+	// production recovery boundary restores the previous build and execs it
+	// with the chain guard: same pid, same endpoint, lower version serving
+	// again, rolled_back receipt with restore metadata, exact-target
+	// suppression, and the canonical update_rolled_back warning.
 	for _, point := range []string{"post-rename", "exec-error"} {
 		t.Run(point, func(t *testing.T) {
 			selfupdateJourneyGuard(t)
 			bins := selfupdateTestBinaries(t)
 			j := newSelfupdateJourney(t, bins.lower)
-			p := j.start(selfupdateStartOptions{failAt: point})
+			port := selfupdateFreePort(t, "127.0.0.1")
+			baseURL := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+			p := j.start(selfupdateStartOptions{failAt: point, listen: "127.0.0.1:" + strconv.Itoa(port)})
+			j.waitHealthy(p, baseURL, selfupdateVersionLower, 30*time.Second)
+
 			j.trigger()
-			waitExitNonZero(t, p)
+
+			// post-rename never invokes the target (0 exec milestones);
+			// exec-error crosses the boundary print once before the
+			// injected failure.
+			wantExecCrossings := map[string]int{"post-rename": 0, "exec-error": 1}[point]
+			assertRestoredService(t, j, p, baseURL, wantExecCrossings)
 			if !p.stderrContains("selfupdate-driver: committed") {
 				t.Fatalf("no committed milestone in stderr:\n%s", p.stderrTail())
 			}
-			if point == "post-rename" && !p.stderrContains("selfupdate-driver: post-rename failure (injected)") {
-				t.Fatalf("no injected post-rename milestone in stderr:\n%s", p.stderrTail())
+			wantMilestone := map[string]string{
+				"post-rename": "selfupdate-driver: post-rename failure (injected)",
+				"exec-error":  "selfupdate-driver: exec failed:",
+			}[point]
+			if !p.stderrContains(wantMilestone) {
+				t.Fatalf("no %s milestone in stderr:\n%s", point, p.stderrTail())
 			}
-			if point == "exec-error" && !p.stderrContains("selfupdate-driver: exec failed:") {
-				t.Fatalf("no exec-failed milestone in stderr:\n%s", p.stderrTail())
-			}
-			r := j.waitReceipt(10 * time.Second)
-			if r.Outcome != selfupdate.OutcomePending || r.Phase != selfupdate.PhaseReplacementComplete {
-				t.Fatalf("receipt = %q/%q; want pending/replacement-complete", r.Outcome, r.Phase)
-			}
-			if point == "exec-error" && r.Error == "" {
-				t.Fatal("exec-error receipt carries no sanitized error")
-			}
-			requireBackupRetained(t, j, r)
-			requireInstalledDigest(t, j, j.bins.higherDigest)
 		})
 	}
 
-	// Target startup: the old image really execs, the new image aborts
-	// during adoption, and the pending receipt plus backup stay actionable.
-	t.Run("target-startup", func(t *testing.T) {
-		selfupdateJourneyGuard(t)
-		bins := selfupdateTestBinaries(t)
-		j := newSelfupdateJourney(t, bins.lower)
-		p := j.start(selfupdateStartOptions{failAt: "target-startup"})
-		j.trigger()
-		waitExitNonZero(t, p)
-		if !p.stderrContains("selfupdate-driver: exec ") {
-			t.Fatalf("old image never crossed the exec boundary:\n%s", p.stderrTail())
-		}
-		if !p.stderrContains("injected target-startup failure") {
-			t.Fatalf("no target-startup failure in stderr:\n%s", p.stderrTail())
-		}
-		r := j.waitReceipt(10 * time.Second)
-		if r.Outcome != selfupdate.OutcomePending || r.Phase != selfupdate.PhaseReplacementComplete {
-			t.Fatalf("receipt = %q/%q; want pending/replacement-complete", r.Outcome, r.Phase)
-		}
-		requireBackupRetained(t, j, r)
-		requireInstalledDigest(t, j, j.bins.higherDigest)
-	})
+	// Target startup failures: the old image really execs the new build and
+	// the adopted image fails during bootstrap (cooperative startup deadline
+	// expiry), so the production recovery boundary restores the previous
+	// build: same end state as the handoff failures, with exactly one exec
+	// crossing onto the target.
+	for _, point := range []string{"target-startup", "startup-deadline"} {
+		t.Run(point, func(t *testing.T) {
+			selfupdateJourneyGuard(t)
+			bins := selfupdateTestBinaries(t)
+			j := newSelfupdateJourney(t, bins.lower)
+			port := selfupdateFreePort(t, "127.0.0.1")
+			baseURL := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+			p := j.start(selfupdateStartOptions{failAt: point, listen: "127.0.0.1:" + strconv.Itoa(port)})
+			j.waitHealthy(p, baseURL, selfupdateVersionLower, 30*time.Second)
 
-	// Discovery publication: the old image serves and hands off; the
-	// replacement image fails its mandatory discovery publication, so the
-	// receipt stays pending with the backup retained.
-	t.Run("discovery", func(t *testing.T) {
-		selfupdateJourneyGuard(t)
-		bins := selfupdateTestBinaries(t)
-		j := newSelfupdateJourney(t, bins.lower)
-		port := selfupdateFreePort(t, "127.0.0.1")
-		baseURL := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-		p := j.start(selfupdateStartOptions{failAt: "discovery", listen: "127.0.0.1:" + strconv.Itoa(port)})
-		j.waitHealthy(p, baseURL, selfupdateVersionLower, 30*time.Second)
-		j.trigger()
-		waitExitNonZero(t, p)
-		r := j.waitReceipt(10 * time.Second)
-		if r.Outcome != selfupdate.OutcomePending {
-			t.Fatalf("receipt outcome = %q; want pending", r.Outcome)
-		}
-		if r.Phase != selfupdate.PhaseReplacementComplete {
-			t.Fatalf("receipt phase = %q; want %q", r.Phase, selfupdate.PhaseReplacementComplete)
-		}
-		requireBackupRetained(t, j, r)
-		requireInstalledDigest(t, j, j.bins.higherDigest)
-	})
+			j.trigger()
 
-	// Confirm: the replacement image serves, then the confirm injection
-	// aborts it; listening alone must never produce a confirmed receipt.
-	t.Run("confirm", func(t *testing.T) {
-		selfupdateJourneyGuard(t)
-		bins := selfupdateTestBinaries(t)
-		j := newSelfupdateJourney(t, bins.lower)
-		port := selfupdateFreePort(t, "127.0.0.1")
-		baseURL := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-		p := j.start(selfupdateStartOptions{failAt: "confirm", listen: "127.0.0.1:" + strconv.Itoa(port)})
-		j.trigger()
-		if h, ok := j.observeHealthy(p, baseURL, selfupdateVersionHigher, 30*time.Second); ok {
-			if h.Owner.PID != p.pid() {
-				t.Fatalf("post-exec owner pid = %d; want preserved %d", h.Owner.PID, p.pid())
+			assertRestoredService(t, j, p, baseURL, 1)
+		})
+	}
+
+	// Adopted-image failures (discovery publication, self-health wait,
+	// confirmation persistence): the production recovery boundary tears the
+	// partially started target down, restores the previous build, and execs
+	// it with the chain guard. A confirm failure never persists
+	// confirmation: the receipt ends rolled_back.
+	for _, point := range []string{"discovery", "health", "confirm"} {
+		t.Run(point, func(t *testing.T) {
+			selfupdateJourneyGuard(t)
+			bins := selfupdateTestBinaries(t)
+			j := newSelfupdateJourney(t, bins.lower)
+			port := selfupdateFreePort(t, "127.0.0.1")
+			baseURL := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+			p := j.start(selfupdateStartOptions{failAt: point, listen: "127.0.0.1:" + strconv.Itoa(port)})
+			j.waitHealthy(p, baseURL, selfupdateVersionLower, 30*time.Second)
+
+			j.trigger()
+
+			if point == "confirm" {
+				// Best-effort: the confirm abort can land within
+				// milliseconds of the listener coming up, so a short window
+				// observes the adopted image without stalling the journey
+				// when it is missed.
+				if h, ok := j.observeHealthy(p, baseURL, selfupdateVersionHigher, 5*time.Second); ok && h.Owner.PID != p.pid() {
+					t.Fatalf("adopted owner pid = %d; want preserved %d", h.Owner.PID, p.pid())
+				}
 			}
-		} else if !p.exited() {
-			t.Fatalf("new image never served the higher version and never exited (stderr tail:\n%s)", p.stderrTail())
-		} else {
-			t.Log("higher version was not observable before the confirm injection aborted serving")
-		}
-		waitExitNonZero(t, p)
-		if !p.stderrContains("selfupdate-driver: confirm failed (injected)") {
-			t.Fatalf("no confirm-failed milestone in stderr:\n%s", p.stderrTail())
-		}
-		r := j.waitReceipt(10 * time.Second)
-		if r.Outcome != selfupdate.OutcomePending {
-			t.Fatalf("receipt outcome = %q; want pending (never confirmed)", r.Outcome)
-		}
-		if r.Phase != selfupdate.PhaseReplacementComplete {
-			t.Fatalf("receipt phase = %q; want %q", r.Phase, selfupdate.PhaseReplacementComplete)
-		}
-		requireBackupRetained(t, j, r)
-		requireInstalledDigest(t, j, j.bins.higherDigest)
-	})
+			assertRestoredService(t, j, p, baseURL, 1)
+			if point == "confirm" {
+				// The production confirm path renders the injection into the
+				// recovery reason: the rolled-back receipt carries it as the
+				// sanitized failure, and confirmation was never persisted.
+				r := j.waitReceiptRolledBack(5 * time.Second)
+				if !strings.Contains(r.Error, "confirm") {
+					t.Fatalf("rolled-back receipt error = %q; want the confirm failure recorded", r.Error)
+				}
+			}
+		})
+	}
+}
+
+// assertRestoredService asserts the recovered end state of one restore
+// journey: the receipt is durably rolled_back with restore metadata (the
+// unambiguous recovery marker — the old server may still be serving when the
+// journey begins, so the receipt is awaited first), then the previous build
+// serves again with the preserved pid on the same endpoint, the installed
+// bytes are the previous build, exactly wantExecCrossings exec boundaries
+// were crossed onto the target, exact-target suppression records the failed
+// version, the recovered build refuses a chained update journey and reports
+// the canonical update_rolled_back warning, and SIGTERM exits zero.
+func assertRestoredService(t *testing.T, j *selfupdateJourney, p *driverProcess, baseURL string, wantExecCrossings int) {
+	t.Helper()
+	r := j.waitReceiptRolledBack(45 * time.Second)
+	if r.Phase != selfupdate.PhaseRollbackAttempted {
+		t.Fatalf("receipt phase = %q; want %q", r.Phase, selfupdate.PhaseRollbackAttempted)
+	}
+	if r.RecoveryKind != selfupdate.RecoveryKindRestore || r.RecoveryAttemptID == "" {
+		t.Fatalf("receipt recovery = %q/%q; want restore kind with attempt id", r.RecoveryKind, r.RecoveryAttemptID)
+	}
+	if r.RestorePath == "" || r.RestoreID == nil {
+		t.Fatalf("receipt restore metadata missing: path=%q id=%v", r.RestorePath, r.RestoreID)
+	}
+	if r.FromVersion != selfupdateVersionLower || r.ToVersion != selfupdateVersionHigher {
+		t.Fatalf("receipt versions = %q -> %q", r.FromVersion, r.ToVersion)
+	}
+	post := j.waitHealthy(p, baseURL, selfupdateVersionLower, 30*time.Second)
+	if post.Owner.PID != p.pid() {
+		t.Fatalf("recovered owner pid = %d; want preserved %d", post.Owner.PID, p.pid())
+	}
+	if got := j.installDigest(); got != j.bins.lowerDigest {
+		t.Fatalf("installed digest = %s; want restored lower digest %s", got, j.bins.lowerDigest)
+	}
+	if code := p.terminate(); code != 0 {
+		t.Fatalf("SIGTERM exit code = %d; want 0 (stderr tail:\n%s)", code, p.stderrTail())
+	}
+	if n := p.stderrPrefixCount("selfupdate-driver: exec /"); n != wantExecCrossings {
+		t.Fatalf("exec milestones = %d; want %d (stderr tail:\n%s)", n, wantExecCrossings, p.stderrTail())
+	}
+	if !p.stderrContains("selfupdate-driver: refusing update journey in a recovery chain; fresh consent required") {
+		t.Fatalf("recovered build did not refuse the chained journey:\n%s", p.stderrTail())
+	}
+	if !p.stderrContains("warning[update_rolled_back]") {
+		t.Fatalf("no canonical update_rolled_back warning in stderr:\n%s", p.stderrTail())
+	}
+	requireSuppressedTarget(t, j, r)
 }
 
 // TestSelfUpdateOwnershipAcrossJourneys proves binary-scoped update
@@ -1366,8 +1562,9 @@ func TestSelfUpdateOwnershipAcrossJourneys(t *testing.T) {
 }
 
 // TestSelfUpdateProductionBoundary proves ordinary builds stay sealed: the
-// untagged binary rejects the driver subcommand outright, and a malformed
-// handoff environment entry never activates anything in server mode.
+// untagged binary rejects the driver subcommand outright, and an invalid
+// handoff environment entry fails the server launch closed without ever
+// activating anything.
 func TestSelfUpdateProductionBoundary(t *testing.T) {
 	selfupdateJourneyGuard(t)
 
@@ -1395,28 +1592,27 @@ func TestSelfUpdateProductionBoundary(t *testing.T) {
 		}
 	})
 
-	t.Run("malformed handoff env inert in server mode", func(t *testing.T) {
+	t.Run("invalid handoff env fails closed in server mode", func(t *testing.T) {
 		selfupdateJourneyGuard(t)
 		bins := selfupdateTestBinaries(t)
 		j := newSelfupdateJourney(t, bins.prod)
 		env := append(selfupdateDriverEnv(j.home),
 			selfupdate.HandoffEnvVar+`={"json":"garbage"}`)
 		p := j.launchEnv(env, "server", "--config", j.configPath, "--state-dir", j.stateDir)
-		disc := j.waitDiscovery(p, 20*time.Second)
-		j.waitHealthy(p, disc.BaseURL, selfupdateVersionProd, 30*time.Second)
-		if code := p.terminate(); code != 0 {
-			t.Fatalf("server SIGTERM exit = %d; want 0 (stderr tail:\n%s)", code, p.stderrTail())
+		if code := p.waitBounded(15 * time.Second); code == 0 {
+			t.Fatalf("production binary accepted an invalid handoff entry (exit 0):\n%s", p.stderrTail())
+		}
+		if !p.stderrContains("adopting update handoff") {
+			t.Fatalf("launch did not fail closed on the invalid handoff entry:\n%s", p.stderrTail())
 		}
 		if _, err := os.Stat(j.receiptPath()); !os.IsNotExist(err) {
-			t.Fatalf("malformed handoff env produced a receipt at %s (err = %v)", j.receiptPath(), err)
+			t.Fatalf("invalid handoff env produced a receipt at %s (err = %v)", j.receiptPath(), err)
 		}
-		entries, err := os.ReadDir(selfupdate.LeaseDir(j.installPath))
-		if err != nil {
-			t.Fatalf("read lease dir: %v", err)
-		}
-		for _, e := range entries {
-			if strings.HasPrefix(e.Name(), "tx-") {
-				t.Fatalf("lease dir carries transaction residue %s", e.Name())
+		if entries, err := os.ReadDir(selfupdate.LeaseDir(j.installPath)); err == nil {
+			for _, e := range entries {
+				if strings.HasPrefix(e.Name(), "tx-") {
+					t.Fatalf("lease dir carries transaction residue %s", e.Name())
+				}
 			}
 		}
 		if got := j.installDigest(); got != bins.prodDigest {

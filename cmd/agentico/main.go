@@ -49,6 +49,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
@@ -308,6 +309,15 @@ func canonicalizeStateDir(stateDir string) string {
 
 func parseLaunchArgs(args []string) (launchOptions, error) {
 	opts := defaultLaunchOptions()
+	// Driver builds (agentico_selfupdate_driver tag) recognize the
+	// selfupdate-driver subcommand here. Ordinary builds have a nil hook, so
+	// that word falls through to the launch-flag loop and rejects as an
+	// unknown command exactly like any other unrecognized first argument.
+	if len(args) > 0 && driverArgParseHook != nil {
+		if driverOpts, handled, err := driverArgParseHook(args); handled || err != nil {
+			return driverOpts, err
+		}
+	}
 	serverOnlyFlag := ""
 	// `update` is a standalone subcommand recognized only as the first
 	// argument. Its sub-flags (--check / -n) are valid only in this context;
@@ -977,9 +987,14 @@ type runtimeBootstrap struct {
 	workspaceDir    string
 	recoveryItems   []ports.RecoveryItem
 	recoveryScanOK  bool
+	selfUpdateExec  selfupdate.Executable
+	updateLease     *selfupdate.Lease
 }
 
-func (b *runtimeBootstrap) Close(ctx context.Context) error {
+// StopServices stops the fx graph without releasing the instance lock: an
+// exec handoff needs service cleanup to complete while the lock is still
+// held. Idempotent.
+func (b *runtimeBootstrap) StopServices(ctx context.Context) error {
 	if b == nil {
 		return nil
 	}
@@ -988,12 +1003,38 @@ func (b *runtimeBootstrap) Close(ctx context.Context) error {
 		errStop = b.fxApp.Stop(ctx)
 		b.fxApp = nil
 	}
+	return errStop
+}
+
+// ReleaseLock closes the instance lock only. Idempotent.
+func (b *runtimeBootstrap) ReleaseLock() error {
+	if b == nil {
+		return nil
+	}
 	var errLock error
 	if b.lock != nil {
 		errLock = b.lock.Close()
 		b.lock = nil
 	}
-	return errors.Join(errStop, errLock)
+	return errLock
+}
+
+// Close stops services, releases the update lease, then releases the
+// instance lock — in that order, so the lock outlives the fx graph and no
+// later lock holder can observe a half-torn runtime. The lease close never
+// removes files. Idempotent.
+func (b *runtimeBootstrap) Close(ctx context.Context) error {
+	if b == nil {
+		return nil
+	}
+	errStop := b.StopServices(ctx)
+	var errLease error
+	if b.updateLease != nil {
+		errLease = b.updateLease.Close()
+		b.updateLease = nil
+	}
+	errLock := b.ReleaseLock()
+	return errors.Join(errStop, errLease, errLock)
 }
 
 type serverMutationTarget struct {
@@ -2697,6 +2738,29 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 			Config:     configPath,
 		},
 	}
+	// Best-effort binary-scoped update ownership. Any failure — including
+	// contention with the true owner (a secondary runtime serving from the
+	// same installed binary) — leaves the lease nil and the launch
+	// untouched: inability to own updates must not break boot or weaken the
+	// instance lock. The lease fd is close-on-exec, so ordinary children
+	// never inherit it.
+	if exec, execErr := selfupdate.CaptureExecutable(); execErr == nil {
+		boot.selfUpdateExec = exec
+		if lease, leaseErr := selfupdate.AcquireLease(exec, selfupdate.OwnershipRecord{
+			RuntimeDir:       runtimeDir,
+			StateDir:         stateDir,
+			Config:           configPath,
+			PID:              os.Getpid(),
+			PGID:             owner.PGID,
+			Version:          buildinfo.Version(),
+			StartedAt:        owner.StartedAt,
+			ExecutablePath:   exec.Path,
+			ExecutableDigest: exec.Digest,
+			ExecutableIno:    exec.ID.Ino,
+		}); leaseErr == nil {
+			boot.updateLease = lease
+		}
+	}
 	success := false
 	defer func() {
 		if !success {
@@ -2897,10 +2961,53 @@ func normalizeProviderNames(enabled []string, warnBlank bool, warn func(name str
 }
 
 func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName string) int {
+	return runServerWithJourney(configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, listenAddr, serverName)
+}
+
+// runServerWithJourney is the server body. Ordinary builds run it with no
+// adopted handoff and no journey; driver builds (agentico_selfupdate_driver
+// tag) install hooks that adopt an inherited handoff, rebind its recorded
+// endpoint, and run the replace/confirm journeys.
+func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	runtimeCtx, requestShutdown := context.WithCancel(ctx)
 	defer requestShutdown()
+
+	// Handoff adoption precedes general bootstrap so no child process can
+	// spawn before the inherited lease descriptor is validated and made
+	// close-on-exec again. The hook returns nils when no handoff entry is
+	// present; a present-but-invalid handoff fails the launch closed.
+	var adopted *selfupdate.Lease
+	var adoptedHandoff selfupdate.HandoffMetadata
+	var adoptedReceipt selfupdate.Receipt
+	if handoffAdoptHook != nil {
+		lease, meta, receipt, err := handoffAdoptHook()
+		if err != nil {
+			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("adopting update handoff: %w", err)})
+			return 1
+		}
+		adopted, adoptedHandoff, adoptedReceipt = lease, meta, receipt
+	}
+	// Reject a competing launch while a live handoff owns this executable —
+	// but never the adopted owner itself, which holds the lease through the
+	// inherited descriptor. A failed executable capture is tolerated: it
+	// disables the check, never the launch.
+	if adopted == nil {
+		if exec, execErr := selfupdate.CaptureExecutable(); execErr == nil {
+			if err := checkLiveHandoff(exec.Path); err != nil {
+				renderStartupFailure(os.Stderr, err)
+				return 1
+			}
+		}
+	}
+	// An adopted handoff rebinds its recorded concrete endpoint; argv's
+	// --listen may still name an ephemeral port.
+	if adopted != nil && handoffListenOverrideHook != nil {
+		if override := handoffListenOverrideHook(); override != "" {
+			listenAddr = override
+		}
+	}
 
 	boot, err := bootstrapRuntime(ctx, configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, os.Stderr)
 	if err != nil {
@@ -2912,6 +3019,13 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 			reportDeferredClose(os.Stderr, "close runtime", err)
 		}
 	}()
+	if adopted != nil {
+		// bootstrapRuntime's own lease acquisition reports contention here:
+		// the adopted open file description already holds the binary-scoped
+		// flock, so its fresh non-blocking attempt cannot succeed. The
+		// adopted lease is this process's true owner.
+		boot.updateLease = adopted
+	}
 
 	if shouldInterruptRunningOnStartup(
 		boot.recoveryScanOK,
@@ -3005,7 +3119,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 
 	now := time.Now().UTC()
 	record := registryRecord(boot, runtimeServer, authToken, resolvedName, policy, now)
-	if err := serverruntime.PublishDiscovery(boot.runtime.RuntimeDir, record); err != nil {
+	if err := publishDiscoveryFn(boot.runtime.RuntimeDir, record); err != nil {
 		renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("publishing discovery metadata: %w", err)})
 		return 1
 	}
@@ -3031,6 +3145,27 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	if err := writeNetworkAccessNotice(os.Stderr, runtimeServer.RuntimePolicy(), runtimeServer.BaseURL(), runtimeServer.WildcardBind(), authToken, resolvedName); err != nil {
 		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
 			errcat.WithDiagnostics(fmt.Sprintf("writing network access notice: %v", err)))
+	}
+	var journey serverJourney
+	if serverJourneyHook != nil {
+		journey = serverJourneyHook()
+	}
+	if journey != nil {
+		r := serverRun{
+			boot:           boot,
+			server:         runtimeServer,
+			authToken:      authToken,
+			resolvedName:   resolvedName,
+			policy:         policy,
+			registryDir:    registryDir,
+			listen:         listen,
+			adoptedLease:   adopted,
+			adoptedHandoff: adoptedHandoff,
+			adoptedReceipt: adoptedReceipt,
+		}
+		if code := journey.run(r); code >= 0 {
+			return code
+		}
 	}
 	<-runtimeCtx.Done()
 	shutdownFeatures(boot.orchestrator, boot.sessionManager)

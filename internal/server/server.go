@@ -31,6 +31,8 @@ type RuntimeServer struct {
 	baseURL      string
 	policy       string
 	wildcard     bool
+	bindHost     string
+	port         int
 	startedAt    time.Time
 	srv          *http.Server
 	broker       *eventBroker
@@ -56,15 +58,20 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen on %s: %w", res.BindAddr, err)
 	}
+	// The concrete bound address is captured here — never by retaining the
+	// listener — so an exec-replacement handoff can rebind the exact same
+	// address in a new process image.
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		_ = ln.Close()
+		return nil, fmt.Errorf("listen on %s: unexpected address type %T", res.BindAddr, ln.Addr())
+	}
+	bindHost := tcpAddr.IP.String()
+	port := tcpAddr.Port
 	baseURL := "http://" + ln.Addr().String()
 	if policy == CompatibilityNetworkRuntimePolicy {
 		// Advertise the resolved host (the primary interface address for
 		// wildcard binds), never the wildcard bind address itself.
-		tcpAddr, ok := ln.Addr().(*net.TCPAddr)
-		if !ok {
-			_ = ln.Close()
-			return nil, fmt.Errorf("listen on %s: unexpected address type %T", res.BindAddr, ln.Addr())
-		}
 		baseURL = "http://" + net.JoinHostPort(res.AdvertiseHost, strconv.Itoa(tcpAddr.Port))
 	}
 	handler := newAPIHandler(HandlerOptions{
@@ -122,6 +129,8 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		baseURL:      baseURL,
 		policy:       policy,
 		wildcard:     res.Wildcard,
+		bindHost:     bindHost,
+		port:         port,
 		startedAt:    startedAt,
 		srv:          httpServer,
 		broker:       handler.broker,
@@ -185,6 +194,25 @@ func (s *RuntimeServer) StartedAt() time.Time {
 	return s.startedAt
 }
 
+// BindHost reports the concrete host the listener bound, preserving wildcard
+// forms ("0.0.0.0"/"::") as bound, so an exec-replacement handoff can rebind
+// the exact same address in a new process image.
+func (s *RuntimeServer) BindHost() string {
+	if s == nil {
+		return ""
+	}
+	return s.bindHost
+}
+
+// Port reports the TCP port assigned to the listener at Start, or 0 when
+// unknown.
+func (s *RuntimeServer) Port() int {
+	if s == nil {
+		return 0
+	}
+	return s.port
+}
+
 func (s *RuntimeServer) EventEpoch() string {
 	if s == nil || s.broker == nil {
 		return ""
@@ -224,6 +252,13 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 		}
 	}
 	shutdownErr := srv.Shutdown(ctx)
+	if shutdownErr != nil {
+		// Open event and session-output SSE streams never become idle, so a
+		// graceful drain can only end at the context deadline. Force-close
+		// the remaining connections then: a live stream must not keep the
+		// process (or an exec handoff) shutdown open beyond the budget.
+		shutdownErr = errors.Join(shutdownErr, srv.Close())
+	}
 	var serveErr error
 	select {
 	case serveErr = <-s.done:

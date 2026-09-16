@@ -54,6 +54,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"go.uber.org/fx"
 	"golang.org/x/term"
 )
@@ -141,10 +142,10 @@ type launchOptions struct {
 	serverName           string
 	// updatesPolicy carries the raw --updates value (both --updates=v and
 	// --updates v forms normalize here). Empty means the flag was not passed.
-	updatesPolicy string
-	mode          launchMode
-	validateArtifacts    validateArtifactsOptions
-	verifyEvidence       verifyEvidenceOptions
+	updatesPolicy     string
+	mode              launchMode
+	validateArtifacts validateArtifactsOptions
+	verifyEvidence    verifyEvidenceOptions
 	// updateCheck is set when update mode was selected with --check / -n,
 	// requesting a check-only run that never attempts to install.
 	updateCheck bool
@@ -1030,6 +1031,9 @@ type runtimeBootstrap struct {
 	// is nil, so eligibility can distinguish ownership contention from
 	// other failures.
 	updateLeaseErr error
+	// admission is the runtime work-admission boundary: one instance shared
+	// by the orchestrator, repository work, and the HTTP server.
+	admission *workadmission.Coordinator
 }
 
 // serverUpdates returns the raw server.updates config values, tolerating a
@@ -1100,6 +1104,9 @@ type serverMutationTarget struct {
 	phaseRunner           *agent.PhaseRunner
 	permissionCache       *permission.Cache
 	workspaceDir          string
+	// admission is the runtime work-admission boundary; nil disables the
+	// chat-launch reservation (tests).
+	admission *workadmission.Coordinator
 	// dispatchAsync runs server-owned background work (durable feature
 	// setup). Nil means `go fn()`; tests inject a synchronous dispatcher.
 	dispatchAsync func(fn func())
@@ -1284,7 +1291,13 @@ func (t *serverMutationTarget) SetupFeature(featureID string) (serverruntime.Fea
 	if dispatch == nil {
 		dispatch = func(fn func()) { go fn() }
 	}
+	// The dispatched setup owns an admission reservation from before the
+	// goroutine launches; a closed boundary refuses the work-start request.
+	if err := t.orch.PrepareAsyncWork(featureID); err != nil {
+		return resp, err
+	}
 	dispatch(func() {
+		defer t.orch.SettleAsyncWork(featureID)
 		// Errors are durable: the setup runner persists per-task and failure
 		// state on the feature and emits setup events that reach the SSE
 		// stream, so the API surface reports them via the read model.
@@ -1721,6 +1734,16 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest, hid
 		return serverruntime.ChatStartResponse{}, errors.New("phase runner is not available")
 	}
 
+	// A fresh chat session runs its provider handshake before registration
+	// makes it visible: the chat reservation covers that whole window, and
+	// a closed admission boundary refuses the launch. It settles once the
+	// registered session is detector-visible.
+	chatReservation, err := acquireChatAdmission(t.admission)
+	if err != nil {
+		return serverruntime.ChatStartResponse{}, err
+	}
+	defer chatReservation.Release()
+
 	chatSkillPath := serverChatSkillPath(t.phaseRunner.SkillsDir)
 	// Wire prompt order: skill instruction, hidden context, visible message.
 	// The stored initial prompt below stays the visible message alone.
@@ -1774,6 +1797,15 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest, hid
 		return serverruntime.ChatStartResponse{}, fmt.Errorf("start chat session: %w", err)
 	}
 	return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultStarted}, nil
+}
+
+// acquireChatAdmission reserves one chat launch; a nil boundary (tests)
+// admits trivially.
+func acquireChatAdmission(coordinator *workadmission.Coordinator) (*workadmission.Reservation, error) {
+	if coordinator == nil {
+		return nil, nil
+	}
+	return coordinator.Acquire(workadmission.CategoryChat)
 }
 
 func chatMessageWithImages(message string, images []string) string {
@@ -2399,6 +2431,11 @@ func (t *serverMutationTarget) DeleteFeature(featureID string, req serverruntime
 	if err != nil {
 		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, err
 	}
+	// A completed cascade owns no further work; pending cleanup keeps the
+	// reservation until its retry settles.
+	if result.Status == feature.CascadeDeleteCompleted {
+		t.orch.SettleFeatureWork(featureID)
+	}
 	return serverruntime.DeleteFeatureResponse{
 		FeatureID:   result.ParentID,
 		OperationID: result.OperationID,
@@ -2414,6 +2451,9 @@ func (t *serverMutationTarget) DiscardChild(featureID string) (serverruntime.Dis
 	if err := t.orch.DiscardChild(featureID); err != nil {
 		return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
+	// The discard settled: the child's reservation settles with it (any
+	// still-draining session keeps it until the completion funnel).
+	t.orch.SettleFeatureWork(featureID)
 	return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: "discarded"}, nil
 }
 
@@ -2823,6 +2863,11 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	configIsNew := !fileExists(configPath)
 	workspaceDir, _ := os.Getwd()
 	eventCh := make(chan interface{}, 1000)
+	// The runtime work-admission boundary is shared by orchestration,
+	// repository work, and the HTTP surface; one instance is supplied to
+	// the fx graph and reused for the server construction below.
+	admission := workadmission.New(workadmission.Options{})
+	boot.admission = admission
 
 	var fm *feature.Manager
 	var sm *session.Manager
@@ -2861,6 +2906,9 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	if err := fxApp.Start(ctx); err != nil {
 		return nil, &runtimeInitError{fmt.Errorf("initializing: %w", err)}
 	}
+	// The work-admission boundary is installed on the fx-built orchestrator
+	// before any serving or dispatch path can run.
+	orch.SetAdmissionBoundary(admission)
 
 	detected, warnings, startupNotices, availabilityFiltered, err := checkRequiredProviders(ctx, registry)
 	if err != nil {
@@ -3192,6 +3240,27 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 		Feed:           updateFeed,
 		Log:            func(line string) { fmt.Fprintln(os.Stderr, line) },
 		Observer:       boot.observer,
+		Admission:      boot.admission,
+	}
+	// The production install path: the same signed-release pipeline and
+	// recoverable replacement the driver journeys prove, reachable only
+	// through the authenticated install endpoint. The lifecycle's server
+	// handle is completed after the server starts; install requests can
+	// only arrive after that point.
+	installLifecycle := &productionInstallLifecycle{
+		exitCode: make(chan int, 1),
+		stager: &productionReleaseStager{
+			exec:           boot.selfUpdateExec,
+			currentVersion: buildinfo.Version(),
+			eligibility:    eligibility,
+		},
+	}
+	if feedClient, ok := updateFeed.(*selfupdate.FeedClient); ok {
+		installLifecycle.stager.feed = feedClient
+	}
+	if installLifecycle.stager.feed != nil {
+		updateOptions.Stager = installLifecycle.stager
+		updateOptions.Install = installLifecycle
 	}
 
 	if shouldInterruptRunningOnStartup(
@@ -3273,12 +3342,14 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 			phaseRunner:           boot.phaseRunner,
 			permissionCache:       boot.permissionCache,
 			workspaceDir:          boot.workspaceDir,
+			admission:             boot.admission,
 		},
 		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
 		},
 		Worktrees: boot.worktrees,
 		Updates:   updateOptions,
+		Admission: boot.admission,
 	})
 	if err != nil {
 		return targetStartupFailure(func(e error) {
@@ -3287,6 +3358,19 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 	}
 	rt.server = runtimeServer
 	rt.authToken = authToken
+	// Complete the install lifecycle's server handle now that the server is
+	// running: install requests arriving through HTTP find it ready.
+	installLifecycle.run = &serverRun{
+		boot:           boot,
+		server:         runtimeServer,
+		authToken:      authToken,
+		resolvedName:   resolvedName,
+		policy:         policy,
+		listen:         listen,
+		adoptedLease:   adopted,
+		adoptedHandoff: adoptedHandoff,
+		adoptedReceipt: adoptedReceipt,
+	}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -3309,6 +3393,7 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 	// attachable via its per-runtime discovery file.
 	registryDir := serverruntime.RegistryDir(resolveRegistryParent())
 	rt.registryDir = registryDir
+	installLifecycle.run.registryDir = registryDir
 	if err := serverruntime.PublishRegistryEntry(registryDir, record); err != nil {
 		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
 			errcat.WithDiagnostics(fmt.Sprintf("publishing server registry entry: %v", err)))
@@ -3397,7 +3482,14 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 			return code
 		}
 	}
-	<-runtimeCtx.Done()
+	// A failed recovery boundary (second failure after teardown) hands its
+	// termination code to this serving goroutine: the process exits without
+	// an exec loop and without os.Exit from the install worker.
+	select {
+	case <-runtimeCtx.Done():
+	case code := <-installLifecycle.exitCode:
+		return code
+	}
 	shutdownFeatures(boot.orchestrator, boot.sessionManager)
 	return 0
 }

@@ -31,7 +31,13 @@ import (
 // idempotent: repeated runs converge on the same terminal states.
 // A failure to persist a transition leaves the truthful unresolved record
 // for the next reconciliation instead of claiming success or cleanup.
+// The pass holds one admission reservation for its duration, best-effort:
+// startup reconciliation owns the durable records and runs before the
+// server serves traffic, so admission cannot be closed yet — if it ever
+// is, reconciliation still runs so records stay truthful.
 func (s *Service) Recover() error {
+	res, _ := s.acquirePassReservation()
+	defer res.Release()
 	var errs []error
 	for _, rec := range s.store.all() {
 		if !ActiveStates[rec.State] && rec.State != StateCleanupPending {
@@ -98,7 +104,7 @@ func (s *Service) reconcileActiveLocked(op *opState, cur *Record) {
 	// counts as success: the evidence is durable in the repository.
 	if s.hasPublicationEvidence(cur) {
 		s.removeStagingWrapper(cur)
-		s.recordSuccessLocked(cur)
+		s.recordSuccessLocked(op, cur)
 		return
 	}
 	// A finalizing record without publication evidence is an unfinished
@@ -149,7 +155,7 @@ func (s *Service) reconcileCleanupPendingLocked(op *opState, cur *Record) {
 		// Late success: the attempt actually published before the
 		// failure was recorded.
 		s.removeStagingWrapper(cur)
-		s.recordSuccessLocked(cur)
+		s.recordSuccessLocked(op, cur)
 		return
 	}
 	cleaned, reason := s.attemptCleanup(cur)
@@ -171,7 +177,15 @@ func (s *Service) reconcileCleanupPendingLocked(op *opState, cur *Record) {
 	if cur.TerminalAt.IsZero() {
 		cur.TerminalAt = now
 	}
-	_ = s.save(cur)
+	if err := s.save(cur); err != nil {
+		// The truthful cleanup-pending record stays on disk; the next
+		// reconciliation retries, and the admission reservation stays
+		// held until that retry settles it.
+		return
+	}
+	// Cleanup resolved to terminal: the record settled and its
+	// reservation releases.
+	op.releaseReservationLocked()
 }
 
 // toCleanupPendingLocked records an unresolved attempt whose cleanup

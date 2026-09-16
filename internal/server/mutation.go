@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -32,6 +33,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 )
 
@@ -452,6 +454,17 @@ func writeMutationError(w http.ResponseWriter, err error) {
 	if writeRelationshipGuardError(w, err) {
 		return
 	}
+	// A closed work-admission boundary refused a work-start mutation: the
+	// canonical 503 update_in_progress refusal with a retry hint.
+	if closed, ok := workadmission.AsClosed(err); ok {
+		w.Header().Set("Retry-After", strconv.Itoa(admissionRetryAfterSeconds))
+		writeAPIError(w, http.StatusServiceUnavailable, errcat.UpdateInProgress,
+			errcat.WithParams(errcat.UpdateInProgressParams{
+				RetryAfterSeconds: admissionRetryAfterSeconds,
+			}),
+			errcat.WithDiagnostics(closed.Error()))
+		return
+	}
 	var conflict *ActionConflictError
 	if errors.As(err, &conflict) {
 		code := conflict.Code
@@ -690,6 +703,8 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return []string{http.MethodPost}, true
 	case apiPathUpdateCheck:
 		return []string{http.MethodPost}, true
+	case apiPathUpdateInstall:
+		return []string{http.MethodPost, http.MethodDelete}, true
 	case apiPathWorkspaceRepositoriesInit:
 		return []string{http.MethodPost}, true
 	case apiPathWorkspaceRepositoriesInitialize:
@@ -820,6 +835,13 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 		return
 	}
 	if !h.requireTrustedMutation(w, r) {
+		return
+	}
+	// Feature creation queues durable setup work and immediately counts as
+	// activity through the SettingUpWorktrees projection: during a closed
+	// admission boundary it is a work-start request and receives the
+	// canonical refusal.
+	if h.refuseAdmissionClosed(w) {
 		return
 	}
 	if h.rejectNotReadyForCreation(w, r) {

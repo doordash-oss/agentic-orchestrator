@@ -1167,10 +1167,34 @@ export interface paths {
         put?: never;
         /**
          * Trigger one explicit release-availability check.
-         * @description Accepts an empty JSON object and returns 202 with the current snapshot promptly. The accepted check runs asynchronously, tied to the runtime lifetime rather than the requesting connection: concurrent requests coalesce into one metadata worker and a disconnecting caller never cancels accepted work. Rejected with 409 when the effective policy is off (update_disabled) or the installation is ineligible (update_unsupported_install), and with 429 update_check_failed while a server-imposed retry deadline is still in force. Installation and cancellation routes are a later roadmap phase.
+         * @description Accepts an empty JSON object and returns 202 with the current snapshot promptly. The accepted check runs asynchronously, tied to the runtime lifetime rather than the requesting connection: concurrent requests coalesce into one metadata worker and a disconnecting caller never cancels accepted work. Rejected with 403 forbidden and the disabled-policy remediation when the effective policy is off, with 409 when the installation is ineligible (update_unsupported_install), and with 429 update_check_failed while a server-imposed retry deadline is still in force. A check issued while an install operation is active refreshes latest metadata without overwriting the operation.
          */
         post: operations["checkForUpdate"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/update/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept one consented install request for the discovered release.
+         * @description Requires consent true plus a when selection. With when idle the operation is staged and waits for active work to finish without interrupting it; with when now the install proceeds immediately only when no work needs stopping — stop_active_work is accepted and normalized but never stops work in this roadmap phase, so an install that would need to stop work is refused with update_blocked_active_work. An equivalent request for the active operation returns the existing operation; changing the target, when, or stop-work permission requires canceling and resubmitting. Refused with 403 forbidden and the disabled-policy remediation while the effective policy is off and with 409 update_unsupported_install for ineligible installations or a conflicting active operation or target.
+         */
+        post: operations["installUpdate"];
+        /**
+         * Cancel the active install operation.
+         * @description Cancels the active install operation and returns the current availability snapshot after cleanup. Idempotent when nothing is active. Refused with 403 forbidden and the disabled-policy remediation while the effective policy is off, and with 409 update_in_progress once draining has begun, because an install that reached the drain boundary can no longer be abandoned.
+         */
+        delete: operations["cancelUpdateInstall"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2964,7 +2988,7 @@ export interface components {
         UpdateSnapshotResponse: components["schemas"]["JSONResponse"] & {
             update: components["schemas"]["UpdateSnapshot"];
         };
-        /** @description Metadata-only release availability for this runtime. Availability is advisory: no package, manifest, checksum, or signature is fetched, nothing is staged, and the executable is never modified by a check. Activity and admission counters belong to the later installation slice and are deliberately absent. */
+        /** @description Metadata-only release availability for this runtime. Availability is advisory: a check never fetches a package, manifest, checksum, or signature, never stages anything, and never changes executable bytes. The active-work summary reports the truthful current activity counts that gate an immediate install. */
         UpdateSnapshot: {
             /**
              * @description Coarse availability state. downloading, verified, scheduled, draining, and restarting are reserved for the later installation slice and never emitted by the availability endpoints.
@@ -2990,7 +3014,7 @@ export interface components {
             current_version: string;
             /** @description Greatest clean stable release discovered by the last successful check; unknown (absent) before discovery. A suppressed newest release remains visible here. */
             latest_version?: string;
-            /** @description Version a pending installation targets. Always absent in this phase: no target contract is ever trusted from feed metadata. */
+            /** @description Version a pending installation targets; present only while an install operation is active. Never trusted from feed metadata alone. */
             target_version?: string;
             /**
              * @description Classified installation method of the running executable.
@@ -3005,7 +3029,7 @@ export interface components {
             /** @description Actionable next step for an unsupported installation. */
             remediation?: string;
             /**
-             * @description Signature trust state for a would-be target. Checks are metadata-only, so this phase always reports unverified.
+             * @description Signature trust state for a would-be target. Metadata-only checks report unverified; verified appears only after an install operation verified the pinned candidate.
              * @enum {string}
              */
             signature: "unverified" | "verified";
@@ -3040,6 +3064,21 @@ export interface components {
             error?: components["schemas"]["Error"];
             /** @description Sanitized public projection of the durable installation receipt history. Absent when no installation receipt exists for this executable. Metadata-only runs never create receipts. */
             receipt?: components["schemas"]["UpdatePublicReceipt"];
+            /**
+             * @description Waiting method of the accepted install operation; present only while an install operation is active.
+             * @enum {string}
+             */
+            method?: "now" | "idle";
+            /** @description Normalized stop-work permission of the accepted operation (only meaningful with method now); present only while an operation is active. */
+            stop_active_work?: boolean;
+            /**
+             * Format: date-time
+             * @description Predicted install deadline; explicitly null because an idle wait has no deadline.
+             */
+            scheduled_for: string | null;
+            /** @description Verified server contract of the pinned candidate; exposed only after candidate verification, never from feed metadata alone. */
+            target_contract?: components["schemas"]["UpdateTargetContract"];
+            active_work_summary: components["schemas"]["UpdateActiveWorkSummary"];
         };
         /** @description Public view of the durable installation receipt: versions, outcome, times, and a sanitized error only. Transaction paths, descriptors, process environment, credentials, and raw receipt internals never cross this boundary. */
         UpdatePublicReceipt: {
@@ -3054,6 +3093,53 @@ export interface components {
             completed_at?: string;
             /** @description Sanitized failure reason for rolled_back receipts. */
             error?: string;
+        };
+        /** @description Truthful current activity counts that gate an immediate install. Counts are advisory reads of live work, never reservations. */
+        UpdateActiveWorkSummary: {
+            /** @description Number of features with live activity. */
+            feature_count: number;
+            /** @description Whether any feature chat turn is active. */
+            chat_active: boolean;
+            /** @description Number of in-flight repository clone operations. */
+            clone_count: number;
+            /** @description Number of in-flight staged uploads. */
+            upload_count: number;
+            /** @description Number of in-flight origin comparisons. */
+            origin_check_count: number;
+            /** @description Number of held admission reservations. */
+            pending_admissions: number;
+            /** @description Number of parked operations; always zero in this phase. */
+            parked_count: number;
+            /** @description Whether activity detection itself failed; the counts are then incomplete and an immediate install is refused. */
+            detection_failed: boolean;
+            /**
+             * Format: date-time
+             * @description When the runtime began quiescing work for an accepted install; never set in this phase.
+             */
+            quiescing_since?: string | null;
+        };
+        /** @description Explicit, consented request to install the currently discovered latest stable release. */
+        UpdateInstallRequest: {
+            /** @description Explicit user consent to install a release. Must be true; any other value is refused with update_consent_required. */
+            consent: boolean;
+            /**
+             * @description Waiting method: now installs immediately, idle stages the operation and waits for active work to finish without interrupting it.
+             * @enum {string}
+             */
+            when: "now" | "idle";
+            /** @description Stop-work permission for an immediate install; valid only with when now. Accepted in this roadmap phase but never stops work: an install that would need to stop work is refused with update_blocked_active_work. */
+            stop_active_work?: boolean;
+            /** @description Explicit target version selector. Must name the currently discovered latest stable version; any other version is refused. */
+            version?: string;
+        };
+        /** @description Verified server contract of the pinned install candidate, read from the downloaded release after verification; never feed metadata. */
+        UpdateTargetContract: {
+            /** @description Server API version the candidate declares. */
+            api_version: string;
+            /** @description Server schema version the candidate declares. */
+            schema_version: number;
+            /** @description Minimum client schema version the candidate requires. */
+            min_client_schema: number;
         };
     };
     responses: {
@@ -3284,7 +3370,7 @@ export interface components {
                 "application/json": components["schemas"]["RecoverySnapshotResponse"];
             };
         };
-        /** @description Metadata-only update availability snapshot. Served with 200 by the read endpoint and with 202 by the accepted explicit-check endpoint. */
+        /** @description Metadata-only update availability snapshot. Served with 200 by the read and cancel endpoints and with 202 by the accepted explicit-check and install endpoints. */
         UpdateSnapshotResponse: {
             headers: {
                 "X-Agentico-Seq": components["headers"]["Sequence"];
@@ -4842,8 +4928,52 @@ export interface operations {
         responses: {
             202: components["responses"]["UpdateSnapshotResponse"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ErrorResponse"];
             409: components["responses"]["ErrorResponse"];
             429: components["responses"]["ErrorResponse"];
+        };
+    };
+    installUpdate: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateInstallRequest"];
+            };
+        };
+        responses: {
+            202: components["responses"]["UpdateSnapshotResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
+            413: components["responses"]["ErrorResponse"];
+        };
+    };
+    cancelUpdateInstall: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["JSONMutation"];
+        responses: {
+            200: components["responses"]["UpdateSnapshotResponse"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
+            413: components["responses"]["ErrorResponse"];
         };
     };
     streamEvents: {

@@ -46,7 +46,13 @@ const maxReadinessTextLen = 240
 // clients never pay a provider-CLI probe per request; POST
 // /api/v1/readiness/refresh forces a re-probe.
 func (h *apiHandler) handleReadiness(w http.ResponseWriter, r *http.Request) {
-	snapshot := h.readinessSnapshot(r.Context(), false)
+	snapshot, err := h.readinessSnapshot(r.Context(), false)
+	if err != nil {
+		if !h.writeAdmissionRefusal(w, err) {
+			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
+		}
+		return
+	}
 	revision := revisionForAny(snapshot)
 	snapshot.Meta = h.responseMeta(revision)
 	h.writeRevisionedJSON(w, r, revision, snapshot)
@@ -70,7 +76,13 @@ func (h *apiHandler) handleRuntimeReadinessRefresh(w http.ResponseWriter, r *htt
 }
 
 func (h *apiHandler) writeRuntimeReadiness(w http.ResponseWriter, r *http.Request, refresh bool) {
-	ready := h.runtimeReadinessSnapshot(r.Context(), refresh)
+	ready, err := h.runtimeReadinessSnapshot(r.Context(), refresh)
+	if err != nil {
+		if !h.writeAdmissionRefusal(w, err) {
+			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
+		}
+		return
+	}
 	snapshot := RuntimeReadinessResponse{
 		APIVersion: ready.APIVersion, Ready: ready.Ready, ProbedAt: ready.ProbedAt,
 		Providers: ready.Providers, Models: ready.Models, Configuration: ready.Configuration, Issues: ready.Issues,
@@ -99,7 +111,13 @@ func (h *apiHandler) handleReadinessRefreshRoute(w http.ResponseWriter, r *http.
 	if !decodeMutationJSON(w, r, &req) {
 		return
 	}
-	snapshot := h.readinessSnapshot(r.Context(), true)
+	snapshot, err := h.readinessSnapshot(r.Context(), true)
+	if err != nil {
+		if !h.writeAdmissionRefusal(w, err) {
+			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
+		}
+		return
+	}
 	revision := revisionForAny(snapshot)
 	snapshot.Meta = h.responseMeta(revision)
 	writeJSON(w, http.StatusOK, snapshot)
@@ -115,7 +133,16 @@ func (h *apiHandler) rejectNotReadyForCreation(w http.ResponseWriter, r *http.Re
 	if h.registry == nil {
 		return false
 	}
-	snapshot := h.runtimeReadinessSnapshot(r.Context(), false)
+	snapshot, err := h.runtimeReadinessSnapshot(r.Context(), false)
+	if err != nil {
+		// The creation guard's lazy provider probe was refused by a closed
+		// admission boundary: creation is a work-start request, so the
+		// canonical refusal applies.
+		if !h.writeAdmissionRefusal(w, err) {
+			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
+		}
+		return true
+	}
 	if snapshot.Ready {
 		return false
 	}
@@ -139,17 +166,31 @@ func (h *apiHandler) rejectNotReadyForCreation(w http.ResponseWriter, r *http.Re
 // probe results are cached; forceProbe re-runs them. The cheap sections
 // (models, configuration) are recomputed on every call; workspace inspection
 // is separate and is never part of the runtime-only connection gate.
-func (h *apiHandler) readinessSnapshot(ctx context.Context, forceProbe bool) ReadinessResponse {
-	resp := h.runtimeReadinessSnapshot(ctx, forceProbe)
+func (h *apiHandler) readinessSnapshot(ctx context.Context, forceProbe bool) (ReadinessResponse, error) {
+	resp, err := h.runtimeReadinessSnapshot(ctx, forceProbe)
+	if err != nil {
+		return ReadinessResponse{}, err
+	}
+	// The workspace section launches Git inspection goroutines on every
+	// full-readiness read; the launched work owns an admission reservation
+	// for its full lifetime.
+	release, err := h.probeAdmissionBegin()
+	if err != nil {
+		return ReadinessResponse{}, err
+	}
+	defer release()
 	resp.Workspace = workspaceReadiness(ctx, h.configOrDefault())
 	resp.Issues = flattenReadinessIssues(resp)
-	return resp
+	return resp, nil
 }
 
 // runtimeReadinessSnapshot never performs workspace discovery or Git work.
 // The mandatory creation guard uses the same cheap runtime truth as connect.
-func (h *apiHandler) runtimeReadinessSnapshot(ctx context.Context, forceProbe bool) ReadinessResponse {
-	providers, probedAt := h.providerReadinessStatuses(ctx, forceProbe)
+func (h *apiHandler) runtimeReadinessSnapshot(ctx context.Context, forceProbe bool) (ReadinessResponse, error) {
+	providers, probedAt, err := h.providerReadinessStatuses(ctx, forceProbe)
+	if err != nil {
+		return ReadinessResponse{}, err
+	}
 	cfg := h.configOrDefault()
 	resp := ReadinessResponse{
 		APIVersion:    APIVersion,
@@ -163,7 +204,7 @@ func (h *apiHandler) runtimeReadinessSnapshot(ctx context.Context, forceProbe bo
 	}
 	resp.Ready = anyProviderReady(providers) && resp.Models.Available && resp.Configuration.Valid
 	resp.Issues = flattenReadinessIssues(resp)
-	return resp
+	return resp, nil
 }
 
 // providerReadinessStatuses returns the per-provider readiness entries. The
@@ -171,15 +212,23 @@ func (h *apiHandler) runtimeReadinessSnapshot(ctx context.Context, forceProbe bo
 // registry's active model routing to the usable providers; later calls reuse
 // the cached result. A change in provider readiness is published to the SSE
 // stream as a runtime invalidation event.
-func (h *apiHandler) providerReadinessStatuses(ctx context.Context, force bool) ([]ProviderReadiness, time.Time) {
+func (h *apiHandler) providerReadinessStatuses(ctx context.Context, force bool) ([]ProviderReadiness, time.Time, error) {
 	if h.registry == nil {
-		return []ProviderReadiness{}, time.Time{}
+		return []ProviderReadiness{}, time.Time{}, nil
 	}
 	h.readinessMu.Lock()
 	defer h.readinessMu.Unlock()
 	if !force && !h.readinessProbedAt.IsZero() {
-		return append([]ProviderReadiness(nil), h.providerReadiness...), h.readinessProbedAt
+		return append([]ProviderReadiness(nil), h.providerReadiness...), h.readinessProbedAt, nil
 	}
+	// A probe pass launches provider CLI work: it owns an admission
+	// reservation, and a closed boundary refuses the launch (cached probe
+	// results above remain readable without starting work).
+	release, err := h.probeAdmissionBegin()
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	defer release()
 
 	all := h.registry.All()
 	probes := make([]ProviderReadiness, 0, len(all))
@@ -198,23 +247,29 @@ func (h *apiHandler) providerReadinessStatuses(ctx context.Context, force bool) 
 	if changed && h.broker != nil {
 		h.broker.publish(snapshotRequiredEventDTO(sseEventLifecycleUpdated, Resource{Type: resourceTypeRuntime}))
 	}
-	return append([]ProviderReadiness(nil), probes...), h.readinessProbedAt
+	return append([]ProviderReadiness(nil), probes...), h.readinessProbedAt, nil
 }
 
 // refreshProviderReadiness re-probes one named provider while preserving the
 // cached status of every other provider. Callers initialize the cache through
 // providerReadinessStatuses before invoking it.
-func (h *apiHandler) refreshProviderReadiness(ctx context.Context, providerName string) (ProviderReadiness, bool) {
+func (h *apiHandler) refreshProviderReadiness(ctx context.Context, providerName string) (ProviderReadiness, bool, error) {
 	if h.registry == nil {
-		return ProviderReadiness{}, false
+		return ProviderReadiness{}, false, nil
 	}
 	provider := h.registry.ByName(providerName)
 	if provider == nil {
-		return ProviderReadiness{}, false
+		return ProviderReadiness{}, false, nil
 	}
 
 	h.readinessMu.Lock()
 	defer h.readinessMu.Unlock()
+
+	release, err := h.probeAdmissionBegin()
+	if err != nil {
+		return ProviderReadiness{}, false, err
+	}
+	defer release()
 
 	refreshed := probeProviderReadiness(ctx, provider)
 	probes := append([]ProviderReadiness(nil), h.providerReadiness...)
@@ -246,7 +301,7 @@ func (h *apiHandler) refreshProviderReadiness(ctx context.Context, providerName 
 	if changed && h.broker != nil {
 		h.broker.publish(snapshotRequiredEventDTO(sseEventLifecycleUpdated, Resource{Type: resourceTypeRuntime}))
 	}
-	return refreshed, true
+	return refreshed, true, nil
 }
 
 // readinessIssue renders one readiness issue as the canonical catalog error

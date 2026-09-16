@@ -19,12 +19,14 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
 // defaultUpdateRand draws a uniform value in [0, n) for schedule jitter.
@@ -96,6 +98,20 @@ type UpdateOptions struct {
 	StartupReceipt *selfupdate.Receipt
 	// Feed performs metadata checks. Nil means no checks can run.
 	Feed FeedChecker
+	// Stager runs the signed-release candidate pipeline for one pinned
+	// version. Nil means installs cannot stage (refused as unavailable).
+	Stager ReleaseStager
+	// Install owns the process-level replacement work (update lock,
+	// transaction begin, final drain/commit/exec). Nil means installs
+	// cannot run.
+	Install InstallLifecycle
+	// Admission is the runtime work-admission boundary installs gate on.
+	// Nil means installs cannot run.
+	Admission InstallAdmission
+	// Activity snapshots the observed work state for the published
+	// active-work summary: activity counts, whether detection failed, and
+	// the held reservation count.
+	Activity func(ctx context.Context) (activity workadmission.Activity, detectionFailed bool, pendingAdmissions int)
 	// Now is the injectable clock; nil uses time.Now.
 	Now func() time.Time
 	// Rand draws a uniform value in [0, n) for schedule jitter; nil uses
@@ -150,12 +166,18 @@ type updateCoordinator struct {
 	rand    func(n int64) int64
 	publish func()
 
-	mu         sync.Mutex
-	state      updateState
-	started    bool
-	stopped    bool
-	generation uint64
-	lastRev    string
+	mu    sync.Mutex
+	state updateState
+	// install is the single accepted install operation; nil when none is
+	// active. Guarded by mu.
+	install *installOperation
+	// activitySummary caches the last advisory activity read for the
+	// published snapshot; refreshed outside the mutex by refreshActivity.
+	activitySummary UpdateActiveWorkSummary
+	started         bool
+	stopped         bool
+	generation      uint64
+	lastRev         string
 	// cancel releases the loop's derived context so shutdown cancels
 	// in-flight metadata work; nil before start.
 	cancel context.CancelFunc
@@ -274,8 +296,11 @@ func (c *updateCoordinator) start(ctx context.Context) {
 
 // shutdown cancels workers and timers, waits for the loop to exit within the
 // caller's deadline, and fences any late completion via the generation
-// counter. It never publishes a post-shutdown snapshot change.
+// counter. It never publishes a post-shutdown snapshot change. An install
+// operation that already entered its final drain owns shutdown and recovery
+// and is left in control; one that has not is cancelled and joined.
 func (c *updateCoordinator) shutdown(ctx context.Context) {
+	c.shutdownInstall(ctx)
 	c.mu.Lock()
 	wasStarted := c.started
 	if c.stopped {
@@ -660,11 +685,15 @@ func (c *updateCoordinator) logf(format string, args ...any) {
 }
 
 // snapshotLocked builds the generated wire snapshot from the current state.
-// Callers must hold the mutex.
+// Callers must hold the mutex. An active install operation takes precedence
+// over the availability status and contributes the pinned target, waiting
+// method, and verified-candidate fields; scheduled_for is explicitly null
+// because an idle wait has no predicted deadline.
 func (c *updateCoordinator) snapshotLocked() UpdateSnapshot {
 	opts := c.opts
+	status := UpdateSnapshotStatus(c.state.status)
 	snap := UpdateSnapshot{
-		Status:               UpdateSnapshotStatus(c.state.status),
+		Status:               status,
 		Policy:               UpdateSnapshotPolicy(opts.Policy),
 		Channel:              UpdateSnapshotChannel(opts.Settings.Channel),
 		Strategy:             UpdateSnapshotStrategy(opts.Settings.Strategy),
@@ -673,6 +702,34 @@ func (c *updateCoordinator) snapshotLocked() UpdateSnapshot {
 		Signature:            Unverified,
 		CheckIntervalSeconds: int(opts.Settings.CheckInterval.Seconds()),
 	}
+	if op := c.install; op != nil {
+		snap.Status = UpdateSnapshotStatus(op.status)
+		method := UpdateSnapshotMethod(op.when)
+		snap.Method = &method
+		stop := op.stopActiveWork
+		snap.StopActiveWork = &stop
+		target := op.target.Version
+		snap.TargetVersion = &target
+		if op.candidate != nil {
+			snap.Signature = Verified
+		}
+		if op.targetContract != nil {
+			snap.TargetContract = &UpdateTargetContract{
+				// The wire contract is the public projection of the verified
+				// envelope contract; api_version renders as its decimal
+				// string form.
+				APIVersion:      strconv.Itoa(op.targetContract.APIVersion),
+				SchemaVersion:   op.targetContract.SchemaVersion,
+				MinClientSchema: op.targetContract.MinClientSchema,
+			}
+		}
+		if op.wireError != nil {
+			snap.Error = op.wireError
+		}
+	}
+	// scheduled_for is explicitly null: an idle install waits without a
+	// predicted deadline, and an immediate install schedules nothing.
+	snap.ScheduledFor = nil
 	if !opts.Eligibility.Supported {
 		reason := UpdateSnapshotUnsupportedReason(opts.Eligibility.Reason)
 		snap.UnsupportedReason = &reason
@@ -686,8 +743,6 @@ func (c *updateCoordinator) snapshotLocked() UpdateSnapshot {
 			snap.LatestReleaseURL = &releaseURL
 		}
 	}
-	// target_version stays null: no target contract is ever trusted from
-	// feed metadata in this phase.
 	if c.state.lastCheckAt != nil {
 		t := c.state.lastCheckAt.UTC()
 		snap.LastCheckAt = &t
@@ -704,17 +759,23 @@ func (c *updateCoordinator) snapshotLocked() UpdateSnapshot {
 		t := c.state.retryNotBefore.UTC()
 		snap.RetryNotBefore = &t
 	}
-	if c.state.wireError != nil {
+	if c.state.wireError != nil && snap.Error == nil {
 		snap.Error = c.state.wireError
 	}
 	if c.state.receipt != nil {
 		snap.Receipt = publicUpdateReceipt(*c.state.receipt)
 	}
+	// The activity summary is a cached advisory read: detection runs
+	// outside this mutex, refreshed on every snapshot request. Activity
+	// changes alone do not bump the snapshot revision.
+	snap.ActiveWorkSummary = c.activitySummary
 	return snap
 }
 
-// Snapshot returns the current wire snapshot.
+// Snapshot returns the current wire snapshot. The activity summary is
+// refreshed outside the mutex first so slow discovery never stalls reads.
 func (c *updateCoordinator) Snapshot() UpdateSnapshot {
+	c.refreshActivity()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.snapshotLocked()

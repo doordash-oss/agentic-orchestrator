@@ -26,6 +26,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
 const APIVersion = "v1"
@@ -87,6 +88,14 @@ type Options struct {
 	// (policy, settings, eligibility, recovery outcome, feed). The zero
 	// value serves a disabled snapshot.
 	Updates UpdateOptions
+	// Admission is the runtime work-admission boundary shared with
+	// orchestration, sessions, and repository work. Nil disables the
+	// boundary.
+	Admission *workadmission.Coordinator
+	// ProbeActivity counts read-launched background probes; shared with the
+	// CLI wiring so Git freshness refreshes participate. Nil creates a
+	// private counter.
+	ProbeActivity *ProbeActivity
 }
 
 type HandlerOptions struct {
@@ -131,6 +140,14 @@ type HandlerOptions struct {
 	// Updates carries the resolved release-availability startup inputs. The
 	// zero value serves a disabled snapshot.
 	Updates UpdateOptions
+	// Admission is the runtime work-admission boundary shared with
+	// orchestration, sessions, and repository work. Nil disables the
+	// boundary.
+	Admission *workadmission.Coordinator
+	// ProbeActivity counts read-launched background probes; shared with the
+	// CLI wiring so Git freshness refreshes participate. Nil creates a
+	// private counter.
+	ProbeActivity *ProbeActivity
 }
 
 type FeatureLister interface {

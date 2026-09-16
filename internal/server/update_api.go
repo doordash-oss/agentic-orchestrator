@@ -61,7 +61,11 @@ func (h *apiHandler) handleUpdateCheckRoute(w http.ResponseWriter, r *http.Reque
 	opts := h.updates.options()
 	switch {
 	case opts.Policy == selfupdate.PolicyOff:
-		writeAPIError(w, http.StatusConflict, errcat.UpdateDisabled)
+		// Disabled policy refuses every update mutation with 403 and the
+		// disabled-policy remediation.
+		writeAPIError(w, http.StatusForbidden, errcat.Forbidden,
+			errcat.WithDiagnostics("updates are disabled by this server's startup policy"),
+			updatesDisabledRemediation())
 		return
 	case !opts.Eligibility.Supported:
 		writeAPIError(w, http.StatusConflict, errcat.UpdateUnsupportedInstall,
@@ -96,7 +100,10 @@ func (h *apiHandler) writeUpdateSnapshot(w http.ResponseWriter, r *http.Request,
 	}
 	h.setSequenceHeader(w)
 	w.Header().Set("ETag", `"`+revision+`"`)
-	if revisionMatches(r, revision) {
+	// Conditional-GET handling applies to reads only: a mutation response
+	// (check 202, install 202, cancel 200) can never accidentally become
+	// 304 through a carried If-None-Match header.
+	if r.Method == http.MethodGet && revisionMatches(r, revision) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}

@@ -162,6 +162,23 @@ func (c *FeedClient) ResolveLatestRelease(ctx context.Context, goos, goarch stri
 	return resolved, nil
 }
 
+// ResolveReleaseVersion resolves the exact stable release for one pinned
+// version and its exact asset identities: the install pipeline stages the
+// version an accepted request pinned, never whatever is latest when staging
+// begins. A pinned target that no longer exists on the feed fails.
+func (c *FeedClient) ResolveReleaseVersion(ctx context.Context, version, goos, goarch string) (ResolvedRelease, error) {
+	rel, _, err := c.releaseByVersion(ctx, version)
+	if err != nil {
+		return ResolvedRelease{}, err
+	}
+	resolved, err := selectReleaseAssets(rel, version, goos, goarch)
+	if err != nil {
+		return ResolvedRelease{}, err
+	}
+	resolved.ReleaseURL = strings.TrimSpace(rel.HTMLURL)
+	return resolved, nil
+}
+
 // selectReleaseAssets matches the exact expected basenames on one selected
 // release. Any asset whose normalized name equals an expected name without
 // being byte-identical to it is a basename alias and is rejected; required

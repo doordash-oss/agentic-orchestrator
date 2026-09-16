@@ -43,11 +43,24 @@ type CreateStartInput struct {
 // versa), hidden owned staging under the destination root, identity-bound
 // verification and atomic no-replace publication. A failure removes only
 // provably owned staging and releases the reservation; an uncertain
-// cleanup stays truthfully cleanup-pending.
+// cleanup stays truthfully cleanup-pending. Create fails with
+// *workadmission.ClosedError when admission is closed.
 func (s *Service) Create(ctx context.Context, input CreateStartInput) (Record, error) {
 	if s.drainingNow() {
 		return Record{}, serviceError(CodeUnavailable, "server is shutting down")
 	}
+	// One reservation covers the request from queue admission until the
+	// accepted operation settles; a draining refusal needs none.
+	res, err := s.acquireStartReservation()
+	if err != nil {
+		return Record{}, err
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			res.Release()
+		}
+	}()
 	if err := ValidateIdempotencyKey(input.IdempotencyKey); err != nil {
 		var verr *ValidationError
 		detail := ""
@@ -82,6 +95,7 @@ func (s *Service) Create(ctx context.Context, input CreateStartInput) (Record, e
 		inputFingerprint: fp,
 		// A create replay must not be satisfied by a clone record.
 		replayRequiresSameKind: true,
+		admission:              res,
 	})
 	if err != nil {
 		return Record{}, err
@@ -90,8 +104,13 @@ func (s *Service) Create(ctx context.Context, input CreateStartInput) (Record, e
 		// Replay returns the retained record whatever its state: a
 		// succeeded record replays its published result; anything else is
 		// mapped by the server layer onto a truthful unavailable error.
+		// The retained operation owns its own reservation; the request's
+		// reservation is released by defer.
 		return rec, nil
 	}
+	// Ownership transferred to the operation's coordination state inside
+	// acceptOperation; the deferred release must not fire.
+	transferred = true
 	s.runCreateOperation(ctx, &rec)
 	out, ok := s.store.get(rec.ID)
 	if !ok {

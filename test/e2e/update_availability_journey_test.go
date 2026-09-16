@@ -407,15 +407,15 @@ func TestUpdateAvailabilityOffJourney(t *testing.T) {
 		t.Fatalf("off policy made %d feed requests, want none", got)
 	}
 	code, body, err := postUpdateCheck(baseURL, token)
-	if err != nil || code != http.StatusConflict {
-		t.Fatalf("explicit check under off = %d, %v; want 409", code, err)
+	if err != nil || code != http.StatusForbidden {
+		t.Fatalf("explicit check under off = %d, %v; want 403", code, err)
 	}
 	var refusal server.ErrorResponse
 	if err := json.Unmarshal(body, &refusal); err != nil {
 		t.Fatalf("decode refusal: %v", err)
 	}
-	if refusal.Error.Code != "update_disabled" {
-		t.Fatalf("refusal code = %q, want update_disabled", refusal.Error.Code)
+	if refusal.Error.Code != "forbidden" {
+		t.Fatalf("refusal code = %q, want forbidden", refusal.Error.Code)
 	}
 	if got := fixture.requestCount(); got != 0 {
 		t.Fatalf("refused check made %d feed requests", got)

@@ -196,6 +196,59 @@ func newFeedClient(baseURL, slug string, token func() string) *FeedClient {
 	}
 }
 
+// releaseByVersion walks the same bounded pagination as
+// latestStableRelease but selects the stable release whose normalized
+// version equals the requested one. A pinned target that no longer exists
+// on the feed is an unavailable-target error.
+func (c *FeedClient) releaseByVersion(ctx context.Context, version string) (*feedRelease, string, error) {
+	nextURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", c.baseURL, c.slug, feedPerPage)
+	seen := make(map[string]string)
+	for page := 1; page <= feedMaxPages; page++ {
+		body, next, err := c.get(ctx, nextURL)
+		if err != nil {
+			return nil, "", err
+		}
+		var releases []feedRelease
+		if err := json.Unmarshal(body, &releases); err != nil {
+			return nil, "", &FeedError{Reason: fmt.Sprintf("malformed release metadata: %v", err)}
+		}
+		for i := range releases {
+			rel := &releases[i]
+			if rel.Draft || rel.Prerelease {
+				continue
+			}
+			if rel.TagName == nil {
+				return nil, "", &FeedError{Reason: "malformed release metadata: release without tag_name"}
+			}
+			tag := strings.TrimSpace(*rel.TagName)
+			parts, ok := ParseReleaseVersion(tag)
+			if !ok {
+				continue
+			}
+			normalized := fmt.Sprintf("%d.%d.%d", parts[0], parts[1], parts[2])
+			if _, dup := seen[normalized]; dup {
+				return nil, "", &FeedError{
+					Reason: fmt.Sprintf("ambiguous duplicate stable release for version %s", normalized),
+				}
+			}
+			seen[normalized] = tag
+			if normalized == version {
+				return rel, tag, nil
+			}
+		}
+		if next == "" {
+			break
+		}
+		if page == feedMaxPages {
+			return nil, "", &FeedError{
+				Reason: fmt.Sprintf("incomplete selection: more than %d pages of releases", feedMaxPages),
+			}
+		}
+		nextURL = next
+	}
+	return nil, "", &FeedError{Reason: fmt.Sprintf("pinned target version %s is not available on the release feed", version)}
+}
+
 // LatestStable selects the numerically greatest clean three-component stable
 // release across at most feedMaxPages pages of feedPerPage releases. Drafts
 // and prereleases are excluded; ambiguous duplicate normalized versions or

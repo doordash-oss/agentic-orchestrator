@@ -971,6 +971,24 @@ func (e TaskActivityState) Valid() bool {
 	}
 }
 
+// Defines values for UpdateInstallRequestWhen.
+const (
+	UpdateInstallRequestWhenIdle UpdateInstallRequestWhen = "idle"
+	UpdateInstallRequestWhenNow  UpdateInstallRequestWhen = "now"
+)
+
+// Valid indicates whether the value is a known member of the UpdateInstallRequestWhen enum.
+func (e UpdateInstallRequestWhen) Valid() bool {
+	switch e {
+	case UpdateInstallRequestWhenIdle:
+		return true
+	case UpdateInstallRequestWhenNow:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UpdatePublicReceiptOutcome.
 const (
 	UpdatePublicReceiptOutcomeConfirmed  UpdatePublicReceiptOutcome = "confirmed"
@@ -1031,6 +1049,24 @@ func (e UpdateSnapshotInstallation) Valid() bool {
 	case UpdateSnapshotInstallationTarball:
 		return true
 	case UpdateSnapshotInstallationUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotMethod.
+const (
+	UpdateSnapshotMethodIdle UpdateSnapshotMethod = "idle"
+	UpdateSnapshotMethodNow  UpdateSnapshotMethod = "now"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotMethod enum.
+func (e UpdateSnapshotMethod) Valid() bool {
+	switch e {
+	case UpdateSnapshotMethodIdle:
+		return true
+	case UpdateSnapshotMethodNow:
 		return true
 	default:
 		return false
@@ -1595,6 +1631,36 @@ const (
 func (e CheckForUpdateParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case CheckForUpdateParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CancelUpdateInstallParamsXAgenticoClient.
+const (
+	CancelUpdateInstallParamsXAgenticoClientLocal CancelUpdateInstallParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CancelUpdateInstallParamsXAgenticoClient enum.
+func (e CancelUpdateInstallParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CancelUpdateInstallParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InstallUpdateParamsXAgenticoClient.
+const (
+	InstallUpdateParamsXAgenticoClientLocal InstallUpdateParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the InstallUpdateParamsXAgenticoClient enum.
+func (e InstallUpdateParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case InstallUpdateParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -4330,6 +4396,54 @@ type TranscriptResponse struct {
 	Meta       ResponseMeta        `json:"meta,omitempty"`
 }
 
+// UpdateActiveWorkSummary Truthful current activity counts that gate an immediate install. Counts are advisory reads of live work, never reservations.
+type UpdateActiveWorkSummary struct {
+	// ChatActive Whether any feature chat turn is active.
+	ChatActive bool `json:"chat_active"`
+
+	// CloneCount Number of in-flight repository clone operations.
+	CloneCount int `json:"clone_count"`
+
+	// DetectionFailed Whether activity detection itself failed; the counts are then incomplete and an immediate install is refused.
+	DetectionFailed bool `json:"detection_failed"`
+
+	// FeatureCount Number of features with live activity.
+	FeatureCount int `json:"feature_count"`
+
+	// OriginCheckCount Number of in-flight origin comparisons.
+	OriginCheckCount int `json:"origin_check_count"`
+
+	// ParkedCount Number of parked operations; always zero in this phase.
+	ParkedCount int `json:"parked_count"`
+
+	// PendingAdmissions Number of held admission reservations.
+	PendingAdmissions int `json:"pending_admissions"`
+
+	// QuiescingSince When the runtime began quiescing work for an accepted install; never set in this phase.
+	QuiescingSince *time.Time `json:"quiescing_since,omitempty"`
+
+	// UploadCount Number of in-flight staged uploads.
+	UploadCount int `json:"upload_count"`
+}
+
+// UpdateInstallRequest Explicit, consented request to install the currently discovered latest stable release.
+type UpdateInstallRequest struct {
+	// Consent Explicit user consent to install a release. Must be true; any other value is refused with update_consent_required.
+	Consent bool `json:"consent"`
+
+	// StopActiveWork Stop-work permission for an immediate install; valid only with when now. Accepted in this roadmap phase but never stops work: an install that would need to stop work is refused with update_blocked_active_work.
+	StopActiveWork *bool `json:"stop_active_work,omitempty"`
+
+	// Version Explicit target version selector. Must name the currently discovered latest stable version; any other version is refused.
+	Version *string `json:"version,omitempty"`
+
+	// When Waiting method: now installs immediately, idle stages the operation and waits for active work to finish without interrupting it.
+	When UpdateInstallRequestWhen `json:"when"`
+}
+
+// UpdateInstallRequestWhen Waiting method: now installs immediately, idle stages the operation and waits for active work to finish without interrupting it.
+type UpdateInstallRequestWhen string
+
 // UpdatePublicReceipt Public view of the durable installation receipt: versions, outcome, times, and a sanitized error only. Transaction paths, descriptors, process environment, credentials, and raw receipt internals never cross this boundary.
 type UpdatePublicReceipt struct {
 	// CompletedAt When the receipt reached its settled outcome.
@@ -4345,8 +4459,11 @@ type UpdatePublicReceipt struct {
 // UpdatePublicReceiptOutcome defines model for UpdatePublicReceipt.Outcome.
 type UpdatePublicReceiptOutcome string
 
-// UpdateSnapshot Metadata-only release availability for this runtime. Availability is advisory: no package, manifest, checksum, or signature is fetched, nothing is staged, and the executable is never modified by a check. Activity and admission counters belong to the later installation slice and are deliberately absent.
+// UpdateSnapshot Metadata-only release availability for this runtime. Availability is advisory: a check never fetches a package, manifest, checksum, or signature, never stages anything, and never changes executable bytes. The active-work summary reports the truthful current activity counts that gate an immediate install.
 type UpdateSnapshot struct {
+	// ActiveWorkSummary Truthful current activity counts that gate an immediate install. Counts are advisory reads of live work, never reservations.
+	ActiveWorkSummary UpdateActiveWorkSummary `json:"active_work_summary"`
+
 	// Channel Release channel consulted by checks. Only stable is supported.
 	Channel UpdateSnapshotChannel `json:"channel"`
 
@@ -4374,6 +4491,9 @@ type UpdateSnapshot struct {
 	// LatestVersion Greatest clean stable release discovered by the last successful check; unknown (absent) before discovery. A suppressed newest release remains visible here.
 	LatestVersion *string `json:"latest_version,omitempty"`
 
+	// Method Waiting method of the accepted install operation; present only while an install operation is active.
+	Method *UpdateSnapshotMethod `json:"method,omitempty"`
+
 	// NextCheckAt When the next periodic check is scheduled. Absent when no periodic check will run (policy off, unsupported, or shutdown).
 	NextCheckAt *time.Time `json:"next_check_at,omitempty"`
 
@@ -4389,16 +4509,25 @@ type UpdateSnapshot struct {
 	// RetryNotBefore Server-imposed retry floor from a 403/429 response. Local backoff and jitter never shorten it; explicit checks inside the deadline are refused without a request.
 	RetryNotBefore *time.Time `json:"retry_not_before,omitempty"`
 
-	// Signature Signature trust state for a would-be target. Checks are metadata-only, so this phase always reports unverified.
+	// ScheduledFor Predicted install deadline; explicitly null because an idle wait has no deadline.
+	ScheduledFor *time.Time `json:"scheduled_for"`
+
+	// Signature Signature trust state for a would-be target. Metadata-only checks report unverified; verified appears only after an install operation verified the pinned candidate.
 	Signature UpdateSnapshotSignature `json:"signature"`
 
 	// Status Coarse availability state. downloading, verified, scheduled, draining, and restarting are reserved for the later installation slice and never emitted by the availability endpoints.
 	Status UpdateSnapshotStatus `json:"status"`
 
+	// StopActiveWork Normalized stop-work permission of the accepted operation (only meaningful with method now); present only while an operation is active.
+	StopActiveWork *bool `json:"stop_active_work,omitempty"`
+
 	// Strategy Reserved startup setting, reported for transparency. It never schedules work and never affects manual installation.
 	Strategy UpdateSnapshotStrategy `json:"strategy"`
 
-	// TargetVersion Version a pending installation targets. Always absent in this phase: no target contract is ever trusted from feed metadata.
+	// TargetContract Verified server contract of the pinned candidate; exposed only after candidate verification, never from feed metadata alone.
+	TargetContract *UpdateTargetContract `json:"target_contract,omitempty"`
+
+	// TargetVersion Version a pending installation targets; present only while an install operation is active. Never trusted from feed metadata alone.
 	TargetVersion *string `json:"target_version,omitempty"`
 
 	// UnsupportedReason Machine-readable remediation code present only while status is unsupported. ownership_contention means another live runtime owns this binary's update lease; lease_unavailable covers other lease acquisition failures.
@@ -4411,10 +4540,13 @@ type UpdateSnapshotChannel string
 // UpdateSnapshotInstallation Classified installation method of the running executable.
 type UpdateSnapshotInstallation string
 
+// UpdateSnapshotMethod Waiting method of the accepted install operation; present only while an install operation is active.
+type UpdateSnapshotMethod string
+
 // UpdateSnapshotPolicy Effective startup update policy. `auto` is not supported and fails configuration at startup.
 type UpdateSnapshotPolicy string
 
-// UpdateSnapshotSignature Signature trust state for a would-be target. Checks are metadata-only, so this phase always reports unverified.
+// UpdateSnapshotSignature Signature trust state for a would-be target. Metadata-only checks report unverified; verified appears only after an install operation verified the pinned candidate.
 type UpdateSnapshotSignature string
 
 // UpdateSnapshotStatus Coarse availability state. downloading, verified, scheduled, draining, and restarting are reserved for the later installation slice and never emitted by the availability endpoints.
@@ -4431,8 +4563,20 @@ type UpdateSnapshotResponse struct {
 	APIVersion string       `json:"api_version"`
 	Meta       ResponseMeta `json:"meta,omitempty"`
 
-	// Update Metadata-only release availability for this runtime. Availability is advisory: no package, manifest, checksum, or signature is fetched, nothing is staged, and the executable is never modified by a check. Activity and admission counters belong to the later installation slice and are deliberately absent.
+	// Update Metadata-only release availability for this runtime. Availability is advisory: a check never fetches a package, manifest, checksum, or signature, never stages anything, and never changes executable bytes. The active-work summary reports the truthful current activity counts that gate an immediate install.
 	Update UpdateSnapshot `json:"update"`
+}
+
+// UpdateTargetContract Verified server contract of the pinned install candidate, read from the downloaded release after verification; never feed metadata.
+type UpdateTargetContract struct {
+	// APIVersion Server API version the candidate declares.
+	APIVersion string `json:"api_version"`
+
+	// MinClientSchema Minimum client schema version the candidate requires.
+	MinClientSchema int `json:"min_client_schema"`
+
+	// SchemaVersion Server schema version the candidate declares.
+	SchemaVersion int `json:"schema_version"`
 }
 
 // Usage defines model for Usage.
@@ -4880,6 +5024,27 @@ type CheckForUpdateParams struct {
 // CheckForUpdateParamsXAgenticoClient defines parameters for CheckForUpdate.
 type CheckForUpdateParamsXAgenticoClient string
 
+// CancelUpdateInstallJSONBody defines parameters for CancelUpdateInstall.
+type CancelUpdateInstallJSONBody map[string]interface{}
+
+// CancelUpdateInstallParams defines parameters for CancelUpdateInstall.
+type CancelUpdateInstallParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CancelUpdateInstallParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CancelUpdateInstallParamsXAgenticoClient defines parameters for CancelUpdateInstall.
+type CancelUpdateInstallParamsXAgenticoClient string
+
+// InstallUpdateParams defines parameters for InstallUpdate.
+type InstallUpdateParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient InstallUpdateParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// InstallUpdateParamsXAgenticoClient defines parameters for InstallUpdate.
+type InstallUpdateParamsXAgenticoClient string
+
 // StageUploadParams defines parameters for StageUpload.
 type StageUploadParams struct {
 	// Kind Staged upload kind: image or attachment.
@@ -5074,6 +5239,12 @@ type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody
 
 // CheckForUpdateJSONRequestBody defines body for CheckForUpdate for application/json ContentType.
 type CheckForUpdateJSONRequestBody CheckForUpdateJSONBody
+
+// CancelUpdateInstallJSONRequestBody defines body for CancelUpdateInstall for application/json ContentType.
+type CancelUpdateInstallJSONRequestBody CancelUpdateInstallJSONBody
+
+// InstallUpdateJSONRequestBody defines body for InstallUpdate for application/json ContentType.
+type InstallUpdateJSONRequestBody = UpdateInstallRequest
 
 // StartWorkspaceCloneJSONRequestBody defines body for StartWorkspaceClone for application/json ContentType.
 type StartWorkspaceCloneJSONRequestBody = CloneStartSchema

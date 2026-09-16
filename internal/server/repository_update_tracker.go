@@ -121,6 +121,18 @@ func (t *sourceUpdateTracker) empty() bool {
 	return len(t.counts) == 0
 }
 
+// total counts every admitted Update-from-origin attempt across all
+// repositories; it backs the work-admission activity detector.
+func (t *sourceUpdateTracker) total() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	total := 0
+	for _, n := range t.counts {
+		total += n
+	}
+	return total
+}
+
 // awaitSourceUpdateSettlement waits out every admitted Update-from-origin
 // attempt on the request's selected repositories before feature acceptance
 // reads and pins their sources. Unresolvable selectors are skipped: the

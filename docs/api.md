@@ -52,12 +52,42 @@ create installation receipts or staging, or change executable bytes.
 accepts one explicit check and returns `202` with the current snapshot
 immediately; the accepted check runs asynchronously tied to the runtime
 lifetime, concurrent requests coalesce into one metadata worker, and a
-disconnecting caller never cancels accepted work. It is refused with `409`
-`update_disabled` under the off policy, `409`
+disconnecting caller never cancels accepted work. It is refused with `403`
+`forbidden` and the disabled-policy remediation under the off policy, `409`
 `update_unsupported_install` for ineligible installations, and `429`
 `update_check_failed` with a retry hint while a server-imposed retry deadline
-is in force — the last without making any request. Installation and
-cancellation routes belong to a later release.
+is in force — the last without making any request. A check issued while an
+install operation is active refreshes latest metadata without overwriting
+the operation.
+
+`POST /api/v1/update/install` (consent request, trusted-mutation headers)
+accepts one consented install request and returns `202` with the current
+snapshot promptly. `consent` must be true — anything else is `400`
+`update_consent_required` — and `when` selects `now` or `idle`. `idle`
+stages the operation and waits for active work to finish without
+interrupting it; `now` installs immediately only when no work needs
+stopping, and `stop_active_work` is accepted but never stops work in this
+release, so an install that would need to stop work is refused with `409`
+`update_blocked_active_work`. An optional `version` selector must name the
+currently discovered latest stable release. Equivalent duplicates return
+the existing operation; changing the target, `when`, or stop-work
+permission requires canceling and resubmitting. The request is refused
+with `403` `forbidden` and the disabled-policy remediation under the off
+policy and `409`
+`update_unsupported_install` for ineligible installations or a conflicting
+active operation or target. Failed downloads, signature or digest
+verification, and installs classify as the warning codes
+`update_download_failed`, `update_signature_failed`, and
+`update_install_failed`, each naming the target version and a sanitized
+reason.
+
+`DELETE /api/v1/update/install` (empty JSON object, trusted-mutation
+headers) cancels the active install operation and returns `200` with the
+current availability snapshot after cleanup. It is idempotent when nothing
+is active, is refused with `403` `forbidden` and the disabled-policy
+remediation under the off policy, and with `409` `update_in_progress` once
+draining has begun, because an install that reached the drain boundary can
+no longer be abandoned.
 
 Every visible snapshot change emits an `update.updated` event (resource type
 `update`); clients re-GET the snapshot. The snapshot reports the effective
@@ -66,7 +96,18 @@ startup policy (`--updates` over `AGENTICO_UPDATES` over
 the reserved `server.updates.strategy` and `server.updates.window` settings
 (validated and reported, never scheduling work), the classified installation,
 check timing, and — when one exists — the sanitized public receipt
-(`versions`, `outcome`, `times`, and a sanitized error only). A suppressed
+(`versions`, `outcome`, `times`, and a sanitized error only). While an
+install operation is active the snapshot also reports its waiting `method`,
+normalized `stop_active_work` permission, and `target_version`;
+`scheduled_for` is the predicted install deadline and is explicitly `null`
+while an idle wait has no deadline. `signature` reads `verified` only after
+the operation verified the pinned candidate, whose verified server contract
+then appears as `target_contract`; neither is ever trusted from feed
+metadata alone. The required `active_work_summary` carries the truthful
+current activity counts — features, chat, clones, uploads, origin checks,
+pending admissions, parked count (always zero in this release), and
+`detection_failed`, which refuses an immediate install — with
+`quiescing_since` never set in this release. A suppressed
 newest release stays visible as `latest_version` with
 `failed`/`update_rolled_back` until a newer unsuppressed release becomes
 available; failed refreshes retain the last successful metadata and its

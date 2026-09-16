@@ -28,9 +28,11 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
 // The apiPathUploads route lives outside the JSON mutation pipeline
@@ -139,9 +141,24 @@ type uploadStore struct {
 	// copy) so concurrent mutations cannot consume the same staged
 	// reference. claims holds references reserved by a still-open
 	// transaction; a claim is released on rollback or replaced by a
-	// tombstone on commit.
-	mu     sync.Mutex
-	claims map[string]struct{}
+	// tombstone on commit. staging counts in-flight staging requests for
+	// the work-admission activity detector.
+	mu      sync.Mutex
+	claims  map[string]struct{}
+	staging atomic.Int64
+}
+
+// inflightWork counts actual in-flight uploads: staging requests in
+// progress plus consumption claims. Completed upload references and their
+// tombstones never count.
+func (s *uploadStore) inflightWork() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	claims := len(s.claims)
+	s.mu.Unlock()
+	return claims + int(s.staging.Load())
 }
 
 func newUploadStore(stateDir string) *uploadStore {
@@ -188,6 +205,8 @@ func (s *uploadStore) readMeta(ref string) (stagedUploadMeta, error) {
 // reference, capped per kind by http.MaxBytesReader. Oversized bodies fail
 // with errUploadTooLarge; partial files never survive an error.
 func (s *uploadStore) stage(kind, name string, limit int64, w http.ResponseWriter, r *http.Request) (stagedUpload, error) {
+	s.staging.Add(1)
+	defer s.staging.Add(-1)
 	ref, err := newUploadReference()
 	if err != nil {
 		return stagedUpload{}, err
@@ -546,6 +565,15 @@ func (h *apiHandler) handleUploadsRoute(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusRequestEntityTooLarge, errcat.RequestTooLarge, errcat.WithDiagnostics("upload body is too large"))
 		return
 	}
+	// The upload body streams to disk for the request's full duration: it
+	// owns an upload admission reservation, and a closed boundary refuses
+	// the launch.
+	uploadReservation, err := h.acquireAdmission(workadmission.CategoryUpload)
+	if err != nil {
+		h.writeAdmissionRefusal(w, err)
+		return
+	}
+	defer uploadReservation.Release()
 	staged, err := h.uploads.stage(kind, name, limit, w, r)
 	if errors.Is(err, errUploadTooLarge) {
 		writeAPIError(w, http.StatusRequestEntityTooLarge, errcat.RequestTooLarge, errcat.WithDiagnostics("upload body is too large"))

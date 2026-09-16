@@ -22,6 +22,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
 // apiPathWorkspaceRepositoryReconcileSourceUpdate is the bounded
@@ -94,6 +95,16 @@ func (h *apiHandler) handleWorkspaceRepositoryReconcileSourceUpdateRoute(w http.
 			errcat.WithDiagnostics("the selected repository is no longer present under the expected identity"))
 		return
 	}
+
+	// Reconciliation performs repository reads and cleanup work: it owns a
+	// repository admission reservation for its full lifetime, and a closed
+	// boundary refuses it.
+	reconcileReservation, err := h.acquireAdmission(workadmission.CategoryRepository)
+	if err != nil {
+		h.writeAdmissionRefusal(w, err)
+		return
+	}
+	defer reconcileReservation.Release()
 
 	deadline := h.reconcileSourceDeadline
 	if deadline <= 0 {

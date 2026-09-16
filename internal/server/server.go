@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -41,6 +42,10 @@ type RuntimeServer struct {
 	originChecks *originCheckCoordinator
 	updates      *updateCoordinator
 	done         chan error
+	// closeMu serializes Close between ordinary shutdown and an install
+	// operation's final drain, so two lifecycle owners can never drain the
+	// same serving resources concurrently. The first winner owns teardown.
+	closeMu sync.Mutex
 }
 
 func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
@@ -95,10 +100,12 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		PersistProviderModelCatalog: opts.PersistProviderModelCatalog,
 		InitGitRepository:           opts.InitGitRepository,
 		InitializeGitRepository:     opts.InitializeGitRepository,
-		Clones:                     opts.Clones,
-		Worktrees:                  opts.Worktrees,
-		Updates:                    opts.Updates,
-		RuntimePolicy:              policy,
+		Clones:                      opts.Clones,
+		Worktrees:                   opts.Worktrees,
+		Updates:                     opts.Updates,
+		Admission:                   opts.Admission,
+		ProbeActivity:               opts.ProbeActivity,
+		RuntimePolicy:               policy,
 	})
 	httpServer := &http.Server{
 		Handler: handler.routes(),
@@ -231,7 +238,15 @@ func (s *RuntimeServer) EventEpoch() string {
 }
 
 func (s *RuntimeServer) Close(ctx context.Context) error {
-	if s == nil || s.srv == nil {
+	if s == nil {
+		return nil
+	}
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	if s.srv == nil {
+		// A concurrent or earlier Close owns teardown; this call joins as a
+		// no-op so two lifecycle owners (ordinary shutdown and an install
+		// drain) never drain the same resources twice.
 		return nil
 	}
 	srv := s.srv

@@ -194,6 +194,18 @@ const (
 	UpdateUnsupportedInstall Code = "update_unsupported_install"
 )
 
+// Update-install codes for the release-install REST surface: consent and
+// input refusals, operation and active-work conflicts, and the staged
+// failure outcomes that keep the previous build installed.
+const (
+	UpdateConsentRequired   Code = "update_consent_required"
+	UpdateInProgress        Code = "update_in_progress"
+	UpdateBlockedActiveWork Code = "update_blocked_active_work"
+	UpdateDownloadFailed    Code = "update_download_failed"
+	UpdateSignatureFailed   Code = "update_signature_failed"
+	UpdateInstallFailed     Code = "update_install_failed"
+)
+
 // CLI degradation warning codes, one per startup degradation family.
 const (
 	ProviderUnavailable        Code = "provider_unavailable"
@@ -351,6 +363,56 @@ type UpdateRetryDeadlineParams struct {
 }
 
 func (UpdateRetryDeadlineParams) params() {}
+
+// UpdateInProgressParams carries the retry hint for a refused request while
+// one accepted update operation owns the install machinery.
+type UpdateInProgressParams struct {
+	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
+}
+
+func (UpdateInProgressParams) params() {}
+
+// UpdateBlockedActiveWorkParams carries the truthful activity counts that
+// refused an immediate install.
+type UpdateBlockedActiveWorkParams struct {
+	Features          int  `json:"features"`
+	ChatActive        bool `json:"chat_active"`
+	Clones            int  `json:"clones"`
+	Uploads           int  `json:"uploads"`
+	OriginChecks      int  `json:"origin_checks"`
+	RepositoryWork    int  `json:"repository_work"`
+	PendingAdmissions int  `json:"pending_admissions"`
+	DetectionFailed   bool `json:"detection_failed"`
+}
+
+func (UpdateBlockedActiveWorkParams) params() {}
+
+// UpdateTargetFailureParams carries the target version and sanitized reason
+// for a failed download, verification, or install attempt.
+type UpdateTargetFailureParams struct {
+	Version string `json:"version,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+func (UpdateTargetFailureParams) params() {}
+
+// updateTargetFailureSummary renders a target-failure summary naming the
+// release and, when known, the sanitized reason; the entry's static summary
+// applies when the params carry neither.
+func updateTargetFailureSummary(p Params, action, outcome string) string {
+	params, ok := p.(UpdateTargetFailureParams)
+	if !ok || (strings.TrimSpace(params.Version) == "" && strings.TrimSpace(params.Reason) == "") {
+		return ""
+	}
+	summary := fmt.Sprintf("%s the approved release %s", action, outcome)
+	if version := strings.TrimSpace(params.Version); version != "" {
+		summary = fmt.Sprintf("%s release %s %s", action, version, outcome)
+	}
+	if reason := strings.TrimSpace(params.Reason); reason != "" {
+		summary += ": " + reason
+	}
+	return summary + "."
+}
 
 // AlreadyRunningParams names the state directory or running base URL for
 // RuntimeAlreadyRunning.
@@ -1176,6 +1238,58 @@ var catalog = map[Code]Entry{
 			return fmt.Sprintf("This installation cannot be updated in place (%s), so update checks are refused.", params.Reason)
 		},
 		Remediation: "See the snapshot's remediation field for the installation-specific next step.",
+	},
+	UpdateConsentRequired: {
+		Class:       ClassBlocking,
+		Title:       "Install consent required",
+		Summary:     "Installing a release requires explicit consent.",
+		Remediation: "Send consent true with a when selection of now or idle.",
+	},
+	UpdateInProgress: {
+		Class:   ClassBlocking,
+		Title:   "Update in progress",
+		Summary: "An update operation is already in progress.",
+		summaryParams: func(p Params) string {
+			params, ok := p.(UpdateInProgressParams)
+			if !ok || params.RetryAfterSeconds <= 0 {
+				return ""
+			}
+			return fmt.Sprintf("An update operation is already in progress; retry after %d seconds.", params.RetryAfterSeconds)
+		},
+		Remediation: "Wait for the update operation to finish or cancel it before retrying.",
+	},
+	UpdateBlockedActiveWork: {
+		Class:       ClassBlocking,
+		Title:       "Update blocked by active work",
+		Summary:     "Active work prevents installing a release right now.",
+		Remediation: "Let the reported work finish, then request the install again.",
+	},
+	UpdateDownloadFailed: {
+		Class:   ClassWarning,
+		Title:   "Update download failed",
+		Summary: "Downloading the approved release failed before anything was installed.",
+		summaryParams: func(p Params) string {
+			return updateTargetFailureSummary(p, "Downloading", "failed before anything was installed")
+		},
+		Remediation: "Request a new install to retry the download.",
+	},
+	UpdateSignatureFailed: {
+		Class:   ClassWarning,
+		Title:   "Update verification failed",
+		Summary: "The release signature or digest verification failed before anything was installed.",
+		summaryParams: func(p Params) string {
+			return updateTargetFailureSummary(p, "Verifying", "failed before anything was installed")
+		},
+		Remediation: "Request a new install after the release is republished correctly.",
+	},
+	UpdateInstallFailed: {
+		Class:   ClassWarning,
+		Title:   "Update install failed",
+		Summary: "Installing the approved release failed and the previous build is still installed.",
+		summaryParams: func(p Params) string {
+			return updateTargetFailureSummary(p, "Installing", "failed and the previous build is still installed")
+		},
+		Remediation: "Request a new install with fresh consent.",
 	},
 	ContractInputUnreadable: {
 		Class:       ClassBlocking,

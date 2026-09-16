@@ -201,15 +201,15 @@ func TestPostUpdateCheckRefusedUnderOffWithoutTraffic(t *testing.T) {
 	fixture.handler.routes().ServeHTTP(w, req)
 	resp := w.Result()
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("status = %d, want 409 under off", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 under off", resp.StatusCode)
 	}
 	var body ErrorResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Error.Code != string(errcat.UpdateDisabled) {
-		t.Fatalf("code = %q, want update_disabled", body.Error.Code)
+	if body.Error.Code != string(errcat.Forbidden) {
+		t.Fatalf("code = %q, want forbidden", body.Error.Code)
 	}
 	if fixture.feed.calls() != 0 {
 		t.Fatal("refused check must make no feed request")

@@ -43,9 +43,23 @@ type activeSetupFailer interface {
 // persistence, or completion failures), silently stranding the feature in
 // SettingUpWorktrees; this method is the only sanctioned async entry point.
 func (o *Orchestrator) RunSetupAsync(featureID string) {
+	// Reserve admission before the goroutine launches so background setup
+	// is never invisible to the work boundary. A closed boundary records a
+	// durably retryable setup failure rather than silently dropping the
+	// queued setup.
+	if err := o.admissionBeginAsync(featureID); err != nil {
+		o.recordAsyncSetupFailure(featureID, err)
+		o.emitEvent(ports.Event{
+			Type:      ports.FeatureFailed,
+			FeatureID: featureID,
+			Message:   fmt.Sprintf("setup dispatch refused: %v", err),
+		})
+		return
+	}
 	o.cycleWG.Add(1)
 	go func() {
 		defer o.cycleWG.Done()
+		defer o.admissionSettleIfQuiet(featureID)
 		if err := o.RunSetup(featureID); err != nil {
 			o.recordAsyncSetupFailure(featureID, err)
 		}

@@ -114,7 +114,7 @@ func (e *SettingsError) Error() string {
 // runtime in this phase supports. It is raised instead of silently falling
 // back so operators see the misconfiguration at startup.
 type UnsupportedPolicyError struct {
-	Value string
+	Value  string
 	Source string
 }
 

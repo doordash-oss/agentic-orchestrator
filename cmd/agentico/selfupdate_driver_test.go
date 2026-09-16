@@ -60,6 +60,9 @@ func resetDriverState(t *testing.T) {
 		driver.barrier = ""
 		driver.barrierFile = ""
 		driver.prepareOnly = false
+		driver.updateFeedURL = ""
+		driver.fixtureFeed = nil
+		driver.installRelease = false
 	}
 	reset()
 	t.Cleanup(reset)
@@ -156,6 +159,33 @@ func TestSelfUpdateDriverArgParse(t *testing.T) {
 	if !driver.prepareOnly {
 		t.Fatal("prepareOnly = false; want true")
 	}
+
+	// --update-feed only accepts a loopback http fixture URL, and the
+	// constructor pins the one origin at parse time.
+	_, handled, err = driverArgParseHook([]string{cliSubcommandSelfUpdateDriver, "--update-feed", "https://api.github.com"})
+	if !handled || err == nil || !strings.Contains(err.Error(), "loopback http fixture URL") {
+		t.Fatalf("non-loopback update-feed: handled %v, err %v; want rejection", handled, err)
+	}
+	_, handled, err = driverArgParseHook([]string{cliSubcommandSelfUpdateDriver, "--update-feed", "http://127.0.0.1:9/base"})
+	if !handled || err == nil || !strings.Contains(err.Error(), "invalid --update-feed value") {
+		t.Fatalf("path-bearing update-feed: handled %v, err %v; want rejection", handled, err)
+	}
+	if _, _, err := driverArgParseHook([]string{cliSubcommandSelfUpdateDriver, "--update-feed", "http://127.0.0.1:9", "--install-release"}); err != nil {
+		t.Fatalf("install-release parse: %v", err)
+	}
+	if !driver.installRelease || driver.fixtureFeed == nil {
+		t.Fatal("install-release not armed with a fixture feed")
+	}
+
+	// The release-backed journey never accepts a caller-provided candidate.
+	_, handled, err = driverArgParseHook([]string{cliSubcommandSelfUpdateDriver, "--update-feed", "http://127.0.0.1:9", "--install-release", "--candidate", "x"})
+	if !handled || err == nil || !strings.Contains(err.Error(), "cannot be combined with --candidate") {
+		t.Fatalf("install-release+candidate: handled %v, err %v; want rejection", handled, err)
+	}
+	_, handled, err = driverArgParseHook([]string{cliSubcommandSelfUpdateDriver, "--install-release"})
+	if !handled || err == nil || !strings.Contains(err.Error(), "requires --update-feed") {
+		t.Fatalf("install-release without feed: handled %v, err %v; want rejection", handled, err)
+	}
 }
 
 func TestSelfUpdateDriverFailAtDiscoveryStubsPublishOnlyOnAdoption(t *testing.T) {
@@ -250,6 +280,17 @@ func TestSelfUpdateDriverJourneySelection(t *testing.T) {
 	driver.candidatePath = "candidate"
 	if _, ok := serverJourneyHook().(replaceJourney); !ok {
 		t.Fatalf("serverJourneyHook() = %T; want replaceJourney", serverJourneyHook())
+	}
+
+	// The release-backed journey is selected only by the deliberate
+	// --install-release flag with its fixture feed, and it wins over a
+	// stray candidate path (parse rejects the combination anyway).
+	resetDriverState(t)
+	if _, _, err := driverArgParseHook([]string{cliSubcommandSelfUpdateDriver, "--update-feed", "http://127.0.0.1:9", "--install-release"}); err != nil {
+		t.Fatalf("install-release parse: %v", err)
+	}
+	if _, ok := serverJourneyHook().(releaseJourney); !ok {
+		t.Fatalf("serverJourneyHook() = %T; want releaseJourney", serverJourneyHook())
 	}
 
 	// A recovery chain never re-attempts installation without fresh consent:

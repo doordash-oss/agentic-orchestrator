@@ -105,11 +105,14 @@ type CleanupSeams struct {
 
 // recognizedStagingNames reports whether name is a transaction object this
 // package creates inside a tx dir: the rollback backup, the staged
-// candidate, a prepared restore copy, or the staging ownership record.
-// Anything else is unexpected and must be retained.
+// candidate, a prepared restore copy, the staging ownership record, or one
+// of the release-staging objects (the downloaded archive and the extracted
+// release executable). Anything else is unexpected and must be retained.
 func recognizedStagingNames(name string) bool {
 	switch {
 	case name == backupName, name == stagedName, name == stagingRecordName:
+		return true
+	case name == releaseArchiveName, name == releaseCandidateName:
 		return true
 	case len(name) > len(restorePrefix) && name[:len(restorePrefix)] == restorePrefix:
 		return true

@@ -55,9 +55,17 @@ type driverConfig struct {
 	prepareOnly   bool
 	// updateFeedURL routes the release-availability feed to a local test
 	// fixture. Empty keeps the fixed production feed. The fixture receives
-	// no credentials.
+	// no credentials. fixtureFeed is the validated client built at parse
+	// time so an invalid fixture origin fails before any socket opens.
 	updateFeedURL string
-	serverFlags   launchOptions
+	fixtureFeed   *selfupdate.FeedClient
+	// installRelease selects the release-backed journey: the driver resolves
+	// a signed release from the fixture feed, verifies it end to end, stages
+	// it through the updater-owned transaction machinery, probes it once,
+	// and commits it. It can never be combined with --candidate: the
+	// release-backed path only accepts verifier-produced provenance.
+	installRelease bool
+	serverFlags    launchOptions
 }
 
 // driver is the driver's process-lifetime state.
@@ -98,6 +106,10 @@ var driverFailPoints = map[string]bool{
 	"recovery-exec":         true,
 	// The recovered build itself fails startup: nonzero exit, no loop.
 	"recovered-startup": true,
+	// Post-verification substitution on the release-backed path: the staged
+	// candidate's bytes are replaced after the probe, and the commit-boundary
+	// revalidation must refuse before replacement.
+	"substitute-candidate": true,
 	// Post-confirmation cleanup failure: warn and keep serving.
 	"cleanup-remove": true,
 	"cleanup-sync":   true,
@@ -111,6 +123,7 @@ var driverBarrierPoints = map[string]bool{
 	"pre-commit":         true, // after teardown, before Commit
 	"commit-receipt":     true, // inside Commit, after rename, before receipt advance
 	"post-rename":        true, // after Commit, before handoff exec
+	"release-staged":     true, // after release download+extraction, before probe or install transaction
 	"restore-attempt":    true, // after the recovery attempt receipt is durable
 	"restore-rename":     true, // after the restore rename, before dir sync
 	"restore-sync":       true, // after the installed-dir sync, before rolled_back
@@ -139,7 +152,10 @@ func init() {
 	// parsed above; ordinary builds keep the nil hook and the fixed
 	// production feed.
 	updateFeedHook = func() serverruntime.FeedChecker {
-		return selfupdate.NewFixtureFeedClient(driver.updateFeedURL, selfupdate.ProductionFeedSlug)
+		if driver.fixtureFeed == nil {
+			return nil
+		}
+		return driver.fixtureFeed
 	}
 }
 
@@ -163,6 +179,8 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 	driver.barrierFile = ""
 	driver.prepareOnly = false
 	driver.updateFeedURL = ""
+	driver.fixtureFeed = nil
+	driver.installRelease = false
 	rest := args[1:]
 	for i := 0; i < len(rest); i++ {
 		arg := rest[i]
@@ -264,9 +282,10 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 		case "--prepare-only":
 			driver.prepareOnly = true
 		case "--update-feed":
-			// Driver-only fixture routing for availability journeys: a
-			// deliberately built test binary points the metadata feed at a
-			// local fixture server. No credential is ever sent there.
+			// Driver-only fixture routing for availability and signed-release
+			// journeys: a deliberately built test binary points the release
+			// feed at a local fixture server. No credential is ever sent
+			// there, and the constructor pins the one loopback origin.
 			if i+1 >= len(rest) {
 				return opts, true, fmt.Errorf("--update-feed requires a value")
 			}
@@ -275,6 +294,16 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 			if !strings.HasPrefix(driver.updateFeedURL, "http://127.0.0.1:") {
 				return opts, true, fmt.Errorf("--update-feed only accepts a loopback http fixture URL")
 			}
+			client, err := selfupdate.NewFixtureFeedClient(driver.updateFeedURL, selfupdate.ProductionFeedSlug)
+			if err != nil {
+				return opts, true, fmt.Errorf("invalid --update-feed value: %w", err)
+			}
+			driver.fixtureFeed = client
+		case "--install-release":
+			// Driver-only release-backed journey selector. The signed release
+			// path never accepts a caller-provided candidate: provenance is
+			// produced only by the release verifier.
+			driver.installRelease = true
 		default:
 			if strings.HasPrefix(arg, "--updates=") {
 				opts.updatesPolicy = strings.TrimPrefix(arg, "--updates=")
@@ -296,6 +325,14 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 	}
 	if driver.barrier != "" && driver.barrierFile == "" {
 		return opts, true, fmt.Errorf("--barrier requires --barrier-file")
+	}
+	if driver.installRelease {
+		if driver.fixtureFeed == nil {
+			return opts, true, fmt.Errorf("--install-release requires --update-feed")
+		}
+		if driver.candidatePath != "" {
+			return opts, true, fmt.Errorf("--install-release cannot be combined with --candidate: the release path only accepts verifier-produced provenance")
+		}
 	}
 	// The same parse-time normalization the server path applies, so bad
 	// values fail before any socket is opened.
@@ -543,22 +580,26 @@ func adoptDriverHandoff() (*selfupdate.Lease, selfupdate.HandoffMetadata, selfup
 	return lease, m, receipt, nil
 }
 
-// driverJourney selects the journey: the replace journey when a candidate
-// was configured and this is a fresh operator launch. An adopted image, a
-// recovered or restarted image, and a plain tagged server all run the
-// production lifecycle (adoption, recovery resolution, confirmation,
-// serving); a recovered chain never re-attempts installation without fresh
-// consent.
+// driverJourney selects the journey: the release-backed journey when
+// --install-release was configured, the replace journey when a local
+// candidate was configured, and otherwise the production lifecycle. An
+// adopted image, a recovered or restarted image, and a plain tagged server
+// all run the production lifecycle (adoption, recovery resolution,
+// confirmation, serving); a recovered chain never re-attempts installation
+// without fresh consent.
 func driverJourney() serverJourney {
-	if driver.candidatePath == "" {
-		return nil
-	}
 	env := os.Environ()
 	if handoffEnvPresent(env) {
 		return nil
 	}
 	if _, guardPresent, _ := selfupdate.ParseRecoveryGuardEnv(env); guardPresent {
 		fmt.Fprintln(os.Stderr, "selfupdate-driver: refusing update journey in a recovery chain; fresh consent required")
+		return nil
+	}
+	if driver.installRelease {
+		return releaseJourney{}
+	}
+	if driver.candidatePath == "" {
 		return nil
 	}
 	return replaceJourney{}
@@ -727,13 +768,23 @@ func (replaceJourney) run(r serverRun) int {
 	}
 	txid := tx.Receipt().TransactionID
 	_ = r.boot.updateLease.SetTransactionID(txid)
+
+	return runReplacementTail(r, tx, toVersion, releaseUpdateLock)
+}
+
+// runReplacementTail carries one prepared transaction through the orderly
+// shutdown, atomic commit, and exec handoff — the journey steps shared by the
+// local-candidate replace journey and the release-backed journey. A return
+// of -1 means the old runtime is still usable and keeps serving.
+func runReplacementTail(r serverRun, tx *selfupdate.Transaction, toVersion string, releaseUpdateLock func()) int {
+	txid := tx.Receipt().TransactionID
+	bind := tx.Receipt().Bind
 	planFor := func() selfupdate.RecoveryPlan {
 		return selfupdate.RecoveryPlan{
 			Receipt:     tx.Receipt(),
 			ReceiptPath: selfupdate.ReceiptPath(r.boot.selfUpdateExec.Path),
 		}
 	}
-
 	if driver.prepareOnly {
 		fmt.Fprintf(os.Stderr, "selfupdate-driver: prepared %s\n", txid)
 		driverBarrierJourney("prepared")
@@ -868,6 +919,131 @@ func (replaceJourney) run(r serverRun) int {
 	// A successful exec never returns; this line only guards a seam
 	// implementation that wrongly returns nil.
 	return 0
+}
+
+// releaseJourney is the old-image journey for a signed fixture release: the
+// driver resolves the release from its fixture feed, verifies the signed
+// checksum manifest (and any advertised envelope), stages the authenticated
+// archive through updater-owned staging, probes the extracted executable
+// once in isolation, and only then prepares and commits the transaction —
+// the same verification, staging, transaction, exec, confirmation, and
+// recovery implementations production will use. A failure at any step before
+// shutdown keeps the old build installed and serving.
+type releaseJourney struct{}
+
+func (releaseJourney) run(r serverRun) int {
+	printDriverFingerprints(os.Stderr)
+
+	// Ownership precondition: a secondary runtime (no lease) can never begin
+	// a transaction, and a record that does not bind this executable and
+	// runtime is stale, not authoritative.
+	if r.boot.updateLease == nil {
+		fmt.Fprintln(os.Stderr, "selfupdate-driver: no update ownership")
+		return 1
+	}
+	if err := selfupdate.ValidateOwnershipRecord(r.boot.updateLease.Record(), r.boot.selfUpdateExec, r.boot.runtime.RuntimeDir); err != nil {
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: ownership validation failed: %v\n", err)
+		return 1
+	}
+
+	rlock, err := selfupdate.AcquireRuntimeUpdateLock(r.boot.runtime.RuntimeDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: runtime update lock unavailable: %v\n", err)
+		return 1
+	}
+	defer func() { _ = rlock.Close() }()
+	releaseUpdateLock := func() {
+		if rlock != nil {
+			_ = rlock.Close()
+			rlock = nil
+		}
+	}
+
+	if driver.triggerFile != "" {
+		if err := waitForTriggerFile(driver.triggerFile, 120*time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "selfupdate-driver: trigger wait failed: %v\n", err)
+			return 1
+		}
+	}
+
+	ctx := context.Background()
+	stageOpts := selfupdate.StageReleaseOptions{
+		CurrentVersion: buildinfo.Version(),
+		Eligibility:    classifyRuntimeEligibility(r.boot),
+	}
+
+	resolved, err := driver.fixtureFeed.ResolveLatestRelease(ctx, runtimeGOOS(), runtimeGOARCH())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: release resolve failed: %v\n", err)
+		return -1
+	}
+	verified, err := driver.fixtureFeed.VerifyResolvedRelease(ctx, resolved)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: release verification failed: %v\n", err)
+		return -1
+	}
+	staged, err := driver.fixtureFeed.StageVerifiedRelease(ctx, r.boot.selfUpdateExec, verified, stageOpts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: release staging failed: %v\n", err)
+		return -1
+	}
+	fmt.Fprintf(os.Stderr, "selfupdate-driver: release staged %s (%s)\n", staged.TxID(), verified.Resolved().Version)
+	driverBarrierJourney("release-staged")
+
+	probe, err := selfupdate.ProbeStagedExecutable(ctx, staged.CandidatePath(), verified.Resolved().Version)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: release probe failed: %v\n", err)
+		return -1
+	}
+
+	// Post-verification substitution injection: the staged candidate's bytes
+	// change after the probe. The verifier-produced provenance must refuse
+	// the transaction before replacement.
+	if driver.failAtSet("substitute-candidate") {
+		if err := os.WriteFile(staged.CandidatePath(), append([]byte("#!/bin/sh\necho stolen\n"), 0), 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "selfupdate-driver: substitution injection failed: %v\n", err)
+			return 1
+		}
+	}
+
+	cand, err := selfupdate.AdmitStagedRelease(staged, probe)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: release admission failed: %v\n", err)
+		return -1
+	}
+	tx, err := selfupdate.BeginVerifiedRelease(r.boot.selfUpdateExec, cand, selfupdate.BeginOptions{
+		RuntimeDir:  r.boot.runtime.RuntimeDir,
+		StateDir:    r.boot.runtime.StateDir,
+		Config:      r.boot.runtime.Config,
+		PID:         os.Getpid(),
+		PGID:        r.boot.owner.PGID,
+		FromVersion: buildinfo.Version(),
+		ToVersion:   verified.Resolved().Version,
+		Bind: selfupdate.BindEndpoint{
+			Host:         r.server.BindHost(),
+			Port:         r.server.Port(),
+			Wildcard:     r.server.WildcardBind(),
+			AdvertiseURL: r.server.BaseURL(),
+			Policy:       r.server.RuntimePolicy(),
+		},
+		ReceiptDest: selfupdate.ReceiptPath(r.boot.selfUpdateExec.Path),
+	}, stageOpts, seamsForFailAt(driver.failAt))
+	if err != nil {
+		// Injected preparation failures and the substitution injection land
+		// here: the installed bytes were never touched and the runtime keeps
+		// serving the old build.
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: release begin failed: %v\n", err)
+		return -1
+	}
+	txid := tx.Receipt().TransactionID
+	_ = r.boot.updateLease.SetTransactionID(txid)
+	// The verified executable now lives in the transaction's own staging; the
+	// release download staging is recognized owned abandoned staging and is
+	// cleaned with full validation (a failure retries on a later launch).
+	if err := selfupdate.CleanupSettledTransaction(r.boot.selfUpdateExec.Path, staged.TxID(), selfUpdateCleanupSeams); err != nil {
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: release staging cleanup deferred: %v\n", err)
+	}
+	return runReplacementTail(r, tx, verified.Resolved().Version, releaseUpdateLock)
 }
 
 // driverBarrierJourney blocks at a journey-level barrier stage.

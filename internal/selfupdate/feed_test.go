@@ -111,7 +111,11 @@ func fixtureClient(t *testing.T, fixture *feedFixture) (*FeedClient, *httptest.S
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(fixture.handler))
 	t.Cleanup(server.Close)
-	return NewFixtureFeedClient(server.URL, ProductionFeedSlug), server
+	client, err := NewFixtureFeedClient(server.URL, ProductionFeedSlug)
+	if err != nil {
+		t.Fatalf("fixture client: %v", err)
+	}
+	return client, server
 }
 
 func feedTokenFunc(heard *[]string) func() string {
@@ -224,7 +228,10 @@ func TestFeedMalformedBodyFails(t *testing.T) {
 		_, _ = w.Write([]byte(`[{"tag_name":5}]`)) // tag_name must be a string
 	}))
 	t.Cleanup(server.Close)
-	client := NewFixtureFeedClient(server.URL, ProductionFeedSlug)
+	client, err := NewFixtureFeedClient(server.URL, ProductionFeedSlug)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := client.LatestStable(context.Background()); err == nil {
 		t.Fatal("malformed metadata must fail, not produce a partial answer")
 	}
@@ -408,8 +415,11 @@ func TestFeedRedirectCap(t *testing.T) {
 		w.WriteHeader(http.StatusFound)
 	}))
 	t.Cleanup(server.Close)
-	client := NewFixtureFeedClient(server.URL, ProductionFeedSlug)
-	_, err := client.LatestStable(context.Background())
+	client, err := NewFixtureFeedClient(server.URL, ProductionFeedSlug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.LatestStable(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "too many feed redirects") {
 		t.Fatalf("error = %v, want redirect cap", err)
 	}

@@ -28,12 +28,12 @@ import (
 type InstallKind string
 
 const (
-	InstallTarball    InstallKind = "tarball"
-	InstallGoInstall  InstallKind = "go_install"
-	InstallHomebrew   InstallKind = "homebrew"
-	InstallAppBundle  InstallKind = "app_bundle"
+	InstallTarball     InstallKind = "tarball"
+	InstallGoInstall   InstallKind = "go_install"
+	InstallHomebrew    InstallKind = "homebrew"
+	InstallAppBundle   InstallKind = "app_bundle"
 	InstallDevelopment InstallKind = "development"
-	InstallUnknown    InstallKind = "unknown"
+	InstallUnknown     InstallKind = "unknown"
 )
 
 // UnsupportedReason is the machine-readable remediation code carried by an
@@ -69,10 +69,10 @@ const (
 // release, whose file is safely replaceable by this runtime, and whose binary
 // lease this runtime holds.
 type Eligibility struct {
-	Supported    bool
-	Install      InstallKind
-	Reason       UnsupportedReason
-	Remediation  string
+	Supported   bool
+	Install     InstallKind
+	Reason      UnsupportedReason
+	Remediation string
 }
 
 // LeaseState describes this runtime's relationship to the binary-scoped
@@ -108,8 +108,8 @@ type ClassifyInputs struct {
 	BuildInfoVersion string
 	// InjectedVersion is the raw ldflags-injected version.
 	InjectedVersion string
-	GOOS   string
-	GOARCH string
+	GOOS            string
+	GOARCH          string
 	// EUID is the running process's effective uid.
 	EUID int
 	// FileUID is the uid owning the installed binary file.
@@ -126,12 +126,12 @@ type ClassifyInputs struct {
 // remediation texts for each unsupported reason. Actionable, never exposing
 // raw paths or environment values.
 const (
-	remediationBundled = "This server runs from the desktop app's bundled resources, so desktop package updates own it. Install a standalone agentico binary to enable server self-update."
-	remediationHomebrew = "Update with your package manager: `brew update && brew upgrade agentico`."
-	remediationDevelopment = "Development and pseudo-version builds are never updated in place. Reinstall from a release tarball or `go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest`."
-	remediationPlatform = "In-place updates support darwin/amd64, darwin/arm64, linux/amd64, and linux/arm64 only."
-	remediationNonReplaceable = "The installed binary is not safely replaceable in place (ownership or permissions). Reinstall it under your own account in a directory you control."
-	remediationContention = "Another live runtime owns this binary's update lease. This runtime serves read-only availability; restart the owning runtime or install a separate executable copy."
+	remediationBundled          = "This server runs from the desktop app's bundled resources, so desktop package updates own it. Install a standalone agentico binary to enable server self-update."
+	remediationHomebrew         = "Update with your package manager: `brew update && brew upgrade agentico`."
+	remediationDevelopment      = "Development and pseudo-version builds are never updated in place. Reinstall from a release tarball or `go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest`."
+	remediationPlatform         = "In-place updates support darwin/amd64, darwin/arm64, linux/amd64, and linux/arm64 only."
+	remediationNonReplaceable   = "The installed binary is not safely replaceable in place (ownership or permissions). Reinstall it under your own account in a directory you control."
+	remediationContention       = "Another live runtime owns this binary's update lease. This runtime serves read-only availability; restart the owning runtime or install a separate executable copy."
 	remediationLeaseUnavailable = "The binary update lease could not be acquired, so availability stays read-only. Check ownership and permissions of the .agentico-selfupdate directory next to the binary."
 )
 

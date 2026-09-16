@@ -58,6 +58,9 @@ type Transaction struct {
 	seams   TxSeams
 	txDir   string
 	receipt Receipt
+	// releaseProvenance, when set by BeginVerifiedRelease, re-runs the full
+	// release trust revalidation immediately before the replacement rename.
+	releaseProvenance *releaseProvenance
 }
 
 func (t *Transaction) copy(dst, src string, mode uint32) error {
@@ -357,10 +360,25 @@ func (t *Transaction) VerifyInstalledUnchanged() error {
 // candidate. The staged file is re-verified (identity, digest, mode,
 // containment in the transaction dir) and the installed file re-checked
 // before the rename; the rename is synced and permissions/ownership restored
-// without elevation before the receipt phase advances.
+// without elevation before the receipt phase advances. A release-backed
+// transaction additionally re-runs its full trust revalidation — retained
+// manifest signature and asset/digest binding, target eligibility and
+// suppression, and link safety on the staging path — immediately before the
+// rename, without refetching or re-probing.
 func (t *Transaction) Commit() error {
 	if err := t.VerifyInstalledUnchanged(); err != nil {
 		return err
+	}
+	if t.releaseProvenance != nil {
+		if err := revalidateReleaseProvenance(t.exec, t.releaseProvenance.candidate, t.releaseProvenance.stageOpts); err != nil {
+			return fmt.Errorf("commit-boundary revalidation: %w", err)
+		}
+		if err := validateNoSymlinkComponents(t.receipt.StagingPath); err != nil {
+			return fmt.Errorf("commit-boundary link safety: %w", err)
+		}
+		if t.receipt.ToVersion != t.releaseProvenance.candidate.release.Resolved().Version {
+			return fmt.Errorf("commit-boundary target %q does not match the verified release %q", t.receipt.ToVersion, t.releaseProvenance.candidate.release.Resolved().Version)
+		}
 	}
 	stagingID, err := StatFile(t.receipt.StagingPath)
 	if err != nil {

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -43,11 +44,11 @@ const (
 // allowedFeedHosts is the closed destination allowlist for the production
 // metadata feed, applied to the initial request and to every redirect.
 var allowedFeedHosts = map[string]bool{
-	"api.github.com":                       true,
-	"github.com":                           true,
-	"objects.githubusercontent.com":        true,
+	"api.github.com":                        true,
+	"github.com":                            true,
+	"objects.githubusercontent.com":         true,
 	"github-releases.githubusercontent.com": true,
-	"release-assets.githubusercontent.com": true,
+	"release-assets.githubusercontent.com":  true,
 }
 
 // FeedError is one failed metadata check. Retry marks errors raised by a
@@ -80,8 +81,9 @@ type feedRelease struct {
 }
 
 type feedAsset struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
+	ID                 int64  `json:"id"`
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
 // ReleaseSelection is the outcome of one successful metadata check.
@@ -128,15 +130,45 @@ func NewProductionFeedClient(moduleSlug string, token func() string) *FeedClient
 	return newFeedClient(ProductionFeedBaseURL, slug, token)
 }
 
-// NewFixtureFeedClient returns a feed client bound to one explicit base URL
-// with no credential. It exists so deliberately built test binaries (and
-// in-process tests) can route metadata checks to a local fixture; the
+// NewFixtureFeedClient returns a feed client bound to one explicit loopback
+// origin with no credential. It exists so deliberately built test binaries
+// (and in-process tests) can route release traffic to a local fixture; the
 // production client always uses the fixed production configuration, and no
 // environment value of an ordinarily built binary can reach this routing.
-func NewFixtureFeedClient(baseURL, slug string) *FeedClient {
+// The base URL must be an http(s) loopback origin: fixture trust (the
+// committed fixture signing key) can never be combined with production
+// hosts, and every redirect or pagination link must stay on this one origin.
+func NewFixtureFeedClient(baseURL, slug string) (*FeedClient, error) {
+	if err := validateFixtureBaseURL(baseURL); err != nil {
+		return nil, err
+	}
 	c := newFeedClient(baseURL, slug, nil)
 	c.fixture = true
-	return c
+	return c, nil
+}
+
+// validateFixtureBaseURL enforces the one explicit loopback origin rule for
+// fixture routing: an http(s) URL whose host is a loopback IP, without
+// userinfo or a path.
+func validateFixtureBaseURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("invalid fixture feed URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("fixture feed URL %q must use http or https", raw)
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("fixture feed URL %q must use a loopback host", raw)
+	}
+	if u.User != nil {
+		return fmt.Errorf("fixture feed URL %q must not carry userinfo", raw)
+	}
+	if u.Path != "" && u.Path != "/" {
+		return fmt.Errorf("fixture feed URL %q must not carry a path", raw)
+	}
+	return nil
 }
 
 // newFeedClient constructs a client against an explicit base URL. Production
@@ -172,22 +204,36 @@ func newFeedClient(baseURL, slug string, token func() string) *FeedClient {
 // selection at the page bound all fail rather than producing a partial
 // answer.
 func (c *FeedClient) LatestStable(ctx context.Context) (ReleaseSelection, error) {
+	rel, parts, err := c.latestStableRelease(ctx)
+	if err != nil {
+		return ReleaseSelection{}, err
+	}
+	version := fmt.Sprintf("%d.%d.%d", parts[0], parts[1], parts[2])
+	selection := ReleaseSelection{Version: version, TagName: deref(rel.TagName)}
+	if u := strings.TrimSpace(rel.HTMLURL); u != "" {
+		selection.ReleaseURL = u
+	}
+	return selection, nil
+}
+
+// latestStableRelease is the shared bounded selection behind LatestStable
+// and the release-verification resolver: it returns the selected raw release
+// (with its full asset identities) plus the parsed version parts.
+func (c *FeedClient) latestStableRelease(ctx context.Context) (*feedRelease, [3]int, error) {
 	nextURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", c.baseURL, c.slug, feedPerPage)
 	seen := make(map[string]string)
-	var bestTag string
+	var bestRelease *feedRelease
 	var bestParts [3]int
-	var bestURL string
-	var bestAssets []feedAsset
 	haveBest := false
 
 	for page := 1; page <= feedMaxPages; page++ {
 		body, next, err := c.get(ctx, nextURL)
 		if err != nil {
-			return ReleaseSelection{}, err
+			return nil, [3]int{}, err
 		}
 		var releases []feedRelease
 		if err := json.Unmarshal(body, &releases); err != nil {
-			return ReleaseSelection{}, &FeedError{Reason: fmt.Sprintf("malformed release metadata: %v", err)}
+			return nil, [3]int{}, &FeedError{Reason: fmt.Sprintf("malformed release metadata: %v", err)}
 		}
 		for i := range releases {
 			rel := &releases[i]
@@ -195,7 +241,7 @@ func (c *FeedClient) LatestStable(ctx context.Context) (ReleaseSelection, error)
 				continue
 			}
 			if rel.TagName == nil {
-				return ReleaseSelection{}, &FeedError{Reason: "malformed release metadata: release without tag_name"}
+				return nil, [3]int{}, &FeedError{Reason: "malformed release metadata: release without tag_name"}
 			}
 			tag := strings.TrimSpace(*rel.TagName)
 			parts, ok := ParseReleaseVersion(tag)
@@ -207,21 +253,21 @@ func (c *FeedClient) LatestStable(ctx context.Context) (ReleaseSelection, error)
 			}
 			normalized := fmt.Sprintf("%d.%d.%d", parts[0], parts[1], parts[2])
 			if _, dup := seen[normalized]; dup {
-				return ReleaseSelection{}, &FeedError{
+				return nil, [3]int{}, &FeedError{
 					Reason: fmt.Sprintf("ambiguous duplicate stable release for version %s", normalized),
 				}
 			}
 			seen[normalized] = tag
 			if !haveBest || compareParts(parts, bestParts) > 0 {
 				haveBest = true
-				bestTag, bestParts, bestURL, bestAssets = tag, parts, rel.HTMLURL, rel.Assets
+				bestRelease, bestParts = rel, parts
 			}
 		}
 		if next == "" {
 			break
 		}
 		if page == feedMaxPages {
-			return ReleaseSelection{}, &FeedError{
+			return nil, [3]int{}, &FeedError{
 				Reason: fmt.Sprintf("incomplete selection: more than %d pages of releases", feedMaxPages),
 			}
 		}
@@ -229,17 +275,19 @@ func (c *FeedClient) LatestStable(ctx context.Context) (ReleaseSelection, error)
 	}
 
 	if !haveBest {
-		return ReleaseSelection{}, &FeedError{Reason: "no selectable stable release"}
+		return nil, [3]int{}, &FeedError{Reason: "no selectable stable release"}
 	}
-	if err := checkAssetIdentities(bestTag, bestAssets); err != nil {
-		return ReleaseSelection{}, err
+	if err := checkAssetIdentities(deref(bestRelease.TagName), bestRelease.Assets); err != nil {
+		return nil, [3]int{}, err
 	}
-	version := fmt.Sprintf("%d.%d.%d", bestParts[0], bestParts[1], bestParts[2])
-	selection := ReleaseSelection{Version: version, TagName: bestTag}
-	if u := strings.TrimSpace(bestURL); u != "" {
-		selection.ReleaseURL = u
+	return bestRelease, bestParts, nil
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
 	}
-	return selection, nil
+	return *s
 }
 
 // checkAssetIdentities rejects a selected release whose assets carry
@@ -276,31 +324,29 @@ func compareParts(a, b [3]int) int {
 	return 0
 }
 
-// get performs one validated feed request and returns the bounded body plus
-// the rel="next" pagination destination (already validated). Redirects are
-// followed manually, each hop re-validated and re-authorized per destination.
+// get performs one validated metadata fetch and returns the bounded body
+// plus the rel="next" pagination destination (already validated). Redirects
+// are followed manually, each hop re-validated and re-authorized per
+// destination. The whole fetch — every hop plus the body read — shares one
+// eight-second budget, so redirect chains can never reset the deadline
+// indefinitely.
 func (c *FeedClient) get(ctx context.Context, rawURL string) (body []byte, next string, err error) {
+	fetchCtx, cancel := context.WithTimeout(ctx, feedRequestTimeout)
+	defer cancel()
 	dest := rawURL
 	for hop := 0; ; hop++ {
 		if hop > feedMaxRedirects {
 			return nil, "", &FeedError{Reason: "too many feed redirects"}
 		}
-		if !c.fixture {
-			if err := validateFeedURL(dest); err != nil {
-				return nil, "", err
-			}
+		if err := c.validateDestination(dest); err != nil {
+			return nil, "", err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, dest, nil)
+		req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, dest, nil)
 		if err != nil {
 			return nil, "", &FeedError{Reason: fmt.Sprintf("building feed request: %v", err)}
 		}
 		req.Header.Set("Accept", "application/vnd.github+json")
-		// Authorization is constructed anew per destination: a token follows
-		// only the API host, never a redirect target. Fixture routing never
-		// attaches a credential.
-		if !c.fixture && req.URL.Hostname() == "api.github.com" && c.token() != "" {
-			req.Header.Set("Authorization", "Bearer "+c.token())
-		}
+		c.authorize(req)
 		resp, err := c.client.Do(req)
 		if err != nil {
 			return nil, "", &FeedError{Reason: fmt.Sprintf("requesting release metadata: %v", err)}
@@ -321,6 +367,117 @@ func (c *FeedClient) get(ctx context.Context, rawURL string) (body []byte, next 
 		defer resp.Body.Close()
 		return c.readResponse(resp)
 	}
+}
+
+// fetchBounded performs one validated release-asset fetch (a checksum
+// manifest, signature, or envelope) and returns at most limit bytes. The cap
+// is enforced while streaming regardless of Content-Length, redirects are
+// re-validated per hop, authorization is constructed per destination, and
+// the whole fetch shares one request-budget deadline.
+func (c *FeedClient) fetchBounded(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
+	fetchCtx, cancel := context.WithTimeout(ctx, feedRequestTimeout)
+	defer cancel()
+	dest := rawURL
+	for hop := 0; ; hop++ {
+		if hop > feedMaxRedirects {
+			return nil, &FeedError{Reason: "too many feed redirects"}
+		}
+		if err := c.validateDestination(dest); err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, dest, nil)
+		if err != nil {
+			return nil, &FeedError{Reason: fmt.Sprintf("building release asset request: %v", err)}
+		}
+		c.authorize(req)
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, &FeedError{Reason: fmt.Sprintf("requesting release asset: %v", err)}
+		}
+		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+			location := resp.Header.Get("Location")
+			_ = resp.Body.Close()
+			if location == "" {
+				return nil, &FeedError{Reason: fmt.Sprintf("release asset redirect without location (status %d)", resp.StatusCode)}
+			}
+			resolved, err := resolveFeedURL(dest, location)
+			if err != nil {
+				return nil, err
+			}
+			dest = resolved
+			continue
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+			return nil, c.retryError(resp)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, &FeedError{
+				Reason:     fmt.Sprintf("release asset request returned status %s", resp.Status),
+				StatusCode: resp.StatusCode,
+			}
+		}
+		// Streamed cap regardless of Content-Length: an oversized body is
+		// truncated by the limit reader and rejected by the size check.
+		limited := io.LimitReader(resp.Body, limit+1)
+		body, err := io.ReadAll(limited)
+		if err != nil {
+			return nil, &FeedError{Reason: fmt.Sprintf("reading release asset: %v", err)}
+		}
+		if int64(len(body)) > limit {
+			return nil, &FeedError{
+				Reason:     fmt.Sprintf("release asset exceeds the %d-byte limit", limit),
+				StatusCode: resp.StatusCode,
+			}
+		}
+		return body, nil
+	}
+}
+
+// authorize constructs the per-destination authorization: a token follows
+// only the API host, never a redirect target or asset host. Fixture routing
+// never attaches a credential.
+func (c *FeedClient) authorize(req *http.Request) {
+	if c.fixture {
+		return
+	}
+	if req.URL.Hostname() == "api.github.com" && c.token() != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token())
+	}
+}
+
+// validateDestination applies the destination policy to one request target:
+// the production allowlist for production clients, or the single fixture
+// origin for fixture clients.
+func (c *FeedClient) validateDestination(raw string) error {
+	if c.fixture {
+		return c.validateFixtureDestination(raw)
+	}
+	return validateFeedURL(raw)
+}
+
+// validateFixtureDestination confines fixture traffic to the one explicit
+// loopback origin the client was built with: scheme and host (including
+// port) must match exactly, so a cross-origin redirect or pagination link —
+// even another loopback port — is rejected.
+func (c *FeedClient) validateFixtureDestination(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return &FeedError{Reason: fmt.Sprintf("invalid fixture destination: %v", err)}
+	}
+	if u.User != nil {
+		return &FeedError{Reason: "fixture destination must not carry userinfo"}
+	}
+	base, err := url.Parse(c.baseURL)
+	if err != nil {
+		return &FeedError{Reason: fmt.Sprintf("invalid fixture origin: %v", err)}
+	}
+	if u.Scheme != base.Scheme || u.Host != base.Host {
+		return &FeedError{
+			Reason: fmt.Sprintf("fixture destination %q is outside the fixture origin %q", u.Host, base.Host),
+		}
+	}
+	return nil
 }
 
 // readResponse consumes one non-redirect feed response: the one-MiB streamed

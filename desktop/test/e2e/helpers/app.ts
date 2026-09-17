@@ -234,7 +234,22 @@ export async function closeApp(handle: AppHandle): Promise<void> {
   // runner. The reason is reported rather than swallowed, so the failure below
   // distinguishes "close() never returned" from "the process outlived a
   // returned close()".
-  const closeFailure = await bounded(handle.app.close(), 90_000, 'app.close').then(
+  const closeFailure = await bounded(
+    (async () => {
+      // Playwright close() disconnects the Node inspector immediately after
+      // app.quit() returns. Keep it attached through our asynchronous before-quit
+      // cleanup, then let close() release it once Electron is ready to exit.
+      await handle.app.evaluate(({ app }) => {
+        return new Promise<void>((resolve) => {
+          app.once('will-quit', () => resolve());
+          app.quit();
+        });
+      });
+      await handle.app.close();
+    })(),
+    90_000,
+    'app.close',
+  ).then(
     () => null,
     (error: unknown) => (error instanceof Error ? error.message : String(error)),
   );

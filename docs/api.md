@@ -43,90 +43,109 @@ The MCP adapter has been removed. The supported client surface is REST plus SSE.
 
 ## Release Availability
 
-`GET /api/v1/update` returns the authenticated, metadata-only release
-availability snapshot. It never triggers a check and never mutates anything:
-notification checks never download packages or manifests, probe candidates,
-create installation receipts or staging, or change executable bytes.
+The server checks GitHub for newer stable releases and can replace its own
+binary on request. Field-level contracts live in `api/openapi.yaml`
+(`UpdateSnapshot`, `UpdateInstallRequest`, `UpdatePublicReceipt`,
+`UpdateActiveWorkSummary`). This section describes the behavior.
 
-`POST /api/v1/update/check` (empty JSON object, trusted-mutation headers)
-accepts one explicit check and returns `202` with the current snapshot
-immediately; the accepted check runs asynchronously tied to the runtime
-lifetime, concurrent requests coalesce into one metadata worker, and a
-disconnecting caller never cancels accepted work. It is refused with `403`
-`forbidden` and the disabled-policy remediation under the off policy, `409`
-`update_unsupported_install` for ineligible installations, and `429`
-`update_check_failed` with a retry hint while a server-imposed retry deadline
-is in force — the last without making any request. A check issued while an
-install operation is active refreshes latest metadata without overwriting
-the operation.
+All endpoints require the bearer token. Mutations also require the
+trusted-mutation headers. Every response carries the current snapshot,
+except errors, which use the standard error envelope.
 
-`POST /api/v1/update/install` (consent request, trusted-mutation headers)
-accepts one consented install request and returns `202` with the current
-snapshot promptly. `consent` must be true — anything else is `400`
-`update_consent_required` — and `when` selects `now` or `idle`. `idle`
-stages the operation and waits for active work to finish without
-interrupting it. `now` without `stop_active_work` installs immediately
-only when no work is active. `now` with `stop_active_work: true` authorizes
-interrupting feature sessions and the singleton chat through the existing
-pause-stop and chat-end semantics: repository work (clones, uploads, origin
-checks, other repository activity), protected or unknown admission
-reservations, and failed activity detection still refuse with `409`
-`update_blocked_active_work` — before staging, again after staging, and
-again under the closed admission gate, with nothing stopped. Stop dispatch
-and completion confirmation share one ten-second deadline; any stop
-failure, timeout, or unresolved work aborts the installation, leaves the
-current build serving with already-stopped work interrupted, and requires
-fresh consent for a new attempt. An optional `version` selector must name the
-currently discovered latest stable release. Equivalent duplicates return
-the existing operation; changing the target, `when`, or stop-work
-permission requires canceling and resubmitting. The request is refused
-with `403` `forbidden` and the disabled-policy remediation under the off
-policy and `409`
-`update_unsupported_install` for ineligible installations or a conflicting
-active operation or target. Failed downloads, signature or digest
-verification, and installs classify as the warning codes
-`update_download_failed`, `update_signature_failed`, and
-`update_install_failed`, each naming the target version and a sanitized
-reason.
+### Policy
 
-`DELETE /api/v1/update/install` (empty JSON object, trusted-mutation
-headers) cancels the active install operation and returns `200` with the
-current availability snapshot after cleanup. It is idempotent when nothing
-is active, is refused with `403` `forbidden` and the disabled-policy
-remediation under the off policy, and with `409` `update_in_progress` once
-an explicit-stop operation entered its stopping interval or draining has
-begun, because an install that crossed that boundary can no longer be
-abandoned. During the stopping and draining interval, new work of every
-kind — including chat turns, prompt and permission replies, and reads that
-launch background work — is refused with `503` `update_in_progress` and a
-`Retry-After` hint, while existing stop and completion paths keep
-settling.
+The effective policy is `--updates`, then `AGENTICO_UPDATES`, then
+`server.updates.policy`. The default is `notify`.
 
-Every visible snapshot change emits an `update.updated` event (resource type
-`update`); clients re-GET the snapshot. The snapshot reports the effective
-startup policy (`--updates` over `AGENTICO_UPDATES` over
-`server.updates.policy`, default `notify`; `auto` fails startup explicitly),
-the reserved `server.updates.strategy` and `server.updates.window` settings
-(validated and reported, never scheduling work), the classified installation,
-check timing, and — when one exists — the sanitized public receipt
-(`versions`, `outcome`, `times`, and a sanitized error only). While an
-install operation is active the snapshot also reports its waiting `method`,
-the actual `stop_active_work` permission the operation retains, and
-`target_version`;
-`scheduled_for` is the predicted install deadline and is explicitly `null`
-while an idle wait has no deadline. `signature` reads `verified` only after
-the operation verified the pinned candidate, whose verified server contract
-then appears as `target_contract`; neither is ever trusted from feed
-metadata alone. The required `active_work_summary` carries the truthful
-current activity counts — features, chat, clones, uploads, origin checks,
-pending admissions, parked count (always zero in this release), and
-`detection_failed`, which refuses an immediate install — with
-`quiescing_since` never set in this release. A suppressed
-newest release stays visible as `latest_version` with
-`failed`/`update_rolled_back` until a newer unsuppressed release becomes
-available; failed refreshes retain the last successful metadata and its
-timestamp. These startup settings never appear on the runtime-config REST
-surface.
+- `off` disables checks. No feed traffic occurs. Checks and installs are refused.
+- `notify` checks on a schedule and on request. Installs happen only on an explicit request.
+- `auto` is reserved. Startup fails with an explicit error.
+
+`server.updates.strategy` and `server.updates.window` are validated and
+reported but never schedule work. None of these settings appear on the
+runtime-config REST surface.
+
+### GET /api/v1/update
+
+Returns the availability snapshot. It never triggers a check and has no
+side effects. The response carries an `ETag`; a matching `If-None-Match`
+yields `304`.
+
+Snapshot highlights:
+
+- `status`, `policy`, `installation`, and `remediation` say whether an update can happen here and why not otherwise.
+- `current_version`, `latest_version`, and `latest_release_url` describe the discovered release. A release that rolled back stays visible as `latest_version` with `failed` and `update_rolled_back` until a newer one appears.
+- `last_check_at`, `last_success_at`, `next_check_at`, and `retry_not_before` describe check timing. A failed refresh keeps the last successful metadata.
+- `receipt` is the sanitized outcome of the last install, when one exists.
+- `active_work_summary` reports current features, chat, clones, uploads, origin checks, and pending admissions. `detection_failed` means an immediate install will be refused.
+- While an install is active: `method`, `stop_active_work`, `target_version`, `scheduled_for`, `signature`, and `target_contract`. `signature` is `verified` only after the pinned candidate was verified.
+
+### POST /api/v1/update/check
+
+Body: `{}`. Runs one explicit check and returns `202` with the current
+snapshot right away. Concurrent requests share one worker. Disconnecting
+does not cancel the check. A check during an install refreshes metadata
+without touching the install.
+
+A check reads release metadata only. It never downloads packages, stages
+files, probes candidates, or writes receipts.
+
+| Status | Code | When |
+|---|---|---|
+| `403` | `forbidden` | Policy is `off`. |
+| `409` | `update_unsupported_install` | This installation cannot update itself. |
+| `429` | `update_check_failed` | A server-imposed retry deadline is in force. No request is made. |
+
+### POST /api/v1/update/install
+
+Body: `UpdateInstallRequest`. Returns `202` with the current snapshot.
+
+- `consent` must be `true`.
+- `when` is `idle` or `now`. `idle` stages the release and waits for work to finish without interrupting it. `now` installs immediately if nothing is active.
+- `stop_active_work: true` with `now` authorizes stopping feature sessions and the chat. Stop dispatch and confirmation share a ten-second budget. Any stop failure or timeout aborts the install and keeps the current build serving. Already-stopped work stays stopped.
+- `version`, when set, must equal the discovered latest stable release.
+
+Repository work such as clones, uploads, and origin checks is never
+stopped. It refuses the install before staging, after staging, and again
+under the closed admission gate. Failed activity detection refuses too.
+
+An identical repeated request returns the existing operation. Changing
+`when`, `stop_active_work`, or the target requires cancel and resubmit.
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `update_consent_required` | `consent` is not `true`. |
+| `400` | `bad_request` | Malformed body or invalid field value. |
+| `403` | `forbidden` | Policy is `off`. |
+| `409` | `update_unsupported_install` | Ineligible installation, or a different operation or target is active. |
+| `409` | `update_blocked_active_work` | Work is active and the request does not, or cannot, stop it. |
+| `409` | `update_in_progress` | An install already entered stopping or draining. |
+
+Install failures settle on the snapshot as `update_download_failed`,
+`update_signature_failed`, or `update_install_failed`, each naming the
+target version with a sanitized reason.
+
+### DELETE /api/v1/update/install
+
+Body: `{}`. Cancels the active install and returns `200` with the snapshot
+after cleanup. Cancelling when nothing is active succeeds.
+
+| Status | Code | When |
+|---|---|---|
+| `403` | `forbidden` | Policy is `off`. |
+| `409` | `update_in_progress` | The install entered stopping or draining and can no longer be abandoned. |
+
+### Stopping and draining
+
+Once an install starts stopping work or draining, new work is refused with
+`503` `update_in_progress` and a `Retry-After` header. This covers chat
+turns, prompt and permission replies, and reads that start background work.
+Existing stop and completion paths keep settling.
+
+### Event
+
+Every visible snapshot change emits `update.updated` with resource type
+`update`. Clients re-GET the snapshot. No-op reads emit nothing.
 
 ## Snapshot Then Subscribe
 

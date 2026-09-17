@@ -1145,7 +1145,7 @@ export interface paths {
         };
         /**
          * Read the authenticated, metadata-only update availability snapshot.
-         * @description Reports release availability for this runtime under its effective startup update policy without triggering a check. The snapshot is metadata-only: notification checks never download packages or manifests, probe candidates, create installation receipts or staging, or change executable bytes. The strategy field is reserved for a later release and never schedules work here.
+         * @description Reports release availability for this runtime under its effective startup update policy without triggering a check. The snapshot is metadata-only: notification checks never download packages or manifests, probe candidates, create installation receipts or staging, or change executable bytes. Under the auto policy discovered releases are staged, verified, and installed at the first idle moment inside the configured window; the snapshot reports that operation exactly like a client-requested idle install.
          */
         get: operations["getUpdateSnapshot"];
         put?: never;
@@ -2996,17 +2996,17 @@ export interface components {
              */
             status: "idle" | "checking" | "up_to_date" | "available" | "downloading" | "verified" | "scheduled" | "draining" | "restarting" | "confirmed" | "failed" | "unsupported" | "disabled";
             /**
-             * @description Effective startup update policy. `auto` is not supported and fails configuration at startup.
+             * @description Effective startup update policy. auto installs each newer stable release when the runtime is idle and never stops work.
              * @enum {string}
              */
-            policy: "off" | "notify";
+            policy: "off" | "notify" | "auto";
             /**
              * @description Release channel consulted by checks. Only stable is supported.
              * @enum {string}
              */
             channel: "stable";
             /**
-             * @description Reserved startup setting, reported for transparency. It never schedules work and never affects manual installation.
+             * @description How automatic installs wait for in-flight work. quiesce is accepted and behaves as idle in this release. Never affects client-requested installs.
              * @enum {string}
              */
             strategy: "idle" | "quiesce";
@@ -3073,7 +3073,7 @@ export interface components {
             stop_active_work?: boolean;
             /**
              * Format: date-time
-             * @description Predicted install deadline; explicitly null because an idle wait has no deadline.
+             * @description Next maintenance-window opening an automatic install waits for; null while no window bounds the operation, because an idle wait has no deadline.
              */
             scheduled_for: string | null;
             /** @description Verified server contract of the pinned candidate; exposed only after candidate verification, never from feed metadata alone. */

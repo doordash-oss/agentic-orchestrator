@@ -57,8 +57,7 @@ type ServerConfig struct {
 // ServerUpdatesConfig is the raw server.updates config map. Values stay
 // untouched strings here; the headless server parses, validates, and applies
 // them at launch (see internal/selfupdate.ResolveStartupSettings). strategy
-// and window are reserved: they are validated and reported but never
-// schedule work in this phase.
+// and window shape automatic installs only.
 type ServerUpdatesConfig struct {
 	Policy        string `yaml:"policy,omitempty"`
 	Channel       string `yaml:"channel,omitempty"`

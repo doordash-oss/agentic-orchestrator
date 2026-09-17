@@ -59,11 +59,13 @@ The effective policy is `--updates`, then `AGENTICO_UPDATES`, then
 
 - `off` disables checks. No feed traffic occurs. Checks and installs are refused.
 - `notify` checks on a schedule and on request. Installs happen only on an explicit request.
-- `auto` is reserved. Startup fails with an explicit error.
+- `auto` checks like `notify` and also installs each newer release at the first idle moment. It never stops work.
 
-`server.updates.strategy` and `server.updates.window` are validated and
-reported but never schedule work. None of these settings appear on the
-runtime-config REST surface.
+`server.updates.window` (`HH:MM-HH:MM`, local time) bounds when an automatic
+install may begin. `server.updates.strategy` accepts `idle` or `quiesce`;
+`quiesce` behaves as `idle` in this release. Neither affects installs a
+client requests. None of these settings appear on the runtime-config REST
+surface.
 
 ### GET /api/v1/update
 
@@ -78,7 +80,7 @@ Snapshot highlights:
 - `last_check_at`, `last_success_at`, `next_check_at`, and `retry_not_before` describe check timing. A failed refresh keeps the last successful metadata.
 - `receipt` is the sanitized outcome of the last install, when one exists.
 - `active_work_summary` reports current features, chat, clones, uploads, origin checks, and pending admissions. `detection_failed` means an immediate install will be refused.
-- While an install is active: `method`, `stop_active_work`, `target_version`, `scheduled_for`, `signature`, and `target_contract`. `signature` is `verified` only after the pinned candidate was verified.
+- While an install is active: `method`, `stop_active_work`, `target_version`, `scheduled_for`, `signature`, and `target_contract`. `signature` is `verified` only after the pinned candidate was verified. `scheduled_for` is the next window opening an automatic install waits for, otherwise `null`.
 
 ### POST /api/v1/update/check
 

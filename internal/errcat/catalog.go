@@ -178,7 +178,6 @@ const (
 	InvalidUsage            Code = "invalid_usage"
 	DesktopLaunchFailed     Code = "desktop_launch_failed"
 	UpdateCheckFailed       Code = "update_check_failed"
-	UpdateUnsupportedPolicy Code = "update_unsupported_policy"
 	UpdateConfigInvalid     Code = "update_config_invalid"
 	ContractInputUnreadable Code = "contract_input_unreadable"
 	RuntimeAlreadyRunning   Code = "runtime_already_running"
@@ -1200,12 +1199,6 @@ var catalog = map[Code]Entry{
 			return params.Reason
 		},
 		Remediation: "Check network access to the GitHub API, or update through your package manager.",
-	},
-	UpdateUnsupportedPolicy: {
-		Class:       ClassBlocking,
-		Title:       "Update policy not supported",
-		Summary:     "The requested update policy is not supported by this runtime.",
-		Remediation: "Use --updates=off or --updates=notify (or the matching AGENTICO_UPDATES / server.updates.policy value); automatic updates are a later release.",
 	},
 	UpdateConfigInvalid: {
 		Class:   ClassBlocking,

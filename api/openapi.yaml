@@ -1436,8 +1436,10 @@ paths:
         startup update policy without triggering a check. The snapshot is
         metadata-only: notification checks never download packages or
         manifests, probe candidates, create installation receipts or staging,
-        or change executable bytes. The strategy field is reserved for a
-        later release and never schedules work here.
+        or change executable bytes. Under the auto policy discovered
+        releases are staged, verified, and installed at the first idle
+        moment inside the configured window; the snapshot reports that
+        operation exactly like a client-requested idle install.
       responses:
         "200":
           $ref: "#/components/responses/UpdateSnapshotResponse"
@@ -6467,8 +6469,10 @@ components:
             - disabled
         policy:
           type: string
-          description: Effective startup update policy. `auto` is not supported and fails configuration at startup.
-          enum: [off, notify]
+          description: >-
+            Effective startup update policy. auto installs each newer
+            stable release when the runtime is idle and never stops work.
+          enum: [off, notify, auto]
         channel:
           type: string
           description: Release channel consulted by checks. Only stable is supported.
@@ -6476,8 +6480,9 @@ components:
         strategy:
           type: string
           description: >-
-            Reserved startup setting, reported for transparency. It never
-            schedules work and never affects manual installation.
+            How automatic installs wait for in-flight work. quiesce is
+            accepted and behaves as idle in this release. Never affects
+            client-requested installs.
           enum: [idle, quiesce]
         current_version:
           type: string
@@ -6606,8 +6611,9 @@ components:
           format: date-time
           nullable: true
           description: >-
-            Predicted install deadline; explicitly null because an idle
-            wait has no deadline.
+            Next maintenance-window opening an automatic install waits for;
+            null while no window bounds the operation, because an idle wait
+            has no deadline.
           x-go-type-skip-optional-pointer: false
         target_contract:
           $ref: "#/components/schemas/UpdateTargetContract"

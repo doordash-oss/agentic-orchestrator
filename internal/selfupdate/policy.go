@@ -31,9 +31,9 @@ const (
 	// PolicyNotify checks release metadata on a schedule and on explicit
 	// request. It never installs anything.
 	PolicyNotify Policy = "notify"
-	// PolicyAuto is recognized by the parser so misconfiguration produces an
-	// explicit unsupported-policy error instead of a silent fallback, but no
-	// runtime in this phase may serve under it.
+	// PolicyAuto checks like notify and additionally stages, verifies, and
+	// installs each newer stable release at the first idle moment inside the
+	// configured window. It never stops work.
 	PolicyAuto Policy = "auto"
 )
 
@@ -68,9 +68,9 @@ const (
 )
 
 // StartupSettings is the resolved, validated update configuration a server
-// runs under. Strategy and Window are reserved: they are parsed, validated,
-// and reported for transparency, but they never schedule work and never
-// affect manual installation in this phase.
+// runs under. Strategy and Window only shape automatic installs: quiesce is
+// accepted and behaves as idle in this release, and Window bounds when an
+// automatic install may begin.
 type StartupSettings struct {
 	Policy        Policy
 	Channel       string
@@ -110,21 +110,8 @@ func (e *SettingsError) Error() string {
 	return fmt.Sprintf("invalid update setting %s=%q: %s", e.Field, e.Value, e.Reason)
 }
 
-// UnsupportedPolicyError reports an effective policy value — auto — that no
-// runtime in this phase supports. It is raised instead of silently falling
-// back so operators see the misconfiguration at startup.
-type UnsupportedPolicyError struct {
-	Value  string
-	Source string
-}
-
-func (e *UnsupportedPolicyError) Error() string {
-	return fmt.Sprintf("update policy %q from %s is not supported; use off or notify", e.Value, e.Source)
-}
-
 // ResolveStartupSettings resolves and validates the effective update startup
-// settings from the precedence chain. An effective auto policy returns
-// *UnsupportedPolicyError; malformed values return *SettingsError.
+// settings from the precedence chain. Malformed values return *SettingsError.
 func ResolveStartupSettings(src SettingsSources) (StartupSettings, error) {
 	settings := StartupSettings{
 		Policy:        PolicyDefault,
@@ -150,9 +137,6 @@ func ResolveStartupSettings(src SettingsSources) (StartupSettings, error) {
 				Value:  rawPolicy,
 				Reason: "expected off, notify, or auto",
 			}
-		}
-		if policy == PolicyAuto {
-			return settings, &UnsupportedPolicyError{Value: string(policy), Source: source}
 		}
 		settings.Policy = policy
 	}
@@ -205,30 +189,70 @@ func ResolveStartupSettings(src SettingsSources) (StartupSettings, error) {
 	return settings, nil
 }
 
-// ValidateWindow checks the reserved local-time maintenance-window syntax:
-// HH:MM-HH:MM with 00-23 hours and 00-59 minutes on both sides. The window is
-// never consulted for scheduling in this phase; validation exists so a typo
-// fails at startup instead of silently changing behavior later.
-func ValidateWindow(v string) error {
+// Window is a parsed local-time maintenance window. Start and End are
+// minutes after local midnight; a window whose End is not after Start wraps
+// past midnight.
+type Window struct {
+	Start int
+	End   int
+}
+
+// ParseWindow parses HH:MM-HH:MM with 00-23 hours and 00-59 minutes on both
+// sides.
+func ParseWindow(v string) (Window, error) {
 	const layout = "15:04"
-	sides := strings.SplitN(v, "-", 2)
+	sides := strings.SplitN(strings.TrimSpace(v), "-", 2)
 	if len(sides) != 2 {
-		return fmt.Errorf("expected HH:MM-HH:MM in local time")
+		return Window{}, fmt.Errorf("expected HH:MM-HH:MM in local time")
 	}
-	for _, side := range sides {
-		if len(side) != len(layout) {
-			return fmt.Errorf("expected HH:MM-HH:MM in local time")
+	minutes := make([]int, 2)
+	for i, side := range sides {
+		if len(side) != len(layout) || side[2] != ':' {
+			return Window{}, fmt.Errorf("expected HH:MM-HH:MM in local time")
 		}
 		hour, err := strconv.Atoi(side[0:2])
 		if err != nil || hour < 0 || hour > 23 {
-			return fmt.Errorf("expected HH:MM-HH:MM in local time")
+			return Window{}, fmt.Errorf("expected HH:MM-HH:MM in local time")
 		}
 		minute, err := strconv.Atoi(side[3:5])
 		if err != nil || minute < 0 || minute > 59 {
-			return fmt.Errorf("expected HH:MM-HH:MM in local time")
+			return Window{}, fmt.Errorf("expected HH:MM-HH:MM in local time")
 		}
+		minutes[i] = hour*60 + minute
 	}
-	return nil
+	if minutes[0] == minutes[1] {
+		return Window{}, fmt.Errorf("window start and end must differ")
+	}
+	return Window{Start: minutes[0], End: minutes[1]}, nil
+}
+
+// ValidateWindow checks the local-time maintenance-window syntax.
+func ValidateWindow(v string) error {
+	_, err := ParseWindow(v)
+	return err
+}
+
+// Contains reports whether t (in its own location) falls inside the window.
+// The start is inclusive and the end exclusive.
+func (w Window) Contains(t time.Time) bool {
+	m := t.Hour()*60 + t.Minute()
+	if w.Start < w.End {
+		return m >= w.Start && m < w.End
+	}
+	return m >= w.Start || m < w.End
+}
+
+// NextOpen returns the earliest instant at or after t inside the window.
+func (w Window) NextOpen(t time.Time) time.Time {
+	if w.Contains(t) {
+		return t
+	}
+	day := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+	open := day.Add(time.Duration(w.Start) * time.Minute)
+	if !open.After(t) {
+		open = open.AddDate(0, 0, 1)
+	}
+	return open
 }
 
 // JitterDelay returns the periodic scheduling jitter for the configured

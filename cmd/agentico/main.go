@@ -585,14 +585,12 @@ Server flags (use with 'agentico server'):
                                    network and print a bearer-token connection string;
   --name <name>                    Server display name (default: generated, persisted per
                                     runtime directory)
-  --updates <policy>               Release-availability policy for the server: off or notify
-                                    (default: notify; also accepts both --updates=off and
-                                    --updates off forms). 'auto' fails startup explicitly.
-                                    Precedence: this flag, then AGENTICO_UPDATES, then
-                                    server.updates.policy in config.yaml. The related
-                                    server.updates.strategy and server.updates.window config
-                                    settings are reserved: they are validated and reported by
-                                    GET /api/v1/update but never schedule work in this release.
+  --updates <policy>               Release-availability policy for the server: off, notify, or
+                                    auto (default: notify; accepts --updates=v and --updates v).
+                                    auto installs each newer release when the server is idle,
+                                    inside server.updates.window when one is set, and never
+                                    stops work. Precedence: this flag, then AGENTICO_UPDATES,
+                                    then server.updates.policy in config.yaml.
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
   --check, -n                      With 'update': check for a newer release without installing
 Global flags:
@@ -3145,8 +3143,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 
 	// Release-availability startup configuration resolves after mandatory
 	// recovery and bootstrap, from the captured executable identity and this
-	// runtime's ownership lease. An effective 'auto' policy is an explicit
-	// unsupported-policy configuration error, never a silent fallback.
+	// runtime's ownership lease.
 	updateSettings, updateErr := selfupdate.ResolveStartupSettings(selfupdate.SettingsSources{
 		Flag:                updatesPolicy,
 		Env:                 os.Getenv("AGENTICO_UPDATES"),
@@ -3157,13 +3154,8 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		ConfigWindow:        boot.serverUpdates().Window,
 	})
 	if updateErr != nil {
-		code := errcat.UpdateConfigInvalid
-		var unsupported *selfupdate.UnsupportedPolicyError
-		if errors.As(updateErr, &unsupported) {
-			code = errcat.UpdateUnsupportedPolicy
-		}
 		return targetStartupFailure(func(e error) {
-			renderError(os.Stderr, code, errcat.WithParams(errcat.UsageParams{Reason: updateErr.Error()}))
+			renderError(os.Stderr, errcat.UpdateConfigInvalid, errcat.WithParams(errcat.UsageParams{Reason: updateErr.Error()}))
 		}, updateErr)
 	}
 	eligibility := classifyRuntimeEligibility(boot)

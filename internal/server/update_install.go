@@ -132,6 +132,12 @@ type installAcceptance struct {
 type installOperation struct {
 	when           string
 	stopActiveWork bool
+	// auto marks an operation the auto policy scheduled without a client
+	// request; its target is skipped after cancellation or failure.
+	auto bool
+	// scheduledFor is the next maintenance-window opening an automatic
+	// install waits for; nil while no window bounds it.
+	scheduledFor   *time.Time
 	target         selfupdate.ReleaseSelection
 	targetContract *selfupdate.ServerContract
 	status         string
@@ -171,6 +177,7 @@ type installRequest struct {
 	when           string
 	stopActiveWork bool
 	version        string // empty means "pin the discovered latest"
+	auto           bool
 }
 
 // requestInstall accepts, coalesces, or refuses one consented install
@@ -205,6 +212,7 @@ func (c *updateCoordinator) requestInstall(req installRequest, responseDone chan
 		op := &installOperation{
 			when:           req.when,
 			stopActiveWork: req.stopActiveWork,
+			auto:           req.auto,
 			target:         *latest,
 			status:         updateStatusDownloading,
 			generation:     c.generation,
@@ -357,6 +365,9 @@ func (c *updateCoordinator) cancelInstall(ctx context.Context) (cancelResult, *i
 	if !op.cancelling {
 		op.cancelling = true
 		op.generation++
+		if op.auto {
+			c.autoSkip = op.target.Version
+		}
 		cancel := op.cancel
 		done := op.done
 		c.mu.Unlock()
@@ -500,6 +511,9 @@ func (c *updateCoordinator) failInstall(op *installOperation, code errcat.Code, 
 	// after the operation clears: a failed install requires fresh consent.
 	c.state.status = updateStatusFailed
 	c.state.wireError = &wireErr
+	if op.auto {
+		c.autoSkip = op.target.Version
+	}
 	c.mu.Unlock()
 	if err := cleanupInstallResources(op); err != nil {
 		c.mu.Lock()
@@ -652,6 +666,14 @@ func (c *updateCoordinator) stageForInstall(op *installOperation, ctx context.Co
 			}))
 		return stagedInstall{}, installPhaseSettled
 	}
+	if reason := incompatibleServerContract(contract); reason != "" {
+		c.mu.Lock()
+		op.cleanup = cleanup
+		c.mu.Unlock()
+		c.failInstall(op, errcat.UpdateInstallFailed, "install_failed:contract",
+			errcat.WithParams(errcat.UpdateTargetFailureParams{Version: op.target.Version, Reason: reason}))
+		return stagedInstall{}, installPhaseSettled
+	}
 	c.mu.Lock()
 	op.candidate = &candidate
 	op.cleanup = cleanup
@@ -661,6 +683,23 @@ func (c *updateCoordinator) stageForInstall(op *installOperation, ctx context.Co
 	c.mu.Unlock()
 	c.applyInstallStatus(op, updateStatusVerified, "install_verified")
 	return stagedInstall{candidate: candidate, cleanup: cleanup}, installPhaseProceed
+}
+
+// incompatibleServerContract explains why a verified target's advertised
+// contract cannot replace this build: a schema series regression, or a
+// minimum client schema that would orphan clients attached to this series.
+// An absent contract is unknown and allowed.
+func incompatibleServerContract(contract *selfupdate.ServerContract) string {
+	if contract == nil {
+		return ""
+	}
+	if contract.SchemaVersion < CompatibilitySchemaVersion {
+		return fmt.Sprintf("target schema series %d is older than the running series %d", contract.SchemaVersion, CompatibilitySchemaVersion)
+	}
+	if contract.MinClientSchema > CompatibilitySchemaVersion {
+		return fmt.Sprintf("target requires client schema %d; clients attached to series %d could not reconnect", contract.MinClientSchema, CompatibilitySchemaVersion)
+	}
+	return ""
 }
 
 // enterStopInterval runs the explicit-stop entry protocol for an immediate
@@ -779,7 +818,12 @@ func (c *updateCoordinator) enterQuiescedInstall(op *installOperation, admission
 // settles the operation, so the phase returns nothing.
 func (c *updateCoordinator) guardedCommit(op *installOperation, ctx context.Context, staged stagedInstall, admission InstallAdmission) {
 	lifecycle := c.opts.Install
+	window := c.installWindow(op)
 	for {
+		if window != nil && !c.awaitWindow(ctx, op, *window) {
+			c.settleCancelled(op, staged.cleanup)
+			return
+		}
 		if err := c.awaitIdleForInstall(ctx, op, admission); err != nil {
 			if ctx.Err() != nil {
 				c.settleCancelled(op, staged.cleanup)
@@ -792,6 +836,12 @@ func (c *updateCoordinator) guardedCommit(op *installOperation, ctx context.Cont
 				c.settleCancelled(op, staged.cleanup)
 				return
 			}
+			continue
+		}
+		if window != nil && !window.Contains(c.clock.Now().Local()) {
+			// Idle arrived after the window closed: reopen and wait for the
+			// next opening.
+			c.admissionOpen()
 			continue
 		}
 		release, acquired := lifecycle.AcquireUpdateLock()
@@ -890,6 +940,56 @@ func (c *updateCoordinator) guardedCommit(op *installOperation, ctx context.Cont
 				Reason:  reason,
 			}))
 		return
+	}
+}
+
+// installWindow returns the maintenance window bounding an automatic
+// operation, or nil when none applies (client-requested installs and
+// unconfigured windows).
+func (c *updateCoordinator) installWindow(op *installOperation) *selfupdate.Window {
+	if !op.auto || c.opts.Settings.Window == "" {
+		return nil
+	}
+	window, err := selfupdate.ParseWindow(c.opts.Settings.Window)
+	if err != nil {
+		return nil
+	}
+	return &window
+}
+
+// awaitWindow parks an automatic operation as scheduled until the window
+// opens, publishing the predicted opening as scheduled_for. It returns false
+// when the operation context ended.
+func (c *updateCoordinator) awaitWindow(ctx context.Context, op *installOperation, window selfupdate.Window) bool {
+	for {
+		now := c.clock.Now().Local()
+		if window.Contains(now) {
+			c.setScheduledFor(op, nil)
+			return true
+		}
+		open := window.NextOpen(now)
+		c.setScheduledFor(op, &open)
+		c.applyInstallStatus(op, updateStatusScheduled, "install_scheduled:window")
+		select {
+		case <-ctx.Done():
+			return false
+		case <-c.clock.After(open.Sub(now)):
+		}
+	}
+}
+
+func (c *updateCoordinator) setScheduledFor(op *installOperation, t *time.Time) {
+	c.mu.Lock()
+	if c.install != op || op.cancelling {
+		c.mu.Unlock()
+		return
+	}
+	op.scheduledFor = t
+	status := op.status
+	revision := c.commitRevisionLocked()
+	c.mu.Unlock()
+	if revision != "" {
+		c.emitTransition(status, status, "install_window_updated")
 	}
 }
 

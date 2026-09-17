@@ -33,18 +33,13 @@ func TestResolveStartupSettingsPrecedence(t *testing.T) {
 		{name: "config used when others unset", src: SettingsSources{ConfigPolicy: "off"}, want: PolicyOff},
 		{name: "blank env does not shadow config", src: SettingsSources{Env: "  ", ConfigPolicy: "off"}, want: PolicyOff},
 		{name: "trimmed values", src: SettingsSources{Flag: " off "}, want: PolicyOff},
-		{name: "auto flag is recognized then rejected", src: SettingsSources{Flag: "auto"}, want: PolicyNotify},
+		{name: "auto flag", src: SettingsSources{Flag: "auto"}, want: PolicyAuto},
+		{name: "auto env", src: SettingsSources{Env: "auto"}, want: PolicyAuto},
+		{name: "auto config", src: SettingsSources{ConfigPolicy: "auto"}, want: PolicyAuto},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			settings, err := ResolveStartupSettings(tt.src)
-			if tt.name == "auto flag is recognized then rejected" {
-				var unsupported *UnsupportedPolicyError
-				if !errors.As(err, &unsupported) {
-					t.Fatalf("want UnsupportedPolicyError, got %v", err)
-				}
-				return
-			}
 			if err != nil {
 				t.Fatalf("resolve: %v", err)
 			}
@@ -55,17 +50,38 @@ func TestResolveStartupSettingsPrecedence(t *testing.T) {
 	}
 }
 
-func TestResolveStartupSettingsAutoRejectedFromEverySource(t *testing.T) {
+func TestWindowContainsAndNextOpen(t *testing.T) {
 	t.Parallel()
-	for _, src := range []SettingsSources{
-		{Flag: "auto"},
-		{Env: "auto"},
-		{ConfigPolicy: "auto"},
-	} {
-		_, err := ResolveStartupSettings(src)
-		var unsupported *UnsupportedPolicyError
-		if !errors.As(err, &unsupported) {
-			t.Fatalf("source %+v: want UnsupportedPolicyError, got %v", src, err)
+	loc := time.FixedZone("test", 0)
+	at := func(h, m int) time.Time { return time.Date(2026, 3, 10, h, m, 0, 0, loc) }
+	tests := []struct {
+		spec     string
+		now      time.Time
+		contains bool
+		nextOpen time.Time
+	}{
+		{"01:00-05:00", at(2, 30), true, at(2, 30)},
+		{"01:00-05:00", at(5, 0), false, at(1, 0).AddDate(0, 0, 1)},
+		{"01:00-05:00", at(0, 59), false, at(1, 0)},
+		{"22:00-02:00", at(23, 0), true, at(23, 0)},
+		{"22:00-02:00", at(1, 59), true, at(1, 59)},
+		{"22:00-02:00", at(12, 0), false, at(22, 0)},
+	}
+	for _, tt := range tests {
+		w, err := ParseWindow(tt.spec)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.spec, err)
+		}
+		if got := w.Contains(tt.now); got != tt.contains {
+			t.Fatalf("%s contains %v = %v, want %v", tt.spec, tt.now, got, tt.contains)
+		}
+		if got := w.NextOpen(tt.now); !got.Equal(tt.nextOpen) {
+			t.Fatalf("%s next open from %v = %v, want %v", tt.spec, tt.now, got, tt.nextOpen)
+		}
+	}
+	for _, bad := range []string{"01:00", "1:00-05:00", "01:00-01:00", "24:00-01:00", "01:60-02:00", "01.00-02:00"} {
+		if _, err := ParseWindow(bad); err == nil {
+			t.Fatalf("%q: want parse error", bad)
 		}
 	}
 }

@@ -1075,6 +1075,7 @@ func (e UpdateSnapshotMethod) Valid() bool {
 
 // Defines values for UpdateSnapshotPolicy.
 const (
+	Auto   UpdateSnapshotPolicy = "auto"
 	Notify UpdateSnapshotPolicy = "notify"
 	Off    UpdateSnapshotPolicy = "off"
 )
@@ -1082,6 +1083,8 @@ const (
 // Valid indicates whether the value is a known member of the UpdateSnapshotPolicy enum.
 func (e UpdateSnapshotPolicy) Valid() bool {
 	switch e {
+	case Auto:
+		return true
 	case Notify:
 		return true
 	case Off:
@@ -4497,7 +4500,7 @@ type UpdateSnapshot struct {
 	// NextCheckAt When the next periodic check is scheduled. Absent when no periodic check will run (policy off, unsupported, or shutdown).
 	NextCheckAt *time.Time `json:"next_check_at,omitempty"`
 
-	// Policy Effective startup update policy. `auto` is not supported and fails configuration at startup.
+	// Policy Effective startup update policy. auto installs each newer stable release when the runtime is idle and never stops work.
 	Policy UpdateSnapshotPolicy `json:"policy"`
 
 	// Receipt Sanitized public projection of the durable installation receipt history. Absent when no installation receipt exists for this executable. Metadata-only runs never create receipts.
@@ -4509,7 +4512,7 @@ type UpdateSnapshot struct {
 	// RetryNotBefore Server-imposed retry floor from a 403/429 response. Local backoff and jitter never shorten it; explicit checks inside the deadline are refused without a request.
 	RetryNotBefore *time.Time `json:"retry_not_before,omitempty"`
 
-	// ScheduledFor Predicted install deadline; explicitly null because an idle wait has no deadline.
+	// ScheduledFor Next maintenance-window opening an automatic install waits for; null while no window bounds the operation, because an idle wait has no deadline.
 	ScheduledFor *time.Time `json:"scheduled_for"`
 
 	// Signature Signature trust state for a would-be target. Metadata-only checks report unverified; verified appears only after an install operation verified the pinned candidate.
@@ -4521,7 +4524,7 @@ type UpdateSnapshot struct {
 	// StopActiveWork The actual stop-work permission the accepted operation retains (only meaningful with method now); present only while an operation is active.
 	StopActiveWork *bool `json:"stop_active_work,omitempty"`
 
-	// Strategy Reserved startup setting, reported for transparency. It never schedules work and never affects manual installation.
+	// Strategy How automatic installs wait for in-flight work. quiesce is accepted and behaves as idle in this release. Never affects client-requested installs.
 	Strategy UpdateSnapshotStrategy `json:"strategy"`
 
 	// TargetContract Verified server contract of the pinned candidate; exposed only after candidate verification, never from feed metadata alone.
@@ -4543,7 +4546,7 @@ type UpdateSnapshotInstallation string
 // UpdateSnapshotMethod Waiting method of the accepted install operation; present only while an install operation is active.
 type UpdateSnapshotMethod string
 
-// UpdateSnapshotPolicy Effective startup update policy. `auto` is not supported and fails configuration at startup.
+// UpdateSnapshotPolicy Effective startup update policy. auto installs each newer stable release when the runtime is idle and never stops work.
 type UpdateSnapshotPolicy string
 
 // UpdateSnapshotSignature Signature trust state for a would-be target. Metadata-only checks report unverified; verified appears only after an install operation verified the pinned candidate.
@@ -4552,7 +4555,7 @@ type UpdateSnapshotSignature string
 // UpdateSnapshotStatus Coarse availability state. downloading, verified, scheduled, draining, and restarting are reserved for the later installation slice and never emitted by the availability endpoints.
 type UpdateSnapshotStatus string
 
-// UpdateSnapshotStrategy Reserved startup setting, reported for transparency. It never schedules work and never affects manual installation.
+// UpdateSnapshotStrategy How automatic installs wait for in-flight work. quiesce is accepted and behaves as idle in this release. Never affects client-requested installs.
 type UpdateSnapshotStrategy string
 
 // UpdateSnapshotUnsupportedReason Machine-readable remediation code present only while status is unsupported. ownership_contention means another live runtime owns this binary's update lease; lease_unavailable covers other lease acquisition failures.

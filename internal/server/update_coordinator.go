@@ -203,6 +203,9 @@ type updateCoordinator struct {
 	// cancel releases the loop's derived context so shutdown cancels
 	// in-flight metadata work; nil before start.
 	cancel context.CancelFunc
+	// autoSkip is the release version an automatic install must not retry:
+	// a cancelled or failed automatic target waits for a newer release.
+	autoSkip string
 
 	wake   chan struct{}
 	stopCh chan struct{}
@@ -287,9 +290,16 @@ func (c *updateCoordinator) resolveStartupReceipt() *selfupdate.Receipt {
 }
 
 func (c *updateCoordinator) checksEnabled() bool {
-	return c.opts.Policy == selfupdate.PolicyNotify &&
+	return (c.opts.Policy == selfupdate.PolicyNotify || c.opts.Policy == selfupdate.PolicyAuto) &&
 		c.opts.Eligibility.Supported &&
 		c.opts.Feed != nil
+}
+
+// autoInstallsEnabled reports whether discovered releases install without a
+// client request.
+func (c *updateCoordinator) autoInstallsEnabled() bool {
+	return c.opts.Policy == selfupdate.PolicyAuto &&
+		c.opts.Stager != nil && c.opts.Install != nil && c.opts.Admission != nil
 }
 
 // start launches the scheduler after health/discovery startup. It never
@@ -486,6 +496,34 @@ func (c *updateCoordinator) performCheck(ctx context.Context, trigger string) {
 	c.mu.Unlock()
 	if revision != "" {
 		c.emitTransition(updateStatusChecking, newStatus, result)
+	}
+	if newStatus == updateStatusAvailable {
+		c.maybeAutoInstall()
+	}
+}
+
+// maybeAutoInstall schedules an idle install of the discovered release under
+// the auto policy. It reuses the consented install path with when=idle and no
+// stop permission, so it never interrupts work; an active operation or a
+// cancelled/failed target for the same version leaves it alone.
+func (c *updateCoordinator) maybeAutoInstall() {
+	if !c.autoInstallsEnabled() {
+		return
+	}
+	c.mu.Lock()
+	latest := c.state.latest
+	skip := c.autoSkip
+	active := c.install != nil
+	c.mu.Unlock()
+	if latest == nil || active || latest.Version == skip {
+		return
+	}
+	if _, refusal := c.requestInstall(installRequest{
+		consent: true,
+		when:    updateInstallWhenIdle,
+		auto:    true,
+	}, nil); refusal != nil {
+		c.logf("automatic install of %s not scheduled: %s", latest.Version, refusal.code)
 	}
 }
 
@@ -745,9 +783,13 @@ func (c *updateCoordinator) snapshotLocked() UpdateSnapshot {
 			snap.Error = op.wireError
 		}
 	}
-	// scheduled_for is explicitly null: an idle install waits without a
-	// predicted deadline, and an immediate install schedules nothing.
+	// scheduled_for is null unless an automatic install waits for its
+	// maintenance window: an idle wait has no predicted deadline.
 	snap.ScheduledFor = nil
+	if op := c.install; op != nil && op.scheduledFor != nil {
+		t := op.scheduledFor.UTC()
+		snap.ScheduledFor = &t
+	}
 	if !opts.Eligibility.Supported {
 		reason := UpdateSnapshotUnsupportedReason(opts.Eligibility.Reason)
 		snap.UnsupportedReason = &reason

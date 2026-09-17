@@ -168,16 +168,6 @@ func (a *fakeInstallAdmission) Held() (int, map[workadmission.Category]int) {
 
 func (a *fakeInstallAdmission) waitCallsN() int { a.mu.Lock(); defer a.mu.Unlock(); return a.waitCalls }
 func (a *fakeInstallAdmission) openCallsN() int { a.mu.Lock(); defer a.mu.Unlock(); return a.openCalls }
-func (a *fakeInstallAdmission) closeCallsN() int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.closeCalls
-}
-func (a *fakeInstallAdmission) detectCallsN() int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.detectCalls
-}
 
 // fakeReleaseStager stages a canned candidate, optionally blocking on a
 // barrier or failing at a chosen pipeline stage so the coordinator's

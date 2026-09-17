@@ -68,21 +68,9 @@ func (s *fakeInstallStopper) setStopErr(id string, err error) {
 	s.mu.Unlock()
 }
 
-func (s *fakeInstallStopper) setEndChatErr(err error) {
-	s.mu.Lock()
-	s.endChatErr = err
-	s.mu.Unlock()
-}
-
 func (s *fakeInstallStopper) setStopBlock(ch chan struct{}) {
 	s.mu.Lock()
 	s.stopBlock = ch
-	s.mu.Unlock()
-}
-
-func (s *fakeInstallStopper) setEndChatBlock(ch chan struct{}) {
-	s.mu.Lock()
-	s.endChatBlock = ch
 	s.mu.Unlock()
 }
 
@@ -183,12 +171,6 @@ func (m *stopMutationTarget) EndChat() (ChatEndResponse, error) {
 	return ChatEndResponse{SessionID: ChatSessionID, Result: "ended"}, nil
 }
 
-func (m *stopMutationTarget) stoppedSnapshot() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return append([]string(nil), m.stopped...)
-}
-
 func (m *stopMutationTarget) endChatsN() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -203,11 +185,6 @@ func (a *fakeInstallAdmission) setAdmissionActivity(activity workadmission.Activ
 }
 
 // setAdmissionHeld mutates the fake admission's held reservation count.
-func (a *fakeInstallAdmission) setAdmissionHeld(held int) {
-	a.mu.Lock()
-	a.held = held
-	a.mu.Unlock()
-}
 
 // setAdmissionHeldCategories mutates the fake admission's per-category
 // reservations.

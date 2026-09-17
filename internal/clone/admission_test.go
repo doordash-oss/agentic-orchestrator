@@ -46,6 +46,16 @@ func cloneHeld(t *testing.T, coord *workadmission.Coordinator) int {
 	return total
 }
 
+// Admission releases after publishing the terminal record, under the operation
+// lock. Wait for that critical section before asserting the settled reservation.
+func waitForAdmissionSettlement(fx *serviceFixture, id string, state State) {
+	fx.t.Helper()
+	fx.waitForState(id, state)
+	op := fx.svc.op(id)
+	op.mu.Lock()
+	op.mu.Unlock()
+}
+
 func TestAdmissionReservationHeldFromStartUntilTerminalSettle(t *testing.T) {
 	t.Parallel()
 	spawnGate := make(chan struct{})
@@ -57,7 +67,7 @@ func TestAdmissionReservationHeldFromStartUntilTerminalSettle(t *testing.T) {
 		t.Fatalf("held = %d after start, want 1", n)
 	}
 	close(spawnGate)
-	fx.waitForState(rec.ID, StateSucceeded)
+	waitForAdmissionSettlement(fx, rec.ID, StateSucceeded)
 	if n := cloneHeld(t, coord); n != 0 {
 		t.Fatalf("held = %d after terminal settle, want 0", n)
 	}
@@ -67,7 +77,7 @@ func TestAdmissionReservationReleasesOnFailedSettle(t *testing.T) {
 	t.Parallel()
 	fx, coord := admitFixture(t, failAuthScript)
 	rec := fx.start("key-admit-fail")
-	fx.waitForState(rec.ID, StateFailed)
+	waitForAdmissionSettlement(fx, rec.ID, StateFailed)
 	if n := cloneHeld(t, coord); n != 0 {
 		t.Fatalf("held = %d after failed settle, want 0", n)
 	}
@@ -189,7 +199,7 @@ func TestAdmissionReplayDoesNotLeakOrDoubleHold(t *testing.T) {
 	t.Parallel()
 	fx, coord := admitFixture(t, succeedScript)
 	rec := fx.start("key-replay")
-	fx.waitForState(rec.ID, StateSucceeded)
+	waitForAdmissionSettlement(fx, rec.ID, StateSucceeded)
 	if n := cloneHeld(t, coord); n != 0 {
 		t.Fatalf("held = %d after settle, want 0", n)
 	}
@@ -300,7 +310,7 @@ func TestStartRefusedWhenAdmissionClosed(t *testing.T) {
 	// Reopening admits work again, and it settles normally.
 	coord.Open()
 	rec := fx.start("key-reopened")
-	fx.waitForState(rec.ID, StateSucceeded)
+	waitForAdmissionSettlement(fx, rec.ID, StateSucceeded)
 	if n := cloneHeld(t, coord); n != 0 {
 		t.Fatalf("held = %d after reopened start settled, want 0", n)
 	}

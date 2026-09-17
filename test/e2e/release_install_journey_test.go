@@ -18,6 +18,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -26,6 +27,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -278,6 +280,13 @@ type tarEntrySpec struct {
 	content []byte
 }
 
+// Many journeys sign the same immutable binary archive with different metadata.
+// Cache by complete tar content so hostile entries and alternate binaries stay distinct.
+var releaseArchiveCache = struct {
+	sync.Mutex
+	archives map[[sha256.Size]byte][]byte
+}{archives: make(map[[sha256.Size]byte][]byte)}
+
 func buildReleaseTarGz(t *testing.T, entries []tarEntrySpec) []byte {
 	t.Helper()
 	var raw bytes.Buffer
@@ -293,14 +302,24 @@ func buildReleaseTarGz(t *testing.T, entries []tarEntrySpec) []byte {
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
 	}
+	key := sha256.Sum256(raw.Bytes())
+	releaseArchiveCache.Lock()
+	defer releaseArchiveCache.Unlock()
+	if archive, ok := releaseArchiveCache.archives[key]; ok {
+		return bytes.Clone(archive)
+	}
 	var out bytes.Buffer
-	zw := gzip.NewWriter(&out)
+	zw, err := gzip.NewWriterLevel(&out, gzip.BestSpeed)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := zw.Write(raw.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
+	releaseArchiveCache.archives[key] = bytes.Clone(out.Bytes())
 	return out.Bytes()
 }
 
@@ -384,8 +403,13 @@ func TestReleaseInstallJourneySignedFixture(t *testing.T) {
 	terminated := openSelfUpdateStream(t, streamURL)
 
 	j.trigger()
+	// Downloading, verifying and syncing precede the shutdown deadline.
+	j.waitReceipt(45 * time.Second)
 	select {
-	case <-terminated:
+	case err := <-terminated:
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			t.Fatalf("SSE client expired instead of observing server shutdown: %v", err)
+		}
 	case <-time.After(20 * time.Second):
 		t.Fatalf("pre-handoff SSE stream never terminated (stderr tail:\n%s)", p.stderrTail())
 	}

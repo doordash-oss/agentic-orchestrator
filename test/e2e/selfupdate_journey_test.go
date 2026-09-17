@@ -867,14 +867,19 @@ func TestSelfUpdateJourneyFixedPort(t *testing.T) {
 	terminated := openSelfUpdateStream(t, streamURL)
 
 	j.trigger()
+	// Preparing and syncing binary copies precedes draining and has its own budget.
+	j.waitReceipt(45 * time.Second)
 
 	// Bounded generously: a healthy drain closes the stream promptly; a
 	// stalled one only closes it at process death, which the later
 	// healthy-version wait diagnoses with the driver's stderr.
 	select {
-	case <-terminated:
+	case err := <-terminated:
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			t.Fatalf("SSE client expired instead of observing server shutdown: %v", err)
+		}
 	case <-time.After(15 * time.Second):
-		t.Fatal("pre-handoff SSE stream never terminated after trigger")
+		t.Fatalf("pre-handoff SSE stream never terminated after trigger (stderr tail:\n%s)", p.stderrTail())
 	}
 
 	post := j.waitHealthy(p, baseURL, selfupdateVersionHigher, 30*time.Second)

@@ -54,21 +54,18 @@ func newFeatureAdmissions(coordinator *workadmission.Coordinator) *featureAdmiss
 }
 
 // launch admits one phase dispatch. When the feature already holds a
-// reservation the launch is a transfer: a scheduled asynchronous
-// continuation consumes its credit, and a synchronous continuation (the
-// completion handler advancing within its own stack) simply keeps the
-// reservation. Otherwise a fresh reservation is acquired before the phase
-// starter dispatches any work; a closed boundary refuses the launch.
+// reservation (an in-flight continuation, or a synchronous advance within
+// the completion handler's own stack) the launch simply keeps it; a
+// continuation's credit is owned by the continuation itself and released
+// only by endAsync. Otherwise a fresh reservation is acquired before the
+// phase starter dispatches any work; a closed boundary refuses the launch.
 func (a *featureAdmissions) launch(featureID string) error {
 	if a == nil {
 		return nil
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if fa := a.features[featureID]; fa != nil {
-		if fa.continuations > 0 {
-			fa.continuations--
-		}
+	if a.features[featureID] != nil {
 		return nil
 	}
 	res, err := a.coordinator.Acquire(workadmission.CategoryFeature)
@@ -102,9 +99,10 @@ func (a *featureAdmissions) beginAsync(featureID string) error {
 	return nil
 }
 
-// cancelAsync withdraws one scheduled asynchronous continuation that will
-// never launch (its dispatch failed), then settles if quiet.
-func (a *featureAdmissions) cancelAsync(featureID string, ownsWork func() bool) {
+// endAsync returns one asynchronous continuation's credit, whether it
+// finished or never launched, then settles if quiet. Every beginAsync must
+// be paired with exactly one endAsync.
+func (a *featureAdmissions) endAsync(featureID string, ownsWork func() bool) {
 	if a == nil {
 		return
 	}
@@ -204,10 +202,10 @@ func (o *Orchestrator) admissionSettleIfQuiet(featureID string) {
 	o.admission.settleIfQuiet(featureID, func() bool { return o.admissionOwnsWork(featureID) })
 }
 
-// admissionCancelAsync withdraws a scheduled continuation whose dispatch
-// failed, then settles if quiet.
-func (o *Orchestrator) admissionCancelAsync(featureID string) {
-	o.admission.cancelAsync(featureID, func() bool { return o.admissionOwnsWork(featureID) })
+// admissionEndAsync returns a continuation's credit (finished or never
+// dispatched), then settles if quiet.
+func (o *Orchestrator) admissionEndAsync(featureID string) {
+	o.admission.endAsync(featureID, func() bool { return o.admissionOwnsWork(featureID) })
 }
 
 // SetAdmissionBoundary installs the runtime work-admission boundary on an
@@ -228,11 +226,10 @@ func (o *Orchestrator) PrepareAsyncWork(featureID string) error {
 	return o.admissionBeginAsync(featureID)
 }
 
-// SettleAsyncWork settles one unit of server-owned background work after
-// it finishes; the release applies only when the feature owns no other
-// work.
+// SettleAsyncWork ends one unit of server-owned background work after it
+// finishes; the release applies only when the feature owns no other work.
 func (o *Orchestrator) SettleAsyncWork(featureID string) {
-	o.admissionSettleIfQuiet(featureID)
+	o.admissionEndAsync(featureID)
 }
 
 // SettleFeatureWork releases the feature's admission reservation

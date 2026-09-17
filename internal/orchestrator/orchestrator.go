@@ -1328,11 +1328,11 @@ func (o *Orchestrator) startFinalReview(featureID string) (PhaseStartResult, err
 	}
 	resultCh, err := o.startDeferredFinalReview(featureID)
 	if err != nil {
-		o.admissionCancelAsync(featureID)
+		o.admissionEndAsync(featureID)
 		return PhaseStartResult{}, err
 	}
 	o.cycleWG.Go(func() {
-		defer o.admissionSettleIfQuiet(featureID)
+		defer o.admissionEndAsync(featureID)
 		res, ok := <-resultCh
 		if err := o.finishDeferredFinalReviewResult(featureID, res, ok); err != nil {
 			o.surfaceDispatchCompletionError(featureID, err)

@@ -59,7 +59,7 @@ func (o *Orchestrator) RunSetupAsync(featureID string) {
 	o.cycleWG.Add(1)
 	go func() {
 		defer o.cycleWG.Done()
-		defer o.admissionSettleIfQuiet(featureID)
+		defer o.admissionEndAsync(featureID)
 		if err := o.RunSetup(featureID); err != nil {
 			o.recordAsyncSetupFailure(featureID, err)
 		}

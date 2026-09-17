@@ -107,6 +107,10 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		ProbeActivity:               opts.ProbeActivity,
 		RuntimePolicy:               policy,
 	})
+	lifetime := opts.Lifetime
+	if lifetime == nil {
+		lifetime = ctx
+	}
 	httpServer := &http.Server{
 		Handler: handler.routes(),
 		// ReadHeaderTimeout (not ReadTimeout) is intentional: ReadTimeout
@@ -123,7 +127,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 	if handler.uploads != nil {
 		// Reap orphaned staged uploads: once at startup, then hourly until the
 		// server lifetime context ends.
-		go handler.uploads.sweepLoop(ctx)
+		go handler.uploads.sweepLoop(lifetime)
 	}
 	if handler.clones != nil {
 		// Startup reconciliation: restore reservations, recognize published
@@ -133,7 +137,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		_ = handler.clones.Recover()
 		// Prune resolved terminal clone records past the retention window,
 		// hourly, exactly like upload sweeping.
-		go cloneSweepLoop(ctx, handler.clones)
+		go cloneSweepLoop(lifetime, handler.clones)
 	}
 	s := &RuntimeServer{
 		baseURL:      baseURL,
@@ -174,7 +178,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 	// and never blocks readiness: the initial release check runs
 	// asynchronously inside the coordinator loop.
 	if handler.updates != nil {
-		handler.updates.start(ctx)
+		handler.updates.start(lifetime)
 	}
 	return s, nil
 }

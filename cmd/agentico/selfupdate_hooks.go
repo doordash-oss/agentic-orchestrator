@@ -231,6 +231,8 @@ func adoptHandoffForLaunch() (*selfupdate.Lease, selfupdate.HandoffMetadata, sel
 	if err != nil {
 		return nil, m, selfupdate.Receipt{}, err
 	}
+	// Consumed: children and a later replacement must not inherit it.
+	_ = os.Unsetenv(selfupdate.HandoffEnvVar)
 	return lease, m, receipt, nil
 }
 

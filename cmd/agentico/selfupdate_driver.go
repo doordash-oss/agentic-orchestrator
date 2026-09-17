@@ -626,6 +626,8 @@ func adoptDriverHandoff() (*selfupdate.Lease, selfupdate.HandoffMetadata, selfup
 	if err != nil {
 		return nil, m, selfupdate.Receipt{}, err
 	}
+	// Consumed: children and a later replacement must not inherit it.
+	_ = os.Unsetenv(selfupdate.HandoffEnvVar)
 	if driverArmOnAdoption != nil {
 		driverArmOnAdoption()
 	}

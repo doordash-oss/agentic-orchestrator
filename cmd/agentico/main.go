@@ -3256,6 +3256,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		Worktrees: boot.worktrees,
 		Updates:   wiring.options,
 		Admission: boot.admission,
+		Lifetime:  ctx,
 	})
 	if err != nil {
 		return targetStartupFailure(func(e error) {
@@ -3267,7 +3268,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	// Complete the install lifecycle's server handle now that the server is
 	// running: install requests arriving through HTTP find it ready.
 	installLifecycle := wiring.lifecycle
-	installLifecycle.run = &serverRun{boot: boot, server: runtimeServer, authToken: authToken}
+	installLifecycle.setRun(&serverRun{boot: boot, server: runtimeServer, authToken: authToken})
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -3290,7 +3291,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	// attachable via its per-runtime discovery file.
 	registryDir := serverruntime.RegistryDir(resolveRegistryParent())
 	rt.registryDir = registryDir
-	installLifecycle.run.registryDir = registryDir
+	installLifecycle.setRegistryDir(registryDir)
 	if err := serverruntime.PublishRegistryEntry(registryDir, record); err != nil {
 		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
 			errcat.WithDiagnostics(fmt.Sprintf("publishing server registry entry: %v", err)))
@@ -3328,7 +3329,11 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		journey = serverJourneyHook()
 	}
 	if journey != nil {
-		if code := journey.run(*installLifecycle.run); code >= 0 {
+		run, err := installLifecycle.current()
+		if err != nil {
+			return 1
+		}
+		if code := journey.run(run); code >= 0 {
 			return code
 		}
 	}

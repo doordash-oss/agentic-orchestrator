@@ -138,6 +138,9 @@ func TestCheckLiveHandoffScenarios(t *testing.T) {
 		t.Fatalf("re-acquire lease: %v", err)
 	}
 	defer func() { _ = lease.Close() }()
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
 	if _, err := selfupdate.ConfirmTransaction(exec.Path, txid); err != nil {
 		t.Fatalf("ConfirmTransaction: %v", err)
 	}

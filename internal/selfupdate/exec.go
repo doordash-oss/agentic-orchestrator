@@ -128,10 +128,17 @@ func ExecReplace(installedPath string, argv []string, env []string, extraEnvEntr
 	if err := ClearCLOEXEC(leaseFD); err != nil {
 		return err
 	}
-	execEnv := env
+	// Copy without any inherited handoff entry so metadata never
+	// accumulates across successive replacements.
+	execEnv := make([]string, 0, len(env)+1)
+	prefix := HandoffEnvVar + "="
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			execEnv = append(execEnv, entry)
+		}
+	}
 	if extraEnvEntry != "" {
-		// Copy: never mutate (or alias into) the caller's environment slice.
-		execEnv = append(append([]string(nil), env...), extraEnvEntry)
+		execEnv = append(execEnv, extraEnvEntry)
 	}
 	if err := execFn(installedPath, argv, execEnv); err != nil {
 		_ = SetCLOEXEC(leaseFD)

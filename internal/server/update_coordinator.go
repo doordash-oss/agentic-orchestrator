@@ -296,23 +296,13 @@ func (c *updateCoordinator) checksEnabled() bool {
 // blocks readiness: the initial check runs asynchronously inside the loop.
 func (c *updateCoordinator) start(ctx context.Context) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.started || c.stopped || !c.checksEnabled() {
-		c.mu.Unlock()
 		return
 	}
-	c.started = true
-	c.mu.Unlock()
 	loopCtx, cancel := context.WithCancel(ctx)
-	c.mu.Lock()
-	// A concurrent shutdown may have fenced the coordinator between the two
-	// critical sections; undo the start in that case.
-	if c.stopped {
-		c.mu.Unlock()
-		cancel()
-		return
-	}
+	c.started = true
 	c.cancel = cancel
-	c.mu.Unlock()
 	go c.run(loopCtx)
 }
 
@@ -470,22 +460,29 @@ func (c *updateCoordinator) performCheck(ctx context.Context, trigger string) {
 	}
 	generation := c.generation
 	prevStatus := c.state.status
-	changed := c.setStatusLocked(updateStatusChecking)
+	c.setStatusLocked(updateStatusChecking)
+	revision := c.commitRevisionLocked()
 	c.mu.Unlock()
-	if changed {
+	if revision != "" {
 		c.emitTransition(prevStatus, updateStatusChecking, "check_started:"+trigger)
 	}
 
 	sel, err := c.fetch(ctx)
+	// Suppression is durable state read off the coordinator mutex.
+	var lookup selfupdate.SuppressionLookup
+	var lookupErr error
+	if err == nil && c.opts.ExecPath != "" {
+		lookup, lookupErr = selfupdate.LookupSuppression(c.opts.ExecPath, sel.Version)
+	}
 
 	c.mu.Lock()
 	if c.stopped || generation != c.generation {
 		c.mu.Unlock()
 		return
 	}
-	result := c.applyCheckResultLocked(sel, err)
+	result := c.applyCheckResultLocked(sel, err, lookup, lookupErr)
 	newStatus := c.state.status
-	revision := c.commitRevisionLocked()
+	revision = c.commitRevisionLocked()
 	c.mu.Unlock()
 	if revision != "" {
 		c.emitTransition(updateStatusChecking, newStatus, result)
@@ -504,7 +501,7 @@ func (c *updateCoordinator) fetch(ctx context.Context) (selfupdate.ReleaseSelect
 // failed refresh retains the prior latest-release metadata and its
 // last-success timestamp; a success resets the retry floor and backoff and
 // schedules the next periodic check with bounded jitter.
-func (c *updateCoordinator) applyCheckResultLocked(sel selfupdate.ReleaseSelection, err error) string {
+func (c *updateCoordinator) applyCheckResultLocked(sel selfupdate.ReleaseSelection, err error, lookup selfupdate.SuppressionLookup, lookupErr error) string {
 	now := c.clock.Now()
 	st := &c.state
 	st.lastCheckAt = &now
@@ -538,7 +535,6 @@ func (c *updateCoordinator) applyCheckResultLocked(sel selfupdate.ReleaseSelecti
 	// store fails the check rather than risking a wrong "available", and a
 	// successful check never rewrites or clears it.
 	if c.opts.ExecPath != "" {
-		lookup, lookupErr := selfupdate.LookupSuppression(c.opts.ExecPath, sel.Version)
 		if lookupErr != nil {
 			st.status = updateStatusFailed
 			wireErr := wireError(errcat.New(errcat.UpdateCheckFailed,

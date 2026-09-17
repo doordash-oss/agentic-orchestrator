@@ -21,7 +21,7 @@ import (
 )
 
 // writeFileAtomic writes data to path with owner-only permissions through a
-// pid-suffixed O_EXCL temp file in the same directory followed by a rename,
+// randomly named O_EXCL temp file in the same directory followed by a rename,
 // so readers never observe a partial write and concurrent writers never
 // corrupt each other's bytes. When durable is true the temp file is fsynced
 // before the rename and the parent directory is fsynced after it, so the
@@ -30,11 +30,11 @@ import (
 // to self-heal mode drift; a failure after the rename leaves the new bytes
 // in place and surfaces the error, never a half-written file.
 func writeFileAtomic(path string, data []byte, durable bool) error {
-	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
+	tmp := f.Name()
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)

@@ -288,11 +288,15 @@ func (c *FeedClient) downloadArchive(ctx context.Context, release VerifiedReleas
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-// downloadClient returns the unbounded-timeout client used for package
-// streaming: the package bounds (inactivity and total deadline) are enforced
-// explicitly by downloadArchive, not by a per-request client timeout.
+// downloadClient returns the client used for package streaming: the header
+// wait is bounded by the inactivity timeout, while body inactivity and the
+// total deadline are enforced explicitly by downloadArchive.
 func (c *FeedClient) downloadClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// The body watchdog arms only once headers arrive; bound that wait too.
+	transport.ResponseHeaderTimeout = downloadInactivityTimeout
 	return &http.Client{
+		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

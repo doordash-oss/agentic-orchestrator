@@ -430,11 +430,15 @@ func TestTransactionReceiptTimesAdvance(t *testing.T) {
 	if !tx.Receipt().StartedAt.Equal(base.Add(time.Minute)) {
 		t.Fatalf("StartedAt = %s", tx.Receipt().StartedAt)
 	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	afterCommit := tx.Receipt().UpdatedAt
 	if err := tx.Confirm(); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
-	if !tx.Receipt().UpdatedAt.Equal(base.Add(2 * time.Minute)) {
-		t.Fatalf("UpdatedAt = %s, want seam-provided time", tx.Receipt().UpdatedAt)
+	if !tx.Receipt().UpdatedAt.Equal(afterCommit.Add(time.Minute)) {
+		t.Fatalf("UpdatedAt = %s, want seam-provided time after %s", tx.Receipt().UpdatedAt, afterCommit)
 	}
 }
 
@@ -538,5 +542,26 @@ func TestCleanupSettledTransactionRemovesTxDirOnlyAndIsIdempotent(t *testing.T) 
 	// Idempotent: a second cleanup of the same transaction is a no-op.
 	if err := CleanupSettledTransaction(f.exec.Path, txID, CleanupSeams{}); err != nil {
 		t.Fatalf("cleanup must be idempotent: %v", err)
+	}
+}
+
+func TestConfirmRequiresReplacementComplete(t *testing.T) {
+	f := newTxFixture(t)
+	tx, err := Begin(f.exec, f.opts, FileOps{})
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if err := tx.Confirm(); err == nil {
+		t.Fatal("Confirm before Commit = nil error; want phase rejection")
+	}
+	if _, err := ConfirmTransaction(f.exec.Path, tx.Receipt().TransactionID); err == nil {
+		t.Fatal("ConfirmTransaction before Commit = nil error; want phase rejection")
+	}
+	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	if err != nil {
+		t.Fatalf("ReadReceipt: %v", err)
+	}
+	if receipt.Outcome != OutcomePending {
+		t.Fatalf("receipt outcome = %s, want pending", receipt.Outcome)
 	}
 }

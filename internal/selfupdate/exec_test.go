@@ -134,7 +134,8 @@ func TestExecReplaceErrorRestoresCLOEXEC(t *testing.T) {
 	if err := ClearCLOEXEC(fd); err != nil {
 		t.Fatalf("ClearCLOEXEC: %v", err)
 	}
-	env := []string{"PATH=/usr/bin", "HOME=/home"}
+	stale := HandoffEnvVar + "={\"schema_version\":1,\"transaction_id\":\"old\"}"
+	env := []string{"PATH=/usr/bin", stale, "HOME=/home"}
 	entry := HandoffEnvVar + "={\"schema_version\":1}"
 	execErr := errors.New("exec boom")
 	var gotPath string
@@ -160,7 +161,7 @@ func TestExecReplaceErrorRestoresCLOEXEC(t *testing.T) {
 	if !reflect.DeepEqual(gotEnv, wantEnv) {
 		t.Fatalf("exec env = %v, want %v", gotEnv, wantEnv)
 	}
-	if !reflect.DeepEqual(env, []string{"PATH=/usr/bin", "HOME=/home"}) {
+	if !reflect.DeepEqual(env, []string{"PATH=/usr/bin", stale, "HOME=/home"}) {
 		t.Fatalf("caller env mutated: %v", env)
 	}
 

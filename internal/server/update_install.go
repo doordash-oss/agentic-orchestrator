@@ -180,12 +180,87 @@ type installRequest struct {
 func (c *updateCoordinator) requestInstall(req installRequest, responseDone chan struct{}) (installAcceptance, *installRefusal) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	for {
+		latest, acceptance, refusal := c.admitInstallLocked(req)
+		if refusal != nil || acceptance.coalesced {
+			return acceptance, refusal
+		}
+		version := latest.Version
+		var lookup selfupdate.SuppressionLookup
+		var lookupErr error
+		if c.opts.ExecPath != "" {
+			// Durable state read off the mutex; the admission decision is
+			// revalidated once the lock is reacquired.
+			c.mu.Unlock()
+			lookup, lookupErr = selfupdate.LookupSuppression(c.opts.ExecPath, version)
+			c.mu.Lock()
+			if c.stopped || c.install != nil || c.state.latest == nil || c.state.latest.Version != version {
+				continue
+			}
+			latest = c.state.latest
+		}
+		if refusal := c.suppressionRefusal(version, lookup, lookupErr); refusal != nil {
+			return installAcceptance{}, refusal
+		}
+		op := &installOperation{
+			when:           req.when,
+			stopActiveWork: req.stopActiveWork,
+			target:         *latest,
+			status:         updateStatusDownloading,
+			generation:     c.generation,
+			cancel:         nil,
+			done:           make(chan struct{}),
+			responseDone:   responseDone,
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		op.cancel = cancel
+		c.install = op
+		c.mu.Unlock()
+		go c.runInstall(op, ctx)
+		c.mu.Lock()
+		return installAcceptance{}, nil
+	}
+}
+
+// suppressionRefusal renders the refusal for an unreadable or suppressing
+// suppression lookup; nil admits the target.
+func (c *updateCoordinator) suppressionRefusal(version string, lookup selfupdate.SuppressionLookup, lookupErr error) *installRefusal {
+	if c.opts.ExecPath == "" {
+		return nil
+	}
+	if lookupErr != nil {
+		return &installRefusal{
+			status: http.StatusConflict,
+			code:   errcat.UpdateCheckFailed,
+			opts: []errcat.Option{
+				errcat.WithParams(errcat.UpdateCheckParams{Reason: "suppression store unreadable: refusing to admit an install target"}),
+			},
+		}
+	}
+	if lookup.Suppressed {
+		current := selfupdate.NormalizeVersion(c.opts.CurrentVersion)
+		return &installRefusal{
+			status: http.StatusConflict,
+			code:   errcat.UpdateRolledBack,
+			opts: []errcat.Option{
+				errcat.WithParams(errcat.UpdateRolledBackParams{FromVersion: current, ToVersion: version}),
+				errcat.WithDiagnostics("the discovered release was rolled back by a failed install and is suppressed"),
+			},
+		}
+	}
+	return nil
+}
+
+// admitInstallLocked validates one request against the coordinator state:
+// it coalesces onto an equivalent active operation, refuses conflicts, and
+// otherwise returns the pinned discovered release.
+func (c *updateCoordinator) admitInstallLocked(req installRequest) (*selfupdate.ReleaseSelection, installAcceptance, *installRefusal) {
 	if c.stopped {
-		return installAcceptance{}, &installRefusal{status: http.StatusServiceUnavailable, code: errcat.Unavailable}
+		return nil, installAcceptance{}, &installRefusal{status: http.StatusServiceUnavailable, code: errcat.Unavailable}
 	}
 	if op := c.install; op != nil {
 		if op.cleanupFailed {
-			return installAcceptance{}, &installRefusal{
+			return nil, installAcceptance{}, &installRefusal{
 				status: http.StatusConflict,
 				code:   errcat.UpdateInstallFailed,
 				opts: []errcat.Option{
@@ -200,7 +275,7 @@ func (c *updateCoordinator) requestInstall(req installRequest, responseDone chan
 		equivalent := req.when == op.when && req.stopActiveWork == op.stopActiveWork &&
 			(req.version == "" || req.version == op.target.Version)
 		if !equivalent {
-			return installAcceptance{}, &installRefusal{
+			return nil, installAcceptance{}, &installRefusal{
 				status: http.StatusConflict,
 				code:   errcat.Conflict,
 				opts: []errcat.Option{
@@ -208,14 +283,14 @@ func (c *updateCoordinator) requestInstall(req installRequest, responseDone chan
 				},
 			}
 		}
-		return installAcceptance{coalesced: true}, nil
+		return nil, installAcceptance{coalesced: true}, nil
 	}
 
 	// Pin the last discovered eligible stable release atomically with
 	// acceptance. Without a discovered release there is nothing to install.
 	latest := c.state.latest
 	if latest == nil {
-		return installAcceptance{}, &installRefusal{
+		return nil, installAcceptance{}, &installRefusal{
 			status: http.StatusConflict,
 			code:   errcat.Conflict,
 			opts: []errcat.Option{
@@ -224,7 +299,7 @@ func (c *updateCoordinator) requestInstall(req installRequest, responseDone chan
 		}
 	}
 	if req.version != "" && req.version != latest.Version {
-		return installAcceptance{}, &installRefusal{
+		return nil, installAcceptance{}, &installRefusal{
 			status: http.StatusConflict,
 			code:   errcat.Conflict,
 			opts: []errcat.Option{
@@ -234,7 +309,7 @@ func (c *updateCoordinator) requestInstall(req installRequest, responseDone chan
 	}
 	current := selfupdate.NormalizeVersion(c.opts.CurrentVersion)
 	if cmp, ordered := selfupdate.CompareReleaseVersions(current, latest.Version); !ordered || cmp >= 0 {
-		return installAcceptance{}, &installRefusal{
+		return nil, installAcceptance{}, &installRefusal{
 			status: http.StatusConflict,
 			code:   errcat.Conflict,
 			opts: []errcat.Option{
@@ -242,49 +317,7 @@ func (c *updateCoordinator) requestInstall(req installRequest, responseDone chan
 			},
 		}
 	}
-	// Suppression lookup failure blocks admission rather than assuming
-	// eligibility; a suppressed target refuses with the durable rollback
-	// outcome.
-	if c.opts.ExecPath != "" {
-		lookup, lookupErr := selfupdate.LookupSuppression(c.opts.ExecPath, latest.Version)
-		if lookupErr != nil {
-			return installAcceptance{}, &installRefusal{
-				status: http.StatusConflict,
-				code:   errcat.UpdateCheckFailed,
-				opts: []errcat.Option{
-					errcat.WithParams(errcat.UpdateCheckParams{Reason: "suppression store unreadable: refusing to admit an install target"}),
-				},
-			}
-		}
-		if lookup.Suppressed {
-			return installAcceptance{}, &installRefusal{
-				status: http.StatusConflict,
-				code:   errcat.UpdateRolledBack,
-				opts: []errcat.Option{
-					errcat.WithParams(errcat.UpdateRolledBackParams{FromVersion: current, ToVersion: latest.Version}),
-					errcat.WithDiagnostics("the discovered release was rolled back by a failed install and is suppressed"),
-				},
-			}
-		}
-	}
-
-	op := &installOperation{
-		when:           req.when,
-		stopActiveWork: req.stopActiveWork,
-		target:         *latest,
-		status:         updateStatusDownloading,
-		generation:     c.generation,
-		cancel:         nil,
-		done:           make(chan struct{}),
-		responseDone:   responseDone,
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	op.cancel = cancel
-	c.install = op
-	c.mu.Unlock()
-	go c.runInstall(op, ctx)
-	c.mu.Lock()
-	return installAcceptance{}, nil
+	return latest, installAcceptance{}, nil
 }
 
 // cancelResult reports the cancellation outcome.
@@ -802,6 +835,13 @@ func (c *updateCoordinator) guardedCommit(op *installOperation, ctx context.Cont
 		// the deferred ordinary shutdown's stopped flag must not cancel a
 		// replacement the operation already stopped work for.
 		cancelled := op.cancelling || (c.stopped && !op.stopEntered)
+		if !cancelled {
+			// From here the operation owns shutdown: cancellation and
+			// ordinary shutdown defer to the installation or its recovery.
+			// Marked in the same critical section as the check so no
+			// accepted cancellation can be overtaken by the drain.
+			op.drainEntered = true
+		}
 		c.mu.Unlock()
 		if cancelled {
 			// Cancellation wins until final drain begins: the prepared
@@ -820,12 +860,6 @@ func (c *updateCoordinator) guardedCommit(op *installOperation, ctx context.Cont
 		if err := staged.cleanup(); err != nil {
 			c.logf("release staging cleanup deferred: %s", selfupdate.SanitizeError(err.Error()))
 		}
-
-		// From here the operation owns shutdown: cancellation and ordinary
-		// shutdown defer to the installation or its recovery.
-		c.mu.Lock()
-		op.drainEntered = true
-		c.mu.Unlock()
 		c.applyInstallStatus(op, updateStatusDraining, "install_draining")
 
 		// The accepted response completes before shutdown begins.

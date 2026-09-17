@@ -92,6 +92,10 @@ type Options struct {
 	// orchestration, sessions, and repository work. Nil disables the
 	// boundary.
 	Admission *workadmission.Coordinator
+	// Lifetime bounds the server's long-lived background loops (sweepers,
+	// update checks). Nil uses the Start context, which callers may bound
+	// to startup only.
+	Lifetime context.Context
 	// ProbeActivity counts read-launched background probes; shared with the
 	// CLI wiring so Git freshness refreshes participate. Nil creates a
 	// private counter.

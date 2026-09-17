@@ -128,8 +128,9 @@ func (t *productionInstallTransaction) Cancel() error {
 // sequence — the shared replacement tail the driver journeys also
 // exercise, run with the zero (production) replacementSeams.
 type productionInstallLifecycle struct {
-	// run is set once the server has started; install requests can only
-	// arrive after that point.
+	// run is published once the server has started; install requests that
+	// race startup on a preserved endpoint are refused until then.
+	mu  sync.Mutex
 	run *serverRun
 	// stager carries the pipeline inputs for transaction preparation.
 	stager *productionReleaseStager
@@ -140,9 +141,38 @@ type productionInstallLifecycle struct {
 	exitCode chan int
 }
 
+// setRun publishes the started server's handle.
+func (l *productionInstallLifecycle) setRun(run *serverRun) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.run = run
+}
+
+// setRegistryDir records the central registry location on the run handle.
+func (l *productionInstallLifecycle) setRegistryDir(dir string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.run.registryDir = dir
+}
+
+// current returns a copy of the run handle, or an error while the server
+// is still starting.
+func (l *productionInstallLifecycle) current() (serverRun, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.run == nil {
+		return serverRun{}, errors.New("server is still starting")
+	}
+	return *l.run, nil
+}
+
 // AcquireUpdateLock takes the per-runtime update transaction lock.
 func (l *productionInstallLifecycle) AcquireUpdateLock() (func(), bool) {
-	lock, err := selfupdate.AcquireRuntimeUpdateLock(l.run.boot.runtime.RuntimeDir)
+	r, err := l.current()
+	if err != nil {
+		return func() {}, false
+	}
+	lock, err := selfupdate.AcquireRuntimeUpdateLock(r.boot.runtime.RuntimeDir)
 	if err != nil {
 		return func() {}, false
 	}
@@ -154,7 +184,11 @@ func (l *productionInstallLifecycle) AcquireUpdateLock() (func(), bool) {
 // still available. The bind endpoint comes from the live server, never the
 // argv flags.
 func (l *productionInstallLifecycle) Begin(candidate selfupdate.VerifiedCandidate) (serverruntime.InstallTransaction, error) {
-	r := l.run
+	run, err := l.current()
+	if err != nil {
+		return nil, err
+	}
+	r := &run
 	tx, err := selfupdate.BeginVerifiedRelease(r.boot.selfUpdateExec, candidate, selfupdate.BeginOptions{
 		RuntimeDir:  r.boot.runtime.RuntimeDir,
 		StateDir:    r.boot.runtime.StateDir,
@@ -192,7 +226,10 @@ func (l *productionInstallLifecycle) Replace(handle serverruntime.InstallTransac
 	if !ok {
 		return errors.New("unknown install transaction handle")
 	}
-	r := *l.run
+	r, err := l.current()
+	if err != nil {
+		return err
+	}
 	releaseUpdateLock := func() {}
 	if lock, err := selfupdate.AcquireRuntimeUpdateLock(r.boot.runtime.RuntimeDir); err == nil {
 		releaseUpdateLock = func() { _ = lock.Close() }

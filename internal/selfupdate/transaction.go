@@ -436,6 +436,9 @@ func (t *Transaction) RecordError(errMsg string, secrets ...string) error {
 // Confirm marks the transaction confirmed. Callers must only confirm after
 // the replacement image has fully started and published its presence.
 func (t *Transaction) Confirm() error {
+	if t.receipt.Phase != PhaseReplacementComplete {
+		return fmt.Errorf("cannot confirm transaction in phase %q", t.receipt.Phase)
+	}
 	t.receipt.Outcome = OutcomeConfirmed
 	t.receipt.UpdatedAt = t.seams.now()
 	return t.seams.writeReceipt(ReceiptPath(t.exec.Path), t.receipt)
@@ -481,6 +484,9 @@ func ConfirmTransaction(execPath, txID string) (Receipt, error) {
 	}
 	if !r.ActionablePending() {
 		return Receipt{}, fmt.Errorf("receipt outcome %q (resolution %q) is not actionable pending", r.Outcome, r.Resolution)
+	}
+	if r.Phase != PhaseReplacementComplete {
+		return Receipt{}, fmt.Errorf("receipt phase %q is not replacement-complete", r.Phase)
 	}
 	r.Outcome = OutcomeConfirmed
 	r.UpdatedAt = time.Now()

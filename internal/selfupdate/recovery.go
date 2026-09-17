@@ -345,6 +345,23 @@ func InspectRecovery(exec Executable, runtimeDir string) (RecoveryPlan, error) {
 // exact recorded object: identity, digest, owner-only mode, no links. A
 // missing backup on a restore path is a recovery error, never a quiet
 // success.
+// lstatOwnedRegular resolves path without following symlinks and requires a
+// singly linked regular file: the no-follow contract every restore source
+// shares.
+func lstatOwnedRegular(path string) (FileIdentity, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return FileIdentity{}, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return FileIdentity{}, fmt.Errorf("%s is not a regular file", path)
+	}
+	if st, ok := info.Sys().(*syscallStat); ok && st.Nlink != 1 {
+		return FileIdentity{}, fmt.Errorf("%s has %d hard links", path, st.Nlink)
+	}
+	return identityFromInfo(info), nil
+}
+
 func validateBackupForRestore(execPath string, r Receipt) error {
 	info, err := os.Lstat(r.BackupPath)
 	if err != nil {
@@ -517,7 +534,7 @@ func RestorePrevious(exec Executable, lease *Lease, plan RecoveryPlan, reason st
 	} else if r.RestorePath != "" && r.RestoreID != nil {
 		// A prior attempt prepared a restore copy before dying: reuse it only
 		// when it is still the exact recorded, digest-verified object.
-		if id, err := StatFile(r.RestorePath); err == nil &&
+		if id, err := lstatOwnedRegular(r.RestorePath); err == nil &&
 			id.SameFile(*r.RestoreID) {
 			if d, derr := DigestFile(r.RestorePath); derr == nil && d == r.OldDigest {
 				reuseRestore = true
@@ -534,7 +551,7 @@ func RestorePrevious(exec Executable, lease *Lease, plan RecoveryPlan, reason st
 			// remains. Do not touch the installed path again.
 			return completeRollback(exec, plan, r, reason, seams)
 		}
-		id, err := StatFile(restorePath)
+		id, err := lstatOwnedRegular(restorePath)
 		if err != nil {
 			return Receipt{}, refuse("stat prepared restore copy %s: %v", restorePath, err)
 		}

@@ -1509,3 +1509,49 @@ func TestUpdateInstallCheckDuringOperationKeepsTargetPinned(t *testing.T) {
 	close(gate)
 	waitInstallCond(t, 5*time.Second, func() bool { return installOpCleared(coordinator) }, "operation never settled")
 }
+
+func TestUpdateInstallCancelAcceptedDuringBeginNeverReplaces(t *testing.T) {
+	t.Parallel()
+	fixture := newInstallAPIFixture(t, eligibleUpdateOptions())
+	fixture.discoverLatest(t)
+	beginBlock := make(chan struct{})
+	fixture.lifecycle.setBeginBlock(beginBlock)
+
+	w := httptest.NewRecorder()
+	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
+	resp := w.Result()
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	waitInstallCond(t, 5*time.Second, func() bool { return fixture.lifecycle.beginCallsN() >= 1 }, "Begin never entered")
+
+	deleteDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		dw := httptest.NewRecorder()
+		fixture.handler.routes().ServeHTTP(dw, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
+		deleteDone <- dw
+	}()
+	waitInstallCond(t, 5*time.Second, func() bool { return installCancelling(fixture.handler.updates) }, "cancellation never started")
+	close(beginBlock)
+
+	select {
+	case dw := <-deleteDone:
+		resp := dw.Result()
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("cancel status = %d, want 200", resp.StatusCode)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancellation never settled")
+	}
+	if got := fixture.lifecycle.replaceCallsN(); got != 0 {
+		t.Fatalf("Replace calls = %d, want none after an accepted cancellation", got)
+	}
+	if installDrainEntered(fixture.handler.updates) {
+		t.Fatal("drain must not be entered after an accepted cancellation")
+	}
+	if !installOpCleared(fixture.handler.updates) {
+		t.Fatal("operation must be cleared after cancellation")
+	}
+}

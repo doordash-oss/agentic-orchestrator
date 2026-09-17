@@ -1069,9 +1069,10 @@ export class RuntimeGateway {
   // --- connect cycle ---------------------------------------------------------
 
   private async connect(generation: number): Promise<void> {
-    // never leave a stray child from an earlier cycle
+    // Deliberately no stopChild(): a retry after losing the selected server
+    // must leave a live app-owned child running; launch() replaces it only
+    // when the cycle ends up spawning.
     await this.resetConnection({
-      stopChild: true,
       clearLaunchContext: true,
       clearPendingCandidates: true,
     });
@@ -1421,6 +1422,14 @@ export class RuntimeGateway {
   // --- launch path -----------------------------------------------------------
 
   private async launch(generation: number, selected: SelectedRuntime): Promise<void> {
+    if (this.supervision.hasLiveChild()) {
+      // Never run two app-owned children: a live one the cycle could not
+      // re-attach to is stopped before spawning its replacement.
+      await this.supervision.stop();
+      if (this.cancelled(generation)) {
+        return;
+      }
+    }
     this.setState({
       status: 'launching',
       stage: 'connect',

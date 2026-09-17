@@ -241,7 +241,14 @@ export async function closeApp(handle: AppHandle): Promise<void> {
       // cleanup, then let close() release it once Electron is ready to exit.
       await handle.app.evaluate(({ app }) => {
         return new Promise<void>((resolve) => {
-          app.once('will-quit', () => resolve());
+          app.once('will-quit', (event) => {
+            // Hold the final exit until this evaluation's reply reaches
+            // Playwright. Otherwise Electron can stop servicing the inspector
+            // before the reply is delivered, leaving both sides waiting forever.
+            // The one-shot listener is gone when close() calls app.quit() again.
+            event.preventDefault();
+            resolve();
+          });
           app.quit();
         });
       });

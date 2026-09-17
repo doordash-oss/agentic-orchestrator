@@ -229,98 +229,63 @@ func (c *FeedClient) downloadArchive(ctx context.Context, release VerifiedReleas
 	}
 
 	dest := release.Resolved().Tarball.URL
-	for hop := 0; ; hop++ {
-		if hop > feedMaxRedirects {
-			cleanup()
-			return "", &FeedError{Reason: "too many package redirects"}
-		}
-		if err := c.validateDestination(dest); err != nil {
-			cleanup()
-			return "", err
-		}
-		// The watchdog cancels this request context when the body stops
-		// making progress, aborting a stalled read.
-		reqCtx, reqCancel := context.WithCancel(totalCtx)
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, dest, nil)
-		if err != nil {
-			reqCancel()
-			cleanup()
-			return "", &FeedError{Reason: fmt.Sprintf("building package request: %v", err)}
-		}
-		c.authorize(req)
-		resp, err := c.downloadClient().Do(req)
-		if err != nil {
-			reqCancel()
-			cleanup()
-			return "", &FeedError{Reason: fmt.Sprintf("requesting release package: %v", err)}
-		}
-		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-			location := resp.Header.Get("Location")
-			_ = resp.Body.Close()
-			reqCancel()
-			if location == "" {
-				cleanup()
-				return "", &FeedError{Reason: fmt.Sprintf("package redirect without location (status %d)", resp.StatusCode)}
-			}
-			resolved, err := resolveFeedURL(dest, location)
-			if err != nil {
-				cleanup()
-				return "", err
-			}
-			dest = resolved
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			_ = resp.Body.Close()
-			reqCancel()
-			cleanup()
-			return "", &FeedError{
-				Reason:     fmt.Sprintf("release package request returned status %s", resp.Status),
-				StatusCode: resp.StatusCode,
-			}
-		}
-		// A declared length beyond the cap is rejected before a byte is
-		// read; a lying smaller length is caught by the streamed cap below.
-		if resp.ContentLength > archiveMaxCompressedBytes {
-			_ = resp.Body.Close()
-			reqCancel()
-			cleanup()
-			return "", &FeedError{Reason: fmt.Sprintf("release package declares more than the %d-MiB compressed limit", archiveMaxCompressedBytes>>20)}
-		}
-		watchdog := &inactivityWatchdog{cancel: reqCancel, timeout: downloadInactivityTimeout}
-		watchdog.timer = time.AfterFunc(downloadInactivityTimeout, reqCancel)
-		hash := sha256.New()
-		limited := io.LimitReader(watchdog.wrap(resp.Body), archiveMaxCompressedBytes+1)
-		_, copyErr := io.Copy(io.MultiWriter(out, hash), limited)
-		_ = resp.Body.Close()
-		watchdog.stop()
-		if copyErr != nil {
-			cleanup()
-			return "", &FeedError{Reason: fmt.Sprintf("downloading release package: %v", copyErr)}
-		}
-		info, err := out.Stat()
-		if err != nil {
-			cleanup()
-			return "", fmt.Errorf("stat staged archive: %w", err)
-		}
-		if info.Size() > archiveMaxCompressedBytes {
-			cleanup()
-			return "", &FeedError{Reason: fmt.Sprintf("release package exceeds the %d-MiB compressed limit", archiveMaxCompressedBytes>>20)}
-		}
-		if err := out.Chmod(0o600); err != nil {
-			cleanup()
-			return "", fmt.Errorf("repair staged archive permissions: %w", err)
-		}
-		if err := out.Sync(); err != nil {
-			cleanup()
-			return "", fmt.Errorf("sync staged archive: %w", err)
-		}
-		if err := out.Close(); err != nil {
-			cleanup()
-			return "", fmt.Errorf("close staged archive: %w", err)
-		}
-		return hex.EncodeToString(hash.Sum(nil)), nil
+	resp, reqCancel, err := c.doValidated(totalCtx, dest, c.downloadClient(), packageFetchSpec)
+	if err != nil {
+		cleanup()
+		return "", err
 	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		reqCancel()
+		cleanup()
+		return "", &FeedError{
+			Reason:     fmt.Sprintf("release package request returned status %s", resp.Status),
+			StatusCode: resp.StatusCode,
+		}
+	}
+	// A declared length beyond the cap is rejected before a byte is
+	// read; a lying smaller length is caught by the streamed cap below.
+	if resp.ContentLength > archiveMaxCompressedBytes {
+		_ = resp.Body.Close()
+		reqCancel()
+		cleanup()
+		return "", &FeedError{Reason: fmt.Sprintf("release package declares more than the %d-MiB compressed limit", archiveMaxCompressedBytes>>20)}
+	}
+	// The watchdog cancels the final request context when the body stops
+	// making progress, aborting a stalled read.
+	watchdog := &inactivityWatchdog{cancel: reqCancel, timeout: downloadInactivityTimeout}
+	watchdog.timer = time.AfterFunc(downloadInactivityTimeout, reqCancel)
+	hash := sha256.New()
+	limited := io.LimitReader(watchdog.wrap(resp.Body), archiveMaxCompressedBytes+1)
+	_, copyErr := io.Copy(io.MultiWriter(out, hash), limited)
+	_ = resp.Body.Close()
+	watchdog.stop()
+	if copyErr != nil {
+		cleanup()
+		return "", &FeedError{Reason: fmt.Sprintf("downloading release package: %v", copyErr)}
+	}
+	info, err := out.Stat()
+	if err != nil {
+		cleanup()
+		return "", fmt.Errorf("stat staged archive: %w", err)
+	}
+	if info.Size() > archiveMaxCompressedBytes {
+		cleanup()
+		return "", &FeedError{Reason: fmt.Sprintf("release package exceeds the %d-MiB compressed limit", archiveMaxCompressedBytes>>20)}
+	}
+	if err := out.Chmod(0o600); err != nil {
+		cleanup()
+		return "", fmt.Errorf("repair staged archive permissions: %w", err)
+	}
+	if err := out.Sync(); err != nil {
+		cleanup()
+		return "", fmt.Errorf("sync staged archive: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		cleanup()
+		return "", fmt.Errorf("close staged archive: %w", err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // downloadClient returns the unbounded-timeout client used for package

@@ -259,7 +259,7 @@ func TestCommitReplacesInstalledAtomically(t *testing.T) {
 		t.Fatalf("staged file must be renamed away, stat error = %v", err)
 	}
 	if _, err := os.Stat(tx.Receipt().BackupPath); err != nil {
-		t.Fatalf("backup must survive until Cleanup: %v", err)
+		t.Fatalf("backup must survive until settled cleanup: %v", err)
 	}
 
 	receipt, err := ReadReceipt(f.opts.ReceiptDest)
@@ -381,15 +381,8 @@ func TestCommitFailsOnExternallyReplacedInstalled(t *testing.T) {
 	}
 }
 
-func TestRecordErrorConfirmAndCleanup(t *testing.T) {
+func TestRecordErrorAndConfirm(t *testing.T) {
 	f := newTxFixture(t)
-	// Cleanup must never remove lease/ownership files, so make them real by
-	// holding the lease the same way a serving owner would.
-	lease, err := AcquireLease(f.exec, testRecordFor(f.exec, f.runtimeDir))
-	if err != nil {
-		t.Fatalf("AcquireLease: %v", err)
-	}
-	defer func() { _ = lease.Close() }()
 	tx, err := Begin(f.exec, f.opts, TxSeams{})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
@@ -421,24 +414,6 @@ func TestRecordErrorConfirmAndCleanup(t *testing.T) {
 	}
 	if receipt.Outcome != OutcomeConfirmed || receipt.Phase != PhaseReplacementComplete {
 		t.Fatalf("receipt = %s/%s, want replacement-complete/confirmed", receipt.Phase, receipt.Outcome)
-	}
-
-	if err := tx.Cleanup(); err != nil {
-		t.Fatalf("Cleanup: %v", err)
-	}
-	if _, err := os.Stat(tx.Receipt().BackupPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("backup must be removed by Cleanup: %v", err)
-	}
-	if _, err := os.Stat(tx.TxDir()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("tx dir must be removed by Cleanup: %v", err)
-	}
-	for _, path := range []string{LeasePath(f.exec.Path), OwnershipRecordPath(f.exec.Path), f.opts.ReceiptDest} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("Cleanup must never remove %s: %v", path, err)
-		}
-	}
-	if err := tx.Cleanup(); err != nil {
-		t.Fatalf("Cleanup must be idempotent: %v", err)
 	}
 }
 

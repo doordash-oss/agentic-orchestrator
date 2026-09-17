@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -185,37 +184,7 @@ func writeReceiptAtomic(path string, r Receipt, now time.Time) error {
 		return fmt.Errorf("marshal receipt: %w", err)
 	}
 	data = append(data, '\n')
-
-	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("create receipt temp: %w", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("write receipt temp: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("sync receipt temp: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("close receipt temp: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("commit receipt: %w", err)
-	}
-	if err := SyncDir(filepath.Dir(path)); err != nil {
-		return fmt.Errorf("sync receipt dir: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("repair receipt permissions: %w", err)
-	}
-	return nil
+	return writeFileAtomic(path, data, true)
 }
 
 // ReadReceipt reads and parses the receipt at path.

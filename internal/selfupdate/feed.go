@@ -201,52 +201,21 @@ func newFeedClient(baseURL, slug string, token func() string) *FeedClient {
 // version equals the requested one. A pinned target that no longer exists
 // on the feed is an unavailable-target error.
 func (c *FeedClient) releaseByVersion(ctx context.Context, version string) (*feedRelease, string, error) {
-	nextURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", c.baseURL, c.slug, feedPerPage)
-	seen := make(map[string]string)
-	for page := 1; page <= feedMaxPages; page++ {
-		body, next, err := c.get(ctx, nextURL)
-		if err != nil {
-			return nil, "", err
+	var match *feedRelease
+	err := c.walkStableReleases(ctx, func(rel *feedRelease, parts [3]int) bool {
+		if fmt.Sprintf("%d.%d.%d", parts[0], parts[1], parts[2]) != version {
+			return false
 		}
-		var releases []feedRelease
-		if err := json.Unmarshal(body, &releases); err != nil {
-			return nil, "", &FeedError{Reason: fmt.Sprintf("malformed release metadata: %v", err)}
-		}
-		for i := range releases {
-			rel := &releases[i]
-			if rel.Draft || rel.Prerelease {
-				continue
-			}
-			if rel.TagName == nil {
-				return nil, "", &FeedError{Reason: "malformed release metadata: release without tag_name"}
-			}
-			tag := strings.TrimSpace(*rel.TagName)
-			parts, ok := ParseReleaseVersion(tag)
-			if !ok {
-				continue
-			}
-			normalized := fmt.Sprintf("%d.%d.%d", parts[0], parts[1], parts[2])
-			if _, dup := seen[normalized]; dup {
-				return nil, "", &FeedError{
-					Reason: fmt.Sprintf("ambiguous duplicate stable release for version %s", normalized),
-				}
-			}
-			seen[normalized] = tag
-			if normalized == version {
-				return rel, tag, nil
-			}
-		}
-		if next == "" {
-			break
-		}
-		if page == feedMaxPages {
-			return nil, "", &FeedError{
-				Reason: fmt.Sprintf("incomplete selection: more than %d pages of releases", feedMaxPages),
-			}
-		}
-		nextURL = next
+		match = rel
+		return true
+	})
+	if err != nil {
+		return nil, "", err
 	}
-	return nil, "", &FeedError{Reason: fmt.Sprintf("pinned target version %s is not available on the release feed", version)}
+	if match == nil {
+		return nil, "", &FeedError{Reason: fmt.Sprintf("pinned target version %s is not available on the release feed", version)}
+	}
+	return match, strings.TrimSpace(deref(match.TagName)), nil
 }
 
 // LatestStable selects the numerically greatest clean three-component stable
@@ -273,20 +242,50 @@ func (c *FeedClient) LatestStable(ctx context.Context) (ReleaseSelection, error)
 // and the release-verification resolver: it returns the selected raw release
 // (with its full asset identities) plus the parsed version parts.
 func (c *FeedClient) latestStableRelease(ctx context.Context) (*feedRelease, [3]int, error) {
-	nextURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", c.baseURL, c.slug, feedPerPage)
-	seen := make(map[string]string)
 	var bestRelease *feedRelease
 	var bestParts [3]int
 	haveBest := false
+	err := c.walkStableReleases(ctx, func(rel *feedRelease, parts [3]int) bool {
+		if haveBest && compareParts(parts, bestParts) <= 0 {
+			return false
+		}
+		haveBest = true
+		bestRelease, bestParts = rel, parts
+		return false
+	})
+	if err != nil {
+		return nil, [3]int{}, err
+	}
+	if !haveBest {
+		return nil, [3]int{}, &FeedError{Reason: "no selectable stable release"}
+	}
+	if err := checkAssetIdentities(deref(bestRelease.TagName), bestRelease.Assets); err != nil {
+		return nil, [3]int{}, err
+	}
+	return bestRelease, bestParts, nil
+}
 
+// walkStableReleases carries the bounded stable-release pagination once:
+// the page cap, the validated per-page fetch, the strict decode, the
+// draft/prerelease exclusion, nil-tag rejection, version parsing, and
+// ambiguous-duplicate detection. Every candidate stable release is offered
+// to visit in feed order; visit returning true stops the walk (a
+// pinned-version match must not force the remaining pages, while the
+// latest-stable selection never stops so duplicate detection still sees
+// every page). Selection outcome errors — "no selectable stable release"
+// and the pinned-target miss — belong to the callers, because only they
+// know what selection means.
+func (c *FeedClient) walkStableReleases(ctx context.Context, visit func(rel *feedRelease, parts [3]int) (stop bool)) error {
+	nextURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", c.baseURL, c.slug, feedPerPage)
+	seen := make(map[string]string)
 	for page := 1; page <= feedMaxPages; page++ {
 		body, next, err := c.get(ctx, nextURL)
 		if err != nil {
-			return nil, [3]int{}, err
+			return err
 		}
 		var releases []feedRelease
 		if err := json.Unmarshal(body, &releases); err != nil {
-			return nil, [3]int{}, &FeedError{Reason: fmt.Sprintf("malformed release metadata: %v", err)}
+			return &FeedError{Reason: fmt.Sprintf("malformed release metadata: %v", err)}
 		}
 		for i := range releases {
 			rel := &releases[i]
@@ -294,7 +293,7 @@ func (c *FeedClient) latestStableRelease(ctx context.Context) (*feedRelease, [3]
 				continue
 			}
 			if rel.TagName == nil {
-				return nil, [3]int{}, &FeedError{Reason: "malformed release metadata: release without tag_name"}
+				return &FeedError{Reason: "malformed release metadata: release without tag_name"}
 			}
 			tag := strings.TrimSpace(*rel.TagName)
 			parts, ok := ParseReleaseVersion(tag)
@@ -306,34 +305,26 @@ func (c *FeedClient) latestStableRelease(ctx context.Context) (*feedRelease, [3]
 			}
 			normalized := fmt.Sprintf("%d.%d.%d", parts[0], parts[1], parts[2])
 			if _, dup := seen[normalized]; dup {
-				return nil, [3]int{}, &FeedError{
+				return &FeedError{
 					Reason: fmt.Sprintf("ambiguous duplicate stable release for version %s", normalized),
 				}
 			}
 			seen[normalized] = tag
-			if !haveBest || compareParts(parts, bestParts) > 0 {
-				haveBest = true
-				bestRelease, bestParts = rel, parts
+			if visit(rel, parts) {
+				return nil
 			}
 		}
 		if next == "" {
 			break
 		}
 		if page == feedMaxPages {
-			return nil, [3]int{}, &FeedError{
+			return &FeedError{
 				Reason: fmt.Sprintf("incomplete selection: more than %d pages of releases", feedMaxPages),
 			}
 		}
 		nextURL = next
 	}
-
-	if !haveBest {
-		return nil, [3]int{}, &FeedError{Reason: "no selectable stable release"}
-	}
-	if err := checkAssetIdentities(deref(bestRelease.TagName), bestRelease.Assets); err != nil {
-		return nil, [3]int{}, err
-	}
-	return bestRelease, bestParts, nil
+	return nil
 }
 
 func deref(s *string) string {
@@ -377,6 +368,92 @@ func compareParts(a, b [3]int) int {
 	return 0
 }
 
+// validatedFetchSpec carries the per-call-site differences of the shared
+// validated redirect loop: the GitHub JSON Accept header (metadata
+// listings only) and the nouns of each failure message, so every call
+// site keeps its exact diagnostics.
+type validatedFetchSpec struct {
+	accept       string
+	hopNoun      string // "too many %s redirects"
+	redirectNoun string // "%s redirect without location (status %d)"
+	buildNoun    string // "building %s request: %v"
+	fetchNoun    string // "requesting release %s: %v"
+}
+
+var (
+	metadataFetchSpec = validatedFetchSpec{
+		accept:       "application/vnd.github+json",
+		hopNoun:      "feed",
+		redirectNoun: "feed",
+		buildNoun:    "feed",
+		fetchNoun:    "metadata",
+	}
+	assetFetchSpec = validatedFetchSpec{
+		hopNoun:      "feed",
+		redirectNoun: "release asset",
+		buildNoun:    "release asset",
+		fetchNoun:    "asset",
+	}
+	packageFetchSpec = validatedFetchSpec{
+		hopNoun:      "package",
+		redirectNoun: "package",
+		buildNoun:    "package",
+		fetchNoun:    "package",
+	}
+)
+
+// doValidated performs the manual redirect loop shared by every release
+// request: the hop cap, per-hop destination validation, request
+// construction, per-destination authorization, and 3xx following with
+// Location resolution. It returns the final non-redirect response; the
+// caller owns closing its body, reading it with its own bounds, and any
+// 403/429 or non-200 interpretation. The returned cancel aborts the final
+// hop's request context (nil on error); the package download keeps it
+// alive as its inactivity watchdog's abort handle. Each hop's request
+// context is a cancellable child of ctx, so the caller's deadline bounds
+// every hop without the redirect chain resetting it.
+func (c *FeedClient) doValidated(ctx context.Context, rawURL string, client *http.Client, spec validatedFetchSpec) (*http.Response, context.CancelFunc, error) {
+	dest := rawURL
+	for hop := 0; ; hop++ {
+		if hop > feedMaxRedirects {
+			return nil, nil, &FeedError{Reason: fmt.Sprintf("too many %s redirects", spec.hopNoun)}
+		}
+		if err := c.validateDestination(dest); err != nil {
+			return nil, nil, err
+		}
+		reqCtx, reqCancel := context.WithCancel(ctx)
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, dest, nil)
+		if err != nil {
+			reqCancel()
+			return nil, nil, &FeedError{Reason: fmt.Sprintf("building %s request: %v", spec.buildNoun, err)}
+		}
+		if spec.accept != "" {
+			req.Header.Set("Accept", spec.accept)
+		}
+		c.authorize(req)
+		resp, err := client.Do(req)
+		if err != nil {
+			reqCancel()
+			return nil, nil, &FeedError{Reason: fmt.Sprintf("requesting release %s: %v", spec.fetchNoun, err)}
+		}
+		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+			location := resp.Header.Get("Location")
+			_ = resp.Body.Close()
+			reqCancel()
+			if location == "" {
+				return nil, nil, &FeedError{Reason: fmt.Sprintf("%s redirect without location (status %d)", spec.redirectNoun, resp.StatusCode)}
+			}
+			resolved, err := resolveFeedURL(dest, location)
+			if err != nil {
+				return nil, nil, err
+			}
+			dest = resolved
+			continue
+		}
+		return resp, reqCancel, nil
+	}
+}
+
 // get performs one validated metadata fetch and returns the bounded body
 // plus the rel="next" pagination destination (already validated). Redirects
 // are followed manually, each hop re-validated and re-authorized per
@@ -386,40 +463,13 @@ func compareParts(a, b [3]int) int {
 func (c *FeedClient) get(ctx context.Context, rawURL string) (body []byte, next string, err error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, feedRequestTimeout)
 	defer cancel()
-	dest := rawURL
-	for hop := 0; ; hop++ {
-		if hop > feedMaxRedirects {
-			return nil, "", &FeedError{Reason: "too many feed redirects"}
-		}
-		if err := c.validateDestination(dest); err != nil {
-			return nil, "", err
-		}
-		req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, dest, nil)
-		if err != nil {
-			return nil, "", &FeedError{Reason: fmt.Sprintf("building feed request: %v", err)}
-		}
-		req.Header.Set("Accept", "application/vnd.github+json")
-		c.authorize(req)
-		resp, err := c.client.Do(req)
-		if err != nil {
-			return nil, "", &FeedError{Reason: fmt.Sprintf("requesting release metadata: %v", err)}
-		}
-		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-			location := resp.Header.Get("Location")
-			_ = resp.Body.Close()
-			if location == "" {
-				return nil, "", &FeedError{Reason: fmt.Sprintf("feed redirect without location (status %d)", resp.StatusCode)}
-			}
-			resolved, err := resolveFeedURL(dest, location)
-			if err != nil {
-				return nil, "", err
-			}
-			dest = resolved
-			continue
-		}
-		defer resp.Body.Close()
-		return c.readResponse(resp)
+	resp, hopCancel, err := c.doValidated(fetchCtx, rawURL, c.client, metadataFetchSpec)
+	if err != nil {
+		return nil, "", err
 	}
+	defer hopCancel()
+	defer resp.Body.Close()
+	return c.readResponse(resp)
 }
 
 // fetchBounded performs one validated release-asset fetch (a checksum
@@ -430,61 +480,35 @@ func (c *FeedClient) get(ctx context.Context, rawURL string) (body []byte, next 
 func (c *FeedClient) fetchBounded(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, feedRequestTimeout)
 	defer cancel()
-	dest := rawURL
-	for hop := 0; ; hop++ {
-		if hop > feedMaxRedirects {
-			return nil, &FeedError{Reason: "too many feed redirects"}
-		}
-		if err := c.validateDestination(dest); err != nil {
-			return nil, err
-		}
-		req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, dest, nil)
-		if err != nil {
-			return nil, &FeedError{Reason: fmt.Sprintf("building release asset request: %v", err)}
-		}
-		c.authorize(req)
-		resp, err := c.client.Do(req)
-		if err != nil {
-			return nil, &FeedError{Reason: fmt.Sprintf("requesting release asset: %v", err)}
-		}
-		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-			location := resp.Header.Get("Location")
-			_ = resp.Body.Close()
-			if location == "" {
-				return nil, &FeedError{Reason: fmt.Sprintf("release asset redirect without location (status %d)", resp.StatusCode)}
-			}
-			resolved, err := resolveFeedURL(dest, location)
-			if err != nil {
-				return nil, err
-			}
-			dest = resolved
-			continue
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
-			return nil, c.retryError(resp)
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, &FeedError{
-				Reason:     fmt.Sprintf("release asset request returned status %s", resp.Status),
-				StatusCode: resp.StatusCode,
-			}
-		}
-		// Streamed cap regardless of Content-Length: an oversized body is
-		// truncated by the limit reader and rejected by the size check.
-		limited := io.LimitReader(resp.Body, limit+1)
-		body, err := io.ReadAll(limited)
-		if err != nil {
-			return nil, &FeedError{Reason: fmt.Sprintf("reading release asset: %v", err)}
-		}
-		if int64(len(body)) > limit {
-			return nil, &FeedError{
-				Reason:     fmt.Sprintf("release asset exceeds the %d-byte limit", limit),
-				StatusCode: resp.StatusCode,
-			}
-		}
-		return body, nil
+	resp, hopCancel, err := c.doValidated(fetchCtx, rawURL, c.client, assetFetchSpec)
+	if err != nil {
+		return nil, err
 	}
+	defer hopCancel()
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+		return nil, c.retryError(resp)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &FeedError{
+			Reason:     fmt.Sprintf("release asset request returned status %s", resp.Status),
+			StatusCode: resp.StatusCode,
+		}
+	}
+	// Streamed cap regardless of Content-Length: an oversized body is
+	// truncated by the limit reader and rejected by the size check.
+	limited := io.LimitReader(resp.Body, limit+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, &FeedError{Reason: fmt.Sprintf("reading release asset: %v", err)}
+	}
+	if int64(len(body)) > limit {
+		return nil, &FeedError{
+			Reason:     fmt.Sprintf("release asset exceeds the %d-byte limit", limit),
+			StatusCode: resp.StatusCode,
+		}
+	}
+	return body, nil
 }
 
 // authorize constructs the per-destination authorization: a token follows

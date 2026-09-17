@@ -499,34 +499,3 @@ func ConfirmTransaction(execPath, txID string) (Receipt, error) {
 	}
 	return r, nil
 }
-
-// CleanupSettledTransaction (in staging.go) is the validated, idempotent
-// cleanup for settled transactions. It replaces Phase 1's unconditional
-// RemoveAll: only recognized owned objects are removed and unexpected
-// entries are retained.
-
-// Cleanup removes only objects this transaction created: the backup, the
-// staged candidate (if still present), any prepared restore copy, the
-// staging ownership record, and the transaction dir. Lease, lock,
-// ownership-record, and receipt files are never removed. It is idempotent.
-func (t *Transaction) Cleanup() error {
-	removeIfExists := func(path string) error {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove %s: %w", path, err)
-		}
-		return nil
-	}
-	if err := removeIfExists(t.receipt.BackupPath); err != nil {
-		return err
-	}
-	if err := removeIfExists(t.receipt.StagingPath); err != nil {
-		return err
-	}
-	if err := removeIfExists(t.receipt.RestorePath); err != nil {
-		return err
-	}
-	if err := removeIfExists(filepath.Join(t.txDir, stagingRecordName)); err != nil {
-		return err
-	}
-	return removeIfExists(t.txDir)
-}

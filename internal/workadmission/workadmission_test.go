@@ -269,6 +269,38 @@ func TestWaitForIdleContextCancel(t *testing.T) {
 	}
 }
 
+// TestActivityProtectedBusy pins the protected-work predicate beside Busy:
+// repository activity of every class is protected, while feature and chat
+// activity alone — the work an explicit-stop install may interrupt — never
+// is.
+func TestActivityProtectedBusy(t *testing.T) {
+	t.Parallel()
+	for _, activity := range []Activity{
+		{Features: 3},
+		{ChatActive: true},
+		{Features: 1, ChatActive: true},
+		{},
+	} {
+		if activity.ProtectedBusy() {
+			t.Fatalf("activity %+v must not be protected", activity)
+		}
+	}
+	for _, activity := range []Activity{
+		{Clones: 1},
+		{Uploads: 1},
+		{OriginChecks: 1},
+		{RepositoryWork: 1},
+		{Features: 2, RepositoryWork: 1},
+	} {
+		if !activity.ProtectedBusy() {
+			t.Fatalf("activity %+v must be protected", activity)
+		}
+		if !activity.Busy() {
+			t.Fatalf("protected activity %+v must also be busy", activity)
+		}
+	}
+}
+
 // TestDetectRunsOutsideMutex proves slow discovery does not block
 // acquisition: a detector blocked mid-discovery cannot stall Acquire.
 func TestDetectRunsOutsideMutex(t *testing.T) {

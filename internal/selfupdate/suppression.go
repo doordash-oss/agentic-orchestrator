@@ -51,7 +51,7 @@ func SuppressionPath(execPath string) string {
 	return filepath.Join(LeaseDir(execPath), "suppression-"+leaseKey(execPath)+".json")
 }
 
-// writeSuppressionState atomically writes the state with owner-only
+// writeSuppressionState durably writes the state with owner-only
 // permissions (O_EXCL tmp, fsync, rename, dir sync, chmod repair).
 func writeSuppressionState(execPath string, st SuppressionState) error {
 	if err := ensureLeaseDir(execPath); err != nil {
@@ -63,37 +63,7 @@ func writeSuppressionState(execPath string, st SuppressionState) error {
 		return fmt.Errorf("marshal suppression state: %w", err)
 	}
 	data = append(data, '\n')
-	path := SuppressionPath(execPath)
-	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("create suppression temp: %w", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("write suppression temp: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("sync suppression temp: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("close suppression temp: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("commit suppression: %w", err)
-	}
-	if err := SyncDir(filepath.Dir(path)); err != nil {
-		return fmt.Errorf("sync suppression dir: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("repair suppression permissions: %w", err)
-	}
-	return nil
+	return writeFileAtomic(SuppressionPath(execPath), data, true)
 }
 
 // ReadSuppressionState reads and validates the executable's suppression

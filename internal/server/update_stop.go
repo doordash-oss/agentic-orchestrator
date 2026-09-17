@@ -161,30 +161,71 @@ type installStopFailure struct {
 	opts   []errcat.Option
 }
 
-// installStopBlockers reports the blockers an explicit-stop immediate
-// install refuses on: repository activity (clones, uploads, origin checks,
-// other repository work), reservations outside the stoppable feature/chat
-// categories — known protected categories and unknown categories alike —
-// and failed or incomplete detection. Feature and chat activity alone
-// never blocks: the accepted permission authorizes stopping it.
-func (c *updateCoordinator) installStopBlockers(admission InstallAdmission) []errcat.Option {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// admissionDetectBudget bounds one blocker observation's activity detection.
+const admissionDetectBudget = 5 * time.Second
+
+// detectAdmissionActivity observes the work state through the admission
+// boundary within the shared detection budget. ok is false when detection
+// failed: uncertainty never reads as zero activity.
+func detectAdmissionActivity(admission InstallAdmission) (activity workadmission.Activity, held int, perCategory map[workadmission.Category]int, ok bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), admissionDetectBudget)
 	defer cancel()
 	activity, err := admission.Detect(ctx)
 	if err != nil {
-		return []errcat.Option{errcat.WithParams(errcat.UpdateBlockedActiveWorkParams{DetectionFailed: true})}
+		return workadmission.Activity{}, 0, nil, false
 	}
-	if activity.Clones > 0 || activity.Uploads > 0 || activity.OriginChecks > 0 || activity.RepositoryWork > 0 {
-		return []errcat.Option{errcat.WithParams(errcat.UpdateBlockedActiveWorkParams{
-			Features:       activity.Features,
-			ChatActive:     activity.ChatActive,
-			Clones:         activity.Clones,
-			Uploads:        activity.Uploads,
-			OriginChecks:   activity.OriginChecks,
-			RepositoryWork: activity.RepositoryWork,
-		})}
+	held, perCategory = admission.Held()
+	return activity, held, perCategory, true
+}
+
+// detectionFailedBlockers reports the canonical blockers when activity
+// detection failed or is incomplete: uncertainty never reads as zero
+// activity.
+func detectionFailedBlockers() []errcat.Option {
+	return []errcat.Option{errcat.WithParams(errcat.UpdateBlockedActiveWorkParams{DetectionFailed: true})}
+}
+
+// admissionRaceBlockers reports the canonical blockers when an atomic
+// admission decision lost a race the observation cannot see — a reservation
+// won the closure race or was held under the update lock yet settled before
+// detection: one pending admission is the truthful minimal snapshot.
+func admissionRaceBlockers() []errcat.Option {
+	return []errcat.Option{errcat.WithParams(errcat.UpdateBlockedActiveWorkParams{PendingAdmissions: 1})}
+}
+
+// activeWorkParams renders one observed work state as the canonical
+// update_blocked_active_work params snapshot.
+func activeWorkParams(activity workadmission.Activity, pending int) errcat.UpdateBlockedActiveWorkParams {
+	return errcat.UpdateBlockedActiveWorkParams{
+		Features:          activity.Features,
+		ChatActive:        activity.ChatActive,
+		Clones:            activity.Clones,
+		Uploads:           activity.Uploads,
+		OriginChecks:      activity.OriginChecks,
+		RepositoryWork:    activity.RepositoryWork,
+		PendingAdmissions: pending,
 	}
-	held, perCategory := admission.Held()
+}
+
+// blockedActiveWorkOptions renders the canonical update_blocked_active_work
+// blocker options for one observed work state, or nil when the observation
+// does not block. Without stop permission any observed activity or held
+// reservation blocks with the full activity snapshot. With stop permission
+// only protected repository activity blocks with the activity snapshot, and
+// held reservations outside the stoppable feature/chat categories block
+// with the pending-admission count and the protected category names;
+// feature and chat activity alone never blocks — the accepted permission
+// authorizes stopping exactly that work.
+func blockedActiveWorkOptions(activity workadmission.Activity, held int, perCategory map[workadmission.Category]int, stopPermitted bool) []errcat.Option {
+	if !stopPermitted {
+		if held > 0 || activity.Busy() {
+			return []errcat.Option{errcat.WithParams(activeWorkParams(activity, held))}
+		}
+		return nil
+	}
+	if activity.ProtectedBusy() {
+		return []errcat.Option{errcat.WithParams(activeWorkParams(activity, 0))}
+	}
 	if held > 0 {
 		if cats := protectedHeldCategories(perCategory); cats != "" {
 			return []errcat.Option{
@@ -194,6 +235,20 @@ func (c *updateCoordinator) installStopBlockers(admission InstallAdmission) []er
 		}
 	}
 	return nil
+}
+
+// installStopBlockers reports the blockers an explicit-stop immediate
+// install refuses on: repository activity (clones, uploads, origin checks,
+// other repository work), reservations outside the stoppable feature/chat
+// categories — known protected categories and unknown categories alike —
+// and failed or incomplete detection. Feature and chat activity alone
+// never blocks: the accepted permission authorizes stopping it.
+func (c *updateCoordinator) installStopBlockers(admission InstallAdmission) []errcat.Option {
+	activity, held, perCategory, ok := detectAdmissionActivity(admission)
+	if !ok {
+		return detectionFailedBlockers()
+	}
+	return blockedActiveWorkOptions(activity, held, perCategory, true)
 }
 
 // stoppableAdmissionCategories are the only reservation categories an
@@ -236,24 +291,18 @@ func (c *updateCoordinator) stopTimeoutFailure(admission InstallAdmission) *inst
 
 // stopBlockersNow snapshots the remaining blockers for a stop failure's
 // canonical params: current activity counts, held reservations, or
-// detection uncertainty when detection itself fails.
+// detection uncertainty when detection itself fails. The snapshot renders
+// even a quiet observation — the zero counts are the truthful answer to
+// what remains.
 func (c *updateCoordinator) stopBlockersNow(admission InstallAdmission) []errcat.Option {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	activity, err := admission.Detect(ctx)
-	if err != nil {
-		return []errcat.Option{errcat.WithParams(errcat.UpdateBlockedActiveWorkParams{DetectionFailed: true})}
+	activity, held, _, ok := detectAdmissionActivity(admission)
+	if !ok {
+		return detectionFailedBlockers()
 	}
-	held, _ := admission.Held()
-	return []errcat.Option{errcat.WithParams(errcat.UpdateBlockedActiveWorkParams{
-		Features:          activity.Features,
-		ChatActive:        activity.ChatActive,
-		Clones:            activity.Clones,
-		Uploads:           activity.Uploads,
-		OriginChecks:      activity.OriginChecks,
-		RepositoryWork:    activity.RepositoryWork,
-		PendingAdmissions: held,
-	})}
+	if blockers := blockedActiveWorkOptions(activity, held, nil, false); blockers != nil {
+		return blockers
+	}
+	return []errcat.Option{errcat.WithParams(activeWorkParams(activity, held))}
 }
 
 // dispatchAndConfirmStops runs the authorized stopping interval for one
@@ -286,10 +335,8 @@ func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admiss
 		if err != nil {
 			return &installStopFailure{
 				result: "install_stop_failed:detection",
-				opts: []errcat.Option{
-					errcat.WithParams(errcat.UpdateBlockedActiveWorkParams{DetectionFailed: true}),
-					errcat.WithDiagnostics("stop-set discovery failed: " + selfupdate.SanitizeError(err.Error())),
-				},
+				opts: append(detectionFailedBlockers(),
+					errcat.WithDiagnostics("stop-set discovery failed: "+selfupdate.SanitizeError(err.Error()))),
 			}
 		}
 		for _, id := range ids {
@@ -340,10 +387,8 @@ func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admiss
 		if detectErr != nil {
 			return &installStopFailure{
 				result: "install_stop_failed:detection",
-				opts: []errcat.Option{
-					errcat.WithParams(errcat.UpdateBlockedActiveWorkParams{DetectionFailed: true}),
-					errcat.WithDiagnostics("completion detection failed: " + selfupdate.SanitizeError(detectErr.Error())),
-				},
+				opts: append(detectionFailedBlockers(),
+					errcat.WithDiagnostics("completion detection failed: "+selfupdate.SanitizeError(detectErr.Error()))),
 			}
 		}
 		held, perCategory := admission.Held()

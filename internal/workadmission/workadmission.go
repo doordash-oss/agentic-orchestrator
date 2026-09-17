@@ -102,6 +102,15 @@ func (a Activity) Busy() bool {
 		a.Uploads > 0 || a.OriginChecks > 0 || a.RepositoryWork > 0
 }
 
+// ProtectedBusy reports whether activity exists that an authorized stop may
+// not interrupt: repository work of every class — clones, uploads, origin
+// checks, and other repository work. Feature and chat activity alone never
+// counts: an explicit-stop install's accepted permission authorizes
+// interrupting exactly that work.
+func (a Activity) ProtectedBusy() bool {
+	return a.Clones > 0 || a.Uploads > 0 || a.OriginChecks > 0 || a.RepositoryWork > 0
+}
+
 // Detector discovers observed activity. Detectors run outside the
 // coordinator mutex and must be safe for concurrent use. A detector error
 // means detection failed: the counts are incomplete and installation must

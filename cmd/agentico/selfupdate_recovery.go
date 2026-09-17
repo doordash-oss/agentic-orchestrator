@@ -307,8 +307,14 @@ func resolveRecoveryOnBoot(stateDir, configPath, listenAddr string) bootRecovery
 // best-effort write at rollback time must never erase the outcome), and
 // recognized cleanup of the settled transaction and of abandoned pre-install
 // staging is retried under the binary lease, skipping anything live-owned.
+// A plan with no receipt path is the ordinary no-transaction launch: there is
+// no settled outcome to re-assert or retry, and attempting cleanup with an
+// empty transaction id would report false maintenance failures and write a
+// receipt outside the updater-owned location. Staging reconciliation still
+// runs so abandoned staging from a lost pre-install attempt is collected.
 func reconcileSettledState(exec selfupdate.Executable, plan selfupdate.RecoveryPlan, runtimeDir, stateDir, configPath string) {
-	if plan.Receipt.Outcome == selfupdate.OutcomeRolledBack {
+	hasReceipt := plan.ReceiptPath != ""
+	if hasReceipt && plan.Receipt.Outcome == selfupdate.OutcomeRolledBack {
 		if err := selfupdate.ReconcileSuppression(exec.Path, plan.Receipt); err != nil {
 			renderError(os.Stderr, errcat.StartupMaintenanceFailed,
 				errcat.WithDiagnostics(fmt.Sprintf("re-asserting update rollback suppression: %v", err)))
@@ -321,7 +327,9 @@ func reconcileSettledState(exec selfupdate.Executable, plan selfupdate.RecoveryP
 		return
 	}
 	defer func() { _ = lease.Close() }()
-	cleanupSettledBestEffort(exec, plan.Receipt, plan)
+	if hasReceipt {
+		cleanupSettledBestEffort(exec, plan.Receipt, plan)
+	}
 	if err := selfupdate.ReconcileStaging(exec.Path, "", selfUpdateCleanupSeams); err != nil {
 		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
 			errcat.WithDiagnostics(fmt.Sprintf("selfupdate staging reconciliation: %v", err)))

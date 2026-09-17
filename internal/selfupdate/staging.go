@@ -41,7 +41,9 @@ type StagingRecord struct {
 }
 
 // writeStagingRecord durably writes the staging ownership record inside
-// txDir: O_EXCL create, fsync, transaction-dir sync.
+// txDir: O_EXCL tmp, fsync, rename, transaction-dir sync. Both callers write
+// into a freshly created tx dir, so the rename's overwrite semantics never
+// race an existing record.
 func writeStagingRecord(txDir string, rec StagingRecord) error {
 	rec.SchemaVersion = stagingRecordSchemaVersion
 	data, err := json.MarshalIndent(rec, "", "  ")
@@ -49,32 +51,7 @@ func writeStagingRecord(txDir string, rec StagingRecord) error {
 		return fmt.Errorf("marshal staging record: %w", err)
 	}
 	data = append(data, '\n')
-	path := filepath.Join(txDir, stagingRecordName)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("create staging record: %w", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return fmt.Errorf("write staging record: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return fmt.Errorf("sync staging record: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(path)
-		return fmt.Errorf("close staging record: %w", err)
-	}
-	if err := SyncDir(txDir); err != nil {
-		return fmt.Errorf("sync transaction dir for staging record: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("repair staging record permissions: %w", err)
-	}
-	return nil
+	return writeFileAtomic(filepath.Join(txDir, stagingRecordName), data, true)
 }
 
 // readStagingRecord reads and validates the staging record inside txDir.

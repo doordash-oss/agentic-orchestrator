@@ -39,7 +39,10 @@ import (
 // no driver code at all, so no flag, environment value, or HTTP request can
 // activate any journey below. The driver injects failures and barriers into
 // the production recovery machinery through the seams declared in
-// selfupdate_hooks.go; it never reimplements recovery.
+// selfupdate_hooks.go; it never reimplements recovery. The replacement tail
+// is the one production implementation (executeReplacementTail in
+// selfupdate_install.go), reached with the driver's failure-injection and
+// barrier seams.
 
 // cliSubcommandSelfUpdateDriver is the driver-only first argument.
 const cliSubcommandSelfUpdateDriver = "selfupdate-driver"
@@ -902,156 +905,81 @@ func (replaceJourney) run(r serverRun) int {
 	txid := tx.Receipt().TransactionID
 	_ = r.boot.updateLease.SetTransactionID(txid)
 
-	return runReplacementTail(r, tx, toVersion, releaseUpdateLock)
+	return runReplacementTail(r, tx, releaseUpdateLock)
 }
 
-// runReplacementTail carries one prepared transaction through the orderly
-// shutdown, atomic commit, and exec handoff — the journey steps shared by the
-// local-candidate replace journey and the release-backed journey. A return
-// of -1 means the old runtime is still usable and keeps serving.
-func runReplacementTail(r serverRun, tx *selfupdate.Transaction, toVersion string, releaseUpdateLock func()) int {
-	txid := tx.Receipt().TransactionID
-	bind := tx.Receipt().Bind
-	planFor := func() selfupdate.RecoveryPlan {
-		return selfupdate.RecoveryPlan{
-			Receipt:     tx.Receipt(),
-			ReceiptPath: selfupdate.ReceiptPath(r.boot.selfUpdateExec.Path),
-		}
-	}
+// runReplacementTail carries one prepared transaction through the shared
+// production replacement tail with the driver's failure-injection and
+// barrier seams. A return of -1 means the old runtime is still usable and
+// keeps serving; any other value is the journey exit code.
+func runReplacementTail(r serverRun, tx *selfupdate.Transaction, releaseUpdateLock func()) int {
 	if driver.prepareOnly {
-		fmt.Fprintf(os.Stderr, "selfupdate-driver: prepared %s\n", txid)
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: prepared %s\n", tx.Receipt().TransactionID)
 		driverBarrierJourney("prepared")
 		shutdownSequence(r)
 		return 0
 	}
 	driverBarrierJourney("prepared")
-
-	// Draining fails while the old runtime is still usable: abort the
-	// installation, settle the truthful installation failure, and keep
-	// serving the unchanged build. No serving resource is closed, the
-	// target is never executed, and the target is never suppressed.
-	if driver.failAtSet("drain") {
-		reason := "injected drain failure: installation aborted before any serving resource closed"
-		settled, serr := selfupdate.ResolveAbandoned(r.boot.selfUpdateExec, r.boot.updateLease, planFor(), reason, selfupdate.RecoverySeams{})
-		if serr != nil {
-			fmt.Fprintf(os.Stderr, "selfupdate-driver: settling aborted installation failed: %v\n", serr)
-			return 1
-		}
-		fmt.Fprintf(os.Stderr, "selfupdate-driver: installation aborted pre-replacement (%s); still serving\n", settled.TransactionID)
-		fmt.Fprintln(os.Stderr, "selfupdate-driver: drain failed (injected)")
+	res := executeReplacementTail(r, tx, releaseUpdateLock, nil, driverReplacementSeams())
+	if res.keepServing {
 		return -1
 	}
+	return res.exitCode
+}
 
-	// Drain and stop before any installed-path mutation. The executable is
-	// never replaced unless all of these succeed.
-	shutdownFeatures(r.boot.orchestrator, r.boot.sessionManager)
-	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelDrain()
-	closeErr := r.server.Close(drainCtx)
-	// A graceful SSE deadline permits progress only when every joined error
-	// is the cooperative deadline itself (RuntimeServer.Close force-terminates
-	// the remaining streams); unrelated joined errors are never discarded
-	// merely because they include a timeout.
-	tolerable := tolerableShutdownDeadline(closeErr)
-	if driver.failAtSet("server-close") {
-		tolerable = false
-		if closeErr == nil {
-			closeErr = errors.New("injected server close failure")
+// driverReplacementSeams builds the driver's injection and barrier surface
+// for the shared replacement tail from the parsed --fail-at and --barrier
+// controls. Only the armed points are installed; everything else keeps the
+// real implementation.
+func driverReplacementSeams() replacementSeams {
+	var seams replacementSeams
+	if driver.anyFailArmed() {
+		if driver.failAtSet("drain") {
+			seams.failDrain = func() bool { return true }
+		}
+		if driver.failAtSet("server-close") || driver.failAtSet("shutdown-mixed") {
+			seams.rewriteServerClose = func(err error, tolerable bool) (error, bool) {
+				if driver.failAtSet("server-close") {
+					tolerable = false
+					if err == nil {
+						err = errors.New("injected server close failure")
+					}
+				}
+				if driver.failAtSet("shutdown-mixed") {
+					tolerable = false
+					err = errors.Join(err, context.DeadlineExceeded, errors.New("injected unfinished stream closure"))
+				}
+				return err, tolerable
+			}
+			// The injected close-failure journeys keep the receipt
+			// actionable so the restart attempt stays recordable; the
+			// restarted image's boot performs the real settlement.
+			seams.settleAbortedInstall = func(string) error { return nil }
+		}
+		if driver.failAtSet("stop") {
+			seams.failStop = func() bool { return true }
+		}
+		if driver.failAtSet("post-rename") {
+			seams.failPostRename = func() bool { return true }
+		}
+		if driver.failAtSet("exec-error") {
+			// Simulate exec returning an error without calling exec:
+			// ExecReplace clears CLOEXEC on the lease fd, the seam fails,
+			// and ExecReplace restores CLOEXEC before returning. The
+			// boundary then restores the previous build and execs it with
+			// the guard.
+			seams.execFn = func(string, []string, []string) error {
+				return errors.New("injected exec failure")
+			}
 		}
 	}
-	if driver.failAtSet("shutdown-mixed") {
-		tolerable = false
-		closeErr = errors.Join(closeErr, context.DeadlineExceeded, errors.New("injected unfinished stream closure"))
+	if driver.barrier != "" {
+		seams.barrier = driverBarrierJourney
 	}
-	if closeErr != nil && !tolerable {
-		fmt.Fprintf(os.Stderr, "selfupdate-driver: server shutdown failed: %v\n", closeErr)
-		releaseUpdateLock()
-		return restartUnchangedBuild(r, planFor(), fmt.Sprintf("server shutdown failed: %v", closeErr), bind)
+	seams.logf = func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, "selfupdate-driver: "+format, args...)
 	}
-	// Idempotent release of the owned registry resource. The instance lock
-	// is deliberately NOT released: it is close-on-exec and must stay held
-	// until the exec boundary so no competing runtime can slip in.
-	_ = serverruntime.RemoveRegistryEntry(r.registryDir, r.boot.runtime.RuntimeDir)
-
-	stopCtx, cancelStop := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelStop()
-	if err := r.boot.StopServices(stopCtx); err != nil && !tolerableShutdownDeadline(err) {
-		fmt.Fprintf(os.Stderr, "selfupdate-driver: stop services failed: %v\n", err)
-		releaseUpdateLock()
-		return restartUnchangedBuild(r, planFor(), fmt.Sprintf("stop services failed: %v", err), bind)
-	}
-	if driver.failAtSet("stop") {
-		fmt.Fprintln(os.Stderr, "selfupdate-driver: stop failed (injected)")
-		releaseUpdateLock()
-		return restartUnchangedBuild(r, planFor(), "injected stop failure after serving resources closed", bind)
-	}
-
-	driverBarrierJourney("pre-commit")
-
-	if err := tx.Commit(); err != nil {
-		// The rename may or may not have landed: decide by the installed
-		// bytes. Old bytes still installed restart the unchanged build;
-		// candidate bytes installed restore the previous build.
-		fmt.Fprintf(os.Stderr, "selfupdate-driver: commit failed: %v\n", err)
-		_ = tx.RecordError(fmt.Sprintf("commit: %v", err))
-		if got, derr := selfupdate.DigestFile(r.boot.selfUpdateExec.Path); derr == nil && got == tx.Receipt().OldDigest {
-			releaseUpdateLock()
-			return restartUnchangedBuild(r, planFor(), fmt.Sprintf("commit failed before replacement: %v", err), bind)
-		}
-		releaseUpdateLock()
-		return recoverPreviousBuild(r, planFor(), fmt.Sprintf("commit failed after replacement: %v", err))
-	}
-	fmt.Fprintf(os.Stderr, "selfupdate-driver: committed %s\n", txid)
-
-	if driver.failAtSet("post-rename") {
-		// The target is never invoked: recover through the boundary —
-		// restore the previous build and exec it with the chain guard.
-		fmt.Fprintln(os.Stderr, "selfupdate-driver: post-rename failure (injected)")
-		releaseUpdateLock()
-		return recoverPreviousBuild(r, planFor(), "injected post-rename failure: target never invoked")
-	}
-	driverBarrierJourney("post-rename")
-
-	meta := selfupdate.HandoffMetadata{
-		SchemaVersion:  1,
-		TransactionID:  txid,
-		RuntimeDir:     r.boot.runtime.RuntimeDir,
-		StateDir:       r.boot.runtime.StateDir,
-		Config:         r.boot.runtime.Config,
-		FromPID:        os.Getpid(),
-		LeaseFD:        r.boot.updateLease.FD(),
-		LeasePath:      r.boot.updateLease.Path(),
-		ExecutablePath: r.boot.selfUpdateExec.Path,
-		NewDigest:      tx.Receipt().NewDigest,
-		FromVersion:    buildinfo.Version(),
-		ToVersion:      toVersion,
-		Bind:           bind,
-		ReceiptPath:    selfupdate.ReceiptPath(r.boot.selfUpdateExec.Path),
-		AuthTokenPath:  serverruntime.AuthTokenPath(r.boot.runtime.RuntimeDir),
-	}
-	fmt.Fprintf(os.Stderr, "selfupdate-driver: exec %s\n", r.boot.selfUpdateExec.Path)
-
-	entry := selfupdate.HandoffEnvVar + "=" + selfupdate.EncodeHandoff(meta)
-	if driver.failAtSet("exec-error") {
-		// Simulate exec returning an error without calling exec: ExecReplace
-		// clears CLOEXEC on the lease fd, the seam fails, and ExecReplace
-		// restores CLOEXEC before returning. The boundary then restores the
-		// previous build and execs it with the guard.
-		err := selfupdate.ExecReplace(r.boot.selfUpdateExec.Path, os.Args, os.Environ(), entry, meta.LeaseFD, func(string, []string, []string) error {
-			return errors.New("injected exec failure")
-		})
-		fmt.Fprintf(os.Stderr, "selfupdate-driver: exec failed: %v\n", err)
-		releaseUpdateLock()
-		return recoverPreviousBuild(r, planFor(), "injected exec failure: target never started")
-	}
-	if err := selfupdate.ExecReplace(r.boot.selfUpdateExec.Path, os.Args, os.Environ(), entry, meta.LeaseFD, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "selfupdate-driver: exec failed: %v\n", err)
-		releaseUpdateLock()
-		return recoverPreviousBuild(r, planFor(), fmt.Sprintf("exec: %v", err))
-	}
-	// A successful exec never returns; this line only guards a seam
-	// implementation that wrongly returns nil.
-	return 0
+	return seams
 }
 
 // releaseJourney is the old-image journey for a signed fixture release: the
@@ -1176,7 +1104,7 @@ func (releaseJourney) run(r serverRun) int {
 	if err := selfupdate.CleanupSettledTransaction(r.boot.selfUpdateExec.Path, staged.TxID(), selfUpdateCleanupSeams); err != nil {
 		fmt.Fprintf(os.Stderr, "selfupdate-driver: release staging cleanup deferred: %v\n", err)
 	}
-	return runReplacementTail(r, tx, verified.Resolved().Version, releaseUpdateLock)
+	return runReplacementTail(r, tx, releaseUpdateLock)
 }
 
 // driverBarrierJourney blocks at a journey-level barrier stage.
@@ -1184,47 +1112,6 @@ func driverBarrierJourney(stage string) {
 	if driver.barrier == stage {
 		barrierHook(stage)
 	}
-}
-
-// restartUnchangedBuild returns an old runtime whose serving resources
-// already closed to service: the unchanged executable is re-executed under
-// the durable recovery-attempt tracking of the guarded recovery path — an
-// installation failure, never a fictitious rollback.
-func restartUnchangedBuild(r serverRun, plan selfupdate.RecoveryPlan, reason string, bind selfupdate.BindEndpoint) int {
-	rt := failedTargetRecovery{
-		boot:             r.boot,
-		server:           r.server,
-		registryDir:      r.registryDir,
-		authToken:        r.authToken,
-		exec:             r.boot.selfUpdateExec,
-		lease:            r.boot.updateLease,
-		receipt:          plan.Receipt,
-		runtimeDir:       r.boot.runtime.RuntimeDir,
-		reason:           reason,
-		restartUnchanged: true,
-		bind:             bind,
-	}
-	fmt.Fprintf(os.Stderr, "selfupdate-driver: restarting unchanged build after aborted shutdown\n")
-	return rt.recover()
-}
-
-// recoverPreviousBuild runs the recovery boundary from the old image: the
-// candidate is installed but the target failed before or at exec — restore
-// the previous build and exec it with the chain guard.
-func recoverPreviousBuild(r serverRun, plan selfupdate.RecoveryPlan, reason string) int {
-	rt := failedTargetRecovery{
-		boot:        r.boot,
-		server:      r.server,
-		registryDir: r.registryDir,
-		authToken:   r.authToken,
-		exec:        r.boot.selfUpdateExec,
-		lease:       r.boot.updateLease,
-		receipt:     plan.Receipt,
-		runtimeDir:  r.boot.runtime.RuntimeDir,
-		reason:      reason,
-		bind:        plan.Receipt.Bind,
-	}
-	return rt.recover()
 }
 
 // seamsForFailAt returns transaction seams that inject the requested
@@ -1271,7 +1158,7 @@ func seamsForFailAt(points map[string]bool) selfupdate.TxSeams {
 // that stays held until the deferred runtimeBootstrap.Close on process
 // exit — and never closes the update lease. server.Close, StopServices, and
 // RemoveRegistryEntry are idempotent, so overlapping with the deferred
-// cleanup in runServerWithJourney is safe.
+// cleanup in runServer is safe.
 func shutdownSequence(r serverRun) {
 	shutdownFeatures(r.boot.orchestrator, r.boot.sessionManager)
 	closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

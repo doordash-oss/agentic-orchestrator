@@ -872,7 +872,7 @@ func TestUpdateInstallPostNowBlockedByActiveWork(t *testing.T) {
 	if body.Error.Code != string(errcat.UpdateBlockedActiveWork) {
 		t.Fatalf("code = %q, want update_blocked_active_work", body.Error.Code)
 	}
-	if blockers := fixture.handler.installRequestBlockers(context.Background(), false); blockers == nil {
+	if blockers := fixture.handler.updates.installRequestBlockers(context.Background(), fixture.handler.admission, false); blockers == nil {
 		t.Fatal("request-time blockers must report the busy feature")
 	}
 	if got := fixture.stager.calls(); got != 0 {
@@ -882,7 +882,7 @@ func TestUpdateInstallPostNowBlockedByActiveWork(t *testing.T) {
 	// An idle boundary with no observed work admits the request-time check.
 	quietFixture := newInstallAPIFixtureWithBoundary(t, eligibleUpdateOptions(), workadmission.New(workadmission.Options{}), nil)
 	quietFixture.discoverLatest(t)
-	if blockers := quietFixture.handler.installRequestBlockers(context.Background(), false); blockers != nil {
+	if blockers := quietFixture.handler.updates.installRequestBlockers(context.Background(), quietFixture.handler.admission, false); blockers != nil {
 		t.Fatalf("quiet runtime blockers = %v, want nil", blockers)
 	}
 
@@ -892,7 +892,7 @@ func TestUpdateInstallPostNowBlockedByActiveWork(t *testing.T) {
 	})
 	failingFixture := newInstallAPIFixtureWithBoundary(t, eligibleUpdateOptions(), workadmission.New(workadmission.Options{}), failingFeatures)
 	failingFixture.discoverLatest(t)
-	if blockers := failingFixture.handler.installRequestBlockers(context.Background(), false); blockers == nil {
+	if blockers := failingFixture.handler.updates.installRequestBlockers(context.Background(), failingFixture.handler.admission, false); blockers == nil {
 		t.Fatal("detection failure must block an immediate install")
 	}
 	w = httptest.NewRecorder()

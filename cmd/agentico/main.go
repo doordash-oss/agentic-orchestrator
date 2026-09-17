@@ -3060,67 +3060,21 @@ func normalizeProviderNames(enabled []string, warnBlank bool, warn func(name str
 	return valid
 }
 
+// runServer is the server body. Ordinary builds adopt inherited update
+// handoffs and resolve interrupted transactions as production behavior;
+// driver builds (agentico_selfupdate_driver tag) additionally install
+// failure-injection and barrier seams.
 func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName, updatesPolicy string) int {
-	return runServerWithJourney(configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, listenAddr, serverName, updatesPolicy)
-}
-
-// runServerWithJourney is the server body. Ordinary builds adopt inherited
-// update handoffs and resolve interrupted transactions as production
-// behavior; driver builds (agentico_selfupdate_driver tag) additionally
-// install failure-injection and barrier seams.
-func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName, updatesPolicy string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	runtimeCtx, requestShutdown := context.WithCancel(ctx)
 	defer requestShutdown()
 
-	// Handoff adoption precedes general bootstrap so no child process can
-	// spawn before the inherited lease descriptor is validated and made
-	// close-on-exec again. This is production behavior: ordinary binaries
-	// adopt and recover legitimate handoffs. A present-but-invalid handoff
-	// fails the launch closed.
-	var adopted *selfupdate.Lease
-	var adoptedHandoff selfupdate.HandoffMetadata
-	var adoptedReceipt selfupdate.Receipt
-	lease, meta, receipt, err := adoptHandoffForLaunch()
-	if err != nil {
-		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("adopting update handoff: %w", err)})
-		return 1
+	id := resolveLaunchIdentity(stateDir, configPath, listenAddr)
+	if id.exit {
+		return id.code
 	}
-	adopted, adoptedHandoff, adoptedReceipt = lease, meta, receipt
-	if adopted != nil && selfUpdateAdoptedStartHook != nil {
-		selfUpdateAdoptedStartHook()
-	}
-
-	// Mandatory recovery resolution for non-adopted (operator) launches runs
-	// before configuration loading, fx construction, bootstrap children,
-	// update-policy selection, and any ownership-record overwrite. A restore
-	// decision execs onto the restored build and never returns; an unsafe
-	// record refuses nonzero with a sanitized diagnostic; absence of a
-	// transaction preserves ordinary startup, including serving without
-	// update ownership.
-	var recoveryLease *selfupdate.Lease
-	var restoredRollback *selfupdate.Receipt
-	recoveredChain := false
-	if adopted == nil {
-		res := resolveRecoveryOnBoot(stateDir, configPath, listenAddr)
-		if res.exit {
-			return res.code
-		}
-		recoveryLease = res.lease
-		restoredRollback = res.restoredRollback
-		if res.listenOverride != "" {
-			listenAddr = res.listenOverride
-			recoveredChain = true
-		}
-		if res.recoveredChain {
-			recoveredChain = true
-		}
-	} else if override := handoffListenAddr(adoptedHandoff); override != "" {
-		// The adopted target rebinds its recorded concrete endpoint; argv's
-		// --listen may still name an ephemeral port.
-		listenAddr = override
-	}
+	listenAddr = id.listenAddr
 
 	// Driver-only deterministic abort for a recovered or restarted image's
 	// own startup: the chain guard already forbids another automatic
@@ -3136,7 +3090,7 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 	// routes through the recovery boundary like any other startup failure.
 	bootCtx := ctx
 	var cancelBootCtx context.CancelFunc
-	if adopted != nil {
+	if id.adopted != nil {
 		bootCtx, cancelBootCtx = context.WithTimeout(ctx, startupDeadline())
 		defer cancelBootCtx()
 	}
@@ -3149,19 +3103,19 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 	// tear down, restore the previous build, and exec it once with the chain
 	// guard. Ordinary launches keep their existing failure behavior.
 	rt := failedTargetRecovery{
-		lease:      adopted,
-		receipt:    adoptedReceipt,
-		exec:       selfupdate.Executable{Path: adoptedHandoff.ExecutablePath},
-		runtimeDir: adoptedHandoff.RuntimeDir,
-		bind:       adoptedReceipt.Bind,
-		reason:     fmt.Sprintf("target %s failed to return to service; previous build %s restored", adoptedReceipt.ToVersion, adoptedReceipt.FromVersion),
+		lease:      id.adopted,
+		receipt:    id.adoptedReceipt,
+		exec:       selfupdate.Executable{Path: id.adoptedHandoff.ExecutablePath},
+		runtimeDir: id.adoptedHandoff.RuntimeDir,
+		bind:       id.adoptedReceipt.Bind,
+		reason:     fmt.Sprintf("target %s failed to return to service; previous build %s restored", id.adoptedReceipt.ToVersion, id.adoptedReceipt.FromVersion),
 	}
 	targetStartupFailure := func(render func(error), err error) int {
-		if adopted == nil {
+		if id.adopted == nil {
 			render(err)
 			return 1
 		}
-		rt.reason = fmt.Sprintf("target %s failed to return to service: %v", adoptedReceipt.ToVersion, err)
+		rt.reason = fmt.Sprintf("target %s failed to return to service: %v", id.adoptedReceipt.ToVersion, err)
 		return rt.recover()
 	}
 
@@ -3174,16 +3128,16 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 			reportDeferredClose(os.Stderr, "close runtime", err)
 		}
 	}()
-	if adopted != nil {
+	if id.adopted != nil {
 		// bootstrapRuntime's own lease acquisition reports contention here:
 		// the adopted open file description already holds the binary-scoped
 		// flock, so its fresh non-blocking attempt cannot succeed. The
 		// adopted lease is this process's true owner.
-		boot.updateLease = adopted
-	} else if recoveryLease != nil {
+		boot.updateLease = id.adopted
+	} else if id.recoveryLease != nil {
 		// Recovery resolution acquired the lease before bootstrap: ownership
 		// stays continuous for this process's lifetime.
-		boot.updateLease = recoveryLease
+		boot.updateLease = id.recoveryLease
 	}
 	if rt.boot == nil {
 		rt.boot = boot
@@ -3213,73 +3167,7 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 		}, updateErr)
 	}
 	eligibility := classifyRuntimeEligibility(boot)
-	var startupUpdateReceipt *selfupdate.Receipt
-	switch {
-	case restoredRollback != nil:
-		startupUpdateReceipt = restoredRollback
-	case adopted != nil:
-		receiptCopy := adoptedReceipt
-		startupUpdateReceipt = &receiptCopy
-	}
-	var updateFeed serverruntime.FeedChecker
-	if updateFeedHook != nil {
-		// Driver-only fixture routing: deliberately built test binaries
-		// inject a local metadata feed that receives no credentials.
-		updateFeed = updateFeedHook()
-	} else {
-		slug, _ := moduleSlug()
-		updateFeed = selfupdate.NewProductionFeedClient(slug, githubToken)
-	}
-	updateOptions := serverruntime.UpdateOptions{
-		Policy:         updateSettings.Policy,
-		Settings:       updateSettings,
-		CurrentVersion: buildinfo.Version(),
-		Eligibility:    eligibility,
-		ExecPath:       boot.selfUpdateExec.Path,
-		StartupReceipt: startupUpdateReceipt,
-		Feed:           updateFeed,
-		Log:            func(line string) { fmt.Fprintln(os.Stderr, line) },
-		Observer:       boot.observer,
-		Admission:      boot.admission,
-	}
-	// The production install path: the same signed-release pipeline and
-	// recoverable replacement the driver journeys prove, reachable only
-	// through the authenticated install endpoint. The lifecycle's server
-	// handle is completed after the server starts; install requests can
-	// only arrive after that point.
-	installLifecycle := &productionInstallLifecycle{
-		exitCode: make(chan int, 1),
-		stager: &productionReleaseStager{
-			exec:           boot.selfUpdateExec,
-			currentVersion: buildinfo.Version(),
-			eligibility:    eligibility,
-		},
-	}
-	if feedClient, ok := updateFeed.(*selfupdate.FeedClient); ok {
-		installLifecycle.stager.feed = feedClient
-	}
-	if installLifecycle.stager.feed != nil {
-		updateOptions.Stager = installLifecycle.stager
-		updateOptions.Install = installLifecycle
-	}
-	// Test-only seams for the tagged driver's explicit-stop journeys:
-	// ordinary builds keep every hook nil so production installs use the
-	// fixed stop budget, never pause before the protected-work recheck,
-	// and never inject stop failures.
-	if updateStopWorkTimeoutHook != nil {
-		if budget := updateStopWorkTimeoutHook(); budget > 0 {
-			updateOptions.StopWorkTimeout = budget
-		}
-	}
-	if updateStopEntryGateHook != nil {
-		updateOptions.StopEntryGate = updateStopEntryGateHook()
-	}
-	if updateStopFeatureFailureHook != nil {
-		updateOptions.StopFeatureHook = updateStopFeatureFailureHook()
-	}
-	if updateStopDetectionFailHook != nil {
-		updateOptions.DetectFailHook = updateStopDetectionFailHook()
-	}
+	wiring := buildUpdateOptions(boot, id, updateSettings, eligibility)
 
 	if shouldInterruptRunningOnStartup(
 		boot.recoveryScanOK,
@@ -3307,7 +3195,7 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 		}, err)
 	}
 	if decision.AlreadyRunning {
-		if adopted != nil {
+		if id.adopted != nil {
 			// The target could not take over its own runtime: recover.
 			rt.reason = "target startup found the runtime already served by another process"
 			return rt.recover()
@@ -3366,7 +3254,7 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
 		},
 		Worktrees: boot.worktrees,
-		Updates:   updateOptions,
+		Updates:   wiring.options,
 		Admission: boot.admission,
 	})
 	if err != nil {
@@ -3378,6 +3266,7 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 	rt.authToken = authToken
 	// Complete the install lifecycle's server handle now that the server is
 	// running: install requests arriving through HTTP find it ready.
+	installLifecycle := wiring.lifecycle
 	installLifecycle.run = &serverRun{
 		boot:           boot,
 		server:         runtimeServer,
@@ -3385,9 +3274,9 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 		resolvedName:   resolvedName,
 		policy:         policy,
 		listen:         listen,
-		adoptedLease:   adopted,
-		adoptedHandoff: adoptedHandoff,
-		adoptedReceipt: adoptedReceipt,
+		adoptedLease:   id.adopted,
+		adoptedHandoff: id.adoptedHandoff,
+		adoptedReceipt: id.adoptedReceipt,
 	}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -3424,63 +3313,28 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 		}()
 	}
 
-	// No ordinary work is admitted before full bootstrap, the mandatory
-	// discovery publication, and — for the adopted target and the recovered
-	// build — the self-health wait.
-	if adopted != nil || recoveredChain {
-		if err := waitSelfHealthy(selfHealthProbeURLs(runtimeServer), 30*time.Second); err != nil {
-			if adopted != nil {
-				rt.reason = fmt.Sprintf("target %s failed its health wait: %v", adoptedReceipt.ToVersion, err)
-				return rt.recover()
-			}
-			// The recovered build's own startup failure terminates nonzero:
-			// the chain guard forbids another automatic recovery.
-			renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("recovered build health wait: %w", err)})
-			return 1
-		}
-	}
-
-	if adopted != nil {
-		// Confirmation is write-once and only happens after full bootstrap,
-		// health wait, and discovery publication. A failure to persist
-		// confirmation stays unconfirmed and enters the recovery boundary
-		// when safe.
-		confirmedReceipt, err := confirmAdoptedTransaction(adoptedHandoff.ExecutablePath, adoptedHandoff.TransactionID)
-		if err != nil {
-			rt.reason = fmt.Sprintf("target %s could not durably confirm its update: %v", adoptedReceipt.ToVersion, err)
-			return rt.recover()
-		}
-		// The public update snapshot now exposes the confirmed outcome and
-		// its sanitized receipt.
-		runtimeServer.SetUpdateReceipt(confirmedReceipt)
-		// Cleanup failure retains the healthy target and the confirmed
-		// outcome: warn and keep serving; a later launch retries the
-		// validated cleanup.
-		if err := selfupdate.CleanupSettledTransaction(adoptedHandoff.ExecutablePath, adoptedHandoff.TransactionID, selfUpdateCleanupSeams); err != nil {
-			renderError(os.Stderr, errcat.StartupMaintenanceFailed,
-				errcat.WithDiagnostics(fmt.Sprintf("selfupdate cleanup for confirmed transaction %s: %v", adoptedHandoff.TransactionID, err)))
-		}
-		fmt.Fprintf(os.Stderr, "selfupdate: confirmed %s\n", adoptedHandoff.TransactionID)
+	if code, stopLaunch := confirmAdoptedStartup(id, &rt, runtimeServer); stopLaunch {
+		return code
 	}
 
 	fmt.Fprintf(os.Stderr, "Agentic server %q listening at %s\n", resolvedName, runtimeServer.BaseURL())
-	if restoredRollback != nil {
+	if id.restoredRollback != nil {
 		// The restored runtime reports the consumed update result as the
 		// canonical update_rolled_back failure while continuing to serve on
 		// the previous build.
 		renderError(os.Stderr, errcat.UpdateRolledBack,
 			errcat.WithParams(errcat.UpdateRolledBackParams{
-				FromVersion: restoredRollback.FromVersion,
-				ToVersion:   restoredRollback.ToVersion,
+				FromVersion: id.restoredRollback.FromVersion,
+				ToVersion:   id.restoredRollback.ToVersion,
 			}),
-			errcat.WithDiagnostics(restoredRollback.Error))
+			errcat.WithDiagnostics(id.restoredRollback.Error))
 	}
 	if err := writeNetworkAccessNotice(os.Stderr, runtimeServer.RuntimePolicy(), runtimeServer.BaseURL(), runtimeServer.WildcardBind(), authToken, resolvedName); err != nil {
 		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
 			errcat.WithDiagnostics(fmt.Sprintf("writing network access notice: %v", err)))
 	}
 	var journey serverJourney
-	if serverJourneyHook != nil && adopted == nil {
+	if serverJourneyHook != nil && id.adopted == nil {
 		journey = serverJourneyHook()
 	}
 	if journey != nil {
@@ -3492,9 +3346,9 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 			policy:         policy,
 			registryDir:    registryDir,
 			listen:         listen,
-			adoptedLease:   adopted,
-			adoptedHandoff: adoptedHandoff,
-			adoptedReceipt: adoptedReceipt,
+			adoptedLease:   id.adopted,
+			adoptedHandoff: id.adoptedHandoff,
+			adoptedReceipt: id.adoptedReceipt,
 		}
 		if code := journey.run(r); code >= 0 {
 			return code
@@ -3510,6 +3364,213 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 	}
 	shutdownFeatures(boot.orchestrator, boot.sessionManager)
 	return 0
+}
+
+// launchIdentity is the update-launch state resolved before bootstrap: the
+// adopted inherited handoff when this process is the exec'd target of a
+// replacement, otherwise the boot-time recovery resolution of an operator
+// launch.
+type launchIdentity struct {
+	// exit is true when the launch must stop with code (a rendered refusal;
+	// a restore decision execs and never returns).
+	exit bool
+	code int
+	// adopted is the inherited lease of the exec'd replacement target, with
+	// its validated handoff metadata and receipt.
+	adopted        *selfupdate.Lease
+	adoptedHandoff selfupdate.HandoffMetadata
+	adoptedReceipt selfupdate.Receipt
+	// recoveryLease is the binary lease acquired during boot-time recovery
+	// resolution, carried into the ordinary boot so ownership stays
+	// continuous for the process lifetime.
+	recoveryLease *selfupdate.Lease
+	// restoredRollback marks that this launch resolved (or finished) an
+	// actual rollback and should report the canonical update_rolled_back
+	// failure for the consumed update result.
+	restoredRollback *selfupdate.Receipt
+	// recoveredChain marks that this launch carries the recovery guard: it
+	// is the recovered or restarted image of a prior chain, so its own
+	// startup is held to the same health-wait bar and a further automatic
+	// recovery is forbidden.
+	recoveredChain bool
+	// listenAddr is the effective listen address after the adopted target's
+	// or the recovered build's recorded endpoint rebind.
+	listenAddr string
+}
+
+// resolveLaunchIdentity resolves the launch's update identity before general
+// bootstrap: handoff adoption for the exec'd replacement target, mandatory
+// recovery resolution for every other launch. Adoption precedes general
+// bootstrap so no child process can spawn before the inherited lease
+// descriptor is validated and made close-on-exec again; a present-but-invalid
+// handoff fails the launch closed. Recovery runs before configuration
+// loading, fx construction, bootstrap children, update-policy selection, and
+// any ownership-record overwrite: an unsafe record refuses nonzero with a
+// sanitized diagnostic; absence of a transaction preserves ordinary startup,
+// including serving without update ownership.
+func resolveLaunchIdentity(stateDir, configPath, listenAddr string) launchIdentity {
+	id := launchIdentity{listenAddr: listenAddr}
+	lease, meta, receipt, err := adoptHandoffForLaunch()
+	if err != nil {
+		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("adopting update handoff: %w", err)})
+		return launchIdentity{exit: true, code: 1}
+	}
+	id.adopted, id.adoptedHandoff, id.adoptedReceipt = lease, meta, receipt
+	if id.adopted != nil && selfUpdateAdoptedStartHook != nil {
+		selfUpdateAdoptedStartHook()
+	}
+	if id.adopted == nil {
+		res := resolveRecoveryOnBoot(stateDir, configPath, id.listenAddr)
+		if res.exit {
+			return launchIdentity{exit: true, code: res.code}
+		}
+		id.recoveryLease = res.lease
+		id.restoredRollback = res.restoredRollback
+		if res.listenOverride != "" {
+			id.listenAddr = res.listenOverride
+			id.recoveredChain = true
+		}
+		if res.recoveredChain {
+			id.recoveredChain = true
+		}
+		return id
+	}
+	if override := handoffListenAddr(id.adoptedHandoff); override != "" {
+		// The adopted target rebinds its recorded concrete endpoint; argv's
+		// --listen may still name an ephemeral port.
+		id.listenAddr = override
+	}
+	return id
+}
+
+// updateWiring bundles the resolved update subsystem for the serving
+// runtime: the update coordinator's options and the production install
+// lifecycle that carries authenticated install requests.
+type updateWiring struct {
+	options   serverruntime.UpdateOptions
+	lifecycle *productionInstallLifecycle
+}
+
+// buildUpdateOptions resolves the update subsystem after bootstrap and
+// recovery: the startup receipt exposed to clients, the release feed, the
+// coordinator options, and the production install lifecycle (wired only when
+// a real feed client exists).
+func buildUpdateOptions(boot *runtimeBootstrap, id launchIdentity, settings selfupdate.StartupSettings, eligibility selfupdate.Eligibility) updateWiring {
+	var startupUpdateReceipt *selfupdate.Receipt
+	switch {
+	case id.restoredRollback != nil:
+		startupUpdateReceipt = id.restoredRollback
+	case id.adopted != nil:
+		receiptCopy := id.adoptedReceipt
+		startupUpdateReceipt = &receiptCopy
+	}
+	var updateFeed serverruntime.FeedChecker
+	if updateFeedHook != nil {
+		// Driver-only fixture routing: deliberately built test binaries
+		// inject a local metadata feed that receives no credentials.
+		updateFeed = updateFeedHook()
+	} else {
+		slug, _ := moduleSlug()
+		updateFeed = selfupdate.NewProductionFeedClient(slug, githubToken)
+	}
+	options := serverruntime.UpdateOptions{
+		Policy:         settings.Policy,
+		Settings:       settings,
+		CurrentVersion: buildinfo.Version(),
+		Eligibility:    eligibility,
+		ExecPath:       boot.selfUpdateExec.Path,
+		StartupReceipt: startupUpdateReceipt,
+		Feed:           updateFeed,
+		Log:            func(line string) { fmt.Fprintln(os.Stderr, line) },
+		Observer:       boot.observer,
+		Admission:      boot.admission,
+	}
+	// The production install path: the same signed-release pipeline and
+	// recoverable replacement the driver journeys prove, reachable only
+	// through the authenticated install endpoint. The lifecycle's server
+	// handle is completed after the server starts; install requests can
+	// only arrive after that point.
+	lifecycle := &productionInstallLifecycle{
+		exitCode: make(chan int, 1),
+		stager: &productionReleaseStager{
+			exec:           boot.selfUpdateExec,
+			currentVersion: buildinfo.Version(),
+			eligibility:    eligibility,
+		},
+	}
+	if feedClient, ok := updateFeed.(*selfupdate.FeedClient); ok {
+		lifecycle.stager.feed = feedClient
+	}
+	if lifecycle.stager.feed != nil {
+		options.Stager = lifecycle.stager
+		options.Install = lifecycle
+	}
+	// Test-only seams for the tagged driver's explicit-stop journeys:
+	// ordinary builds keep every hook nil so production installs use the
+	// fixed stop budget, never pause before the protected-work recheck,
+	// and never inject stop failures.
+	if updateStopWorkTimeoutHook != nil {
+		if budget := updateStopWorkTimeoutHook(); budget > 0 {
+			options.StopWorkTimeout = budget
+		}
+	}
+	if updateStopEntryGateHook != nil {
+		options.StopEntryGate = updateStopEntryGateHook()
+	}
+	if updateStopFeatureFailureHook != nil {
+		options.StopFeatureHook = updateStopFeatureFailureHook()
+	}
+	if updateStopDetectionFailHook != nil {
+		options.DetectFailHook = updateStopDetectionFailHook()
+	}
+	return updateWiring{options: options, lifecycle: lifecycle}
+}
+
+// confirmAdoptedStartup gates the adopted target's transition to serving:
+// the mandatory self-health wait (a recovered build's own startup is held to
+// the same bar), then the write-once confirmation, the public receipt
+// exposure, and the settled cleanup. It returns the exit code and true when
+// the launch must stop; false means serving may proceed.
+func confirmAdoptedStartup(id launchIdentity, rt *failedTargetRecovery, runtimeServer *serverruntime.RuntimeServer) (int, bool) {
+	// No ordinary work is admitted before full bootstrap, the mandatory
+	// discovery publication, and — for the adopted target and the recovered
+	// build — the self-health wait.
+	if id.adopted == nil && !id.recoveredChain {
+		return 0, false
+	}
+	if err := waitSelfHealthy(selfHealthProbeURLs(runtimeServer), 30*time.Second); err != nil {
+		if id.adopted != nil {
+			rt.reason = fmt.Sprintf("target %s failed its health wait: %v", id.adoptedReceipt.ToVersion, err)
+			return rt.recover(), true
+		}
+		// The recovered build's own startup failure terminates nonzero: the
+		// chain guard forbids another automatic recovery.
+		renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("recovered build health wait: %w", err)})
+		return 1, true
+	}
+	if id.adopted == nil {
+		return 0, false
+	}
+	// Confirmation is write-once and only happens after full bootstrap,
+	// health wait, and discovery publication. A failure to persist
+	// confirmation stays unconfirmed and enters the recovery boundary
+	// when safe.
+	confirmedReceipt, err := confirmAdoptedTransaction(id.adoptedHandoff.ExecutablePath, id.adoptedHandoff.TransactionID)
+	if err != nil {
+		rt.reason = fmt.Sprintf("target %s could not durably confirm its update: %v", id.adoptedReceipt.ToVersion, err)
+		return rt.recover(), true
+	}
+	// The public update snapshot now exposes the confirmed outcome and its
+	// sanitized receipt.
+	runtimeServer.SetUpdateReceipt(confirmedReceipt)
+	// Cleanup failure retains the healthy target and the confirmed outcome:
+	// warn and keep serving; a later launch retries the validated cleanup.
+	if err := selfupdate.CleanupSettledTransaction(id.adoptedHandoff.ExecutablePath, id.adoptedHandoff.TransactionID, selfUpdateCleanupSeams); err != nil {
+		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
+			errcat.WithDiagnostics(fmt.Sprintf("selfupdate cleanup for confirmed transaction %s: %v", id.adoptedHandoff.TransactionID, err)))
+	}
+	fmt.Fprintf(os.Stderr, "selfupdate: confirmed %s\n", id.adoptedHandoff.TransactionID)
+	return 0, false
 }
 
 // writeNetworkAccessNotice prints the network-bind security notice and the

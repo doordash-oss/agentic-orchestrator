@@ -252,7 +252,6 @@ func (p *Protocol) RespondToControl(requestID string, allow bool, _ json.RawMess
 
 	p.mu.Lock()
 	perm, ok := p.pendingPerms[requestID]
-	delete(p.pendingPerms, requestID)
 	p.mu.Unlock()
 
 	if !ok {
@@ -261,17 +260,33 @@ func (p *Protocol) RespondToControl(requestID string, allow bool, _ json.RawMess
 		return p.writePermissionOutcome(id, OutcomeCancelled, "")
 	}
 
+	outcome := OutcomeCancelled
+	optionID := ""
 	if allow {
 		if perm.allowID != "" {
-			return p.writePermissionOutcome(id, OutcomeSelected, perm.allowID)
+			outcome = OutcomeSelected
+			optionID = perm.allowID
+		} else {
+			p.logDebug("[opencode] approve for request %s had no allow option; cancelling", requestID)
 		}
-		p.logDebug("[opencode] approve for request %s had no allow option; cancelling", requestID)
-		return p.writePermissionOutcome(id, OutcomeCancelled, "")
+	} else if perm.rejectID != "" {
+		outcome = OutcomeSelected
+		optionID = perm.rejectID
 	}
-	if perm.rejectID != "" {
-		return p.writePermissionOutcome(id, OutcomeSelected, perm.rejectID)
+
+	if err := p.writePermissionOutcome(id, outcome, optionID); err != nil {
+		return err
 	}
-	return p.writePermissionOutcome(id, OutcomeCancelled, "")
+
+	// Consume only the permission that was answered. A newer request with the
+	// same ID may have replaced it while the response was being written.
+	p.mu.Lock()
+	if current, exists := p.pendingPerms[requestID]; exists && current == perm {
+		delete(p.pendingPerms, requestID)
+	}
+	p.mu.Unlock()
+
+	return nil
 }
 
 // writePermissionOutcome sends the JSON-RPC result for a

@@ -625,11 +625,12 @@ func TestSelfUpdateSuppressionPersistence(t *testing.T) {
 	f.j.waitHealthy(p, f.baseURL, selfupdateVersionLower, 30*time.Second)
 	f.j.trigger()
 	rolled := f.j.waitReceiptRolledBack(45 * time.Second)
-	requireSuppressedTarget(t, f.j, rolled)
 	// Wait for the recovered build to serve before signaling: the durable
 	// rolled_back write precedes the recovery exec, and a signal in that
 	// window kills the chain before handlers exist.
 	f.j.waitHealthy(p, f.baseURL, selfupdateVersionLower, 30*time.Second)
+	// Suppression is recorded after the rollback receipt and before recovery exec.
+	requireSuppressedTarget(t, f.j, rolled)
 	if code := p.terminate(); code != 0 {
 		t.Fatalf("recovered process SIGTERM exit = %d; want 0 (stderr tail:\n%s)", code, p.stderrTail())
 	}

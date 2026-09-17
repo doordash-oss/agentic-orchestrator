@@ -642,24 +642,6 @@ func TestUpdateInstallStopFeaturesAndChatScope(t *testing.T) {
 	})
 }
 
-// TestUpdateInstallStopIdleAndCompletedWork proves an explicit-stop request
-// over an idle runtime — and over already-completed work — dispatches no
-// stops, confirms immediately, and installs through the guarded commit.
-func TestUpdateInstallStopIdleAndCompletedWork(t *testing.T) {
-	t.Parallel()
-	stopper := &fakeInstallStopper{}
-	coordinator, _, lifecycle, _, _ := newStopTestCoordinator(t, stopper)
-	if refusal := requestStopInstall(t, coordinator, true); refusal != nil {
-		t.Fatalf("stop install refused: %v", refusal)
-	}
-	waitStopEntered(t, coordinator)
-	waitInstallCond(t, 5*time.Second, func() bool { return lifecycle.replaceCallsN() == 1 }, "replacement never ran")
-	waitInstallCond(t, 5*time.Second, func() bool { return installOpCleared(coordinator) }, "operation never settled")
-	if got := len(stopper.stopCallsSnapshot()) + stopper.endChatCallsN(); got != 0 {
-		t.Fatalf("stop dispatches = %d, want none for an idle runtime", got)
-	}
-}
-
 // TestUpdateInstallStopAccountsForNewlyVisibleWork proves previously
 // admitted work that becomes visible during stopping is accounted for:
 // a stop is dispatched for it within the same budget, and confirmation

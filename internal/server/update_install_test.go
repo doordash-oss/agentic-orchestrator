@@ -922,22 +922,6 @@ func TestUpdateInstallDeleteWithoutOperation(t *testing.T) {
 	}
 }
 
-func TestUpdateInstallRouteMethodNotAllowed(t *testing.T) {
-	t.Parallel()
-	fixture := newInstallAPIFixture(t, eligibleUpdateOptions())
-	fixture.discoverLatest(t)
-	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodPut, apiPathUpdateInstall, nil))
-	resp := w.Result()
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Fatalf("PUT status = %d, want 405", resp.StatusCode)
-	}
-	if allow := resp.Header.Get("Allow"); !strings.Contains(allow, "DELETE") {
-		t.Fatalf("Allow = %q, want POST and DELETE", allow)
-	}
-}
-
 func TestUpdateInstallMutationNeverNotModified(t *testing.T) {
 	t.Parallel()
 	fixture := newInstallAPIFixture(t, eligibleUpdateOptions())

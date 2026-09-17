@@ -56,6 +56,10 @@ const installResponseDeadline = 10 * time.Second
 type InstallAdmission interface {
 	WaitForIdle(ctx context.Context) error
 	CloseIfQuiesced() bool
+	// CloseForStopping closes the boundary for the stopping interval while
+	// stoppable feature/chat reservations persist; it refuses the closure
+	// when any reservation outside the stoppable categories is held.
+	CloseForStopping(stoppable ...workadmission.Category) bool
 	Open()
 	Closed() bool
 	Detect(ctx context.Context) (workadmission.Activity, error)
@@ -138,8 +142,16 @@ type installOperation struct {
 
 	// generation fences stale worker transitions: it advances on
 	// cancellation and coordinator shutdown.
-	generation    uint64
-	cancelling    bool
+	generation uint64
+	cancelling bool
+	// stopEntered marks the atomic ownership boundary an explicit-stop
+	// immediate install crosses before its first stop dispatch: from there
+	// cancellation returns 409 update_in_progress, ordinary shutdown defers
+	// to the operation, and only the worker itself dispatches stops or
+	// aborts. Set under the coordinator mutex together with the
+	// cancelling/stopped check, so no check-then-mark race permits both a
+	// cancellation and a stop entry.
+	stopEntered   bool
 	drainEntered  bool
 	cleanupFailed bool
 
@@ -257,13 +269,14 @@ func (c *updateCoordinator) requestInstall(req installRequest, responseDone chan
 	}
 
 	op := &installOperation{
-		when:         req.when,
-		target:       *latest,
-		status:       updateStatusDownloading,
-		generation:   c.generation,
-		cancel:       nil,
-		done:         make(chan struct{}),
-		responseDone: responseDone,
+		when:           req.when,
+		stopActiveWork: req.stopActiveWork,
+		target:         *latest,
+		status:         updateStatusDownloading,
+		generation:     c.generation,
+		cancel:         nil,
+		done:           make(chan struct{}),
+		responseDone:   responseDone,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	op.cancel = cancel
@@ -295,14 +308,17 @@ func (c *updateCoordinator) cancelInstall(ctx context.Context) (cancelResult, *i
 		c.mu.Unlock()
 		return cancelNone, nil
 	}
-	if op.drainEntered {
-		// At or after drain entry the operation finishes installation or
-		// recovery; cancellation returns the canonical conflict.
+	if (op.stopEntered || op.drainEntered) && op.status != updateStatusFailed {
+		// From stop entry — before the first stop dispatch — through the
+		// final drain a live operation finishes installation or recovery;
+		// cancellation returns the canonical conflict. A failed operation
+		// retained only for its cleanup retry keeps DELETE as the
+		// idempotent cleanup channel.
 		c.mu.Unlock()
 		return cancelDrainRefused, &installRefusal{
 			status: http.StatusConflict,
 			code:   errcat.UpdateInProgress,
-			opts:   []errcat.Option{errcat.WithDiagnostics("the installation is draining; cancellation is no longer available")},
+			opts:   []errcat.Option{errcat.WithDiagnostics("the installation is stopping work or draining; cancellation is no longer available")},
 		}
 	}
 	if !op.cancelling {
@@ -452,12 +468,6 @@ func (c *updateCoordinator) failInstall(op *installOperation, code errcat.Code, 
 	c.state.status = updateStatusFailed
 	c.state.wireError = &wireErr
 	c.mu.Unlock()
-	if code == errcat.UpdateBlockedActiveWork {
-		// A blocked immediate attempt never closed admission; nothing to
-		// reopen and no owned resources to keep.
-		c.clearInstallOp(op)
-		return
-	}
 	if err := cleanupInstallResources(op); err != nil {
 		c.mu.Lock()
 		if c.install == op {
@@ -523,6 +533,11 @@ func (c *updateCoordinator) runInstall(op *installOperation, ctx context.Context
 			errcat.WithDiagnostics("this runtime cannot install updates"))
 		return
 	}
+	if op.stopActiveWork && c.opts.Stopper == nil {
+		c.failInstall(op, errcat.UpdateInstallFailed, "install_unsupported",
+			errcat.WithDiagnostics("this runtime cannot stop work for installs"))
+		return
+	}
 
 	c.applyInstallStatus(op, updateStatusDownloading, "install_started:"+op.when)
 	lastStage := "resolve"
@@ -563,9 +578,83 @@ func (c *updateCoordinator) runInstall(op *installOperation, ctx context.Context
 
 	if op.when == updateInstallWhenIdle {
 		c.applyInstallStatus(op, updateStatusScheduled, "install_scheduled")
+	} else if op.stopActiveWork {
+		// A test-only race seam parks the worker between staging and the
+		// protected-work recheck; production never sets it. The gate
+		// honors the operation context, so a cancellation that wins during
+		// the park unblocks it immediately.
+		if gate := c.opts.StopEntryGate; gate != nil {
+			gate(ctx)
+			// The gate may have parked for a long time: cancellation that
+			// won during it settles here, before any stop.
+			c.mu.Lock()
+			cancelled := op.cancelling || c.stopped
+			c.mu.Unlock()
+			if cancelled {
+				c.settleCancelled(op, cleanup)
+				return
+			}
+		}
+		// An explicit-stop immediate install repeats the protected-work and
+		// detection checks after staging, before any stop: repository work,
+		// protected or unknown reservations, and failed detection abort
+		// with nothing stopped and owned staging cleaned.
+		if blockers := c.installStopBlockers(admission); blockers != nil {
+			c.failInstall(op, errcat.UpdateBlockedActiveWork, "install_blocked_active_work:staged", blockers...)
+			return
+		}
+		// Stop entry is the atomic ownership boundary shared with
+		// cancellation and ordinary shutdown: check-and-mark happens under
+		// one critical section, so cancellation either wins before any stop
+		// is dispatched or is refused from here on.
+		c.mu.Lock()
+		if op.cancelling || c.stopped {
+			c.mu.Unlock()
+			c.settleCancelled(op, cleanup)
+			return
+		}
+		op.stopEntered = true
+		c.mu.Unlock()
+		// Gate closure synchronizes with reservation acquisition: new work
+		// of every category is refused from the single critical section,
+		// while already-admitted feature/chat work keeps its reservations.
+		// A repository reservation that won the race refuses the closure
+		// with admission left open and aborts the operation before any
+		// feature or chat work is stopped.
+		if !admission.CloseForStopping(stoppableAdmissionCategories...) {
+			blockers := c.installStopBlockers(admission)
+			if blockers == nil {
+				blockers = []errcat.Option{errcat.WithParams(errcat.UpdateBlockedActiveWorkParams{PendingAdmissions: 1})}
+			}
+			c.failInstall(op, errcat.UpdateBlockedActiveWork, "install_blocked_active_work:stop_race", blockers...)
+			return
+		}
+		// Protected activity and detection are rechecked under closed
+		// admission before entering stop dispatch.
+		if blockers := c.installStopBlockers(admission); blockers != nil {
+			c.admissionOpen()
+			c.failInstall(op, errcat.UpdateBlockedActiveWork, "install_blocked_active_work:closed_recheck", blockers...)
+			return
+		}
+		// The existing draining status represents the non-cancellable
+		// stop/drain interval from stop entry through replacement.
+		c.applyInstallStatus(op, updateStatusDraining, "install_stopping")
+		if failure := c.dispatchAndConfirmStops(op, admission, c.opts.Stopper); failure != nil {
+			// Any stop error, timeout, unresolved activity or reservation,
+			// or detection failure aborts the installation even if another
+			// stop succeeded: the current binary keeps serving, owned
+			// staging is cleaned, the gate reopens, and already-stopped
+			// features stay interrupted with no automatic resumption.
+			c.failInstall(op, errcat.UpdateBlockedActiveWork, failure.result, failure.opts...)
+			return
+		}
+		// Confirmed absence of activity and reservations admits the guarded
+		// commit section below; admission is already closed, so the idle
+		// wait returns immediately and the under-lock recheck uses the full
+		// active-work check.
 	} else {
-		// when=now refuses active or uncertain work before commitment;
-		// stop_active_work is accepted but never stops work in this phase.
+		// when=now without stop permission repeats the full active-work
+		// check after staging and closes the boundary only when quiesced.
 		if blockers := c.installBlockers(admission); blockers != nil {
 			c.failInstall(op, errcat.UpdateBlockedActiveWork, "install_blocked_active_work", blockers...)
 			return
@@ -580,13 +669,12 @@ func (c *updateCoordinator) runInstall(op *installOperation, ctx context.Context
 		}
 	}
 
-	// The guarded commit section: wait for idle, close the boundary, then
-	// hold the per-runtime update transaction lock while rechecking. A
-	// blocker under the lock reopens admission and returns an idle
-	// operation to scheduled without consuming fresh consent or
-	// retargeting; an immediate operation aborts as blocked. This is the
-	// boundary Phase 6 extends with explicit session stopping — Phase 5
-	// never stops active work.
+	// The guarded commit section: wait for idle (immediately satisfied for
+	// a confirmed explicit-stop operation, whose boundary is already
+	// closed), then hold the per-runtime update transaction lock while
+	// rechecking. A blocker under the lock reopens admission and returns an
+	// idle operation to scheduled without consuming fresh consent or
+	// retargeting; an immediate operation aborts as blocked.
 	for {
 		if err := c.awaitIdleForInstall(ctx, op, admission); err != nil {
 			if ctx.Err() != nil {
@@ -639,7 +727,10 @@ func (c *updateCoordinator) runInstall(op *installOperation, ctx context.Context
 		}
 		c.mu.Lock()
 		op.tx = handle
-		cancelled := op.cancelling || c.stopped
+		// An operation that entered its stopping interval owns shutdown:
+		// the deferred ordinary shutdown's stopped flag must not cancel a
+		// replacement the operation already stopped work for.
+		cancelled := op.cancelling || (c.stopped && !op.stopEntered)
 		c.mu.Unlock()
 		if cancelled {
 			// Cancellation wins until final drain begins: the prepared
@@ -648,6 +739,15 @@ func (c *updateCoordinator) runInstall(op *installOperation, ctx context.Context
 			release()
 			c.settleCancelled(op, cleanup)
 			return
+		}
+
+		// The verified executable now lives in the install transaction's
+		// own durable staging, so the release download staging is
+		// recognized owned abandoned staging: clean it now with full
+		// validation. A failure defers to a later launch's staging
+		// reconciliation — it never blocks the replacement.
+		if err := cleanup(); err != nil {
+			c.logf("release staging cleanup deferred: %s", selfupdate.SanitizeError(err.Error()))
 		}
 
 		// From here the operation owns shutdown: cancellation and ordinary
@@ -799,12 +899,12 @@ func (c *updateCoordinator) logInstallWait(op *installOperation, err error) {
 }
 
 // shutdownInstall cancels and joins an active install worker during
-// ordinary shutdown. Once the operation entered its final drain it owns
-// shutdown and recovery; ordinary shutdown defers to it.
+// ordinary shutdown. Once the operation entered its stopping interval or its
+// final drain it owns shutdown and recovery; ordinary shutdown defers to it.
 func (c *updateCoordinator) shutdownInstall(ctx context.Context) {
 	c.mu.Lock()
 	op := c.install
-	if op == nil || op.drainEntered {
+	if op == nil || op.drainEntered || op.stopEntered {
 		c.mu.Unlock()
 		return
 	}
@@ -978,10 +1078,16 @@ func (h *apiHandler) handleUpdateInstallPost(w http.ResponseWriter, r *http.Requ
 			errcat.WithDiagnostics("this runtime cannot install updates"))
 		return
 	}
-	// An immediate install refuses active or uncertain work before staging;
-	// stop permission is accepted but never stops work in this phase.
-	if when == updateInstallWhenNow {
-		if blockers := h.installRequestBlockers(r.Context()); blockers != nil {
+	// An immediate install refuses work before staging. Without stop
+	// permission any active work or pending reservation refuses; with stop
+	// permission only repository work, protected or unknown reservations,
+	// and failed or incomplete detection refuse — feature and chat activity
+	// is exactly what the permission authorizes stopping. An already active
+	// operation owns the retry decision: a retry must not mistake the
+	// operation's own closed stopping gate for a new request's blocker, so
+	// the request-time check only runs when no operation exists.
+	if when == updateInstallWhenNow && !h.updates.installActive() {
+		if blockers := h.installRequestBlockers(r.Context(), stopActiveWork); blockers != nil {
 			writeAPIError(w, http.StatusConflict, errcat.UpdateBlockedActiveWork, blockers...)
 			return
 		}
@@ -1003,24 +1109,55 @@ func (h *apiHandler) handleUpdateInstallPost(w http.ResponseWriter, r *http.Requ
 	close(responseDone)
 }
 
-// installRequestBlockers reports the request-time active-work blockers for
-// an immediate install, or nil when the runtime is observably idle.
-func (h *apiHandler) installRequestBlockers(ctx context.Context) []errcat.Option {
+// installActive reports whether an install operation is currently accepted.
+func (c *updateCoordinator) installActive() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.install != nil
+}
+
+// installRequestBlockers reports the request-time blockers for an immediate
+// install, or nil when the request may proceed to staging. Without stop
+// permission any active work or pending reservation blocks; with stop
+// permission only repository activity, reservations outside the stoppable
+// feature/chat categories, and failed or incomplete detection block.
+func (h *apiHandler) installRequestBlockers(ctx context.Context, stopPermitted bool) []errcat.Option {
 	activity, detectionFailed, detectionErr := h.admissionActivitySnapshot(ctx)
-	pending := h.admissionPendingCount()
 	if detectionFailed || detectionErr != nil {
 		return []errcat.Option{errcat.WithParams(errcat.UpdateBlockedActiveWorkParams{DetectionFailed: true})}
 	}
-	if pending > 0 || activity.Busy() {
+	pending, perCategory := h.admissionPendingCounts()
+	if !stopPermitted {
+		if pending > 0 || activity.Busy() {
+			return []errcat.Option{errcat.WithParams(errcat.UpdateBlockedActiveWorkParams{
+				Features:          activity.Features,
+				ChatActive:        activity.ChatActive,
+				Clones:            activity.Clones,
+				Uploads:           activity.Uploads,
+				OriginChecks:      activity.OriginChecks,
+				RepositoryWork:    activity.RepositoryWork,
+				PendingAdmissions: pending,
+			})}
+		}
+		return nil
+	}
+	if activity.Clones > 0 || activity.Uploads > 0 || activity.OriginChecks > 0 || activity.RepositoryWork > 0 {
 		return []errcat.Option{errcat.WithParams(errcat.UpdateBlockedActiveWorkParams{
-			Features:          activity.Features,
-			ChatActive:        activity.ChatActive,
-			Clones:            activity.Clones,
-			Uploads:           activity.Uploads,
-			OriginChecks:      activity.OriginChecks,
-			RepositoryWork:    activity.RepositoryWork,
-			PendingAdmissions: pending,
+			Features:       activity.Features,
+			ChatActive:     activity.ChatActive,
+			Clones:         activity.Clones,
+			Uploads:        activity.Uploads,
+			OriginChecks:   activity.OriginChecks,
+			RepositoryWork: activity.RepositoryWork,
 		})}
+	}
+	if pending > 0 {
+		if cats := protectedHeldCategories(perCategory); cats != "" {
+			return []errcat.Option{
+				errcat.WithParams(errcat.UpdateBlockedActiveWorkParams{PendingAdmissions: pending}),
+				errcat.WithDiagnostics("pending admissions in protected or unknown categories: " + cats),
+			}
+		}
 	}
 	return nil
 }

@@ -28,6 +28,30 @@ jobs:
       - name: go test
         run: go test ./... -short -count=1
 
+  # Native process-journey gate. The selfupdate exec journeys skip under
+  # -short and need real unix exec semantics, so the short-mode test job
+  # above cannot prove them. Each of the four supported Darwin/Linux
+  # release targets (darwin/arm64, darwin/amd64, linux/amd64, linux/arm64)
+  # runs the E2E Go suite natively with the race detector: replacement and
+  # recovery journeys replace and exec the actual built binary, so
+  # cross-compilation cannot stand in for a runner.
+  go-e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel, ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: E2E Go journeys (native exec, race)
+        run: go test ./test/e2e/... -count=1 -race -timeout 30m
+
   # Native package gate per platform. Platform-independent checks (typecheck,
   # lint, format, API drift, unit/component/security suites) run once on
   # ubuntu-latest. Each leg then packages and inspects the unsigned app for

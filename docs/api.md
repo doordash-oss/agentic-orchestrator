@@ -65,10 +65,18 @@ accepts one consented install request and returns `202` with the current
 snapshot promptly. `consent` must be true — anything else is `400`
 `update_consent_required` — and `when` selects `now` or `idle`. `idle`
 stages the operation and waits for active work to finish without
-interrupting it; `now` installs immediately only when no work needs
-stopping, and `stop_active_work` is accepted but never stops work in this
-release, so an install that would need to stop work is refused with `409`
-`update_blocked_active_work`. An optional `version` selector must name the
+interrupting it. `now` without `stop_active_work` installs immediately
+only when no work is active. `now` with `stop_active_work: true` authorizes
+interrupting feature sessions and the singleton chat through the existing
+pause-stop and chat-end semantics: repository work (clones, uploads, origin
+checks, other repository activity), protected or unknown admission
+reservations, and failed activity detection still refuse with `409`
+`update_blocked_active_work` — before staging, again after staging, and
+again under the closed admission gate, with nothing stopped. Stop dispatch
+and completion confirmation share one ten-second deadline; any stop
+failure, timeout, or unresolved work aborts the installation, leaves the
+current build serving with already-stopped work interrupted, and requires
+fresh consent for a new attempt. An optional `version` selector must name the
 currently discovered latest stable release. Equivalent duplicates return
 the existing operation; changing the target, `when`, or stop-work
 permission requires canceling and resubmitting. The request is refused
@@ -86,8 +94,13 @@ headers) cancels the active install operation and returns `200` with the
 current availability snapshot after cleanup. It is idempotent when nothing
 is active, is refused with `403` `forbidden` and the disabled-policy
 remediation under the off policy, and with `409` `update_in_progress` once
-draining has begun, because an install that reached the drain boundary can
-no longer be abandoned.
+an explicit-stop operation entered its stopping interval or draining has
+begun, because an install that crossed that boundary can no longer be
+abandoned. During the stopping and draining interval, new work of every
+kind — including chat turns, prompt and permission replies, and reads that
+launch background work — is refused with `503` `update_in_progress` and a
+`Retry-After` hint, while existing stop and completion paths keep
+settling.
 
 Every visible snapshot change emits an `update.updated` event (resource type
 `update`); clients re-GET the snapshot. The snapshot reports the effective
@@ -98,7 +111,8 @@ the reserved `server.updates.strategy` and `server.updates.window` settings
 check timing, and — when one exists — the sanitized public receipt
 (`versions`, `outcome`, `times`, and a sanitized error only). While an
 install operation is active the snapshot also reports its waiting `method`,
-normalized `stop_active_work` permission, and `target_version`;
+the actual `stop_active_work` permission the operation retains, and
+`target_version`;
 `scheduled_for` is the predicted install deadline and is explicitly `null`
 while an idle wait has no deadline. `signature` reads `verified` only after
 the operation verified the pinned candidate, whose verified server contract

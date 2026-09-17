@@ -34,28 +34,35 @@ import (
 )
 
 // fakeInstallAdmission is the deterministic InstallAdmission seam: it can
-// park WaitForIdle on a gate, close atomically when quiet, and report a
-// one-shot busy detection while closed (work that raced in under the update
-// lock).
+// park WaitForIdle on a gate, close atomically when quiet, refuse or admit
+// the stopping closure by held category, and report a one-shot busy
+// detection while closed (work that raced in under the update lock).
 type fakeInstallAdmission struct {
-	mu         sync.Mutex
-	closed     bool
-	activity   workadmission.Activity
-	detectErr  error
-	held       int
-	closeQuiet bool
+	mu        sync.Mutex
+	closed    bool
+	activity  workadmission.Activity
+	detectErr error
+	held      int
+	// heldCategories simulates per-category reservations for the
+	// permission-aware stopping checks.
+	heldCategories map[workadmission.Category]int
+	closeQuiet     bool
 
 	busyOnceWhileClosed bool
-	busyClosedDetects   int
+	// busyClosedRepository switches the one-shot closed detection from
+	// feature activity to repository activity (origin checks).
+	busyClosedRepository bool
+	busyClosedDetects    int
 
 	waitIdleGate chan struct{}
 	waitIdleFrom int
 	waitIdleErr  error
 
-	waitCalls   int
-	closeCalls  int
-	openCalls   int
-	detectCalls int
+	waitCalls     int
+	closeCalls    int
+	stopCloseWins int
+	openCalls     int
+	detectCalls   int
 }
 
 func (a *fakeInstallAdmission) setWaitIdleGate(gate chan struct{}, from int) {
@@ -98,6 +105,23 @@ func (a *fakeInstallAdmission) CloseIfQuiesced() bool {
 	return true
 }
 
+func (a *fakeInstallAdmission) CloseForStopping(stoppable ...workadmission.Category) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.stopCloseWins++
+	permitted := make(map[workadmission.Category]bool, len(stoppable))
+	for _, cat := range stoppable {
+		permitted[cat] = true
+	}
+	for cat, n := range a.heldCategories {
+		if n > 0 && !permitted[cat] {
+			return false
+		}
+	}
+	a.closed = true
+	return true
+}
+
 func (a *fakeInstallAdmission) Open() {
 	a.mu.Lock()
 	a.closed = false
@@ -120,6 +144,9 @@ func (a *fakeInstallAdmission) Detect(context.Context) (workadmission.Activity, 
 	}
 	if a.closed && a.busyOnceWhileClosed && a.busyClosedDetects == 0 {
 		a.busyClosedDetects++
+		if a.busyClosedRepository {
+			return workadmission.Activity{OriginChecks: 1}, nil
+		}
 		return workadmission.Activity{Features: 1}, nil
 	}
 	return a.activity, nil
@@ -128,7 +155,15 @@ func (a *fakeInstallAdmission) Detect(context.Context) (workadmission.Activity, 
 func (a *fakeInstallAdmission) Held() (int, map[workadmission.Category]int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.held, nil
+	per := make(map[workadmission.Category]int, len(a.heldCategories))
+	for cat, n := range a.heldCategories {
+		per[cat] = n
+	}
+	if len(per) == 0 && a.held > 0 {
+		// Category-less fakes keep the pre-Phase-6 total-only shape.
+		per[workadmission.CategoryFeature] = a.held
+	}
+	return a.held, per
 }
 
 func (a *fakeInstallAdmission) waitCallsN() int { a.mu.Lock(); defer a.mu.Unlock(); return a.waitCalls }
@@ -837,7 +872,7 @@ func TestUpdateInstallPostNowBlockedByActiveWork(t *testing.T) {
 	if body.Error.Code != string(errcat.UpdateBlockedActiveWork) {
 		t.Fatalf("code = %q, want update_blocked_active_work", body.Error.Code)
 	}
-	if blockers := fixture.handler.installRequestBlockers(context.Background()); blockers == nil {
+	if blockers := fixture.handler.installRequestBlockers(context.Background(), false); blockers == nil {
 		t.Fatal("request-time blockers must report the busy feature")
 	}
 	if got := fixture.stager.calls(); got != 0 {
@@ -847,7 +882,7 @@ func TestUpdateInstallPostNowBlockedByActiveWork(t *testing.T) {
 	// An idle boundary with no observed work admits the request-time check.
 	quietFixture := newInstallAPIFixtureWithBoundary(t, eligibleUpdateOptions(), workadmission.New(workadmission.Options{}), nil)
 	quietFixture.discoverLatest(t)
-	if blockers := quietFixture.handler.installRequestBlockers(context.Background()); blockers != nil {
+	if blockers := quietFixture.handler.installRequestBlockers(context.Background(), false); blockers != nil {
 		t.Fatalf("quiet runtime blockers = %v, want nil", blockers)
 	}
 
@@ -857,7 +892,7 @@ func TestUpdateInstallPostNowBlockedByActiveWork(t *testing.T) {
 	})
 	failingFixture := newInstallAPIFixtureWithBoundary(t, eligibleUpdateOptions(), workadmission.New(workadmission.Options{}), failingFeatures)
 	failingFixture.discoverLatest(t)
-	if blockers := failingFixture.handler.installRequestBlockers(context.Background()); blockers == nil {
+	if blockers := failingFixture.handler.installRequestBlockers(context.Background(), false); blockers == nil {
 		t.Fatal("detection failure must block an immediate install")
 	}
 	w = httptest.NewRecorder()

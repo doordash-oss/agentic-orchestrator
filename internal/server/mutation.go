@@ -1332,6 +1332,13 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 	if !h.requireTrustedMutation(w, r) {
 		return
 	}
+	// A permission reply can launch new work for the paused session: an
+	// install operation's closed admission boundary refuses it with the
+	// canonical 503 so no new work escapes the stopping gate. Existing
+	// stop and completion paths settle without this check.
+	if h.refuseAdmissionClosed(w) {
+		return
+	}
 	var req PermissionAnswerRequest
 	if !decodeMutationJSON(w, r, &req) {
 		return
@@ -1381,6 +1388,11 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 	}
 	switch strings.Join(parts, "/") {
 	case "ask-user/answer":
+		// Replies can launch new work for the waiting session: a closed
+		// admission boundary refuses them with the canonical 503.
+		if h.refuseAdmissionClosed(w) {
+			return
+		}
 		var req AskUserAnswerRequest
 		if !decodeMutationJSON(w, r, &req) {
 			return
@@ -1401,6 +1413,11 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 		defaultActionFields(&resp, "", resultAnswered)
 		writeActionJSON(w, http.StatusOK, &resp)
 	case "help/send":
+		// Help replies can launch new work for the waiting session: a
+		// closed admission boundary refuses them with the canonical 503.
+		if h.refuseAdmissionClosed(w) {
+			return
+		}
 		var req HelpAnswerRequest
 		if !decodeMutationJSON(w, r, &req) {
 			return
@@ -1421,6 +1438,14 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 		defaultActionFields(&resp, "", "sent")
 		writeActionJSON(w, http.StatusOK, &resp)
 	case "chat/start":
+		// Both a fresh chat launch and a reply to the active session can
+		// launch work: a closed admission boundary refuses the whole route
+		// with the canonical 503, so no new chat work escapes the stopping
+		// gate while an authorized install settles. The chat/end settle
+		// path stays available.
+		if h.refuseAdmissionClosed(w) {
+			return
+		}
 		var req ChatStartRequest
 		if !decodeMutationJSON(w, r, &req) {
 			return

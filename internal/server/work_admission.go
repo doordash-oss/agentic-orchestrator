@@ -116,11 +116,18 @@ func (h *apiHandler) admissionActivitySnapshot(ctx context.Context) (workadmissi
 
 // admissionPendingCount returns the number of held admission reservations.
 func (h *apiHandler) admissionPendingCount() int {
-	if h.admission == nil {
-		return 0
-	}
-	total, _ := h.admission.Held()
+	total, _ := h.admissionPendingCounts()
 	return total
+}
+
+// admissionPendingCounts returns the held admission reservations with their
+// per-category breakdown. Categories outside feature and chat are protected
+// or unknown work an explicit-stop install must refuse on.
+func (h *apiHandler) admissionPendingCounts() (int, map[workadmission.Category]int) {
+	if h.admission == nil {
+		return 0, nil
+	}
+	return h.admission.Held()
 }
 
 // registerAdmissionDetectors installs the handler-owned activity detectors
@@ -143,9 +150,17 @@ func (h *apiHandler) registerAdmissionDetectors(coordinator *workadmission.Coord
 
 // detectFeatureActivity counts features through the same projection that
 // enables the pause-stop action: a running or need-user-input status for
-// ordinary features, and a running status for children whose relationship is
-// still open. The count intentionally fails toward blocking.
+// ordinary features, and a running status for children whose relationship
+// is still open. The count intentionally fails toward blocking.
 func (h *apiHandler) detectFeatureActivity(context.Context) (workadmission.Activity, error) {
+	if h.featureDetectFail != nil {
+		// Test-only seam armed by the selfupdate driver: a deterministic
+		// detection failure for detection-failure journeys. Production
+		// never sets it.
+		if err := h.featureDetectFail(); err != nil {
+			return workadmission.Activity{}, err
+		}
+	}
 	if h.features == nil {
 		return workadmission.Activity{}, nil
 	}

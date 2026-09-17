@@ -299,3 +299,115 @@ func TestDetectRunsOutsideMutex(t *testing.T) {
 		t.Fatalf("detect: %v", err)
 	}
 }
+
+// TestCloseForStoppingRefusesProtectedReservations proves the stopping
+// closure is refused — with admission left open — when any reservation
+// outside the stoppable categories is held, while feature and chat
+// reservations alone permit the closure and persist under it.
+func TestCloseForStoppingRefusesProtectedReservations(t *testing.T) {
+	for _, cat := range []Category{CategoryClone, CategoryUpload, CategoryOrigin, CategoryRepository, Category("unknown")} {
+		c := New(Options{})
+		res, err := c.Acquire(cat)
+		if err != nil {
+			t.Fatalf("acquire %s: %v", cat, err)
+		}
+		if c.CloseForStopping(CategoryFeature, CategoryChat) {
+			t.Fatalf("closure with held %s reservation must be refused", cat)
+		}
+		if c.Closed() {
+			t.Fatalf("admission must stay open after a refused stopping closure (%s)", cat)
+		}
+		// A refused closure leaves ordinary admission working.
+		if _, err := c.Acquire(CategoryFeature); err != nil {
+			t.Fatalf("acquire after refused closure: %v", err)
+		}
+		res.Release()
+	}
+}
+
+// TestCloseForStoppingAdmitsStoppableReservations proves feature and chat
+// reservations survive the stopping closure, settle through Release while
+// closed, and every new reservation — stoppable or not — is refused once
+// the boundary is closed.
+func TestCloseForStoppingAdmitsStoppableReservations(t *testing.T) {
+	c := New(Options{})
+	featureRes, err := c.Acquire(CategoryFeature)
+	if err != nil {
+		t.Fatalf("acquire feature: %v", err)
+	}
+	chatRes, err := c.Acquire(CategoryChat)
+	if err != nil {
+		t.Fatalf("acquire chat: %v", err)
+	}
+	if !c.CloseForStopping(CategoryFeature, CategoryChat) {
+		t.Fatal("closure with only stoppable reservations must succeed")
+	}
+	if !c.Closed() {
+		t.Fatal("admission must be closed after a successful stopping closure")
+	}
+	for _, cat := range []Category{CategoryFeature, CategoryChat, CategoryClone, CategoryRepository, Category("unknown")} {
+		if _, err := c.Acquire(cat); err == nil {
+			t.Fatalf("acquire %s under closed admission must fail", cat)
+		}
+	}
+	// Settling stoppable work releases its reservations while closed.
+	featureRes.Release()
+	chatRes.Release()
+	total, _ := c.Held()
+	if total != 0 {
+		t.Fatalf("held after settle = %d, want 0", total)
+	}
+	// The boundary stays closed: closed admission alone never proves
+	// inactivity, and reopening belongs to the install operation.
+	if !c.Closed() {
+		t.Fatal("boundary must stay closed until explicitly reopened")
+	}
+	c.Open()
+	if c.Closed() {
+		t.Fatal("Open must reopen after the stopping interval")
+	}
+}
+
+// TestCloseForStoppingSynchronizesWithAcquisition proves the stopping
+// closure and reservation acquisition are atomic with respect to each
+// other: a protected acquire racing the closure either wins (closure
+// refused) or is refused by the closed boundary — never both admitted and
+// closed, and never silently dropped.
+func TestCloseForStoppingSynchronizesWithAcquisition(t *testing.T) {
+	for i := 0; i < 64; i++ {
+		c := New(Options{})
+		start := make(chan struct{})
+		closureObserved := make(chan struct{}, 1)
+		closureDone := make(chan bool, 1)
+		acquireDone := make(chan error, 1)
+		go func() {
+			<-start
+			closureDone <- c.CloseForStopping(CategoryFeature, CategoryChat)
+		}()
+		go func() {
+			<-start
+			res, err := c.Acquire(CategoryClone)
+			if err == nil {
+				// Hold the reservation until both outcomes are observed so
+				// the closure cannot race past a released reservation.
+				defer func() {
+					<-closureObserved
+					res.Release()
+				}()
+			}
+			acquireDone <- err
+		}()
+		close(start)
+		closed := <-closureDone
+		closureObserved <- struct{}{}
+		acquireErr := <-acquireDone
+		if closed && acquireErr == nil {
+			t.Fatal("closure cannot succeed while a protected reservation was acquired")
+		}
+		if !closed && acquireErr != nil {
+			// The closure refused because the reservation was held; the
+			// acquisition itself must have succeeded in that case.
+			t.Fatalf("acquire failed (%v) while closure was refused", acquireErr)
+		}
+	}
+}

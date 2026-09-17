@@ -4431,7 +4431,7 @@ type UpdateInstallRequest struct {
 	// Consent Explicit user consent to install a release. Must be true; any other value is refused with update_consent_required.
 	Consent bool `json:"consent"`
 
-	// StopActiveWork Stop-work permission for an immediate install; valid only with when now. Accepted in this roadmap phase but never stops work: an install that would need to stop work is refused with update_blocked_active_work.
+	// StopActiveWork Stop-work permission for an immediate install; valid only with when now. Authorizes interrupting feature sessions and the singleton chat through the existing pause-stop and chat-end semantics. Repository work, protected or unknown admission reservations, and failed activity detection still refuse, and any stop failure or timeout aborts the install with update_blocked_active_work while already-stopped work stays interrupted.
 	StopActiveWork *bool `json:"stop_active_work,omitempty"`
 
 	// Version Explicit target version selector. Must name the currently discovered latest stable version; any other version is refused.
@@ -4518,7 +4518,7 @@ type UpdateSnapshot struct {
 	// Status Coarse availability state. downloading, verified, scheduled, draining, and restarting are reserved for the later installation slice and never emitted by the availability endpoints.
 	Status UpdateSnapshotStatus `json:"status"`
 
-	// StopActiveWork Normalized stop-work permission of the accepted operation (only meaningful with method now); present only while an operation is active.
+	// StopActiveWork The actual stop-work permission the accepted operation retains (only meaningful with method now); present only while an operation is active.
 	StopActiveWork *bool `json:"stop_active_work,omitempty"`
 
 	// Strategy Reserved startup setting, reported for transparency. It never schedules work and never affects manual installation.

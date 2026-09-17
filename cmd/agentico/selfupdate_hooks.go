@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -123,6 +124,30 @@ var publishDiscoveryFn = serverruntime.PublishDiscovery
 // an ordinarily built binary can redirect it or send credentials anywhere
 // but api.github.com.
 var updateFeedHook func() serverruntime.FeedChecker
+
+// updateStopWorkTimeoutHook lets a tagged build shorten the explicit-stop
+// dispatch/confirmation budget for deterministic timeout journeys. Nil in
+// ordinary builds: production always uses the fixed ten-second budget.
+var updateStopWorkTimeoutHook func() time.Duration
+
+// updateStopEntryGateHook lets a tagged build park an explicit-stop install
+// between staging and the post-staging protected-work recheck, for deterministic
+// cancellation-versus-stop-entry and blocker-injection journeys. Nil in
+// ordinary builds: production installs never pause there.
+var updateStopEntryGateHook func() func(context.Context)
+
+// updateStopFeatureFailureHook lets a tagged build inject a failure in front
+// of a chosen feature stop dispatch, for deterministic partial-stop
+// journeys. Nil in ordinary builds: production dispatches every stop for
+// real.
+var updateStopFeatureFailureHook func() func(featureID string) error
+
+// updateStopDetectionFailHook lets a tagged build arm a detection-failure
+// seam that makes the feature-activity detector fail once a trigger file
+// exists, for deterministic detection-failure journeys before and during
+// stop confirmation. Nil in ordinary builds: production detection always
+// probes the real feature store.
+var updateStopDetectionFailHook func() func() error
 
 // classifyRuntimeEligibility gathers the real classification signals for the
 // running server — captured executable identity, lease state (held, live

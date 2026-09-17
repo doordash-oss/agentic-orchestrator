@@ -105,6 +105,11 @@ type apiHandler struct {
 	// orchestration, sessions, and repository work; nil disables the
 	// boundary (tests, runtimes without install support).
 	admission *workadmission.Coordinator
+	// featureDetectFail is the test-only detection-failure seam from
+	// UpdateOptions.DetectFailHook: when set, the feature-activity detector
+	// reports a detection failure instead of probing the store. Nil in
+	// production.
+	featureDetectFail func() error
 	// probeActivity counts read-launched background probes for the
 	// repository-work activity detector.
 	probeActivity *ProbeActivity
@@ -194,6 +199,12 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		activity, detectionFailed, _ := handler.admissionActivitySnapshot(ctx)
 		return activity, detectionFailed, handler.admissionPendingCount()
 	}
+	if updatesOpts.Stopper == nil {
+		// The production stopper dispatches through this handler's mutation
+		// surface and pause-stop projection; tests inject fakes directly.
+		updatesOpts.Stopper = handlerInstallStopper{handler: handler}
+	}
+	handler.featureDetectFail = updatesOpts.DetectFailHook
 	handler.updates = newUpdateCoordinator(updatesOpts)
 	handler.updates.publish = handler.publishUpdateEvent
 	// Origin attempts reserve admission from registration until they settle.

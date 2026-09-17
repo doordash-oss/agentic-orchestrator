@@ -16,10 +16,15 @@
 // HTTP entry points, orchestration, session launching, and repository work.
 // Reservation acquisition and admission closure synchronize on one mutex, so
 // a deterministic invariant holds: either work owns a reservation, or
-// installation owns closed admission — never both. Reservations must be
-// acquired before the underlying work launches and released only after that
-// work settles, so no window exists where running work is invisible both to
-// the reservation count and to the activity detectors.
+// installation owns closed admission — never both — except during an
+// install operation's explicitly consented stopping interval, where
+// already-admitted feature/chat reservations persist under a closed boundary
+// and settle through their own completion and stop paths while every new
+// reservation is refused. Closed admission alone therefore never proves
+// inactivity. Reservations must be acquired before the underlying work
+// launches and released only after that work settles, so no window exists
+// where running work is invisible both to the reservation count and to the
+// activity detectors.
 package workadmission
 
 import (
@@ -226,6 +231,34 @@ func (c *Coordinator) CloseIfQuiesced() bool {
 	defer c.mu.Unlock()
 	if c.closed || c.total > 0 {
 		return false
+	}
+	c.closed = true
+	return true
+}
+
+// CloseForStopping closes the admission boundary for an install operation's
+// stopping interval: every new reservation is refused from the single
+// critical section Acquire synchronizes on, while already-admitted work in
+// the stoppable categories keeps its reservations and can still settle
+// through its normal completion and stop paths. The closure is refused —
+// with admission left open — when any reservation outside the stoppable
+// categories is held: that work won the race, no feature or chat work may
+// be stopped, and the operation must abort.
+func (c *Coordinator) CloseForStopping(stoppable ...Category) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.total == 0 {
+		c.closed = true
+		return true
+	}
+	permitted := make(map[Category]bool, len(stoppable))
+	for _, cat := range stoppable {
+		permitted[cat] = true
+	}
+	for cat := range c.held {
+		if !permitted[cat] {
+			return false
+		}
 	}
 	c.closed = true
 	return true

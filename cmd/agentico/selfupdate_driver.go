@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,7 +66,23 @@ type driverConfig struct {
 	// and commits it. It can never be combined with --candidate: the
 	// release-backed path only accepts verifier-produced provenance.
 	installRelease bool
-	serverFlags    launchOptions
+	// stopWorkBudget shortens the explicit-stop dispatch/confirmation
+	// budget for deterministic timeout journeys; zero keeps the production
+	// ten seconds.
+	stopWorkBudget time.Duration
+	// stopEntryGate parks an HTTP-driven explicit-stop install between
+	// staging and the protected-work recheck until the file exists, for
+	// deterministic cancellation and blocker-injection journeys.
+	stopEntryGate string
+	// failStopNth injects a failure in front of the nth feature stop
+	// dispatch, for deterministic partial-stop journeys; zero never
+	// injects.
+	failStopNth int
+	// failStopDetection arms the detection-failure seam once this trigger
+	// file exists, for deterministic detection-failure journeys; empty
+	// never arms it.
+	failStopDetection string
+	serverFlags       launchOptions
 }
 
 // driver is the driver's process-lifetime state.
@@ -157,6 +174,52 @@ func init() {
 		}
 		return driver.fixtureFeed
 	}
+	// Explicit-stop journey seams: armed only by the driver-only flags
+	// parsed above; ordinary builds keep every hook nil. Like the feed
+	// hook, each closure reads the driver config at call time — runServer
+	// evaluates them after parseDriverArgs has populated the config.
+	updateStopWorkTimeoutHook = func() time.Duration { return driver.stopWorkBudget }
+	updateStopEntryGateHook = func() func(context.Context) {
+		if driver.stopEntryGate == "" {
+			return nil
+		}
+		gate := driver.stopEntryGate
+		return func(ctx context.Context) {
+			fmt.Fprintf(os.Stderr, "selfupdate-driver: milestone: stop-entry gate waiting: %s\n", gate)
+			if err := waitForTriggerFileCtx(ctx, gate, 120*time.Second); err != nil {
+				fmt.Fprintf(os.Stderr, "selfupdate-driver: stop-entry gate error: %v\n", err)
+			}
+		}
+	}
+	updateStopFeatureFailureHook = func() func(featureID string) error {
+		if driver.failStopNth <= 0 {
+			return nil
+		}
+		nth := driver.failStopNth
+		var calls int
+		return func(featureID string) error {
+			calls++
+			if calls != nth {
+				return nil
+			}
+			return fmt.Errorf("injected stop failure for feature %s", featureID)
+		}
+	}
+	// The detection-failure seam stays disarmed until its trigger file
+	// exists, so a request whose detection already passed can still fail
+	// the post-staging recheck or the confirmation observations.
+	updateStopDetectionFailHook = func() func() error {
+		if driver.failStopDetection == "" {
+			return nil
+		}
+		path := driver.failStopDetection
+		return func() error {
+			if _, err := os.Stat(path); err == nil {
+				return errors.New("injected detection failure")
+			}
+			return nil
+		}
+	}
 }
 
 // parseDriverArgs recognizes the selfupdate-driver subcommand and parses the
@@ -174,6 +237,10 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 	opts.mode = launchModeServer
 	driver.candidatePath = ""
 	driver.triggerFile = ""
+	driver.stopWorkBudget = 0
+	driver.stopEntryGate = ""
+	driver.failStopNth = 0
+	driver.failStopDetection = ""
 	driver.failAt = nil
 	driver.barrier = ""
 	driver.barrierFile = ""
@@ -304,6 +371,47 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 			// path never accepts a caller-provided candidate: provenance is
 			// produced only by the release verifier.
 			driver.installRelease = true
+		case "--stop-work-budget":
+			// Driver-only explicit-stop budget override for timeout
+			// journeys; production always keeps the fixed ten seconds.
+			if i+1 >= len(rest) {
+				return opts, true, fmt.Errorf("--stop-work-budget requires a duration")
+			}
+			i++
+			budget, err := time.ParseDuration(rest[i])
+			if err != nil || budget <= 0 {
+				return opts, true, fmt.Errorf("--stop-work-budget requires a positive duration")
+			}
+			driver.stopWorkBudget = budget
+		case "--stop-entry-gate":
+			// Driver-only race seam: parks an HTTP-driven explicit-stop
+			// install between staging and the protected-work recheck until
+			// the file exists.
+			if i+1 >= len(rest) {
+				return opts, true, fmt.Errorf("--stop-entry-gate requires a path")
+			}
+			i++
+			driver.stopEntryGate = rest[i]
+		case "--fail-stop-nth":
+			// Driver-only partial-stop seam: injects a failure in front of
+			// the nth feature stop dispatch.
+			if i+1 >= len(rest) {
+				return opts, true, fmt.Errorf("--fail-stop-nth requires a positive integer")
+			}
+			i++
+			n, err := strconv.Atoi(rest[i])
+			if err != nil || n <= 0 {
+				return opts, true, fmt.Errorf("--fail-stop-nth requires a positive integer")
+			}
+			driver.failStopNth = n
+		case "--fail-stop-detection":
+			// Driver-only detection-failure seam: the feature-activity
+			// detector fails once this trigger file exists.
+			if i+1 >= len(rest) {
+				return opts, true, fmt.Errorf("--fail-stop-detection requires a path")
+			}
+			i++
+			driver.failStopDetection = rest[i]
 		default:
 			if strings.HasPrefix(arg, "--updates=") {
 				opts.updatesPolicy = strings.TrimPrefix(arg, "--updates=")
@@ -622,6 +730,31 @@ func waitForTriggerFile(path string, deadline time.Duration) error {
 		case <-ticker.C:
 		case <-timeout:
 			return fmt.Errorf("trigger file %s not present within %s", path, deadline)
+		}
+	}
+}
+
+// waitForTriggerFileCtx is waitForTriggerFile with a cancellation escape:
+// the stop-entry gate parks only until its trigger file appears or the
+// operation context is cancelled, so a cancelled install never waits out
+// the deadline.
+func waitForTriggerFileCtx(ctx context.Context, path string, deadline time.Duration) error {
+	if path == "" {
+		return errors.New("no trigger file configured")
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.After(deadline)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		}
+		select {
+		case <-ticker.C:
+		case <-timeout:
+			return fmt.Errorf("trigger file %s not present within %s", path, deadline)
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }

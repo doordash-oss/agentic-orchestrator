@@ -1187,12 +1187,12 @@ export interface paths {
         put?: never;
         /**
          * Accept one consented install request for the discovered release.
-         * @description Requires consent true plus a when selection. With when idle the operation is staged and waits for active work to finish without interrupting it; with when now the install proceeds immediately only when no work needs stopping — stop_active_work is accepted and normalized but never stops work in this roadmap phase, so an install that would need to stop work is refused with update_blocked_active_work. An equivalent request for the active operation returns the existing operation; changing the target, when, or stop-work permission requires canceling and resubmitting. Refused with 403 forbidden and the disabled-policy remediation while the effective policy is off and with 409 update_unsupported_install for ineligible installations or a conflicting active operation or target.
+         * @description Requires consent true plus a when selection. With when idle the operation is staged and waits for active work to finish without interrupting it. With when now and no stop_active_work the install proceeds only when no work is active. With when now and stop_active_work true the install may interrupt feature sessions and the singleton chat through the existing pause-stop and chat-end semantics — repository work (clones, uploads, origin checks, other repository activity), protected or unknown admission reservations, and failed activity detection still refuse before staging, again after staging, and again under the closed admission gate, with 409 update_blocked_active_work and nothing stopped. Stop dispatch and completion confirmation share one ten-second deadline; any stop failure, timeout, or unresolved work aborts the installation, leaves the current build serving with already-stopped work interrupted, and requires fresh consent. An equivalent request for the active operation returns the existing operation; changing the target, when, or stop-work permission requires canceling and resubmitting. Refused with 403 forbidden and the disabled-policy remediation while the effective policy is off and with 409 update_unsupported_install for ineligible installations or a conflicting active operation or target.
          */
         post: operations["installUpdate"];
         /**
          * Cancel the active install operation.
-         * @description Cancels the active install operation and returns the current availability snapshot after cleanup. Idempotent when nothing is active. Refused with 403 forbidden and the disabled-policy remediation while the effective policy is off, and with 409 update_in_progress once draining has begun, because an install that reached the drain boundary can no longer be abandoned.
+         * @description Cancels the active install operation and returns the current availability snapshot after cleanup. Idempotent when nothing is active. Refused with 403 forbidden and the disabled-policy remediation while the effective policy is off, and with 409 update_in_progress once an explicit-stop operation entered its stopping interval or draining has begun, because an install that crossed that boundary can no longer be abandoned.
          */
         delete: operations["cancelUpdateInstall"];
         options?: never;
@@ -3069,7 +3069,7 @@ export interface components {
              * @enum {string}
              */
             method?: "now" | "idle";
-            /** @description Normalized stop-work permission of the accepted operation (only meaningful with method now); present only while an operation is active. */
+            /** @description The actual stop-work permission the accepted operation retains (only meaningful with method now); present only while an operation is active. */
             stop_active_work?: boolean;
             /**
              * Format: date-time
@@ -3127,7 +3127,7 @@ export interface components {
              * @enum {string}
              */
             when: "now" | "idle";
-            /** @description Stop-work permission for an immediate install; valid only with when now. Accepted in this roadmap phase but never stops work: an install that would need to stop work is refused with update_blocked_active_work. */
+            /** @description Stop-work permission for an immediate install; valid only with when now. Authorizes interrupting feature sessions and the singleton chat through the existing pause-stop and chat-end semantics. Repository work, protected or unknown admission reservations, and failed activity detection still refuse, and any stop failure or timeout aborts the install with update_blocked_active_work while already-stopped work stays interrupted. */
             stop_active_work?: boolean;
             /** @description Explicit target version selector. Must name the currently discovered latest stable version; any other version is refused. */
             version?: string;

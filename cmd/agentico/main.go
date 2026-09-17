@@ -3262,6 +3262,24 @@ func runServerWithJourney(configPath, stateDir string, dangerouslySkipPerms bool
 		updateOptions.Stager = installLifecycle.stager
 		updateOptions.Install = installLifecycle
 	}
+	// Test-only seams for the tagged driver's explicit-stop journeys:
+	// ordinary builds keep every hook nil so production installs use the
+	// fixed stop budget, never pause before the protected-work recheck,
+	// and never inject stop failures.
+	if updateStopWorkTimeoutHook != nil {
+		if budget := updateStopWorkTimeoutHook(); budget > 0 {
+			updateOptions.StopWorkTimeout = budget
+		}
+	}
+	if updateStopEntryGateHook != nil {
+		updateOptions.StopEntryGate = updateStopEntryGateHook()
+	}
+	if updateStopFeatureFailureHook != nil {
+		updateOptions.StopFeatureHook = updateStopFeatureFailureHook()
+	}
+	if updateStopDetectionFailHook != nil {
+		updateOptions.DetectFailHook = updateStopDetectionFailHook()
+	}
 
 	if shouldInterruptRunningOnStartup(
 		boot.recoveryScanOK,

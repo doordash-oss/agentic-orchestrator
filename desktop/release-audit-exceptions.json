@@ -27,7 +27,7 @@
       "id": "GO-2026-4970",
       "name": "stdlib",
       "fixedVersion": "v1.26.5",
-      "expires": "2026-08-20",
+      "expires": "2026-10-16",
       "reason": "Local runner Go 1.26.4 standard library finding. Protected release runners must upgrade to Go 1.26.5 or newer before promotion."
     },
     {
@@ -35,23 +35,79 @@
       "id": "GO-2026-5856",
       "name": "stdlib",
       "fixedVersion": "v1.26.5",
-      "expires": "2026-08-20",
+      "expires": "2026-10-16",
       "reason": "Local runner Go 1.26.4 standard library finding. Protected release runners must upgrade to Go 1.26.5 or newer before promotion."
     },
     {
       "source": "go",
+      "id": "GO-2026-5026",
+      "name": "stdlib",
+      "fixedVersion": "v1.26.6",
+      "expires": "2026-10-16",
+      "reason": "Advisory surfaced by the Go vulnerability database after the local runner's Go 1.26.4 toolchain was cut. Protected release runners must upgrade to Go 1.26.6 or newer before promotion."
+    },
+    {
+      "source": "go",
       "id": "GO-2026-5942",
-      "name": "golang.org/x/net",
-      "fixedVersion": "v0.56.0",
-      "expires": "2026-09-01",
-      "reason": "New advisories surfaced by the Go vulnerability database on 2026-08-01 after the pinned dependency set was cut. The affected paths (SVCB/HTTPS RR parsing) are not exercised by shipped features. Upgrade golang.org/x/net to v0.56.0 or newer in the next dependency pass."
+      "name": "stdlib",
+      "fixedVersion": "v1.26.6",
+      "expires": "2026-10-16",
+      "reason": "Originally scoped to golang.org/x/net when the dependency set was cut; the advisory is now reported against the Go 1.26.4 standard library on this runner. Upgrade Go to 1.26.6 or newer (and golang.org/x/net to v0.56.0 or newer in the next dependency pass) before promotion."
+    },
+    {
+      "source": "go",
+      "id": "GO-2026-5972",
+      "name": "stdlib",
+      "fixedVersion": "v1.26.6",
+      "expires": "2026-10-16",
+      "reason": "Advisory surfaced by the Go vulnerability database after the local runner's Go 1.26.4 toolchain was cut. Protected release runners must upgrade to Go 1.26.6 or newer before promotion."
+    },
+    {
+      "source": "go",
+      "id": "GO-2026-6088",
+      "name": "stdlib",
+      "fixedVersion": "v1.26.6",
+      "expires": "2026-10-16",
+      "reason": "Advisory surfaced by the Go vulnerability database after the local runner's Go 1.26.4 toolchain was cut. Protected release runners must upgrade to Go 1.26.6 or newer before promotion."
+    },
+    {
+      "source": "go",
+      "id": "GO-2026-6089",
+      "name": "stdlib",
+      "fixedVersion": "v1.26.6",
+      "expires": "2026-10-16",
+      "reason": "Advisory surfaced by the Go vulnerability database after the local runner's Go 1.26.4 toolchain was cut. Protected release runners must upgrade to Go 1.26.6 or newer before promotion."
+    },
+    {
+      "source": "go",
+      "id": "GO-2026-6090",
+      "name": "stdlib",
+      "fixedVersion": "v1.26.6",
+      "expires": "2026-10-16",
+      "reason": "Advisory surfaced by the Go vulnerability database after the local runner's Go 1.26.4 toolchain was cut. Protected release runners must upgrade to Go 1.26.6 or newer before promotion."
+    },
+    {
+      "source": "go",
+      "id": "GO-2026-6091",
+      "name": "stdlib",
+      "fixedVersion": "v1.26.6",
+      "expires": "2026-10-16",
+      "reason": "Advisory surfaced by the Go vulnerability database after the local runner's Go 1.26.4 toolchain was cut. Protected release runners must upgrade to Go 1.26.6 or newer before promotion."
+    },
+    {
+      "source": "go",
+      "id": "GO-2026-6218",
+      "name": "stdlib",
+      "fixedVersion": "v1.26.6",
+      "expires": "2026-10-16",
+      "reason": "Advisory surfaced by the Go vulnerability database after the local runner's Go 1.26.4 toolchain was cut. Protected release runners must upgrade to Go 1.26.6 or newer before promotion."
     },
     {
       "source": "go",
       "id": "GO-2026-5158",
       "name": "go.opentelemetry.io/otel",
       "fixedVersion": "v1.42.0",
-      "expires": "2026-09-01",
+      "expires": "2026-10-16",
       "reason": "New advisories surfaced by the Go vulnerability database on 2026-08-01 after the pinned dependency set was cut. Baggage parsing runs on trusted loopback traffic only. Upgrade go.opentelemetry.io/otel to v1.42.0 or newer in the next dependency pass."
     },
     {
@@ -59,7 +115,7 @@
       "id": "GO-2026-6061",
       "name": "google.golang.org/grpc",
       "fixedVersion": "v1.82.1",
-      "expires": "2026-09-01",
+      "expires": "2026-10-16",
       "reason": "New advisories surfaced by the Go vulnerability database on 2026-08-01 after the pinned dependency set was cut. gRPC xDS/HTTP2 transport paths are not part of the shipped control surface. Upgrade google.golang.org/grpc to v1.82.1 or newer in the next dependency pass."
     },
     {
@@ -67,7 +123,7 @@
       "id": "GO-2026-5970",
       "name": "golang.org/x/text",
       "fixedVersion": "v0.39.0",
-      "expires": "2026-09-01",
+      "expires": "2026-10-16",
       "reason": "New advisories surfaced by the Go vulnerability database on 2026-08-01 after the pinned dependency set was cut. The infinite-loop path requires hostile untrusted text input not present in the loopback server. Upgrade golang.org/x/text to v0.39.0 or newer in the next dependency pass."
     }
   ]

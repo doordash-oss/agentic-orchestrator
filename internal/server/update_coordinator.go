@@ -108,6 +108,28 @@ type UpdateOptions struct {
 	// Admission is the runtime work-admission boundary installs gate on.
 	// Nil means installs cannot run.
 	Admission InstallAdmission
+	// Stopper performs the authorized interruption of feature and chat
+	// work for explicit-stop immediate installs. Nil means such installs
+	// cannot run (refused as unsupported).
+	Stopper InstallStopper
+	// StopWorkTimeout overrides the shared stop-dispatch/confirmation
+	// budget for deterministic tests; zero uses updateStopWorkBudget.
+	StopWorkTimeout time.Duration
+	// StopEntryGate, when set, parks an explicit-stop operation between
+	// staging completion and the post-staging protected-work recheck. It is
+	// a test-only race seam (deterministic cancellation-versus-stop-entry
+	// and blocker-injection journeys); production leaves it nil. The gate
+	// receives the operation context so a cancellation unblocks it.
+	StopEntryGate func(ctx context.Context)
+	// StopFeatureHook, when set, wraps every feature stop dispatch with
+	// test-only failure injection. Production leaves it nil.
+	StopFeatureHook func(featureID string) error
+	// DetectFailHook, when set, makes the handler's feature-activity
+	// detector report a detection failure. It is a test-only seam (the
+	// selfupdate driver arms it for deterministic detection-failure
+	// journeys); production leaves it nil so detection always probes the
+	// real feature store.
+	DetectFailHook func() error
 	// Activity snapshots the observed work state for the published
 	// active-work summary: activity counts, whether detection failed, and
 	// the held reservation count.

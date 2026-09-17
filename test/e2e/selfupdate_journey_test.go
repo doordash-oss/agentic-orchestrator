@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -197,6 +198,10 @@ func startDriverProcess(t *testing.T, bin string, env []string, args ...string) 
 	}
 	cmd := exec.Command(bin, args...)
 	cmd.Env = env
+	// A dedicated process group makes the child's PGID its own PID, so
+	// journeys can prove process-group identity survives the exec
+	// replacement. Termination still signals the process alone.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stderr = stderrW
 	if err := cmd.Start(); err != nil {
 		_ = stderrR.Close()
@@ -285,6 +290,16 @@ func (p *driverProcess) alive() bool {
 		return false
 	}
 	return p.cmd.Process.Signal(syscall.Signal(0)) == nil
+}
+
+// pgid reports the process's current process-group id. The launched child
+// owns its group (Setpgid at start), so an unchanged PGID across an exec
+// replacement proves process-group identity preservation.
+func (p *driverProcess) pgid() (int, error) {
+	if p.cmd.Process == nil {
+		return 0, errors.New("process not started")
+	}
+	return syscall.Getpgid(p.cmd.Process.Pid)
 }
 
 // exited reports whether the process already terminated: the stderr pipe

@@ -32,11 +32,19 @@ import { ErrorSurface } from '../components/ErrorSurface';
 import { parseIpcError } from '../wizard/ipcError';
 import { SettingsConfirmationDialog } from './SettingsConfirmationDialog';
 
+const MANAGED_SUMMARY =
+  'This server ships with the desktop app and is replaced when the app updates. Its update state is the app card above.';
+
 export function ServerUpdateCard({
   serverLabel,
+  managed = false,
+  revision,
   onOpenExternal,
 }: {
   serverLabel: string;
+  /** App-owned child runtime: versions are shown, update verbs are not. */
+  managed?: boolean;
+  revision?: string | undefined;
   onOpenExternal(url: string): void;
 }) {
   const [state, setState] = useState<ServerUpdateState | null>(null);
@@ -93,7 +101,7 @@ export function ServerUpdateCard({
     requestAnimationFrame(() => installNowTrigger.current?.focus());
   }, []);
 
-  const verbs = serverUpdateVerbs(state);
+  const verbs = managed ? null : serverUpdateVerbs(state);
   const version = state?.currentVersion === undefined ? '' : ` (v${state.currentVersion})`;
 
   return (
@@ -107,17 +115,23 @@ export function ServerUpdateCard({
             Server: {serverLabel}
             {version}
           </h2>
-          <p className="settings-panel__section-desc">{serverUpdatePolicyLabel(state)}</p>
+          <p className="settings-panel__section-desc">
+            {managed ? 'Managed by the app' : serverUpdatePolicyLabel(state)}
+            {revision !== undefined && ` · build ${revision.slice(0, 8)}`}
+          </p>
         </div>
-        <span className="settings-panel__status-pill" data-tone={serverUpdateTone(state)}>
-          {serverUpdateStatusLabel(state)}
+        <span
+          className="settings-panel__status-pill"
+          data-tone={managed ? 'neutral' : serverUpdateTone(state)}
+        >
+          {managed ? 'Bundled' : serverUpdateStatusLabel(state)}
         </span>
       </div>
       <div className="settings-panel__update-grid">
         <span>Current</span>
         <strong>{state?.currentVersion ?? 'Unknown'}</strong>
         <span>Latest</span>
-        <strong>{state?.latestVersion ?? 'Unknown'}</strong>
+        <strong>{managed ? 'Tracks the app' : (state?.latestVersion ?? 'Unknown')}</strong>
         <span>Install</span>
         <strong>{state?.installation ?? 'unknown'}</strong>
         <span>Signature</span>
@@ -129,6 +143,8 @@ export function ServerUpdateCard({
           variant="compact"
           localAction={{ label: 'Retry', onAction: refresh }}
         />
+      ) : managed ? (
+        <p className="settings-panel__section-desc">{MANAGED_SUMMARY}</p>
       ) : state?.status === 'failed' && state.error !== undefined ? (
         <ErrorSurface
           error={state.error}
@@ -149,7 +165,17 @@ export function ServerUpdateCard({
         <p className="settings-panel__update-work">{state.activeWorkSummary}</p>
       )}
       <div className="settings-panel__button-row">
-        {verbs.check && (
+        {managed && (
+          <button
+            type="button"
+            className="setup-wizard__action"
+            disabled
+            title="Bundled servers update with the app"
+          >
+            Check now
+          </button>
+        )}
+        {verbs?.check && (
           <button
             type="button"
             className="setup-wizard__action"
@@ -168,7 +194,7 @@ export function ServerUpdateCard({
             Release notes
           </button>
         )}
-        {verbs.installWhenIdle && (
+        {verbs?.installWhenIdle && (
           <button
             type="button"
             className="setup-wizard__action"
@@ -178,28 +204,28 @@ export function ServerUpdateCard({
             {busy === 'idle' ? 'Scheduling…' : 'Install when idle'}
           </button>
         )}
-        {verbs.installNow && (
+        {verbs?.installNow && (
           <button
             type="button"
             ref={installNowTrigger}
             className={
-              verbs.installNowStopsWork
+              verbs?.installNowStopsWork
                 ? 'settings-panel__root-btn settings-panel__root-btn--danger'
                 : 'setup-wizard__action setup-wizard__action--primary'
             }
             onClick={() =>
-              verbs.installNowStopsWork ? setConfirming(true) : void install({ when: 'now' })
+              verbs?.installNowStopsWork ? setConfirming(true) : void install({ when: 'now' })
             }
             disabled={busy !== null}
           >
             {busy === 'now'
               ? 'Installing…'
-              : verbs.installNowStopsWork
+              : verbs?.installNowStopsWork
                 ? 'Stop work and install now'
                 : 'Install now'}
           </button>
         )}
-        {verbs.cancel && (
+        {verbs?.cancel && (
           <button
             type="button"
             className="setup-wizard__action"
@@ -211,7 +237,7 @@ export function ServerUpdateCard({
         )}
       </div>
 
-      {confirming && state !== null && (
+      {confirming && state !== null && !managed && (
         <SettingsConfirmationDialog
           ariaLabel="Install server update confirmation"
           onCancel={closeConfirm}

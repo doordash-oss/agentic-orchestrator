@@ -807,14 +807,17 @@ export function SettingsPanel({
         </section>
       )}
 
-      {pane === 'updates' &&
-        connection.status === 'ready' &&
-        connection.ownership !== 'app-owned' && (
-          <ServerUpdateCard
-            serverLabel={connection.serverName ?? 'Connected server'}
-            onOpenExternal={(url) => void handleOpenExternal(url)}
-          />
-        )}
+      {pane === 'updates' && connection.status === 'ready' && (
+        <ServerUpdateCard
+          serverLabel={
+            connection.serverName ??
+            (connection.ownership === 'app-owned' ? 'Local runtime' : 'Connected server')
+          }
+          managed={connection.ownership === 'app-owned'}
+          revision={connection.serverBuild?.revision}
+          onOpenExternal={(url) => void handleOpenExternal(url)}
+        />
+      )}
 
       {pane === 'notifications' && (
         <section className="settings-panel__section" aria-label="Notifications">

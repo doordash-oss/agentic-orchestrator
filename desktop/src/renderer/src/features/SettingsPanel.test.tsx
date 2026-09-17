@@ -426,7 +426,7 @@ describe('SettingsPanel server update card', () => {
     expect(await within(card).findByRole('button', { name: 'Cancel install' })).toBeVisible();
   });
 
-  it('is absent for the app-managed local runtime', async () => {
+  it('is read-only for the app-managed local runtime', async () => {
     installAgenticoMock({
       connection: {
         status: 'ready',
@@ -437,10 +437,22 @@ describe('SettingsPanel server update card', () => {
         serverKey: 'a'.repeat(32),
       },
       readiness: readySnapshot(),
+      serverUpdate: defaultServerUpdateState({
+        status: 'disabled',
+        policy: 'off',
+        installation: 'app_bundle',
+      }),
     });
     render(<SettingsPanel pane="updates" />);
-    await screen.findByRole('region', { name: 'Updates' });
-    expect(screen.queryByRole('region', { name: 'Server updates' })).toBeNull();
+    const card = await screen.findByRole('region', { name: 'Server updates' });
+    expect(
+      await within(card).findByRole('heading', { name: 'Server: Local runtime (v0.1.0)' }),
+    ).toBeVisible();
+    expect(within(card).getByText('Managed by the app')).toBeVisible();
+    expect(within(card).getByText('Bundled')).toBeVisible();
+    expect(within(card).getByText('Tracks the app')).toBeVisible();
+    expect(within(card).getByRole('button', { name: 'Check now' })).toBeDisabled();
+    expect(within(card).queryByRole('button', { name: /install/i })).toBeNull();
   });
 });
 

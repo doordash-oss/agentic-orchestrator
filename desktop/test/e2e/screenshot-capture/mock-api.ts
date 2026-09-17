@@ -1310,6 +1310,14 @@ const CONNECTION_STATE: ConnectionState = {
   ownership: 'app-owned',
   kind: 'local',
   serverKey: SERVER_KEY,
+  serverBuild: { version: '0.1.0', revision: '51e2a666cc81176e2fb24d9d8c54c840c2369936' },
+};
+
+const CONNECTION_STATE_EXTERNAL: ConnectionState = {
+  ...CONNECTION_STATE,
+  ownership: 'external',
+  kind: 'remote',
+  serverName: 'flux-agentico',
 };
 
 /** Mid-connect state for the connection-shell capture: two of the six
@@ -1684,7 +1692,7 @@ function makeMockApi(
         scene === 'connection-shell'
           ? CONNECTION_STATE_MID_CONNECT
           : scene.startsWith('settings-server-update')
-            ? { ...CONNECTION_STATE, ownership: 'external' as const, kind: 'remote' as const }
+            ? CONNECTION_STATE_EXTERNAL
             : CONNECTION_STATE,
       ),
     retryConnection: () => Promise.resolve(CONNECTION_STATE),
@@ -2845,11 +2853,10 @@ function serverUpdateStateForScene(scene: string): ServerUpdateState {
     };
   }
   return {
-    status: 'up_to_date',
-    policy: 'notify',
+    status: 'disabled',
+    policy: 'off',
     currentVersion: '0.1.0',
-    latestVersion: '0.1.0',
-    installation: 'tarball',
+    installation: 'app_bundle',
     signature: 'unverified',
   };
 }

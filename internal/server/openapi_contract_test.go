@@ -657,6 +657,10 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: apiPathRecovery},
 		{method: httpMethodPost, path: apiPathRecoveryActions, mutation: true},
 		{method: httpMethodGet, path: apiPathRecoveryLogs},
+		{method: httpMethodGet, path: apiPathUpdate},
+		{method: httpMethodPost, path: apiPathUpdateCheck, mutation: true},
+		{method: httpMethodPost, path: apiPathUpdateInstall, mutation: true},
+		{method: "delete", path: apiPathUpdateInstall, mutation: true},
 		{method: httpMethodGet, path: apiPathEvents, sse: true},
 		{method: httpMethodPost, path: apiPathUploads, mutation: true},
 	}

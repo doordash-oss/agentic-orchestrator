@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,8 +12,25 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    outputs:
+      selfupdate: ${{ steps.changes.outputs.selfupdate }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect native updater changes
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "selfupdate=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "$(git diff --name-only "$BASE_SHA" HEAD -- cmd/agentico internal api test/e2e test/testutil go.mod go.sum Makefile .github/workflows/ci.yml)" ]; then
+            echo "selfupdate=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "selfupdate=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-go@v7
         with:
@@ -27,6 +45,40 @@ jobs:
 
       - name: go test
         run: go test ./... -short -count=1
+
+  # Run the complete process suite once; instrument the spawned updater
+  # binaries as well as the Go test harness.
+  go-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Updater driver unit tests and vet
+        run: make test-selfupdate-driver
+      - name: E2E Go (race)
+        run: make test-e2e
+
+  # Linux amd64 is covered above. Other native targets only exercise the
+  # focused updater journeys, and only when their inputs change or requested.
+  selfupdate-native:
+    needs: test
+    if: needs.test.outputs.selfupdate == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Native updater journeys
+        run: make test-selfupdate-native
 
   # Native package gate per platform. Platform-independent checks (typecheck,
   # lint, format, API drift, unit/component/security suites) run once on

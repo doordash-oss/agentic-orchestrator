@@ -18,26 +18,44 @@ limitations under the License.
 // produced here must verify with the same node:crypto primitives updates.ts
 // uses, and the embedded-trust-root extraction must find the real constant.
 import { generateKeyPairSync } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import {
   SIGNATURE_PREFIX,
   extractEmbeddedReleasePublicKey,
+  extractGoReleasePublicKeySPKI,
   privateKeyFromMaterial,
   publicKeyPem,
   signReleasePayload,
+  spkiBase64FromPem,
   verifyReleasePayload,
 } from './release-signing.mjs';
 
 const desktopDir = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+const repoRoot = dirname(desktopDir);
+const GO_TRUST_SOURCE = join(repoRoot, 'internal', 'selfupdate', 'trust.go');
+const UPDATES_SOURCE = join(desktopDir, 'src', 'main', 'updates.ts');
+const FIXTURE_SPKI_BASE64 = 'MCowBQYDK2VwAyEAmhM+TNlJSPzGSFwd/DakW3G6MzxCpouletrsW4WAezE=';
+const FIXTURE_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----\n${FIXTURE_SPKI_BASE64}\n-----END PUBLIC KEY-----`;
+// Anchor proving the repo-root resolution: if the layout moves, the parity
+// tests must fail loudly rather than silently read some other checkout's files.
+const repoRootAnchored = existsSync(resolve(repoRoot, 'go.mod'));
 
 function newKeyPem() {
   return generateKeyPairSync('ed25519')
     .privateKey.export({ type: 'pkcs8', format: 'pem' })
     .toString();
+}
+
+function fixturePayload() {
+  return readFileSync(join(repoRoot, 'test', 'release-trust-vectors', 'payload.bin'));
+}
+
+function fixtureSignature() {
+  return readFileSync(join(repoRoot, 'test', 'release-trust-vectors', 'payload.sig'), 'utf8');
 }
 
 describe('release signing', () => {
@@ -82,5 +100,71 @@ describe('release signing', () => {
 
   it('throws when the trust root constant is missing', () => {
     expect(() => extractEmbeddedReleasePublicKey('nothing here')).toThrow(/RELEASE_PUBLIC_KEY/);
+  });
+});
+
+describe('release trust-root parity', () => {
+  it('anchors the repo root at go.mod', () => {
+    expect(repoRootAnchored).toBe(true);
+  });
+
+  it('extracts the SPKI constant from the real internal/selfupdate/trust.go', () => {
+    expect(extractGoReleasePublicKeySPKI(readFileSync(GO_TRUST_SOURCE, 'utf8'))).toMatch(
+      /^[A-Za-z0-9+/=]+$/,
+    );
+  });
+
+  it('decodes the Go SPKI constant to the same DER bytes as the desktop trust root', () => {
+    const goSpki = extractGoReleasePublicKeySPKI(readFileSync(GO_TRUST_SOURCE, 'utf8'));
+    const desktopPem = extractEmbeddedReleasePublicKey(readFileSync(UPDATES_SOURCE, 'utf8'));
+    const goDer = Buffer.from(goSpki, 'base64');
+    const desktopDer = Buffer.from(spkiBase64FromPem(desktopPem), 'base64');
+    expect(Buffer.isBuffer(goDer)).toBe(true);
+    expect(Buffer.isBuffer(desktopDer)).toBe(true);
+    expect(goDer.equals(desktopDer)).toBe(true);
+  });
+
+  it('throws when the Go trust-root constant is missing or malformed', () => {
+    expect(() => extractGoReleasePublicKeySPKI('package selfupdate\n')).toThrow(
+      /productionReleasePublicKeySPKI/,
+    );
+    expect(() =>
+      extractGoReleasePublicKeySPKI('const productionReleasePublicKeySPKI = not-a-string'),
+    ).toThrow(/productionReleasePublicKeySPKI/);
+  });
+
+  it('verifies the shared fixture vectors with the fixture public key', () => {
+    expect(verifyReleasePayload(fixturePayload(), fixtureSignature(), FIXTURE_PUBLIC_KEY_PEM)).toBe(
+      true,
+    );
+  });
+
+  it('rejects a tampered fixture payload', () => {
+    const tampered = Buffer.from(fixturePayload());
+    tampered[0] ^= 0x01;
+    expect(verifyReleasePayload(tampered, fixtureSignature(), FIXTURE_PUBLIC_KEY_PEM)).toBe(false);
+  });
+
+  it('rejects a tampered fixture signature', () => {
+    // Swap one base64 character in the signature body (not the prefix).
+    const body = fixtureSignature().trim().slice(SIGNATURE_PREFIX.length);
+    const flipped = `${body.charAt(0) === 'A' ? 'B' : 'A'}${body.slice(1)}`;
+    expect(
+      verifyReleasePayload(
+        fixturePayload(),
+        `${SIGNATURE_PREFIX}${flipped}`,
+        FIXTURE_PUBLIC_KEY_PEM,
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects the fixture signature under the production trust root', () => {
+    const productionPem = extractEmbeddedReleasePublicKey(readFileSync(UPDATES_SOURCE, 'utf8'));
+    expect(verifyReleasePayload(fixturePayload(), fixtureSignature(), productionPem)).toBe(false);
+  });
+
+  it('reduces a PUBLIC KEY PEM block to its base64 body', () => {
+    expect(spkiBase64FromPem(FIXTURE_PUBLIC_KEY_PEM)).toBe(FIXTURE_SPKI_BASE64);
+    expect(() => spkiBase64FromPem('no markers here')).toThrow(/PUBLIC KEY/);
   });
 });

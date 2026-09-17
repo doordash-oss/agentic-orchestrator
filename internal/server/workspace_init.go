@@ -25,6 +25,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 )
 
@@ -62,6 +63,14 @@ func (h *apiHandler) handleWorkspaceRepositoryInitRoute(w http.ResponseWriter, r
 	if !ok {
 		return
 	}
+	// Repository initialization is synchronous git work for the request's
+	// full lifetime; a closed admission boundary refuses it.
+	initReservation, err := h.acquireAdmission(workadmission.CategoryRepository)
+	if err != nil {
+		h.writeAdmissionRefusal(w, err)
+		return
+	}
+	defer initReservation.Release()
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("create repository directory"))
 		return

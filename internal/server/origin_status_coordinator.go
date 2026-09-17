@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
 const (
@@ -116,6 +117,10 @@ func (c *originCompleted) unavailable() bool {
 type originFlight struct {
 	key  originCheckKey
 	done chan struct{}
+	// reservation is the work-admission reservation held from registration
+	// until the attempt settles; nil when no boundary is configured or a
+	// joined flight (the owning flight holds it).
+	reservation *workadmission.Reservation
 }
 
 // originCheckCoordinator owns the server's origin-check state: coalesced
@@ -126,6 +131,10 @@ type originCheckCoordinator struct {
 	executor originCheckExecutor
 	deadline time.Duration
 	now      func() time.Time
+
+	// admission, when configured, holds one origin reservation per
+	// in-flight attempt from registration until the attempt settles.
+	admission *workadmission.Coordinator
 
 	baseCtx context.Context
 	cancel  context.CancelFunc
@@ -159,25 +168,43 @@ func (c *originCheckCoordinator) Shutdown() {
 	c.wg.Wait()
 }
 
+// inflightAttempts counts the attempts currently registered.
+func (c *originCheckCoordinator) inflightAttempts() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.inflight)
+}
+
 // ensure registers or joins the attempt for one resolved selection. It
 // returns the completed snapshot when one exists and is not being refreshed,
 // otherwise the attempt's done channel, which closes when the attempt's
-// result is stored.
-func (c *originCheckCoordinator) ensure(identity git.RepoIdentity, plan git.OriginCheckPlan, repoPath string, refresh bool) (*originCompleted, bool, <-chan struct{}) {
+// result is stored. A new attempt reserves work admission under the same
+// mutex that registers it, so registration and the admission boundary are
+// atomic: either the attempt owns a reservation, or a closed boundary owns
+// the refusal — never an invisible attempt.
+func (c *originCheckCoordinator) ensure(identity git.RepoIdentity, plan git.OriginCheckPlan, repoPath string, refresh bool) (*originCompleted, bool, <-chan struct{}, error) {
 	key := originCheckKeyFor(identity, plan)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !refresh {
 		if completed, ok := c.completed[key]; ok {
-			return completed, true, nil
+			return completed, true, nil, nil
 		}
 	}
 	if flight, ok := c.inflight[key]; ok {
 		// An in-flight attempt for the identical resolved source is itself a
 		// fresh attempt; the caller joins it instead of scheduling another.
-		return nil, false, flight.done
+		return nil, false, flight.done, nil
 	}
-	flight := &originFlight{key: key, done: make(chan struct{})}
+	var reservation *workadmission.Reservation
+	if c.admission != nil {
+		var err error
+		reservation, err = c.admission.Acquire(workadmission.CategoryOrigin)
+		if err != nil {
+			return nil, false, nil, err
+		}
+	}
+	flight := &originFlight{key: key, done: make(chan struct{}), reservation: reservation}
 	c.inflight[key] = flight
 	var priorSuccess *git.OriginComparison
 	var priorStale *git.OriginComparison
@@ -191,7 +218,7 @@ func (c *originCheckCoordinator) ensure(identity git.RepoIdentity, plan git.Orig
 	}
 	c.wg.Add(1)
 	go c.runAttempt(flight, identity, plan, repoPath, priorSuccess, priorStale)
-	return nil, false, flight.done
+	return nil, false, flight.done, nil
 }
 
 // runAttempt executes one attempt: admission, coordination, re-resolution,
@@ -267,6 +294,7 @@ func (c *originCheckCoordinator) runAttempt(flight *originFlight, identity git.R
 	delete(c.inflight, key)
 	c.storeCompletedLocked(key, completed)
 	c.mu.Unlock()
+	flight.reservation.Release()
 	close(flight.done)
 }
 

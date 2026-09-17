@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 import type {
+  ServerUpdateState,
   AgenticoApi,
   AppEvent,
   AppRouteEvent,
@@ -1309,6 +1310,14 @@ const CONNECTION_STATE: ConnectionState = {
   ownership: 'app-owned',
   kind: 'local',
   serverKey: SERVER_KEY,
+  serverBuild: { version: '0.1.0', revision: '51e2a666cc81176e2fb24d9d8c54c840c2369936' },
+};
+
+const CONNECTION_STATE_EXTERNAL: ConnectionState = {
+  ...CONNECTION_STATE,
+  ownership: 'external',
+  kind: 'remote',
+  serverName: 'flux-agentico',
 };
 
 /** Mid-connect state for the connection-shell capture: two of the six
@@ -1680,7 +1689,11 @@ function makeMockApi(
     windowPurpose: scene.startsWith('settings-') ? 'settings' : 'main',
     getConnectionStatus: () =>
       Promise.resolve(
-        scene === 'connection-shell' ? CONNECTION_STATE_MID_CONNECT : CONNECTION_STATE,
+        scene === 'connection-shell'
+          ? CONNECTION_STATE_MID_CONNECT
+          : scene.startsWith('settings-server-update')
+            ? CONNECTION_STATE_EXTERNAL
+            : CONNECTION_STATE,
       ),
     retryConnection: () => Promise.resolve(CONNECTION_STATE),
     restartConnection: () => Promise.resolve(CONNECTION_STATE),
@@ -2473,6 +2486,10 @@ function makeMockApi(
         status: 'installing' as const,
         message: 'Restarting to apply the verified update.',
       }),
+    getServerUpdate: () => Promise.resolve(serverUpdateStateForScene(scene)),
+    checkServerUpdate: () => Promise.resolve(serverUpdateStateForScene(scene)),
+    installServerUpdate: () => Promise.resolve(serverUpdateStateForScene(scene)),
+    cancelServerUpdate: () => Promise.resolve(serverUpdateStateForScene(scene)),
     getDiagnostics: () => Promise.resolve(diagnosticsSnapshotForScene(scene)),
     revealDiagnostics: () => Promise.resolve({ ok: true }),
     clearDiagnostics: () =>
@@ -2799,6 +2816,48 @@ function readyUpdateState(): UpdateState {
     nextCheckAt: '2026-07-20T16:00:00.000Z',
     releaseNotesUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
     message: 'A verified update is downloaded and ready to install.',
+  };
+}
+
+function serverUpdateStateForScene(scene: string): ServerUpdateState {
+  if (scene === 'settings-server-update-available') {
+    return {
+      status: 'available',
+      policy: 'notify',
+      currentVersion: '0.1.0',
+      latestVersion: '0.2.0',
+      targetVersion: '0.2.0',
+      releaseUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
+      installation: 'tarball',
+      signature: 'unverified',
+      lastCheckAt: '2026-07-20T10:00:00.000Z',
+      nextCheckAt: '2026-07-20T16:00:00.000Z',
+      activeWorkSummary: '2 features running, 1 clone in progress.',
+    };
+  }
+  if (scene === 'settings-server-update-auto') {
+    return {
+      status: 'scheduled',
+      policy: 'auto',
+      currentVersion: '0.1.0',
+      latestVersion: '0.2.0',
+      targetVersion: '0.2.0',
+      releaseUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
+      installation: 'tarball',
+      signature: 'verified',
+      method: 'idle',
+      stopActiveWork: false,
+      lastCheckAt: '2026-07-20T10:00:00.000Z',
+      nextCheckAt: '2026-07-20T16:00:00.000Z',
+      activeWorkSummary: '2 features running, 1 clone in progress.',
+    };
+  }
+  return {
+    status: 'disabled',
+    policy: 'off',
+    currentVersion: '0.1.0',
+    installation: 'app_bundle',
+    signature: 'unverified',
   };
 }
 

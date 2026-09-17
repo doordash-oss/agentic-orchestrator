@@ -79,3 +79,29 @@ export function extractEmbeddedReleasePublicKey(updatesSource) {
   }
   return match[1].trim();
 }
+
+/**
+ * Extract the production trust root the Go updater embeds, as SPKI base64,
+ * from internal/selfupdate/trust.go source text, so the signer can hold both
+ * ecosystems to the same key. Throws when the constant cannot be located.
+ */
+export function extractGoReleasePublicKeySPKI(trustSource) {
+  const match = /const productionReleasePublicKeySPKI = "([A-Za-z0-9+/=]+)"/.exec(trustSource);
+  if (match === null) {
+    throw new Error(
+      'could not locate productionReleasePublicKeySPKI in internal/selfupdate/trust.go',
+    );
+  }
+  return match[1];
+}
+
+/** Reduce an SPKI PUBLIC KEY PEM block to its trimmed base64 body. */
+export function spkiBase64FromPem(pemText) {
+  const match = /-----BEGIN PUBLIC KEY-----([A-Za-z0-9+/=\s]+)-----END PUBLIC KEY-----/.exec(
+    pemText,
+  );
+  if (match === null) {
+    throw new Error('could not locate a PUBLIC KEY PEM block');
+  }
+  return match[1].replace(/\s+/g, '').trim();
+}

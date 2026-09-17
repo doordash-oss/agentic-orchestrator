@@ -55,6 +55,7 @@ import {
   readDiscovery,
   setStubAuthenticated,
   waitFor,
+  type JourneyWorld,
 } from '../helpers/world';
 
 /**
@@ -241,6 +242,14 @@ test(
         auth_token: '[redacted]',
       });
 
+      transcript.section('Desktop-owned server keeps release checks disabled');
+      const updateSnapshot = await fetchUpdateSnapshot(world);
+      expect(updateSnapshot.status).toBe('disabled');
+      expect(updateSnapshot.policy).toBe('off');
+      transcript.step(
+        'authenticated GET /api/v1/update on the app-owned child reported the disabled/off startup policy',
+      );
+
       const logText = persistAppLogs(handle, 'first-launch-app');
       if (discovery!.auth_token !== undefined && discovery!.auth_token !== '') {
         expect(logText).not.toContain(discovery!.auth_token);
@@ -293,6 +302,37 @@ function nonemptyLogExcerpt(logText: string, lines: number): string {
   return excerpt === ''
     ? '[no app/server process output was emitted; PID lifecycle assertions verified shutdown]'
     : excerpt;
+}
+
+/**
+ * Authenticated update-snapshot read against the app-owned bundled server,
+ * using the discovery record's bearer token like the other journeys' direct
+ * server calls.
+ */
+async function fetchUpdateSnapshot(
+  world: JourneyWorld,
+): Promise<{ status: unknown; policy: unknown }> {
+  const discovery = readDiscovery(world);
+  expect(discovery, 'server discovery record should exist').not.toBeNull();
+  const response = await fetch(`${discovery!.base_url}/api/v1/update`, {
+    headers: {
+      Accept: 'application/json',
+      'X-Agentico-Client': 'local',
+      ...(discovery!.auth_token === undefined
+        ? {}
+        : { Authorization: `Bearer ${discovery!.auth_token}` }),
+    },
+  });
+  const text = await response.text();
+  expect(response.ok, text).toBe(true);
+  const body = JSON.parse(text) as { update?: UpdateSnapshotFields };
+  expect(body.update, 'update snapshot should exist').toBeDefined();
+  return { status: body.update!.status, policy: body.update!.policy };
+}
+
+interface UpdateSnapshotFields {
+  status?: unknown;
+  policy?: unknown;
 }
 
 /** Tabs from the document body until the named button owns focus. */

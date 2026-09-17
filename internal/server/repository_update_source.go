@@ -24,6 +24,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
 // apiPathWorkspaceRepositoryUpdateSource is the bounded Update-from-origin
@@ -96,7 +97,15 @@ func (h *apiHandler) handleWorkspaceRepositoryUpdateSourceRoute(w http.ResponseW
 	// The attempt's lifetime is registered before any coordination wait so
 	// reconciliation reads and feature acceptance can wait it out: an
 	// admitted attempt that is still queued, running, or not yet reaped is
-	// never settled by a read of its old local SHA.
+	// never settled by a read of its old local SHA. The whole attempt owns
+	// a repository admission reservation for its full lifetime, and a
+	// closed boundary refuses the launch.
+	sourceReservation, err := h.acquireAdmission(workadmission.CategoryRepository)
+	if err != nil {
+		h.writeAdmissionRefusal(w, err)
+		return
+	}
+	defer sourceReservation.Release()
 	releaseAttempt := h.sourceUpdates.begin(identity)
 	defer releaseAttempt()
 

@@ -8648,8 +8648,12 @@ body {
   background: var(--color-scrim);
 }
 
-.restart-prompt {
+.restart-prompt__backdrop > [role='dialog'] {
   width: min(480px, 100%);
+}
+
+.restart-prompt {
+  width: 100%;
   border: 1px solid var(--accent);
   border-radius: var(--radius);
   padding: var(--space-5);

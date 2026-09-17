@@ -28,7 +28,7 @@ limitations under the License.
  * app-event subscriptions stay at the top so switching panes never re-runs
  * them.
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { retryAction, useConnectionState, useTheme } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import { WorkspaceDefaultsPanel } from './ConfigEditor';
@@ -38,6 +38,8 @@ import { CreateRepositorySection } from './CreateRepositorySection';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { BUNDLED_RUNTIME_LABEL } from '../components/ServerSwitcher';
 import { FieldError } from '../components/FieldError';
+import { SettingsConfirmationDialog } from './SettingsConfirmationDialog';
+import { ServerUpdateCard } from './ServerUpdateCard';
 import type { PaneFocusIntent } from './settingsPanes';
 import type {
   CanonicalError,
@@ -397,15 +399,19 @@ export function SettingsPanel({
     }
   }, []);
 
-  const handleOpenReleaseNotes = useCallback(async () => {
-    const url = updateState?.releaseNotesUrl;
-    if (url === undefined) return;
+  const handleOpenExternal = useCallback(async (url: string) => {
     try {
       await window.agentico.openExternal({ url });
     } catch (e: unknown) {
       setError(parseIpcError(e));
     }
-  }, [updateState?.releaseNotesUrl]);
+  }, []);
+
+  const handleOpenReleaseNotes = useCallback(async () => {
+    const url = updateState?.releaseNotesUrl;
+    if (url === undefined) return;
+    await handleOpenExternal(url);
+  }, [handleOpenExternal, updateState?.releaseNotesUrl]);
 
   const handleCopyUpdateCommand = useCallback((command: string) => {
     const clipboard: Clipboard | undefined = navigator.clipboard;
@@ -800,6 +806,15 @@ export function SettingsPanel({
           </div>
         </section>
       )}
+
+      {pane === 'updates' &&
+        connection.status === 'ready' &&
+        connection.ownership !== 'app-owned' && (
+          <ServerUpdateCard
+            serverLabel={connection.serverName ?? 'Connected server'}
+            onOpenExternal={(url) => void handleOpenExternal(url)}
+          />
+        )}
 
       {pane === 'notifications' && (
         <section className="settings-panel__section" aria-label="Notifications">
@@ -1578,63 +1593,6 @@ function ServersPane({
         </SettingsConfirmationDialog>
       )}
     </section>
-  );
-}
-
-function SettingsConfirmationDialog({
-  ariaLabel,
-  onCancel,
-  children,
-}: {
-  ariaLabel: string;
-  onCancel(): void;
-  children: ReactNode;
-}) {
-  const dialogRef = useRef<HTMLDivElement | null>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    previousFocusRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    requestAnimationFrame(() => {
-      const firstButton =
-        dialogRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)');
-      firstButton?.focus();
-    });
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onCancel();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const controls = [
-        ...(dialogRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? []),
-      ];
-      const first = controls[0];
-      const last = controls.at(-1);
-      if (first === undefined || last === undefined) return;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      previousFocusRef.current?.focus();
-    };
-  }, [onCancel]);
-
-  return (
-    <div className="restart-prompt__backdrop" role="presentation">
-      <div ref={dialogRef} role="dialog" aria-label={ariaLabel} aria-modal="true">
-        {children}
-      </div>
-    </div>
   );
 }
 

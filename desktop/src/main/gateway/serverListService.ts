@@ -50,6 +50,8 @@ export interface ServerListServiceDeps {
   knownServers(): ServersPrefs;
   /** Identity of the currently connected server, when any. */
   currentServerKey(): string | null;
+  /** Last known update availability of the connected server, when any. */
+  currentServerUpdate?(): ServerListRow['serverUpdate'] | undefined;
   /**
    * The app's own bundled runtime identity (key + runtime dir), resolved from
    * the runtime selection at call time. Its liveness is derived from the
@@ -158,6 +160,11 @@ export class ServerListService {
 
   private snapshot(): ServerListSnapshot {
     const currentKey = this.deps.currentServerKey();
+    const currentUpdate = this.deps.currentServerUpdate?.();
+    const updateFor = (serverKey: string): Partial<Pick<ServerListRow, 'serverUpdate'>> =>
+      serverKey === currentKey && currentUpdate !== undefined
+        ? { serverUpdate: currentUpdate }
+        : {};
     const rows: ServerListRow[] = [];
     const seen = new Set<string>();
     // The persisted nickname wins over both registry-record names and stored
@@ -183,6 +190,7 @@ export class ServerListService {
         runtimeDir: candidate.runtimeDir,
         current: candidate.serverKey === currentKey,
         health: this.health.get(candidate.serverKey) ?? 'probing',
+        ...updateFor(candidate.serverKey),
       });
     }
     for (const entry of this.deps.knownServers().known) {
@@ -198,6 +206,7 @@ export class ServerListService {
         runtimeDir: entry.runtimeDir,
         current: entry.serverKey === currentKey,
         health: this.health.get(entry.serverKey) ?? 'probing',
+        ...updateFor(entry.serverKey),
       });
     }
     const bundled = this.deps.bundledRuntime?.();

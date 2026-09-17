@@ -159,6 +159,8 @@ import {
   type RevealPathResult,
   type MainWindowUiState,
   type UpdateInstallNowRequest,
+  type ServerUpdateInstallRequest,
+  type ServerUpdateState,
   type UpdateState,
   type DiagnosticsSnapshot,
   ipcContracts,
@@ -292,6 +294,10 @@ export interface IpcServices {
   installUpdateWhenIdle(): Promise<UpdateState>;
   installUpdateNow(request: UpdateInstallNowRequest): Promise<UpdateState>;
   restartToUpdate(): Promise<UpdateState> | UpdateState;
+  getServerUpdate(): Promise<ServerUpdateState>;
+  checkServerUpdate(): Promise<ServerUpdateState>;
+  installServerUpdate(request: ServerUpdateInstallRequest): Promise<ServerUpdateState>;
+  cancelServerUpdate(): Promise<ServerUpdateState>;
   getDiagnostics(): Promise<DiagnosticsSnapshot> | DiagnosticsSnapshot;
   revealDiagnostics(): Promise<{ ok: boolean }>;
   clearDiagnostics(): Promise<DiagnosticsSnapshot> | DiagnosticsSnapshot;
@@ -536,6 +542,11 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.updatesInstallNow]: (_event, request: UpdateInstallNowRequest) =>
       services.installUpdateNow(request),
     [IPC_CHANNELS.updatesRestart]: () => services.restartToUpdate(),
+    [IPC_CHANNELS.serverUpdatesGet]: () => services.getServerUpdate(),
+    [IPC_CHANNELS.serverUpdatesCheck]: () => services.checkServerUpdate(),
+    [IPC_CHANNELS.serverUpdatesInstall]: (_event, request: ServerUpdateInstallRequest) =>
+      services.installServerUpdate(request),
+    [IPC_CHANNELS.serverUpdatesCancel]: () => services.cancelServerUpdate(),
     [IPC_CHANNELS.diagnosticsGet]: () => services.getDiagnostics(),
     [IPC_CHANNELS.diagnosticsReveal]: () => services.revealDiagnostics(),
     [IPC_CHANNELS.diagnosticsClear]: () => services.clearDiagnostics(),

@@ -9247,6 +9247,12 @@ body {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
+.settings-panel__server-kind[data-kind='update'] {
+  color: var(--attention);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--attention) 12%, transparent);
+}
+
 .settings-panel__server-status {
   flex-shrink: 0;
   color: var(--muted);

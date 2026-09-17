@@ -47,6 +47,8 @@ import type {
   Settings,
   ThemeInfo,
   UpdateState,
+  ServerUpdateInstallRequest,
+  ServerUpdateState,
   WindowPurpose,
 } from '../../../shared/ipc';
 import { defaultSettings } from '../../../shared/ipc';
@@ -475,6 +477,10 @@ export interface AgenticoMock {
     installUpdateWhenIdle: ReturnType<typeof vi.fn>;
     installUpdateNow: ReturnType<typeof vi.fn>;
     restartToUpdate: ReturnType<typeof vi.fn>;
+    getServerUpdate: ReturnType<typeof vi.fn>;
+    checkServerUpdate: ReturnType<typeof vi.fn>;
+    installServerUpdate: ReturnType<typeof vi.fn>;
+    cancelServerUpdate: ReturnType<typeof vi.fn>;
     getDiagnostics: ReturnType<typeof vi.fn>;
     revealDiagnostics: ReturnType<typeof vi.fn>;
     clearDiagnostics: ReturnType<typeof vi.fn>;
@@ -513,6 +519,7 @@ export function installAgenticoMock(
     createResult?: Partial<CreateRepositoryResult>;
     initializeResult?: Partial<InitializeRepositoryResult>;
     updates?: UpdateState;
+    serverUpdate?: ServerUpdateState;
     diagnostics?: DiagnosticsSnapshot;
     platform?: string;
     windowPurpose?: WindowPurpose;
@@ -536,6 +543,7 @@ export function installAgenticoMock(
   const sessionOutputListeners = new Set<(event: SessionOutputEvent) => void>();
   const sessions = overrides.sessions ?? [];
   const updates = overrides.updates ?? defaultUpdateState();
+  const serverUpdate = overrides.serverUpdate ?? defaultServerUpdateState();
   const diagnostics = overrides.diagnostics ?? defaultDiagnostics();
   const serversChangedListeners = new Set<(snapshot: ServerListSnapshot) => void>();
 
@@ -828,6 +836,17 @@ export function installAgenticoMock(
         message: 'Restarting to apply the verified update.',
       }),
     ),
+    getServerUpdate: vi.fn(() => Promise.resolve(serverUpdate)),
+    checkServerUpdate: vi.fn(() => Promise.resolve(serverUpdate)),
+    installServerUpdate: vi.fn((request: ServerUpdateInstallRequest) =>
+      Promise.resolve({
+        ...serverUpdate,
+        status: 'scheduled',
+        method: request.when,
+        targetVersion: serverUpdate.latestVersion,
+      }),
+    ),
+    cancelServerUpdate: vi.fn(() => Promise.resolve({ ...serverUpdate, status: 'available' })),
     restartToUpdate: vi.fn(() =>
       Promise.resolve({
         ...updates,
@@ -875,6 +894,20 @@ export function installAgenticoMock(
       for (const listener of serversChangedListeners) listener(snapshot);
     },
     serversChangedListenerCount: () => serversChangedListeners.size,
+  };
+}
+
+export function defaultServerUpdateState(
+  overrides: Partial<ServerUpdateState> = {},
+): ServerUpdateState {
+  return {
+    status: 'up_to_date',
+    policy: 'notify',
+    currentVersion: '0.1.0',
+    latestVersion: '0.1.0',
+    installation: 'tarball',
+    signature: 'unverified',
+    ...overrides,
   };
 }
 

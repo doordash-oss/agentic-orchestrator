@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 import type {
+  ServerUpdateState,
   AgenticoApi,
   AppEvent,
   AppRouteEvent,
@@ -2473,6 +2474,10 @@ function makeMockApi(
         status: 'installing' as const,
         message: 'Restarting to apply the verified update.',
       }),
+    getServerUpdate: () => Promise.resolve(serverUpdateStateForScene()),
+    checkServerUpdate: () => Promise.resolve(serverUpdateStateForScene()),
+    installServerUpdate: () => Promise.resolve(serverUpdateStateForScene()),
+    cancelServerUpdate: () => Promise.resolve(serverUpdateStateForScene()),
     getDiagnostics: () => Promise.resolve(diagnosticsSnapshotForScene(scene)),
     revealDiagnostics: () => Promise.resolve({ ok: true }),
     clearDiagnostics: () =>
@@ -2799,6 +2804,17 @@ function readyUpdateState(): UpdateState {
     nextCheckAt: '2026-07-20T16:00:00.000Z',
     releaseNotesUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
     message: 'A verified update is downloaded and ready to install.',
+  };
+}
+
+function serverUpdateStateForScene(): ServerUpdateState {
+  return {
+    status: 'up_to_date',
+    policy: 'notify',
+    currentVersion: '0.1.0',
+    latestVersion: '0.1.0',
+    installation: 'tarball',
+    signature: 'unverified',
   };
 }
 

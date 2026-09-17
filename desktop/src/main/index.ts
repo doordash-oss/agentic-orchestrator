@@ -67,6 +67,7 @@ import { RecoveryService } from './recovery';
 import { BulkService } from './bulk';
 import { AttentionService } from './attention';
 import { SessionService } from './serverClient';
+import { ServerUpdateService } from './serverUpdates';
 import { UploadService } from './uploads';
 import { randomUUID } from 'node:crypto';
 import { registerIpcHandlers, type IpcServices } from './ipcHandlers';
@@ -741,10 +742,12 @@ if (!hasSingleInstanceLock) {
     // The switcher popover's server list: union of registry scan and
     // persisted known-servers, health probed only while the popover signals
     // open. Rows are renderer-safe — no token or base URL crosses.
+    const serverUpdates = new ServerUpdateService(gateway);
     const serverList = new ServerListService({
       scanRegistry,
       knownServers: () => settings.get().servers,
       currentServerKey: () => gateway.getState().serverKey ?? null,
+      currentServerUpdate: () => serverUpdates.switcherBadge(),
       bundledRuntime: () => {
         const selected = gateway.getBundledRuntime();
         return {
@@ -1330,6 +1333,9 @@ if (!hasSingleInstanceLock) {
       onPush: (event) => {
         broadcastAppEvent(event);
         void refreshBackgroundState();
+        if (event.type === 'invalidated' && event.kind === 'update.updated') {
+          void serverUpdates.refresh().then(() => serverList.notifyConnectionChanged());
+        }
       },
     });
     stopStreams = () => {
@@ -1564,6 +1570,10 @@ if (!hasSingleInstanceLock) {
       installUpdateWhenIdle: () => updates.installWhenIdle(),
       installUpdateNow: (request) => updates.installNow(request),
       restartToUpdate: () => updates.restartToUpdate(),
+      getServerUpdate: () => serverUpdates.get(),
+      checkServerUpdate: () => serverUpdates.check(),
+      installServerUpdate: (request) => serverUpdates.install(request),
+      cancelServerUpdate: () => serverUpdates.cancel(),
       getDiagnostics: () => diagnostics.snapshot(),
       revealDiagnostics: async () => {
         // Snapshot first so reveal also enforces diagnostics root creation and pruning.

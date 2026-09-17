@@ -234,7 +234,7 @@ export async function fetchJson(
     token?: string;
     signal?: AbortSignal;
     timeoutMs: number;
-    method?: 'GET' | 'POST' | 'PATCH' | 'PUT';
+    method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
     body?: unknown;
     /** Tighter response bound for probe endpoints; defaults to the boundary cap. */
     maxResponseBytes?: number;

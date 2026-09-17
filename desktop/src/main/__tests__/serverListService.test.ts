@@ -145,6 +145,25 @@ const HEALTH = (base: string) => `${base}/api/v1/health`;
 const OK = { status: 200, body: { status: 'ok' } };
 
 describe('ServerListService list building', () => {
+  it('attaches the known update badge to the connected row only', () => {
+    const harness = makeHarness({
+      scanRegistry: () =>
+        scan(
+          candidate(ALPHA_KEY, 'alpha', 'http://127.0.0.1:51001'),
+          candidate(BETA_KEY, 'beta', 'http://127.0.0.1:51002'),
+        ),
+      currentServerKey: () => ALPHA_KEY,
+      currentServerUpdate: () => ({ available: true, latest: '2.0.0' }),
+    });
+
+    const rows = harness.service.list().rows;
+    expect(rows[0]).toMatchObject({
+      serverKey: ALPHA_KEY,
+      serverUpdate: { available: true, latest: '2.0.0' },
+    });
+    expect(rows[1]).not.toHaveProperty('serverUpdate');
+  });
+
   it('publishes connection changes without reopening network polling', () => {
     let currentKey: string | null = null;
     const harness = makeHarness({

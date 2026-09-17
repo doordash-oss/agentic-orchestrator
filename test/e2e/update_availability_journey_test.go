@@ -25,7 +25,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,39 +47,12 @@ const (
 	updateAvailVersionHigher = "1.2.0"
 )
 
-type updateAvailBinaries struct {
-	lower, higher string
-	lowerDigest   string
-	higherDigest  string
-}
-
-var (
-	updateAvailBuildMu sync.Mutex
-	updateAvailBuilt   *updateAvailBinaries
-)
-
-func updateAvailTestBinaries(t *testing.T) *updateAvailBinaries {
+func updateAvailTestBinaries(t *testing.T) *selfupdateBinaries {
 	t.Helper()
-	updateAvailBuildMu.Lock()
-	defer updateAvailBuildMu.Unlock()
-	if updateAvailBuilt != nil {
-		return updateAvailBuilt
-	}
-	root := selfupdateRepoRoot(t)
-	lower := filepath.Join(selfupdateBuildDir, "agentico-avail-lower")
-	higher := filepath.Join(selfupdateBuildDir, "agentico-avail-higher")
-	selfupdateGoBuild(t, root, lower, updateAvailVersionLower, true)
-	selfupdateGoBuild(t, root, higher, updateAvailVersionHigher, true)
-	b := &updateAvailBinaries{lower: lower, higher: higher}
-	var err error
-	if b.lowerDigest, err = selfupdate.DigestFile(lower); err != nil {
-		t.Fatalf("digest lower: %v", err)
-	}
-	if b.higherDigest, err = selfupdate.DigestFile(higher); err != nil {
-		t.Fatalf("digest higher: %v", err)
-	}
-	updateAvailBuilt = b
-	return b
+	lower := selfupdateBinary(t, updateAvailVersionLower, true)
+	higher := selfupdateBinary(t, updateAvailVersionHigher, true)
+	return &selfupdateBinaries{lower: lower.path, higher: higher.path,
+		lowerDigest: lower.digest, higherDigest: higher.digest}
 }
 
 // updateFeedFixture is the test-only metadata feed: a local, loopback
@@ -484,7 +456,11 @@ func TestUpdateAvailabilityRollbackOutcomeJourney(t *testing.T) {
 
 	// A later notify launch reads the durable outcome: the suppressed newest
 	// release stays visible as latest_version with failed/update_rolled_back.
-	notify := j.launch(driverArgs("notify")...)
+	// This launch only observes the previous outcome. Reusing the install
+	// trigger would start another transaction and erase in-memory feed history.
+	notify := j.launch("selfupdate-driver", "--config", j.configPath,
+		"--state-dir", j.stateDir, "--listen", "127.0.0.1:"+strconv.Itoa(port),
+		"--update-feed", fixture.server.URL, "--updates", "notify")
 	j.waitHealthy(notify, baseURL, updateAvailVersionLower, 30*time.Second)
 	disc = j.waitDiscovery(notify, 20*time.Second)
 	token = disc.AuthToken
@@ -574,9 +550,7 @@ func TestUpdateAvailabilityConfirmedJourney(t *testing.T) {
 	// The update confirms and keeps serving; only the cleanup fails.
 	j.waitHealthy(p, baseURL, updateAvailVersionHigher, 30*time.Second)
 	receipt := j.waitReceiptOutcome(selfupdate.OutcomeConfirmed, 30*time.Second)
-	if !p.stderrContains("selfupdate cleanup") {
-		t.Fatalf("no cleanup failure warning:\n%s", p.stderrTail())
-	}
+	p.waitStderr(t, "selfupdate cleanup")
 	disc := j.waitDiscovery(p, 20*time.Second)
 	token := disc.AuthToken
 

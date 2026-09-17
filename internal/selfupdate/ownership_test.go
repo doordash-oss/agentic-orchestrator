@@ -437,9 +437,8 @@ func TestProcessAlive(t *testing.T) {
 	}
 }
 
-func TestReadLatestReceiptKeyedLegacyPrecedence(t *testing.T) {
+func TestReadLatestReceipt(t *testing.T) {
 	keyedTx := "11111111111111111111111111111111"
-	legacyTx := "22222222222222222222222222222222"
 	writeReceiptBinding := func(t *testing.T, execPath, path, execPathInRecord, txID string) {
 		t.Helper()
 		if err := ensureLeaseDir(execPath); err != nil {
@@ -465,31 +464,6 @@ func TestReadLatestReceiptKeyedLegacyPrecedence(t *testing.T) {
 			t.Fatalf("ReadLatestReceipt = (%v, %v, %v), want keyed record", found, err, r.TransactionID)
 		}
 	})
-	t.Run("keyed takes precedence over legacy", func(t *testing.T) {
-		exec := installExecutable(t, "v1")
-		writeReceiptBinding(t, exec.Path, LegacyReceiptPath(exec.Path), exec.Path, legacyTx)
-		writeReceiptBinding(t, exec.Path, ReceiptPath(exec.Path), exec.Path, keyedTx)
-		r, found, err := ReadLatestReceipt(exec.Path)
-		if err != nil || !found || r.TransactionID != keyedTx {
-			t.Fatalf("ReadLatestReceipt = (%v, %v, tx %s), want the keyed record %s", found, err, r.TransactionID, keyedTx)
-		}
-	})
-	t.Run("legacy only", func(t *testing.T) {
-		exec := installExecutable(t, "v1")
-		writeReceiptBinding(t, exec.Path, LegacyReceiptPath(exec.Path), exec.Path, legacyTx)
-		r, found, err := ReadLatestReceipt(exec.Path)
-		if err != nil || !found || r.TransactionID != legacyTx {
-			t.Fatalf("ReadLatestReceipt = (%v, %v, tx %s), want the legacy record %s", found, err, r.TransactionID, legacyTx)
-		}
-	})
-	t.Run("legacy record of another executable is not ours", func(t *testing.T) {
-		exec := installExecutable(t, "v1")
-		writeReceiptBinding(t, exec.Path, LegacyReceiptPath(exec.Path), "/elsewhere/bin/agentico", legacyTx)
-		r, found, err := ReadLatestReceipt(exec.Path)
-		if err != nil || found {
-			t.Fatalf("ReadLatestReceipt = (%v, %v, %+v), want not found without error", found, err, r)
-		}
-	})
 	t.Run("keyed record of another executable errors", func(t *testing.T) {
 		exec := installExecutable(t, "v1")
 		writeReceiptBinding(t, exec.Path, ReceiptPath(exec.Path), "/elsewhere/bin/agentico", keyedTx)
@@ -507,6 +481,37 @@ func TestReadLatestReceiptKeyedLegacyPrecedence(t *testing.T) {
 		}
 		if _, found, err := ReadLatestReceipt(exec.Path); err == nil || found {
 			t.Fatalf("ReadLatestReceipt = (%v, %v), want an unreadable-record error", found, err)
+		}
+	})
+	t.Run("unkeyed file is not a receipt", func(t *testing.T) {
+		exec := installExecutable(t, "v1")
+		path := filepath.Join(LeaseDir(exec.Path), "receipt.json")
+		writeReceiptBinding(t, exec.Path, path, exec.Path, keyedTx)
+		if _, found, err := ReadLatestReceipt(exec.Path); err != nil || found {
+			t.Fatalf("unkeyed file used as receipt: found %v, err %v", found, err)
+		}
+		plan, err := InspectRecovery(exec, t.TempDir())
+		if err != nil || plan.Action != RecoveryActionNone {
+			t.Fatalf("unexpected recovery: %+v, %v", plan, err)
+		}
+		if _, err := ConfirmTransaction(exec.Path, keyedTx); err == nil {
+			t.Fatal("confirmed an unkeyed record")
+		}
+		r, err := ReadReceipt(path)
+		if err != nil || r.Outcome != OutcomePending {
+			t.Fatalf("unrelated file modified: %+v, %v", r, err)
+		}
+	})
+	t.Run("dangling receipt symlink is an error", func(t *testing.T) {
+		exec := installExecutable(t, "v1")
+		if err := ensureLeaseDir(exec.Path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), ReceiptPath(exec.Path)); err != nil {
+			t.Fatal(err)
+		}
+		if _, found, err := ReadLatestReceipt(exec.Path); err == nil || found {
+			t.Fatalf("dangling receipt ignored: %v, %v", found, err)
 		}
 	})
 	t.Run("no record at all", func(t *testing.T) {

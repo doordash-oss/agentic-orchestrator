@@ -222,7 +222,7 @@ func startStopJourneyChat(t *testing.T, baseURL, token string) {
 // installStopServerFixture prepares one serving runtime on a free port: the
 // lower-version installed binary, a signed fixture release for the target,
 // a scripted provider on PATH, and a health/discovery handshake.
-func installStopServerFixture(t *testing.T, stubborn bool, extraDriverFlags ...string) (*selfupdateJourney, *updateAvailBinaries, *releaseServeFixture, *driverProcess, string, string, string) {
+func installStopServerFixture(t *testing.T, stubborn bool, extraDriverFlags ...string) (*selfupdateJourney, *selfupdateBinaries, *releaseServeFixture, *driverProcess, string, string, string) {
 	t.Helper()
 	j, bins := newReleaseInstallJourney(t)
 	f := newReleaseServeFixture(t)

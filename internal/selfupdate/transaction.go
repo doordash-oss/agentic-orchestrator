@@ -27,15 +27,57 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// TxSeams are failure-injection points for transaction steps. A nil field
-// means the real implementation runs.
-type TxSeams struct {
+// FileOps supplies filesystem and clock overrides shared by installation and
+// recovery. Nil fields use the real implementation.
+type FileOps struct {
 	Copy         func(dst, src string, mode uint32) error
 	SyncFile     func(path string) error
 	SyncDir      func(path string) error
 	WriteReceipt func(path string, r Receipt) error
 	Rename       func(oldpath, newpath string) error
 	Now          func() time.Time
+}
+
+func (s FileOps) copy(dst, src string, mode uint32) error {
+	if s.Copy != nil {
+		return s.Copy(dst, src, mode)
+	}
+	return CopyFile(dst, src, mode)
+}
+
+func (s FileOps) syncFile(path string) error {
+	if s.SyncFile != nil {
+		return s.SyncFile(path)
+	}
+	return SyncFile(path)
+}
+
+func (s FileOps) syncDir(path string) error {
+	if s.SyncDir != nil {
+		return s.SyncDir(path)
+	}
+	return SyncDir(path)
+}
+
+func (s FileOps) rename(oldpath, newpath string) error {
+	if s.Rename != nil {
+		return s.Rename(oldpath, newpath)
+	}
+	return os.Rename(oldpath, newpath)
+}
+
+func (s FileOps) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+func (s FileOps) writeReceipt(path string, receipt Receipt) error {
+	if s.WriteReceipt != nil {
+		return s.WriteReceipt(path, receipt)
+	}
+	return writeReceiptAtomic(path, receipt, receipt.UpdatedAt)
 }
 
 // BeginOptions carries the runtime identity and candidate inputs for one
@@ -47,7 +89,6 @@ type BeginOptions struct {
 	CandidatePath                string
 	CandidateDigest              string
 	Bind                         BindEndpoint
-	ReceiptDest                  string
 }
 
 // Transaction is a prepared, durable replacement of one installed executable.
@@ -55,7 +96,7 @@ type BeginOptions struct {
 type Transaction struct {
 	exec    Executable
 	opts    BeginOptions
-	seams   TxSeams
+	seams   FileOps
 	txDir   string
 	receipt Receipt
 	// releaseProvenance, when set by BeginVerifiedRelease, re-runs the full
@@ -63,48 +104,31 @@ type Transaction struct {
 	releaseProvenance *releaseProvenance
 }
 
-func (t *Transaction) copy(dst, src string, mode uint32) error {
-	if t.seams.Copy != nil {
-		return t.seams.Copy(dst, src, mode)
+// stageCopy persists a fresh copy and its directory entry before recording identity.
+func (s FileOps) stageCopy(dst, src string, mode uint32) (FileIdentity, error) {
+	if err := s.copy(dst, src, mode); err != nil {
+		return FileIdentity{}, err
 	}
-	return CopyFile(dst, src, mode)
+	if err := s.syncFile(dst); err != nil {
+		return FileIdentity{}, err
+	}
+	if err := s.syncDir(filepath.Dir(dst)); err != nil {
+		return FileIdentity{}, err
+	}
+	return StatFile(dst)
 }
 
-func (t *Transaction) syncFile(path string) error {
-	if t.seams.SyncFile != nil {
-		return t.seams.SyncFile(path)
+func restoreInstalledModeAndOwner(path string, r Receipt) error {
+	if err := os.Chmod(path, os.FileMode(r.OriginalMode)); err != nil {
+		return fmt.Errorf("restore installed mode: %w", err)
 	}
-	return SyncFile(path)
-}
-
-func (t *Transaction) syncDir(path string) error {
-	if t.seams.SyncDir != nil {
-		return t.seams.SyncDir(path)
+	// Never elevate or take ownership we did not start with.
+	if r.OriginalUID == os.Geteuid() && r.OriginalGID == os.Getegid() {
+		if err := os.Chown(path, r.OriginalUID, r.OriginalGID); err != nil {
+			return fmt.Errorf("restore installed ownership: %w", err)
+		}
 	}
-	return SyncDir(path)
-}
-
-func (t *Transaction) rename(oldpath, newpath string) error {
-	if t.seams.Rename != nil {
-		return t.seams.Rename(oldpath, newpath)
-	}
-	return os.Rename(oldpath, newpath)
-}
-
-func (t *Transaction) now() time.Time {
-	if t.seams.Now != nil {
-		return t.seams.Now()
-	}
-	return time.Now()
-}
-
-func (t *Transaction) writeReceipt() error {
-	if t.seams.WriteReceipt != nil {
-		return t.seams.WriteReceipt(t.opts.ReceiptDest, t.receipt)
-	}
-	// The receipt always carries a current UpdatedAt; the now parameter only
-	// backfills receipts that were never stamped.
-	return writeReceiptAtomic(t.opts.ReceiptDest, t.receipt, t.receipt.UpdatedAt)
+	return nil
 }
 
 // CopyFile copies src into a newly created dst with exactly the requested
@@ -210,15 +234,12 @@ func newTransactionID() (string, error) {
 // private transaction dir, copies and syncs a rollback backup (0600) and a
 // staged candidate (original mode), and persists a pending backup-ready
 // receipt. Any failure leaves the installed executable exactly as it was.
-func Begin(exec Executable, opts BeginOptions, seams TxSeams) (*Transaction, error) {
+func Begin(exec Executable, opts BeginOptions, seams FileOps) (*Transaction, error) {
 	if opts.CandidatePath == "" {
 		return nil, errors.New("candidate path is empty")
 	}
 	if opts.CandidateDigest == "" {
 		return nil, errors.New("candidate digest is empty")
-	}
-	if opts.ReceiptDest == "" {
-		return nil, errors.New("receipt destination is empty")
 	}
 	matches, err := exec.PathStillMatches()
 	if err != nil {
@@ -245,7 +266,7 @@ func Begin(exec Executable, opts BeginOptions, seams TxSeams) (*Transaction, err
 	if err := os.Chmod(t.txDir, 0o700); err != nil {
 		return nil, fmt.Errorf("repair transaction dir permissions: %w", err)
 	}
-	if err := t.syncDir(LeaseDir(exec.Path)); err != nil {
+	if err := t.seams.syncDir(LeaseDir(exec.Path)); err != nil {
 		return nil, err
 	}
 	// Durable staging ownership precedes every staged byte and the install
@@ -253,7 +274,7 @@ func Begin(exec Executable, opts BeginOptions, seams TxSeams) (*Transaction, err
 	// be owned by a later launch, and a dir whose record did is recognized
 	// abandoned staging once its transaction is settled or gone. The stamp
 	// is captured once so the staging record and the receipt share it.
-	startedAt := t.now()
+	startedAt := t.seams.now()
 	if err := writeStagingRecord(t.txDir, StagingRecord{
 		TransactionID:    txID,
 		ExecutablePath:   exec.Path,
@@ -264,31 +285,13 @@ func Begin(exec Executable, opts BeginOptions, seams TxSeams) (*Transaction, err
 	}
 
 	backupPath := filepath.Join(t.txDir, backupName)
-	if err := t.copy(backupPath, exec.Path, 0o600); err != nil {
-		return nil, err
-	}
-	if err := t.syncFile(backupPath); err != nil {
-		return nil, err
-	}
-	if err := t.syncDir(t.txDir); err != nil {
-		return nil, err
-	}
-	backupID, err := StatFile(backupPath)
+	backupID, err := t.seams.stageCopy(backupPath, exec.Path, 0o600)
 	if err != nil {
 		return nil, err
 	}
 
 	stagingPath := filepath.Join(t.txDir, stagedName)
-	if err := t.copy(stagingPath, opts.CandidatePath, exec.ID.Mode); err != nil {
-		return nil, err
-	}
-	if err := t.syncFile(stagingPath); err != nil {
-		return nil, err
-	}
-	if err := t.syncDir(t.txDir); err != nil {
-		return nil, err
-	}
-	stagingID, err := StatFile(stagingPath)
+	stagingID, err := t.seams.stageCopy(stagingPath, opts.CandidatePath, exec.ID.Mode)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +323,7 @@ func Begin(exec Executable, opts BeginOptions, seams TxSeams) (*Transaction, err
 		Outcome:        OutcomePending,
 		Phase:          PhaseBackupReady,
 	}
-	if err := t.writeReceipt(); err != nil {
+	if err := t.seams.writeReceipt(ReceiptPath(t.exec.Path), t.receipt); err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -343,7 +346,7 @@ func (t *Transaction) VerifyInstalledUnchanged() error {
 	if err != nil {
 		return err
 	}
-	if id.Dev != t.receipt.ExecutableID.Dev || id.Ino != t.receipt.ExecutableID.Ino || id.Size != t.receipt.ExecutableID.Size {
+	if !id.SameFile(t.receipt.ExecutableID) {
 		return fmt.Errorf("installed executable %s identity changed since transaction start", t.exec.Path)
 	}
 	digest, err := DigestFile(t.exec.Path)
@@ -384,7 +387,7 @@ func (t *Transaction) Commit() error {
 	if err != nil {
 		return err
 	}
-	if stagingID.Dev != t.receipt.StagingID.Dev || stagingID.Ino != t.receipt.StagingID.Ino || stagingID.Size != t.receipt.StagingID.Size {
+	if !stagingID.SameFile(t.receipt.StagingID) {
 		return fmt.Errorf("staged candidate %s changed since preparation", t.receipt.StagingPath)
 	}
 	if filepath.Dir(t.receipt.StagingPath) != t.txDir {
@@ -401,7 +404,7 @@ func (t *Transaction) Commit() error {
 		return fmt.Errorf("staged candidate mode %o does not match original %o", stagingID.Mode, t.receipt.OriginalMode)
 	}
 
-	if err := t.rename(t.receipt.StagingPath, t.exec.Path); err != nil {
+	if err := t.seams.rename(t.receipt.StagingPath, t.exec.Path); err != nil {
 		return err
 	}
 	// Write-ahead honesty: the receipt phase only advances to
@@ -409,22 +412,16 @@ func (t *Transaction) Commit() error {
 	// directory sync returns an error while the receipt still says
 	// backup-ready, even though the installed bytes were replaced: the
 	// durable record must never claim a phase that is not yet on disk.
-	if err := t.syncDir(filepath.Dir(t.exec.Path)); err != nil {
+	if err := t.seams.syncDir(filepath.Dir(t.exec.Path)); err != nil {
 		return err
 	}
-	if err := os.Chmod(t.exec.Path, os.FileMode(t.receipt.OriginalMode)); err != nil {
-		return fmt.Errorf("restore installed mode: %w", err)
+	if err := restoreInstalledModeAndOwner(t.exec.Path, t.receipt); err != nil {
+		return err
 	}
-	// Chown only to values we already hold: never elevate or take ownership
-	// we did not start with.
-	if t.receipt.OriginalUID == os.Geteuid() && t.receipt.OriginalGID == os.Getegid() {
-		if err := os.Chown(t.exec.Path, t.receipt.OriginalUID, t.receipt.OriginalGID); err != nil {
-			return fmt.Errorf("restore installed ownership: %w", err)
-		}
-	}
+
 	t.receipt.Phase = PhaseReplacementComplete
-	t.receipt.UpdatedAt = t.now()
-	return t.writeReceipt()
+	t.receipt.UpdatedAt = t.seams.now()
+	return t.seams.writeReceipt(ReceiptPath(t.exec.Path), t.receipt)
 }
 
 // RecordError persists a sanitized error message into the receipt without
@@ -432,16 +429,16 @@ func (t *Transaction) Commit() error {
 // progress marker.
 func (t *Transaction) RecordError(errMsg string, secrets ...string) error {
 	t.receipt.Error = SanitizeError(errMsg, secrets...)
-	t.receipt.UpdatedAt = t.now()
-	return t.writeReceipt()
+	t.receipt.UpdatedAt = t.seams.now()
+	return t.seams.writeReceipt(ReceiptPath(t.exec.Path), t.receipt)
 }
 
 // Confirm marks the transaction confirmed. Callers must only confirm after
 // the replacement image has fully started and published its presence.
 func (t *Transaction) Confirm() error {
 	t.receipt.Outcome = OutcomeConfirmed
-	t.receipt.UpdatedAt = t.now()
-	return t.writeReceipt()
+	t.receipt.UpdatedAt = t.seams.now()
+	return t.seams.writeReceipt(ReceiptPath(t.exec.Path), t.receipt)
 }
 
 // validTransactionID reports whether txID has the exact shape newTransactionID
@@ -463,8 +460,7 @@ func validTransactionID(txID string) bool {
 
 // ConfirmTransaction durably records outcome=confirmed for the latest
 // receipt of the executable when it still matches txID and is pending. The
-// keyed receipt path is preferred, with the Phase 1 legacy path as fallback;
-// the settlement is written back to the path the record was found at.
+// receipt is stored only at the executable-specific path.
 // Mismatched or advanced receipts are an error — confirmation is write-once,
 // so a caller can never confirm another process's transaction or re-confirm
 // a settled one.
@@ -472,14 +468,14 @@ func ConfirmTransaction(execPath, txID string) (Receipt, error) {
 	if !validTransactionID(txID) {
 		return Receipt{}, fmt.Errorf("invalid transaction id %q", txID)
 	}
-	r, loc, found, err := locateLatestReceipt(execPath)
+	r, found, err := ReadLatestReceipt(execPath)
 	if err != nil || !found {
 		if err == nil {
 			err = fmt.Errorf("no receipt binds to executable %s", execPath)
 		}
 		return Receipt{}, err
 	}
-	path := loc.Path
+	path := ReceiptPath(execPath)
 	if r.TransactionID != txID {
 		return Receipt{}, fmt.Errorf("latest receipt transaction %q does not match %q", r.TransactionID, txID)
 	}
@@ -491,11 +487,6 @@ func ConfirmTransaction(execPath, txID string) (Receipt, error) {
 	if err := writeReceiptAtomic(path, r, r.UpdatedAt); err != nil {
 		return Receipt{}, err
 	}
-	if loc.Legacy {
-		// Keep historical binaries observing the settlement.
-		if err := writeReceiptAtomic(ReceiptPath(execPath), r, r.UpdatedAt); err != nil {
-			return Receipt{}, err
-		}
-	}
+
 	return r, nil
 }

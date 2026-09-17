@@ -189,7 +189,7 @@ func newHandoffFixture(t *testing.T, commit bool) *handoffFixture {
 		t.Fatalf("AcquireLease: %v", err)
 	}
 
-	tx, err := Begin(f.exec, f.opts, TxSeams{})
+	tx, err := Begin(f.exec, f.opts, FileOps{})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -221,7 +221,7 @@ func newHandoffFixture(t *testing.T, commit bool) *handoffFixture {
 		FromVersion:    f.opts.FromVersion,
 		ToVersion:      f.opts.ToVersion,
 		Bind:           f.opts.Bind,
-		ReceiptPath:    f.opts.ReceiptDest,
+		ReceiptPath:    ReceiptPath(f.exec.Path),
 		AuthTokenPath:  filepath.Join(f.runtimeDir, "auth-token"),
 	}
 	return &handoffFixture{f: f, lease: lease, tx: tx, newExec: newExec, metadata: metadata}
@@ -294,12 +294,12 @@ func TestAdoptHandoffFailureMatrix(t *testing.T) {
 			h.newExec.Digest = h.metadata.NewDigest
 		}},
 		{"wrong outcome", true, func(t *testing.T, h *handoffFixture) {
-			r, err := ReadReceipt(h.f.opts.ReceiptDest)
+			r, err := ReadReceipt(ReceiptPath(h.f.exec.Path))
 			if err != nil {
 				t.Fatalf("ReadReceipt: %v", err)
 			}
 			r.Outcome = OutcomeConfirmed
-			if err := writeReceiptAtomic(h.f.opts.ReceiptDest, r, r.UpdatedAt); err != nil {
+			if err := writeReceiptAtomic(ReceiptPath(h.f.exec.Path), r, r.UpdatedAt); err != nil {
 				t.Fatalf("tamper receipt: %v", err)
 			}
 		}},

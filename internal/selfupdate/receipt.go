@@ -22,15 +22,10 @@ import (
 	"time"
 )
 
-// receiptSchemaVersion is the on-disk schema of Receipt. Phase 2 recovery
-// metadata is deliberately additive on schema 1: historical binaries ignore
-// the new fields, and newer binaries must never assume an arbitrary
-// historical build understands them.
+// receiptSchemaVersion is the on-disk schema of Receipt.
 const receiptSchemaVersion = 1
 
-// Outcome is the durable result of a transaction. Only pending and confirmed
-// are produced in this slice; rolled_back is vocabulary for a later phase and
-// must never be reported without an actually performed rollback.
+// Outcome is the durable result of a transaction.
 type Outcome string
 
 const (

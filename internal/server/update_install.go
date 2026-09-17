@@ -496,9 +496,10 @@ func (c *updateCoordinator) clearInstallOp(op *installOperation) {
 func (c *updateCoordinator) logInstallFailure(op *installOperation, result string) {
 	c.mu.Lock()
 	revision := c.commitRevisionLocked()
+	status := c.snapshotStatusLocked()
 	c.mu.Unlock()
 	if revision != "" {
-		c.emitTransition(updateStatusFailed, c.snapshotStatusLocked(), result)
+		c.emitTransition(updateStatusFailed, status, result)
 	}
 }
 

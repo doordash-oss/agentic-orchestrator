@@ -251,58 +251,21 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 	driver.updateFeedURL = ""
 	driver.fixtureFeed = nil
 	driver.installRelease = false
+	serverArgs := []string{cliSubcommandServer}
 	rest := args[1:]
 	for i := 0; i < len(rest); i++ {
 		arg := rest[i]
 		switch arg {
-		case "--config":
+		case "--config", "--state-dir", "--providers", "--listen", "--name", "--updates":
 			if i+1 >= len(rest) {
-				return opts, true, fmt.Errorf("--config requires a value")
+				return opts, true, fmt.Errorf("%s requires a value", arg)
 			}
 			i++
-			opts.configPath = rest[i]
-		case "--state-dir":
-			if i+1 >= len(rest) {
-				return opts, true, fmt.Errorf("--state-dir requires a value")
-			}
-			i++
-			opts.stateDir = rest[i]
-		case "--dangerously-skip-permissions":
-			opts.dangerouslySkipPerms = true
-		case "--providers":
-			if i+1 >= len(rest) {
-				return opts, true, fmt.Errorf("--providers requires a value")
-			}
-			i++
-			opts.enabledProviders = strings.Split(rest[i], ",")
-		case "--refresh-models":
-			opts.refreshModels = true
-		case "--listen":
-			if i+1 >= len(rest) {
-				return opts, true, fmt.Errorf("--listen requires a value")
-			}
-			i++
-			opts.listenAddr = rest[i]
-		case "--name":
-			if i+1 >= len(rest) {
-				return opts, true, fmt.Errorf("--name requires a value")
-			}
-			i++
-			opts.serverName = rest[i]
-		case "--updates":
-			if i+1 >= len(rest) {
-				return opts, true, fmt.Errorf("--updates requires a value")
-			}
-			i++
-			opts.updatesPolicy = rest[i]
-		case "--help", "-h":
-			opts.mode = launchModeHelp
-			driver.serverFlags = opts
-			return opts, true, nil
-		case "--version", "-v":
-			opts.mode = launchModeVersion
-			driver.serverFlags = opts
-			return opts, true, nil
+			serverArgs = append(serverArgs, arg, rest[i])
+		case "--help", "-h", "--version", "-v":
+			parsed, err := parseLaunchArgs(append(serverArgs, arg))
+			driver.serverFlags = parsed
+			return parsed, true, err
 		case "--candidate":
 			if i+1 >= len(rest) {
 				return opts, true, fmt.Errorf("--candidate requires a value")
@@ -416,20 +379,13 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 			i++
 			driver.failStopDetection = rest[i]
 		default:
-			if strings.HasPrefix(arg, "--updates=") {
-				opts.updatesPolicy = strings.TrimPrefix(arg, "--updates=")
-				continue
-			}
-			if strings.HasPrefix(arg, "-") {
-				return opts, true, fmt.Errorf("unknown flag: %s", arg)
-			}
-			return opts, true, fmt.Errorf("unknown selfupdate-driver argument: %s", arg)
+			serverArgs = append(serverArgs, arg)
 		}
 	}
-	if opts.updatesPolicy != "" {
-		if _, ok := selfupdate.ParsePolicyValue(opts.updatesPolicy); !ok {
-			return opts, true, fmt.Errorf("invalid --updates value %q: expected off, notify, or auto", opts.updatesPolicy)
-		}
+	var err error
+	opts, err = parseLaunchArgs(serverArgs)
+	if err != nil {
+		return opts, true, err
 	}
 	if driver.barrier != "" && driver.anyFailArmed() {
 		return opts, true, fmt.Errorf("--barrier and --fail-at are mutually exclusive")
@@ -444,21 +400,6 @@ func parseDriverArgs(args []string) (launchOptions, bool, error) {
 		if driver.candidatePath != "" {
 			return opts, true, fmt.Errorf("--install-release cannot be combined with --candidate: the release path only accepts verifier-produced provenance")
 		}
-	}
-	// The same parse-time normalization the server path applies, so bad
-	// values fail before any socket is opened.
-	if opts.listenAddr != "" {
-		resolved, err := serverruntime.ResolveListenAddr(opts.listenAddr)
-		if err != nil {
-			return opts, true, err
-		}
-		opts.listenAddr = resolved
-	}
-	if name := strings.TrimSpace(opts.serverName); name != "" {
-		if err := serverruntime.ValidateServerName(name); err != nil {
-			return opts, true, fmt.Errorf("invalid --name value: %w", err)
-		}
-		opts.serverName = name
 	}
 	armDriverSeams()
 	driver.serverFlags = opts
@@ -523,11 +464,11 @@ func armDriverSeams() {
 				SyncDir: func(string) error { return errors.New("injected cleanup sync failure") },
 			}
 		}
-		selfUpdateRecoverySeams = recoverySeamsForFailAt(driver.failAt)
+		selfUpdateFileOps = recoverySeamsForFailAt(driver.failAt)
 	}
 	if driver.barrier != "" {
 		selfUpdateRecoveryBarrier = barrierHook
-		selfUpdateRecoverySeams = recoverySeamsForBarrier(driver.barrier)
+		selfUpdateFileOps = recoverySeamsForBarrier(driver.barrier)
 	}
 }
 
@@ -585,8 +526,8 @@ func barrierSeam(stage string, run func() error) error {
 // recoverySeamsForBarrier wraps the recovery seams so the armed barrier
 // blocks at the matching deterministic stage inside the production
 // restoration.
-func recoverySeamsForBarrier(stage string) selfupdate.RecoverySeams {
-	return selfupdate.RecoverySeams{
+func recoverySeamsForBarrier(stage string) selfupdate.FileOps {
+	return selfupdate.FileOps{
 		WriteReceipt: func(path string, r selfupdate.Receipt) error {
 			return barrierSeam(barrierStageForReceiptWrite(r), func() error {
 				return selfupdate.WriteReceiptDurable(path, r)
@@ -631,8 +572,8 @@ func barrierStageForReceiptWrite(r selfupdate.Receipt) string {
 // recoverySeamsForFailAt builds the recovery failure seams for the armed
 // injection points: each armed point fails exactly once at its boundary,
 // leaving the durable receipt truthful for the furthest completed step.
-func recoverySeamsForFailAt(points map[string]bool) selfupdate.RecoverySeams {
-	seams := selfupdate.RecoverySeams{}
+func recoverySeamsForFailAt(points map[string]bool) selfupdate.FileOps {
+	seams := selfupdate.FileOps{}
 	if points["restore-attempt-write"] {
 		seams.WriteReceipt = func(path string, r selfupdate.Receipt) error {
 			if r.Outcome == selfupdate.OutcomePending && r.RecoveryAttemptID != "" && r.RecoveryKind == selfupdate.RecoveryKindRestore {
@@ -894,7 +835,6 @@ func (replaceJourney) run(r serverRun) int {
 		CandidatePath:   driver.candidatePath,
 		CandidateDigest: digest,
 		Bind:            bind,
-		ReceiptDest:     selfupdate.ReceiptPath(r.boot.selfUpdateExec.Path),
 	}, seamsForFailAt(driver.failAt))
 	if err != nil {
 		// Injected preparation failures (backup-sync, receipt-write) land
@@ -1087,7 +1027,6 @@ func (releaseJourney) run(r serverRun) int {
 			AdvertiseURL: r.server.BaseURL(),
 			Policy:       r.server.RuntimePolicy(),
 		},
-		ReceiptDest: selfupdate.ReceiptPath(r.boot.selfUpdateExec.Path),
 	}, stageOpts, seamsForFailAt(driver.failAt))
 	if err != nil {
 		// Injected preparation failures and the substitution injection land
@@ -1120,11 +1059,11 @@ func driverBarrierJourney(stage string) {
 // failure is attributable to the backup alone. "receipt-write" fails the
 // pending receipt write. "commit-receipt" is a barrier, not a failure: it
 // blocks inside Commit after the rename, before the receipt advances.
-func seamsForFailAt(points map[string]bool) selfupdate.TxSeams {
+func seamsForFailAt(points map[string]bool) selfupdate.FileOps {
 	switch {
 	case points["backup-sync"]:
 		calls := 0
-		return selfupdate.TxSeams{SyncFile: func(path string) error {
+		return selfupdate.FileOps{SyncFile: func(path string) error {
 			calls++
 			if calls == 1 {
 				return errors.New("injected backup sync failure")
@@ -1132,13 +1071,13 @@ func seamsForFailAt(points map[string]bool) selfupdate.TxSeams {
 			return selfupdate.SyncFile(path)
 		}}
 	case points["receipt-write"]:
-		return selfupdate.TxSeams{WriteReceipt: func(string, selfupdate.Receipt) error {
+		return selfupdate.FileOps{WriteReceipt: func(string, selfupdate.Receipt) error {
 			return errors.New("injected receipt write failure")
 		}}
 	default:
 		if driver.barrier == "commit-receipt" {
 			calls := 0
-			return selfupdate.TxSeams{WriteReceipt: func(path string, r selfupdate.Receipt) error {
+			return selfupdate.FileOps{WriteReceipt: func(path string, r selfupdate.Receipt) error {
 				calls++
 				if calls >= 2 {
 					// Begin wrote the pending receipt (call 1); this is
@@ -1148,7 +1087,7 @@ func seamsForFailAt(points map[string]bool) selfupdate.TxSeams {
 				return selfupdate.WriteReceiptDurable(path, r)
 			}}
 		}
-		return selfupdate.TxSeams{}
+		return selfupdate.FileOps{}
 	}
 }
 

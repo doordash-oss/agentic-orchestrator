@@ -79,10 +79,10 @@ var selfUpdateHealthWaitFn func(urls []string) error
 // confirm.
 var selfUpdateConfirmFn func(execPath, txID string) (selfupdate.Receipt, error)
 
-// selfUpdateRecoverySeams lets a tagged build inject recovery persistence
+// selfUpdateFileOps lets a tagged build inject recovery persistence
 // failures and deterministic barriers. The zero value runs the real
 // implementation for every seam.
-var selfUpdateRecoverySeams selfupdate.RecoverySeams
+var selfUpdateFileOps selfupdate.FileOps
 
 // selfUpdateRecoveryBarrier lets a tagged build block production recovery at
 // deterministic stages for kill journeys. Nil in ordinary builds.
@@ -186,19 +186,12 @@ type serverJourney interface {
 }
 
 // serverRun hands one fully-booted server to a serverJourney. It carries the
-// bootstrap, the live server handle, and — for the confirm journey — the
-// adopted handoff state validated before bootstrap.
+// bootstrap, live server handle, and registry entry.
 type serverRun struct {
-	boot           *runtimeBootstrap
-	server         *serverruntime.RuntimeServer
-	authToken      string
-	resolvedName   string
-	policy         serverruntime.LaunchPolicy
-	registryDir    string
-	listen         serverruntime.ListenResolution
-	adoptedLease   *selfupdate.Lease
-	adoptedHandoff selfupdate.HandoffMetadata
-	adoptedReceipt selfupdate.Receipt
+	boot        *runtimeBootstrap
+	server      *serverruntime.RuntimeServer
+	authToken   string
+	registryDir string
 }
 
 // handoffEnvPresent reports whether the handoff entry exists in env,

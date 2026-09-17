@@ -52,7 +52,6 @@ func newTxFixture(t *testing.T) *txFixture {
 			AdvertiseURL: "http://127.0.0.1:54321",
 			Policy:       "loopback",
 		},
-		ReceiptDest: ReceiptPath(exec.Path),
 	}
 	return &txFixture{
 		runtimeDir:      runtimeDir,
@@ -80,14 +79,14 @@ func assertInstalledIntact(t *testing.T, f *txFixture) {
 
 func assertNoReceipt(t *testing.T, f *txFixture) {
 	t.Helper()
-	if _, err := os.Stat(f.opts.ReceiptDest); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(ReceiptPath(f.exec.Path)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("receipt must not exist, stat error = %v", err)
 	}
 }
 
 func TestBeginPreparesDurableBackupAndStaging(t *testing.T) {
 	f := newTxFixture(t)
-	tx, err := Begin(f.exec, f.opts, TxSeams{})
+	tx, err := Begin(f.exec, f.opts, FileOps{})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -107,7 +106,7 @@ func TestBeginPreparesDurableBackupAndStaging(t *testing.T) {
 		t.Fatalf("receipt executable identity = %+v mode %o", receipt.ExecutableID, receipt.OriginalMode)
 	}
 
-	onDisk, err := ReadReceipt(f.opts.ReceiptDest)
+	onDisk, err := ReadReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatalf("ReadReceipt: %v", err)
 	}
@@ -190,7 +189,7 @@ func TestBeginRejectsUnsafeCandidates(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newTxFixture(t)
 			f.opts.CandidatePath, f.opts.CandidateDigest = tc.candFn(t)
-			if _, err := Begin(f.exec, f.opts, TxSeams{}); err == nil {
+			if _, err := Begin(f.exec, f.opts, FileOps{}); err == nil {
 				t.Fatal("Begin accepted unsafe candidate")
 			}
 			assertInstalledIntact(t, f)
@@ -202,7 +201,7 @@ func TestBeginRejectsUnsafeCandidates(t *testing.T) {
 func TestBeginRejectsReplacedInstalled(t *testing.T) {
 	f := newTxFixture(t)
 	replaceFile(t, f.installedPath, "externally-replaced")
-	if _, err := Begin(f.exec, f.opts, TxSeams{}); err == nil {
+	if _, err := Begin(f.exec, f.opts, FileOps{}); err == nil {
 		t.Fatal("Begin accepted a replaced installed executable")
 	}
 	assertNoReceipt(t, f)
@@ -212,12 +211,12 @@ func TestBeginFailureInjectionLeavesInstalledIntact(t *testing.T) {
 	boom := errors.New("injected boom")
 	tests := []struct {
 		name  string
-		seams TxSeams
+		seams FileOps
 	}{
-		{"copy backup", TxSeams{Copy: func(string, string, uint32) error { return boom }}},
-		{"sync file", TxSeams{SyncFile: func(string) error { return boom }}},
-		{"sync dir", TxSeams{SyncDir: func(string) error { return boom }}},
-		{"write receipt", TxSeams{WriteReceipt: func(string, Receipt) error { return boom }}},
+		{"copy backup", FileOps{Copy: func(string, string, uint32) error { return boom }}},
+		{"sync file", FileOps{SyncFile: func(string) error { return boom }}},
+		{"sync dir", FileOps{SyncDir: func(string) error { return boom }}},
+		{"write receipt", FileOps{WriteReceipt: func(string, Receipt) error { return boom }}},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -234,7 +233,7 @@ func TestBeginFailureInjectionLeavesInstalledIntact(t *testing.T) {
 
 func TestCommitReplacesInstalledAtomically(t *testing.T) {
 	f := newTxFixture(t)
-	tx, err := Begin(f.exec, f.opts, TxSeams{})
+	tx, err := Begin(f.exec, f.opts, FileOps{})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -262,7 +261,7 @@ func TestCommitReplacesInstalledAtomically(t *testing.T) {
 		t.Fatalf("backup must survive until settled cleanup: %v", err)
 	}
 
-	receipt, err := ReadReceipt(f.opts.ReceiptDest)
+	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatalf("ReadReceipt: %v", err)
 	}
@@ -277,7 +276,7 @@ func TestCommitReplacesInstalledAtomically(t *testing.T) {
 func TestCommitRenameFailureLeavesInstalledIntact(t *testing.T) {
 	f := newTxFixture(t)
 	boom := errors.New("rename boom")
-	tx, err := Begin(f.exec, f.opts, TxSeams{Rename: func(string, string) error { return boom }})
+	tx, err := Begin(f.exec, f.opts, FileOps{Rename: func(string, string) error { return boom }})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -285,7 +284,7 @@ func TestCommitRenameFailureLeavesInstalledIntact(t *testing.T) {
 		t.Fatal("Commit with failing rename: expected error")
 	}
 	assertInstalledIntact(t, f)
-	receipt, err := ReadReceipt(f.opts.ReceiptDest)
+	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatalf("ReadReceipt: %v", err)
 	}
@@ -300,7 +299,7 @@ func TestCommitSyncDirFailureAfterRenameIsHonest(t *testing.T) {
 	// Begin syncs three directories (lease dir, tx dir twice); the fourth
 	// sync call is the post-rename sync of the installed binary's dir.
 	syncCalls := 0
-	tx, err := Begin(f.exec, f.opts, TxSeams{SyncDir: func(path string) error {
+	tx, err := Begin(f.exec, f.opts, FileOps{SyncDir: func(path string) error {
 		syncCalls++
 		if syncCalls > 3 {
 			return boom
@@ -320,7 +319,7 @@ func TestCommitSyncDirFailureAfterRenameIsHonest(t *testing.T) {
 	if got := mustDigest(t, f.installedPath); got != f.candidateDigest {
 		t.Fatalf("installed digest = %s, want replaced with candidate %s", got, f.candidateDigest)
 	}
-	receipt, err := ReadReceipt(f.opts.ReceiptDest)
+	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatalf("ReadReceipt: %v", err)
 	}
@@ -331,7 +330,7 @@ func TestCommitSyncDirFailureAfterRenameIsHonest(t *testing.T) {
 
 func TestCommitFailsOnTamperedStaging(t *testing.T) {
 	f := newTxFixture(t)
-	tx, err := Begin(f.exec, f.opts, TxSeams{})
+	tx, err := Begin(f.exec, f.opts, FileOps{})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -350,7 +349,7 @@ func TestCommitFailsOnTamperedStaging(t *testing.T) {
 		t.Fatal("Commit accepted tampered staging")
 	}
 	assertInstalledIntact(t, f)
-	receipt, err := ReadReceipt(f.opts.ReceiptDest)
+	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatalf("ReadReceipt: %v", err)
 	}
@@ -361,7 +360,7 @@ func TestCommitFailsOnTamperedStaging(t *testing.T) {
 
 func TestCommitFailsOnExternallyReplacedInstalled(t *testing.T) {
 	f := newTxFixture(t)
-	tx, err := Begin(f.exec, f.opts, TxSeams{})
+	tx, err := Begin(f.exec, f.opts, FileOps{})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -369,7 +368,7 @@ func TestCommitFailsOnExternallyReplacedInstalled(t *testing.T) {
 	if err := tx.Commit(); err == nil {
 		t.Fatal("Commit accepted an externally replaced installed executable")
 	}
-	receipt, err := ReadReceipt(f.opts.ReceiptDest)
+	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatalf("ReadReceipt: %v", err)
 	}
@@ -383,7 +382,7 @@ func TestCommitFailsOnExternallyReplacedInstalled(t *testing.T) {
 
 func TestRecordErrorAndConfirm(t *testing.T) {
 	f := newTxFixture(t)
-	tx, err := Begin(f.exec, f.opts, TxSeams{})
+	tx, err := Begin(f.exec, f.opts, FileOps{})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -394,7 +393,7 @@ func TestRecordErrorAndConfirm(t *testing.T) {
 	if err := tx.RecordError("handoff failed; token abc123 rejected", "abc123"); err != nil {
 		t.Fatalf("RecordError: %v", err)
 	}
-	receipt, err := ReadReceipt(f.opts.ReceiptDest)
+	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatalf("ReadReceipt: %v", err)
 	}
@@ -408,7 +407,7 @@ func TestRecordErrorAndConfirm(t *testing.T) {
 	if err := tx.Confirm(); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
-	receipt, err = ReadReceipt(f.opts.ReceiptDest)
+	receipt, err = ReadReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatalf("ReadReceipt: %v", err)
 	}
@@ -421,7 +420,7 @@ func TestTransactionReceiptTimesAdvance(t *testing.T) {
 	f := newTxFixture(t)
 	base := time.Now()
 	steps := 0
-	tx, err := Begin(f.exec, f.opts, TxSeams{Now: func() time.Time {
+	tx, err := Begin(f.exec, f.opts, FileOps{Now: func() time.Time {
 		steps++
 		return base.Add(time.Duration(steps) * time.Minute)
 	}})
@@ -441,7 +440,7 @@ func TestTransactionReceiptTimesAdvance(t *testing.T) {
 
 func TestConfirmTransactionConfirmsPendingReceiptOnce(t *testing.T) {
 	f := newTxFixture(t)
-	tx, err := Begin(f.exec, f.opts, TxSeams{})
+	tx, err := Begin(f.exec, f.opts, FileOps{})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -457,7 +456,7 @@ func TestConfirmTransactionConfirmsPendingReceiptOnce(t *testing.T) {
 	if confirmed.Outcome != OutcomeConfirmed || confirmed.Phase != PhaseReplacementComplete {
 		t.Fatalf("confirmed receipt = %s/%s, want replacement-complete/confirmed", confirmed.Phase, confirmed.Outcome)
 	}
-	onDisk, err := ReadReceipt(f.opts.ReceiptDest)
+	onDisk, err := ReadReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatalf("ReadReceipt: %v", err)
 	}
@@ -474,7 +473,7 @@ func TestConfirmTransactionConfirmsPendingReceiptOnce(t *testing.T) {
 
 func TestConfirmTransactionRejectsMismatchedTransaction(t *testing.T) {
 	f := newTxFixture(t)
-	tx, err := Begin(f.exec, f.opts, TxSeams{})
+	tx, err := Begin(f.exec, f.opts, FileOps{})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -485,7 +484,7 @@ func TestConfirmTransactionRejectsMismatchedTransaction(t *testing.T) {
 	if _, err := ConfirmTransaction(f.exec.Path, other); err == nil {
 		t.Fatal("ConfirmTransaction with mismatched txID = nil error")
 	}
-	receipt, err := ReadReceipt(f.opts.ReceiptDest)
+	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatalf("ReadReceipt: %v", err)
 	}
@@ -515,7 +514,7 @@ func TestCleanupSettledTransactionRemovesTxDirOnlyAndIsIdempotent(t *testing.T) 
 		t.Fatalf("AcquireLease: %v", err)
 	}
 	defer func() { _ = lease.Close() }()
-	tx, err := Begin(f.exec, f.opts, TxSeams{})
+	tx, err := Begin(f.exec, f.opts, FileOps{})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -530,7 +529,7 @@ func TestCleanupSettledTransactionRemovesTxDirOnlyAndIsIdempotent(t *testing.T) 
 	if _, err := os.Stat(tx.TxDir()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("tx dir must be removed, stat error = %v", err)
 	}
-	for _, path := range []string{LeasePath(f.exec.Path), OwnershipRecordPath(f.exec.Path), f.opts.ReceiptDest} {
+	for _, path := range []string{LeasePath(f.exec.Path), OwnershipRecordPath(f.exec.Path), ReceiptPath(f.exec.Path)} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("cleanup must never remove %s: %v", path, err)
 		}

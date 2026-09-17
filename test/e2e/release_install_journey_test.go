@@ -324,7 +324,7 @@ func (j *selfupdateJourney) startRelease(feedURL, listen string, extra ...string
 
 // newReleaseInstallJourney installs the clean-versioned lower build so the
 // release path classifies it update-eligible.
-func newReleaseInstallJourney(t *testing.T) (*selfupdateJourney, *updateAvailBinaries) {
+func newReleaseInstallJourney(t *testing.T) (*selfupdateJourney, *selfupdateBinaries) {
 	t.Helper()
 	bins := updateAvailTestBinaries(t)
 	return newSelfupdateJourney(t, bins.lower), bins

@@ -145,7 +145,7 @@ func revalidateReleaseProvenance(exec Executable, cand VerifiedCandidate, opts S
 // unsuppressed, and strictly newer before any backup or receipt is written.
 // The provenance rides along on the transaction and is re-validated again
 // immediately before commit.
-func BeginVerifiedRelease(exec Executable, cand VerifiedCandidate, opts BeginOptions, stageOpts StageReleaseOptions, seams TxSeams) (*Transaction, error) {
+func BeginVerifiedRelease(exec Executable, cand VerifiedCandidate, opts BeginOptions, stageOpts StageReleaseOptions, seams FileOps) (*Transaction, error) {
 	if err := RevalidateVerifiedCandidate(exec, cand, stageOpts); err != nil {
 		return nil, err
 	}

@@ -129,7 +129,7 @@ func TestReconcileStagingScopesToOwnedAbandonedDirs(t *testing.T) {
 		f, tx := beginRecoveryTx(t, false)
 		// The receipt never became durable: only the staging record
 		// names the dir's owner.
-		if err := os.Remove(f.opts.ReceiptDest); err != nil {
+		if err := os.Remove(ReceiptPath(f.exec.Path)); err != nil {
 			t.Fatalf("remove receipt: %v", err)
 		}
 		if err := ReconcileStaging(f.exec.Path, "", CleanupSeams{}); err != nil {
@@ -212,7 +212,7 @@ func TestReconcileStagingScopesToOwnedAbandonedDirs(t *testing.T) {
 		if err := ReconcileStaging(f.exec.Path, tx.Receipt().TransactionID, CleanupSeams{}); err != nil {
 			t.Fatalf("ReconcileStaging: %v", err)
 		}
-		for _, path := range []string{notes, plainDir, f.opts.ReceiptDest} {
+		for _, path := range []string{notes, plainDir, ReceiptPath(f.exec.Path)} {
 			if _, err := os.Stat(path); err != nil {
 				t.Fatalf("%s must never be a cleanup candidate: %v", path, err)
 			}
@@ -231,18 +231,18 @@ func TestRecordSettledErrorPreservesSettlement(t *testing.T) {
 	r := tx.Receipt()
 	r.Outcome = OutcomeConfirmed
 	r.UpdatedAt = time.Now().Add(-time.Hour)
-	if err := WriteReceiptDurable(f.opts.ReceiptDest, r); err != nil {
+	if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
 		t.Fatalf("write settled receipt: %v", err)
 	}
-	before, err := ReadReceipt(f.opts.ReceiptDest)
+	before, err := ReadReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatalf("ReadReceipt: %v", err)
 	}
 
-	if err := RecordSettledError(f.exec.Path, f.opts.ReceiptDest, before, "  cleanup retry pending: boom  "); err != nil {
+	if err := RecordSettledError(f.exec.Path, ReceiptPath(f.exec.Path), before, "  cleanup retry pending: boom  "); err != nil {
 		t.Fatalf("RecordSettledError: %v", err)
 	}
-	after, err := ReadReceipt(f.opts.ReceiptDest)
+	after, err := ReadReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatalf("ReadReceipt after settled error: %v", err)
 	}

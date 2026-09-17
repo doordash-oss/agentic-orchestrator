@@ -3267,17 +3267,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	// Complete the install lifecycle's server handle now that the server is
 	// running: install requests arriving through HTTP find it ready.
 	installLifecycle := wiring.lifecycle
-	installLifecycle.run = &serverRun{
-		boot:           boot,
-		server:         runtimeServer,
-		authToken:      authToken,
-		resolvedName:   resolvedName,
-		policy:         policy,
-		listen:         listen,
-		adoptedLease:   id.adopted,
-		adoptedHandoff: id.adoptedHandoff,
-		adoptedReceipt: id.adoptedReceipt,
-	}
+	installLifecycle.run = &serverRun{boot: boot, server: runtimeServer, authToken: authToken}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -3338,19 +3328,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		journey = serverJourneyHook()
 	}
 	if journey != nil {
-		r := serverRun{
-			boot:           boot,
-			server:         runtimeServer,
-			authToken:      authToken,
-			resolvedName:   resolvedName,
-			policy:         policy,
-			registryDir:    registryDir,
-			listen:         listen,
-			adoptedLease:   id.adopted,
-			adoptedHandoff: id.adoptedHandoff,
-			adoptedReceipt: id.adoptedReceipt,
-		}
-		if code := journey.run(r); code >= 0 {
+		if code := journey.run(*installLifecycle.run); code >= 0 {
 			return code
 		}
 	}

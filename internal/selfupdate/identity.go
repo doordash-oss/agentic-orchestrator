@@ -36,6 +36,11 @@ type FileIdentity struct {
 	Size int64
 }
 
+// SameFile compares device, inode and size; permission changes do not replace a file.
+func (id FileIdentity) SameFile(other FileIdentity) bool {
+	return id.Dev == other.Dev && id.Ino == other.Ino && id.Size == other.Size
+}
+
 // identityFromInfo extracts inode identity plus permission and ownership bits
 // from a FileInfo. Non-stat backends yield zero UID/GID/Dev/Ino.
 func identityFromInfo(info os.FileInfo) FileIdentity {
@@ -124,5 +129,5 @@ func (e Executable) PathStillMatches() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return id.Dev == e.ID.Dev && id.Ino == e.ID.Ino && id.Size == e.ID.Size, nil
+	return id.SameFile(e.ID), nil
 }

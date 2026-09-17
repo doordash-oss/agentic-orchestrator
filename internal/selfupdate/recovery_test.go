@@ -27,7 +27,7 @@ import (
 func beginRecoveryTx(t *testing.T, commit bool) (*txFixture, *Transaction) {
 	t.Helper()
 	f := newTxFixture(t)
-	tx, err := Begin(f.exec, f.opts, TxSeams{})
+	tx, err := Begin(f.exec, f.opts, FileOps{})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -44,12 +44,12 @@ func beginRecoveryTx(t *testing.T, commit bool) (*txFixture, *Transaction) {
 // phase advance: candidate bytes installed, receipt still backup-ready.
 func crashInsideCommit(t *testing.T, f *txFixture) Receipt {
 	t.Helper()
-	r, err := ReadReceipt(f.opts.ReceiptDest)
+	r, err := ReadReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatalf("ReadReceipt: %v", err)
 	}
 	r.Phase = PhaseBackupReady
-	if err := WriteReceiptDurable(f.opts.ReceiptDest, r); err != nil {
+	if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
 		t.Fatalf("rewrite receipt: %v", err)
 	}
 	return r
@@ -106,12 +106,12 @@ func TestInspectRecoverySettledReceiptsAreNone(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			f, _ := beginRecoveryTx(t, tc.commit)
-			r, err := ReadReceipt(f.opts.ReceiptDest)
+			r, err := ReadReceipt(ReceiptPath(f.exec.Path))
 			if err != nil {
 				t.Fatalf("ReadReceipt: %v", err)
 			}
 			tc.mutate(&r)
-			if err := WriteReceiptDurable(f.opts.ReceiptDest, r); err != nil {
+			if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
 				t.Fatalf("rewrite receipt: %v", err)
 			}
 			plan, err := InspectRecovery(f.exec, f.runtimeDir)
@@ -121,8 +121,8 @@ func TestInspectRecoverySettledReceiptsAreNone(t *testing.T) {
 			if plan.Action != RecoveryActionNone {
 				t.Fatalf("action = %s, want none", plan.Action)
 			}
-			if plan.ReceiptPath != f.opts.ReceiptDest {
-				t.Fatalf("plan receipt path = %s, want %s", plan.ReceiptPath, f.opts.ReceiptDest)
+			if plan.ReceiptPath != ReceiptPath(f.exec.Path) {
+				t.Fatalf("plan receipt path = %s, want %s", plan.ReceiptPath, ReceiptPath(f.exec.Path))
 			}
 			if plan.Receipt.TransactionID != r.TransactionID {
 				t.Fatalf("plan receipt txid = %s, want %s", plan.Receipt.TransactionID, r.TransactionID)
@@ -141,8 +141,8 @@ func TestInspectRecoveryPendingDecisions(t *testing.T) {
 		if plan.Action != RecoveryActionAbandon {
 			t.Fatalf("action = %s, want abandon", plan.Action)
 		}
-		if plan.ReceiptPath != f.opts.ReceiptDest {
-			t.Fatalf("plan receipt path = %s, want keyed %s", plan.ReceiptPath, f.opts.ReceiptDest)
+		if plan.ReceiptPath != ReceiptPath(f.exec.Path) {
+			t.Fatalf("plan receipt path = %s, want keyed %s", plan.ReceiptPath, ReceiptPath(f.exec.Path))
 		}
 	})
 	t.Run("backup-ready candidate installed restores after crash inside commit", func(t *testing.T) {
@@ -205,12 +205,12 @@ func TestInspectRecoveryRefusesUnsafeRecords(t *testing.T) {
 	})
 	t.Run("unsupported schema version", func(t *testing.T) {
 		f, _ := beginRecoveryTx(t, false)
-		r, err := ReadReceipt(f.opts.ReceiptDest)
+		r, err := ReadReceipt(ReceiptPath(f.exec.Path))
 		if err != nil {
 			t.Fatalf("ReadReceipt: %v", err)
 		}
 		r.SchemaVersion = 2
-		if err := WriteReceiptDurable(f.opts.ReceiptDest, r); err != nil {
+		if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
 			t.Fatalf("rewrite receipt: %v", err)
 		}
 		_, err = InspectRecovery(f.exec, f.runtimeDir)
@@ -241,12 +241,12 @@ func TestInspectRecoveryRefusesUnsafeRecords(t *testing.T) {
 			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
 				f, _ := beginRecoveryTx(t, tc.commit)
-				r, err := ReadReceipt(f.opts.ReceiptDest)
+				r, err := ReadReceipt(ReceiptPath(f.exec.Path))
 				if err != nil {
 					t.Fatalf("ReadReceipt: %v", err)
 				}
 				tc.mutate(&r)
-				if err := WriteReceiptDurable(f.opts.ReceiptDest, r); err != nil {
+				if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
 					t.Fatalf("rewrite receipt: %v", err)
 				}
 				_, err = InspectRecovery(f.exec, f.runtimeDir)
@@ -256,7 +256,7 @@ func TestInspectRecoveryRefusesUnsafeRecords(t *testing.T) {
 	})
 	t.Run("receipt mode 0644", func(t *testing.T) {
 		f, _ := beginRecoveryTx(t, false)
-		if err := os.Chmod(f.opts.ReceiptDest, 0o644); err != nil {
+		if err := os.Chmod(ReceiptPath(f.exec.Path), 0o644); err != nil {
 			t.Fatalf("chmod receipt: %v", err)
 		}
 		_, err := InspectRecovery(f.exec, f.runtimeDir)
@@ -264,7 +264,7 @@ func TestInspectRecoveryRefusesUnsafeRecords(t *testing.T) {
 	})
 	t.Run("receipt owned by another uid", func(t *testing.T) {
 		f, _ := beginRecoveryTx(t, false)
-		if err := os.Chown(f.opts.ReceiptDest, os.Geteuid()+1, -1); err != nil {
+		if err := os.Chown(ReceiptPath(f.exec.Path), os.Geteuid()+1, -1); err != nil {
 			t.Skipf("cannot hand the receipt to another uid as euid %d: %v", os.Geteuid(), err)
 		}
 		_, err := InspectRecovery(f.exec, f.runtimeDir)
@@ -285,12 +285,12 @@ func TestInspectRecoveryRefusesUnsafeRecords(t *testing.T) {
 	})
 	t.Run("backup path outside tx dir", func(t *testing.T) {
 		f, _ := beginRecoveryTx(t, false)
-		r, err := ReadReceipt(f.opts.ReceiptDest)
+		r, err := ReadReceipt(ReceiptPath(f.exec.Path))
 		if err != nil {
 			t.Fatalf("ReadReceipt: %v", err)
 		}
 		r.BackupPath = filepath.Join(t.TempDir(), "elsewhere-backup")
-		if err := WriteReceiptDurable(f.opts.ReceiptDest, r); err != nil {
+		if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
 			t.Fatalf("rewrite receipt: %v", err)
 		}
 		_, err = InspectRecovery(f.exec, f.runtimeDir)
@@ -379,7 +379,7 @@ func TestInspectRecoveryRestoreAttemptRecorded(t *testing.T) {
 		if plan.Action != RecoveryActionRestore {
 			t.Fatalf("action = %s, want restore", plan.Action)
 		}
-		if _, err := RestorePrevious(f.exec, lease, plan, "target failed", RecoverySeams{}); err != nil {
+		if _, err := RestorePrevious(f.exec, lease, plan, "target failed", FileOps{}); err != nil {
 			t.Fatalf("RestorePrevious: %v", err)
 		}
 		// The crash boundary: the attempt was durable and the rename
@@ -403,13 +403,13 @@ func TestInspectRecoveryRestoreAttemptRecorded(t *testing.T) {
 	})
 	t.Run("candidate still installed restores", func(t *testing.T) {
 		f, _ := beginRecoveryTx(t, true)
-		r, err := ReadReceipt(f.opts.ReceiptDest)
+		r, err := ReadReceipt(ReceiptPath(f.exec.Path))
 		if err != nil {
 			t.Fatalf("ReadReceipt: %v", err)
 		}
 		r.RecoveryAttemptID = "11111111111111111111111111111111"
 		r.RecoveryKind = RecoveryKindRestore
-		if err := WriteReceiptDurable(f.opts.ReceiptDest, r); err != nil {
+		if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
 			t.Fatalf("rewrite receipt: %v", err)
 		}
 		plan, err := InspectRecovery(f.exec, f.runtimeDir)
@@ -422,13 +422,13 @@ func TestInspectRecoveryRestoreAttemptRecorded(t *testing.T) {
 	})
 	t.Run("neither restore copy nor candidate matches refuses", func(t *testing.T) {
 		f, _ := beginRecoveryTx(t, true)
-		r, err := ReadReceipt(f.opts.ReceiptDest)
+		r, err := ReadReceipt(ReceiptPath(f.exec.Path))
 		if err != nil {
 			t.Fatalf("ReadReceipt: %v", err)
 		}
 		r.RecoveryAttemptID = "11111111111111111111111111111111"
 		r.RecoveryKind = RecoveryKindRestore
-		if err := WriteReceiptDurable(f.opts.ReceiptDest, r); err != nil {
+		if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
 			t.Fatalf("rewrite receipt: %v", err)
 		}
 		replaceFile(t, f.installedPath, "externally-replaced-mid-recovery")
@@ -447,7 +447,7 @@ func TestInspectRecoveryRestartAttemptRecorded(t *testing.T) {
 	if plan.Action != RecoveryActionAbandon {
 		t.Fatalf("action = %s, want abandon before restart marking", plan.Action)
 	}
-	if _, err := MarkRecoveryRestart(f.exec, lease, plan, "aborted shutdown", RecoverySeams{}); err != nil {
+	if _, err := MarkRecoveryRestart(f.exec, lease, plan, "aborted shutdown", FileOps{}); err != nil {
 		t.Fatalf("MarkRecoveryRestart: %v", err)
 	}
 	again, err := InspectRecovery(f.exec, f.runtimeDir)
@@ -473,7 +473,7 @@ func TestRestorePreviousFullJourney(t *testing.T) {
 		t.Fatalf("action = %s, want restore", plan.Action)
 	}
 
-	restored, err := RestorePrevious(f.exec, lease, plan, "target failed health wait", RecoverySeams{})
+	restored, err := RestorePrevious(f.exec, lease, plan, "target failed health wait", FileOps{})
 	if err != nil {
 		t.Fatalf("RestorePrevious: %v", err)
 	}
@@ -535,7 +535,7 @@ func TestRestorePreviousReusesPreparedRestoreCopy(t *testing.T) {
 	}
 
 	boom := errors.New("rename boom")
-	if _, err := RestorePrevious(f.exec, lease, plan, "interrupted", RecoverySeams{Rename: func(string, string) error { return boom }}); !errors.Is(err, boom) {
+	if _, err := RestorePrevious(f.exec, lease, plan, "interrupted", FileOps{Rename: func(string, string) error { return boom }}); !errors.Is(err, boom) {
 		t.Fatalf("interrupted RestorePrevious error = %v, want rename boom", err)
 	}
 	interrupted, err := ReadReceipt(plan.ReceiptPath)
@@ -563,7 +563,7 @@ func TestRestorePreviousReusesPreparedRestoreCopy(t *testing.T) {
 	if resumed.Action != RecoveryActionRestore {
 		t.Fatalf("action = %s, want restore", resumed.Action)
 	}
-	final, err := RestorePrevious(f.exec, lease, resumed, "resumed", RecoverySeams{})
+	final, err := RestorePrevious(f.exec, lease, resumed, "resumed", FileOps{})
 	if err != nil {
 		t.Fatalf("Resume RestorePrevious: %v", err)
 	}
@@ -604,7 +604,7 @@ func TestRestorePreviousFinishRollbackOnlyCompletesBookkeeping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectRecovery: %v", err)
 	}
-	if _, err := RestorePrevious(f.exec, lease, plan, "target failed", RecoverySeams{}); err != nil {
+	if _, err := RestorePrevious(f.exec, lease, plan, "target failed", FileOps{}); err != nil {
 		t.Fatalf("RestorePrevious: %v", err)
 	}
 	crashed, err := ReadReceipt(plan.ReceiptPath)
@@ -633,7 +633,7 @@ func TestRestorePreviousFinishRollbackOnlyCompletesBookkeeping(t *testing.T) {
 		t.Fatalf("StatFile installed: %v", err)
 	}
 
-	final, err := RestorePrevious(f.exec, lease, resumed, "resumed finish", RecoverySeams{})
+	final, err := RestorePrevious(f.exec, lease, resumed, "resumed finish", FileOps{})
 	if err != nil {
 		t.Fatalf("RestorePrevious finish-rollback: %v", err)
 	}
@@ -673,7 +673,7 @@ func TestMarkRecoveryRestartJourney(t *testing.T) {
 	if plan.Action != RecoveryActionAbandon {
 		t.Fatalf("action = %s, want abandon", plan.Action)
 	}
-	marked, err := MarkRecoveryRestart(f.exec, lease, plan, "aborted shutdown", RecoverySeams{})
+	marked, err := MarkRecoveryRestart(f.exec, lease, plan, "aborted shutdown", FileOps{})
 	if err != nil {
 		t.Fatalf("MarkRecoveryRestart: %v", err)
 	}
@@ -700,7 +700,7 @@ func TestMarkRecoveryRestartRequiresBackupReadyOriginal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectRecovery: %v", err)
 	}
-	_, err = MarkRecoveryRestart(f.exec, lease, plan, "not a restart", RecoverySeams{})
+	_, err = MarkRecoveryRestart(f.exec, lease, plan, "not a restart", FileOps{})
 	requireRefusal(t, err)
 }
 
@@ -714,7 +714,7 @@ func TestResolveAbandonedSettlesPreReplacement(t *testing.T) {
 	if plan.Action != RecoveryActionAbandon {
 		t.Fatalf("action = %s, want abandon", plan.Action)
 	}
-	settled, err := ResolveAbandoned(f.exec, lease, plan, "  installation failed before replacement  ", RecoverySeams{})
+	settled, err := ResolveAbandoned(f.exec, lease, plan, "  installation failed before replacement  ", FileOps{})
 	if err != nil {
 		t.Fatalf("ResolveAbandoned: %v", err)
 	}
@@ -759,15 +759,15 @@ func TestRecoveryMutationsRequireHeldLease(t *testing.T) {
 	}
 	mutations := map[string]func() error{
 		"resolve abandoned": func() error {
-			_, err := ResolveAbandoned(f.exec, nil, plan, "reason", RecoverySeams{})
+			_, err := ResolveAbandoned(f.exec, nil, plan, "reason", FileOps{})
 			return err
 		},
 		"restore previous": func() error {
-			_, err := RestorePrevious(f.exec, nil, plan, "reason", RecoverySeams{})
+			_, err := RestorePrevious(f.exec, nil, plan, "reason", FileOps{})
 			return err
 		},
 		"mark restart": func() error {
-			_, err := MarkRecoveryRestart(f.exec, nil, plan, "reason", RecoverySeams{})
+			_, err := MarkRecoveryRestart(f.exec, nil, plan, "reason", FileOps{})
 			return err
 		},
 	}
@@ -794,7 +794,7 @@ func twoExecsInOneDir(t *testing.T) (Executable, Executable) {
 	return execA, execB
 }
 
-func beginOptsForExec(t *testing.T, exec Executable, runtimeDir, receiptDest string) BeginOptions {
+func beginOptsForExec(t *testing.T, exec Executable, runtimeDir string) BeginOptions {
 	t.Helper()
 	candidatePath := writeExecutableFile(t, t.TempDir(), "candidate", 0o755, []byte("candidate-for-"+filepath.Base(exec.Path)))
 	return BeginOptions{
@@ -806,7 +806,6 @@ func beginOptsForExec(t *testing.T, exec Executable, runtimeDir, receiptDest str
 		ToVersion:       "2.0.0",
 		CandidatePath:   candidatePath,
 		CandidateDigest: mustDigest(t, candidatePath),
-		ReceiptDest:     receiptDest,
 	}
 }
 
@@ -814,8 +813,8 @@ func TestTwoExecutablesInOneDirectoryRecoverIndependently(t *testing.T) {
 	t.Run("keyed receipt of one executable is invisible to the other", func(t *testing.T) {
 		execA, execB := twoExecsInOneDir(t)
 		runtimeA := t.TempDir()
-		opts := beginOptsForExec(t, execA, runtimeA, ReceiptPath(execA.Path))
-		if _, err := Begin(execA, opts, TxSeams{}); err != nil {
+		opts := beginOptsForExec(t, execA, runtimeA)
+		if _, err := Begin(execA, opts, FileOps{}); err != nil {
 			t.Fatalf("Begin on A: %v", err)
 		}
 		plan, err := InspectRecovery(execB, t.TempDir())
@@ -827,39 +826,6 @@ func TestTwoExecutablesInOneDirectoryRecoverIndependently(t *testing.T) {
 		}
 		if _, found, err := ReadLatestReceipt(execB.Path); err != nil || found {
 			t.Fatalf("ReadLatestReceipt(B) = (%v, %v), want not found without error", found, err)
-		}
-	})
-	t.Run("legacy receipt of one executable is not the other's", func(t *testing.T) {
-		execA, execB := twoExecsInOneDir(t)
-		runtimeA := t.TempDir()
-		opts := beginOptsForExec(t, execA, runtimeA, LegacyReceiptPath(execA.Path))
-		tx, err := Begin(execA, opts, TxSeams{})
-		if err != nil {
-			t.Fatalf("Begin on A with legacy receipt dest: %v", err)
-		}
-		if _, found, err := ReadLatestReceipt(execB.Path); err != nil || found {
-			t.Fatalf("ReadLatestReceipt(B) = (%v, %v), want not found without error", found, err)
-		}
-		got, found, err := ReadLatestReceipt(execA.Path)
-		if err != nil || !found {
-			t.Fatalf("ReadLatestReceipt(A) = (%v, %v), want found without error", found, err)
-		}
-		if got.TransactionID != tx.Receipt().TransactionID {
-			t.Fatalf("A's latest receipt txid = %s, want %s", got.TransactionID, tx.Receipt().TransactionID)
-		}
-		plan, err := InspectRecovery(execA, runtimeA)
-		if err != nil {
-			t.Fatalf("InspectRecovery on A: %v", err)
-		}
-		if plan.Action != RecoveryActionAbandon || !plan.ReceiptLegacy {
-			t.Fatalf("A plan = %s (legacy %v), want abandon over the legacy record", plan.Action, plan.ReceiptLegacy)
-		}
-		planB, err := InspectRecovery(execB, t.TempDir())
-		if err != nil {
-			t.Fatalf("InspectRecovery on B: %v", err)
-		}
-		if planB.Action != RecoveryActionNone {
-			t.Fatalf("B action = %s, want none: A's legacy receipt binds A only", planB.Action)
 		}
 	})
 }

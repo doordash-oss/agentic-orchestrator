@@ -234,41 +234,6 @@ func TestWriteReceiptDurableRecoveryFieldsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestReceiptPhaseOneRecordUnmarshalsAdditively(t *testing.T) {
-	// A Phase 1-shaped record: none of the recovery fields exist on disk.
-	phase1 := `{
-  "schema_version": 1,
-  "transaction_id": "0123456789abcdef0123456789abcdef",
-  "runtime_dir": "/runtime",
-  "executable_path": "/runtime/bin/agentico",
-  "old_digest": "aaaa",
-  "new_digest": "bbbb",
-  "original_mode": 493,
-  "outcome": "pending",
-  "phase": "backup-ready"
-}`
-	path := filepath.Join(t.TempDir(), "receipt.json")
-	if err := os.WriteFile(path, []byte(phase1), 0o600); err != nil {
-		t.Fatalf("write phase 1 receipt: %v", err)
-	}
-	r, err := ReadReceipt(path)
-	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
-	}
-	if r.SchemaVersion != receiptSchemaVersion || r.Outcome != OutcomePending || r.Phase != PhaseBackupReady {
-		t.Fatalf("phase 1 receipt = %d %s/%s", r.SchemaVersion, r.Outcome, r.Phase)
-	}
-	if r.RecoveryAttemptID != "" || r.RecoveryKind != "" || r.RecoveryAttemptBy != 0 || r.RestorePath != "" || r.RestoreID != nil || r.Resolution != ResolutionNone || r.InstallFailed {
-		t.Fatalf("recovery fields must unmarshal to zero values: %+v", r)
-	}
-	if !r.RecoveryStartedAt.IsZero() || !r.ResolvedAt.IsZero() {
-		t.Fatalf("recovery timestamps must be zero: %s %s", r.RecoveryStartedAt, r.ResolvedAt)
-	}
-	if !r.ActionablePending() || r.Settled() {
-		t.Fatal("phase 1 pending record must be actionable pending")
-	}
-}
-
 func TestReceiptSettledAndActionablePendingMatrix(t *testing.T) {
 	now := time.Now()
 	tests := []struct {

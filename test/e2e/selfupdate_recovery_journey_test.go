@@ -679,9 +679,7 @@ func TestSelfUpdateCleanupRetry(t *testing.T) {
 	if _, err := os.Stat(txDir); err != nil {
 		t.Fatalf("failed cleanup must retain the transaction dir: %v", err)
 	}
-	if !p.stderrContains("selfupdate cleanup") {
-		t.Fatalf("no cleanup failure warning:\n%s", p.stderrTail())
-	}
+	p.waitStderr(t, "selfupdate cleanup")
 	if code := p.terminate(); code != 0 {
 		t.Fatalf("SIGTERM exit = %d; want 0 — a cleanup failure never breaks a confirmed build (stderr tail:\n%s)", code, p.stderrTail())
 	}

@@ -504,15 +504,14 @@ func TestBeginVerifiedReleaseRefusesSubstitutedBytes(t *testing.T) {
 	opts := BeginOptions{
 		RuntimeDir: t.TempDir(), StateDir: t.TempDir(), Config: "config.yaml",
 		PID: 1, PGID: 1, FromVersion: "2.0.0", ToVersion: "2.1.0",
-		Bind:        BindEndpoint{Host: "127.0.0.1", Port: 1},
-		ReceiptDest: ReceiptPath(f.exec.Path),
+		Bind: BindEndpoint{Host: "127.0.0.1", Port: 1},
 	}
 
 	// A ToVersion that disagrees with the verified release is refused while
 	// the candidate bytes are still exactly the admitted bytes.
 	mismatchedOpts := opts
 	mismatchedOpts.ToVersion = "9.9.9"
-	if _, err := BeginVerifiedRelease(f.exec, cand, mismatchedOpts, eligibleStageOpts("2.0.0"), TxSeams{}); err == nil || !strings.Contains(err.Error(), "does not match the verified release") {
+	if _, err := BeginVerifiedRelease(f.exec, cand, mismatchedOpts, eligibleStageOpts("2.0.0"), FileOps{}); err == nil || !strings.Contains(err.Error(), "does not match the verified release") {
 		t.Fatalf("expected target mismatch refusal, got %v", err)
 	}
 
@@ -523,7 +522,7 @@ func TestBeginVerifiedReleaseRefusesSubstitutedBytes(t *testing.T) {
 	if err := os.WriteFile(staged.CandidatePath(), tampered, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := BeginVerifiedRelease(f.exec, cand, opts, eligibleStageOpts("2.0.0"), TxSeams{}); err == nil {
+	if _, err := BeginVerifiedRelease(f.exec, cand, opts, eligibleStageOpts("2.0.0"), FileOps{}); err == nil {
 		t.Fatal("expected refusal for substituted candidate bytes")
 	}
 	if digest := mustDigest(t, f.exec.Path); digest != f.exec.Digest {
@@ -534,7 +533,7 @@ func TestBeginVerifiedReleaseRefusesSubstitutedBytes(t *testing.T) {
 	// provenance cannot pass the trust checks.
 	forged := cand
 	forged.release.manifestBytes = []byte("0000000000000000000000000000000000000000000000000000000000000000  forged.tar.gz\n")
-	if _, err := BeginVerifiedRelease(f.exec, forged, opts, eligibleStageOpts("2.0.0"), TxSeams{}); err == nil {
+	if _, err := BeginVerifiedRelease(f.exec, forged, opts, eligibleStageOpts("2.0.0"), FileOps{}); err == nil {
 		t.Fatal("expected refusal for forged manifest provenance")
 	}
 
@@ -545,7 +544,7 @@ func TestBeginVerifiedReleaseRefusesSubstitutedBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	unknown.release.trustRoot = priv.Public().(ed25519.PublicKey)
-	if _, err := BeginVerifiedRelease(f.exec, unknown, opts, eligibleStageOpts("2.0.0"), TxSeams{}); err == nil || !strings.Contains(err.Error(), "not a known release embedding") {
+	if _, err := BeginVerifiedRelease(f.exec, unknown, opts, eligibleStageOpts("2.0.0"), FileOps{}); err == nil || !strings.Contains(err.Error(), "not a known release embedding") {
 		t.Fatalf("expected trust-root refusal, got %v", err)
 	}
 }
@@ -567,10 +566,9 @@ func TestBeginVerifiedReleaseCommitBoundary(t *testing.T) {
 	opts := BeginOptions{
 		RuntimeDir: t.TempDir(), StateDir: t.TempDir(), Config: "config.yaml",
 		PID: 1, PGID: 1, FromVersion: "2.0.0", ToVersion: "2.1.0",
-		Bind:        BindEndpoint{Host: "127.0.0.1", Port: 1},
-		ReceiptDest: ReceiptPath(f.exec.Path),
+		Bind: BindEndpoint{Host: "127.0.0.1", Port: 1},
 	}
-	tx, err := BeginVerifiedRelease(f.exec, cand, opts, eligibleStageOpts("2.0.0"), TxSeams{})
+	tx, err := BeginVerifiedRelease(f.exec, cand, opts, eligibleStageOpts("2.0.0"), FileOps{})
 	if err != nil {
 		t.Fatalf("begin verified release: %v", err)
 	}
@@ -613,10 +611,9 @@ func TestBeginVerifiedReleaseCommitsVerifiedCandidate(t *testing.T) {
 	opts := BeginOptions{
 		RuntimeDir: t.TempDir(), StateDir: t.TempDir(), Config: "config.yaml",
 		PID: 1, PGID: 1, FromVersion: "2.0.0", ToVersion: "2.1.0",
-		Bind:        BindEndpoint{Host: "127.0.0.1", Port: 1},
-		ReceiptDest: ReceiptPath(f.exec.Path),
+		Bind: BindEndpoint{Host: "127.0.0.1", Port: 1},
 	}
-	tx, err := BeginVerifiedRelease(f.exec, cand, opts, eligibleStageOpts("2.0.0"), TxSeams{})
+	tx, err := BeginVerifiedRelease(f.exec, cand, opts, eligibleStageOpts("2.0.0"), FileOps{})
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}

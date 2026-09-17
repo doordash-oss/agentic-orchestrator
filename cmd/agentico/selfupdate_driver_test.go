@@ -17,8 +17,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +39,7 @@ func resetDriverState(t *testing.T) {
 	origDeadline := startupDeadlineHook
 	origHealth := selfUpdateHealthWaitFn
 	origConfirm := selfUpdateConfirmFn
-	origRecoverySeams := selfUpdateRecoverySeams
+	origFileOps := selfUpdateFileOps
 	origBarrier := selfUpdateRecoveryBarrier
 	origRecoveryExec := selfUpdateRecoveryExecFn
 	origStartupAbort := selfUpdateStartupAbortHook
@@ -48,7 +50,7 @@ func resetDriverState(t *testing.T) {
 		startupDeadlineHook = origDeadline
 		selfUpdateHealthWaitFn = origHealth
 		selfUpdateConfirmFn = origConfirm
-		selfUpdateRecoverySeams = origRecoverySeams
+		selfUpdateFileOps = origFileOps
 		selfUpdateRecoveryBarrier = origBarrier
 		selfUpdateRecoveryExecFn = origRecoveryExec
 		selfUpdateStartupAbortHook = origStartupAbort
@@ -185,6 +187,21 @@ func TestSelfUpdateDriverArgParse(t *testing.T) {
 	_, handled, err = driverArgParseHook([]string{cliSubcommandSelfUpdateDriver, "--install-release"})
 	if !handled || err == nil || !strings.Contains(err.Error(), "requires --update-feed") {
 		t.Fatalf("install-release without feed: handled %v, err %v; want rejection", handled, err)
+	}
+}
+
+func TestSelfUpdateDriverUsesServerFlagParsing(t *testing.T) {
+	resetDriverState(t)
+	for _, args := range [][]string{
+		{"--config", "custom.yaml", "--state-dir", "state", "--listen", "127.0.0.1:4321", "--name", "test-server", "--updates=off"},
+		{"--providers", "codex,claude", "--refresh-models", "--dangerously-skip-permissions"},
+		{"--updates", "invalid"}, {"--listen", "invalid"}, {"--name"}, {"--help"}, {"--version"},
+	} {
+		want, wantErr := parseLaunchArgs(append([]string{cliSubcommandServer}, args...))
+		got, handled, gotErr := parseDriverArgs(append([]string{cliSubcommandSelfUpdateDriver, "--candidate", "fixture"}, args...))
+		if !handled || !reflect.DeepEqual(got, want) || fmt.Sprint(gotErr) != fmt.Sprint(wantErr) {
+			t.Fatalf("flags %v: driver (%+v, %v), server (%+v, %v)", args, got, gotErr, want, wantErr)
+		}
 	}
 }
 
@@ -334,7 +351,7 @@ func TestSelfUpdateDriverSeamsForFailAt(t *testing.T) {
 	}
 }
 
-func TestSelfUpdateDriverRecoverySeamsForFailAt(t *testing.T) {
+func TestSelfUpdateDriverFileOpsForFailAt(t *testing.T) {
 	attemptPending := selfupdate.Receipt{
 		Outcome:           selfupdate.OutcomePending,
 		RecoveryAttemptID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

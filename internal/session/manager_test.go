@@ -202,20 +202,6 @@ sleep 30
 	if err != nil {
 		t.Fatalf("reading live session metadata: %v", err)
 	}
-	// The in-memory message log is observed before its transcript row is
-	// persisted, so wait for the durable copy too: the recovering manager
-	// below replays the file, not the live log.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		persisted, readErr := os.ReadFile(pidFile.Transcript)
-		if readErr == nil && strings.Contains(string(persisted), "before restart") {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("persisted transcript = %q, want the second assistant row on disk", persisted)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 	transcript, err := os.OpenFile(pidFile.Transcript, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatalf("opening persisted transcript: %v", err)

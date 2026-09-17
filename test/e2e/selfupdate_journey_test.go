@@ -80,45 +80,42 @@ type selfupdateBinaries struct {
 	prodDigest   string
 }
 
+type selfupdateBuiltBinary struct {
+	path, digest string
+}
+
 var (
 	selfupdateBuildMu sync.Mutex
-	selfupdateBuilt   *selfupdateBinaries
+	selfupdateBuilds  = make(map[string]selfupdateBuiltBinary)
 )
 
-// selfupdateTestBinaries builds and digests the three deliberate binaries
-// once per test-binary run: the tagged lower and higher driver builds, plus
-// one untagged production build.
-func selfupdateTestBinaries(t *testing.T) *selfupdateBinaries {
+// selfupdateBinary shares native builds across all updater journeys.
+func selfupdateBinary(t *testing.T, version string, tagged bool) selfupdateBuiltBinary {
 	t.Helper()
+	key := fmt.Sprintf("%s-%t", version, tagged)
 	selfupdateBuildMu.Lock()
 	defer selfupdateBuildMu.Unlock()
-	if selfupdateBuilt != nil {
-		return selfupdateBuilt
+	if built, ok := selfupdateBuilds[key]; ok {
+		return built
 	}
-	root := selfupdateRepoRoot(t)
-	lower := filepath.Join(selfupdateBuildDir, "agentico-lower")
-	higher := filepath.Join(selfupdateBuildDir, "agentico-higher")
-	prod := filepath.Join(selfupdateBuildDir, "agentico-prod")
-	selfupdateGoBuild(t, root, lower, selfupdateVersionLower, true)
-	selfupdateGoBuild(t, root, higher, selfupdateVersionHigher, true)
-	selfupdateGoBuild(t, root, prod, selfupdateVersionProd, false)
-	b := &selfupdateBinaries{
-		lower:  lower,
-		higher: higher,
-		prod:   prod,
+	path := filepath.Join(selfupdateBuildDir, "agentico-"+key)
+	selfupdateGoBuild(t, selfupdateRepoRoot(t), path, version, tagged)
+	digest, err := selfupdate.DigestFile(path)
+	if err != nil {
+		t.Fatalf("digest %s: %v", path, err)
 	}
-	var err error
-	if b.lowerDigest, err = selfupdate.DigestFile(lower); err != nil {
-		t.Fatalf("digest lower binary: %v", err)
-	}
-	if b.higherDigest, err = selfupdate.DigestFile(higher); err != nil {
-		t.Fatalf("digest higher binary: %v", err)
-	}
-	if b.prodDigest, err = selfupdate.DigestFile(prod); err != nil {
-		t.Fatalf("digest production binary: %v", err)
-	}
-	selfupdateBuilt = b
-	return b
+	built := selfupdateBuiltBinary{path: path, digest: digest}
+	selfupdateBuilds[key] = built
+	return built
+}
+
+func selfupdateTestBinaries(t *testing.T) *selfupdateBinaries {
+	t.Helper()
+	lower := selfupdateBinary(t, selfupdateVersionLower, true)
+	higher := selfupdateBinary(t, selfupdateVersionHigher, true)
+	prod := selfupdateBinary(t, selfupdateVersionProd, false)
+	return &selfupdateBinaries{lower: lower.path, higher: higher.path, prod: prod.path,
+		lowerDigest: lower.digest, higherDigest: higher.digest, prodDigest: prod.digest}
 }
 
 // selfupdateRepoRoot resolves the repository root; test/e2e sits two levels
@@ -142,7 +139,12 @@ func selfupdateRepoRoot(t *testing.T) string {
 // stamped version, optionally carrying the driver build tag.
 func selfupdateGoBuild(t *testing.T, root, outPath, version string, tagged bool) {
 	t.Helper()
-	args := []string{"build"}
+	// VCS-derived module versions vary between tagged/shallow CI checkouts.
+	// These fixtures model tarball releases using only the explicit version stamp.
+	args := []string{"build", "-buildvcs=false"}
+	if os.Getenv("AGENTICO_E2E_RACE") == "1" {
+		args = append(args, "-race")
+	}
 	if tagged {
 		args = append(args, "-tags", "agentico_selfupdate_driver")
 	}
@@ -597,52 +599,50 @@ func (j *selfupdateJourney) receiptPath() string {
 	return selfupdate.ReceiptPath(j.installPath)
 }
 
-// waitReceipt polls until the receipt exists, returning the latest snapshot.
+// waitUntil bounds observations of asynchronous process and filesystem state.
+func waitUntil(t *testing.T, timeout time.Duration, description string, ready func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !ready() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", description)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func (p *driverProcess) waitStderr(t *testing.T, text string) {
+	t.Helper()
+	waitUntil(t, 10*time.Second, "stderr containing "+text, func() bool { return p.stderrContains(text) })
+}
+
+func (j *selfupdateJourney) waitForReceipt(timeout time.Duration, description string, match func(selfupdate.Receipt) bool) selfupdate.Receipt {
+	j.t.Helper()
+	var receipt selfupdate.Receipt
+	waitUntil(j.t, timeout, description+" at "+j.receiptPath(), func() bool {
+		r, err := selfupdate.ReadReceipt(j.receiptPath())
+		if err != nil || !match(r) {
+			return false
+		}
+		receipt = r
+		return true
+	})
+	return receipt
+}
+
 func (j *selfupdateJourney) waitReceipt(timeout time.Duration) selfupdate.Receipt {
 	j.t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		if r, err := selfupdate.ReadReceipt(j.receiptPath()); err == nil {
-			return r
-		}
-		if time.Now().After(deadline) {
-			j.t.Fatalf("receipt never appeared at %s", j.receiptPath())
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	return j.waitForReceipt(timeout, "receipt", func(selfupdate.Receipt) bool { return true })
 }
 
-// waitReceiptOutcome polls until the receipt carries the wanted outcome.
 func (j *selfupdateJourney) waitReceiptOutcome(want selfupdate.Outcome, timeout time.Duration) selfupdate.Receipt {
 	j.t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		r, err := selfupdate.ReadReceipt(j.receiptPath())
-		if err == nil && r.Outcome == want {
-			return r
-		}
-		if time.Now().After(deadline) {
-			j.t.Fatalf("receipt at %s never became %q (last read: %+v, err: %v)", j.receiptPath(), want, r, err)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	return j.waitForReceipt(timeout, "receipt outcome "+string(want), func(r selfupdate.Receipt) bool { return r.Outcome == want })
 }
 
-// waitReceiptResolution polls until the receipt carries the wanted explicit
-// settlement resolution (an abandoned transaction keeps Outcome=pending).
 func (j *selfupdateJourney) waitReceiptResolution(want selfupdate.Resolution, timeout time.Duration) selfupdate.Receipt {
 	j.t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		r, err := selfupdate.ReadReceipt(j.receiptPath())
-		if err == nil && r.Resolution == want {
-			return r
-		}
-		if time.Now().After(deadline) {
-			j.t.Fatalf("receipt at %s never carried resolution %q (last read: %+v, err: %v)", j.receiptPath(), want, r, err)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	return j.waitForReceipt(timeout, "receipt resolution "+string(want), func(r selfupdate.Receipt) bool { return r.Resolution == want })
 }
 
 // waitReceiptRolledBack polls until the receipt is durably rolled back.

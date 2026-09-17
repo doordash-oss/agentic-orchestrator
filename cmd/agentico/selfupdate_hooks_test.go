@@ -82,7 +82,6 @@ func TestCheckLiveHandoffScenarios(t *testing.T) {
 			AdvertiseURL: "http://127.0.0.1:54321",
 			Policy:       "loopback",
 		},
-		ReceiptDest: selfupdate.ReceiptPath(exec.Path),
 	}
 
 	// An empty exec path never probes.
@@ -100,7 +99,7 @@ func TestCheckLiveHandoffScenarios(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire lease: %v", err)
 	}
-	tx, err := selfupdate.Begin(exec, opts, selfupdate.TxSeams{})
+	tx, err := selfupdate.Begin(exec, opts, selfupdate.FileOps{})
 	if err != nil {
 		_ = lease.Close()
 		t.Fatalf("Begin: %v", err)

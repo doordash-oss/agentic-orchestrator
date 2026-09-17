@@ -123,8 +123,8 @@ func recoveryBarrier(stage string) {
 }
 
 // recoverySeams resolves the (driver-only) recovery failure seams.
-func recoverySeams() selfupdate.RecoverySeams {
-	return selfUpdateRecoverySeams
+func recoverySeams() selfupdate.FileOps {
+	return selfUpdateFileOps
 }
 
 // bootRecoveryResult is the outcome of pre-bootstrap recovery resolution.

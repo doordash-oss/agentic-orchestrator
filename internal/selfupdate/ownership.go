@@ -33,7 +33,6 @@ const ownershipSchemaVersion = 1
 
 const (
 	leaseDirName      = ".agentico-selfupdate"
-	receiptName       = "receipt.json"
 	txDirPrefix       = "tx-"
 	backupName        = "backup"
 	stagedName        = "staged"
@@ -98,43 +97,22 @@ func ReceiptPath(execPath string) string {
 	return filepath.Join(LeaseDir(execPath), "receipt-"+leaseKey(execPath)+".json")
 }
 
-// LegacyReceiptPath returns the Phase 1 receipt path: one shared receipt.json
-// per lease directory. It is read-only vocabulary: existing Phase 1 records
-// are recognized here, but every Phase 2 write lands at the keyed path (and,
-// when settling a legacy record, at the legacy path too so historical
-// binaries keep observing the settlement).
-func LegacyReceiptPath(execPath string) string {
-	return filepath.Join(LeaseDir(execPath), receiptName)
-}
-
-// ReadLatestReceipt reads the executable's latest receipt with Phase 1
-// legacy fallback. The keyed path takes precedence whenever it exists and is
-// parseable; a keyed record that does not bind to this executable is an
-// unsafe mismatch, never silently skipped. When the keyed path is absent the
-// legacy receipt.json is consulted and recognized only when it binds to this
-// executable — a legacy record naming another executable belongs to that
-// other binary and is left untouched. found is false when no record binds.
-func ReadLatestReceipt(execPath string) (receipt Receipt, found bool, err error) {
-	keyed := ReceiptPath(execPath)
-	if r, rerr := ReadReceipt(keyed); rerr == nil {
-		if r.ExecutablePath != execPath {
-			return Receipt{}, false, fmt.Errorf("receipt at %s does not bind to executable %s", keyed, execPath)
-		}
-		return r, true, nil
-	} else if !errors.Is(rerr, os.ErrNotExist) {
-		return Receipt{}, false, fmt.Errorf("read receipt %s: %w", keyed, rerr)
-	}
-	legacy := LegacyReceiptPath(execPath)
-	r, rerr := ReadReceipt(legacy)
-	if rerr != nil {
-		if errors.Is(rerr, os.ErrNotExist) {
+// ReadLatestReceipt reads the receipt keyed to this executable. An existing
+// but unreadable or mismatched record is an error, never an absent transaction.
+func ReadLatestReceipt(execPath string) (Receipt, bool, error) {
+	path := ReceiptPath(execPath)
+	if _, err := os.Lstat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return Receipt{}, false, nil
 		}
-		return Receipt{}, false, fmt.Errorf("read receipt %s: %w", legacy, rerr)
+		return Receipt{}, false, refuse("inspect receipt path %s: %v", path, err)
+	}
+	r, err := ReadReceipt(path)
+	if err != nil {
+		return Receipt{}, false, refuse("latest receipt at %s is unreadable: %v", path, err)
 	}
 	if r.ExecutablePath != execPath {
-		// Another executable's Phase 1 record: not ours, untouched.
-		return Receipt{}, false, nil
+		return Receipt{}, false, refuse("latest receipt at %s does not bind to executable %s", path, execPath)
 	}
 	return r, true, nil
 }

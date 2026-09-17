@@ -113,7 +113,7 @@ func (t *productionInstallTransaction) Cancel() error {
 			Receipt:     t.tx.Receipt(),
 			ReceiptPath: selfupdate.ReceiptPath(exec.Path),
 		}
-		if _, err := selfupdate.ResolveAbandoned(exec, lease, plan, "install cancelled before replacement", selfupdate.RecoverySeams{}); err != nil {
+		if _, err := selfupdate.ResolveAbandoned(exec, lease, plan, "install cancelled before replacement", selfupdate.FileOps{}); err != nil {
 			t.settleErr = fmt.Errorf("settling cancelled transaction: %w", err)
 			return
 		}
@@ -170,11 +170,10 @@ func (l *productionInstallLifecycle) Begin(candidate selfupdate.VerifiedCandidat
 			AdvertiseURL: r.server.BaseURL(),
 			Policy:       r.server.RuntimePolicy(),
 		},
-		ReceiptDest: selfupdate.ReceiptPath(r.boot.selfUpdateExec.Path),
 	}, selfupdate.StageReleaseOptions{
 		CurrentVersion: l.stager.currentVersion,
 		Eligibility:    l.stager.eligibility,
-	}, selfupdate.TxSeams{})
+	}, selfupdate.FileOps{})
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +353,7 @@ func executeReplacementTail(r serverRun, tx *selfupdate.Transaction, releaseUpda
 	settle := seams.settleAbortedInstall
 	if settle == nil {
 		settle = func(reason string) error {
-			_, err := selfupdate.ResolveAbandoned(r.boot.selfUpdateExec, r.boot.updateLease, planFor(), reason, selfupdate.RecoverySeams{})
+			_, err := selfupdate.ResolveAbandoned(r.boot.selfUpdateExec, r.boot.updateLease, planFor(), reason, selfupdate.FileOps{})
 			return err
 		}
 	}
@@ -366,7 +365,7 @@ func executeReplacementTail(r serverRun, tx *selfupdate.Transaction, releaseUpda
 	// target is never suppressed.
 	if seams.failDrain != nil && seams.failDrain() {
 		reason := "injected drain failure: installation aborted before any serving resource closed"
-		settled, serr := selfupdate.ResolveAbandoned(r.boot.selfUpdateExec, r.boot.updateLease, planFor(), reason, selfupdate.RecoverySeams{})
+		settled, serr := selfupdate.ResolveAbandoned(r.boot.selfUpdateExec, r.boot.updateLease, planFor(), reason, selfupdate.FileOps{})
 		if serr != nil {
 			seams.milestone("settling aborted installation failed: %v\n", serr)
 			return replacementTailResult{exitCode: 1}

@@ -63,7 +63,6 @@ func TestParseLaunchArgsUpdatesFlagForms(t *testing.T) {
 }
 
 func TestClassifyRuntimeEligibilityGathersRealSignals(t *testing.T) {
-	t.Parallel()
 	// Pin the version signals so the classification is about lease state,
 	// not the test binary's own build info.
 	originalBuildInfo, originalInjected := updatesBuildInfoVersion, updatesInjectedVersion

@@ -1681,7 +1681,11 @@ function makeMockApi(
     windowPurpose: scene.startsWith('settings-') ? 'settings' : 'main',
     getConnectionStatus: () =>
       Promise.resolve(
-        scene === 'connection-shell' ? CONNECTION_STATE_MID_CONNECT : CONNECTION_STATE,
+        scene === 'connection-shell'
+          ? CONNECTION_STATE_MID_CONNECT
+          : scene.startsWith('settings-server-update')
+            ? { ...CONNECTION_STATE, ownership: 'external' as const, kind: 'remote' as const }
+            : CONNECTION_STATE,
       ),
     retryConnection: () => Promise.resolve(CONNECTION_STATE),
     restartConnection: () => Promise.resolve(CONNECTION_STATE),
@@ -2474,10 +2478,10 @@ function makeMockApi(
         status: 'installing' as const,
         message: 'Restarting to apply the verified update.',
       }),
-    getServerUpdate: () => Promise.resolve(serverUpdateStateForScene()),
-    checkServerUpdate: () => Promise.resolve(serverUpdateStateForScene()),
-    installServerUpdate: () => Promise.resolve(serverUpdateStateForScene()),
-    cancelServerUpdate: () => Promise.resolve(serverUpdateStateForScene()),
+    getServerUpdate: () => Promise.resolve(serverUpdateStateForScene(scene)),
+    checkServerUpdate: () => Promise.resolve(serverUpdateStateForScene(scene)),
+    installServerUpdate: () => Promise.resolve(serverUpdateStateForScene(scene)),
+    cancelServerUpdate: () => Promise.resolve(serverUpdateStateForScene(scene)),
     getDiagnostics: () => Promise.resolve(diagnosticsSnapshotForScene(scene)),
     revealDiagnostics: () => Promise.resolve({ ok: true }),
     clearDiagnostics: () =>
@@ -2807,7 +2811,39 @@ function readyUpdateState(): UpdateState {
   };
 }
 
-function serverUpdateStateForScene(): ServerUpdateState {
+function serverUpdateStateForScene(scene: string): ServerUpdateState {
+  if (scene === 'settings-server-update-available') {
+    return {
+      status: 'available',
+      policy: 'notify',
+      currentVersion: '0.1.0',
+      latestVersion: '0.2.0',
+      targetVersion: '0.2.0',
+      releaseUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
+      installation: 'tarball',
+      signature: 'unverified',
+      lastCheckAt: '2026-07-20T10:00:00.000Z',
+      nextCheckAt: '2026-07-20T16:00:00.000Z',
+      activeWorkSummary: '2 features running, 1 clone in progress.',
+    };
+  }
+  if (scene === 'settings-server-update-auto') {
+    return {
+      status: 'scheduled',
+      policy: 'auto',
+      currentVersion: '0.1.0',
+      latestVersion: '0.2.0',
+      targetVersion: '0.2.0',
+      releaseUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
+      installation: 'tarball',
+      signature: 'verified',
+      method: 'idle',
+      stopActiveWork: false,
+      lastCheckAt: '2026-07-20T10:00:00.000Z',
+      nextCheckAt: '2026-07-20T16:00:00.000Z',
+      activeWorkSummary: '2 features running, 1 clone in progress.',
+    };
+  }
   return {
     status: 'up_to_date',
     policy: 'notify',

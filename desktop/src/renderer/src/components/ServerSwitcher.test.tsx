@@ -186,6 +186,37 @@ describe('ServerSwitcher', () => {
     expect(mock.api.switchConnectionServer).toHaveBeenCalledWith({ serverKey: BETA_KEY });
   });
 
+  it('badges the connected server when it has a release available', async () => {
+    const mock = installAgenticoMock();
+    const snapshot = {
+      rows: [
+        row({
+          serverKey: ALPHA_KEY,
+          name: 'alpha',
+          runtimeDir: '/rt/alpha',
+          current: true,
+          serverUpdate: { available: true, latest: '2.0.0' },
+        }),
+        row({
+          serverKey: BETA_KEY,
+          name: 'beta',
+          runtimeDir: '/rt/beta',
+          serverUpdate: { available: false, latest: '1.0.0' },
+        }),
+      ],
+    };
+    mock.api.listServers.mockResolvedValue(snapshot);
+    mock.api.probeServers.mockResolvedValue(snapshot);
+    render(<ServerSwitcher currentLabel="alpha" tone="ready" enabled />);
+    await userEvent.click(screen.getByRole('button', { name: 'alpha — switch server' }));
+
+    const current = await screen.findByRole('option', { name: 'alpha at /rt/alpha — Connected' });
+    const badge = current.querySelector('.settings-panel__server-kind[data-kind="update"]');
+    expect(badge).toHaveTextContent('v2.0.0 available');
+    const other = screen.getByRole('option', { name: 'beta at /rt/beta — Available' });
+    expect(other.querySelector('.settings-panel__server-kind[data-kind="update"]')).toBeNull();
+  });
+
   it('offers a fixed "Add Server…" row that deep-links to Settings → Servers', async () => {
     const mock = renderSwitcher();
     await userEvent.click(screen.getByRole('button', { name: 'alpha — switch server' }));

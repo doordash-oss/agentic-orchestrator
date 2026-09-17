@@ -84,6 +84,10 @@ export const IPC_CHANNELS = {
   updatesInstallWhenIdle: 'agentico:updates:install-when-idle',
   updatesInstallNow: 'agentico:updates:install-now',
   updatesRestart: 'agentico:updates:restart',
+  serverUpdatesGet: 'agentico:server-updates:get',
+  serverUpdatesCheck: 'agentico:server-updates:check',
+  serverUpdatesInstall: 'agentico:server-updates:install',
+  serverUpdatesCancel: 'agentico:server-updates:cancel',
   diagnosticsGet: 'agentico:diagnostics:get',
   diagnosticsReveal: 'agentico:diagnostics:reveal',
   diagnosticsClear: 'agentico:diagnostics:clear',
@@ -555,6 +559,8 @@ export const ServerListRowSchema = z.strictObject({
   runtimeDir: z.string().max(4096).optional(),
   current: z.boolean(),
   health: ServerRowHealthSchema,
+  /** Present on the connected server when its own update snapshot is known. */
+  serverUpdate: z.strictObject({ available: z.boolean(), latest: z.string().max(80) }).optional(),
 });
 export type ServerListRow = z.output<typeof ServerListRowSchema>;
 
@@ -1080,6 +1086,59 @@ export const UpdateInstallNowRequestSchema = z.strictObject({
   stopActiveWork: z.boolean(),
 });
 export type UpdateInstallNowRequest = z.output<typeof UpdateInstallNowRequestSchema>;
+
+// --- Connected server self-update -------------------------------------------
+// Renderer-safe projection of GET /api/v1/update on the connected server. The
+// main process maps the wire snapshot; the renderer only ever sees this.
+
+export const ServerUpdateStatusSchema = z.enum([
+  'idle',
+  'checking',
+  'up_to_date',
+  'available',
+  'downloading',
+  'verified',
+  'scheduled',
+  'draining',
+  'restarting',
+  'confirmed',
+  'failed',
+  'unsupported',
+  'disabled',
+]);
+export type ServerUpdateStatus = z.output<typeof ServerUpdateStatusSchema>;
+
+export const ServerUpdatePolicySchema = z.enum(['off', 'notify', 'auto']);
+export type ServerUpdatePolicy = z.output<typeof ServerUpdatePolicySchema>;
+
+export const ServerUpdateStateSchema = z.strictObject({
+  status: ServerUpdateStatusSchema,
+  policy: ServerUpdatePolicySchema,
+  currentVersion: z.string().min(1).max(80),
+  latestVersion: z.string().max(80).optional(),
+  targetVersion: z.string().max(80).optional(),
+  releaseUrl: z.string().url().optional(),
+  installation: z.string().max(32),
+  remediation: z.string().max(500).optional(),
+  signature: z.enum(['unverified', 'verified']),
+  /** Waiting method of the active install operation. */
+  method: z.enum(['now', 'idle']).optional(),
+  stopActiveWork: z.boolean().optional(),
+  /** Next maintenance-window opening an automatic install waits for. */
+  scheduledFor: z.string().datetime().optional(),
+  lastCheckAt: z.string().datetime().optional(),
+  nextCheckAt: z.string().datetime().optional(),
+  /** Prose summary of live work on the server; absent when idle. */
+  activeWorkSummary: z.string().max(240).optional(),
+  error: CanonicalErrorSchema.optional(),
+});
+export type ServerUpdateState = z.output<typeof ServerUpdateStateSchema>;
+
+export const ServerUpdateInstallRequestSchema = z.strictObject({
+  when: z.enum(['now', 'idle']),
+  stopActiveWork: z.boolean().optional(),
+});
+export type ServerUpdateInstallRequest = z.output<typeof ServerUpdateInstallRequestSchema>;
 
 // --- Local diagnostics ------------------------------------------------------
 // Diagnostics payloads contain already-redacted bounded records only. They do
@@ -4384,6 +4443,22 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([]),
     response: UpdateStateSchema,
   },
+  [IPC_CHANNELS.serverUpdatesGet]: {
+    request: z.tuple([]),
+    response: ServerUpdateStateSchema,
+  },
+  [IPC_CHANNELS.serverUpdatesCheck]: {
+    request: z.tuple([]),
+    response: ServerUpdateStateSchema,
+  },
+  [IPC_CHANNELS.serverUpdatesInstall]: {
+    request: z.tuple([ServerUpdateInstallRequestSchema]),
+    response: ServerUpdateStateSchema,
+  },
+  [IPC_CHANNELS.serverUpdatesCancel]: {
+    request: z.tuple([]),
+    response: ServerUpdateStateSchema,
+  },
   [IPC_CHANNELS.diagnosticsGet]: {
     request: z.tuple([]),
     response: DiagnosticsSnapshotSchema,
@@ -4623,6 +4698,10 @@ export interface AgenticoApi {
   installUpdateWhenIdle(): Promise<UpdateState>;
   installUpdateNow(request: UpdateInstallNowRequest): Promise<UpdateState>;
   restartToUpdate(): Promise<UpdateState>;
+  getServerUpdate(): Promise<ServerUpdateState>;
+  checkServerUpdate(): Promise<ServerUpdateState>;
+  installServerUpdate(request: ServerUpdateInstallRequest): Promise<ServerUpdateState>;
+  cancelServerUpdate(): Promise<ServerUpdateState>;
   getDiagnostics(): Promise<DiagnosticsSnapshot>;
   revealDiagnostics(): Promise<{ ok: boolean }>;
   clearDiagnostics(): Promise<DiagnosticsSnapshot>;

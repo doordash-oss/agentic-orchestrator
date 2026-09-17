@@ -31,6 +31,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/buildinfo"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
+	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 )
 
 const (
@@ -182,15 +183,17 @@ func openRegisteredDesktopUpdates(ctx context.Context) error {
 }
 
 // normalizeVersion trims surrounding whitespace and a single leading "v" so
-// ldflags/build-info versions and GitHub tags compare on equal footing.
+// ldflags/build-info versions and GitHub tags compare on equal footing. Thin
+// legacy adapter over the shared selfupdate helper.
 func normalizeVersion(v string) string {
-	return strings.TrimPrefix(strings.TrimSpace(v), "v")
+	return selfupdate.NormalizeVersion(v)
 }
 
 // sameVersion reports whether two version strings are equal after
-// normalization. A "dev" current never equals a release tag.
+// normalization. A "dev" current never equals a release tag. Thin legacy
+// adapter over the shared selfupdate helper.
 func sameVersion(a, b string) bool {
-	return normalizeVersion(a) == normalizeVersion(b)
+	return selfupdate.SameVersion(a, b)
 }
 
 // moduleSlug derives the owner/repo GitHub slug from the binary's module path

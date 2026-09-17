@@ -305,7 +305,7 @@ describe('ConnectionShell', () => {
             // The gateway folds the launch command context and bounded log
             // tail into the canonical error's diagnostics string.
             diagnostics:
-              'bundled agentico server --config [path] --state-dir [path]\n' +
+              'bundled agentico server --config [path] --state-dir [path] --updates=off\n' +
               'startup failed at [path]\n' +
               'credential=[redacted]',
           },

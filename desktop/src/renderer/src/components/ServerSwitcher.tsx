@@ -332,6 +332,11 @@ export function ServerSwitcher({
                         Remote
                       </span>
                     ) : null}
+                    {row.serverUpdate?.available === true ? (
+                      <span className="settings-panel__server-kind" data-kind="update">
+                        v{row.serverUpdate.latest} available
+                      </span>
+                    ) : null}
                   </span>
                   <span className="server-switcher__runtime" aria-hidden="true">
                     {row.runtimeDir ?? ''}

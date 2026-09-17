@@ -33,6 +33,7 @@ import {
   processAlive,
   readDiscovery,
   waitFor,
+  type JourneyWorld,
 } from '../helpers/world';
 
 test('app-owned transient recovery, crash-loop exhaustion, and manual retry', async ({}, testInfo) => {
@@ -58,6 +59,10 @@ test('app-owned transient recovery, crash-loop exhaustion, and manual retry', as
     );
     expect(initialConnection.ownership).toBe('app-owned');
     transcript.json('initial app-owned connection', initialConnection);
+    const initialUpdate = await fetchUpdateSnapshot(world);
+    expect(initialUpdate.status).toBe('disabled');
+    expect(initialUpdate.policy).toBe('off');
+    transcript.step('app-owned child reported the disabled/off update policy');
 
     transcript.section('A transient app-owned crash relaunches and adopts a new epoch');
     process.kill(initial.pid, 'SIGKILL');
@@ -74,6 +79,10 @@ test('app-owned transient recovery, crash-loop exhaustion, and manual retry', as
     expect(recovered.pid).not.toBe(initial.pid);
     transcript.step(`unexpected exit pid ${initial.pid} recovered as pid ${recovered.pid}`);
     transcript.json('revalidated connection after transient recovery', recoveredConnection);
+    const recoveredUpdate = await fetchUpdateSnapshot(world);
+    expect(recoveredUpdate.status).toBe('disabled');
+    expect(recoveredUpdate.policy).toBe('off');
+    transcript.step('relaunched app-owned child still reported the disabled/off update policy');
     await evidenceShot(handle, 'supervision-transient-crash-recovered');
 
     transcript.section('Rapid success/crash cycles consume the rolling restart budget');
@@ -114,6 +123,10 @@ test('app-owned transient recovery, crash-loop exhaustion, and manual retry', as
     expect(manualConnection.ownership).toBe('app-owned');
     transcript.step(`manual Retry launched and revalidated pid ${manual.pid}`);
     transcript.json('connection after manual retry', manualConnection);
+    const manualUpdate = await fetchUpdateSnapshot(world);
+    expect(manualUpdate.status).toBe('disabled');
+    expect(manualUpdate.policy).toBe('off');
+    transcript.step('manual-retry relaunch still reported the disabled/off update policy');
     await setTheme(handle, 'dark');
     await evidenceShot(handle, 'supervision-manual-retry-recovered');
   } finally {
@@ -129,3 +142,34 @@ test('app-owned transient recovery, crash-loop exhaustion, and manual retry', as
     destroyWorld(world);
   }
 });
+
+/**
+ * Authenticated update-snapshot read against the currently running
+ * app-owned bundled server, using the discovery record's bearer token like
+ * the other journeys' direct server calls.
+ */
+async function fetchUpdateSnapshot(
+  world: JourneyWorld,
+): Promise<{ status: unknown; policy: unknown }> {
+  const discovery = readDiscovery(world);
+  expect(discovery, 'server discovery record should exist').not.toBeNull();
+  const response = await fetch(`${discovery!.base_url}/api/v1/update`, {
+    headers: {
+      Accept: 'application/json',
+      'X-Agentico-Client': 'local',
+      ...(discovery!.auth_token === undefined
+        ? {}
+        : { Authorization: `Bearer ${discovery!.auth_token}` }),
+    },
+  });
+  const text = await response.text();
+  expect(response.ok, text).toBe(true);
+  const body = JSON.parse(text) as { update?: UpdateSnapshotFields };
+  expect(body.update, 'update snapshot should exist').toBeDefined();
+  return { status: body.update!.status, policy: body.update!.policy };
+}
+
+interface UpdateSnapshotFields {
+  status?: unknown;
+  policy?: unknown;
+}

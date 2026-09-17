@@ -95,7 +95,7 @@ test('verified download, Install When Idle, and Restart to Update require explic
     // it was showing.
     await updatePopover.getByRole('button', { name: 'Updates' }).click();
     let settings = await awaitSettingsWindow(handle);
-    const updatesPanel = settings.getByRole('region', { name: 'Updates' });
+    const updatesPanel = settings.getByRole('region', { name: 'Updates', exact: true });
     await expect(updatesPanel).toContainText('0.2.0');
     await expect(updatesPanel).toContainText('verified');
     await expect(updatesPanel.getByRole('button', { name: 'Release notes' })).toBeVisible();

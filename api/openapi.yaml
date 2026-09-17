@@ -1427,6 +1427,131 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/update:
+    get:
+      operationId: getUpdateSnapshot
+      summary: Read the authenticated, metadata-only update availability snapshot.
+      description: >-
+        Reports release availability for this runtime under its effective
+        startup update policy without triggering a check. The snapshot is
+        metadata-only: notification checks never download packages or
+        manifests, probe candidates, create installation receipts or staging,
+        or change executable bytes. Under the auto policy discovered
+        releases are staged, verified, and installed at the first idle
+        moment inside the configured window; the snapshot reports that
+        operation exactly like a client-requested idle install.
+      responses:
+        "200":
+          $ref: "#/components/responses/UpdateSnapshotResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/update/check:
+    post:
+      operationId: checkForUpdate
+      summary: Trigger one explicit release-availability check.
+      description: >-
+        Accepts an empty JSON object and returns 202 with the current
+        snapshot promptly. The accepted check runs asynchronously, tied to
+        the runtime lifetime rather than the requesting connection:
+        concurrent requests coalesce into one metadata worker and a
+        disconnecting caller never cancels accepted work. Rejected with 403
+        forbidden and the disabled-policy remediation when the effective
+        policy is off, with 409 when
+        the installation is ineligible (update_unsupported_install), and
+        with 429 update_check_failed while a server-imposed retry deadline
+        is still in force. A check issued while an install operation is
+        active refreshes latest metadata without overwriting the operation.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "202":
+          $ref: "#/components/responses/UpdateSnapshotResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "429":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/update/install:
+    post:
+      operationId: installUpdate
+      summary: Accept one consented install request for the discovered release.
+      description: >-
+        Requires consent true plus a when selection. With when idle the
+        operation is staged and waits for active work to finish without
+        interrupting it. With when now and no stop_active_work the install
+        proceeds only when no work is active. With when now and
+        stop_active_work true the install may interrupt feature sessions
+        and the singleton chat through the existing pause-stop and
+        chat-end semantics — repository work (clones, uploads, origin
+        checks, other repository activity), protected or unknown
+        admission reservations, and failed activity detection still refuse
+        before staging, again after staging, and again under the closed
+        admission gate, with 409 update_blocked_active_work and nothing
+        stopped. Stop dispatch and completion confirmation share one
+        ten-second deadline; any stop failure, timeout, or unresolved work
+        aborts the installation, leaves the current build serving with
+        already-stopped work interrupted, and requires fresh consent. An
+        equivalent request for the active operation returns the existing
+        operation; changing the target, when, or stop-work permission
+        requires canceling and resubmitting. Refused with 403 forbidden
+        and the disabled-policy remediation while the effective policy is
+        off and with 409 update_unsupported_install for ineligible
+        installations or a conflicting active operation or target.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateInstallRequest"
+      responses:
+        "202":
+          $ref: "#/components/responses/UpdateSnapshotResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "413":
+          $ref: "#/components/responses/ErrorResponse"
+    delete:
+      operationId: cancelUpdateInstall
+      summary: Cancel the active install operation.
+      description: >-
+        Cancels the active install operation and returns the current
+        availability snapshot after cleanup. Idempotent when nothing is
+        active. Refused with 403 forbidden and the disabled-policy
+        remediation while the effective policy is off, and with 409
+        update_in_progress once an explicit-stop operation entered its
+        stopping interval or draining has begun, because an install that
+        crossed that boundary can no longer be abandoned.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/UpdateSnapshotResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "413":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/events:
     get:
       operationId: streamEvents
@@ -1850,6 +1975,20 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RecoverySnapshotResponse"
+    UpdateSnapshotResponse:
+      description: >-
+        Metadata-only update availability snapshot. Served with 200 by the
+        read and cancel endpoints and with 202 by the accepted
+        explicit-check and install endpoints.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/UpdateSnapshotResponse"
     CompletionPreflightResponse:
       description: Read-only, server-authored completion preflight — eligible repository set, outcomes, blockers, PR URLs, source revision.
       headers:
@@ -6278,3 +6417,339 @@ components:
               type: boolean
             log_available:
               type: boolean
+    UpdateSnapshotResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [update]
+          properties:
+            update:
+              $ref: "#/components/schemas/UpdateSnapshot"
+    UpdateSnapshot:
+      type: object
+      description: >-
+        Metadata-only release availability for this runtime. Availability is
+        advisory: a check never fetches a package, manifest, checksum, or
+        signature, never stages anything, and never changes executable
+        bytes. The active-work summary reports the truthful current
+        activity counts that gate an immediate install.
+      required:
+        [
+          status,
+          policy,
+          channel,
+          strategy,
+          current_version,
+          installation,
+          signature,
+          check_interval_seconds,
+          active_work_summary,
+          scheduled_for,
+        ]
+      properties:
+        status:
+          type: string
+          description: >-
+            Coarse availability state. downloading, verified, scheduled,
+            draining, and restarting are reserved for the later installation
+            slice and never emitted by the availability endpoints.
+          enum:
+            - idle
+            - checking
+            - up_to_date
+            - available
+            - downloading
+            - verified
+            - scheduled
+            - draining
+            - restarting
+            - confirmed
+            - failed
+            - unsupported
+            - disabled
+        policy:
+          type: string
+          description: >-
+            Effective startup update policy. auto installs each newer
+            stable release when the runtime is idle and never stops work.
+          enum: [off, notify, auto]
+        channel:
+          type: string
+          description: Release channel consulted by checks. Only stable is supported.
+          enum: [stable]
+        strategy:
+          type: string
+          description: >-
+            How automatic installs wait for in-flight work. quiesce is
+            accepted and behaves as idle in this release. Never affects
+            client-requested installs.
+          enum: [idle, quiesce]
+        current_version:
+          type: string
+          description: Running build version as reported at startup.
+        latest_version:
+          type: string
+          description: >-
+            Greatest clean stable release discovered by the last successful
+            check; unknown (absent) before discovery. A suppressed newest
+            release remains visible here.
+          x-go-type-skip-optional-pointer: false
+        target_version:
+          type: string
+          description: >-
+            Version a pending installation targets; present only while an
+            install operation is active. Never trusted from feed metadata
+            alone.
+          x-go-type-skip-optional-pointer: false
+        installation:
+          type: string
+          description: Classified installation method of the running executable.
+          enum:
+            - tarball
+            - go_install
+            - homebrew
+            - app_bundle
+            - development
+            - unknown
+        unsupported_reason:
+          type: string
+          description: >-
+            Machine-readable remediation code present only while status is
+            unsupported. ownership_contention means another live runtime owns
+            this binary's update lease; lease_unavailable covers other lease
+            acquisition failures.
+          enum:
+            - bundled
+            - homebrew
+            - development_version
+            - unsupported_platform
+            - non_replaceable
+            - ownership_contention
+            - lease_unavailable
+          x-go-type-skip-optional-pointer: false
+        remediation:
+          type: string
+          description: Actionable next step for an unsupported installation.
+          x-go-type-skip-optional-pointer: false
+        signature:
+          type: string
+          description: >-
+            Signature trust state for a would-be target. Metadata-only
+            checks report unverified; verified appears only after an
+            install operation verified the pinned candidate.
+          enum: [unverified, verified]
+        last_check_at:
+          type: string
+          format: date-time
+          description: When the last check attempt finished, successful or not.
+          x-go-type-skip-optional-pointer: false
+        last_success_at:
+          type: string
+          format: date-time
+          description: >-
+            When the last successful check finished. Retained across later
+            failed refreshes together with the metadata it produced.
+          x-go-type-skip-optional-pointer: false
+        next_check_at:
+          type: string
+          format: date-time
+          description: >-
+            When the next periodic check is scheduled. Absent when no
+            periodic check will run (policy off, unsupported, or shutdown).
+          x-go-type-skip-optional-pointer: false
+        retry_not_before:
+          type: string
+          format: date-time
+          description: >-
+            Server-imposed retry floor from a 403/429 response. Local
+            backoff and jitter never shorten it; explicit checks inside the
+            deadline are refused without a request.
+          x-go-type-skip-optional-pointer: false
+        check_interval_seconds:
+          type: integer
+          description: Configured periodic check interval in seconds.
+          minimum: 1
+        latest_release_url:
+          type: string
+          format: uri
+          description: >-
+            Public release page for the discovered latest version. Never a
+            signed download URL and never credential-bearing.
+          x-go-type-skip-optional-pointer: false
+        error:
+          $ref: "#/components/schemas/Error"
+          description: >-
+            Canonical error for the current state: update_rolled_back for a
+            validated rollback or suppressed newest release,
+            update_check_failed for transient check failures. Absent when
+            availability is healthy.
+          x-go-type-skip-optional-pointer: false
+        receipt:
+          $ref: "#/components/schemas/UpdatePublicReceipt"
+          description: >-
+            Sanitized public projection of the durable installation receipt
+            history. Absent when no installation receipt exists for this
+            executable. Metadata-only runs never create receipts.
+          x-go-type-skip-optional-pointer: false
+        method:
+          type: string
+          description: >-
+            Waiting method of the accepted install operation; present only
+            while an install operation is active.
+          enum: [now, idle]
+          x-enum-varnames: [UpdateSnapshotMethodNow, UpdateSnapshotMethodIdle]
+          x-go-type-skip-optional-pointer: false
+        stop_active_work:
+          type: boolean
+          description: >-
+            The actual stop-work permission the accepted operation retains
+            (only meaningful with method now); present only while an
+            operation is active.
+          x-go-type-skip-optional-pointer: false
+        scheduled_for:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Next maintenance-window opening an automatic install waits for;
+            null while no window bounds the operation, because an idle wait
+            has no deadline.
+          x-go-type-skip-optional-pointer: false
+        target_contract:
+          $ref: "#/components/schemas/UpdateTargetContract"
+          description: >-
+            Verified server contract of the pinned candidate; exposed only
+            after candidate verification, never from feed metadata alone.
+          x-go-type-skip-optional-pointer: false
+        active_work_summary:
+          $ref: "#/components/schemas/UpdateActiveWorkSummary"
+    UpdatePublicReceipt:
+      type: object
+      description: >-
+        Public view of the durable installation receipt: versions, outcome,
+        times, and a sanitized error only. Transaction paths, descriptors,
+        process environment, credentials, and raw receipt internals never
+        cross this boundary.
+      required: [outcome, from_version, to_version]
+      properties:
+        outcome:
+          type: string
+          enum: [pending, confirmed, rolled_back]
+        from_version:
+          type: string
+        to_version:
+          type: string
+        completed_at:
+          type: string
+          format: date-time
+          description: When the receipt reached its settled outcome.
+          x-go-type-skip-optional-pointer: false
+        error:
+          type: string
+          description: Sanitized failure reason for rolled_back receipts.
+          x-go-type-skip-optional-pointer: false
+    UpdateActiveWorkSummary:
+      type: object
+      description: >-
+        Truthful current activity counts that gate an immediate install.
+        Counts are advisory reads of live work, never reservations.
+      required:
+        [
+          feature_count,
+          chat_active,
+          clone_count,
+          upload_count,
+          origin_check_count,
+          pending_admissions,
+          parked_count,
+          detection_failed,
+        ]
+      properties:
+        feature_count:
+          type: integer
+          description: Number of features with live activity.
+        chat_active:
+          type: boolean
+          description: Whether any feature chat turn is active.
+        clone_count:
+          type: integer
+          description: Number of in-flight repository clone operations.
+        upload_count:
+          type: integer
+          description: Number of in-flight staged uploads.
+        origin_check_count:
+          type: integer
+          description: Number of in-flight origin comparisons.
+        pending_admissions:
+          type: integer
+          description: Number of held admission reservations.
+        parked_count:
+          type: integer
+          description: Number of parked operations; always zero in this phase.
+        detection_failed:
+          type: boolean
+          description: >-
+            Whether activity detection itself failed; the counts are then
+            incomplete and an immediate install is refused.
+        quiescing_since:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            When the runtime began quiescing work for an accepted install;
+            never set in this phase.
+          x-go-type-skip-optional-pointer: false
+    UpdateInstallRequest:
+      type: object
+      description: >-
+        Explicit, consented request to install the currently discovered
+        latest stable release.
+      required: [consent, when]
+      properties:
+        consent:
+          type: boolean
+          description: >-
+            Explicit user consent to install a release. Must be true; any
+            other value is refused with update_consent_required.
+        when:
+          type: string
+          description: >-
+            Waiting method: now installs immediately, idle stages the
+            operation and waits for active work to finish without
+            interrupting it.
+          enum: [now, idle]
+          x-enum-varnames: [UpdateInstallRequestWhenNow, UpdateInstallRequestWhenIdle]
+        stop_active_work:
+          type: boolean
+          description: >-
+            Stop-work permission for an immediate install; valid only with
+            when now. Authorizes interrupting feature sessions and the
+            singleton chat through the existing pause-stop and chat-end
+            semantics. Repository work, protected or unknown admission
+            reservations, and failed activity detection still refuse, and
+            any stop failure or timeout aborts the install with
+            update_blocked_active_work while already-stopped work stays
+            interrupted.
+          x-go-type-skip-optional-pointer: false
+        version:
+          type: string
+          description: >-
+            Explicit target version selector. Must name the currently
+            discovered latest stable version; any other version is refused.
+          x-go-type-skip-optional-pointer: false
+    UpdateTargetContract:
+      type: object
+      description: >-
+        Verified server contract of the pinned install candidate, read from
+        the downloaded release after verification; never feed metadata.
+      required: [api_version, schema_version, min_client_schema]
+      properties:
+        api_version:
+          type: string
+          description: Server API version the candidate declares.
+        schema_version:
+          type: integer
+          description: Server schema version the candidate declares.
+        min_client_schema:
+          type: integer
+          description: Minimum client schema version the candidate requires.

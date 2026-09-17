@@ -36,6 +36,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
 func NewHandler(opts HandlerOptions) http.Handler {
@@ -95,6 +96,23 @@ type apiHandler struct {
 	// pre-CAS hooks) for Update-from-origin; the zero value uses production
 	// defaults.
 	updateSourceOptions git.SourceUpdateOptions
+
+	// updates owns the release-availability snapshot, the metadata check
+	// worker, and the periodic scheduler behind /api/v1/update.
+	updates *updateCoordinator
+
+	// admission is the runtime work-admission boundary shared with
+	// orchestration, sessions, and repository work; nil disables the
+	// boundary (tests, runtimes without install support).
+	admission *workadmission.Coordinator
+	// featureDetectFail is the test-only detection-failure seam from
+	// UpdateOptions.DetectFailHook: when set, the feature-activity detector
+	// reports a detection failure instead of probing the store. Nil in
+	// production.
+	featureDetectFail func() error
+	// probeActivity counts read-launched background probes for the
+	// repository-work activity detector.
+	probeActivity *ProbeActivity
 
 	// sourceUpdates tracks the lifetime of admitted Update-from-origin
 	// attempts so reconciliation reads and feature acceptance settle before
@@ -168,9 +186,43 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		updateSourceDeadline:    defaultUpdateSourceDeadline,
 		sourceUpdates:           newSourceUpdateTracker(),
 		reconcileSourceDeadline: defaultReconcileSourceDeadline,
+		admission:               opts.Admission,
+		probeActivity:           opts.ProbeActivity,
 	}
+	if handler.probeActivity == nil {
+		handler.probeActivity = NewProbeActivity()
+	}
+	// The update coordinator's activity probe reads this handler's
+	// detectors; discovery runs outside the coordinator's mutex.
+	updatesOpts := opts.Updates
+	updatesOpts.Activity = func(ctx context.Context) (workadmission.Activity, bool, int) {
+		activity, detectionFailed, _ := handler.admissionActivitySnapshot(ctx)
+		return activity, detectionFailed, handler.admissionPendingCount()
+	}
+	if updatesOpts.Stopper == nil {
+		// The production stopper dispatches through this handler's mutation
+		// surface and pause-stop projection; tests inject fakes directly.
+		updatesOpts.Stopper = handlerInstallStopper{handler: handler}
+	}
+	handler.featureDetectFail = updatesOpts.DetectFailHook
+	handler.updates = newUpdateCoordinator(updatesOpts)
+	handler.updates.publish = handler.publishUpdateEvent
+	// Origin attempts reserve admission from registration until they settle.
+	handler.originChecks.admission = handler.admission
+	// Register the handler-owned activity detectors on the shared boundary.
+	handler.registerAdmissionDetectors(handler.admission)
 	if opts.Worktrees != nil {
-		handler.cleanliness = git.NewCleanlinessCache(opts.Worktrees)
+		var inspector git.CleanlinessInspector = git.NewCleanlinessCache(opts.Worktrees)
+		if handler.admission != nil {
+			// Every dirtiness probe the cache launches owns a repository
+			// reservation, so a stale-cache read never drops protection
+			// while a detached refresh continues.
+			inspector = admittedCleanliness{
+				base:     inspector,
+				admitted: newAdmittedProbe(handler.admission, handler.probeActivity),
+			}
+		}
+		handler.cleanliness = inspector
 	}
 	if opts.Clones != nil {
 		handler.clones = opts.Clones
@@ -179,8 +231,9 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		// dir and publishes SSE invalidations through this handler's
 		// broker.
 		svc, err := clone.New(clone.Options{
-			StateDir: opts.Runtime.StateDir,
-			Config:   func() *config.Config { return handler.configOrDefault() },
+			StateDir:  opts.Runtime.StateDir,
+			Config:    func() *config.Config { return handler.configOrDefault() },
+			Admission: handler.admission,
 			Hooks: clone.Hooks{
 				OperationChanged: handler.publishOperationEvent,
 				WorkspaceChanged: handler.publishCloneWorkspaceEvent,
@@ -219,6 +272,9 @@ const (
 	apiPathRecovery                = "/api/v1/recovery"
 	apiPathRecoveryActions         = "/api/v1/recovery/actions"
 	apiPathRecoveryLogs            = "/api/v1/recovery/logs"
+	apiPathUpdate                  = "/api/v1/update"
+	apiPathUpdateCheck             = "/api/v1/update/check"
+	apiPathUpdateInstall           = "/api/v1/update/install"
 	apiPathEvents                  = "/api/v1/events"
 	apiPathUploads                 = "/api/v1/uploads"
 )
@@ -243,6 +299,7 @@ const (
 	resourceTypeRuntime        = "runtime"
 	resourceTypeRelationship   = "relationship"
 	resourceTypeCloneOperation = "clone_operation"
+	resourceTypeUpdate         = "update"
 )
 
 var topLevelServerRoutes = []topLevelRoute{
@@ -274,6 +331,9 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathRecovery, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryRoute }},
 	{apiPathRecoveryActions, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryActionRoute }},
 	{apiPathRecoveryLogs, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryLogRoute }},
+	{apiPathUpdate, func(h *apiHandler) http.HandlerFunc { return h.handleUpdateRoute }},
+	{apiPathUpdateCheck, func(h *apiHandler) http.HandlerFunc { return h.handleUpdateCheckRoute }},
+	{apiPathUpdateInstall, func(h *apiHandler) http.HandlerFunc { return h.handleUpdateInstallRoute }},
 	{apiPathEvents, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleEvents) }},
 	{apiPathUploads, func(h *apiHandler) http.HandlerFunc { return h.handleUploadsRoute }},
 }

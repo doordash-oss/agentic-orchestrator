@@ -89,6 +89,7 @@ import {
   type RecoveryExecuteRequest,
   type RecoveryLogReadRequest,
   type UpdateInstallNowRequest,
+  type ServerUpdateInstallRequest,
   type CompletionPreflightRequest,
   type PublishDescriptionRequest,
   type RepositoryDiffRequest,
@@ -362,6 +363,11 @@ const api: AgenticoApi = {
   installUpdateNow: (request: UpdateInstallNowRequest) =>
     call(IPC_CHANNELS.updatesInstallNow, request),
   restartToUpdate: () => call(IPC_CHANNELS.updatesRestart),
+  getServerUpdate: () => call(IPC_CHANNELS.serverUpdatesGet),
+  checkServerUpdate: () => call(IPC_CHANNELS.serverUpdatesCheck),
+  installServerUpdate: (request: ServerUpdateInstallRequest) =>
+    call(IPC_CHANNELS.serverUpdatesInstall, request),
+  cancelServerUpdate: () => call(IPC_CHANNELS.serverUpdatesCancel),
   getDiagnostics: () => call(IPC_CHANNELS.diagnosticsGet),
   revealDiagnostics: () => call(IPC_CHANNELS.diagnosticsReveal),
   clearDiagnostics: () => call(IPC_CHANNELS.diagnosticsClear),

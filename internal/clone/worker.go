@@ -238,8 +238,15 @@ func (s *Service) finalizeOutcomeLocked(op *opState, cur *Record, outcome State,
 	}
 	if err := s.save(cur); err != nil {
 		// Keep the truthful unresolved record on disk; the next
-		// reconciliation retries the transition.
+		// reconciliation retries the transition, and the admission
+		// reservation stays held until that retry settles it.
 		return
+	}
+	if cleaned {
+		// Terminal with completed cleanup: the operation has settled and
+		// its reservation releases. A cleanup-pending record keeps its
+		// reservation until cleanup resolves.
+		op.releaseReservationLocked()
 	}
 }
 
@@ -343,13 +350,13 @@ func (s *Service) publishLocked(op *opState, cur *Record) {
 
 	// The rename succeeded: publication is the irreversible success
 	// boundary. Retain published data whatever happens next.
-	s.recordSuccessLocked(cur)
+	s.recordSuccessLocked(op, cur)
 }
 
 // recordSuccessLocked durably records success from publication evidence.
 // A persistence failure keeps the truthful finalizing state; the
 // repository stays published and a later reconciliation records success.
-func (s *Service) recordSuccessLocked(cur *Record) {
+func (s *Service) recordSuccessLocked(op *opState, cur *Record) {
 	pub := s.publicationIdentity(cur)
 	now := s.now().UTC()
 	cur.State = StateSucceeded
@@ -365,6 +372,9 @@ func (s *Service) recordSuccessLocked(cur *Record) {
 	if err := s.save(cur); err != nil {
 		return
 	}
+	// Success is durable: the operation has settled and its reservation
+	// releases (a failed save keeps it held for the retry).
+	op.releaseReservationLocked()
 	if s.opts.Hooks.WorkspaceChanged != nil {
 		s.opts.Hooks.WorkspaceChanged()
 	}

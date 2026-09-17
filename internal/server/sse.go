@@ -67,6 +67,10 @@ const (
 	// clone operation change. Events identify the changed operation; the
 	// authoritative snapshot stays the durable record.
 	sseEventCloneUpdated = "clone.updated"
+	// sseEventUpdateUpdated is the snapshot-required event kind for any
+	// visible release-availability snapshot change; clients re-GET
+	// /api/v1/update.
+	sseEventUpdateUpdated = "update.updated"
 	// sseEventStreamReset is the event kind sent when the client's replay
 	// cursor has fallen outside the broker's retained buffer, forcing a full
 	// resync.

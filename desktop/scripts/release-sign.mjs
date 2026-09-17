@@ -39,15 +39,19 @@ import { fileURLToPath } from 'node:url';
 
 import {
   extractEmbeddedReleasePublicKey,
+  extractGoReleasePublicKeySPKI,
   privateKeyFromMaterial,
   publicKeyPem,
   signReleasePayload,
+  spkiBase64FromPem,
   verifyReleasePayload,
 } from './lib/release-signing.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
+const rootDir = dirname(desktopDir);
 const DEFAULT_KEY_FILE = join(homedir(), '.config', 'agentico-release', 'release-key.pem');
 const UPDATES_SOURCE = join(desktopDir, 'src', 'main', 'updates.ts');
+const GO_TRUST_SOURCE = join(rootDir, 'internal', 'selfupdate', 'trust.go');
 
 function fail(message) {
   console.error(`release-sign: ${message}`);
@@ -71,8 +75,23 @@ function embeddedTrustRoot() {
   return extractEmbeddedReleasePublicKey(readFileSync(UPDATES_SOURCE, 'utf8'));
 }
 
+// The Go updater (internal/selfupdate) and the desktop updater (updates.ts)
+// must embed the exact same production trust root; a signature only one side
+// accepts must never reach a release. Checked before any signature is written.
+function assertTrustRootParity() {
+  const goSpki = extractGoReleasePublicKeySPKI(readFileSync(GO_TRUST_SOURCE, 'utf8'));
+  const desktopSpki = spkiBase64FromPem(embeddedTrustRoot());
+  if (goSpki.trim() !== desktopSpki.trim()) {
+    fail(
+      'Go and desktop release trust roots do not match; refusing to sign ' +
+        '(internal/selfupdate/trust.go vs src/main/updates.ts)',
+    );
+  }
+}
+
 function sign(file) {
   if (file === undefined) fail('usage: release-sign.mjs sign <file>');
+  assertTrustRootParity();
   const key = loadPrivateKey();
   const derived = publicKeyPem(key);
   const embedded = embeddedTrustRoot();

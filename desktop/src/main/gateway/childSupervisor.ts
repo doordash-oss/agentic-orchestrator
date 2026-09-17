@@ -304,6 +304,7 @@ export class ChildSupervisor {
             selected.configPath,
             '--state-dir',
             selected.stateDir,
+            '--updates=off',
           ]);
           this.adopt(child);
           this.host.log('detached app-owned server relaunched silently');

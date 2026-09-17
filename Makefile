@@ -92,6 +92,21 @@ test-fast:
 	echo "Fast suite wall time: $${elapsed}s"; \
 	exit $$test_status
 
+.PHONY: test-e2e test-selfupdate-native test-selfupdate-driver
+
+# Instrument the child binaries too: go test -race alone covers only the harness.
+test-e2e:
+	AGENTICO_E2E_RACE=1 go test ./test/e2e/... -count=1 -race -timeout 30m
+
+# Real exec, endpoint preservation, signed install, rollback, cleanup retry,
+# and explicit stop consent on each supported native platform.
+test-selfupdate-native:
+	go test ./test/e2e/... -count=1 -timeout 15m -run '^(TestSelfUpdateJourney(FixedPort|DefaultEphemeral)|TestReleaseInstallJourney(SignedFixture|TargetStartupFailure)|TestSelfUpdateCleanupRetry|TestInstallStopWorkJourney(SuccessStopsAndReplaces|RollbackAfterConsentedStop))$$'
+
+test-selfupdate-driver:
+	go test -tags agentico_selfupdate_driver ./cmd/agentico -short -count=1 -run '^TestSelfUpdateDriver'
+	go vet -tags agentico_selfupdate_driver ./cmd/agentico
+
 # ---------- Jaeger (local OTel collector + trace UI) ----------
 JAEGER_CONTAINER := agentic-jaeger
 JAEGER_IMAGE     := jaegertracing/all-in-one:latest

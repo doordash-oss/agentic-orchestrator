@@ -756,7 +756,6 @@ func TestUpdateInstallCancelAfterStopEntryRefused(t *testing.T) {
 	waitStopEntered(t, coordinator)
 	waitInstallCond(t, 5*time.Second, func() bool { return len(stopper.stopCallsSnapshot()) == 1 },
 		"first dispatch never started")
-
 	result, refusal := coordinator.cancelInstall(context.Background())
 	if result != cancelDrainRefused || refusal == nil ||
 		refusal.status != http.StatusConflict || refusal.code != errcat.UpdateInProgress {
@@ -842,9 +841,21 @@ func TestUpdateInstallStopTimeoutAborts(t *testing.T) {
 		"first dispatch never started")
 	// The dispatch overruns the whole budget; releasing it afterwards must
 	// not restart the clock.
+	coordinator.mu.Lock()
+	done := coordinator.install.done
+	coordinator.mu.Unlock()
 	time.Sleep(300 * time.Millisecond)
 	close(park)
-	waitInstallCond(t, 5*time.Second, func() bool { return installOpCleared(coordinator) }, "timed-out operation never settled")
+	// Clearing the operation precedes reopening admission and publishing the
+	// observation; join the worker before asserting all three outcomes.
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed-out operation never settled")
+	}
+	if !installOpCleared(coordinator) {
+		t.Fatal("timed-out operation must be cleared")
+	}
 	if got := lifecycle.replaceCallsN(); got != 0 {
 		t.Fatalf("replace calls = %d, want none after the deadline expired", got)
 	}

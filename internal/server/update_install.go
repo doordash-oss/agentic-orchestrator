@@ -106,8 +106,10 @@ type InstallLifecycle interface {
 	// lifecycle statuses (draining, restarting); responseDone must complete
 	// before shutdown begins. On success it never returns. When the old
 	// build keeps serving (a drain-stage abort), it returns the sanitized
-	// reason; recovery paths re-exec and never return.
-	Replace(handle InstallTransaction, notify func(status string), responseDone <-chan struct{}) error
+	// reason; recovery paths re-exec and never return. releaseUpdateLock
+	// releases the caller's held lock before recovery reacquires it. It is
+	// idempotent so the caller can also release on a returning failure.
+	Replace(handle InstallTransaction, releaseUpdateLock func(), notify func(status string), responseDone <-chan struct{}) error
 }
 
 // installRefusal is one typed install-request refusal for the handler.
@@ -396,8 +398,7 @@ func (c *updateCoordinator) cancelInstall(ctx context.Context) (cancelResult, *i
 	// The worker settled. A retained operation means its cleanup failed:
 	// this repeated DELETE owns the idempotent retry.
 	c.mu.Lock()
-	op = c.install
-	if op == nil {
+	if c.install != op {
 		c.mu.Unlock()
 		return cancelCompleted, nil
 	}
@@ -417,13 +418,29 @@ func (c *updateCoordinator) cancelInstall(ctx context.Context) (cancelResult, *i
 			},
 		}
 	}
-	c.mu.Lock()
-	if c.install == op {
-		c.install = nil
-	}
-	c.mu.Unlock()
-	c.admissionOpen()
+	c.completeInstallCancellation(op)
 	return cancelCompleted, nil
+}
+
+// completeInstallCancellation removes only the cancelled operation and
+// publishes the resulting snapshot. Reopening admission before releasing
+// the mutex prevents a new install from closing the boundary in between.
+func (c *updateCoordinator) completeInstallCancellation(op *installOperation) {
+	c.mu.Lock()
+	if c.install != op {
+		c.mu.Unlock()
+		return
+	}
+	previous := op.status
+	c.admissionOpen()
+	c.install = nil
+	status := c.snapshotStatusLocked()
+	revision := c.commitRevisionLocked()
+	publish := revision != "" && !c.stopped
+	c.mu.Unlock()
+	if publish {
+		c.emitTransition(previous, status, "install_cancelled")
+	}
 }
 
 // waitInstallSettled waits for one operation's worker to settle within the
@@ -854,6 +871,9 @@ func (c *updateCoordinator) guardedCommit(op *installOperation, ctx context.Cont
 				}))
 			return
 		}
+		// Recovery may release this same lock before Replace returns.
+		// Exactly-once release keeps the caller's failure cleanup safe.
+		release = sync.OnceFunc(release)
 		blockers := c.installBlockers(admission)
 		if blockers != nil || !c.installHeldNone(admission) {
 			release()
@@ -915,7 +935,7 @@ func (c *updateCoordinator) guardedCommit(op *installOperation, ctx context.Cont
 		// The accepted response completes before shutdown begins.
 		waitResponseDone(op.responseDone)
 
-		replaceErr := lifecycle.Replace(handle, func(status string) {
+		replaceErr := lifecycle.Replace(handle, release, func(status string) {
 			if status == updateStatusRestarting {
 				c.mu.Lock()
 				if c.install == op {
@@ -1080,8 +1100,7 @@ func (c *updateCoordinator) settleCancelled(op *installOperation, cleanup func()
 		c.admissionOpen()
 		return
 	}
-	c.clearInstallOp(op)
-	c.admissionOpen()
+	c.completeInstallCancellation(op)
 }
 
 // logInstallWait records one bounded wait-reevaluation without changing the

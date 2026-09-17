@@ -91,10 +91,11 @@ type productionInstallTransaction struct {
 	run *serverRun
 	tx  *selfupdate.Transaction
 
-	// settleOnce keeps the pre-replacement settlement exactly-once across
-	// worker cancellation and repeated DELETE cleanup retries.
-	settleOnce sync.Once
-	settleErr  error
+	// Settlement and cleanup are serialized, but failures remain retryable.
+	// Once settlement succeeds, cleanup retries must not rewrite the receipt
+	// or require backup files a partial cleanup has already removed.
+	settleMu sync.Mutex
+	settled  bool
 }
 
 // ID returns the durable transaction identifier.
@@ -107,19 +108,20 @@ func (t *productionInstallTransaction) ID() string {
 // never rollback suppression — and validated owned resources are cleaned.
 // Idempotent.
 func (t *productionInstallTransaction) Cancel() error {
-	t.settleOnce.Do(func() {
-		exec, lease := t.run.boot.selfUpdateExec, t.run.boot.updateLease
+	t.settleMu.Lock()
+	defer t.settleMu.Unlock()
+	exec, lease := t.run.boot.selfUpdateExec, t.run.boot.updateLease
+	if !t.settled {
 		plan := selfupdate.RecoveryPlan{
 			Receipt:     t.tx.Receipt(),
 			ReceiptPath: selfupdate.ReceiptPath(exec.Path),
 		}
 		if _, err := selfupdate.ResolveAbandoned(exec, lease, plan, "install cancelled before replacement", selfupdate.FileOps{}); err != nil {
-			t.settleErr = fmt.Errorf("settling cancelled transaction: %w", err)
-			return
+			return fmt.Errorf("settling cancelled transaction: %w", err)
 		}
-		t.settleErr = selfupdate.CleanupSettledTransaction(exec.Path, t.ID(), selfupdate.CleanupSeams{})
-	})
-	return t.settleErr
+		t.settled = true
+	}
+	return selfupdate.CleanupSettledTransaction(exec.Path, t.ID(), selfupdate.CleanupSeams{})
 }
 
 // productionInstallLifecycle owns the process-level replacement work for
@@ -221,7 +223,7 @@ func (l *productionInstallLifecycle) Begin(candidate selfupdate.VerifiedCandidat
 // success and on every recovery path it never returns. It returns a
 // sanitized reason only when an aborted drain leaves the old build
 // serving.
-func (l *productionInstallLifecycle) Replace(handle serverruntime.InstallTransaction, notify func(status string), _ <-chan struct{}) error {
+func (l *productionInstallLifecycle) Replace(handle serverruntime.InstallTransaction, releaseUpdateLock func(), notify func(status string), _ <-chan struct{}) error {
 	tx, ok := handle.(*productionInstallTransaction)
 	if !ok {
 		return errors.New("unknown install transaction handle")
@@ -229,10 +231,6 @@ func (l *productionInstallLifecycle) Replace(handle serverruntime.InstallTransac
 	r, err := l.current()
 	if err != nil {
 		return err
-	}
-	releaseUpdateLock := func() {}
-	if lock, err := selfupdate.AcquireRuntimeUpdateLock(r.boot.runtime.RuntimeDir); err == nil {
-		releaseUpdateLock = func() { _ = lock.Close() }
 	}
 	// requestExit hands a failed recovery boundary's termination code to
 	// the serving goroutine; the runtime is already torn down, so the

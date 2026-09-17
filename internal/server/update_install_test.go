@@ -317,7 +317,7 @@ func (l *fakeInstallLifecycle) Begin(selfupdate.VerifiedCandidate) (InstallTrans
 	return tx, nil
 }
 
-func (l *fakeInstallLifecycle) Replace(_ InstallTransaction, notify func(string), _ <-chan struct{}) error {
+func (l *fakeInstallLifecycle) Replace(_ InstallTransaction, _ func(), notify func(string), _ <-chan struct{}) error {
 	l.mu.Lock()
 	l.replaceCalls++
 	l.notifyStatus = append(l.notifyStatus, updateStatusRestarting)
@@ -1373,7 +1373,19 @@ func TestUpdateInstallCleanupFailureRetainedAndRetried(t *testing.T) {
 	}
 
 	// The repeated DELETE retries the idempotent cleanup, succeeds, and
-	// clears the retained operation.
+	// clears the retained operation with an invalidation for other clients.
+	countEvents := func() int {
+		fixture.handler.broker.mu.Lock()
+		defer fixture.handler.broker.mu.Unlock()
+		count := 0
+		for _, event := range fixture.handler.broker.ring {
+			if event.Kind == sseEventUpdateUpdated {
+				count++
+			}
+		}
+		return count
+	}
+	before := countEvents()
 	w = httptest.NewRecorder()
 	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
 	resp = w.Result()
@@ -1382,6 +1394,9 @@ func TestUpdateInstallCleanupFailureRetainedAndRetried(t *testing.T) {
 		t.Fatalf("retry cancel status = %d, want 200", resp.StatusCode)
 	}
 	waitInstallCond(t, 5*time.Second, func() bool { return installOpCleared(fixture.handler.updates) }, "retained operation never cleared")
+	if got := countEvents(); got != before+1 {
+		t.Fatalf("cleanup retry events = %d, want %d", got, before+1)
+	}
 	if got := fixture.tx.cancelCalls(); got != 3 {
 		t.Fatalf("transaction cancels = %d, want worker settle + failed retry + successful retry", got)
 	}
@@ -1527,5 +1542,34 @@ func TestUpdateInstallCancelAcceptedDuringBeginNeverReplaces(t *testing.T) {
 	}
 	if !installOpCleared(fixture.handler.updates) {
 		t.Fatal("operation must be cleared after cancellation")
+	}
+}
+
+func TestUpdateInstallCancelPublishesInvalidation(t *testing.T) {
+	stager, lifecycle, admission, _ := newInstallFakes()
+	admission.setWaitIdleGate(make(chan struct{}), 1)
+	c, _, recorder := newInstallTestCoordinator(t, stager, lifecycle, admission)
+	c.performCheck(context.Background(), "initial")
+	if _, refusal := c.requestInstall(installRequest{consent: true, when: updateInstallWhenIdle}, nil); refusal != nil {
+		t.Fatal(refusal)
+	}
+	t.Cleanup(func() { _, _ = c.cancelInstall(context.Background()) })
+	waitInstallCond(t, 5*time.Second, func() bool { return admission.waitCallsN() > 0 }, "worker did not enter idle wait")
+	before := recorder.eventCount()
+	if _, refusal := c.cancelInstall(context.Background()); refusal != nil {
+		t.Fatal(refusal)
+	}
+	if got := c.Snapshot().Status; got != UpdateSnapshotStatus(updateStatusAvailable) {
+		t.Fatalf("status = %s", got)
+	}
+	if recorder.eventCount() != before+1 {
+		t.Fatal("scheduled -> available cancellation emits no update.updated event")
+	}
+	after := recorder.eventCount()
+	if result, refusal := c.cancelInstall(context.Background()); result != cancelNone || refusal != nil {
+		t.Fatalf("repeated cancel = %v, %v", result, refusal)
+	}
+	if recorder.eventCount() != after {
+		t.Fatal("no-op cancel emitted an invalidation")
 	}
 }

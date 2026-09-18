@@ -334,7 +334,7 @@ func TestParentProjectionsCarryCompleteRelationshipHistory(t *testing.T) {
 					ConflictFiles: []string{"internal/server/read_model.go"},
 				}},
 			},
-			Diagnostics: repoNameSelf + ": rebase replay conflict: [internal/server/read_model.go]",
+			Diagnostics: repoNameSelf + ": resolving segment phase:2..phase:3 commit 1a2b3c4d exhausted 3 attempts on: internal/server/read_model.go; last failure: conflict markers remain in internal/server/read_model.go; attempt directory: /state/features/f1/rebase-resolution/repo-a/1a2b3c4d/attempt-03",
 		},
 		Entries: []feature.RepoTransactionEntry{{
 			Repo: repoNameSelf,

@@ -365,6 +365,7 @@ func TestRebaseGate_TargetMovedStillPasses(t *testing.T) {
 	if err := o.StartFeature(fx.childID); err != nil {
 		t.Fatalf("StartFeature() error = %v", err)
 	}
+	fx.waitLanded(t)
 	if err := fx.store.Modify(fx.childID, func(f *feature.Feature) error {
 		f.Status = feature.StatusReviewPassed
 		return nil
@@ -406,6 +407,7 @@ func TestRebaseGate_OnlyBehindReposGated(t *testing.T) {
 	if err := o.StartFeature(fx.childID); err != nil {
 		t.Fatalf("StartFeature() error = %v", err)
 	}
+	fx.waitLanded(t)
 	if err := fx.store.Modify(fx.childID, func(f *feature.Feature) error {
 		f.Status = feature.StatusReviewPassed
 		return nil

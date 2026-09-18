@@ -178,6 +178,7 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 		t, spec, "ErrorRepositoryContext",
 		"name", "branch", "conflict_files", "dirty_files",
 		"child_head_sha", "candidate_sha", "observed_sha",
+		"commit_sha", "attempts",
 	)
 	errorProps := schemaProperties(spec.Components.Schemas["Error"])
 	for _, forbidden := range []string{"message", "status", "target"} {

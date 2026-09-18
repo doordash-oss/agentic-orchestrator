@@ -1,0 +1,66 @@
+# Rebase Conflict Resolution
+
+Your working directory is a detached temporary worktree created to replay this pull-request stack onto a new target. The cherry-pick of the commit below stopped with conflicts. Resolve them so the commit's intent survives on the new base.
+
+## Feature
+
+**Rebase the payment stack** — Replay the stack onto the latest main.
+
+## Layer
+
+You are resolving a commit from layer 2: Wire the refund callback of the stack (roadmap phase 3).
+
+## Rebase Target
+
+The stack is being replayed onto branch `main` at `1111111111111111111111111111111111111111`.
+
+## Commit Being Replayed
+
+Commit message:
+
+```text
+fix: handle partial refunds
+```
+
+Full patch:
+
+```diff
+--- a/internal/refund.go
++++ b/internal/refund.go
+@@ -1,3 +1,4 @@
+ func Refund() error {
+```
+
+## Conflicted Files
+
+Paths are relative to your working directory. Edit only these files:
+
+- internal/refund.go
+- internal/refund_test.go
+
+## How the Conflicted Files Changed on the Target Side
+
+The old-base to target diff restricted to the conflicted files:
+
+```diff
+--- a/internal/refund.go
++++ b/internal/refund.go
+@@ -2,2 +2,3 @@
+```
+
+## Previous Attempt Feedback
+
+A previous resolution attempt for this commit failed. Fix exactly what this feedback names, then finish:
+
+```text
+Refund test still contains a conflict marker.
+```
+
+## Rules
+
+- Edit only the conflicted files listed above; never touch any other file.
+- Remove every conflict marker (`<<<<<<<`, `=======`, `>>>>>>>`); leave none behind.
+- Never run git or any other mutating command — the shell is read-only inspection only.
+- Never create files.
+- Never ask the user; this session is autonomous.
+- Finish with the success outcome from the system prompt's completion protocol.

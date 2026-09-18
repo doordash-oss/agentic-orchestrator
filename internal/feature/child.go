@@ -343,6 +343,99 @@ type RebaseRepoRestack struct {
 	AnchorRemap map[int]string `yaml:"anchor_remap,omitempty" json:"anchor_remap,omitempty"`
 	// RebuiltTop is the rewritten chain's top commit in this repository.
 	RebuiltTop string `yaml:"rebuilt_top,omitempty" json:"rebuilt_top,omitempty"`
+	// ResolvedConflicts records every replay conflict a bounded agent
+	// session resolved in this repository, so the verification round and the
+	// read model can scrutinize those commits specifically. Additive on the
+	// persisted relationship; no schema version bump.
+	ResolvedConflicts []RebaseResolvedConflict `yaml:"resolved_conflicts,omitempty" json:"resolved_conflicts,omitempty"`
+}
+
+// RebaseResolvedConflict records one agent-resolved replay conflict: the
+// original commit, the segment it belonged to, the conflicted files, the
+// resolution attempts used, and whether the continued cherry-pick turned out
+// empty (dropped) — the resolution took the target's side entirely.
+type RebaseResolvedConflict struct {
+	Commit   string   `yaml:"commit" json:"commit"`
+	Segment  string   `yaml:"segment" json:"segment"`
+	Files    []string `yaml:"files,omitempty" json:"files,omitempty"`
+	Attempts int      `yaml:"attempts,omitempty" json:"attempts,omitempty"`
+	Dropped  bool     `yaml:"dropped,omitempty" json:"dropped,omitempty"`
+}
+
+// ExtendRebaseDescriptionWithResolutions appends a section naming every
+// agent-resolved conflict the pass recorded, so the Final Review description
+// directs the verification round to scrutinize those commits specifically.
+// Repositories without resolutions are untouched.
+func ExtendRebaseDescriptionWithResolutions(description string, restacks []RebaseRepoRestack) string {
+	var withResolutions []RebaseRepoRestack
+	for _, rs := range restacks {
+		if len(rs.ResolvedConflicts) > 0 {
+			withResolutions = append(withResolutions, rs)
+		}
+	}
+	if len(withResolutions) == 0 {
+		return description
+	}
+	var sb strings.Builder
+	sb.WriteString(description)
+	sb.WriteString("\n## Agent-resolved replay conflicts\n\n")
+	sb.WriteString("The conflicts listed below were resolved by bounded agent sessions inside a temporary worktree during the restack — no human resolved them. Scrutinize each commit's replayed result specifically: the conflict resolution must preserve the commit's intent on the new base, leave no conflict markers, and touch nothing outside the conflicted files.\n")
+	for _, rs := range withResolutions {
+		sb.WriteString("\n### Repository: ")
+		sb.WriteString(rs.Repo)
+		sb.WriteString("\n\n")
+		for _, rc := range rs.ResolvedConflicts {
+			sb.WriteString("- Commit `")
+			sb.WriteString(rc.Commit)
+			sb.WriteString("` (segment ")
+			sb.WriteString(rc.Segment)
+			if rc.Attempts > 0 {
+				sb.WriteString(", resolved after ")
+				sb.WriteString(strconv.Itoa(rc.Attempts))
+				sb.WriteString(" attempt")
+				if rc.Attempts > 1 {
+					sb.WriteString("s")
+				}
+			}
+			if rc.Dropped {
+				sb.WriteString("; the resolution took the target's side entirely, so the replay was dropped as empty")
+			}
+			sb.WriteString(") on: ")
+			sb.WriteString(strings.Join(rc.Files, ", "))
+			sb.WriteString(".\n")
+		}
+	}
+	return sb.String()
+}
+
+// ExtendRebaseExitCriteriaWithResolutions appends one completion fact per
+// agent-resolved conflict: the verification round must check the commit's
+// resolution is complete and faithful on the new base.
+func ExtendRebaseExitCriteriaWithResolutions(criteria string, restacks []RebaseRepoRestack) string {
+	var withResolutions []RebaseRepoRestack
+	for _, rs := range restacks {
+		if len(rs.ResolvedConflicts) > 0 {
+			withResolutions = append(withResolutions, rs)
+		}
+	}
+	if len(withResolutions) == 0 {
+		return criteria
+	}
+	var sb strings.Builder
+	sb.WriteString(criteria)
+	sb.WriteString("\n## Agent-resolved conflicts\n")
+	for _, rs := range withResolutions {
+		for _, rc := range rs.ResolvedConflicts {
+			sb.WriteString("\n- Repository `")
+			sb.WriteString(rs.Repo)
+			sb.WriteString("`: the agent-resolved commit `")
+			sb.WriteString(rc.Commit)
+			sb.WriteString("` (")
+			sb.WriteString(strings.Join(rc.Files, ", "))
+			sb.WriteString(") was replayed with a complete, faithful resolution — the commit's intent survives on the new base and no conflict markers remain.\n")
+		}
+	}
+	return sb.String()
 }
 
 // RebaseLayerState is the launch-time classification of one stack layer's

@@ -1699,13 +1699,13 @@ var catalog = map[Code]Entry{
 	},
 	IntegrationRebaseConflict: {
 		Class:   ClassNeedsAction,
-		Title:   "Rebase replay conflict",
+		Title:   "Rebase conflict resolution exhausted",
 		Blocks:  []Block{BlockRepositories},
-		Summary: "Replaying the stack onto the resolved target conflicted.",
+		Summary: "Resolving the replayed stack conflict used up every resolution attempt.",
 		summaryParams: func(p Params) string {
 			return integrationRebaseConflictSummary(p)
 		},
-		Remediation: "Start the pass again to retry the restack, or discard the pass; the raw details name the segment and commit that conflicted.",
+		Remediation: "Start the pass again to re-run the restack and the resolution sessions, or discard the pass; the raw details name the segment, commit, files, and the last failure.",
 		Actions:     []string{"retry"},
 	},
 	RebaseGateTargetMissing: {

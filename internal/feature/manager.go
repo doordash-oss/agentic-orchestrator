@@ -74,6 +74,14 @@ type WorktreeOps interface {
 	// refs or existing worktrees; a conflict returns
 	// *git.RestackConflictError.
 	RestackChain(mainRepo string, cutPoints []git.RestackCutPoint, ops []git.RestackOp) (*git.RestackResult, error)
+	// RestackChainWithResolver behaves like RestackChain, but a conflicting
+	// cherry-pick is left in progress inside the primitive's temporary
+	// worktree and handed to the supplied resolver together with the
+	// attempt-directory root. A resolved result stages the conflicted files
+	// and continues the pick; exhaustion surfaces the conflict error with
+	// the attempt count; a resolver error fails the run. A nil resolver
+	// keeps RestackChain's abort-on-conflict behavior.
+	RestackChainWithResolver(mainRepo string, cutPoints []git.RestackCutPoint, ops []git.RestackOp, resolver git.RestackConflictResolver, attemptsRoot string) (*git.RestackResult, error)
 	// CommitTreeSHA returns a commit's tree identifier for byte-for-byte
 	// tree comparison.
 	CommitTreeSHA(repoPath, commitSHA string) (string, error)

@@ -268,7 +268,7 @@ func TestOwnedErrorsProjectChildRecords(t *testing.T) {
 			t.Fatalf("errors len = %d, want one transaction entry; entries = %#v", len(entries), entries)
 		}
 		assertOwnedEntry(t, entries[0], "transaction", string(errcat.IntegrationRebaseConflict), child.ID,
-			"Rebase replay conflict", errcat.ClassNeedsAction)
+			"Rebase conflict resolution exhausted", errcat.ClassNeedsAction)
 	})
 
 	t.Run("failed child run projects child-keyed run entry", func(t *testing.T) {

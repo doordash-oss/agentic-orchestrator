@@ -169,6 +169,12 @@ func FinalFixUserPrompt(in any) string {
 	return MustRender("final_fix.user", in)
 }
 
+// ConflictResolutionUserPrompt renders the rebase conflict-resolution user
+// prompt (conflict_resolution.user.tmpl).
+func ConflictResolutionUserPrompt(in any) string {
+	return MustRender("conflict_resolution.user", in)
+}
+
 // ScoutUserPrompt renders the per-scout subprocess prompt (scout.user.tmpl).
 func ScoutUserPrompt(in ScoutUserInput) string {
 	return MustRender("scout.user", in)

@@ -76,6 +76,9 @@ func (*cascadeTestWorktrees) InspectCleanliness(string, int) (*git.CleanlinessRe
 func (*cascadeTestWorktrees) RestackChain(string, []git.RestackCutPoint, []git.RestackOp) (*git.RestackResult, error) {
 	return nil, nil
 }
+func (*cascadeTestWorktrees) RestackChainWithResolver(string, []git.RestackCutPoint, []git.RestackOp, git.RestackConflictResolver, string) (*git.RestackResult, error) {
+	return nil, nil
+}
 func (*cascadeTestWorktrees) CommitTreeSHA(string, string) (string, error)        { return "", nil }
 func (*cascadeTestWorktrees) UpdateRefsTransaction(string, []git.RefUpdate) error { return nil }
 

@@ -87,18 +87,28 @@ type RestackResult struct {
 // RestackConflictError reports a cherry-pick conflict during a restack
 // replay. SegmentFrom and SegmentTo name the bounding cut points of the
 // segment being replayed, CommitSHA the commit whose application conflicted,
-// and ConflictFiles the conflicted paths. The attempt was aborted and no ref
-// of the repository changed.
+// and ConflictFiles the conflicted paths. When a resolver engaged, Attempts
+// carries the number of resolution attempts used, LastFailure the reason the
+// final attempt failed, and AttemptDir the directory the attempts were logged
+// under; a zero Attempts means no resolver engaged and the conflict aborted
+// immediately. The attempt was aborted and no ref of the repository changed.
 type RestackConflictError struct {
 	SegmentFrom   string
 	SegmentTo     string
 	CommitSHA     string
 	ConflictFiles []string
+	Attempts      int
+	LastFailure   string
+	AttemptDir    string
 }
 
 func (e *RestackConflictError) Error() string {
-	return fmt.Sprintf("restack conflict in segment %s..%s applying %s: %v",
+	base := fmt.Sprintf("restack conflict in segment %s..%s applying %s: %v",
 		e.SegmentFrom, e.SegmentTo, e.CommitSHA, e.ConflictFiles)
+	if e.Attempts > 0 {
+		base += fmt.Sprintf(" after %d resolution attempts", e.Attempts)
+	}
+	return base
 }
 
 // extractConflictFiles reads the conflict file list from a worktree with an
@@ -142,6 +152,13 @@ func restackSegLabel(cutPoints []RestackCutPoint, idx int) string {
 // failure a plain error. The temporary worktree is removed from the worktree
 // list and from disk on success, on conflict, and on any other error.
 func RestackChain(mainRepo string, cutPoints []RestackCutPoint, ops []RestackOp) (*RestackResult, error) {
+	return restackChain(mainRepo, cutPoints, ops, nil, "")
+}
+
+// restackChain is the shared core of RestackChain and
+// RestackChainWithResolver; a non-nil resolver pauses conflicting picks for
+// resolution instead of aborting them (see RestackChainWithResolver).
+func restackChain(mainRepo string, cutPoints []RestackCutPoint, ops []RestackOp, resolver RestackConflictResolver, attemptsRoot string) (*RestackResult, error) {
 	if len(cutPoints) == 0 {
 		return nil, fmt.Errorf("restack requires at least the base cut point")
 	}
@@ -186,7 +203,7 @@ func RestackChain(mainRepo string, cutPoints []RestackCutPoint, ops []RestackOp)
 	}
 
 	apply := func(oldSHA, segFrom, segTo string) error {
-		newSHA, dropped, err := restackCherryPick(mainRepo, tmpWorktree, oldSHA, segFrom, segTo)
+		newSHA, dropped, err := restackCherryPick(mainRepo, tmpWorktree, oldSHA, segFrom, segTo, resolver, attemptsRoot)
 		if err != nil {
 			return err
 		}
@@ -426,11 +443,14 @@ func restackSegmentCommits(mainRepo, lower, upper string) ([]string, error) {
 
 // restackCherryPick applies one commit in the restack worktree with a plain
 // cherry-pick. A conflict returns *RestackConflictError naming the segment
-// and the conflicted files. A pick whose result is empty — detected by
-// comparing the index with HEAD while a cherry-pick is in progress — is
-// skipped as dropped. The caller receives the new HEAD SHA for applied
-// commits.
-func restackCherryPick(mainRepo, tmpWorktree, commitSHA, segFrom, segTo string) (newSHA string, dropped bool, err error) {
+// and the conflicted files — unless a resolver is supplied, in which case the
+// pick is left in progress inside the worktree and handed to the resolver:
+// resolved re-scans, stages, and continues; exhausted aborts and returns the
+// conflict error with the attempt count; a resolver error aborts and
+// propagates. A pick whose result is empty — detected by comparing the index
+// with HEAD while a cherry-pick is in progress — is skipped as dropped. The
+// caller receives the new HEAD SHA for applied commits.
+func restackCherryPick(mainRepo, tmpWorktree, commitSHA, segFrom, segTo string, resolver RestackConflictResolver, attemptsRoot string) (newSHA string, dropped bool, err error) {
 	pickArgs := append([]string{"-C", tmpWorktree}, identityFallbackArgs(tmpWorktree)...)
 	pickArgs = append(pickArgs, "cherry-pick", commitSHA)
 	out, pickErr := exec.Command("git", pickArgs...).CombinedOutput()
@@ -449,7 +469,10 @@ func restackCherryPick(mainRepo, tmpWorktree, commitSHA, segFrom, segTo string) 
 
 	conflictFiles := extractConflictFiles(tmpWorktree)
 	if len(conflictFiles) > 0 {
-		_ = exec.Command("git", "-C", tmpWorktree, "cherry-pick", "--abort").Run()
+		if resolver != nil {
+			return restackResolveConflict(mainRepo, tmpWorktree, commitSHA, segFrom, segTo, conflictFiles, resolver, attemptsRoot)
+		}
+		abortRestackPick(tmpWorktree)
 		return "", false, &RestackConflictError{
 			SegmentFrom:   segFrom,
 			SegmentTo:     segTo,
@@ -458,10 +481,108 @@ func restackCherryPick(mainRepo, tmpWorktree, commitSHA, segFrom, segTo string) 
 		}
 	}
 	if restackPickEmpty(tmpWorktree) {
-		_ = exec.Command("git", "-C", tmpWorktree, "cherry-pick", "--abort").Run()
+		abortRestackPick(tmpWorktree)
 		return "", true, nil
 	}
 	return "", false, fmt.Errorf("cherry-pick %s in restack: %s: %w", commitSHA, strings.TrimSpace(string(out)), pickErr)
+}
+
+// abortRestackPick cancels an in-progress cherry-pick in the restack
+// worktree. Failures are ignored: the worktree is removed on every exit path
+// regardless.
+func abortRestackPick(tmpWorktree string) {
+	_ = exec.Command("git", "-C", tmpWorktree, "cherry-pick", "--abort").Run()
+}
+
+// restackResolveConflict engages the resolver for one conflicting pick. The
+// pick stays in progress inside the temporary worktree for the duration, so
+// the resolver's edits land on the paused pick and the continuation commits
+// them with the original author, message, and trailers.
+func restackResolveConflict(mainRepo, tmpWorktree, commitSHA, segFrom, segTo string, conflictFiles []string, resolver RestackConflictResolver, attemptsRoot string) (newSHA string, dropped bool, err error) {
+	res, resolveErr := resolver(RestackResolverInput{
+		WorktreePath:  tmpWorktree,
+		MainRepo:      mainRepo,
+		SegmentFrom:   segFrom,
+		SegmentTo:     segTo,
+		CommitSHA:     commitSHA,
+		ConflictFiles: conflictFiles,
+		AttemptRoot:   attemptsRoot,
+	})
+	if resolveErr != nil {
+		abortRestackPick(tmpWorktree)
+		return "", false, fmt.Errorf("resolving the conflict applying %s: %w", commitSHA, resolveErr)
+	}
+	switch res.Resolution {
+	case RestackResolutionExhausted:
+		abortRestackPick(tmpWorktree)
+		return "", false, &RestackConflictError{
+			SegmentFrom:   segFrom,
+			SegmentTo:     segTo,
+			CommitSHA:     commitSHA,
+			ConflictFiles: conflictFiles,
+			Attempts:      res.Attempts,
+			LastFailure:   res.LastFailure,
+			AttemptDir:    res.AttemptDir,
+		}
+	case RestackResolutionResolved:
+		return restackContinuePick(tmpWorktree, commitSHA, conflictFiles)
+	default:
+		abortRestackPick(tmpWorktree)
+		return "", false, fmt.Errorf("resolver returned an unknown resolution %d for commit %s", res.Resolution, commitSHA)
+	}
+}
+
+// restackContinuePick finishes a resolver-resolved cherry-pick: it re-scans
+// the conflicted files for markers (a resolution that still holds markers is
+// a failed primitive run, never a silent commit), stages exactly those files,
+// and continues the pick non-interactively. A continuation whose result is
+// empty is skipped and recorded as dropped, exactly like a replay that became
+// empty on its own.
+func restackContinuePick(tmpWorktree, commitSHA string, conflictFiles []string) (newSHA string, dropped bool, err error) {
+	marked, err := ConflictMarkerFilesInPaths(tmpWorktree, conflictFiles)
+	if err != nil {
+		abortRestackPick(tmpWorktree)
+		return "", false, fmt.Errorf("scanning the resolved files of %s: %w", commitSHA, err)
+	}
+	if len(marked) > 0 {
+		abortRestackPick(tmpWorktree)
+		return "", false, fmt.Errorf("conflict resolution left conflict markers in %s", strings.Join(marked, ", "))
+	}
+
+	addArgs := append([]string{"-C", tmpWorktree, "add", "--"}, conflictFiles...)
+	if out, err := exec.Command("git", addArgs...).CombinedOutput(); err != nil {
+		abortRestackPick(tmpWorktree)
+		return "", false, fmt.Errorf("staging the resolved files of %s: %s: %w", commitSHA, strings.TrimSpace(string(out)), err)
+	}
+
+	// A non-interactive editor keeps `cherry-pick --continue` from waiting
+	// on a terminal; the pick's recorded author and message are used as-is.
+	continueArgs := append([]string{"-C", tmpWorktree}, identityFallbackArgs(tmpWorktree)...)
+	continueArgs = append(continueArgs, "-c", "core.editor=true", "cherry-pick", "--continue")
+	out, contErr := exec.Command("git", continueArgs...).CombinedOutput()
+	if contErr == nil {
+		headCmd := readGitCmd(tmpWorktree, "rev-parse", "HEAD")
+		headOut, err := headCmd.Output()
+		if err != nil {
+			abortRestackPick(tmpWorktree)
+			return "", false, fmt.Errorf("capturing restack HEAD after continuing %s: %w", commitSHA, err)
+		}
+		sha := strings.TrimSpace(string(headOut))
+		if sha == "" {
+			abortRestackPick(tmpWorktree)
+			return "", false, fmt.Errorf("restack HEAD is empty after continuing %s", commitSHA)
+		}
+		return sha, false, nil
+	}
+	// The resolution may have taken the target's side entirely: the pick
+	// still in progress with an index identical to HEAD is an empty
+	// continuation, dropped like any empty replay.
+	if restackPickEmpty(tmpWorktree) {
+		abortRestackPick(tmpWorktree)
+		return "", true, nil
+	}
+	abortRestackPick(tmpWorktree)
+	return "", false, fmt.Errorf("continuing the resolved cherry-pick of %s: %s: %w", commitSHA, strings.TrimSpace(string(out)), contErr)
 }
 
 // restackPickEmpty reports whether a failed cherry-pick with no conflicted

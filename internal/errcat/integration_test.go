@@ -68,8 +68,9 @@ func TestIntegrationAttentionCodesAreNeedsAction(t *testing.T) {
 }
 
 // TestIntegrationAttentionSummaryTemplates pins the repositories-block
-// summaries: named repository plus conflict-file count, static fallback
-// without context, and no raw diagnostics leaking into the summary.
+// summaries: named repository plus commit, attempt count, and conflict-file
+// count, static fallback without context, and no raw diagnostics leaking
+// into the summary.
 func TestIntegrationAttentionSummaryTemplates(t *testing.T) {
 	rendered := New(
 		IntegrationRebaseConflict,
@@ -81,20 +82,72 @@ func TestIntegrationAttentionSummaryTemplates(t *testing.T) {
 		WithParams(IntegrationRepoParams{Repositories: []CodeRepository{{
 			Name:          "repo-a",
 			ConflictFiles: []string{"internal/api.go", "internal/api_test.go"},
+			CommitSHA:     "1a2b3c4d9e0f11",
+			Attempts:      3,
 		}}}),
-		WithDiagnostics("repo-a: rebase replay conflict: [internal/api.go, internal/api_test.go]"),
+		WithDiagnostics("repo-a: resolving segment phase:2..phase:3 commit 1a2b3c4d exhausted 3 attempts on: internal/api.go, internal/api_test.go; last failure: conflict markers remain in internal/api.go; attempt directory: /state/features/f1/rebase-resolution/repo-a/1a2b3c4d/attempt-03"),
 	)
-	if !strings.Contains(rendered.Summary, "repo-a") {
-		t.Fatalf("summary does not name the repository: %q", rendered.Summary)
+	if want := `Resolution attempts for commit 1a2b3c4 in repository "repo-a" were exhausted after 3 attempts on 2 files.`; rendered.Summary != want {
+		t.Fatalf("summary = %q, want %q", rendered.Summary, want)
 	}
-	if !strings.Contains(rendered.Summary, "2 files") {
-		t.Fatalf("summary does not name the conflict-file count: %q", rendered.Summary)
-	}
-	if strings.Contains(rendered.Summary, "rebase replay conflict:") {
+	if strings.Contains(rendered.Summary, "resolving segment") {
 		t.Fatalf("summary leaks raw diagnostics: %q", rendered.Summary)
 	}
 	if rendered.Diagnostics == "" {
 		t.Fatal("diagnostics not carried on the rendered error")
+	}
+
+	for _, pin := range []struct {
+		name string
+		repo CodeRepository
+		want string
+	}{
+		{
+			name: "commit and attempts without files",
+			repo: CodeRepository{Name: "repo-a", CommitSHA: "1a2b3c4d9e0f11", Attempts: 3},
+			want: `Resolution attempts for commit 1a2b3c4 in repository "repo-a" were exhausted after 3 attempts.`,
+		},
+		{
+			name: "short commit SHA stays whole",
+			repo: CodeRepository{Name: "repo-a", CommitSHA: "abc1234", Attempts: 3},
+			want: `Resolution attempts for commit abc1234 in repository "repo-a" were exhausted after 3 attempts.`,
+		},
+		{
+			name: "attempts without a commit",
+			repo: CodeRepository{Name: "repo-a", Attempts: 3, ConflictFiles: []string{"internal/api.go", "internal/api_test.go"}},
+			want: `Resolution attempts in repository "repo-a" were exhausted after 3 attempts on 2 files.`,
+		},
+		{
+			name: "attempts without a commit or files",
+			repo: CodeRepository{Name: "repo-a", Attempts: 3},
+			want: `Resolution attempts in repository "repo-a" were exhausted after 3 attempts.`,
+		},
+		{
+			name: "legacy record without a commit or attempts",
+			repo: CodeRepository{Name: "repo-a", ConflictFiles: []string{"internal/api.go"}},
+			want: `The stack replay conflicted in repository "repo-a" on 1 file.`,
+		},
+		{
+			name: "legacy record without context detail",
+			repo: CodeRepository{Name: "repo-a"},
+			want: `The stack replay conflicted in repository "repo-a".`,
+		},
+	} {
+		got := New(IntegrationRebaseConflict, WithParams(IntegrationRepoParams{Repositories: []CodeRepository{pin.repo}}))
+		if got.Summary != pin.want {
+			t.Errorf("%s: summary = %q, want %q", pin.name, got.Summary, pin.want)
+		}
+	}
+
+	exhausted := New(
+		IntegrationRebaseConflict,
+		WithParams(IntegrationRepoParams{Repositories: []CodeRepository{
+			{Name: "repo-e", Attempts: 3},
+			{Name: "repo-f", Attempts: 3},
+		}}),
+	)
+	if want := "Resolution attempts were exhausted in repositories: repo-e, repo-f."; exhausted.Summary != want {
+		t.Fatalf("multi-repository summary = %q, want %q", exhausted.Summary, want)
 	}
 
 	static := New(IntegrationRebaseConflict)
@@ -188,20 +241,23 @@ func TestRenderRecordIntegrationAttention(t *testing.T) {
 				Name:          "repo-a",
 				Branch:        "main",
 				ConflictFiles: []string{"internal/api.go"},
+				CommitSHA:     "1a2b3c4d9e0f11",
+				Attempts:      3,
 			}},
 		},
-		Diagnostics: "repo-a: rebase replay conflict: [internal/api.go]",
+		Diagnostics: "repo-a: resolving segment phase:2..phase:3 commit 1a2b3c4d exhausted 3 attempts on: internal/api.go; last failure: conflict markers remain in internal/api.go; attempt directory: /state/features/f1/rebase-resolution/repo-a/1a2b3c4d/attempt-03",
 	})
 	if rendered.Class != ClassNeedsAction {
 		t.Fatalf("class = %q; want needs_action", rendered.Class)
 	}
-	if !strings.Contains(rendered.Summary, "repo-a") || !strings.Contains(rendered.Summary, "1 file") {
-		t.Fatalf("summary does not name repository and conflict count: %q", rendered.Summary)
+	if !strings.Contains(rendered.Summary, "repo-a") || !strings.Contains(rendered.Summary, "1 file") ||
+		!strings.Contains(rendered.Summary, "1a2b3c4") || !strings.Contains(rendered.Summary, "3 attempts") {
+		t.Fatalf("summary does not name repository, commit, attempts, and conflict count: %q", rendered.Summary)
 	}
 	if rendered.Remediation == nil || len(rendered.Remediation.Actions) != 1 || rendered.Remediation.Actions[0] != "retry" {
 		t.Fatalf("record render must reference the retry action: %#v", rendered.Remediation)
 	}
-	if rendered.Diagnostics != "repo-a: rebase replay conflict: [internal/api.go]" {
+	if rendered.Diagnostics != "repo-a: resolving segment phase:2..phase:3 commit 1a2b3c4d exhausted 3 attempts on: internal/api.go; last failure: conflict markers remain in internal/api.go; attempt directory: /state/features/f1/rebase-resolution/repo-a/1a2b3c4d/attempt-03" {
 		t.Fatalf("diagnostics not preserved: %q", rendered.Diagnostics)
 	}
 	if rendered.Context == nil || len(rendered.Context.Repositories) != 1 ||

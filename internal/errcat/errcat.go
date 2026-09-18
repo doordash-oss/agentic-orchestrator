@@ -64,6 +64,8 @@ type CodeRepository struct {
 	ChildHeadSHA      string   `json:"child_head_sha,omitempty" yaml:"child_head_sha,omitempty"`
 	CandidateSHA      string   `json:"candidate_sha,omitempty" yaml:"candidate_sha,omitempty"`
 	ObservedSHA       string   `json:"observed_sha,omitempty" yaml:"observed_sha,omitempty"`
+	CommitSHA         string   `json:"commit_sha,omitempty" yaml:"commit_sha,omitempty"`
+	Attempts          int      `json:"attempts,omitempty" yaml:"attempts,omitempty"`
 }
 
 // CodePhase is the typed context block for the phase a code references.

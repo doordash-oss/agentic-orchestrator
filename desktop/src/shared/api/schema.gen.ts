@@ -1206,6 +1206,10 @@ export interface components {
             child_head_sha?: string;
             candidate_sha?: string;
             observed_sha?: string;
+            /** @description Commit whose replayed conflict exhausted its resolution attempts, when known. */
+            commit_sha?: string;
+            /** @description Resolution attempts spent on the replayed commit's conflict, when known. */
+            attempts?: number;
         };
         /** @description Phase a code references. */
         ErrorPhaseContext: {

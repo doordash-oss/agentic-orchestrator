@@ -137,6 +137,13 @@ func journeyPromptLineValue(prompt, marker string) string {
 	return ""
 }
 
+// isJourneyConflictResolutionPrompt reports whether a session prompt is the
+// rebase conflict-resolution prompt — the harness-rendered template's
+// heading is its stable marker.
+func isJourneyConflictResolutionPrompt(prompt string) bool {
+	return strings.Contains(prompt, "# Rebase Conflict Resolution")
+}
+
 // journeyChildPhaseRunner wires scripted plan sessions plus stubbed
 // implement and final-review kernels so the journey exercises the real
 // orchestrator/server wiring without launching provider CLIs. The implement
@@ -170,6 +177,12 @@ type journeyPhaseRunnerOptions struct {
 	// record which feature context publish handed the session (the parent's
 	// for roadmap-derived layers, the origin child's for appended layers).
 	echoDescriptionContext bool
+	// rebaseResolution supplies the bash body a rebase conflict-resolution
+	// session runs; the script's working directory is the paused pick's
+	// temporary restack worktree. Nil defaults to a session that finishes
+	// without touching the conflicted files, so every attempt fails and the
+	// pass parks with exhausted resolution attempts.
+	rebaseResolution func(prompt string) string
 }
 
 // journeyChildPhaseRunnerWithOpts is the configurable core of
@@ -196,6 +209,20 @@ func journeyChildPhaseRunnerWithOpts(t *testing.T, sm *session.Manager, store *f
 		f, _ := store.Load(opts.FeatureID)
 		var script string
 		switch {
+		case isJourneyConflictResolutionPrompt(opts.Prompt):
+			// A rebase conflict-resolution session: the scripted body edits
+			// (or fails to edit) the conflicted files inside the paused
+			// pick's temporary worktree, which is the session's working
+			// directory. The default body touches nothing, so the conflicted
+			// file keeps its markers and the attempt budget exhausts.
+			body := ""
+			if runnerOpts.rebaseResolution != nil {
+				body = runnerOpts.rebaseResolution(opts.Prompt)
+			}
+			script = testutil.WriteScript(t, scriptsDir, nextScript("rebase-resolution"), testutil.JSONLInit+"\n"+
+				`read -r _agentic_init`+"\n"+
+				body+"\n"+
+				testutil.JSONLSuccess+"\n")
 		case opts.Phase != feature.PhasePlan || f == nil:
 			reply := "TITLE: Child integration\n\nBODY: Integrated the refactor child."
 			if runnerOpts.echoDescriptionContext {

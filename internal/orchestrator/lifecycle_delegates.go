@@ -750,6 +750,12 @@ const (
 
 	// RestartDispatchPhase requires the caller to start Outcome.Phase.
 	RestartDispatchPhase
+
+	// RestartRestackRunning means an asynchronous restack loop is now
+	// running for a rebase child at Created; no phase dispatch follows —
+	// the loop itself dispatches the Final Review on landing. The server
+	// and CLI map this onto the restart response's dispatch string.
+	RestartRestackRunning
 )
 
 // RestartOutcome describes the follow-up required after RestartPhase applies
@@ -803,25 +809,32 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		return RestartOutcome{}, fmt.Errorf("load feature: %w", err)
 	}
 
+	// A rebase child whose asynchronous restack loop is still running
+	// refuses a restart: the loop is the pass's own work and a restart must
+	// not kill its sessions. (While a resolution session runs, the active
+	// session guard above already refused; this catches the gaps between
+	// sessions.)
+	if f.IsChild() && f.Parent != nil && f.Parent.Kind == feature.ChildKindRebase && f.Status == feature.StatusCreated {
+		if _, inFlight := o.rebaseRestackLoops.Load(featureID); inFlight {
+			return RestartOutcome{}, ErrFeatureBusy
+		}
+	}
+
 	// Stop any active sessions before mutating state so orphaned agents do not
 	// race subsequent Store.Modify writes.
 	o.StopFeatureSessions(featureID)
 
-	// A rebase child at Created restarts the harness restack loop: the
-	// restack replaces the planning and implement phases, and a pass parked
-	// on a replay conflict re-runs the loop from scratch. A landed restack
-	// dispatches the Final Review — the pass's single verification round —
-	// through the normal dispatch path; a parked one reports the attention
-	// record and dispatches nothing.
+	// A rebase child at Created restarts the asynchronous harness restack
+	// loop: the restack replaces the planning and implement phases, and a
+	// pass parked on exhausted resolution attempts re-runs the loop from
+	// scratch. The start returns at once with the restack-running outcome;
+	// landing dispatches the Final Review — the pass's single verification
+	// round — from the loop's goroutine.
 	if f.IsChild() && f.Parent != nil && f.Parent.Kind == feature.ChildKindRebase && f.Status == feature.StatusCreated {
-		landed, err := o.runRebaseRestackPass(featureID)
-		if err != nil {
+		if err := o.startRebaseRestackPass(featureID); err != nil {
 			return RestartOutcome{}, err
 		}
-		if !landed {
-			return RestartOutcome{Action: RestartNoOp}, nil
-		}
-		return RestartOutcome{Action: RestartDispatchPhase, Phase: feature.PhaseFinalReview}, nil
+		return RestartOutcome{Action: RestartRestackRunning}, nil
 	}
 
 	// An active child with resumable integration state replays the integration

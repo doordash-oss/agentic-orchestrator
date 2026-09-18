@@ -144,26 +144,27 @@ func (m *MockPRCloser) DeleteRemoteBranch(repoPath, branch string) error {
 // MockWorktreeOps implements feature.WorktreeOps with configurable
 // function overrides and call tracking.
 type MockWorktreeOps struct {
-	CreateFn                func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error)
-	ExpectedPathFn          func(featureSlug, repoName string) string
-	RemoveFn                func(worktreePath string, deleteBranch bool) error
-	RemoveRefFn             func(worktreePath, mainRepo, branch string) error
-	ResetToBaseFn           func(worktreePath, baseBranch string) error
-	ResetToBaseLocalFn      func(worktreePath, baseBranch string) error
-	ResetToCommitFn         func(worktreePath, commitSHA string) error
-	CurrentHeadSHAFn        func(worktreePath string) (string, error)
-	CurrentBranchFn         func(worktreePath string) string
-	RefSHAFn                func(repoPath, ref string) (string, error)
-	RefSHAOrAbsentFn        func(repoPath, ref string) (string, bool, error)
-	UpdateRefFn             func(repoPath, ref, oldSHA, newSHA string) error
-	InspectCleanlinessFn    func(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
-	RenameBranchFn          func(worktreePath, oldName, newName string) error
-	CreateBranchAtHeadFn    func(worktreePath, branch string) error
-	SwitchBranchFn          func(worktreePath, branch string) error
-	DeleteBranchFn          func(worktreePath, branch string) error
-	RestackChainFn          func(mainRepo string, cutPoints []git.RestackCutPoint, ops []git.RestackOp) (*git.RestackResult, error)
-	CommitTreeSHAFn         func(repoPath, commitSHA string) (string, error)
-	UpdateRefsTransactionFn func(repoPath string, updates []git.RefUpdate) error
+	CreateFn                   func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error)
+	ExpectedPathFn             func(featureSlug, repoName string) string
+	RemoveFn                   func(worktreePath string, deleteBranch bool) error
+	RemoveRefFn                func(worktreePath, mainRepo, branch string) error
+	ResetToBaseFn              func(worktreePath, baseBranch string) error
+	ResetToBaseLocalFn         func(worktreePath, baseBranch string) error
+	ResetToCommitFn            func(worktreePath, commitSHA string) error
+	CurrentHeadSHAFn           func(worktreePath string) (string, error)
+	CurrentBranchFn            func(worktreePath string) string
+	RefSHAFn                   func(repoPath, ref string) (string, error)
+	RefSHAOrAbsentFn           func(repoPath, ref string) (string, bool, error)
+	UpdateRefFn                func(repoPath, ref, oldSHA, newSHA string) error
+	InspectCleanlinessFn       func(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
+	RenameBranchFn             func(worktreePath, oldName, newName string) error
+	CreateBranchAtHeadFn       func(worktreePath, branch string) error
+	SwitchBranchFn             func(worktreePath, branch string) error
+	DeleteBranchFn             func(worktreePath, branch string) error
+	RestackChainFn             func(mainRepo string, cutPoints []git.RestackCutPoint, ops []git.RestackOp) (*git.RestackResult, error)
+	RestackChainWithResolverFn func(mainRepo string, cutPoints []git.RestackCutPoint, ops []git.RestackOp, resolver git.RestackConflictResolver, attemptsRoot string) (*git.RestackResult, error)
+	CommitTreeSHAFn            func(repoPath, commitSHA string) (string, error)
+	UpdateRefsTransactionFn    func(repoPath string, updates []git.RefUpdate) error
 
 	DefaultError error
 	Calls        []MockCall
@@ -312,6 +313,14 @@ func (m *MockWorktreeOps) RestackChain(mainRepo string, cutPoints []git.RestackC
 	m.Calls = append(m.Calls, MockCall{Method: "RestackChain", Args: []any{mainRepo, cutPoints, ops}})
 	if m.RestackChainFn != nil {
 		return m.RestackChainFn(mainRepo, cutPoints, ops)
+	}
+	return nil, m.DefaultError
+}
+
+func (m *MockWorktreeOps) RestackChainWithResolver(mainRepo string, cutPoints []git.RestackCutPoint, ops []git.RestackOp, resolver git.RestackConflictResolver, attemptsRoot string) (*git.RestackResult, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "RestackChainWithResolver", Args: []any{mainRepo, cutPoints, ops, resolver, attemptsRoot}})
+	if m.RestackChainWithResolverFn != nil {
+		return m.RestackChainWithResolverFn(mainRepo, cutPoints, ops, resolver, attemptsRoot)
 	}
 	return nil, m.DefaultError
 }

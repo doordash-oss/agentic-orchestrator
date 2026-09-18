@@ -34,9 +34,11 @@ func attentionRecordFixture() *errcat.FailureRecord {
 				Branch:        "main",
 				ConflictFiles: []string{"internal/api.go"},
 				ChildHeadSHA:  "9b1e445",
+				CommitSHA:     "1a2b3c4d",
+				Attempts:      3,
 			}},
 		},
-		Diagnostics: "repo-a: rebase replay conflict: [internal/api.go]",
+		Diagnostics: "repo-a: resolving segment phase:2..phase:3 commit 1a2b3c4d exhausted 3 attempts on: internal/api.go; last failure: conflict markers remain in internal/api.go; attempt directory: /state/features/f1/rebase-resolution/repo-a/1a2b3c4d/attempt-03",
 	}
 }
 
@@ -60,6 +62,9 @@ func TestTransactionJournalRoundTripsAttentionRecord(t *testing.T) {
 	if !strings.Contains(string(raw), "code: integration_rebase_conflict") {
 		t.Fatalf("YAML does not carry the record code:\n%s", raw)
 	}
+	if !strings.Contains(string(raw), "commit_sha: 1a2b3c4d") || !strings.Contains(string(raw), "attempts: 3") {
+		t.Fatalf("YAML does not carry the resolution context:\n%s", raw)
+	}
 	var got TransactionJournal
 	if err := yaml.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
@@ -68,10 +73,14 @@ func TestTransactionJournalRoundTripsAttentionRecord(t *testing.T) {
 		t.Fatalf("round-trip lost journal state: %+v", got)
 	}
 	if got.Attention == nil || got.Attention.Code != errcat.IntegrationRebaseConflict ||
-		got.Attention.Diagnostics != "repo-a: rebase replay conflict: [internal/api.go]" ||
+		got.Attention.Diagnostics != "repo-a: resolving segment phase:2..phase:3 commit 1a2b3c4d exhausted 3 attempts on: internal/api.go; last failure: conflict markers remain in internal/api.go; attempt directory: /state/features/f1/rebase-resolution/repo-a/1a2b3c4d/attempt-03" ||
 		got.Attention.Context == nil || len(got.Attention.Context.Repositories) != 1 ||
 		len(got.Attention.Context.Repositories[0].ConflictFiles) != 1 {
 		t.Fatalf("round-trip lost the attention record: %+v", got.Attention)
+	}
+	repo := got.Attention.Context.Repositories[0]
+	if repo.CommitSHA != "1a2b3c4d" || repo.Attempts != 3 {
+		t.Fatalf("round-trip lost the resolution context: %+v", repo)
 	}
 }
 

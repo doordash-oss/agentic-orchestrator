@@ -59,6 +59,9 @@ func TestMockWorktreeOpsRestackAndTransactionOverrides(t *testing.T) {
 	m.RestackChainFn = func(mainRepo string, cps []gitpkg.RestackCutPoint, os []gitpkg.RestackOp) (*gitpkg.RestackResult, error) {
 		return wantResult, nil
 	}
+	m.RestackChainWithResolverFn = func(mainRepo string, cps []gitpkg.RestackCutPoint, os []gitpkg.RestackOp, resolver gitpkg.RestackConflictResolver, attemptsRoot string) (*gitpkg.RestackResult, error) {
+		return wantResult, nil
+	}
 	m.CommitTreeSHAFn = func(repoPath, commitSHA string) (string, error) {
 		return "tree123", nil
 	}
@@ -70,6 +73,10 @@ func TestMockWorktreeOpsRestackAndTransactionOverrides(t *testing.T) {
 	}
 	if gotResult != wantResult {
 		t.Fatalf("RestackChain() = %v, want the configured result", gotResult)
+	}
+	resolverResult, err := m.RestackChainWithResolver("/repo", cutPoints, ops, nil, "/attempts")
+	if err != nil || resolverResult != wantResult {
+		t.Fatalf("RestackChainWithResolver() = %v, %v; want the configured result, nil", resolverResult, err)
 	}
 	tree, err := m.CommitTreeSHA("/repo", "abc123")
 	if err != nil || tree != "tree123" {
@@ -83,7 +90,7 @@ func TestMockWorktreeOpsRestackAndTransactionOverrides(t *testing.T) {
 	for _, call := range m.Calls {
 		methods[call.Method] = true
 	}
-	for _, want := range []string{"RestackChain", "CommitTreeSHA", "UpdateRefsTransaction"} {
+	for _, want := range []string{"RestackChain", "RestackChainWithResolver", "CommitTreeSHA", "UpdateRefsTransaction"} {
 		if !methods[want] {
 			t.Errorf("mock did not record a %s call; calls = %v", want, m.Calls)
 		}

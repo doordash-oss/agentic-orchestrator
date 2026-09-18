@@ -2310,9 +2310,14 @@ type ErrorRemediation struct {
 
 // ErrorRepositoryContext Repository a code references.
 type ErrorRepositoryContext struct {
-	Branch        string   `json:"branch,omitempty"`
-	CandidateSha  string   `json:"candidate_sha,omitempty"`
-	ChildHeadSha  string   `json:"child_head_sha,omitempty"`
+	// Attempts Resolution attempts spent on the replayed commit's conflict, when known.
+	Attempts     int    `json:"attempts,omitempty"`
+	Branch       string `json:"branch,omitempty"`
+	CandidateSha string `json:"candidate_sha,omitempty"`
+	ChildHeadSha string `json:"child_head_sha,omitempty"`
+
+	// CommitSha Commit whose replayed conflict exhausted its resolution attempts, when known.
+	CommitSha     string   `json:"commit_sha,omitempty"`
 	ConflictFiles []string `json:"conflict_files,omitempty"`
 	DirtyFiles    []string `json:"dirty_files,omitempty"`
 	Name          string   `json:"name"`

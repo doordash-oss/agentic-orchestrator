@@ -24,6 +24,7 @@ package e2e
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,6 +65,11 @@ type rebaseHarnessOpts struct {
 	// UpToDate skips the base advancement so nothing has work and the
 	// launch is refused with the already-up-to-date error.
 	UpToDate bool
+	// resolutionScript scripts the rebase conflict-resolution sessions' bash
+	// bodies (working directory = the paused pick's temporary worktree).
+	// Nil defaults to sessions that never touch the conflicted files, so
+	// the attempt budget exhausts and the pass parks.
+	resolutionScript func(prompt string) string
 }
 
 // rebaseHarnessJourney bundles the journey infrastructure: a real-git
@@ -316,8 +322,13 @@ func newRebaseHarnessJourney(t *testing.T, opts rebaseHarnessOpts) *rebaseHarnes
 		ActiveRun:     1,
 		RunCount:      1,
 		SchemaVersion: feature.SchemaVersionCurrent,
-		Repos:         parentRepos,
-		RepoStates:    repoStates,
+		// An explicit implementation model keeps the scripted
+		// conflict-resolution sessions launchable without a provider
+		// registry: the model resolves from the feature config and the
+		// BuildSessionFn seam replaces the provider entirely.
+		Models:     config.ModelConfig{Implementation: "journey-resolution-model"},
+		Repos:      parentRepos,
+		RepoStates: repoStates,
 		Checkpoints: feature.Checkpoints{
 			RoadmapReview:   true,
 			PhasePlanReview: true,
@@ -343,7 +354,9 @@ func newRebaseHarnessJourney(t *testing.T, opts rebaseHarnessOpts) *rebaseHarnes
 	serverEvents := make(chan interface{}, 512)
 	sm := session.NewManager(serverEvents)
 	t.Cleanup(sm.Shutdown)
-	pr := journeyChildPhaseRunner(t, sm, store, stateDir)
+	pr := journeyChildPhaseRunnerWithOpts(t, sm, store, stateDir, journeyPhaseRunnerOptions{
+		rebaseResolution: opts.resolutionScript,
+	})
 
 	orch := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   mgr,
@@ -873,12 +886,15 @@ func TestRebaseHarnessChangesRequestedJourney(t *testing.T) {
 	}
 }
 
-// TestRebaseHarnessConflictParksAttentionJourney drives the conflicting
-// variant: the target's squash commit also touches layer 2's file, so the
-// harness replay genuinely conflicts and the start parks the pass with the
-// rebase replay conflict attention — no ref moved, the child worktree stays
-// at the parent tip, and a second start re-runs the loop and parks again.
-func TestRebaseHarnessConflictParksAttentionJourney(t *testing.T) {
+// TestRebaseHarnessConflictNeverResolvingParksJourney drives the
+// never-resolving variant: the target's squash commit also touches layer 2's
+// file, and the scripted resolution sessions never touch the conflicted
+// file, so three attempts run and the pass parks with the rebase conflict
+// resolution code carrying attempt count 3 — no ref moved, the child
+// worktree stays at the parent tip, three attempt directories exist with
+// feedback in the second and third prompts, no temporary worktree remains,
+// and a second start re-runs the loop and parks again.
+func TestRebaseHarnessConflictNeverResolvingParksJourney(t *testing.T) {
 	fx := newRebaseHarnessJourney(t, rebaseHarnessOpts{Conflicting: true})
 	capturedHEAD := journeyGit(t, fx.repoDir, "rev-parse", "HEAD")
 	stackRefsBefore := journeyStackRefSnapshot(t, fx.repoDir)
@@ -889,19 +905,27 @@ func TestRebaseHarnessConflictParksAttentionJourney(t *testing.T) {
 	}
 	childID := resp.FeatureID
 	waitForJourneySetupComplete(t, fx.srv.URL, childID)
+	// Capture the conflicting commit before the pass rewrites the refs.
+	commitSHA := journeyConflictCommitSHA(t, fx.repoDir, fx.forkSHA)
 	postAction(t, fx.srv.URL, childID, "start", `{}`)
 
 	tx := fx.waitForRebaseAttentionJournal(childID)
 	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationRebaseConflict {
-		t.Fatalf("attention record = %+v, want the rebase replay conflict code", tx.Attention)
+		t.Fatalf("attention record = %+v, want the rebase conflict resolution code", tx.Attention)
 	}
 	if !strings.Contains(tx.Attention.Diagnostics, "repo-a") || !strings.Contains(tx.Attention.Diagnostics, "l2.txt") {
 		t.Fatalf("attention diagnostics = %q, want the repository and the conflicted file named", tx.Attention.Diagnostics)
 	}
+	if !strings.Contains(tx.Attention.Diagnostics, "exhausted 3 attempts") {
+		t.Fatalf("attention diagnostics = %q, want the exhausted attempt count named", tx.Attention.Diagnostics)
+	}
+	if tx.Attention.Context == nil || len(tx.Attention.Context.Repositories) != 1 || tx.Attention.Context.Repositories[0].Attempts != 3 {
+		t.Fatalf("attention repositories = %+v, want repo-a with attempt count 3", tx.Attention.Context)
+	}
 
 	child := fx.loadChild(childID)
 	if child.Status != feature.StatusCreated {
-		t.Fatalf("child status after the conflict park = %q, want Created (start re-runs the loop)", child.Status)
+		t.Fatalf("child status after the exhausted park = %q, want Created (start re-runs the loop)", child.Status)
 	}
 	childWT := fx.childWorktreePath(child)
 	if got := journeyGit(t, childWT, "rev-parse", "HEAD"); got != capturedHEAD {
@@ -913,13 +937,35 @@ func TestRebaseHarnessConflictParksAttentionJourney(t *testing.T) {
 	if got := journeyStackRefSnapshot(t, fx.repoDir); got != stackRefsBefore {
 		t.Fatalf("stack refs changed by the aborted replay:\nbefore:\n%s\nafter:\n%s", stackRefsBefore, got)
 	}
+	journeyAssertNoRestackTempWorktree(t, fx.repoDir)
+
+	// Three attempt directories exist under the child's active run; the
+	// second and third prompts carry the previous attempts' feedback.
+	commitRoot := filepath.Join(fx.store.BaseDir, childID, "runs", "run-001", "rebase-resolution", "repo-a", commitSHA[:7])
+	for attempt := 1; attempt <= 3; attempt++ {
+		dir := filepath.Join(commitRoot, fmt.Sprintf("attempt-%02d", attempt))
+		for _, name := range []string{"user-prompt.md", "feedback.md"} {
+			if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+				t.Fatalf("attempt %d directory missing %s: %v", attempt, name, err)
+			}
+		}
+		if attempt > 1 {
+			prompt, err := os.ReadFile(filepath.Join(dir, "user-prompt.md"))
+			if err != nil {
+				t.Fatalf("reading attempt %d prompt: %v", attempt, err)
+			}
+			if !strings.Contains(string(prompt), "conflict markers remain in: l2.txt") {
+				t.Fatalf("attempt %d prompt does not carry the previous failure's feedback", attempt)
+			}
+		}
+	}
 
 	// Starting again re-runs the loop from scratch: the journal is cleared,
-	// the replay conflicts again, and the pass parks with the same code.
+	// the sessions fail again, and the pass parks with the same code.
 	postAction(t, fx.srv.URL, childID, "start", `{}`)
 	tx = fx.waitForRebaseAttentionJournal(childID)
 	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationRebaseConflict {
-		t.Fatalf("attention record after the second start = %+v, want the rebase replay conflict code again", tx.Attention)
+		t.Fatalf("attention record after the second start = %+v, want the rebase conflict resolution code again", tx.Attention)
 	}
 	if got := journeyStackRefSnapshot(t, fx.repoDir); got != stackRefsBefore {
 		t.Fatalf("stack refs changed by the second aborted replay:\nbefore:\n%s\nafter:\n%s", stackRefsBefore, got)
@@ -927,6 +973,306 @@ func TestRebaseHarnessConflictParksAttentionJourney(t *testing.T) {
 	if got := journeyGit(t, childWT, "rev-parse", "HEAD"); got != capturedHEAD {
 		t.Fatalf("child worktree HEAD after the second start = %s, want the unchanged parent tip %s", got, capturedHEAD)
 	}
+}
+
+// journeyConflictCommitSHA resolves the phase-3 commit — the conflicting
+// replay's third commit above the fork — from the fixture chain.
+func journeyConflictCommitSHA(t *testing.T, repoDir, forkSHA string) string {
+	t.Helper()
+	commits := journeyGitLines(t, repoDir, "rev-list", "--reverse", forkSHA+"..stack/3")
+	if len(commits) < 3 {
+		t.Fatalf("chain above the fork has %d commits, want at least 3", len(commits))
+	}
+	return commits[2]
+}
+
+// journeyAssertNoRestackTempWorktree fails when a temporary restack worktree
+// is still registered in the repository. The check matches path components —
+// the fixture's branch names themselves contain "restack-".
+func journeyAssertNoRestackTempWorktree(t *testing.T, repoDir string) {
+	t.Helper()
+	out := journeyGit(t, repoDir, "worktree", "list", "--porcelain")
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "worktree ") {
+			continue
+		}
+		path := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+		for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+			if strings.HasPrefix(part, "restack-") {
+				t.Fatalf("a temporary restack worktree remains registered: %s", path)
+			}
+		}
+	}
+}
+
+// TestRebaseHarnessConflictResolvesJourney drives the resolving variant: the
+// scripted resolution session writes marker-free content into the conflicted
+// file, so the pass completes through the scripted Final Review, the
+// integration, and the tail — the parent's layer 2 is replayed onto the new
+// base with the resolved content and its original author and message, layers
+// 2 and 3 are republished, the child closes completed, one resolution is
+// recorded on the relationship, and the start response reports the
+// restack-running dispatch.
+func TestRebaseHarnessConflictResolvesJourney(t *testing.T) {
+	fx := newRebaseHarnessJourney(t, rebaseHarnessOpts{
+		Conflicting: true,
+		resolutionScript: func(prompt string) string {
+			// Resolve by taking the commit's own side, so the next commit of
+			// the layer replays cleanly.
+			return "printf 'layer2 v1\\n' > l2.txt"
+		},
+	})
+	remoteRefsBefore := journeyGit(t, fx.repoDir, "ls-remote", "origin")
+
+	resp, err := fx.client.RebaseFeature(t.Context(), fx.parentID)
+	if err != nil {
+		t.Fatalf("RebaseFeature() error = %v", err)
+	}
+	childID := resp.FeatureID
+	waitForJourneySetupComplete(t, fx.srv.URL, childID)
+	// Capture the conflicting commit before the pass rewrites the refs.
+	conflictSHA := journeyConflictCommitSHA(t, fx.repoDir, fx.forkSHA)
+
+	// Start the pass through the restart surface: the asynchronous restack
+	// loop reports the restack-running dispatch.
+	startResp := postActionJSON(t, fx.srv.URL, childID, "restart", `{}`)
+	if startResp["dispatch"] != "restack" {
+		t.Fatalf("restart response dispatch = %v, want restack (the loop is running)", startResp["dispatch"])
+	}
+
+	waitForJourneyChildClosed(t, fx.srv.URL, fx.store, childID)
+	fx.waitForRebaseTailSettled(childID)
+
+	child := fx.loadChild(childID)
+	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome = %q, want completed", child.Parent.CloseOutcome)
+	}
+
+	// One resolution recorded on the relationship: the phase-3 commit, its
+	// file, one attempt, not dropped.
+	commitSHA := conflictSHA
+	if len(child.Parent.RebaseRestacks) != 1 {
+		t.Fatalf("restacks = %+v, want one entry for repo-a", child.Parent.RebaseRestacks)
+	}
+	rs := child.Parent.RebaseRestacks[0]
+	if len(rs.ResolvedConflicts) != 1 {
+		t.Fatalf("resolved conflicts = %+v, want one", rs.ResolvedConflicts)
+	}
+	rc := rs.ResolvedConflicts[0]
+	if rc.Commit != commitSHA || rc.Attempts != 1 || rc.Dropped || len(rc.Files) != 1 || rc.Files[0] != "l2.txt" {
+		t.Fatalf("resolution record = %+v, want the phase-3 commit on l2.txt after one attempt, not dropped", rc)
+	}
+
+	// The generated description names the resolved commit so the
+	// verification round scrutinized it.
+	if !strings.Contains(child.Description, commitSHA) || !strings.Contains(child.Description, "l2.txt") {
+		t.Fatalf("description does not name the resolved commit and file:\n%s", child.Description)
+	}
+
+	// The parent's layer 2 is replayed onto the new base with the resolved
+	// content and the original author and message preserved.
+	parent := fx.reloadParent()
+	layer2Tip := parent.Stack[1].Repos["repo-a"].TipSHA
+	if layer2Tip == "" || !git.IsAncestor(fx.repoDir, fx.targetSHA, layer2Tip) {
+		t.Fatalf("layer 2 tip = %q, want a rebuilt tip descending from the target", layer2Tip)
+	}
+	if content := journeyGit(t, fx.repoDir, "show", layer2Tip+":l2.txt"); content != "layer2 v2" {
+		t.Fatalf("layer 2 tip l2.txt = %q, want the replayed phase-4 content", content)
+	}
+	// The phase-3 commit sits below the phase-4 tip with the resolved
+	// content, its original author and message.
+	phase3Replayed := journeyGit(t, fx.repoDir, "rev-parse", layer2Tip+"~1")
+	if got := journeyGit(t, fx.repoDir, "show", phase3Replayed+":l2.txt"); got != "layer2 v1" {
+		t.Fatalf("replayed phase-3 l2.txt = %q, want the resolved content", got)
+	}
+	if subject := journeyGit(t, fx.repoDir, "log", "-1", "--format=%s", phase3Replayed); subject != "layer2 phase3" {
+		t.Fatalf("replayed phase-3 subject = %q, want the preserved message", subject)
+	}
+	origAuthor := journeyGit(t, fx.repoDir, "log", "-1", "--format=%an <%ae>", commitSHA)
+	if author := journeyGit(t, fx.repoDir, "log", "-1", "--format=%an <%ae>", phase3Replayed); author != origAuthor {
+		t.Fatalf("replayed phase-3 author = %q, want the preserved %q", author, origAuthor)
+	}
+
+	// Layers 2 and 3 were republished to the rebuilt tips.
+	for _, branch := range []string{"stack/2", "stack/3"} {
+		want := parentStackTip(parent, branch)
+		if got := journeyGit(t, fx.bareRemote, "rev-parse", "refs/heads/"+branch); got != want {
+			t.Fatalf("remote %s = %s, want the rebuilt tip %s", branch, got, want)
+		}
+	}
+	if got := journeyGit(t, fx.repoDir, "ls-remote", "origin"); got == remoteRefsBefore {
+		t.Fatal("the closure tail's republish never reached the remote")
+	}
+	journeyAssertNoRestackTempWorktree(t, fx.repoDir)
+}
+
+// TestRebaseHarnessConflictOutOfScopeJourney drives the out-of-scope
+// variant: the first scripted resolution session also writes an extra file
+// outside the conflicted set, which the harness reverts before recording the
+// failed attempt; the second session resolves cleanly and the pass completes
+// with a landed commit that does not contain the extra file.
+func TestRebaseHarnessConflictOutOfScopeJourney(t *testing.T) {
+	fx := newRebaseHarnessJourney(t, rebaseHarnessOpts{
+		Conflicting: true,
+		resolutionScript: func(prompt string) string {
+			if strings.Contains(prompt, "Previous Attempt Feedback") {
+				// The retry resolves cleanly.
+				return "printf 'layer2 v1\\n' > l2.txt"
+			}
+			// The first attempt edits outside the conflicted set and leaves
+			// the markers in place.
+			return "printf 'out of scope\\n' > extra.txt"
+		},
+	})
+
+	resp, err := fx.client.RebaseFeature(t.Context(), fx.parentID)
+	if err != nil {
+		t.Fatalf("RebaseFeature() error = %v", err)
+	}
+	childID := resp.FeatureID
+	waitForJourneySetupComplete(t, fx.srv.URL, childID)
+	// Capture the conflicting commit before the pass rewrites the refs.
+	commitSHA := journeyConflictCommitSHA(t, fx.repoDir, fx.forkSHA)
+	postAction(t, fx.srv.URL, childID, "start", `{}`)
+	waitForJourneyChildClosed(t, fx.srv.URL, fx.store, childID)
+	fx.waitForRebaseTailSettled(childID)
+
+	child := fx.loadChild(childID)
+	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome = %q, want completed", child.Parent.CloseOutcome)
+	}
+	rs := child.Parent.RebaseRestacks[0]
+	if len(rs.ResolvedConflicts) != 1 || rs.ResolvedConflicts[0].Attempts != 2 {
+		t.Fatalf("resolved conflicts = %+v, want one resolution after two attempts", rs.ResolvedConflicts)
+	}
+
+	// The first attempt's feedback names the reverted out-of-scope file, and
+	// the second attempt's prompt carries it.
+	commitRoot := filepath.Join(fx.store.BaseDir, childID, "runs", "run-001", "rebase-resolution", "repo-a", commitSHA[:7])
+	feedback, err := os.ReadFile(filepath.Join(commitRoot, "attempt-01", "feedback.md"))
+	if err != nil {
+		t.Fatalf("reading attempt-01 feedback: %v", err)
+	}
+	if !strings.Contains(string(feedback), "extra.txt") {
+		t.Fatalf("attempt-01 feedback does not name the out-of-scope file:\n%s", feedback)
+	}
+	prompt, err := os.ReadFile(filepath.Join(commitRoot, "attempt-02", "user-prompt.md"))
+	if err != nil {
+		t.Fatalf("reading attempt-02 prompt: %v", err)
+	}
+	if !strings.Contains(string(prompt), "extra.txt") {
+		t.Fatalf("attempt-02 prompt does not carry the out-of-scope feedback:\n%s", prompt)
+	}
+
+	// The landed chain and the parent worktree do not contain the extra
+	// file: the out-of-scope edit never reached a commit.
+	parent := fx.reloadParent()
+	layer3Tip := parent.Stack[2].Repos["repo-a"].TipSHA
+	if layer3Tip == "" {
+		t.Fatal("layer 3 rebuilt tip missing")
+	}
+	if _, err := journeyGitIn(fx.repoDir, "show", layer3Tip+":extra.txt"); err == nil {
+		t.Fatal("the landed chain contains the out-of-scope extra.txt")
+	}
+	if _, err := os.Stat(filepath.Join(fx.repoDir, "extra.txt")); !os.IsNotExist(err) {
+		t.Fatal("the parent worktree contains the out-of-scope extra.txt")
+	}
+	journeyAssertNoRestackTempWorktree(t, fx.repoDir)
+}
+
+// TestRebaseHarnessConflictStopJourney drives the stop variant: the child is
+// stopped during the first resolution attempt — the scripted session sleeps
+// so the stop lands mid-attempt — and the pass ends with the child at
+// Created, no attention journal, no ref change, and no temporary worktree.
+func TestRebaseHarnessConflictStopJourney(t *testing.T) {
+	fx := newRebaseHarnessJourney(t, rebaseHarnessOpts{
+		Conflicting: true,
+		resolutionScript: func(prompt string) string {
+			// Sleep long enough for the stop to land mid-attempt; the
+			// session is killed before the sleep finishes.
+			return "sleep 60\nprintf 'layer2 v1\\n' > l2.txt"
+		},
+	})
+	capturedHEAD := journeyGit(t, fx.repoDir, "rev-parse", "HEAD")
+	stackRefsBefore := journeyStackRefSnapshot(t, fx.repoDir)
+
+	resp, err := fx.client.RebaseFeature(t.Context(), fx.parentID)
+	if err != nil {
+		t.Fatalf("RebaseFeature() error = %v", err)
+	}
+	childID := resp.FeatureID
+	waitForJourneySetupComplete(t, fx.srv.URL, childID)
+	postAction(t, fx.srv.URL, childID, "start", `{}`)
+
+	// Stop the child while the resolution attempt runs.
+	postAction(t, fx.srv.URL, childID, "pause-stop", `{}`)
+	waitForJourneyFeatureSessionsQuiescent(t, fx.srv.URL, childID)
+
+	// The loop aborted without parking: the child stays at Created with no
+	// attention journal, and the paused pick's temporary worktree is gone.
+	deadline := time.Now().Add(30 * time.Second)
+	for journeyRestackTempWorktreeListed(t, fx.repoDir) {
+		if time.Now().After(deadline) {
+			t.Fatal("the temporary restack worktree was never removed after the stop")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	child := fx.loadChild(childID)
+	if child.Status != feature.StatusCreated {
+		t.Fatalf("child status after the stop = %q, want Created (the pass's home state)", child.Status)
+	}
+	if child.Parent.Transaction != nil {
+		t.Fatalf("transaction = %+v, want no attention journal after a stop", child.Parent.Transaction)
+	}
+	if child.Parent.CloseOutcome != "" {
+		t.Fatalf("child closed (%q) after a stop", child.Parent.CloseOutcome)
+	}
+	if got := journeyStackRefSnapshot(t, fx.repoDir); got != stackRefsBefore {
+		t.Fatalf("stack refs changed by the stopped pass:\nbefore:\n%s\nafter:\n%s", stackRefsBefore, got)
+	}
+	childWT := fx.childWorktreePath(child)
+	if got := journeyGit(t, childWT, "rev-parse", "HEAD"); got != capturedHEAD {
+		t.Fatalf("child worktree HEAD = %s, want the unchanged parent tip %s", got, capturedHEAD)
+	}
+	if st := journeyGit(t, childWT, "status", "--porcelain"); st != "" {
+		t.Fatalf("child worktree dirty after the stop: %q", st)
+	}
+}
+
+// journeyRestackTempWorktreeListed reports whether a temporary restack
+// worktree is still registered in the repository.
+func journeyRestackTempWorktreeListed(t *testing.T, repoDir string) bool {
+	t.Helper()
+	out := journeyGit(t, repoDir, "worktree", "list", "--porcelain")
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "worktree ") {
+			continue
+		}
+		path := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+		for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+			if strings.HasPrefix(part, "restack-") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// postActionJSON posts one feature action and decodes the successful
+// response body as a JSON object.
+func postActionJSON(t *testing.T, baseURL, featureID, action, body string) map[string]any {
+	t.Helper()
+	status, payload := postActionStatus(t, baseURL, featureID, action, body)
+	if status != http.StatusOK {
+		t.Fatalf("POST action %s status = %d; body: %s", action, status, payload)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode action %s response %s: %v", action, payload, err)
+	}
+	return decoded
 }
 
 // TestRebaseHarnessTwoRepoFullyMergedJourney drives the two-repository

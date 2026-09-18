@@ -440,6 +440,11 @@ func (t *journeyMutationTarget) RestartFeature(featureID string, req server.Rest
 	case orchestrator.RestartNoOp:
 		resp.Dispatch = "none"
 		return resp, nil
+	case orchestrator.RestartRestackRunning:
+		// Mirrors the production mapping: the asynchronous restack loop is
+		// running and dispatches the Final Review itself on landing.
+		resp.Dispatch = "restack"
+		return resp, nil
 	case orchestrator.RestartDispatchPhase:
 		resp.Dispatch = "phase"
 		if err := t.orch.StartFeature(featureID); err != nil {

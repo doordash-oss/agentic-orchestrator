@@ -388,7 +388,7 @@ func TestChatContextResolverBuildsBundlePerScope(t *testing.T) {
 				"code":       "integration_rebase_conflict",
 				"feature_id": "feat-child-pass",
 			},
-			wantHeading: "needs-action[integration_rebase_conflict]: Rebase replay conflict",
+			wantHeading: "needs-action[integration_rebase_conflict]: Rebase conflict resolution exhausted",
 			wantDetail:  chatContextLongDiagnostics("attention"),
 		},
 		{

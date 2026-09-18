@@ -272,6 +272,21 @@ type FinalFixUserInput struct {
 	FixManifestPath string
 }
 
+type ConflictResolutionUserInput struct {
+	FeatureName        string
+	FeatureDescription string
+	LayerPosition      int
+	LayerTitle         string
+	RoadmapPhase       int
+	TargetBranch       string
+	TargetSHA          string
+	CommitMessage      string
+	CommitPatch        string
+	ConflictFiles      []string
+	UpstreamDiff       string
+	Feedback           string
+}
+
 type ValidateSpecializedUserInput struct {
 	Name             string
 	Description      string
@@ -709,6 +724,25 @@ func TestGoldenSnapshots(t *testing.T) {
 					Files: []ScoutFile{
 						{Path: "auth/login.go", Purpose: "login flow", Content: "package auth\n\nfunc Login() error { ... }"},
 					},
+				})
+			},
+		},
+		{
+			name: "conflict_resolution_user",
+			render: func() string {
+				return ConflictResolutionUserPrompt(ConflictResolutionUserInput{
+					FeatureName:        "Rebase the payment stack",
+					FeatureDescription: "Replay the stack onto the latest main.",
+					LayerPosition:      2,
+					LayerTitle:         "Wire the refund callback",
+					RoadmapPhase:       3,
+					TargetBranch:       "main",
+					TargetSHA:          "1111111111111111111111111111111111111111",
+					CommitMessage:      "fix: handle partial refunds",
+					CommitPatch:        "--- a/internal/refund.go\n+++ b/internal/refund.go\n@@ -1,3 +1,4 @@\n func Refund() error {",
+					ConflictFiles:      []string{"internal/refund.go", "internal/refund_test.go"},
+					UpstreamDiff:       "--- a/internal/refund.go\n+++ b/internal/refund.go\n@@ -2,2 +2,3 @@",
+					Feedback:           "Refund test still contains a conflict marker.",
 				})
 			},
 		},

@@ -17,60 +17,78 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"log"
+	"path/filepath"
 	"sort"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // This file owns the harness restack loop a rebase child runs when it is
 // started at Created. The loop replaces the child's planning and implement
 // phases: for every work repository it rebuilds the stack chain from the
-// target SHA through the Phase 6 restack primitive — dropping merged layers'
-// segments and replaying the kept layers in order — resets the child
-// worktree to the rebuilt top, persists the result on the relationship, and
-// leaves the child ready for its single verification round (the deferred
-// Final Review).
+// target SHA through the restack primitive — dropping merged layers'
+// segments and replaying the kept layers in order, with bounded agent
+// sessions resolving any conflicting cherry-pick — resets the child worktree
+// to the rebuilt top, persists the result on the relationship, and leaves
+// the child ready for its single verification round (the deferred Final
+// Review).
 //
-// The loop is synchronous and idempotent: it recomputes from the parent's
-// current refs and the creation-time persisted target SHA, so a crash after
-// the worktree reset but before the result is persisted leaves the child at
-// Created and a restart recomputes the same rebuilt tips. A replay conflict
-// parks the pass immediately: the child's transaction journal is created in
-// the attention phase with the rebase replay conflict code, no ref changes,
-// and starting the pass again re-runs the loop.
+// Because a resolution session runs for minutes, the start is asynchronous:
+// the start request returns at once, the loop runs in a background goroutine
+// tracked by the cycle wait group while the child stays at Created with no
+// new status transitions, an in-memory in-flight guard refuses a second
+// start with the feature-busy error, and stop or discard aborts the loop
+// with the temporary worktree removed. The loop is idempotent: it recomputes
+// from the parent's current refs and the creation-time persisted target SHA,
+// so a crash after the worktree reset but before the result is persisted
+// leaves the child at Created and a restart recomputes the same rebuilt
+// tips. Exhausted resolution attempts park the pass: the child's transaction
+// journal is created in the attention phase with the rebase conflict
+// resolution code, no ref changes, and starting the pass again re-runs the
+// loop.
 
-// runRebaseRestackPass runs the harness restack loop for a rebase child at
-// Created. It reports whether the restack landed; a replay conflict parks
-// the pass (durable attention journal, attention event emitted) and reports
-// landed=false with a nil error — the park is a state, not a failed command.
-// Any other failure returns an error with every parent ref untouched.
-func (o *Orchestrator) runRebaseRestackPass(featureID string) (bool, error) {
+// startRebaseRestackPass admits one asynchronous restack run for a rebase
+// child at Created. The synchronous preflight (validation, the in-flight
+// guard, clearing a previously parked journal) runs under the caller's
+// relationship read lock; the loop itself runs in a background goroutine
+// tracked by the cycle wait group, holding no relationship lock, and the
+// start returns immediately with the child still at Created. Landing
+// dispatches the Final Review from the goroutine through the same start path
+// the server used.
+func (o *Orchestrator) startRebaseRestackPass(featureID string) error {
 	child, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
-		return false, fmt.Errorf("loading rebase child: %w", err)
+		return fmt.Errorf("loading rebase child: %w", err)
 	}
 	if child == nil || child.Parent == nil || child.Parent.Kind != feature.ChildKindRebase {
-		return false, fmt.Errorf("feature %s is not a rebase child", featureID)
+		return fmt.Errorf("feature %s is not a rebase child", featureID)
 	}
 	if child.Status != feature.StatusCreated {
-		return false, fmt.Errorf("rebase child %s is %s, expected Created", featureID, child.Status)
+		return fmt.Errorf("rebase child %s is %s, expected Created", featureID, child.Status)
 	}
 	if len(child.Parent.RebaseWorkRepos) == 0 {
-		return false, fmt.Errorf("rebase child %s has no work repositories", featureID)
+		return fmt.Errorf("rebase child %s has no work repositories", featureID)
 	}
-	parent, err := o.deps.Lifecycle.Get(child.Parent.ParentID)
-	if err != nil {
-		return false, fmt.Errorf("loading rebase parent %s: %w", child.Parent.ParentID, err)
+	if _, err := o.deps.Lifecycle.Get(child.Parent.ParentID); err != nil {
+		return fmt.Errorf("loading rebase parent %s: %w", child.Parent.ParentID, err)
 	}
 	if o.deps.Worktrees == nil {
-		return false, errors.New("worktree operations are not configured")
+		return errors.New("worktree operations are not configured")
+	}
+
+	handle := &rebaseRestackLoopHandle{}
+	if _, loaded := o.rebaseRestackLoops.LoadOrStore(featureID, handle); loaded {
+		return ErrFeatureBusy
 	}
 
 	// A re-run recomputes everything from the parent's refs; a journal left
-	// by a previous replay-conflict park describes that attempt only, so it
-	// is cleared before the loop runs.
+	// by a previous exhausted-resolution park describes that attempt only,
+	// so it is cleared before the loop runs.
 	if child.Parent.Transaction != nil {
 		if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 			if f.Parent != nil {
@@ -78,21 +96,54 @@ func (o *Orchestrator) runRebaseRestackPass(featureID string) (bool, error) {
 			}
 			return nil
 		}); err != nil {
-			return false, fmt.Errorf("clearing the parked rebase journal: %w", err)
+			o.rebaseRestackLoops.Delete(featureID)
+			return fmt.Errorf("clearing the parked rebase journal: %w", err)
 		}
+	}
+
+	o.cycleWG.Go(func() {
+		defer o.rebaseRestackLoops.Delete(featureID)
+		o.runRebaseRestackLoop(featureID, handle)
+	})
+	return nil
+}
+
+// runRebaseRestackLoop is the background body of the pass: per work
+// repository, rebuild the chain with the conflict resolver attached; on
+// exhaustion park the pass (a durable attention journal, an attention event
+// emitted) and stop; on any other failure exit without parking, leaving the
+// child at Created; on landing, persist the result, transition to
+// ReviewPassed, extend the description and exit criteria with the resolved
+// conflicts, and dispatch the Final Review through StartFeature — the same
+// path the server's start used.
+func (o *Orchestrator) runRebaseRestackLoop(featureID string, handle *rebaseRestackLoopHandle) {
+	child, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		log.Printf("rebase restack loop for %s: loading the child failed: %v", featureID, err)
+		return
+	}
+	if child == nil || child.Parent == nil || child.Parent.Kind != feature.ChildKindRebase || child.Status != feature.StatusCreated {
+		// Stopped or discarded between the start and the loop's first step.
+		return
+	}
+	parent, err := o.deps.Lifecycle.Get(child.Parent.ParentID)
+	if err != nil {
+		o.emitRestackLoopError(featureID, fmt.Errorf("loading rebase parent %s: %w", child.Parent.ParentID, err))
+		return
 	}
 
 	restacks := make([]feature.RebaseRepoRestack, 0, len(child.Parent.RebaseWorkRepos))
 	for _, repoName := range child.Parent.RebaseWorkRepos {
-		restack, conflict, err := o.rebaseRestackOneRepo(parent, child, repoName)
+		restack, conflict, err := o.rebaseRestackOneRepo(parent, child, repoName, handle)
 		if err != nil {
-			return false, err
+			o.emitRestackLoopError(featureID, err)
+			return
 		}
 		if conflict != nil {
 			if err := o.parkRebaseReplayConflict(child, repoName, conflict); err != nil {
-				return false, err
+				o.emitRestackLoopError(featureID, err)
 			}
-			return false, nil
+			return
 		}
 		restacks = append(restacks, restack)
 	}
@@ -113,27 +164,61 @@ func (o *Orchestrator) runRebaseRestackPass(featureID string) (bool, error) {
 			return fmt.Errorf("transitioning the rebase child to ReviewPassed: %w", err)
 		}
 		f.CurrentPhase = feature.PhaseFinalReview
+		// The verification round scrutinizes the agent-resolved commits
+		// specifically: the description and exit criteria name them.
+		f.Description = feature.ExtendRebaseDescriptionWithResolutions(f.Description, restacks)
+		f.ExitCriteria = feature.ExtendRebaseExitCriteriaWithResolutions(f.ExitCriteria, restacks)
 		return nil
 	}); err != nil {
-		return false, err
+		o.emitRestackLoopError(featureID, err)
+		return
 	}
-	return true, nil
+
+	// Landing dispatches the deferred Final Review through the same start
+	// path the server used: StartFeature on the ReviewPassed child routes to
+	// the Final Review starter exactly as the pre-async flow's fall-through
+	// did.
+	if err := o.StartFeature(featureID); err != nil {
+		o.emitRestackLoopError(featureID, fmt.Errorf("dispatching the rebase Final Review: %w", err))
+	}
 }
 
-// parkRebaseReplayConflict parks the pass on a structured restack conflict:
+// emitRestackLoopError surfaces a non-park loop failure: the child stays at
+// Created with no attention journal, so the transient event is the only
+// progress surface.
+func (o *Orchestrator) emitRestackLoopError(featureID string, err error) {
+	log.Printf("rebase restack loop for %s: %v", featureID, err)
+	o.emitEvent(ports.Event{
+		Type:      ports.RepoStatusChanged,
+		FeatureID: featureID,
+		Message:   "rebase restack failed: " + err.Error(),
+	})
+}
+
+// parkRebaseReplayConflict parks the pass on exhausted conflict resolution:
 // the child's transaction journal is created in the attention phase carrying
-// the rebase replay conflict code, naming the repository, the segment, the
-// commit, and the conflicted files. No ref and no worktree changed — the
-// restack primitive aborts its replay before returning the conflict.
+// the rebase conflict resolution code, naming the repository, the segment,
+// the commit, the conflicted files, the attempt count, the last failure, and
+// the attempt directory. No ref and no worktree changed — the restack
+// primitive aborts its replay before returning the conflict.
 func (o *Orchestrator) parkRebaseReplayConflict(child *feature.Feature, repoName string, conflict *git.RestackConflictError) error {
 	entry := feature.RepoTransactionEntry{
 		Repo:      repoName,
 		PrepState: feature.RepoPrepFailed,
 	}
-	item := entryFinding(&entry, errcat.IntegrationRebaseConflict, fmt.Sprintf(
-		"replaying segment %s..%s commit %s conflicted on: %s",
-		conflict.SegmentFrom, conflict.SegmentTo, conflict.CommitSHA, joinFileList(conflict.ConflictFiles)))
+	detail := fmt.Sprintf(
+		"resolving segment %s..%s commit %s exhausted %d attempts on: %s",
+		conflict.SegmentFrom, conflict.SegmentTo, conflict.CommitSHA, conflict.Attempts, joinFileList(conflict.ConflictFiles))
+	if conflict.LastFailure != "" {
+		detail += "; last failure: " + conflict.LastFailure
+	}
+	if conflict.AttemptDir != "" {
+		detail += "; attempt directory: " + conflict.AttemptDir
+	}
+	item := entryFinding(&entry, errcat.IntegrationRebaseConflict, detail)
 	item.ctx.ConflictFiles = append([]string(nil), conflict.ConflictFiles...)
+	item.ctx.CommitSHA = conflict.CommitSHA
+	item.ctx.Attempts = conflict.Attempts
 	journal := &feature.TransactionJournal{
 		Phase:   feature.TransactionPhaseAttention,
 		Entries: []feature.RepoTransactionEntry{entry},
@@ -143,12 +228,14 @@ func (o *Orchestrator) parkRebaseReplayConflict(child *feature.Feature, repoName
 
 // rebaseRestackOneRepo rebuilds one work repository's chain: it resolves the
 // cut points, runs the restack primitive with replace-base to the persisted
-// target SHA plus drop-segment for every cut point inside a merged layer,
-// resets the repository's child worktree to the rebuilt top, and returns the
+// target SHA plus drop-segment for every cut point inside a merged layer and
+// the per-repository conflict resolver attached, decorates the resolver's
+// records with the primitive's dropped verdict, resets the repository's
+// child worktree to the rebuilt top, and returns the
 // relationship-persistable result. A structured conflict returns the
 // conflict with a nil result and a nil error; every other failure returns an
 // error with no ref touched.
-func (o *Orchestrator) rebaseRestackOneRepo(parent *feature.Feature, child *feature.Feature, repoName string) (feature.RebaseRepoRestack, *git.RestackConflictError, error) {
+func (o *Orchestrator) rebaseRestackOneRepo(parent *feature.Feature, child *feature.Feature, repoName string, handle *rebaseRestackLoopHandle) (feature.RebaseRepoRestack, *git.RestackConflictError, error) {
 	restack := feature.RebaseRepoRestack{Repo: repoName}
 
 	target, ok := child.RebaseTargetForRepo(repoName)
@@ -171,7 +258,9 @@ func (o *Orchestrator) rebaseRestackOneRepo(parent *feature.Feature, child *feat
 	if err != nil {
 		return restack, nil, err
 	}
-	result, err := o.deps.Worktrees.RestackChain(worktree, plan.cutPoints, plan.ops)
+	resolver := o.newRebaseConflictResolver(parent, child, repoName, worktree, plan, target, handle)
+	attemptsRoot := filepath.Join(agent.ActiveRunDir(o.stateDir(), child), "rebase-resolution", repoName)
+	result, err := o.deps.Worktrees.RestackChainWithResolver(worktree, plan.cutPoints, plan.ops, resolver.ResolveConflict, attemptsRoot)
 	if err != nil {
 		var conflict *git.RestackConflictError
 		if errors.As(err, &conflict) {
@@ -184,6 +273,7 @@ func (o *Orchestrator) rebaseRestackOneRepo(parent *feature.Feature, child *feat
 	restack.RebuiltTips = plan.rebuiltTips(result)
 	restack.DroppedLayers = plan.droppedLayers
 	restack.AnchorRemap = plan.anchorRemap(result, target.TargetSHA)
+	restack.ResolvedConflicts = decorateResolvedConflicts(resolver.resolved, result.Dropped)
 
 	// The child branch is the top layer's carrier: reset the child
 	// worktree's branch to the rebuilt top before the result is persisted,
@@ -193,6 +283,25 @@ func (o *Orchestrator) rebaseRestackOneRepo(parent *feature.Feature, child *feat
 		return restack, nil, fmt.Errorf("resetting the child worktree of %s to the rebuilt top: %w", repoName, err)
 	}
 	return restack, nil, nil
+}
+
+// decorateResolvedConflicts marks every resolution whose continued
+// cherry-pick turned out empty — the resolution took the target's side
+// entirely — as dropped, exactly like a replay that became empty on its own.
+func decorateResolvedConflicts(resolved []feature.RebaseResolvedConflict, dropped []string) []feature.RebaseResolvedConflict {
+	if len(resolved) == 0 {
+		return nil
+	}
+	droppedSet := make(map[string]bool, len(dropped))
+	for _, sha := range dropped {
+		droppedSet[sha] = true
+	}
+	out := make([]feature.RebaseResolvedConflict, 0, len(resolved))
+	for _, rc := range resolved {
+		rc.Dropped = droppedSet[rc.Commit]
+		out = append(out, rc)
+	}
+	return out
 }
 
 // rebaseRestackPlan is one repository's computed restack request and the
@@ -214,6 +323,15 @@ type rebaseRestackPlan struct {
 	droppedLayers []int
 	// layerState mirrors the per-layer classification for tip translation.
 	layerState map[int]feature.RebaseLayerState
+	// tips lists the stack layers' resolved tips ascending, so the conflict
+	// resolver can attribute a conflicted commit to its owning layer.
+	tips []rebaseRestackTip
+}
+
+// rebaseRestackTip is one stack layer's resolved tip position on the chain.
+type rebaseRestackTip struct {
+	position int
+	sha      string
 }
 
 // rebaseRestackGroup is one cut-point group on the chain: consecutive
@@ -253,11 +371,7 @@ func (o *Orchestrator) buildRebaseRestackPlan(parent *feature.Feature, child *fe
 		}
 	}
 
-	type layerTip struct {
-		position int
-		sha      string
-	}
-	var tips []layerTip
+	var tips []rebaseRestackTip
 	for _, layer := range layers {
 		entry, hasEntry := layer.Repos[repoName]
 		if !hasEntry || layer.Branch == "" {
@@ -274,7 +388,7 @@ func (o *Orchestrator) buildRebaseRestackPlan(parent *feature.Feature, child *fe
 		if tip == "" {
 			continue
 		}
-		tips = append(tips, layerTip{position: layer.Position, sha: tip})
+		tips = append(tips, rebaseRestackTip{position: layer.Position, sha: tip})
 	}
 	if len(tips) == 0 {
 		return nil, fmt.Errorf("repository %s has no stack layer tip to restack", repoName)
@@ -332,7 +446,7 @@ func (o *Orchestrator) buildRebaseRestackPlan(parent *feature.Feature, child *fe
 	}
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].sortKey < candidates[j].sortKey })
 
-	plan := &rebaseRestackPlan{layerTipGroup: make(map[int]int), layerState: stateByLayer}
+	plan := &rebaseRestackPlan{layerTipGroup: make(map[int]int), layerState: stateByLayer, tips: tips}
 	var groups []rebaseRestackGroup
 	for _, c := range candidates {
 		if len(groups) > 0 && groups[len(groups)-1].sha == c.sha {

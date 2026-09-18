@@ -1,0 +1,69 @@
+{{- /*
+  conflict_resolution.user: user prompt for one rebase conflict-resolution
+  attempt. The session runs inside the detached temporary restack worktree:
+  it receives the replayed commit's message and patch plus structured
+  context, may edit only the conflicted files, and finishes with the
+  semantic completion protocol's success outcome. The upstream-diff and
+  previous-attempt-feedback sections render only when non-empty.
+*/ -}}
+{{- define "conflict_resolution.user" -}}# Rebase Conflict Resolution
+
+Your working directory is a detached temporary worktree created to replay this pull-request stack onto a new target. The cherry-pick of the commit below stopped with conflicts. Resolve them so the commit's intent survives on the new base.
+
+## Feature
+
+**{{ .FeatureName }}** — {{ .FeatureDescription }}
+
+## Layer
+
+You are resolving a commit from layer {{ .LayerPosition }}{{ if .LayerTitle }}: {{ .LayerTitle }}{{ end }} of the stack (roadmap phase {{ .RoadmapPhase }}).
+
+## Rebase Target
+
+The stack is being replayed onto branch `{{ .TargetBranch }}` at `{{ .TargetSHA }}`.
+
+## Commit Being Replayed
+
+Commit message:
+
+```text
+{{ .CommitMessage }}
+```
+
+Full patch:
+
+```diff
+{{ .CommitPatch }}
+```
+
+## Conflicted Files
+
+Paths are relative to your working directory. Edit only these files:
+
+{{ range .ConflictFiles }}- {{ . }}
+{{ end }}
+{{ if .UpstreamDiff }}## How the Conflicted Files Changed on the Target Side
+
+The old-base to target diff restricted to the conflicted files:
+
+```diff
+{{ .UpstreamDiff }}
+```
+
+{{ end }}{{ if .Feedback }}## Previous Attempt Feedback
+
+A previous resolution attempt for this commit failed. Fix exactly what this feedback names, then finish:
+
+```text
+{{ .Feedback }}
+```
+
+{{ end }}## Rules
+
+- Edit only the conflicted files listed above; never touch any other file.
+- Remove every conflict marker (`<<<<<<<`, `=======`, `>>>>>>>`); leave none behind.
+- Never run git or any other mutating command — the shell is read-only inspection only.
+- Never create files.
+- Never ask the user; this session is autonomous.
+- Finish with the success outcome from the system prompt's completion protocol.
+{{- end -}}

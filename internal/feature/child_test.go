@@ -73,6 +73,9 @@ func (f *childFakeWorktrees) InspectCleanliness(path string, max int) (*git.Clea
 func (f *childFakeWorktrees) RestackChain(string, []git.RestackCutPoint, []git.RestackOp) (*git.RestackResult, error) {
 	return nil, nil
 }
+func (f *childFakeWorktrees) RestackChainWithResolver(string, []git.RestackCutPoint, []git.RestackOp, git.RestackConflictResolver, string) (*git.RestackResult, error) {
+	return nil, nil
+}
 func (f *childFakeWorktrees) CommitTreeSHA(string, string) (string, error)        { return "", nil }
 func (f *childFakeWorktrees) UpdateRefsTransaction(string, []git.RefUpdate) error { return nil }
 
@@ -810,6 +813,9 @@ func (f *reuseWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport
 func (f *reuseWorktrees) RestackChain(string, []git.RestackCutPoint, []git.RestackOp) (*git.RestackResult, error) {
 	return nil, nil
 }
+func (f *reuseWorktrees) RestackChainWithResolver(string, []git.RestackCutPoint, []git.RestackOp, git.RestackConflictResolver, string) (*git.RestackResult, error) {
+	return nil, nil
+}
 func (f *reuseWorktrees) CommitTreeSHA(string, string) (string, error)        { return "", nil }
 func (f *reuseWorktrees) UpdateRefsTransaction(string, []git.RefUpdate) error { return nil }
 
@@ -1307,9 +1313,11 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 							Branch:        "feature/parent",
 							ConflictFiles: []string{"internal/api.go"},
 							ChildHeadSHA:  "bbbb2222",
+							CommitSHA:     "1a2b3c4d",
+							Attempts:      3,
 						}},
 					},
-					Diagnostics: "repoA: rebase replay conflict: [internal/api.go]",
+					Diagnostics: "repoA: resolving segment phase:2..phase:3 commit 1a2b3c4d exhausted 3 attempts on: internal/api.go; last failure: conflict markers remain in internal/api.go; attempt directory: /state/features/f1/rebase-resolution/repoA/1a2b3c4d/attempt-03",
 				},
 			},
 		},
@@ -1341,7 +1349,7 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 		t.Fatalf("transaction entry = %+v, want full round-trip", entry)
 	}
 	rec := tx.Attention
-	if rec == nil || rec.Code != errcat.IntegrationRebaseConflict || rec.Diagnostics != "repoA: rebase replay conflict: [internal/api.go]" {
+	if rec == nil || rec.Code != errcat.IntegrationRebaseConflict || rec.Diagnostics != "repoA: resolving segment phase:2..phase:3 commit 1a2b3c4d exhausted 3 attempts on: internal/api.go; last failure: conflict markers remain in internal/api.go; attempt directory: /state/features/f1/rebase-resolution/repoA/1a2b3c4d/attempt-03" {
 		t.Fatalf("attention record = %+v, want round-trip", rec)
 	}
 	if rec.Context == nil || len(rec.Context.Repositories) != 1 {
@@ -1350,7 +1358,8 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 	repo := rec.Context.Repositories[0]
 	if repo.Name != "repoA" || repo.Branch != "feature/parent" ||
 		len(repo.ConflictFiles) != 1 || repo.ConflictFiles[0] != "internal/api.go" ||
-		repo.ChildHeadSHA != "bbbb2222" {
+		repo.ChildHeadSHA != "bbbb2222" ||
+		repo.CommitSHA != "1a2b3c4d" || repo.Attempts != 3 {
 		t.Fatalf("attention repository = %+v, want round-trip", repo)
 	}
 }

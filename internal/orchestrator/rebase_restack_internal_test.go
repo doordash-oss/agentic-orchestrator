@@ -22,6 +22,7 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -321,6 +322,44 @@ func (fx *rebaseRestackFixture) refSHA(ref string) string {
 	return restackGit(fx.t, fx.repoDir, "rev-parse", ref)
 }
 
+// waitForRestackLoop polls the child until the asynchronous restack loop
+// reaches the expected end state (landed, parked, or still Created after an
+// abort). The loop runs in a background goroutine; the Final Review
+// goroutine it dispatches on landing blocks on its result channel in these
+// tests, so WaitForCycles cannot be used — the observable store state is
+// the loop's own completion signal.
+func (fx *rebaseRestackFixture) waitForRestackLoop(t *testing.T, done func(*feature.Feature) bool, what string) *feature.Feature {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		child := fx.reloadChild()
+		if done(child) {
+			return child
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("restack loop never %s; child status = %s, transaction = %+v", what, child.Status, child.Parent.Transaction)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// waitLanded waits for the loop to land the child at FinalReviewing with
+// the Final Review dispatched.
+func (fx *rebaseRestackFixture) waitLanded(t *testing.T) *feature.Feature {
+	t.Helper()
+	return fx.waitForRestackLoop(t, func(child *feature.Feature) bool {
+		return child.Status == feature.StatusFinalReviewing
+	}, "landed")
+}
+
+// waitParked waits for the loop to park the child with an attention journal.
+func (fx *rebaseRestackFixture) waitParked(t *testing.T) *feature.Feature {
+	t.Helper()
+	return fx.waitForRestackLoop(t, func(child *feature.Feature) bool {
+		return child.Parent.Transaction != nil && child.Parent.Transaction.Phase == feature.TransactionPhaseAttention
+	}, "parked")
+}
+
 // TestRebaseRestack_ReplaysStackOntoTarget drives the restack loop through
 // StartFeature and verifies the full acceptance shape: the child worktree
 // descends from the target with layers 2 and 3 replayed in order (identical
@@ -336,8 +375,10 @@ func TestRebaseRestack_ReplaysStackOntoTarget(t *testing.T) {
 		t.Fatalf("StartFeature() error = %v", err)
 	}
 
-	// The Final Review dispatch arrived with the child transitioned out of
-	// Created onto the Final Review phase.
+	// The asynchronous loop landed the child and dispatched the Final
+	// Review: the child is at FinalReviewing with its current phase Final
+	// Review.
+	fx.waitLanded(t)
 	select {
 	case f := <-fx.dispatched:
 		if f.ID != fx.childID {
@@ -443,19 +484,30 @@ func TestRebaseRestack_ReplaysStackOntoTarget(t *testing.T) {
 }
 
 // TestRebaseRestack_ConflictParksAttention verifies a conflicting replay
-// parks the pass with the rebase replay conflict attention code naming the
-// repository, the segment, the commit, and the conflicted files, leaves the
-// child worktree at the parent tip with every ref unchanged, and starting
-// the pass again re-runs the loop.
+// whose scripted resolution sessions never resolve: three attempts run
+// (each attempt directory holds its prompt, output, and feedback, the
+// second and third prompts carrying the previous failure), the pass parks
+// with the rebase conflict resolution attention code carrying the attempt
+// count, the repository, the segment, the commit, and the conflicted files,
+// every ref stays unchanged with the child worktree at the parent tip, and
+// starting the pass again re-runs the loop.
 func TestRebaseRestack_ConflictParksAttention(t *testing.T) {
 	fx := newRebaseRestackFixture(t, rebaseRestackFixtureOpts{Conflicting: true})
 	o := fx.orchestrator()
 
+	var sessionWorkDirs []string
+	o.SetRunConflictResolutionFn(func(ctx context.Context, req agent.ConflictResolutionRequest) (*agent.ConflictResolutionResult, error) {
+		sessionWorkDirs = append(sessionWorkDirs, req.WorkDir)
+		// The session completes but never touches the conflicted file, so
+		// the markers stay and every attempt fails verification.
+		return &agent.ConflictResolutionResult{Status: agent.ConflictResolutionCompleted}, nil
+	})
+
 	if err := o.StartFeature(fx.childID); err != nil {
-		t.Fatalf("StartFeature() error = %v, want nil (the conflict parks the pass)", err)
+		t.Fatalf("StartFeature() error = %v, want nil (exhaustion parks the pass)", err)
 	}
 
-	child := fx.reloadChild()
+	child := fx.waitParked(t)
 	if child.Status != feature.StatusCreated {
 		t.Fatalf("child status = %s, want Created (the park performs no status change)", child.Status)
 	}
@@ -475,9 +527,16 @@ func TestRebaseRestack_ConflictParksAttention(t *testing.T) {
 	if rec.Context == nil || len(rec.Context.Repositories) != 1 || rec.Context.Repositories[0].Name != "repoA" {
 		t.Fatalf("attention repositories = %+v, want repoA", rec.Context)
 	}
-	files := rec.Context.Repositories[0].ConflictFiles
+	repoRec := rec.Context.Repositories[0]
+	files := repoRec.ConflictFiles
 	if len(files) == 0 || files[0] != "l2.txt" {
 		t.Fatalf("conflict files = %v, want l2.txt", files)
+	}
+	if repoRec.Attempts != rebaseConflictResolutionAttempts {
+		t.Fatalf("attention attempts = %d, want %d", repoRec.Attempts, rebaseConflictResolutionAttempts)
+	}
+	if repoRec.CommitSHA != fx.anchors[3] {
+		t.Fatalf("attention commit = %s, want %s", repoRec.CommitSHA, fx.anchors[3])
 	}
 	if !strings.Contains(rec.Diagnostics, "repoA") || !strings.Contains(rec.Diagnostics, "phase:2..phase:3") {
 		t.Fatalf("diagnostics = %q, want the repository and the conflicting segment", rec.Diagnostics)
@@ -485,8 +544,47 @@ func TestRebaseRestack_ConflictParksAttention(t *testing.T) {
 	if !strings.Contains(rec.Diagnostics, fx.anchors[3]) {
 		t.Fatalf("diagnostics = %q, want the conflicting commit %s", rec.Diagnostics, fx.anchors[3])
 	}
+	if !strings.Contains(rec.Diagnostics, "exhausted 3 attempts") {
+		t.Fatalf("diagnostics = %q, want the exhausted attempt count", rec.Diagnostics)
+	}
+	if !strings.Contains(rec.Diagnostics, "conflict markers remain in: l2.txt") {
+		t.Fatalf("diagnostics = %q, want the last failure reason", rec.Diagnostics)
+	}
+	if !strings.Contains(rec.Diagnostics, "attempt-03") {
+		t.Fatalf("diagnostics = %q, want the last attempt directory", rec.Diagnostics)
+	}
 
-	// Every ref and the child worktree are untouched.
+	// Three sessions ran, each inside the paused pick's temporary worktree.
+	if len(sessionWorkDirs) != rebaseConflictResolutionAttempts {
+		t.Fatalf("resolution sessions = %d, want %d", len(sessionWorkDirs), rebaseConflictResolutionAttempts)
+	}
+
+	// Every attempt directory holds its prompt and feedback; the second and
+	// third prompts carry the previous attempt's failure. (The session
+	// output and receipt are written by the real phase-runner entry point;
+	// this test scripts the runner seam, so only the harness-authored files
+	// are on disk.)
+	commitRoot := filepath.Join(fx.store.BaseDir, fx.childID, "runs", "run-001", "rebase-resolution", "repoA", fx.anchors[3][:7])
+	for attempt := 1; attempt <= rebaseConflictResolutionAttempts; attempt++ {
+		dir := filepath.Join(commitRoot, fmt.Sprintf("attempt-%02d", attempt))
+		for _, name := range []string{"user-prompt.md", "feedback.md"} {
+			if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+				t.Fatalf("attempt %d directory missing %s: %v", attempt, name, err)
+			}
+		}
+		if attempt > 1 {
+			prompt, err := os.ReadFile(filepath.Join(dir, "user-prompt.md"))
+			if err != nil {
+				t.Fatalf("reading attempt %d prompt: %v", attempt, err)
+			}
+			if !strings.Contains(string(prompt), "conflict markers remain in: l2.txt") {
+				t.Fatalf("attempt %d prompt does not carry the previous failure's feedback", attempt)
+			}
+		}
+	}
+
+	// Every ref and the child worktree are untouched, and no temporary
+	// worktree remains.
 	if got := restackGit(t, fx.childWT, "rev-parse", "HEAD"); got != fx.parentTip {
 		t.Fatalf("child worktree HEAD = %s, want the parent tip %s", got, fx.parentTip)
 	}
@@ -496,19 +594,14 @@ func TestRebaseRestack_ConflictParksAttention(t *testing.T) {
 			t.Fatalf("parent ref %s moved: %s, want %s", ref, got, want)
 		}
 	}
+	assertNoRestackTempWorktrees(t, fx.repoDir)
 
 	// Starting the pass again re-runs the loop: the parked journal is
-	// cleared and recreated by the second conflicting attempt.
-	if err := fx.store.Modify(fx.childID, func(f *feature.Feature) error {
-		f.Parent.Transaction = nil
-		return nil
-	}); err != nil {
-		t.Fatalf("clearing the parked journal: %v", err)
-	}
+	// cleared and recreated by the second exhausted run.
 	if err := o.StartFeature(fx.childID); err != nil {
 		t.Fatalf("second StartFeature() error = %v", err)
 	}
-	child = fx.reloadChild()
+	child = fx.waitParked(t)
 	if child.Status != feature.StatusCreated {
 		t.Fatalf("child status after re-run = %s, want Created", child.Status)
 	}
@@ -518,6 +611,37 @@ func TestRebaseRestack_ConflictParksAttention(t *testing.T) {
 	if child.Parent.Transaction.Attention == nil || child.Parent.Transaction.Attention.Code != errcat.IntegrationRebaseConflict {
 		t.Fatalf("re-run attention = %+v, want integration_rebase_conflict", child.Parent.Transaction.Attention)
 	}
+}
+
+// assertNoRestackTempWorktrees proves no detached temporary worktree from a
+// restack remains registered in the repository.
+func assertNoRestackTempWorktrees(t *testing.T, repoDir string) {
+	t.Helper()
+	if restackTempWorktreeListed(t, repoDir) {
+		t.Fatal("a temporary restack worktree remains registered")
+	}
+}
+
+// restackTempWorktreeListed reports whether a temporary restack worktree
+// (created under an OS-temp "restack-*" directory) is still registered. The
+// check matches path components, not raw output — the fixture's child branch
+// name itself contains "restack-".
+func restackTempWorktreeListed(t *testing.T, repoDir string) bool {
+	t.Helper()
+	out := restackGit(t, repoDir, "worktree", "list", "--porcelain")
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "worktree ") {
+			continue
+		}
+		path := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+		for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+			if strings.HasPrefix(part, "restack-") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // TestRebaseRestack_IdempotentRecompute simulates a crash after the child
@@ -531,6 +655,7 @@ func TestRebaseRestack_IdempotentRecompute(t *testing.T) {
 	if err := o.StartFeature(fx.childID); err != nil {
 		t.Fatalf("first StartFeature() error = %v", err)
 	}
+	fx.waitLanded(t)
 	first := fx.reloadChild()
 	firstRestack := first.Parent.RebaseRestacks[0]
 	firstHeadTree := restackGit(t, fx.childWT, "rev-parse", "HEAD^{tree}")
@@ -552,6 +677,7 @@ func TestRebaseRestack_IdempotentRecompute(t *testing.T) {
 	if err := o.StartFeature(fx.childID); err != nil {
 		t.Fatalf("second StartFeature() error = %v", err)
 	}
+	fx.waitLanded(t)
 	second := fx.reloadChild()
 	if second.Status != feature.StatusFinalReviewing {
 		t.Fatalf("child status after recompute = %s, want FinalReviewing", second.Status)
@@ -666,14 +792,16 @@ func reverseStrings(s []string) {
 	}
 }
 
-// landRestackedChildAtReviewPassed runs the harness restack and leaves the
-// child at the approved-shaped state a finished verification round produces,
-// ready for RunChildIntegration.
+// landRestackedChildAtReviewPassed runs the asynchronous harness restack,
+// waits for it to land the child at FinalReviewing, and leaves the child at
+// the approved-shaped state a finished verification round produces, ready
+// for RunChildIntegration.
 func landRestackedChildAtReviewPassed(t *testing.T, fx *rebaseRestackFixture, o *Orchestrator) {
 	t.Helper()
 	if err := o.StartFeature(fx.childID); err != nil {
 		t.Fatalf("StartFeature() error = %v", err)
 	}
+	fx.waitLanded(t)
 	if err := fx.store.Modify(fx.childID, func(f *feature.Feature) error {
 		f.Status = feature.StatusReviewPassed
 		return nil

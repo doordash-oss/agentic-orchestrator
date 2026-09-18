@@ -368,6 +368,7 @@ func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 		"codex_design_system_rolespec":                         true,
 		"codex_implement_system_rolespec":                      true,
 		"autoreview_user":                                      true,
+		"conflict_resolution_user":                             true,
 		"design_system_rolespec":                               true,
 		"design_user_multi_repo":                               true,
 		"final_fix_user_with_manual":                           true,

@@ -213,6 +213,12 @@ type Orchestrator struct {
 	// cleanup.
 	cycleWG sync.WaitGroup
 
+	// rebaseRestackLoops tracks the in-flight asynchronous restack loops by
+	// rebase child id. Presence is the in-flight guard that refuses a
+	// second start with ErrFeatureBusy; the handle's stopped flag turns a
+	// running resolution attempt into an abort on stop or discard.
+	rebaseRestackLoops sync.Map
+
 	// featureStartControls serialize phase admission per feature. This makes
 	// repeated API start requests idempotent even when they arrive before
 	// the first request's state transition is visible to the second.
@@ -266,6 +272,33 @@ type Orchestrator struct {
 	// worktreeFingerprintFn is a test seam for detecting whether a mounted
 	// context repo changed during the agent loop.
 	worktreeFingerprintFn func(worktreePath string) (string, error)
+
+	// runConflictResolutionFn is a test seam over
+	// PhaseRunner.RunConflictResolution, the bounded session a rebase pass
+	// runs to resolve a conflicting cherry-pick. The default (set in New())
+	// is a thin adapter that calls o.deps.PhaseRunner.RunConflictResolution.
+	// Tests override this via SetRunConflictResolutionFn so the resolution
+	// budget, verification, and feedback loop can be exercised with
+	// scripted sessions.
+	runConflictResolutionFn func(ctx context.Context, req agent.ConflictResolutionRequest) (*agent.ConflictResolutionResult, error)
+}
+
+// SetRunConflictResolutionFn installs a test seam that intercepts
+// PhaseRunner.RunConflictResolution dispatch. Intended for tests only.
+func (o *Orchestrator) SetRunConflictResolutionFn(fn func(ctx context.Context, req agent.ConflictResolutionRequest) (*agent.ConflictResolutionResult, error)) {
+	o.runConflictResolutionFn = fn
+}
+
+// runConflictResolution dispatches one bounded conflict-resolution attempt
+// through the seam, so tests can script the session.
+func (o *Orchestrator) runConflictResolution(ctx context.Context, req agent.ConflictResolutionRequest) (*agent.ConflictResolutionResult, error) {
+	if o.runConflictResolutionFn != nil {
+		return o.runConflictResolutionFn(ctx, req)
+	}
+	if o.deps.PhaseRunner == nil {
+		return nil, errors.New("phase runner not configured")
+	}
+	return o.deps.PhaseRunner.RunConflictResolution(ctx, req)
 }
 
 // SetRunImplementationFn installs a test seam that intercepts
@@ -524,26 +557,17 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 
 	phase := f.CurrentPhase
 
-	// A rebase child at Created runs the harness restack loop instead of
-	// dispatching a planning phase. The loop is synchronous and idempotent;
-	// on success the child is at ReviewPassed with its current phase Final
-	// Review, and the fall-through below dispatches the deferred Final
-	// Review — the pass's single verification round — exactly as a feature
-	// restarting mid-Final-Review is dispatched today. A replay conflict
-	// parks the pass (durable attention journal) and the start returns.
+	// A rebase child at Created runs the asynchronous harness restack loop
+	// instead of dispatching a planning phase: the start returns at once
+	// with the child still at Created, the loop runs in a background
+	// goroutine (with bounded agent sessions resolving any conflicting
+	// cherry-pick), and landing dispatches the deferred Final Review — the
+	// pass's single verification round — from the goroutine through this
+	// same start path. Exhausted resolution attempts park the pass (durable
+	// attention journal) and the loop ends; a resolver error or a stop ends
+	// the loop without parking, leaving the child at Created.
 	if f.IsChild() && f.Parent.Kind == feature.ChildKindRebase && f.Status == feature.StatusCreated {
-		landed, err := o.runRebaseRestackPass(featureID)
-		if err != nil {
-			return err
-		}
-		if !landed {
-			return nil
-		}
-		f, err = o.deps.Lifecycle.Get(featureID)
-		if err != nil {
-			return fmt.Errorf("loading feature after restack: %w", err)
-		}
-		phase = feature.PhaseFinalReview
+		return o.startRebaseRestackPass(featureID)
 	}
 
 	// For new features, fall back to the pipeline's first phase.
@@ -1339,6 +1363,18 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 	case getErr == nil && isSettledFeatureStatus(f.Status):
 		// Stop is idempotent when work completed after the caller's activity
 		// check.
+	case getErr == nil && f.IsChild() && f.Parent != nil && f.Parent.Kind == feature.ChildKindRebase && f.Status == feature.StatusCreated:
+		// The restack pass's home state is Created: a stop kills the pass's
+		// sessions — aborting an in-flight resolution session and its
+		// background loop without parking — and the child stays at Created
+		// so the next start recomputes from scratch. The loop handle's
+		// stopped flag is what turns the running attempt into an abort
+		// instead of a retryable failure.
+		if handle, ok := o.rebaseRestackLoops.Load(featureID); ok {
+			if h, ok := handle.(*rebaseRestackLoopHandle); ok {
+				h.stop()
+			}
+		}
 	default:
 		// Transition to interrupted FIRST so racing completion handlers
 		// (onKBCompleted, onPhaseCompletedDefault, …) observe the terminal

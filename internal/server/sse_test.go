@@ -727,8 +727,8 @@ func TestRelationshipIntegrationChangedCarriesCanonicalError(t *testing.T) {
 	if parked.Resource.Type != resourceTypeRelationship {
 		t.Fatalf("relationship integration event resource type = %q, want %q", parked.Resource.Type, resourceTypeRelationship)
 	}
-	if parked.Summary != "Rebase replay conflict" {
-		t.Fatalf("relationship integration event summary = %q, want the catalog title %q", parked.Summary, "Rebase replay conflict")
+	if parked.Summary != "Rebase conflict resolution exhausted" {
+		t.Fatalf("relationship integration event summary = %q, want the catalog title %q", parked.Summary, "Rebase conflict resolution exhausted")
 	}
 	if parked.Error == nil {
 		t.Fatal("relationship integration event error = nil, want canonical error object")

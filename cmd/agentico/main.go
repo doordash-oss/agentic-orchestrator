@@ -1269,6 +1269,12 @@ func (t *serverMutationTarget) dispatchRestartOutcome(featureID string, outcome 
 	case orchestrator.RestartNoOp:
 		resp.Dispatch = dispatchNone
 		return nil
+	case orchestrator.RestartRestackRunning:
+		// The asynchronous restack loop is now running for a rebase child;
+		// no phase dispatch follows — the loop dispatches the Final Review
+		// itself on landing.
+		resp.Dispatch = "restack"
+		return nil
 	case orchestrator.RestartDispatchPhase:
 		resp.Dispatch = "phase"
 		if outcome.Phase.String() != "" {

@@ -45,6 +45,11 @@ type integrationRepoContext struct {
 	ChildHeadSHA  string
 	CandidateSHA  string
 	ObservedSHA   string
+	// CommitSHA and Attempts carry the exhausted conflict-resolution facts
+	// for the rebase-conflict park: the commit whose replay conflicted and
+	// the resolution attempt count.
+	CommitSHA string
+	Attempts  int
 }
 
 // block converts the context into the record's repositories-block entry.
@@ -57,6 +62,8 @@ func (c integrationRepoContext) block() errcat.CodeRepository {
 		ChildHeadSHA:  c.ChildHeadSHA,
 		CandidateSHA:  c.CandidateSHA,
 		ObservedSHA:   c.ObservedSHA,
+		CommitSHA:     c.CommitSHA,
+		Attempts:      c.Attempts,
 	}
 }
 

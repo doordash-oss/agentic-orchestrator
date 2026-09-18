@@ -32,9 +32,10 @@ const (
 	IntegrationWorktreeSyncFailed   Code = "integration_worktree_sync_failed"
 	IntegrationRolledBack           Code = "integration_rolled_back"
 	IntegrationCandidateFailed      Code = "integration_candidate_failed"
-	// IntegrationRebaseConflict parks a rebase pass whose harness restack
-	// replay conflicted: the segment and commit being replayed and the
-	// conflicted files are named in the record.
+	// IntegrationRebaseConflict parks a rebase pass whose agent
+	// conflict-resolution attempts were exhausted: the segment and commit
+	// being replayed, the conflicted files, the attempt count, the last
+	// failure, and the attempt directory are named in the record.
 	IntegrationRebaseConflict     Code = "integration_rebase_conflict"
 	RebaseGateTargetMissing       Code = "rebase_gate_target_missing"
 	RebaseGateNotAncestor         Code = "rebase_gate_not_ancestor"
@@ -272,8 +273,11 @@ func integrationCandidateFailedSummary(p Params) string {
 	}, "Preparing merge candidates failed in repositories:")
 }
 
-// integrationRebaseConflictSummary names the repository whose restack
-// replay conflicted, with the affected files when known.
+// integrationRebaseConflictSummary names the repository whose conflict
+// resolution attempts were exhausted, with the replayed commit and the
+// attempt and file counts when known. Legacy persisted records that carry
+// neither a commit nor an attempt count render the replay-conflict sentence
+// instead.
 func integrationRebaseConflictSummary(p Params) string {
 	repos, ok := integrationParams(p)
 	if !ok {
@@ -285,11 +289,23 @@ func integrationRebaseConflictSummary(p Params) string {
 			return ""
 		}
 		count := len(repo.ConflictFiles)
-		if count > 0 {
-			return fmt.Sprintf("Replaying the stack onto the resolved target conflicted in repository %q on %d %s.", name, count, fileWord(count))
+		if repo.Attempts <= 0 {
+			if count > 0 {
+				return fmt.Sprintf("The stack replay conflicted in repository %q on %d %s.", name, count, fileWord(count))
+			}
+			return fmt.Sprintf("The stack replay conflicted in repository %q.", name)
 		}
-		return fmt.Sprintf("Replaying the stack onto the resolved target conflicted in repository %q.", name)
-	}, "Replaying the stack onto the resolved target conflicted in repositories:")
+		if commit := shortSHA(repo.CommitSHA); commit != "" {
+			if count > 0 {
+				return fmt.Sprintf("Resolution attempts for commit %s in repository %q were exhausted after %d attempts on %d %s.", commit, name, repo.Attempts, count, fileWord(count))
+			}
+			return fmt.Sprintf("Resolution attempts for commit %s in repository %q were exhausted after %d attempts.", commit, name, repo.Attempts)
+		}
+		if count > 0 {
+			return fmt.Sprintf("Resolution attempts in repository %q were exhausted after %d attempts on %d %s.", name, repo.Attempts, count, fileWord(count))
+		}
+		return fmt.Sprintf("Resolution attempts in repository %q were exhausted after %d attempts.", name, repo.Attempts)
+	}, "Resolution attempts were exhausted in repositories:")
 }
 
 // rebaseGateTargetMissingSummary names the repository whose creation-time

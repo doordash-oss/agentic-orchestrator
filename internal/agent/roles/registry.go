@@ -28,6 +28,7 @@ var roleSpecs = append(
 		researcherRoleSpec,
 		designerRoleSpec,
 		finalReviewFixerRoleSpec,
+		conflictResolverRoleSpec,
 	}, planValidatorRoleSpecs...),
 	implementationReviewAxisRoleSpecs...,
 )

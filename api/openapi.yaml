@@ -2110,6 +2110,13 @@ components:
           type: string
         observed_sha:
           type: string
+        commit_sha:
+          type: string
+          description: Commit whose replayed conflict exhausted its resolution attempts, when known.
+        attempts:
+          type: integer
+          minimum: 0
+          description: Resolution attempts spent on the replayed commit's conflict, when known.
     ErrorPhaseContext:
       type: object
       description: Phase a code references.

@@ -40,8 +40,9 @@ var removedEntryWireKeys = []string{
 // nothing.
 var removedAttentionItemCodes = []string{"dirty_parent", "integration_conflict", "integration_attention"}
 
-// mergeConflictRecord is the stored canonical record for a child parked on a
-// rebase replay conflict: one repository with two conflict files and oversized raw
+// mergeConflictRecord is the stored canonical record for a child parked on
+// exhausted rebase conflict resolution: one repository with a replayed
+// commit, three spent attempts, two conflict files, and oversized raw
 // diagnostics, so projections pin both the catalog rendering and the
 // diagnostics bound.
 func mergeConflictRecord() *errcat.FailureRecord {
@@ -53,6 +54,8 @@ func mergeConflictRecord() *errcat.FailureRecord {
 				Branch:        "main",
 				ConflictFiles: []string{"internal/api.go", "internal/server/handler.go"},
 				ChildHeadSHA:  "9b1e7a2c4d6f",
+				CommitSHA:     "1a2b3c4d5e6f",
+				Attempts:      3,
 			}},
 		},
 		Diagnostics: strings.Repeat("conflict hunk ", 40),
@@ -88,9 +91,9 @@ func canonicalAttentionFrom(t *testing.T, projection map[string]any) map[string]
 
 // assertCanonicalMergeConflict pins the catalog-rendered canonical object for
 // the merge-conflict record: needs_action class, authored title, a summary
-// naming the repository and the conflict-file count, the repositories block
-// with the conflict files, a retry-referencing remediation, and bounded
-// diagnostics.
+// naming the repository, the replayed commit, the attempt count, and the
+// conflict-file count, the repositories block with the conflict files, a
+// retry-referencing remediation, and bounded diagnostics.
 func assertCanonicalMergeConflict(t *testing.T, attention map[string]any) {
 	t.Helper()
 	if attention["code"] != string(errcat.IntegrationRebaseConflict) {
@@ -99,12 +102,13 @@ func assertCanonicalMergeConflict(t *testing.T, attention map[string]any) {
 	if attention["class"] != string(errcat.ClassNeedsAction) {
 		t.Fatalf("attention class = %v, want %q", attention["class"], errcat.ClassNeedsAction)
 	}
-	if attention["title"] != "Rebase replay conflict" {
-		t.Fatalf("attention title = %v, want the catalog title %q", attention["title"], "Rebase replay conflict")
+	if attention["title"] != "Rebase conflict resolution exhausted" {
+		t.Fatalf("attention title = %v, want the catalog title %q", attention["title"], "Rebase conflict resolution exhausted")
 	}
 	summary, _ := attention["summary"].(string)
-	if !strings.Contains(summary, repoNameSelf) || !strings.Contains(summary, "2 files") {
-		t.Fatalf("attention summary = %q, want %q and the conflict-file count named", summary, repoNameSelf)
+	if !strings.Contains(summary, repoNameSelf) || !strings.Contains(summary, "2 files") ||
+		!strings.Contains(summary, "1a2b3c4") || !strings.Contains(summary, "3 attempts") {
+		t.Fatalf("attention summary = %q, want %q, the commit, the attempt count, and the conflict-file count named", summary, repoNameSelf)
 	}
 	context, ok := attention["context"].(map[string]any)
 	if !ok {
@@ -132,8 +136,8 @@ func assertCanonicalMergeConflict(t *testing.T, attention map[string]any) {
 	if !ok {
 		t.Fatalf("attention remediation = %#v, want remediation block", attention["remediation"])
 	}
-	if hint, _ := remediation["hint"].(string); !strings.Contains(strings.ToLower(hint), "retry") {
-		t.Fatalf("attention remediation hint = %q, want a retry reference", hint)
+	if hint, _ := remediation["hint"].(string); !strings.Contains(strings.ToLower(hint), "start the pass again") {
+		t.Fatalf("attention remediation hint = %q, want a start-the-pass-again reference", hint)
 	}
 	sawRetryAction := false
 	if actions, ok := remediation["actions"].([]any); ok {

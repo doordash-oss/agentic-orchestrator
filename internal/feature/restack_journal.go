@@ -226,6 +226,30 @@ func MarkStackLayerMergedForRepo(f *Feature, repository string, layerPosition in
 	}
 }
 
+// SetStackLayerLastPushedForRepo pins one repository's entry on the stack
+// layer at the given position to the remote tip a rebase pass observed and
+// adopted at preflight, so the tail's force-with-lease republish pins
+// exactly that tip: nothing pushed after the observation can be
+// overwritten. Called from the closure's single parent write, so it must
+// stay a pure function of the feature; idempotent — re-applying writes the
+// same SHA. Layers the stack no longer defines are skipped.
+func SetStackLayerLastPushedForRepo(f *Feature, repository string, layerPosition int, remoteTip string) {
+	if f == nil || remoteTip == "" {
+		return
+	}
+	for i := range f.Stack {
+		if f.Stack[i].Position != layerPosition {
+			continue
+		}
+		if f.Stack[i].Repos == nil {
+			f.Stack[i].Repos = make(map[string]StackRepoEntry)
+		}
+		entry := f.Stack[i].Repos[repository]
+		entry.LastPushedSHA = remoteTip
+		f.Stack[i].Repos[repository] = entry
+	}
+}
+
 // RestackRemapForRepository computes the anchor and tip remap for one
 // repository given an old-to-new SHA map: every roadmap-phase anchor and
 // every layer tip of the repository whose current SHA appears in the map is

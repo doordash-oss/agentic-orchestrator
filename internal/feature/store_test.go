@@ -3124,3 +3124,105 @@ func TestStoreLoadNeverObservesSetupDoneWithStaleLifecycleStatus(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// TestStoreSaveAndLoadRebaseDivergedLayerStatesRoundTrip proves the
+// divergence fields of the per-layer classification round-trip unchanged
+// through the feature YAML, and that a relationship persisted before the
+// fields existed loads with no diverged layers.
+func TestStoreSaveAndLoadRebaseDivergedLayerStatesRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewStore(dir)
+	now := time.Now().Truncate(time.Second)
+	f := &Feature{
+		ID:            "test-rebase-diverged-roundtrip",
+		Name:          "Test Rebase Diverged RoundTrip",
+		Slug:          "test-rebase-diverged-roundtrip",
+		Status:        StatusCreated,
+		SchemaVersion: SchemaVersionCurrent,
+		Created:       now,
+		Parent: &ChildRelationship{
+			ParentID: "parent-1",
+			Kind:     ChildKindRebase,
+			RebaseLayerStates: []RebaseLayerClassification{
+				{
+					Repo: "repoA", LayerPosition: 1, LayerTitle: "Layer one", Branch: "stack/1",
+					State: RebaseLayerStateKept,
+				},
+				{
+					Repo: "repoA", LayerPosition: 2, LayerTitle: "Layer two", Branch: "stack/2",
+					State: RebaseLayerStateKept, Diverged: true,
+					RemoteTip:         "fedcba9876543210fedcba9876543210fedcba98",
+					RemoteOnlyCommits: 3,
+					ForeignCommits: []RebaseForeignCommit{
+						{SHA: "1111111111111111111111111111111111111111", Subject: "reviewer fix one", Author: "Reviewer One <reviewer1@example.com>"},
+						{SHA: "2222222222222222222222222222222222222222", Subject: "reviewer fix two", Author: "Reviewer Two <reviewer2@example.com>"},
+					},
+				},
+			},
+			RebaseWorkRepos: []string{"repoA"},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	states := loaded.Parent.RebaseLayerStates
+	if len(states) != 2 {
+		t.Fatalf("loaded RebaseLayerStates = %+v, want 2", states)
+	}
+	if states[0].Diverged || states[0].RemoteTip != "" || states[0].RemoteOnlyCommits != 0 || len(states[0].ForeignCommits) != 0 {
+		t.Errorf("layer 1 classification = %+v, want no divergence fields", states[0])
+	}
+	got := states[1]
+	if !got.Diverged || got.RemoteTip != "fedcba9876543210fedcba9876543210fedcba98" || got.RemoteOnlyCommits != 3 {
+		t.Errorf("layer 2 classification = %+v, want diverged with pinned tip and count", got)
+	}
+	if len(got.ForeignCommits) != 2 || got.ForeignCommits[0].SHA != "1111111111111111111111111111111111111111" ||
+		got.ForeignCommits[1].Subject != "reviewer fix two" || got.ForeignCommits[1].Author != "Reviewer Two <reviewer2@example.com>" {
+		t.Errorf("layer 2 foreign commits = %+v, want the recorded reviewer commits", got.ForeignCommits)
+	}
+
+	// The accessor returns exactly the diverged layers of one repository.
+	diverged := loaded.RebaseDivergedLayers("repoA")
+	if len(diverged) != 1 || diverged[0].LayerPosition != 2 {
+		t.Fatalf("RebaseDivergedLayers(repoA) = %+v, want layer 2 only", diverged)
+	}
+	if legacy := loaded.RebaseDivergedLayers("repoB"); legacy != nil {
+		t.Fatalf("RebaseDivergedLayers(repoB) = %+v, want none", legacy)
+	}
+
+	// A relationship persisted before the divergence fields existed loads
+	// with no diverged layers.
+	legacy := &Feature{
+		ID:            "test-rebase-diverged-legacy",
+		Name:          "Test Rebase Diverged Legacy",
+		Slug:          "test-rebase-diverged-legacy",
+		Status:        StatusCreated,
+		SchemaVersion: SchemaVersionCurrent,
+		Created:       now,
+		Parent: &ChildRelationship{
+			ParentID: "parent-1",
+			Kind:     ChildKindRebase,
+			RebaseLayerStates: []RebaseLayerClassification{
+				{Repo: "repoA", LayerPosition: 2, LayerTitle: "Layer two", Branch: "stack/2", State: RebaseLayerStateKept},
+			},
+			RebaseWorkRepos: []string{"repoA"},
+		},
+	}
+	if err := store.Save(legacy); err != nil {
+		t.Fatalf("Save legacy: %v", err)
+	}
+	loadedLegacy, err := store.Load(legacy.ID)
+	if err != nil {
+		t.Fatalf("Load legacy: %v", err)
+	}
+	if got := loadedLegacy.RebaseDivergedLayers("repoA"); got != nil {
+		t.Fatalf("legacy RebaseDivergedLayers(repoA) = %+v, want none", got)
+	}
+}

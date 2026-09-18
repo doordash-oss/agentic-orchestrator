@@ -215,12 +215,21 @@ func (r *rebaseConflictResolver) buildPrompt(input git.RestackResolverInput, fee
 		return "", err
 	}
 	layerPosition, layerTitle := r.owningLayer(input.CommitSHA)
+	roadmapPhase := r.owningRoadmapPhase(input.CommitSHA)
+	// A conflicting foreign commit belongs to the diverged layer it was
+	// scheduled onto, not to whatever layer the local chain's geometry
+	// suggests: the plan pinned the adoption's owning layer at build time.
+	if pos, ok := r.plan.foreignBySHA[input.CommitSHA]; ok {
+		layerPosition = pos
+		layerTitle = r.layerTitle(pos)
+		roadmapPhase = r.layerLastRoadmapPhase(pos)
+	}
 	return roles.BuildConflictResolutionPrompt(roles.ConflictResolutionUserInput{
 		FeatureName:        r.parent.Name,
 		FeatureDescription: r.parent.Description,
 		LayerPosition:      layerPosition,
 		LayerTitle:         layerTitle,
-		RoadmapPhase:       r.owningRoadmapPhase(input.CommitSHA),
+		RoadmapPhase:       roadmapPhase,
 		TargetBranch:       r.targetBranch(),
 		TargetSHA:          r.target.TargetSHA,
 		CommitMessage:      message,
@@ -280,6 +289,33 @@ func (r *rebaseConflictResolver) owningRoadmapPhase(commitSHA string) int {
 		}
 	}
 	return owner
+}
+
+// layerTitle resolves one stack layer position to its title.
+func (r *rebaseConflictResolver) layerTitle(position int) string {
+	for _, layer := range r.parent.OrderedStackLayers() {
+		if layer.Position == position {
+			return layer.Title
+		}
+	}
+	return ""
+}
+
+// layerLastRoadmapPhase resolves one stack layer position to its last
+// roadmap phase — the highest phase the layer covers.
+func (r *rebaseConflictResolver) layerLastRoadmapPhase(position int) int {
+	phase := 0
+	for _, layer := range r.parent.OrderedStackLayers() {
+		if layer.Position != position {
+			continue
+		}
+		for _, p := range layer.Phases {
+			if p > phase {
+				phase = p
+			}
+		}
+	}
+	return phase
 }
 
 // targetBranch renders the rebase target's human-readable name.

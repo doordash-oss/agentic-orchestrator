@@ -45,22 +45,30 @@ import (
 type rebaseRestackFixture struct {
 	t *testing.T
 
-	repoDir    string // parent worktree of repoA, checked out on the top layer branch
-	childWT    string // repoA's child worktree, on the child branch at the parent tip
-	childBr    string
-	layerTips  []string // original layer tips, ascending
-	Subjects   []string // replayed commits' subjects, oldest first (phases 3..5)
-	Authors    []string // replayed commits' "name <email>" authors, oldest first
-	targetSHA  string   // main tip: layer 1 squashed plus one upstream commit
-	forkSHA    string   // merge base of the target and the lowest layer tip
-	parentTip  string   // layer 3's tip, the child worktree's fork point
-	anchors    map[int]string
-	store      *feature.Store
-	mgr        *feature.Manager
-	wm         *git.WorktreeManager
-	parentID   string
-	childID    string
-	dispatched chan *feature.Feature // captured Final Review dispatches
+	repoDir   string // parent worktree of repoA, checked out on the top layer branch
+	childWT   string // repoA's child worktree, on the child branch at the parent tip
+	childBr   string
+	layerTips []string // original layer tips, ascending
+	Subjects  []string // replayed commits' subjects, oldest first (phases 3..5)
+	Authors   []string // replayed commits' "name <email>" authors, oldest first
+	targetSHA string   // main tip: layer 1 squashed plus one upstream commit
+	forkSHA   string   // merge base of the target and the lowest layer tip
+	parentTip string   // layer 3's tip, the child worktree's fork point
+	anchors   map[int]string
+	// pushedTip2 is layer 2's tip as last pushed (before any unpublished
+	// local fix), the parent of the reviewer commits in the divergent
+	// variants.
+	pushedTip2 string
+	// reviewer1SHA and reviewer2SHA are the divergent variants' reviewer
+	// commits (reviewer2 doubles as the observed remote tip; in the
+	// merge-only variant it is the skipped merge commit).
+	reviewer1SHA, reviewer2SHA string
+	store                      *feature.Store
+	mgr                        *feature.Manager
+	wm                         *git.WorktreeManager
+	parentID                   string
+	childID                    string
+	dispatched                 chan *feature.Feature // captured Final Review dispatches
 
 	passRepoDir string // optional pass-through repository
 	passChildWT string
@@ -79,6 +87,26 @@ type rebaseRestackFixtureOpts struct {
 	// TopMerged additionally marks layer 3's pull request merged, so the
 	// restack drops both end layers and the new top is layer 2.
 	TopMerged bool
+	// DivergentLayer2 switches the fixture to the foreign-commit shape: no
+	// merged layer, the target at the fork point (neither behind nor
+	// merged), and layer 2 recorded diverged with two reviewer commits
+	// created on a throwaway branch off layer 2's pushed tip so their
+	// objects exist locally.
+	DivergentLayer2 bool
+	// ForeignFirstDropping (with DivergentLayer2) gives layer 2 a local fix
+	// commit beyond its pushed tip and makes the first reviewer commit's
+	// change identical to that fix, so its adoption is dropped as empty
+	// while the second is still adopted.
+	ForeignFirstDropping bool
+	// ForeignConflicting (with DivergentLayer2) gives layer 2 a local fix
+	// commit beyond its pushed tip and makes the second reviewer commit
+	// touch the same file with different content, so its adoption conflicts
+	// and runs through the Phase 13 resolver.
+	ForeignConflicting bool
+	// ForeignMergeOnly (with DivergentLayer2) records layer 2 diverged with
+	// an empty foreign list and one skipped remote-only merge, so the loop
+	// adds no adoption operation and behaves exactly as Phase 13 does.
+	ForeignMergeOnly bool
 }
 
 // newRebaseRestackFixture builds the three-layer stack fixture.
@@ -88,6 +116,11 @@ func newRebaseRestackFixture(t *testing.T, opts rebaseRestackFixtureOpts) *rebas
 		t.Skip("real-git rebase restack test")
 	}
 	conflicting, withPassThrough, topMerged := opts.Conflicting, opts.WithPassThrough, opts.TopMerged
+	divergent := opts.DivergentLayer2
+	localFix := opts.ForeignFirstDropping || opts.ForeignConflicting
+	if divergent && (conflicting || topMerged) {
+		t.Fatal("the divergent fixture variants keep every layer and stay at the fork target")
+	}
 	fx := &rebaseRestackFixture{
 		t:          t,
 		parentID:   "restack-parent",
@@ -106,7 +139,8 @@ func newRebaseRestackFixture(t *testing.T, opts rebaseRestackFixtureOpts) *rebas
 	repoDir := testutil.InitGitRepo(t)
 	fx.repoDir = repoDir
 
-	// The stack chain: fork → layer 1 (phases 1-2) → layer 2 (phases 3-4) →
+	// The stack chain: fork → layer 1 (phases 1-2) → layer 2 (phases 3-4,
+	// plus an unpublished local fix in the dropping/conflicting variants) →
 	// layer 3 (phase 5). Every commit carries a distinct author so the
 	// replay's author preservation is observable.
 	fx.forkSHA = restackGit(t, repoDir, "rev-parse", "HEAD")
@@ -118,6 +152,10 @@ func newRebaseRestackFixture(t *testing.T, opts rebaseRestackFixtureOpts) *rebas
 	restackGit(t, repoDir, "checkout", "-b", "stack/2")
 	fx.commitLayerCommit("l2.txt", "layer2 v1\n", "layer2 phase3", "Three Author <three@example.com>")
 	fx.commitLayerCommit("l2.txt", "layer2 v2\n", "layer2 phase4", "Four Author <four@example.com>")
+	fx.pushedTip2 = restackGit(t, repoDir, "rev-parse", "HEAD")
+	if localFix {
+		fx.commitLayerCommit("l2.txt", "layer2 locally fixed\n", "layer2 local fix", "Local Author <local@example.com>")
+	}
 	fx.layerTips = append(fx.layerTips, restackGit(t, repoDir, "rev-parse", "HEAD"))
 
 	restackGit(t, repoDir, "checkout", "-b", "stack/3")
@@ -133,29 +171,60 @@ func newRebaseRestackFixture(t *testing.T, opts rebaseRestackFixtureOpts) *rebas
 		"Five Author <five@example.com>",
 	}
 
-	// The target: main squash-merges layer 1's content (and, in the
-	// conflicting variant, also touches layer 2's file) and gains one
-	// upstream commit.
-	restackCheckout(t, repoDir, "main")
-	restackGit(t, repoDir, "checkout", "stack/1", "--", "l1.txt")
-	if conflicting {
-		restackWrite(t, repoDir, "l2.txt", "upstream conflicting content\n")
-		restackGit(t, repoDir, "add", "l2.txt")
+	if divergent {
+		// The reviewer's work: a throwaway branch off layer 2's pushed tip
+		// carries the commits the remote branch gained, so their objects
+		// exist locally exactly as the preflight's fetch would leave them.
+		if opts.ForeignMergeOnly {
+			tree := restackGit(t, repoDir, "rev-parse", fx.pushedTip2+"^{tree}")
+			fx.reviewer2SHA = restackGit(t, repoDir, "commit-tree", "-p", fx.pushedTip2, "-p", fx.forkSHA, "-m", "Update branch", tree)
+		} else {
+			restackGit(t, repoDir, "checkout", "-b", "reviewer/stack-2", fx.pushedTip2)
+			firstContent, firstFile := "review one\n", "review1.txt"
+			if opts.ForeignFirstDropping {
+				firstContent, firstFile = "layer2 locally fixed\n", "l2.txt"
+			}
+			fx.commitLayerCommit(firstFile, firstContent, "reviewer fix one", "Reviewer One <reviewer1@example.com>")
+			fx.reviewer1SHA = restackGit(t, repoDir, "rev-parse", "HEAD")
+			secondContent, secondFile := "review two\n", "review2.txt"
+			if opts.ForeignConflicting {
+				secondContent, secondFile = "reviewer conflicting take\n", "l2.txt"
+			}
+			fx.commitLayerCommit(secondFile, secondContent, "reviewer fix two", "Reviewer Two <reviewer2@example.com>")
+			fx.reviewer2SHA = restackGit(t, repoDir, "rev-parse", "HEAD")
+			restackCheckout(t, repoDir, "stack/3")
+		}
+		// No merged layer and no behind condition: the target stays at the
+		// fork point, so divergence alone drives the pass.
+		fx.targetSHA = fx.forkSHA
+	} else {
+		// The target: main squash-merges layer 1's content (and, in the
+		// conflicting variant, also touches layer 2's file) and gains one
+		// upstream commit.
+		restackCheckout(t, repoDir, "main")
+		restackGit(t, repoDir, "checkout", "stack/1", "--", "l1.txt")
+		if conflicting {
+			restackWrite(t, repoDir, "l2.txt", "upstream conflicting content\n")
+			restackGit(t, repoDir, "add", "l2.txt")
+		}
+		restackCommitAs(t, repoDir, "squash merge layer 1", "Main Merger", "main@example.com")
+		testutil.CommitFile(t, repoDir, "upstream.txt", "upstream change\n", "upstream advancement")
+		fx.targetSHA = restackGit(t, repoDir, "rev-parse", "HEAD")
+		restackCheckout(t, repoDir, "stack/3")
 	}
-	restackCommitAs(t, repoDir, "squash merge layer 1", "Main Merger", "main@example.com")
-	testutil.CommitFile(t, repoDir, "upstream.txt", "upstream change\n", "upstream advancement")
-	fx.targetSHA = restackGit(t, repoDir, "rev-parse", "HEAD")
-	restackCheckout(t, repoDir, "stack/3")
 
-	// The anchors: every phase's commit sits on the chain in order.
+	// The anchors: phases 1-4 map to the first four chain commits and
+	// phase 5 to the layer 3 tip; an unpublished local fix between them
+	// carries no anchor.
 	commits := restackGitLines(t, repoDir, "rev-list", "--reverse", fx.forkSHA+".."+fx.parentTip)
-	if len(commits) != 5 {
-		t.Fatalf("chain has %d commits above the fork, want 5", len(commits))
+	if len(commits) != 5 && len(commits) != 6 {
+		t.Fatalf("chain has %d commits above the fork, want 5 or 6", len(commits))
 	}
 	fx.anchors = map[int]string{}
-	for phase, sha := range commits {
-		fx.anchors[phase+1] = sha
+	for phase := 1; phase <= 4; phase++ {
+		fx.anchors[phase] = commits[phase-1]
 	}
+	fx.anchors[5] = commits[len(commits)-1]
 
 	// The child worktree on the child branch at the parent tip.
 	fx.childBr = "feature/restack-child/rebase-feature-branches"
@@ -216,6 +285,20 @@ func newRebaseRestackFixture(t *testing.T, opts rebaseRestackFixtureOpts) *rebas
 			Repos: map[string]feature.StackRepoEntry{"repoA": {TipSHA: fx.layerTips[2]}},
 		},
 	}
+	if divergent {
+		// Every layer is kept; layer 2's entry carries its pushed tip as
+		// the last-published state the reviewer's commits landed on.
+		parent.Stack[0].Repos["repoA"] = feature.StackRepoEntry{
+			TipSHA: fx.layerTips[0], PRURL: "https://fake.example/pr/1", PRState: feature.StackPRStateOpen,
+		}
+		parent.Stack[1].Repos["repoA"] = feature.StackRepoEntry{
+			TipSHA: fx.layerTips[1], PRURL: "https://fake.example/pr/2", PRState: feature.StackPRStateOpen,
+			LastPushedSHA: fx.pushedTip2,
+		}
+		parent.Stack[2].Repos["repoA"] = feature.StackRepoEntry{
+			TipSHA: fx.layerTips[2], PRURL: "https://fake.example/pr/3", PRState: feature.StackPRStateOpen,
+		}
+	}
 	if topMerged {
 		parent.Stack[2].Repos["repoA"] = feature.StackRepoEntry{
 			TipSHA: fx.layerTips[2], PRURL: "https://fake.example/pr/3",
@@ -242,6 +325,27 @@ func newRebaseRestackFixture(t *testing.T, opts rebaseRestackFixtureOpts) *rebas
 	if topMerged {
 		layerThreeState = feature.RebaseLayerStateMerged
 	}
+	layerOneState := feature.RebaseLayerStateMerged
+	if divergent {
+		layerOneState = feature.RebaseLayerStateKept
+	}
+	layerTwoClassification := feature.RebaseLayerClassification{
+		Repo: "repoA", LayerPosition: 2, LayerTitle: "Layer two", Branch: "stack/2",
+		State: feature.RebaseLayerStateKept,
+	}
+	if divergent {
+		layerTwoClassification.Diverged = true
+		layerTwoClassification.RemoteTip = fx.reviewer2SHA
+		if !opts.ForeignMergeOnly {
+			layerTwoClassification.RemoteOnlyCommits = 2
+			layerTwoClassification.ForeignCommits = []feature.RebaseForeignCommit{
+				{SHA: fx.reviewer1SHA, Subject: "reviewer fix one", Author: "Reviewer One <reviewer1@example.com>"},
+				{SHA: fx.reviewer2SHA, Subject: "reviewer fix two", Author: "Reviewer Two <reviewer2@example.com>"},
+			}
+		} else {
+			layerTwoClassification.RemoteOnlyCommits = 1
+		}
+	}
 	child := &feature.Feature{
 		ID: fx.childID, Name: "Rebase feature branches", Slug: fx.childID,
 		Status:       feature.StatusCreated,
@@ -261,8 +365,8 @@ func newRebaseRestackFixture(t *testing.T, opts rebaseRestackFixtureOpts) *rebas
 				Publishable: publishable, TargetSHA: fx.targetSHA,
 			}},
 			RebaseLayerStates: []feature.RebaseLayerClassification{
-				{Repo: "repoA", LayerPosition: 1, LayerTitle: "Layer one", Branch: "stack/1", State: feature.RebaseLayerStateMerged},
-				{Repo: "repoA", LayerPosition: 2, LayerTitle: "Layer two", Branch: "stack/2", State: feature.RebaseLayerStateKept},
+				{Repo: "repoA", LayerPosition: 1, LayerTitle: "Layer one", Branch: "stack/1", State: layerOneState},
+				layerTwoClassification,
 				{Repo: "repoA", LayerPosition: 3, LayerTitle: "Layer three", Branch: "stack/3", State: layerThreeState},
 			},
 			RebaseWorkRepos: []string{"repoA"},
@@ -996,5 +1100,396 @@ func TestRebaseIntegration_ChildHeadOffChainParksCandidateFailed(t *testing.T) {
 	}
 	if after := fx.refSHA("stack/3"); after != before {
 		t.Fatalf("parent ref moved: before=%s after=%s", before, after)
+	}
+}
+
+// TestRebaseRestack_AdoptsForeignCommitsOntoDivergedLayer proves the core
+// adoption journey: with two reviewer commits recorded as foreign on a
+// diverged layer 2 and no behind or merged condition, the loop replays the
+// full stack onto the fork target with the two adopted commits landing
+// after layer 2's own commits (original authors and messages preserved) and
+// below layer 3's, layer 2's roadmap-phase anchors remap below the adopted
+// commits, the restack result lists both adoptions with new SHAs, and every
+// parent ref — including the reviewer's throwaway branch — is unchanged.
+func TestRebaseRestack_AdoptsForeignCommitsOntoDivergedLayer(t *testing.T) {
+	fx := newRebaseRestackFixture(t, rebaseRestackFixtureOpts{DivergentLayer2: true})
+	o := fx.orchestrator()
+
+	if err := o.StartFeature(fx.childID); err != nil {
+		t.Fatalf("StartFeature() error = %v", err)
+	}
+	fx.waitLanded(t)
+
+	if !git.IsAncestor(fx.childWT, fx.targetSHA, "HEAD") {
+		t.Fatal("child worktree HEAD does not descend from the target commit")
+	}
+	wantSubjects := []string{
+		"layer1 phase1", "layer1 phase2",
+		"layer2 phase3", "layer2 phase4",
+		"reviewer fix one", "reviewer fix two",
+		"layer3 phase5",
+	}
+	subjects := restackGitLines(t, fx.childWT, "log", "--format=%s", fx.targetSHA+"..HEAD")
+	reverseStrings(subjects)
+	if strings.Join(subjects, "|") != strings.Join(wantSubjects, "|") {
+		t.Fatalf("replayed subjects = %v, want %v (layer 2's commits, the two adoptions, then layer 3)", subjects, wantSubjects)
+	}
+	wantAuthors := []string{
+		"One Author <one@example.com>", "Two Author <two@example.com>",
+		"Three Author <three@example.com>", "Four Author <four@example.com>",
+		"Reviewer One <reviewer1@example.com>", "Reviewer Two <reviewer2@example.com>",
+		"Five Author <five@example.com>",
+	}
+	authors := restackGitLines(t, fx.childWT, "log", "--format=%an <%ae>", fx.targetSHA+"..HEAD")
+	reverseStrings(authors)
+	if strings.Join(authors, "|") != strings.Join(wantAuthors, "|") {
+		t.Fatalf("replayed authors = %v, want %v (the adoptions keep their reviewer authors)", authors, wantAuthors)
+	}
+
+	child := fx.reloadChild()
+	rs := child.Parent.RebaseRestacks[0]
+	if len(rs.AdoptedCommits) != 2 {
+		t.Fatalf("adopted commits = %+v, want the two reviewer commits", rs.AdoptedCommits)
+	}
+	for i, ac := range rs.AdoptedCommits {
+		if ac.LayerPosition != 2 || ac.Dropped || ac.NewSHA == "" {
+			t.Fatalf("adopted commit %d = %+v, want layer 2, landed, with a new SHA", i, ac)
+		}
+	}
+	if rs.AdoptedCommits[0].OriginalSHA != fx.reviewer1SHA || rs.AdoptedCommits[1].OriginalSHA != fx.reviewer2SHA {
+		t.Fatalf("adopted originals = [%s %s], want [%s %s]",
+			rs.AdoptedCommits[0].OriginalSHA, rs.AdoptedCommits[1].OriginalSHA, fx.reviewer1SHA, fx.reviewer2SHA)
+	}
+	if rs.AdoptedCommits[0].Subject != "reviewer fix one" || rs.AdoptedCommits[0].Author != "Reviewer One <reviewer1@example.com>" {
+		t.Fatalf("first adoption identity = %+v, want the reviewer's subject and author", rs.AdoptedCommits[0])
+	}
+	if rs.SkippedMergeCommits != 0 {
+		t.Fatalf("skipped merge commits = %d, want 0 (no remote-only merges)", rs.SkippedMergeCommits)
+	}
+
+	// Layer 2's rebuilt tip is the second adoption; its roadmap-phase
+	// anchors remap to commits strictly below the adopted ones.
+	if got := restackGit(t, fx.childWT, "log", "-1", "--format=%s", rs.RebuiltTips[2]); got != "reviewer fix two" {
+		t.Fatalf("layer 2 rebuilt tip subject = %q, want the second adoption", got)
+	}
+	if !git.IsAncestor(fx.childWT, rs.AnchorRemap[4], rs.RebuiltTips[2]) {
+		t.Fatalf("layer 2's phase-4 anchor %s is not below the rebuilt tip %s", rs.AnchorRemap[4], rs.RebuiltTips[2])
+	}
+	if got := restackGit(t, fx.childWT, "log", "-1", "--format=%s", rs.RebuiltTips[3]); got != "layer3 phase5" {
+		t.Fatalf("layer 3 rebuilt tip subject = %q, want layer3 phase5 above the adoptions", got)
+	}
+
+	// Every parent ref is unchanged, including the reviewer's branch.
+	for i, want := range fx.layerTips {
+		ref := fmt.Sprintf("stack/%d", i+1)
+		if got := fx.refSHA(ref); got != want {
+			t.Fatalf("parent ref %s moved: %s, want %s", ref, got, want)
+		}
+	}
+	if got := fx.refSHA("main"); got != fx.targetSHA {
+		t.Fatalf("parent ref main moved: %s, want %s", got, fx.targetSHA)
+	}
+	if got := fx.refSHA("reviewer/stack-2"); got != fx.reviewer2SHA {
+		t.Fatalf("reviewer branch moved: %s, want %s", got, fx.reviewer2SHA)
+	}
+}
+
+// TestRebaseRestack_DropsAlreadyPresentForeignCommitAndAdoptsTheNext proves
+// a foreign commit whose change is already present on the replayed tip is
+// dropped and recorded as dropped, while the commit after it is still
+// adopted.
+func TestRebaseRestack_DropsAlreadyPresentForeignCommitAndAdoptsTheNext(t *testing.T) {
+	fx := newRebaseRestackFixture(t, rebaseRestackFixtureOpts{DivergentLayer2: true, ForeignFirstDropping: true})
+	o := fx.orchestrator()
+
+	if err := o.StartFeature(fx.childID); err != nil {
+		t.Fatalf("StartFeature() error = %v", err)
+	}
+	fx.waitLanded(t)
+
+	wantSubjects := []string{
+		"layer1 phase1", "layer1 phase2",
+		"layer2 phase3", "layer2 phase4", "layer2 local fix",
+		"reviewer fix two",
+		"layer3 phase5",
+	}
+	subjects := restackGitLines(t, fx.childWT, "log", "--format=%s", fx.targetSHA+"..HEAD")
+	reverseStrings(subjects)
+	if strings.Join(subjects, "|") != strings.Join(wantSubjects, "|") {
+		t.Fatalf("replayed subjects = %v, want %v (first adoption dropped, second adopted)", subjects, wantSubjects)
+	}
+
+	child := fx.reloadChild()
+	rs := child.Parent.RebaseRestacks[0]
+	if len(rs.AdoptedCommits) != 2 {
+		t.Fatalf("adopted commits = %+v, want both reviewer commits recorded", rs.AdoptedCommits)
+	}
+	if !rs.AdoptedCommits[0].Dropped || rs.AdoptedCommits[0].OriginalSHA != fx.reviewer1SHA {
+		t.Fatalf("first adoption = %+v, want dropped (its change is already present)", rs.AdoptedCommits[0])
+	}
+	if rs.AdoptedCommits[1].Dropped || rs.AdoptedCommits[1].NewSHA == "" || rs.AdoptedCommits[1].OriginalSHA != fx.reviewer2SHA {
+		t.Fatalf("second adoption = %+v, want adopted with a new SHA", rs.AdoptedCommits[1])
+	}
+	if got := restackGit(t, fx.childWT, "log", "-1", "--format=%s", rs.RebuiltTips[2]); got != "reviewer fix two" {
+		t.Fatalf("layer 2 rebuilt tip subject = %q, want the surviving adoption", got)
+	}
+}
+
+// TestRebaseRestack_MergeOnlyDivergenceAddsNoOperation proves a diverged
+// layer with an empty foreign list adds no restack operation: the loop
+// behaves exactly as Phase 13 does, records no adopted commit, and counts
+// the skipped remote-only merge.
+func TestRebaseRestack_MergeOnlyDivergenceAddsNoOperation(t *testing.T) {
+	fx := newRebaseRestackFixture(t, rebaseRestackFixtureOpts{DivergentLayer2: true, ForeignMergeOnly: true})
+	o := fx.orchestrator()
+
+	if err := o.StartFeature(fx.childID); err != nil {
+		t.Fatalf("StartFeature() error = %v", err)
+	}
+	fx.waitLanded(t)
+
+	wantSubjects := []string{
+		"layer1 phase1", "layer1 phase2",
+		"layer2 phase3", "layer2 phase4",
+		"layer3 phase5",
+	}
+	subjects := restackGitLines(t, fx.childWT, "log", "--format=%s", fx.targetSHA+"..HEAD")
+	reverseStrings(subjects)
+	if strings.Join(subjects, "|") != strings.Join(wantSubjects, "|") {
+		t.Fatalf("replayed subjects = %v, want the plain Phase 13 replay %v", subjects, wantSubjects)
+	}
+
+	child := fx.reloadChild()
+	rs := child.Parent.RebaseRestacks[0]
+	if len(rs.AdoptedCommits) != 0 {
+		t.Fatalf("adopted commits = %+v, want none (nothing to adopt)", rs.AdoptedCommits)
+	}
+	if rs.SkippedMergeCommits != 1 {
+		t.Fatalf("skipped merge commits = %d, want 1 (the Update branch merge)", rs.SkippedMergeCommits)
+	}
+	if len(rs.DroppedLayers) != 0 {
+		t.Fatalf("dropped layers = %v, want none (every layer kept)", rs.DroppedLayers)
+	}
+	if !strings.Contains(child.Description, "1 remote-only merge commit(s) were skipped") {
+		t.Fatalf("description does not name the skipped merge count: %q", child.Description)
+	}
+	if strings.Contains(child.ExitCriteria, "## Adopted reviewer commits") {
+		t.Fatalf("exit criteria carry an adopted-commit section with no adoptions: %q", child.ExitCriteria)
+	}
+}
+
+// TestRebaseRestack_ConflictingForeignCommitResolvesWithLayerContext proves
+// a conflicting foreign commit runs through the Phase 13 resolver with its
+// layer's position, title, and last roadmap phase as prompt context, and a
+// scripted resolution lands it with the resolution recorded.
+func TestRebaseRestack_ConflictingForeignCommitResolvesWithLayerContext(t *testing.T) {
+	fx := newRebaseRestackFixture(t, rebaseRestackFixtureOpts{DivergentLayer2: true, ForeignConflicting: true})
+	o := fx.orchestrator()
+
+	var prompts []string
+	scriptResolution(t, o, resolutionScript{
+		run: func(req agent.ConflictResolutionRequest) (*agent.ConflictResolutionResult, error) {
+			prompts = append(prompts, req.Prompt)
+			writeResolutionFile(t, req, "layer2 locally fixed with reviewer take\n")
+			return completedResult(), nil
+		},
+	})
+
+	if err := o.StartFeature(fx.childID); err != nil {
+		t.Fatalf("StartFeature() error = %v", err)
+	}
+	fx.waitLanded(t)
+
+	if len(prompts) != 1 {
+		t.Fatalf("resolution sessions = %d, want one for the conflicting adoption", len(prompts))
+	}
+	if !strings.Contains(prompts[0], "layer 2: Layer two") {
+		t.Fatalf("resolution prompt does not name the diverged layer: %q", prompts[0])
+	}
+	if !strings.Contains(prompts[0], "roadmap phase 4") {
+		t.Fatalf("resolution prompt does not name the layer's last roadmap phase: %q", prompts[0])
+	}
+	if !strings.Contains(prompts[0], "reviewer fix two") {
+		t.Fatalf("resolution prompt does not carry the foreign commit's message: %q", prompts[0])
+	}
+
+	child := fx.reloadChild()
+	rs := child.Parent.RebaseRestacks[0]
+	if len(rs.ResolvedConflicts) != 1 || rs.ResolvedConflicts[0].Commit != fx.reviewer2SHA || rs.ResolvedConflicts[0].Dropped {
+		t.Fatalf("resolved conflicts = %+v, want the conflicting foreign commit landed", rs.ResolvedConflicts)
+	}
+	if len(rs.AdoptedCommits) != 2 || rs.AdoptedCommits[1].Dropped || rs.AdoptedCommits[1].NewSHA == "" {
+		t.Fatalf("adopted commits = %+v, want the resolved adoption landed with a new SHA", rs.AdoptedCommits)
+	}
+	if got := restackGit(t, fx.childWT, "log", "-1", "--format=%an <%ae>", rs.AdoptedCommits[1].NewSHA); got != "Reviewer Two <reviewer2@example.com>" {
+		t.Fatalf("resolved adoption author = %q, want the reviewer's identity preserved", got)
+	}
+	if got := strings.TrimRight(restackGit(t, fx.childWT, "show", fmt.Sprintf("%s:l2.txt", rs.AdoptedCommits[1].NewSHA)), "\n"); got != "layer2 locally fixed with reviewer take" {
+		t.Fatalf("resolved adoption content = %q, want the scripted resolution", got)
+	}
+}
+
+// TestRebaseRestack_ConflictingForeignCommitParksWhenUnresolvable proves a
+// never-resolving conflicting foreign commit parks the pass with the
+// existing rebase conflict attention code and no ref change.
+func TestRebaseRestack_ConflictingForeignCommitParksWhenUnresolvable(t *testing.T) {
+	fx := newRebaseRestackFixture(t, rebaseRestackFixtureOpts{DivergentLayer2: true, ForeignConflicting: true})
+	o := fx.orchestrator()
+	o.SetRunConflictResolutionFn(func(ctx context.Context, req agent.ConflictResolutionRequest) (*agent.ConflictResolutionResult, error) {
+		return &agent.ConflictResolutionResult{Status: agent.ConflictResolutionCompleted}, nil
+	})
+
+	if err := o.StartFeature(fx.childID); err != nil {
+		t.Fatalf("StartFeature() error = %v", err)
+	}
+	child := fx.waitParked(t)
+	if child.Status != feature.StatusCreated {
+		t.Fatalf("child status = %s, want Created (the park performs no status change)", child.Status)
+	}
+	journal := child.Parent.Transaction
+	if journal == nil || journal.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("transaction = %+v, want attention phase", journal)
+	}
+	if journal.Attention == nil || journal.Attention.Code != errcat.IntegrationRebaseConflict {
+		t.Fatalf("attention record = %+v, want integration_rebase_conflict", journal.Attention)
+	}
+	if journal.Attention.Context == nil || len(journal.Attention.Context.Repositories) != 1 ||
+		journal.Attention.Context.Repositories[0].CommitSHA != fx.reviewer2SHA {
+		t.Fatalf("attention repositories = %+v, want the foreign commit %s", journal.Attention.Context, fx.reviewer2SHA)
+	}
+	if got := restackGit(t, fx.childWT, "rev-parse", "HEAD"); got != fx.parentTip {
+		t.Fatalf("child worktree HEAD = %s, want the parent tip %s", got, fx.parentTip)
+	}
+	for i, want := range fx.layerTips {
+		ref := fmt.Sprintf("stack/%d", i+1)
+		if got := fx.refSHA(ref); got != want {
+			t.Fatalf("parent ref %s moved: %s, want %s", ref, got, want)
+		}
+	}
+}
+
+// TestRebaseRestack_AdoptionIdempotentRecomputeAndDescription proves a
+// re-run from Created adopts the same commits onto the same rebuilt chain,
+// and the generated Final Review description names each adopted commit
+// while the exit criteria carry one fact per adopted commit. Cherry-pick
+// committer timestamps differ between runs, so the SHAs are not comparable
+// — the subjects, authors, tree content, and adoption records are.
+func TestRebaseRestack_AdoptionIdempotentRecomputeAndDescription(t *testing.T) {
+	fx := newRebaseRestackFixture(t, rebaseRestackFixtureOpts{DivergentLayer2: true})
+	o := fx.orchestrator()
+
+	if err := o.StartFeature(fx.childID); err != nil {
+		t.Fatalf("first StartFeature() error = %v", err)
+	}
+	fx.waitLanded(t)
+	first := fx.reloadChild()
+	firstRestack := first.Parent.RebaseRestacks[0]
+	firstHeadTree := restackGit(t, fx.childWT, "rev-parse", "HEAD^{tree}")
+
+	if !strings.Contains(first.Description, "## Adopted reviewer commits") {
+		t.Fatalf("description lacks the adopted-commits section: %q", first.Description)
+	}
+	for _, sha := range []string{fx.reviewer1SHA, fx.reviewer2SHA} {
+		if !strings.Contains(first.Description, sha) {
+			t.Fatalf("description does not name the adopted commit %s", sha)
+		}
+	}
+	adoptedFacts := 0
+	for _, ac := range firstRestack.AdoptedCommits {
+		if strings.Contains(first.ExitCriteria, ac.OriginalSHA) {
+			adoptedFacts++
+		}
+	}
+	if adoptedFacts != 2 {
+		t.Fatalf("exit criteria carry %d adopted-commit facts, want one per adopted commit", adoptedFacts)
+	}
+
+	// Simulate the crash: the worktree reset landed but nothing persisted.
+	if err := fx.store.Modify(fx.childID, func(f *feature.Feature) error {
+		f.Status = feature.StatusCreated
+		f.CurrentPhase = feature.PipelineMedium.FirstPhase()
+		f.Parent.RebaseRestacks = nil
+		f.Parent.Transaction = nil
+		return nil
+	}); err != nil {
+		t.Fatalf("simulating the crash: %v", err)
+	}
+
+	if err := o.StartFeature(fx.childID); err != nil {
+		t.Fatalf("second StartFeature() error = %v", err)
+	}
+	fx.waitLanded(t)
+	second := fx.reloadChild()
+	secondRestack := second.Parent.RebaseRestacks[0]
+
+	wantSubjects := []string{
+		"layer1 phase1", "layer1 phase2",
+		"layer2 phase3", "layer2 phase4",
+		"reviewer fix one", "reviewer fix two",
+		"layer3 phase5",
+	}
+	subjects := restackGitLines(t, fx.childWT, "log", "--format=%s", fx.targetSHA+"..HEAD")
+	reverseStrings(subjects)
+	if strings.Join(subjects, "|") != strings.Join(wantSubjects, "|") {
+		t.Fatalf("recomputed subjects = %v, want %v", subjects, wantSubjects)
+	}
+	if got := restackGit(t, fx.childWT, "rev-parse", "HEAD^{tree}"); got != firstHeadTree {
+		t.Fatalf("recomputed top tree = %s, want the first run's tree %s", got, firstHeadTree)
+	}
+	if len(secondRestack.AdoptedCommits) != len(firstRestack.AdoptedCommits) {
+		t.Fatalf("recomputed adoptions = %+v, want the same count as the first run %+v", secondRestack.AdoptedCommits, firstRestack.AdoptedCommits)
+	}
+	for i := range secondRestack.AdoptedCommits {
+		a, b := firstRestack.AdoptedCommits[i], secondRestack.AdoptedCommits[i]
+		if a.OriginalSHA != b.OriginalSHA || a.LayerPosition != b.LayerPosition || a.Dropped != b.Dropped || b.NewSHA == "" {
+			t.Fatalf("recomputed adoption %d = %+v, want the same record as the first run %+v", i, b, a)
+		}
+	}
+}
+
+// TestRebaseRestack_DiscardedPassLeavesLastPushedSHAsAlone proves a
+// discarded pass changes no last-pushed SHA: after the restack loop landed
+// with its adoption records, discard closes the child without ever running
+// the closure write, so the stack entries keep exactly the last-pushed
+// state they held before launch.
+func TestRebaseRestack_DiscardedPassLeavesLastPushedSHAsAlone(t *testing.T) {
+	fx := newRebaseRestackFixture(t, rebaseRestackFixtureOpts{DivergentLayer2: true})
+	o := fx.orchestrator()
+	landRestackedChildAtReviewPassed(t, fx, o)
+
+	if err := o.DiscardChild(fx.childID); err != nil {
+		t.Fatalf("DiscardChild() error = %v", err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		child := fx.reloadChild()
+		if child.Parent.CloseOutcome == feature.ChildCloseOutcomeDiscarded {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("discard never closed the child; outcome = %q", child.Parent.CloseOutcome)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	parent, err := fx.store.Load(fx.parentID)
+	if err != nil {
+		t.Fatalf("reload parent: %v", err)
+	}
+	for _, layer := range parent.Stack {
+		entry := layer.Repos["repoA"]
+		switch layer.Position {
+		case 2:
+			if entry.LastPushedSHA != fx.pushedTip2 {
+				t.Fatalf("layer 2 last-pushed SHA = %s, want the pre-launch pushed tip %s", entry.LastPushedSHA, fx.pushedTip2)
+			}
+			if entry.TipSHA != fx.layerTips[1] {
+				t.Fatalf("layer 2 tip = %s, want the pre-integration tip %s", entry.TipSHA, fx.layerTips[1])
+			}
+		case 3:
+			if entry.LastPushedSHA != "" {
+				t.Fatalf("layer 3 last-pushed SHA = %s, want never set", entry.LastPushedSHA)
+			}
+		}
 	}
 }

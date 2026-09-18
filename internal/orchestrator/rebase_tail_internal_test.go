@@ -111,6 +111,12 @@ type rebaseTailFixtureOpts struct {
 	// kept layer's remote branch diverged, so its leased push fails while
 	// the other repository still processes.
 	WithDivergedRepoB bool
+	// DivergentLayer2A records repoa's layer 2 as diverged with a
+	// reviewer's tip: a reviewer commit is pushed onto the remote stack/2
+	// past the last-pushed SHA, the rebuilt chain adopts it, and the child
+	// relationship records the divergence so closure pins the observed
+	// remote tip as the layer's last-pushed SHA.
+	DivergentLayer2A bool
 }
 
 // rebaseTailFixture is a real-git three-layer stack after a completed rebase
@@ -137,6 +143,9 @@ type rebaseTailFixture struct {
 	tip1, tip2, tip3, tip4    string
 	targetSHA                 string
 	newTip2, newTip3, newTip4 string
+	// reviewerTipA is repoa's observed remote stack/2 tip in the
+	// DivergentLayer2A variant: the reviewer commit pushed past tip2.
+	reviewerTipA string
 
 	repoB, bareB     string
 	prNumB1, prNumB2 int
@@ -206,6 +215,18 @@ func newRebaseTailFixture(t *testing.T, opts rebaseTailFixtureOpts) *rebaseTailF
 	// stack/4 is never published: it carries no remote branch, exactly as
 	// a layer appended after the stack's publish does.
 
+	// The adopted divergence variant: a reviewer commit lands on the remote
+	// stack/2 past the last-pushed SHA, and the objects stay in the local
+	// repository so the rebuilt chain below can adopt it.
+	if opts.DivergentLayer2A {
+		restackGit(t, repoA, "checkout", "-b", "reviewer/stack-2", fx.tip2)
+		restackWrite(t, repoA, "review.txt", "reviewer fix\n")
+		restackGit(t, repoA, "add", "review.txt")
+		restackCommitAs(t, repoA, "reviewer fix one", "Reviewer One", "reviewer1@example.com")
+		fx.reviewerTipA = restackGit(t, repoA, "rev-parse", "HEAD")
+		testutil.SimulatePush(t, repoA, bareA, "reviewer/stack-2", "stack/2")
+	}
+
 	// The target: main squash-merges layer 1's content and gains one
 	// upstream commit, then advances the bare remote's main.
 	restackCheckout(t, repoA, "main")
@@ -217,9 +238,14 @@ func newRebaseTailFixture(t *testing.T, opts rebaseTailFixtureOpts) *rebaseTailF
 
 	// The landed chain: the kept layers' commits replayed onto the target
 	// and the branches moved to their rebuilt tips; the dropped layer's
-	// local ref is gone.
+	// local ref is gone. In the adopted-divergence variant the reviewer's
+	// commit is adopted after layer 2's own commits, so the rebuilt tip
+	// contains its copy.
 	restackGit(t, repoA, "checkout", "-b", "rebuilt", fx.targetSHA)
 	restackGit(t, repoA, "cherry-pick", layer2First, layer2Second)
+	if opts.DivergentLayer2A {
+		restackGit(t, repoA, "cherry-pick", fx.reviewerTipA)
+	}
 	fx.newTip2 = restackGit(t, repoA, "rev-parse", "HEAD")
 	restackGit(t, repoA, "branch", "-f", "stack/2", fx.newTip2)
 	restackGit(t, repoA, "cherry-pick", layer3Commit)
@@ -405,6 +431,18 @@ func newRebaseTailFixture(t *testing.T, opts rebaseTailFixtureOpts) *rebaseTailF
 	}
 	if len(refsB) > 0 {
 		child.Parent.Transaction.Entries = append([]feature.RepoTransactionEntry{{Repo: "repob", Refs: refsB}}, child.Parent.Transaction.Entries...)
+	}
+	if opts.DivergentLayer2A {
+		child.Parent.RebaseLayerStates = []feature.RebaseLayerClassification{
+			{Repo: "repoa", LayerPosition: 1, LayerTitle: "Layer one", Branch: "stack/1", State: feature.RebaseLayerStateMerged},
+			{
+				Repo: "repoa", LayerPosition: 2, LayerTitle: "Layer two", Branch: "stack/2",
+				State: feature.RebaseLayerStateKept, Diverged: true, RemoteTip: fx.reviewerTipA,
+				RemoteOnlyCommits: 1,
+				ForeignCommits:    []feature.RebaseForeignCommit{{SHA: fx.reviewerTipA, Subject: "reviewer fix one", Author: "Reviewer One <reviewer1@example.com>"}},
+			},
+			{Repo: "repoa", LayerPosition: 3, LayerTitle: "Layer three", Branch: "stack/3", State: feature.RebaseLayerStateKept},
+		}
 	}
 
 	store := feature.NewStore(filepath.Join(t.TempDir(), "features"))
@@ -866,5 +904,230 @@ func TestRebaseTail_DivergedRemoteStoresRecordAndContinues(t *testing.T) {
 	child := fx.reloadChild()
 	if !child.Parent.Transaction.TailSettled {
 		t.Fatal("tail did not settle after the diverged republish")
+	}
+}
+
+// runClosureFromApplied drives the closure over the landed fixture from the
+// crash state between the ref transaction and closure persistence: the
+// parent sits at CodeReady, the child is active with its journal in the
+// applied phase and every ref already at its candidate — exactly the shape
+// the startup scan finishes through closeTransactionAfterApply.
+func (fx *rebaseTailFixture) runClosureFromApplied() {
+	fx.t.Helper()
+	if err := fx.store.Modify(fx.parentID, func(f *feature.Feature) error {
+		f.Status = feature.StatusCodeReady
+		return nil
+	}); err != nil {
+		fx.t.Fatalf("move parent to CodeReady: %v", err)
+	}
+	if err := fx.store.Modify(fx.childID, func(f *feature.Feature) error {
+		f.Parent.CloseOutcome = ""
+		f.Parent.ClosedAt = nil
+		if f.Parent.Transaction != nil {
+			f.Parent.Transaction.Phase = feature.TransactionPhaseApplied
+		}
+		return nil
+	}); err != nil {
+		fx.t.Fatalf("reopen the child at the applied journal: %v", err)
+	}
+	o := fx.orchestrator()
+	if err := o.closeTransactionAfterApply(fx.childID, fx.parentID); err != nil {
+		fx.t.Fatalf("closeTransactionAfterApply() error = %v", err)
+	}
+}
+
+// TestRebaseClosure_PinsAdoptedRemoteTipAndTailRepublishesOverIt proves the
+// Task 3 acceptance over the tail fixture's diverged-repository variant with
+// the relationship recording layer 2 as diverged at the reviewer's tip:
+// closure pins the layer's last-pushed SHA to the observed remote tip, the
+// tail pushes layer 2 leased on exactly that SHA (and layer 3 on its
+// previous last-pushed SHA), the remote branch ends at the rebuilt tip that
+// contains the adopted copy, both pull-request bases are retargeted, the
+// stack sections are refreshed, and no diverged record is stored. The
+// closure-driven run reads the pin through the recorded lease because the
+// tail's successful push then records the delivered rebuilt tip.
+func TestRebaseClosure_PinsAdoptedRemoteTipAndTailRepublishesOverIt(t *testing.T) {
+	fx := newRebaseTailFixture(t, rebaseTailFixtureOpts{DivergentLayer2A: true})
+
+	fx.runClosureFromApplied()
+
+	// The tail pushed layer 2 leased on the adopted remote tip and layer 3
+	// on its previous last-pushed SHA.
+	pushes := fx.repoAPushes()
+	if len(pushes) != 2 {
+		t.Fatalf("repoA pushes = %+v, want exactly layers 2 and 3", pushes)
+	}
+	if pushes[0].branch != "stack/2" || pushes[0].localSHA != fx.newTip2 || pushes[0].lastPushedSHA != fx.reviewerTipA {
+		t.Errorf("layer 2 push = %+v, want %s leased on the adopted reviewer tip %s", pushes[0], fx.newTip2, fx.reviewerTipA)
+	}
+	if pushes[1].branch != "stack/3" || pushes[1].localSHA != fx.newTip3 || pushes[1].lastPushedSHA != fx.tip3 {
+		t.Errorf("layer 3 push = %+v, want %s leased on the previous last-pushed SHA %s", pushes[1], fx.newTip3, fx.tip3)
+	}
+
+	// The remote branches end at the rebuilt tips; the adopted copy
+	// replaced the reviewer's original commit.
+	for _, branch := range []string{"stack/2", "stack/3"} {
+		remoteTip := restackGit(t, fx.bareA, "rev-parse", "refs/heads/"+branch)
+		localTip := restackGit(t, fx.repoA, "rev-parse", branch)
+		if remoteTip != localTip {
+			t.Errorf("remote %s = %s, want the rebuilt tip %s", branch, remoteTip, localTip)
+		}
+	}
+	if got := restackGit(t, fx.bareA, "log", "-1", "--format=%an <%ae>", "refs/heads/stack/2"); got != "Reviewer One <reviewer1@example.com>" {
+		t.Fatalf("adopted copy author on the remote = %q, want the reviewer's identity preserved", got)
+	}
+	if git.IsAncestor(fx.repoA, fx.reviewerTipA, "refs/heads/stack/2") {
+		t.Fatal("the reviewer's original commit is still reachable from the remote layer 2 branch")
+	}
+
+	// Both bases retargeted: layer 2 patched to the base branch, layer 3
+	// keeps layer 2's branch.
+	patches := fx.basePatches()
+	if len(patches) != 1 || patches[0].Number != fx.prNum2 || *patches[0].Base != "main" {
+		t.Fatalf("base patches = %+v, want exactly layer 2 (%d) retargeted to main", patches, fx.prNum2)
+	}
+	if pr, ok := fx.pulls.Pull("repoa", fx.prNum3); !ok || pr.Base != "stack/2" {
+		t.Fatalf("layer 3 pull request = %+v, want base stack/2 with no patch", pr)
+	}
+
+	// The stack sections list layer 1 as merged in both open pull requests.
+	for _, num := range []int{fx.prNum2, fx.prNum3} {
+		pr, ok := fx.pulls.Pull("repoa", num)
+		if !ok || !strings.Contains(pr.Body, "(merged)") || !strings.Contains(pr.Body, "Layer one") {
+			t.Fatalf("pull request %d body does not list layer 1 as merged:\n%s", num, pr.Body)
+		}
+	}
+
+	// No diverged record is stored; the entries record the delivered tips.
+	parent := fx.reloadParent()
+	if state := parent.RepoStates["repoa"]; state != nil && state.Error != nil {
+		t.Fatalf("repoa stored record = %+v, want none (the republish succeeded)", state.Error)
+	}
+	for _, layer := range parent.Stack {
+		entry := layer.Repos["repoa"]
+		switch layer.Position {
+		case 2:
+			if entry.LastPushedSHA != fx.newTip2 {
+				t.Errorf("layer 2 last-pushed SHA = %s, want the delivered rebuilt tip %s", entry.LastPushedSHA, fx.newTip2)
+			}
+		case 3:
+			if entry.LastPushedSHA != fx.newTip3 {
+				t.Errorf("layer 3 last-pushed SHA = %s, want the delivered rebuilt tip %s", entry.LastPushedSHA, fx.newTip3)
+			}
+		}
+	}
+
+	// The closure finished and the tail settled with no warning.
+	child := fx.reloadChild()
+	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome = %q, want completed", child.Parent.CloseOutcome)
+	}
+	if child.Parent.Transaction == nil || !child.Parent.Transaction.TailSettled {
+		t.Fatalf("journal = %+v, want the tail-settled marker", child.Parent.Transaction)
+	}
+	if entry := child.Parent.Transaction.EntryByRepo("repoa"); entry == nil || entry.Tail != nil {
+		t.Fatalf("repoA tail record = %+v, want none (no failure)", entry.Tail)
+	}
+}
+
+// TestRebaseClosure_NonDivergedLayerKeepsTodaysLeases proves a repository
+// whose classification has no diverged layer keeps today's leases byte for
+// byte: closure pins nothing and the tail pushes layers 2 and 3 leased on
+// the pre-rebase pushed SHAs exactly as before.
+func TestRebaseClosure_NonDivergedLayerKeepsTodaysLeases(t *testing.T) {
+	fx := newRebaseTailFixture(t, rebaseTailFixtureOpts{})
+
+	fx.runClosureFromApplied()
+
+	pushes := fx.repoAPushes()
+	if len(pushes) != 2 {
+		t.Fatalf("repoA pushes = %+v, want exactly layers 2 and 3", pushes)
+	}
+	if pushes[0].branch != "stack/2" || pushes[0].localSHA != fx.newTip2 || pushes[0].lastPushedSHA != fx.tip2 {
+		t.Errorf("layer 2 push = %+v, want %s leased on the pre-rebase tip %s (today's lease)", pushes[0], fx.newTip2, fx.tip2)
+	}
+	if pushes[1].branch != "stack/3" || pushes[1].localSHA != fx.newTip3 || pushes[1].lastPushedSHA != fx.tip3 {
+		t.Errorf("layer 3 push = %+v, want %s leased on the pre-rebase tip %s (today's lease)", pushes[1], fx.newTip3, fx.tip3)
+	}
+}
+
+// TestRebaseClosure_SecondReviewerPushAfterPreflightRefusesAndSettles
+// proves a reviewer push between preflight and the tail leaves the
+// republish refused: closure still pins the observed first tip, the lease
+// no longer matches the remote (which holds the second commit), the tail
+// stores the diverged record for that repository, leaves the remote
+// untouched, continues with the other repository, and still settles.
+func TestRebaseClosure_SecondReviewerPushAfterPreflightRefusesAndSettles(t *testing.T) {
+	fx := newRebaseTailFixture(t, rebaseTailFixtureOpts{DivergentLayer2A: true, WithDivergedRepoB: true})
+
+	// A second reviewer commit lands on the remote stack/2 after the
+	// preflight observation.
+	restackGit(t, fx.repoA, "checkout", "-b", "reviewer/stack-2-late", fx.reviewerTipA)
+	restackWrite(t, fx.repoA, "review2.txt", "late reviewer fix\n")
+	restackGit(t, fx.repoA, "add", "review2.txt")
+	restackCommitAs(t, fx.repoA, "reviewer fix two", "Reviewer Two", "reviewer2@example.com")
+	lateTip := restackGit(t, fx.repoA, "rev-parse", "HEAD")
+	testutil.SimulatePush(t, fx.repoA, fx.bareA, "reviewer/stack-2-late", "stack/2")
+
+	fx.runClosureFromApplied()
+
+	// repoa's republish was refused with the diverged record and the remote
+	// keeps the second reviewer commit.
+	parent := fx.reloadParent()
+	state := parent.RepoStates["repoa"]
+	if state == nil || state.Error == nil || state.Error.Code != errcat.PublishRemoteDiverged {
+		t.Fatalf("repoa stored record = %+v, want publish_remote_diverged", state)
+	}
+	if got := restackGit(t, fx.bareA, "rev-parse", "refs/heads/stack/2"); got != lateTip {
+		t.Fatalf("remote stack/2 = %s, want the second reviewer commit %s untouched", got, lateTip)
+	}
+	// The pinned lease proves closure recorded the first observed tip: the
+	// refused push was leased on it.
+	pushes := fx.repoAPushes()
+	if len(pushes) != 1 || pushes[0].branch != "stack/2" || pushes[0].lastPushedSHA != fx.reviewerTipA {
+		t.Fatalf("repoA pushes = %+v, want only layer 2 leased on the observed first tip %s", pushes, fx.reviewerTipA)
+	}
+
+	// The other repository still processed: its retarget happened and its
+	// own diverged record stored.
+	if stateB := parent.RepoStates["repob"]; stateB == nil || stateB.Error == nil || stateB.Error.Code != errcat.PublishRemoteDiverged {
+		t.Fatalf("repob stored record = %+v, want publish_remote_diverged (existing behavior)", stateB)
+	}
+	patches := fx.basePatches()
+	if len(patches) != 2 {
+		t.Fatalf("base patches = %+v, want both repositories' layer 2 retargeted before the pushes", patches)
+	}
+
+	// The closure finished and the tail settled with both records stored.
+	child := fx.reloadChild()
+	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome = %q, want completed", child.Parent.CloseOutcome)
+	}
+	if child.Parent.Transaction == nil || !child.Parent.Transaction.TailSettled {
+		t.Fatalf("journal = %+v, want the tail-settled marker", child.Parent.Transaction)
+	}
+}
+
+// TestRebaseClosure_StartupScanFinishStillPinsLastPushed proves a crash
+// between the ref transaction and closure persistence, finished by the
+// startup scan's closeTransactionAfterApply re-entry, still sets the
+// diverged layer's last-pushed SHA to the observed remote tip.
+func TestRebaseClosure_StartupScanFinishStillPinsLastPushed(t *testing.T) {
+	fx := newRebaseTailFixture(t, rebaseTailFixtureOpts{DivergentLayer2A: true})
+
+	// The crash state: refs at candidates, journal applied, child active,
+	// parent CodeReady, nothing persisted — exactly what
+	// runClosureFromApplied installs and the startup scan finishes.
+	fx.runClosureFromApplied()
+
+	// The pin landed: the tail's layer-2 push was leased on the observed
+	// reviewer tip and the remote now holds the rebuilt tip that contains
+	// the adopted copy.
+	pushes := fx.repoAPushes()
+	if len(pushes) != 2 || pushes[0].branch != "stack/2" || pushes[0].lastPushedSHA != fx.reviewerTipA {
+		t.Fatalf("repoA pushes = %+v, want layer 2 leased on the observed reviewer tip %s", pushes, fx.reviewerTipA)
+	}
+	if got := restackGit(t, fx.bareA, "rev-parse", "refs/heads/stack/2"); got != fx.newTip2 {
+		t.Fatalf("remote stack/2 = %s, want the rebuilt tip %s", got, fx.newTip2)
 	}
 }

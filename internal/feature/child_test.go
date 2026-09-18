@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1508,5 +1509,64 @@ func TestRebaseExitCriteriaIsWorktreeAnchored(t *testing.T) {
 	}
 	if strings.Contains(criteria, "repo-current") {
 		t.Errorf("exit criteria mention the up-to-date repo by section:\n%s", criteria)
+	}
+}
+
+// TestCreateRebaseChildCarriesDivergedClassification proves the created
+// child's relationship carries the preflight's divergence classification —
+// the diverged flag, the observed remote tip, and the ordered foreign
+// commits — together with the work list, so the restack loop and closure
+// read the creation-time decision instead of recomputing.
+func TestCreateRebaseChildCarriesDivergedClassification(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp store and fakes isolate state.
+	mgr := newChildTestManager(t, nil, cleanEverywhere())
+	parent := &feature.Feature{
+		ID:           "rebase-parent-diverged",
+		Slug:         "rebase-parent-diverged",
+		Status:       feature.StatusPublished,
+		Repos:        []feature.FeatureRepo{{Name: "repo", Path: "/src/repo", WorktreePath: "/wt/repo", Branch: "feature/parent-x", BaseBranch: "main"}},
+		Pipeline:     feature.PipelineMoonshot,
+		DeliveryMode: feature.DeliveryModeStack,
+	}
+	saveChildTestParent(t, mgr, parent)
+
+	child, err := mgr.CreateRebaseChild(parent.ID, feature.RebaseChildSpec{
+		Bases: []feature.ChildRepoBase{{Repo: "repo", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ParentBranch: "feature/parent-x"}},
+		Targets: []feature.RebaseRepoTarget{
+			{Repo: "repo", Target: "main", Ref: "origin/main", Publishable: true, TargetSHA: "1111111111111111111111111111111111111111"},
+		},
+		LayerStates: []feature.RebaseLayerClassification{
+			{Repo: "repo", LayerPosition: 1, LayerTitle: "Layer one", Branch: "stack/1", State: feature.RebaseLayerStateKept},
+			{
+				Repo: "repo", LayerPosition: 2, LayerTitle: "Layer two", Branch: "stack/2",
+				State: feature.RebaseLayerStateKept, Diverged: true,
+				RemoteTip:         "fedcba9876543210fedcba9876543210fedcba98",
+				RemoteOnlyCommits: 2,
+				ForeignCommits: []feature.RebaseForeignCommit{
+					{SHA: "1111111111111111111111111111111111111111", Subject: "reviewer fix one", Author: "Reviewer One <reviewer1@example.com>"},
+					{SHA: "2222222222222222222222222222222222222222", Subject: "reviewer fix two", Author: "Reviewer Two <reviewer2@example.com>"},
+				},
+			},
+		},
+		WorkRepos: []string{"repo"},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	loaded, err := mgr.Store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("reload child: %v", err)
+	}
+	if !reflect.DeepEqual(loaded.Parent.RebaseWorkRepos, []string{"repo"}) {
+		t.Fatalf("child RebaseWorkRepos = %+v, want [repo]", loaded.Parent.RebaseWorkRepos)
+	}
+	diverged := loaded.RebaseDivergedLayers("repo")
+	if len(diverged) != 1 || diverged[0].LayerPosition != 2 || diverged[0].RemoteTip != "fedcba9876543210fedcba9876543210fedcba98" {
+		t.Fatalf("child diverged layers = %+v, want layer 2 with the pinned remote tip", diverged)
+	}
+	if len(diverged[0].ForeignCommits) != 2 || diverged[0].ForeignCommits[0].SHA != "1111111111111111111111111111111111111111" {
+		t.Fatalf("child foreign commits = %+v, want the two recorded reviewer commits in order", diverged[0].ForeignCommits)
 	}
 }

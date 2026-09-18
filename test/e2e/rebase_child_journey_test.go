@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -65,6 +66,20 @@ type rebaseHarnessOpts struct {
 	// UpToDate skips the base advancement so nothing has work and the
 	// launch is refused with the already-up-to-date error.
 	UpToDate bool
+	// ReviewerCommitLayer2 pushes one reviewer commit (a distinct reviewer
+	// identity) onto the remote stack/2 past the published tip, from a
+	// second clone of the bare origin — the foreign work the adoption
+	// journeys reconcile.
+	ReviewerCommitLayer2 bool
+	// ReviewerConflictingCommit makes the reviewer commit touch layer 2's
+	// file with different content instead of adding a new file, so its
+	// adoption conflicts with a locally rewritten layer 2 and runs through
+	// the scripted resolution session.
+	ReviewerConflictingCommit bool
+	// ReviewerMergeOnlyLayer2 pushes a content-free "Update branch" merge
+	// of main onto the remote stack/2 instead of a plain reviewer commit:
+	// diverged with nothing to adopt.
+	ReviewerMergeOnlyLayer2 bool
 	// resolutionScript scripts the rebase conflict-resolution sessions' bash
 	// bodies (working directory = the paused pick's temporary worktree).
 	// Nil defaults to sessions that never touch the conflicted files, so
@@ -81,6 +96,7 @@ type rebaseHarnessJourney struct {
 	store    *feature.Store
 	mgr      *feature.Manager
 	orch     *orchestrator.Orchestrator
+	pr       *agent.PhaseRunner
 	srv      *httptest.Server
 	client   *server.Client
 	pulls    *testutil.FakePullStore
@@ -93,6 +109,9 @@ type rebaseHarnessJourney struct {
 	layerTips []string // original layer tips, ascending
 	targetSHA string   // origin/main: layer 1 squashed plus one upstream commit
 	forkSHA   string   // merge base of the target and the lowest layer tip
+	// reviewerTip is the remote stack/2 tip the reviewer pushed past the
+	// published tip (the plain commit or the Update branch merge).
+	reviewerTip string
 
 	prNum1, prNum2, prNum3 int
 	prURL1, prURL2, prURL3 string
@@ -261,6 +280,33 @@ func newRebaseHarnessJourney(t *testing.T, opts rebaseHarnessOpts) *rebaseHarnes
 		// Nothing merged and nothing published: a plain behind parent.
 	}
 
+	// The reviewer's work on layer 2's remote branch, past the published
+	// tip, pushed from a second clone of the bare origin.
+	if opts.ReviewerCommitLayer2 || opts.ReviewerMergeOnlyLayer2 {
+		clone := fx.reviewerClone(t)
+		journeyGit(t, clone, "checkout", "stack/2")
+		if opts.ReviewerMergeOnlyLayer2 {
+			// A content-free "Update branch" merge of the base: git refuses
+			// to merge an unchanged base, so the merge is assembled with
+			// plumbing exactly like the redundant merges the push proof
+			// admits.
+			tree := journeyGit(t, clone, "rev-parse", "HEAD^{tree}")
+			fx.reviewerTip = journeyGit(t, clone, "commit-tree", "-p", "HEAD", "-p", "origin/main", "-m", "Update branch", tree)
+			journeyGit(t, clone, "reset", "--hard", fx.reviewerTip)
+		} else if opts.ReviewerConflictingCommit {
+			writeJourneyFile(t, clone, "l2.txt", "reviewer conflicting take\n")
+			journeyGit(t, clone, "add", "l2.txt")
+			journeyGitAs(t, clone, "Reviewer One", "reviewer1@example.com", "commit", "-m", "reviewer fix one")
+			fx.reviewerTip = journeyGit(t, clone, "rev-parse", "HEAD")
+		} else {
+			writeJourneyFile(t, clone, "review.txt", "reviewer fix\n")
+			journeyGit(t, clone, "add", "review.txt")
+			journeyGitAs(t, clone, "Reviewer One", "reviewer1@example.com", "commit", "-m", "reviewer fix one")
+			fx.reviewerTip = journeyGit(t, clone, "rev-parse", "HEAD")
+		}
+		journeyGit(t, clone, "push", "origin", "stack/2")
+	}
+
 	if opts.FullyMergedRepoB {
 		repoB := testutil.InitGitRepo(t)
 		bareB := stackJourneyBareOrigin(t, remotesDir, repoB, "repo-b")
@@ -414,9 +460,55 @@ func newRebaseHarnessJourney(t *testing.T, opts rebaseHarnessOpts) *rebaseHarnes
 	fx.store = store
 	fx.mgr = mgr
 	fx.orch = orch
+	fx.pr = pr
 	fx.srv = srv
 	fx.client = client
 	return fx
+}
+
+// reviewerClone clones the bare origin so reviewer work can be authored and
+// pushed without touching the inspected checkout.
+func (fx *rebaseHarnessJourney) reviewerClone(t *testing.T) string {
+	t.Helper()
+	parent := t.TempDir()
+	clone := filepath.Join(parent, "repo-a")
+	journeyGit(t, parent, "clone", "--quiet", fx.bareRemote, clone)
+	return clone
+}
+
+// pushReviewerCommitOntoLayer2 pushes one reviewer commit onto the remote
+// stack/2 from a second clone — onto whatever tip the remote currently
+// holds — and returns the new remote tip.
+func (fx *rebaseHarnessJourney) pushReviewerCommitOntoLayer2(t *testing.T, file, content, subject, authorName, authorEmail string) string {
+	t.Helper()
+	clone := fx.reviewerClone(t)
+	journeyGit(t, clone, "checkout", "stack/2")
+	writeJourneyFile(t, clone, file, content)
+	journeyGit(t, clone, "add", file)
+	journeyGitAs(t, clone, authorName, authorEmail, "commit", "-m", subject)
+	sha := journeyGit(t, clone, "rev-parse", "HEAD")
+	journeyGit(t, clone, "push", "origin", "stack/2")
+	return sha
+}
+
+// journeyGitAs runs one git command with an explicit author and committer
+// identity, for the reviewer commits whose identities the adoption records
+// must preserve.
+func journeyGitAs(t *testing.T, dir, authorName, authorEmail string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(testutil.GitTestEnv(),
+		"GIT_AUTHOR_NAME="+authorName,
+		"GIT_AUTHOR_EMAIL="+authorEmail,
+		"GIT_COMMITTER_NAME="+authorName,
+		"GIT_COMMITTER_EMAIL="+authorEmail,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // layerBranches returns the stack's layer branch names, ascending.

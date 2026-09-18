@@ -165,9 +165,12 @@ func (o *Orchestrator) runRebaseRestackLoop(featureID string, handle *rebaseRest
 		}
 		f.CurrentPhase = feature.PhaseFinalReview
 		// The verification round scrutinizes the agent-resolved commits
-		// specifically: the description and exit criteria name them.
+		// and the adopted reviewer commits specifically: the description
+		// and exit criteria name them.
 		f.Description = feature.ExtendRebaseDescriptionWithResolutions(f.Description, restacks)
 		f.ExitCriteria = feature.ExtendRebaseExitCriteriaWithResolutions(f.ExitCriteria, restacks)
+		f.Description = feature.ExtendRebaseDescriptionWithAdoptions(f.Description, restacks)
+		f.ExitCriteria = feature.ExtendRebaseExitCriteriaWithAdoptions(f.ExitCriteria, restacks)
 		return nil
 	}); err != nil {
 		o.emitRestackLoopError(featureID, err)
@@ -274,6 +277,8 @@ func (o *Orchestrator) rebaseRestackOneRepo(parent *feature.Feature, child *feat
 	restack.DroppedLayers = plan.droppedLayers
 	restack.AnchorRemap = plan.anchorRemap(result, target.TargetSHA)
 	restack.ResolvedConflicts = decorateResolvedConflicts(resolver.resolved, result.Dropped)
+	restack.AdoptedCommits = plan.adoptedCommits(result)
+	restack.SkippedMergeCommits = plan.skippedMergeCommits
 
 	// The child branch is the top layer's carrier: reset the child
 	// worktree's branch to the rebuilt top before the result is persisted,
@@ -310,8 +315,9 @@ func decorateResolvedConflicts(resolved []feature.RebaseResolvedConflict, droppe
 type rebaseRestackPlan struct {
 	// cutPoints are the labelled chain positions handed to the primitive.
 	cutPoints []git.RestackCutPoint
-	// ops are the restack operations: replace-base to the target SHA plus
-	// drop-segment for every cut point inside a merged layer.
+	// ops are the restack operations: replace-base to the target SHA,
+	// drop-segment for every cut point inside a merged layer, and
+	// insert-after for every diverged layer's foreign commits.
 	ops []git.RestackOp
 	// groups are the merged cut-point groups with their owning layer and
 	// anchor phases, in chain order (the base group first).
@@ -326,6 +332,27 @@ type rebaseRestackPlan struct {
 	// tips lists the stack layers' resolved tips ascending, so the conflict
 	// resolver can attribute a conflicted commit to its owning layer.
 	tips []rebaseRestackTip
+	// adoptions records every diverged layer's foreign commits scheduled
+	// onto the cut point that owns the layer's tip, so the result can be
+	// translated into the persisted adopted-commit records.
+	adoptions []rebaseRestackAdoption
+	// foreignBySHA maps an adopted foreign commit's original SHA to its
+	// layer position, so the conflict resolver attributes a conflicting
+	// adoption to the diverged layer it extends.
+	foreignBySHA map[string]int
+	// skippedMergeCommits counts the remote-only merge commits the
+	// preflight observed on this repository's diverged layers.
+	skippedMergeCommits int
+}
+
+// rebaseRestackAdoption is one diverged layer's foreign commits scheduled
+// onto the cut point that owns the layer's tip: the commits cherry-pick
+// onto the layer's replayed segment, after the layer's own commits and
+// before the next layer's.
+type rebaseRestackAdoption struct {
+	layerPosition int
+	label         string
+	commits       []feature.RebaseForeignCommit
 }
 
 // rebaseRestackTip is one stack layer's resolved tip position on the chain.
@@ -446,7 +473,7 @@ func (o *Orchestrator) buildRebaseRestackPlan(parent *feature.Feature, child *fe
 	}
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].sortKey < candidates[j].sortKey })
 
-	plan := &rebaseRestackPlan{layerTipGroup: make(map[int]int), layerState: stateByLayer, tips: tips}
+	plan := &rebaseRestackPlan{layerTipGroup: make(map[int]int), layerState: stateByLayer, tips: tips, foreignBySHA: make(map[string]int)}
 	var groups []rebaseRestackGroup
 	for _, c := range candidates {
 		if len(groups) > 0 && groups[len(groups)-1].sha == c.sha {
@@ -502,6 +529,45 @@ func (o *Orchestrator) buildRebaseRestackPlan(parent *feature.Feature, child *fe
 		}
 	}
 
+	// Foreign-commit adoption: every diverged layer with a non-empty
+	// foreign list gets one insert-after operation on the cut point that
+	// owns the layer's tip, so the reviewer's commits extend the layer's
+	// replayed segment — after the layer's own commits (and its
+	// roadmap-phase anchors) and before the next layer's — and the layer's
+	// remapped tip covers them. A diverged layer whose tip resolved no cut
+	// point fails closed: replaying without the reviewer's commits would
+	// silently lose them. The foreign SHAs are pinned on the persisted
+	// classification, so a re-run adopts the same commits; the preflight's
+	// fetch left their objects in the shared store the primitive's temp
+	// worktree cherry-picks from.
+	var insertOps []git.RestackOp
+	for _, c := range child.RebaseDivergedLayers(repoName) {
+		plan.skippedMergeCommits += c.RemoteOnlyCommits - len(c.ForeignCommits)
+		if len(c.ForeignCommits) == 0 {
+			continue
+		}
+		groupIdx, ok := plan.layerTipGroup[c.LayerPosition]
+		if !ok {
+			return nil, fmt.Errorf("repository %s's diverged layer %d has no cut point on the restack chain; refusing to replay without its reviewer commits", repoName, c.LayerPosition)
+		}
+		shas := make([]string, 0, len(c.ForeignCommits))
+		for _, fc := range c.ForeignCommits {
+			shas = append(shas, fc.SHA)
+			plan.foreignBySHA[fc.SHA] = c.LayerPosition
+		}
+		label := groups[groupIdx].label
+		insertOps = append(insertOps, git.RestackOp{
+			Kind:          git.RestackInsertAfter,
+			CutPointLabel: label,
+			CommitSHAs:    shas,
+		})
+		plan.adoptions = append(plan.adoptions, rebaseRestackAdoption{
+			layerPosition: c.LayerPosition,
+			label:         label,
+			commits:       c.ForeignCommits,
+		})
+	}
+
 	plan.groups = groups
 	plan.cutPoints = make([]git.RestackCutPoint, len(groups))
 	for i, group := range groups {
@@ -523,6 +589,7 @@ func (o *Orchestrator) buildRebaseRestackPlan(parent *feature.Feature, child *fe
 			})
 		}
 	}
+	plan.ops = append(plan.ops, insertOps...)
 	return plan, nil
 }
 
@@ -567,6 +634,34 @@ func (p *rebaseRestackPlan) anchorRemap(result *git.RestackResult, targetSHA str
 		}
 	}
 	return remap
+}
+
+// adoptedCommits translates the restack result into the persisted
+// adopted-commit records: one record per foreign commit the plan scheduled,
+// with the new SHA the replay produced and the dropped marker when the
+// commit's change was already present on the replayed tip.
+func (p *rebaseRestackPlan) adoptedCommits(result *git.RestackResult) []feature.RebaseAdoptedCommit {
+	if len(p.adoptions) == 0 {
+		return nil
+	}
+	droppedSet := make(map[string]bool, len(result.Dropped))
+	for _, sha := range result.Dropped {
+		droppedSet[sha] = true
+	}
+	var out []feature.RebaseAdoptedCommit
+	for _, a := range p.adoptions {
+		for _, fc := range a.commits {
+			out = append(out, feature.RebaseAdoptedCommit{
+				LayerPosition: a.layerPosition,
+				OriginalSHA:   fc.SHA,
+				NewSHA:        result.CommitMap[fc.SHA],
+				Dropped:       droppedSet[fc.SHA],
+				Subject:       fc.Subject,
+				Author:        fc.Author,
+			})
+		}
+	}
+	return out
 }
 
 // prepareRebaseRestackRefs stages one work repository's integration entry

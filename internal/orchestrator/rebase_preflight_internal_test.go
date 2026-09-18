@@ -80,22 +80,40 @@ type rebasePreflightFixture struct {
 	mgr    *feature.Manager
 	remote *preflightRemoteOps
 
-	parentID               string
-	repoDir                string
+	parentID string
+	repoDir  string
+	// bareDir maps a repository name to its bare origin path, for reviewer
+	// pushes from a second clone.
+	bareDir                map[string]string
 	prURL1, prURL2, prURL3 string
 	tip1, tip2, tip3       string
 	targetSHA, forkSHA     string
 }
 
+// preflightFixtureOpts configures the preflight fixture.
+type preflightFixtureOpts struct {
+	// WithRepoB adds a second repository to the parent.
+	WithRepoB bool
+	// BehindRepoB advances repoB's origin main past its stack (behind)
+	// instead of leaving it at the fork point (up to date).
+	BehindRepoB bool
+	// AdvanceMainA controls whether repoA's origin main advances past the
+	// stack (behind); false leaves repoA up to date so launch conditions
+	// other than behind-ness (divergence, merged layers) can be exercised
+	// alone.
+	AdvanceMainA bool
+}
+
 // newRebasePreflightFixture builds the shared fixture. behindRepoB controls
 // whether the second repository's origin advanced (behind) or stayed at the
 // fork point (up to date); repoBEntries customizes its stack entries.
-func newRebasePreflightFixture(t *testing.T, withRepoB, behindRepoB bool) *rebasePreflightFixture {
+func newRebasePreflightFixture(t *testing.T, opts preflightFixtureOpts) *rebasePreflightFixture {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("real-git rebase preflight test")
 	}
-	fx := &rebasePreflightFixture{t: t, parentID: "rebase-preflight-parent"}
+	withRepoB, behindRepoB, advanceMainA := opts.WithRepoB, opts.BehindRepoB, opts.AdvanceMainA
+	fx := &rebasePreflightFixture{t: t, parentID: "rebase-preflight-parent", bareDir: map[string]string{}}
 
 	newRepo := func(name string) (repoDir, bare string, tips [3]string, fork string) {
 		repoDir = testutil.InitGitRepo(t)
@@ -122,19 +140,24 @@ func newRebasePreflightFixture(t *testing.T, withRepoB, behindRepoB bool) *rebas
 		return repoDir, bare, tips, fork
 	}
 
-	repoA, bareA, tipsA, _ := newRepo("repoa")
+	repoA, bareA, tipsA, forkA := newRepo("repoa")
 	fx.repoDir = repoA
+	fx.bareDir["repoa"] = bareA
 	fx.tip1, fx.tip2, fx.tip3 = tipsA[0], tipsA[1], tipsA[2]
 
-	// Advance repoa's origin/main past the stack: layer 1's squashed
-	// content plus one upstream commit.
-	restackCheckout(t, repoA, "main")
-	restackGit(t, repoA, "checkout", "stack/1", "--", "l1.txt")
-	restackCommitAs(t, repoA, "squash merge layer 1", "Main Merger", "main@example.com")
-	testutil.CommitFile(t, repoA, "upstream.txt", "upstream change\n", "upstream advancement")
-	fx.targetSHA = restackGit(t, repoA, "rev-parse", "HEAD")
-	testutil.SimulatePush(t, repoA, bareA, "main", "main")
-	restackCheckout(t, repoA, "stack/3")
+	fx.forkSHA = forkA
+	fx.targetSHA = forkA
+	if advanceMainA {
+		// Advance repoa's origin/main past the stack: layer 1's squashed
+		// content plus one upstream commit.
+		restackCheckout(t, repoA, "main")
+		restackGit(t, repoA, "checkout", "stack/1", "--", "l1.txt")
+		restackCommitAs(t, repoA, "squash merge layer 1", "Main Merger", "main@example.com")
+		testutil.CommitFile(t, repoA, "upstream.txt", "upstream change\n", "upstream advancement")
+		fx.targetSHA = restackGit(t, repoA, "rev-parse", "HEAD")
+		testutil.SimulatePush(t, repoA, bareA, "main", "main")
+		restackCheckout(t, repoA, "stack/3")
+	}
 
 	publishable := true
 	parentRepos := []feature.FeatureRepo{{
@@ -159,6 +182,7 @@ func newRebasePreflightFixture(t *testing.T, withRepoB, behindRepoB bool) *rebas
 
 	if withRepoB {
 		repoB, bareB, tipsB, _ := newRepo("repob")
+		fx.bareDir["repob"] = bareB
 		if behindRepoB {
 			restackCheckout(t, repoB, "main")
 			restackGit(t, repoB, "checkout", "stack/1", "--", "l1.txt")
@@ -234,7 +258,7 @@ func (fx *rebasePreflightFixture) orchestrator() *Orchestrator {
 // kept, behind true, and appears in the work list, and the merged state
 // observed live is persisted on the parent's stack.
 func TestRebasePreflight_ClassifiesMergedLayerBehindReposAsWork(t *testing.T) {
-	fx := newRebasePreflightFixture(t, false, false)
+	fx := newRebasePreflightFixture(t, preflightFixtureOpts{AdvanceMainA: true})
 	fx.remote.states[fx.prURL1] = git.PRStateMerged
 	orch := fx.orchestrator()
 
@@ -277,7 +301,7 @@ func TestRebasePreflight_ClassifiesMergedLayerBehindReposAsWork(t *testing.T) {
 // pull request in the stack refuses the launch with the Phase 7 stack-closed
 // error naming the repository, the layer, its title, and its URL.
 func TestRebasePreflight_ClosedPullRequestRefusesLaunch(t *testing.T) {
-	fx := newRebasePreflightFixture(t, false, false)
+	fx := newRebasePreflightFixture(t, preflightFixtureOpts{AdvanceMainA: true})
 	fx.remote.states[fx.prURL2] = git.PRStateClosed
 	orch := fx.orchestrator()
 
@@ -300,7 +324,7 @@ func TestRebasePreflight_ClosedPullRequestRefusesLaunch(t *testing.T) {
 // carrying work the launch is refused with the existing already-up-to-date
 // error.
 func TestRebasePreflight_FullyMergedRepoExcludedRefusesUpToDate(t *testing.T) {
-	fx := newRebasePreflightFixture(t, false, false)
+	fx := newRebasePreflightFixture(t, preflightFixtureOpts{AdvanceMainA: true})
 	fx.remote.states[fx.prURL1] = git.PRStateMerged
 	fx.remote.states[fx.prURL2] = git.PRStateMerged
 	fx.remote.states[fx.prURL3] = git.PRStateMerged
@@ -321,7 +345,7 @@ func TestRebasePreflight_FullyMergedRepoExcludedRefusesUpToDate(t *testing.T) {
 // every layer as kept and enters the work list by behind-ness alone, with
 // the target resolved from the local base branch.
 func TestRebasePreflight_LocalOnlyRepoClassifiedByBehindness(t *testing.T) {
-	fx := newRebasePreflightFixture(t, false, false)
+	fx := newRebasePreflightFixture(t, preflightFixtureOpts{AdvanceMainA: true})
 
 	// Strip the pull requests and publishability: a local-only repository
 	// whose local main advanced past the stack.
@@ -364,7 +388,7 @@ func TestRebasePreflight_LocalOnlyRepoClassifiedByBehindness(t *testing.T) {
 // parent with one up-to-date repository and one behind repository launches
 // with only the behind repository in the work list.
 func TestRebasePreflight_UpToDateAndBehindPairLaunchesOnlyBehindRepo(t *testing.T) {
-	fx := newRebasePreflightFixture(t, true, false)
+	fx := newRebasePreflightFixture(t, preflightFixtureOpts{WithRepoB: true, AdvanceMainA: true})
 	orch := fx.orchestrator()
 
 	res, err := orch.RebaseChildPreflight(fx.parentID)
@@ -378,5 +402,198 @@ func TestRebasePreflight_UpToDateAndBehindPairLaunchesOnlyBehindRepo(t *testing.
 		if c.Repo == "repob" && c.State != feature.RebaseLayerStateKept {
 			t.Fatalf("repob layer %d classification = %q, want kept", c.LayerPosition, c.State)
 		}
+	}
+}
+
+// recordLastPushedSHAs stamps every repoa layer entry's LastPushedSHA with
+// the branch tip the fixture pushed, modeling the publish bookkeeping a
+// published stack carries.
+func (fx *rebasePreflightFixture) recordLastPushedSHAs() {
+	fx.t.Helper()
+	if err := fx.store.Modify(fx.parentID, func(f *feature.Feature) error {
+		for i := range f.Stack {
+			entry := f.Stack[i].Repos["repoa"]
+			entry.LastPushedSHA = entry.TipSHA
+			f.Stack[i].Repos["repoa"] = entry
+		}
+		return nil
+	}); err != nil {
+		fx.t.Fatalf("record last-pushed SHAs: %v", err)
+	}
+}
+
+// reviewerClone clones repoa's bare origin so reviewer work can be authored
+// and pushed without touching the inspected checkout.
+func (fx *rebasePreflightFixture) reviewerClone() string {
+	fx.t.Helper()
+	parent := fx.t.TempDir()
+	clone := filepath.Join(parent, "reviewer")
+	restackGit(fx.t, parent, "clone", "--quiet", fx.bareDir["repoa"], clone)
+	return clone
+}
+
+// pushReviewerCommit pushes one reviewer commit onto the named layer branch
+// from a second clone of the bare origin and returns the commit's SHA.
+func (fx *rebasePreflightFixture) pushReviewerCommit(branch, file, content, subject, author string) string {
+	fx.t.Helper()
+	clone := fx.reviewerClone()
+	restackCheckout(fx.t, clone, branch)
+	restackWrite(fx.t, clone, file, content)
+	restackGit(fx.t, clone, "add", file)
+	name, email := splitAuthor(author)
+	restackCommitAs(fx.t, clone, subject, name, email)
+	sha := restackGit(fx.t, clone, "rev-parse", "HEAD")
+	restackGit(fx.t, clone, "push", "origin", branch)
+	return sha
+}
+
+// pushReviewerMerge pushes a content-free "Update branch" merge of the base
+// branch onto the named layer branch from a second clone and returns the
+// merge commit's SHA. git refuses to merge an unchanged base, so the merge
+// is assembled with plumbing exactly like the redundant merges the push
+// proof admits.
+func (fx *rebasePreflightFixture) pushReviewerMerge(branch, baseBranch string) string {
+	fx.t.Helper()
+	clone := fx.reviewerClone()
+	restackCheckout(fx.t, clone, branch)
+	tree := restackGit(fx.t, clone, "rev-parse", "HEAD^{tree}")
+	merge := restackGit(fx.t, clone, "commit-tree", "-p", "HEAD", "-p", "origin/"+baseBranch, "-m", "Update branch", tree)
+	restackGit(fx.t, clone, "reset", "--hard", merge)
+	restackGit(fx.t, clone, "push", "origin", branch)
+	return merge
+}
+
+// TestRebasePreflight_ReviewerCommitOnLayer2LaunchesOnDivergence proves
+// divergence alone launches the pass: a reviewer commit pushed to layer 2's
+// remote branch on a parent that is neither behind nor holds a merged layer
+// puts the repository in the work list with layer 2 classified kept and
+// diverged carrying the reviewer commit's SHA and the observed remote tip,
+// while layers 1 and 3 are not diverged.
+func TestRebasePreflight_ReviewerCommitOnLayer2LaunchesOnDivergence(t *testing.T) {
+	fx := newRebasePreflightFixture(t, preflightFixtureOpts{})
+	fx.recordLastPushedSHAs()
+	reviewerSHA := fx.pushReviewerCommit("stack/2", "review.txt", "reviewer fix\n", "reviewer fix one", "Reviewer One <reviewer1@example.com>")
+	orch := fx.orchestrator()
+
+	res, err := orch.RebaseChildPreflight(fx.parentID)
+	if err != nil {
+		t.Fatalf("RebaseChildPreflight() error = %v, want launch on divergence alone", err)
+	}
+	if len(res.WorkRepos) != 1 || res.WorkRepos[0] != "repoa" {
+		t.Fatalf("work repos = %+v, want [repoa] by divergence alone", res.WorkRepos)
+	}
+	if len(res.Behind) != 0 {
+		t.Fatalf("behind = %+v, want none (main not advanced)", res.Behind)
+	}
+	var layer2 *feature.RebaseLayerClassification
+	for i := range res.LayerStates {
+		c := &res.LayerStates[i]
+		if c.Repo != "repoa" {
+			continue
+		}
+		switch c.LayerPosition {
+		case 2:
+			layer2 = c
+		default:
+			if c.Diverged {
+				t.Fatalf("layer %d diverged = %+v, want not diverged", c.LayerPosition, c)
+			}
+		}
+	}
+	if layer2 == nil {
+		t.Fatal("no classification for repoa layer 2")
+	}
+	if layer2.State != feature.RebaseLayerStateKept || !layer2.Diverged {
+		t.Fatalf("layer 2 classification = %+v, want kept and diverged", layer2)
+	}
+	if len(layer2.ForeignCommits) != 1 || layer2.ForeignCommits[0].SHA != reviewerSHA {
+		t.Fatalf("layer 2 foreign commits = %+v, want exactly the reviewer commit %s", layer2.ForeignCommits, reviewerSHA)
+	}
+	if layer2.ForeignCommits[0].Subject != "reviewer fix one" || layer2.ForeignCommits[0].Author != "Reviewer One <reviewer1@example.com>" {
+		t.Fatalf("foreign commit identity = %+v, want the reviewer's subject and author", layer2.ForeignCommits[0])
+	}
+	if layer2.RemoteOnlyCommits != 1 {
+		t.Fatalf("layer 2 remote-only count = %d, want 1", layer2.RemoteOnlyCommits)
+	}
+	if layer2.RemoteTip == "" || layer2.RemoteTip == fx.tip2 {
+		t.Fatalf("layer 2 remote tip = %q, want the observed reviewer tip beyond %s", layer2.RemoteTip, fx.tip2)
+	}
+	if got := restackGit(t, fx.repoDir, "rev-parse", "refs/remotes/origin/stack/2"); got != layer2.RemoteTip {
+		t.Fatalf("layer 2 remote tip %s != remote-tracking ref %s", layer2.RemoteTip, got)
+	}
+}
+
+// TestRebasePreflight_MergeOnlyRemoteCommitDivergedWithEmptyForeignList
+// proves a layer whose only remote-only commit is a content-free merge of
+// the base still classifies diverged — with nothing to adopt — and the pass
+// still launches on divergence alone.
+func TestRebasePreflight_MergeOnlyRemoteCommitDivergedWithEmptyForeignList(t *testing.T) {
+	fx := newRebasePreflightFixture(t, preflightFixtureOpts{})
+	fx.recordLastPushedSHAs()
+	mergeSHA := fx.pushReviewerMerge("stack/2", "main")
+	orch := fx.orchestrator()
+
+	res, err := orch.RebaseChildPreflight(fx.parentID)
+	if err != nil {
+		t.Fatalf("RebaseChildPreflight() error = %v, want launch on divergence alone", err)
+	}
+	if len(res.WorkRepos) != 1 || res.WorkRepos[0] != "repoa" {
+		t.Fatalf("work repos = %+v, want [repoa] by divergence alone", res.WorkRepos)
+	}
+	var found bool
+	for _, c := range res.LayerStates {
+		if c.Repo == "repoa" && c.LayerPosition == 2 {
+			found = true
+			if !c.Diverged || c.RemoteTip != mergeSHA {
+				t.Fatalf("layer 2 classification = %+v, want diverged at the merge tip %s", c, mergeSHA)
+			}
+			if len(c.ForeignCommits) != 0 {
+				t.Fatalf("layer 2 foreign commits = %+v, want none (merge commits are never adopted)", c.ForeignCommits)
+			}
+			if c.RemoteOnlyCommits != 1 {
+				t.Fatalf("layer 2 remote-only count = %d, want 1 (the merge)", c.RemoteOnlyCommits)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no classification for repoa layer 2")
+	}
+}
+
+// TestRebasePreflight_NoDivergenceNoMergedNotBehindRefusesUpToDate proves
+// the already-up-to-date refusal is unchanged: a parent with no divergence,
+// no merged layer, and no behind repository still refuses the launch with
+// the existing already-up-to-date error.
+func TestRebasePreflight_NoDivergenceNoMergedNotBehindRefusesUpToDate(t *testing.T) {
+	fx := newRebasePreflightFixture(t, preflightFixtureOpts{})
+	fx.recordLastPushedSHAs()
+	orch := fx.orchestrator()
+
+	_, err := orch.RebaseChildPreflight(fx.parentID)
+	var upToDate *feature.RebaseAlreadyUpToDateError
+	if !errors.As(err, &upToDate) {
+		t.Fatalf("error = %v (%T), want *RebaseAlreadyUpToDateError", err, err)
+	}
+}
+
+// TestRebasePreflight_ClosedPullRequestRefusesBeforeDivergence proves the
+// closed-unmerged blocker keeps its precedence: a layer whose pull request
+// reads closed refuses the launch with the stack-closed error even when
+// another layer's remote branch also holds reviewer work, and no divergence
+// result is persisted because no child is created.
+func TestRebasePreflight_ClosedPullRequestRefusesBeforeDivergence(t *testing.T) {
+	fx := newRebasePreflightFixture(t, preflightFixtureOpts{})
+	fx.recordLastPushedSHAs()
+	fx.remote.states[fx.prURL2] = git.PRStateClosed
+	fx.pushReviewerCommit("stack/3", "review.txt", "reviewer fix\n", "reviewer fix one", "Reviewer One <reviewer1@example.com>")
+	orch := fx.orchestrator()
+
+	_, err := orch.RebaseChildPreflight(fx.parentID)
+	var closed *PublishStackClosedError
+	if !errors.As(err, &closed) {
+		t.Fatalf("error = %v (%T), want *PublishStackClosedError", err, err)
+	}
+	if closed.LayerPosition != 2 || closed.PRURL != fx.prURL2 {
+		t.Fatalf("stack-closed error = %+v, want layer 2 at %s", closed, fx.prURL2)
 	}
 }

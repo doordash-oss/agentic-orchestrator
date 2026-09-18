@@ -447,16 +447,24 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 	// pull-request URL as the durable record — and, for a transaction that
 	// appended layers, the appended layer definitions with per-repository
 	// tips equal to the candidates — onto the parent run, all in one write.
-	// Everything carries absolute SHAs or idempotent state, so the write is
-	// idempotent and a crash before it is repaired by this merged-phase
-	// re-entry (and the startup scan through the journal's appended-layer
-	// list).
+	// A rebase child's closure additionally pins every layer its
+	// relationship classified as diverged to the remote tip observed at
+	// preflight, so the tail's force-with-lease republish leases on exactly
+	// the tip it adopted. Everything carries absolute SHAs or idempotent
+	// state, so the write is idempotent and a crash before it is repaired
+	// by this merged-phase re-entry (and the startup scan through the
+	// journal's appended-layer list).
 	if err := o.deps.Store.Modify(parentID, func(f *feature.Feature) error {
 		for i := range journal.Entries {
 			feature.ApplyTransactionRemap(f, journal.Entries[i].Remap, journal.Entries[i].Repo)
 			for j := range journal.Entries[i].Refs {
 				if ref := &journal.Entries[i].Refs[j]; ref.RefKind() == feature.RepoRefKindDelete {
 					feature.MarkStackLayerMergedForRepo(f, journal.Entries[i].Repo, ref.Layer)
+				}
+			}
+			if child.Parent != nil && child.Parent.Kind == feature.ChildKindRebase {
+				for _, c := range child.RebaseDivergedLayers(journal.Entries[i].Repo) {
+					feature.SetStackLayerLastPushedForRepo(f, journal.Entries[i].Repo, c.LayerPosition, c.RemoteTip)
 				}
 			}
 		}

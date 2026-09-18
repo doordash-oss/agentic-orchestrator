@@ -313,9 +313,10 @@ type ChildRelationship struct {
 	RebaseLayerStates []RebaseLayerClassification `yaml:"rebase_layer_states,omitempty" json:"rebase_layer_states,omitempty"`
 	// RebaseWorkRepos lists the repositories the rebase pass must reconcile:
 	// each has at least one kept layer with commits and is either behind its
-	// resolved target or has a merged layer whose entry still holds a tip.
-	// Repositories absent from the list are pass-through. Only set for
-	// rebase children.
+	// resolved target, has a merged layer whose entry still holds a tip, or
+	// has a diverged layer whose remote branch held commits Agentico never
+	// pushed. Repositories absent from the list are pass-through. Only set
+	// for rebase children.
 	RebaseWorkRepos []string `yaml:"rebase_work_repos,omitempty" json:"rebase_work_repos,omitempty"`
 	// RebaseRestacks records the harness restack's result per work
 	// repository: per kept layer the rebuilt tip, per dropped layer a
@@ -348,6 +349,29 @@ type RebaseRepoRestack struct {
 	// read model can scrutinize those commits specifically. Additive on the
 	// persisted relationship; no schema version bump.
 	ResolvedConflicts []RebaseResolvedConflict `yaml:"resolved_conflicts,omitempty" json:"resolved_conflicts,omitempty"`
+	// AdoptedCommits records every reviewer commit the restack adopted onto
+	// a diverged layer's replayed segment, so the verification round and the
+	// read model can scrutinize those commits specifically. Additive on the
+	// persisted relationship; no schema version bump.
+	AdoptedCommits []RebaseAdoptedCommit `yaml:"adopted_commits,omitempty" json:"adopted_commits,omitempty"`
+	// SkippedMergeCommits counts the remote-only merge commits the preflight
+	// observed on this repository's diverged layers and the restack never
+	// adopted.
+	SkippedMergeCommits int `yaml:"skipped_merge_commits,omitempty" json:"skipped_merge_commits,omitempty"`
+}
+
+// RebaseAdoptedCommit records one reviewer commit the restack adopted onto a
+// diverged layer's replayed segment: the layer it extends, the original
+// remote SHA, the new SHA the replay produced (or the dropped marker when
+// the commit's change was already present on the replayed tip), and the
+// original subject and author identity.
+type RebaseAdoptedCommit struct {
+	LayerPosition int    `yaml:"layer_position" json:"layer_position"`
+	OriginalSHA   string `yaml:"original_sha" json:"original_sha"`
+	NewSHA        string `yaml:"new_sha,omitempty" json:"new_sha,omitempty"`
+	Dropped       bool   `yaml:"dropped,omitempty" json:"dropped,omitempty"`
+	Subject       string `yaml:"subject,omitempty" json:"subject,omitempty"`
+	Author        string `yaml:"author,omitempty" json:"author,omitempty"`
 }
 
 // RebaseResolvedConflict records one agent-resolved replay conflict: the
@@ -438,6 +462,103 @@ func ExtendRebaseExitCriteriaWithResolutions(criteria string, restacks []RebaseR
 	return sb.String()
 }
 
+// ExtendRebaseDescriptionWithAdoptions appends a section naming every
+// reviewer commit the restack adopted onto a diverged layer's replayed
+// segment, plus the count of remote-only merge commits that were skipped and
+// never adopted, so the Final Review description directs the verification
+// round to scrutinize those commits specifically. Repositories without
+// adoptions or skipped merges are untouched.
+func ExtendRebaseDescriptionWithAdoptions(description string, restacks []RebaseRepoRestack) string {
+	type adoptionSection struct {
+		repo     string
+		adopted  []RebaseAdoptedCommit
+		skippedM int
+	}
+	var sections []adoptionSection
+	for _, rs := range restacks {
+		if len(rs.AdoptedCommits) == 0 && rs.SkippedMergeCommits == 0 {
+			continue
+		}
+		sections = append(sections, adoptionSection{repo: rs.Repo, adopted: rs.AdoptedCommits, skippedM: rs.SkippedMergeCommits})
+	}
+	if len(sections) == 0 {
+		return description
+	}
+	var sb strings.Builder
+	sb.WriteString(description)
+	sb.WriteString("\n## Adopted reviewer commits\n\n")
+	sb.WriteString("The commits listed below were pushed to a layer branch's remote by a reviewer and adopted by the harness restack: each was cherry-picked onto its layer's replayed segment, keeping its original author, message, and trailers. Scrutinize each adopted commit's replayed result specifically: its intent must survive on the new base, and a conflicting adoption must have been resolved through the same bounded agent sessions as any replayed commit.\n")
+	for _, s := range sections {
+		sb.WriteString("\n### Repository: ")
+		sb.WriteString(s.repo)
+		sb.WriteString("\n\n")
+		for _, ac := range s.adopted {
+			sb.WriteString("- Layer ")
+			sb.WriteString(strconv.Itoa(ac.LayerPosition))
+			sb.WriteString(": commit `")
+			sb.WriteString(ac.OriginalSHA)
+			sb.WriteString("` (")
+			sb.WriteString(ac.Subject)
+			sb.WriteString(", author ")
+			sb.WriteString(ac.Author)
+			if ac.Dropped {
+				sb.WriteString("; its change was already present on the replayed tip, so the adoption was dropped as empty")
+			} else if ac.NewSHA != "" {
+				sb.WriteString("; adopted as ")
+				sb.WriteString(ac.NewSHA)
+			}
+			sb.WriteString(").\n")
+		}
+		if s.skippedM > 0 {
+			sb.WriteString("- ")
+			sb.WriteString(strconv.Itoa(s.skippedM))
+			sb.WriteString(" remote-only merge commit(s) were skipped and never adopted: content a base or lower-layer merge brought in is subsumed by the replay onto the target, while a merge of an unrelated branch loses its content — a known limitation of this pass.\n")
+		}
+	}
+	return sb.String()
+}
+
+// ExtendRebaseExitCriteriaWithAdoptions appends one completion fact per
+// adopted reviewer commit: the verification round must check the commit's
+// adoption is complete and faithful on the replayed chain.
+func ExtendRebaseExitCriteriaWithAdoptions(criteria string, restacks []RebaseRepoRestack) string {
+	type adoptionRepo struct {
+		repo    string
+		adopted []RebaseAdoptedCommit
+	}
+	var withAdoptions []adoptionRepo
+	for _, rs := range restacks {
+		if len(rs.AdoptedCommits) == 0 {
+			continue
+		}
+		withAdoptions = append(withAdoptions, adoptionRepo{repo: rs.Repo, adopted: rs.AdoptedCommits})
+	}
+	if len(withAdoptions) == 0 {
+		return criteria
+	}
+	var sb strings.Builder
+	sb.WriteString(criteria)
+	sb.WriteString("\n## Adopted reviewer commits\n")
+	for _, ar := range withAdoptions {
+		for _, ac := range ar.adopted {
+			sb.WriteString("\n- Repository `")
+			sb.WriteString(ar.repo)
+			sb.WriteString("`: the reviewer commit `")
+			sb.WriteString(ac.OriginalSHA)
+			sb.WriteString("` (layer ")
+			sb.WriteString(strconv.Itoa(ac.LayerPosition))
+			sb.WriteString(", ")
+			sb.WriteString(ac.Subject)
+			if ac.Dropped {
+				sb.WriteString(") was correctly dropped: its change is already present on the replayed tip.\n")
+			} else {
+				sb.WriteString(") was adopted onto its layer's replayed segment with a complete, faithful replay — its intent survives on the new base with its original author and message.\n")
+			}
+		}
+	}
+	return sb.String()
+}
+
 // RebaseLayerState is the launch-time classification of one stack layer's
 // entry in one repository: kept (the layer still has work to deliver),
 // merged (its pull request read merged live), or closed (its pull request
@@ -460,6 +581,54 @@ type RebaseLayerClassification struct {
 	LayerTitle    string           `yaml:"layer_title,omitempty" json:"layer_title,omitempty"`
 	Branch        string           `yaml:"branch,omitempty" json:"branch,omitempty"`
 	State         RebaseLayerState `yaml:"state" json:"state"`
+	// Diverged records that the layer branch's remote tip held, at the
+	// preflight fetch, commits Agentico never pushed: the remote tip
+	// existed, differed from the entry's last-pushed SHA, and was not an
+	// ancestor of the local tip. Only set for kept layers of publishable
+	// repositories; additive and optional so relationships persisted before
+	// the field existed load with no diverged layers.
+	Diverged bool `yaml:"diverged,omitempty" json:"diverged,omitempty"`
+	// RemoteTip is the layer branch's observed remote-tracking tip at the
+	// preflight fetch, pinned so the restack loop, closure, and the tail
+	// all read the same SHA across re-runs.
+	RemoteTip string `yaml:"remote_tip,omitempty" json:"remote_tip,omitempty"`
+	// ForeignCommits lists the layer's adoptable remote-only commits — the
+	// non-merge commits reachable from the remote tip but from neither the
+	// local tip nor the last-pushed SHA — oldest first. Merge commits are
+	// never adopted; RemoteOnlyCommits counts them alongside the foreign
+	// ones.
+	ForeignCommits []RebaseForeignCommit `yaml:"foreign_commits,omitempty" json:"foreign_commits,omitempty"`
+	// RemoteOnlyCommits counts every commit reachable from the remote tip
+	// but from neither the local tip nor the last-pushed SHA, including the
+	// merge commits excluded from ForeignCommits.
+	RemoteOnlyCommits int `yaml:"remote_only_commits,omitempty" json:"remote_only_commits,omitempty"`
+}
+
+// RebaseForeignCommit is one adoptable reviewer commit recorded on a diverged
+// layer's classification: the original SHA pinned at preflight, plus the
+// subject and author identity the restack result and the Final Review
+// description report.
+type RebaseForeignCommit struct {
+	SHA     string `yaml:"sha" json:"sha"`
+	Subject string `yaml:"subject,omitempty" json:"subject,omitempty"`
+	Author  string `yaml:"author,omitempty" json:"author,omitempty"`
+}
+
+// RebaseDivergedLayers returns the relationship's diverged layer
+// classifications for the named repository, in recorded order. Only kept
+// layers of publishable repositories can carry the flag; a relationship
+// persisted before the divergence fields existed yields none.
+func (f *Feature) RebaseDivergedLayers(repoName string) []RebaseLayerClassification {
+	if f == nil || f.Parent == nil {
+		return nil
+	}
+	var diverged []RebaseLayerClassification
+	for _, c := range f.Parent.RebaseLayerStates {
+		if c.Repo == repoName && c.Diverged {
+			diverged = append(diverged, c)
+		}
+	}
+	return diverged
 }
 
 // IsChild reports whether the feature was launched as a child of another.
@@ -673,8 +842,8 @@ type RebaseChildSpec struct {
 	LayerStates []RebaseLayerClassification
 	// WorkRepos is the list of repositories the pass must reconcile; a
 	// repository has work when it has at least one kept layer with commits
-	// and is either behind its target or has a merged layer whose entry
-	// still holds a tip.
+	// and is either behind its target, has a merged layer whose entry still
+	// holds a tip, or has a diverged layer.
 	WorkRepos []string
 }
 

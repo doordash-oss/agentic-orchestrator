@@ -267,8 +267,8 @@ func TestOwnedErrorsProjectChildRecords(t *testing.T) {
 		if len(entries) != 1 {
 			t.Fatalf("errors len = %d, want one transaction entry; entries = %#v", len(entries), entries)
 		}
-		assertOwnedEntry(t, entries[0], "transaction", string(errcat.IntegrationMergeConflict), child.ID,
-			"Integration merge conflict", errcat.ClassNeedsAction)
+		assertOwnedEntry(t, entries[0], "transaction", string(errcat.IntegrationRebaseConflict), child.ID,
+			"Rebase replay conflict", errcat.ClassNeedsAction)
 	})
 
 	t.Run("failed child run projects child-keyed run entry", func(t *testing.T) {

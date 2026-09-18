@@ -27,6 +27,7 @@ var warningCodeList = []Code{
 	FeatureLoadFailed,
 	ChildCleanupIncomplete,
 	ReviewFeedbackTailIncomplete,
+	StackBaseRetargetFailed,
 	RewindPullRequestCloseFailed,
 	RewindBackupBranchFailed,
 	RewindWorktreeResetFailed,
@@ -49,8 +50,8 @@ var orphanSessionCodeList = []Code{
 // for every warning code: warning class and no action references. A warning
 // never blocks progress, never gates a lane, and never offers an action.
 func TestWarningCodesAreWarningClassWithoutActions(t *testing.T) {
-	if len(warningCodeList) != 15 {
-		t.Fatalf("warning code list has %d entries; want 15", len(warningCodeList))
+	if len(warningCodeList) != 16 {
+		t.Fatalf("warning code list has %d entries; want 16", len(warningCodeList))
 	}
 	for _, code := range warningCodeList {
 		entry, ok := Lookup(code)
@@ -140,6 +141,46 @@ func TestWarningSummaryTemplates(t *testing.T) {
 	}))
 	if fresh.Summary != rendered.Summary {
 		t.Fatalf("stored and fresh child_cleanup_incomplete summaries differ: %q vs %q", rendered.Summary, fresh.Summary)
+	}
+
+	retargetRepos := []CodeRepository{{
+		Name:           "web",
+		Branch:         "agentico/layer-2",
+		LayerPosition:  2,
+		LayerTitle:     "API surface",
+		PullRequestURL: "https://github.com/acme/web/pull/12",
+	}}
+	fresh = New(StackBaseRetargetFailed, WithParams(WarningRepoParams{Repositories: retargetRepos}))
+	want = `Retargeting the pull request for repository "web" (branch "agentico/layer-2") in layer 2 ("API surface") at https://github.com/acme/web/pull/12 to the parent layer's branch failed; the pull request keeps its current base.`
+	if fresh.Summary != want {
+		t.Fatalf("stack_base_retarget_failed summary is %q; want %q", fresh.Summary, want)
+	}
+	if fresh.Remediation == nil || !strings.Contains(fresh.Remediation.Hint, "intended parent-layer branch") {
+		t.Fatalf("stack_base_retarget_failed remediation = %#v; want the intended-base retarget hint", fresh.Remediation)
+	}
+	// The base-retarget warning is a relationship warning: a stored journal
+	// record must render the same text a freshly built warning renders, so
+	// the summary may only depend on the repositories block.
+	storedRetarget := RenderRecord(FailureRecord{
+		Code:    StackBaseRetargetFailed,
+		Context: &RecordContext{Repositories: retargetRepos},
+	})
+	if storedRetarget.Summary != fresh.Summary {
+		t.Fatalf("stored and fresh stack_base_retarget_failed summaries differ: %q vs %q", storedRetarget.Summary, fresh.Summary)
+	}
+	staticRetarget := New(StackBaseRetargetFailed)
+	if staticRetarget.Summary != "Retargeting a stack layer's pull request to the parent layer's branch failed." {
+		t.Fatalf("stack_base_retarget_failed summary without params is %q; want the static summary", staticRetarget.Summary)
+	}
+	entry, ok := Lookup(StackBaseRetargetFailed)
+	if !ok {
+		t.Fatalf("stack_base_retarget_failed: missing from catalog")
+	}
+	if len(entry.Blocks) != 1 || entry.Blocks[0] != BlockRepositories {
+		t.Errorf("stack_base_retarget_failed: blocks = %#v; want exactly repositories", entry.Blocks)
+	}
+	if !IsRelationshipWarning(StackBaseRetargetFailed) {
+		t.Error("stack_base_retarget_failed: want a relationship warning code")
 	}
 
 	rendered = New(OrphanSessionLive, WithParams(OrphanSessionParams{

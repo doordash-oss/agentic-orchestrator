@@ -2160,6 +2160,11 @@ export function FeatureCockpit({
   // One facts element for both aftercare inspector presentations: the trailing
   // pane when wide, the drawer when narrow.
   const aftercarePendingFact = pendingDeliveryFact(pendingDelivery);
+  // The completion preflight's rebase hint — the first repository that carries
+  // one — renders beside the freshness fact; nothing renders when absent.
+  const aftercareRebaseHint = completion.preflight?.repos.find(
+    (repo) => repo.rebaseHint !== undefined,
+  )?.rebaseHint;
   // The aftercare inspector keeps the repository instrument beside the
   // feature facts: a publish failure leaves the feature in aftercare, and the
   // instrument's indication is the cockpit's link into the publish modal.
@@ -2169,6 +2174,7 @@ export function FeatureCockpit({
         snapshot={snapshot}
         run={aftercareRun}
         {...(aftercarePendingFact === null ? {} : { pendingFact: aftercarePendingFact })}
+        {...(aftercareRebaseHint === undefined ? {} : { rebaseHint: aftercareRebaseHint })}
         {...(presentation === 'pane' ? { title: 'Feature' } : {})}
         onOpenPullRequest={(url) => {
           void window.agentico.openExternal({ url });

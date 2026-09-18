@@ -58,12 +58,12 @@ func (f *childFakeWorktrees) CurrentHeadSHA(p string) (string, error) {
 	}
 	return sha, nil
 }
-func (f *childFakeWorktrees) CurrentBranch(string) string                    { return "" }
-func (f *childFakeWorktrees) RefSHA(string, string) (string, error)          { return "", nil }
-func (f *childFakeWorktrees) UpdateRef(string, string, string, string) error { return nil }
-func (f *childFakeWorktrees) CreateMergeCandidate(string, string, string, string) (*git.MergeCandidateResult, error) {
-	return nil, nil
+func (f *childFakeWorktrees) CurrentBranch(string) string           { return "" }
+func (f *childFakeWorktrees) RefSHA(string, string) (string, error) { return "", nil }
+func (f *childFakeWorktrees) RefSHAOrAbsent(string, string) (string, bool, error) {
+	return "", false, nil
 }
+func (f *childFakeWorktrees) UpdateRef(string, string, string, string) error { return nil }
 func (f *childFakeWorktrees) InspectCleanliness(path string, max int) (*git.CleanlinessReport, error) {
 	if f.clean != nil {
 		return f.clean(path, max)
@@ -416,7 +416,7 @@ func TestCreateRebaseChildInheritsParentDeliveryMode(t *testing.T) {
 				Targets: []feature.RebaseRepoTarget{
 					{Repo: "repo", Target: "main", Ref: "origin/main", Publishable: true, TargetSHA: "1111111111111111111111111111111111111111"},
 				},
-				Behind: []string{"repo"},
+				WorkRepos: []string{"repo"},
 			})
 			if err != nil {
 				t.Fatalf("create: %v", err)
@@ -798,12 +798,12 @@ func (f *reuseWorktrees) ExpectedPath(slug, repo string) string     { return "" 
 func (f *reuseWorktrees) CurrentHeadSHA(p string) (string, error) {
 	return f.heads[p], nil
 }
-func (f *reuseWorktrees) CurrentBranch(string) string                    { return "" }
-func (f *reuseWorktrees) RefSHA(string, string) (string, error)          { return "", nil }
-func (f *reuseWorktrees) UpdateRef(string, string, string, string) error { return nil }
-func (f *reuseWorktrees) CreateMergeCandidate(string, string, string, string) (*git.MergeCandidateResult, error) {
-	return nil, nil
+func (f *reuseWorktrees) CurrentBranch(string) string           { return "" }
+func (f *reuseWorktrees) RefSHA(string, string) (string, error) { return "", nil }
+func (f *reuseWorktrees) RefSHAOrAbsent(string, string) (string, bool, error) {
+	return "", false, nil
 }
+func (f *reuseWorktrees) UpdateRef(string, string, string, string) error { return nil }
 func (f *reuseWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport, error) {
 	return &git.CleanlinessReport{}, nil
 }
@@ -1300,7 +1300,7 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 					PendingSync: true,
 				}},
 				Attention: &errcat.FailureRecord{
-					Code: errcat.IntegrationMergeConflict,
+					Code: errcat.IntegrationRebaseConflict,
 					Context: &errcat.RecordContext{
 						Repositories: []errcat.CodeRepository{{
 							Name:          "repoA",
@@ -1309,7 +1309,7 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 							ChildHeadSHA:  "bbbb2222",
 						}},
 					},
-					Diagnostics: "repoA: merge conflict: [internal/api.go]",
+					Diagnostics: "repoA: rebase replay conflict: [internal/api.go]",
 				},
 			},
 		},
@@ -1341,7 +1341,7 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 		t.Fatalf("transaction entry = %+v, want full round-trip", entry)
 	}
 	rec := tx.Attention
-	if rec == nil || rec.Code != errcat.IntegrationMergeConflict || rec.Diagnostics != "repoA: merge conflict: [internal/api.go]" {
+	if rec == nil || rec.Code != errcat.IntegrationRebaseConflict || rec.Diagnostics != "repoA: rebase replay conflict: [internal/api.go]" {
 		t.Fatalf("attention record = %+v, want round-trip", rec)
 	}
 	if rec.Context == nil || len(rec.Context.Repositories) != 1 {
@@ -1430,14 +1430,24 @@ func TestRebaseDescriptionIsWorktreeAnchored(t *testing.T) {
 	if strings.Contains(desc, "working branch") {
 		t.Errorf("description still uses branch-anchored phrasing:\n%s", desc)
 	}
+	for _, banned := range []string{
+		"merge the resolved target",
+		"Merge the resolved target",
+		"git merge",
+		"merge commit",
+		"merge cleanly",
+	} {
+		if strings.Contains(desc, banned) {
+			t.Errorf("description carries merge wording %q:\n%s", banned, desc)
+		}
+	}
 	for _, want := range []string{
-		"already been merged",
+		"has already replayed",
 		"this repository's worktree",
-		"in-progress merge",
-		"resolve every conflict",
-		"complete the merge commit",
-		"never squash or rewrite history",
-		"Leave up-to-date repositories completely untouched",
+		"replayed onto the resolved target commit",
+		"merged layers were dropped",
+		"original messages and authors",
+		"Leave pass-through repositories completely untouched",
 		"Never push to any remote",
 		"Do not fetch from any remote",
 		"worktrees provisioned for this pass",
@@ -1472,15 +1482,20 @@ func TestRebaseExitCriteriaIsWorktreeAnchored(t *testing.T) {
 	for _, want := range []string{
 		"this repository's worktree",
 		"git merge-base --is-ancestor origin/main HEAD",
-		"No merge is in progress",
+		"No rebase is in progress",
 		"No conflict markers remain",
 		"git status --porcelain",
+		"byte-identical to the creation-time fork point",
 		"No other checkout of any repository was modified",
 		"Nothing was pushed to any remote",
+		"Nothing was fetched from any remote",
 	} {
 		if !strings.Contains(criteria, want) {
 			t.Errorf("exit criteria missing %q:\n%s", want, criteria)
 		}
+	}
+	if strings.Contains(criteria, "No merge is in progress") {
+		t.Errorf("exit criteria carry merge wording:\n%s", criteria)
 	}
 	if strings.Contains(criteria, "repo-current") {
 		t.Errorf("exit criteria mention the up-to-date repo by section:\n%s", criteria)

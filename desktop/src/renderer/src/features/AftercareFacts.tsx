@@ -26,6 +26,12 @@ export interface AftercareFactsProps {
   snapshot: FeatureSnapshot;
   run: RunDetailView | null;
   pendingFact?: { label: string; value: string };
+  /**
+   * Server-authored rebase hint from the completion preflight, present when a
+   * merged layer whose entry still holds a tip sits below kept work with
+   * commits. Rendered beside the freshness fact; omitted when absent.
+   */
+  rebaseHint?: string;
   /** Rendered above the facts; omitted where the presentation already has a header. */
   title?: string;
   onOpenPullRequest(url: string): void;
@@ -41,6 +47,7 @@ export function AftercareFacts({
   snapshot,
   run,
   pendingFact,
+  rebaseHint,
   title,
   onOpenPullRequest,
 }: AftercareFactsProps): React.ReactElement {
@@ -115,6 +122,7 @@ export function AftercareFacts({
           value={
             repository?.freshness === undefined ? 'Unavailable' : sentenceCase(repository.freshness)
           }
+          {...(rebaseHint === undefined ? {} : { hint: rebaseHint })}
         />
       </dl>
     </section>
@@ -125,15 +133,21 @@ function Fact({
   label,
   value,
   mono = false,
+  hint,
 }: {
   label: string;
   value: string;
   mono?: boolean;
+  /** Server-authored rebase hint rendered under the fact's value. */
+  hint?: string;
 }): React.ReactElement {
   return (
     <div className="aftercare-facts__fact">
       <dt>{label}</dt>
-      <dd>{mono ? <code>{value}</code> : value}</dd>
+      <dd>
+        {mono ? <code>{value}</code> : value}
+        {hint === undefined ? null : <p className="aftercare-facts__rebase-hint">{hint}</p>}
+      </dd>
     </div>
   );
 }

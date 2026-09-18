@@ -59,15 +59,16 @@ func (*cascadeTestWorktrees) CurrentBranch(string) string           { return "" 
 func (w *cascadeTestWorktrees) RefSHA(_ string, ref string) (string, error) {
 	return w.refs[ref], nil
 }
+func (w *cascadeTestWorktrees) RefSHAOrAbsent(_ string, ref string) (string, bool, error) {
+	sha, ok := w.refs[ref]
+	return sha, !ok, nil
+}
 func (w *cascadeTestWorktrees) UpdateRef(_ string, ref, oldSHA, newSHA string) error {
 	if w.refs[ref] != oldSHA {
 		return errors.New("ref moved")
 	}
 	w.refs[ref] = newSHA
 	return nil
-}
-func (*cascadeTestWorktrees) CreateMergeCandidate(string, string, string, string) (*git.MergeCandidateResult, error) {
-	return nil, nil
 }
 func (*cascadeTestWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport, error) {
 	return &git.CleanlinessReport{}, nil

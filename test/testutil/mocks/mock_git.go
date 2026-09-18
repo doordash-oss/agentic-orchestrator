@@ -28,6 +28,7 @@ type MockRemoteOps struct {
 	PRStateFn         func(repoPath, prURL string) (string, error)
 	GetPRBodyFn       func(prURL string) (string, error)
 	UpdatePRBodyFn    func(prURL, body string) error
+	UpdatePRBaseFn    func(prURL, base string) error
 	DefaultError      error
 	Calls             []MockCall
 }
@@ -92,6 +93,14 @@ func (m *MockRemoteOps) UpdatePRBody(prURL, body string) error {
 	return m.DefaultError
 }
 
+func (m *MockRemoteOps) UpdatePRBase(prURL, base string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "UpdatePRBase", Args: []any{prURL, base}})
+	if m.UpdatePRBaseFn != nil {
+		return m.UpdatePRBaseFn(prURL, base)
+	}
+	return m.DefaultError
+}
+
 type MockPRCloser struct {
 	ClosePRFn            func(prURL string) error
 	PRStateFn            func(prURL string) (string, error)
@@ -145,8 +154,8 @@ type MockWorktreeOps struct {
 	CurrentHeadSHAFn        func(worktreePath string) (string, error)
 	CurrentBranchFn         func(worktreePath string) string
 	RefSHAFn                func(repoPath, ref string) (string, error)
+	RefSHAOrAbsentFn        func(repoPath, ref string) (string, bool, error)
 	UpdateRefFn             func(repoPath, ref, oldSHA, newSHA string) error
-	CreateMergeCandidateFn  func(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error)
 	InspectCleanlinessFn    func(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
 	RenameBranchFn          func(worktreePath, oldName, newName string) error
 	CreateBranchAtHeadFn    func(worktreePath, branch string) error
@@ -243,20 +252,20 @@ func (m *MockWorktreeOps) RefSHA(repoPath, ref string) (string, error) {
 	return "", m.DefaultError
 }
 
+func (m *MockWorktreeOps) RefSHAOrAbsent(repoPath, ref string) (string, bool, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "RefSHAOrAbsent", Args: []any{repoPath, ref}})
+	if m.RefSHAOrAbsentFn != nil {
+		return m.RefSHAOrAbsentFn(repoPath, ref)
+	}
+	return "", false, m.DefaultError
+}
+
 func (m *MockWorktreeOps) UpdateRef(repoPath, ref, oldSHA, newSHA string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "UpdateRef", Args: []any{repoPath, ref, oldSHA, newSHA}})
 	if m.UpdateRefFn != nil {
 		return m.UpdateRefFn(repoPath, ref, oldSHA, newSHA)
 	}
 	return m.DefaultError
-}
-
-func (m *MockWorktreeOps) CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "CreateMergeCandidate", Args: []any{mainRepo, parentTip, childHead, message}})
-	if m.CreateMergeCandidateFn != nil {
-		return m.CreateMergeCandidateFn(mainRepo, parentTip, childHead, message)
-	}
-	return nil, m.DefaultError
 }
 
 func (m *MockWorktreeOps) InspectCleanliness(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error) {

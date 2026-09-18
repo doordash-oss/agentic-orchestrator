@@ -196,4 +196,42 @@ describe('AftercareFacts', () => {
     expect(facts).not.toHaveTextContent('Pull request');
     expect(screen.queryByRole('button', { name: 'Open pull request' })).not.toBeInTheDocument();
   });
+
+  it('renders the completion preflight rebase hint beside the freshness fact when present', () => {
+    render(
+      <AftercareFacts
+        snapshot={featureSnapshot({
+          status: 'CodeReady',
+          repoStatus: [{ name: 'api', publishable: true, freshness: 'behind' }],
+        })}
+        run={completedRun}
+        rebaseHint="Layer 1 (Foundation) is merged below kept work — run the rebase pass to restack the layers above."
+        onOpenPullRequest={vi.fn()}
+      />,
+    );
+    const facts = screen.getByRole('region', { name: 'Feature facts' });
+    expect(facts).toHaveTextContent('Freshness');
+    expect(facts).toHaveTextContent('Behind');
+    // The hint names the merged layer and points at the rebase pass.
+    expect(facts).toHaveTextContent('Layer 1 (Foundation) is merged below kept work');
+    expect(facts).toHaveTextContent('run the rebase pass to restack the layers above');
+    expect(document.querySelector('.aftercare-facts__rebase-hint')).not.toBeNull();
+  });
+
+  it('renders no rebase hint when the preflight carries none', () => {
+    render(
+      <AftercareFacts
+        snapshot={featureSnapshot({
+          status: 'CodeReady',
+          repoStatus: [{ name: 'api', publishable: true, freshness: 'in sync' }],
+        })}
+        run={completedRun}
+        onOpenPullRequest={vi.fn()}
+      />,
+    );
+    const facts = screen.getByRole('region', { name: 'Feature facts' });
+    expect(facts).toHaveTextContent('In sync');
+    expect(document.querySelector('.aftercare-facts__rebase-hint')).toBeNull();
+    expect(facts).not.toHaveTextContent('rebase pass');
+  });
 });

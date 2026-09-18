@@ -1422,6 +1422,16 @@ var catalog = map[Code]Entry{
 		},
 		Remediation: "Retry the tail steps; each failure is listed in the details.",
 	},
+	StackBaseRetargetFailed: {
+		Class:   ClassWarning,
+		Title:   "Stack base retarget failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Retargeting a stack layer's pull request to the parent layer's branch failed.",
+		summaryParams: func(p Params) string {
+			return stackBaseRetargetFailedSummary(p)
+		},
+		Remediation: "Retarget the pull request's base to the intended parent-layer branch on the remote yourself; the stack's pull requests stay mischained until then.",
+	},
 	RewindPullRequestCloseFailed: {
 		Class:   ClassWarning,
 		Title:   "Pull request close failed",
@@ -1599,17 +1609,6 @@ var catalog = map[Code]Entry{
 	// classifies into one of these at the transaction boundary. All are
 	// fix-then-retry preconditions that declare only the repositories block
 	// and reference the retry action.
-	IntegrationMergeConflict: {
-		Class:   ClassNeedsAction,
-		Title:   "Integration merge conflict",
-		Blocks:  []Block{BlockRepositories},
-		Summary: "The integration merge conflicted with the parent's current state.",
-		summaryParams: func(p Params) string {
-			return integrationMergeConflictSummary(p)
-		},
-		Remediation: "Resolve the conflict in the pass worktree and retry; the pass re-enters final review if its code changed.",
-		Actions:     []string{"retry"},
-	},
 	IntegrationParentDirty: {
 		Class:   ClassNeedsAction,
 		Title:   "Parent worktree is dirty",
@@ -1698,6 +1697,17 @@ var catalog = map[Code]Entry{
 		Remediation: "Check the repository's state and retry the integration.",
 		Actions:     []string{"retry"},
 	},
+	IntegrationRebaseConflict: {
+		Class:   ClassNeedsAction,
+		Title:   "Rebase replay conflict",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Replaying the stack onto the resolved target conflicted.",
+		summaryParams: func(p Params) string {
+			return integrationRebaseConflictSummary(p)
+		},
+		Remediation: "Start the pass again to retry the restack, or discard the pass; the raw details name the segment and commit that conflicted.",
+		Actions:     []string{"retry"},
+	},
 	RebaseGateTargetMissing: {
 		Class:   ClassNeedsAction,
 		Title:   "Rebase target missing",
@@ -1718,17 +1728,6 @@ var catalog = map[Code]Entry{
 			return rebaseGateNotAncestorSummary(p)
 		},
 		Remediation: "Rebase the pass branch onto its target and retry, or discard the pass.",
-		Actions:     []string{"retry"},
-	},
-	RebaseGateMergeInProgress: {
-		Class:   ClassNeedsAction,
-		Title:   "Merge in progress",
-		Blocks:  []Block{BlockRepositories},
-		Summary: "A repository has a merge in progress.",
-		summaryParams: func(p Params) string {
-			return rebaseGateMergeInProgressSummary(p)
-		},
-		Remediation: "Complete or abort the in-progress merge in the worktree and retry.",
 		Actions:     []string{"retry"},
 	},
 	RebaseGateConflictMarkers: {

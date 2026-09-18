@@ -25,6 +25,7 @@ import type {
 import { E_REQUEST_TIMEOUT, buildCanonicalError } from '../../../../shared/errors';
 import { ErrorSurface, type ErrorSurfaceAction } from '../../components/ErrorSurface';
 import { useModalDismiss } from '../../components/useModalDismiss';
+import { sentenceCase } from '../aftercareReceipt';
 import { catalogErrorAction } from '../featureView';
 import { parseIpcError } from '../../wizard/ipcError';
 import type { CanonicalError } from '../../../../shared/ipc';
@@ -413,6 +414,19 @@ export function PublishModal({
 type PublishRepo = CompletionPreflightResult['repos'][number];
 
 /**
+ * The publish row's freshness line: the server's freshness phrase with the
+ * rebase hint appended, joined by an em dash — nothing when the preflight
+ * carries neither. The hint is advisory text in the sheet's own voice, never
+ * error markup (ErrorSurface owns that).
+ */
+function repoFreshnessHint(repo: PublishRepo): string | null {
+  const parts: string[] = [];
+  if (repo.freshness !== undefined) parts.push(sentenceCase(repo.freshness));
+  if (repo.rebaseHint !== undefined) parts.push(repo.rebaseHint);
+  return parts.length === 0 ? null : parts.join(' — ');
+}
+
+/**
  * The publish verb for one stack layer: the no-commits marker and merged/closed
  * states speak for themselves, a carried push mode is quoted verbatim, and a
  * push-mode-less entry (a snapshot-sourced preview) derives from the recorded
@@ -496,7 +510,8 @@ function PublishRepoRow({
   openExternal(url: string): Promise<{ ok: boolean }>;
   resolveAction(actionId: string): ErrorSurfaceAction | undefined;
   onRetryPublish(): void;
-}) {
+}): React.ReactElement {
+  const freshnessHint = repoFreshnessHint(repo);
   return (
     <div className="completion-workspace__publish-repo">
       <div className="completion-workspace__publish-repo-main">
@@ -517,6 +532,9 @@ function PublishRepoRow({
             })}
           </span>
         ) : null}
+        {freshnessHint === null ? null : (
+          <span className="completion-workspace__freshness">{freshnessHint}</span>
+        )}
       </div>
       <StackPreview entries={repo.pullRequests ?? []} openExternal={openExternal} />
       {repo.pushMode === 'rewrite' ? (

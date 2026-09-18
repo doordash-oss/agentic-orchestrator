@@ -326,7 +326,7 @@ func TestParentProjectionsCarryCompleteRelationshipHistory(t *testing.T) {
 		// The journal's attention is one stored canonical record; rendered
 		// text is produced by the catalog at projection time.
 		Attention: &errcat.FailureRecord{
-			Code: errcat.IntegrationMergeConflict,
+			Code: errcat.IntegrationRebaseConflict,
 			Context: &errcat.RecordContext{
 				Repositories: []errcat.CodeRepository{{
 					Name:          repoNameSelf,
@@ -334,7 +334,7 @@ func TestParentProjectionsCarryCompleteRelationshipHistory(t *testing.T) {
 					ConflictFiles: []string{"internal/server/read_model.go"},
 				}},
 			},
-			Diagnostics: repoNameSelf + ": merge candidate conflict: [internal/server/read_model.go]",
+			Diagnostics: repoNameSelf + ": rebase replay conflict: [internal/server/read_model.go]",
 		},
 		Entries: []feature.RepoTransactionEntry{{
 			Repo: repoNameSelf,

@@ -350,8 +350,11 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 		return fmt.Errorf("transaction journal missing during closure")
 	}
 
-	// Confirm every listed parent ref is at its candidate commit, sync the
-	// worktree to the top candidate, and persist the entry's remap onto the
+	// Confirm every listed parent ref is at its candidate commit — a
+	// created ref must exist at its candidate; absence makes closure
+	// impossible — a deleted ref must be absent — sync the worktree to the
+	// entry's top, and persist the entry's remap, the merged marking of
+	// every deleted ref's stack entry, and the appended layers onto the
 	// parent run.
 	if o.deps.Worktrees == nil {
 		return fmt.Errorf("transaction: ref CAS operations are not configured")
@@ -369,19 +372,35 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 		for j := range entry.Refs {
 			ref := &entry.Refs[j]
 			refName := "refs/heads/" + ref.Branch
-			current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, refName)
+			current, absent, err := o.deps.Worktrees.RefSHAOrAbsent(parentRepo.Path, refName)
 			if err != nil {
 				return fmt.Errorf("confirming ref %s during closure: %w", refName, err)
+			}
+			if ref.RefKind() == feature.RepoRefKindDelete {
+				if !absent {
+					return fmt.Errorf("deleted ref %s is still present at %s; expected absence; closure impossible", refName, current)
+				}
+				continue
+			}
+			if ref.RefKind() == feature.RepoRefKindCreate && absent {
+				return fmt.Errorf("created ref %s is absent; expected candidate %s; closure impossible", refName, ref.CandidateSHA)
 			}
 			if current != ref.CandidateSHA {
 				return fmt.Errorf("ref %s is at %s, expected candidate %s; closure impossible", refName, current, ref.CandidateSHA)
 			}
 		}
-		// Ensure the parent worktree is synced to the top ref's candidate. A
-		// crash between the apply-progress write and the worktree sync can
-		// leave the worktree at the old tree even though every ref is at
-		// its candidate. This is idempotent when the worktree is already
-		// current.
+		// Ensure the parent worktree is synced to the entry's top. An entry
+		// that appended layers must sit on the new top layer's branch —
+		// the existing layers' refs are never rewritten, so the sync is a
+		// branch switch, not a reset; an entry whose previous top was
+		// deleted additionally hard-resets to the top candidate, because
+		// the transaction moved the new top branch's ref underneath the
+		// checkout and a crash before the post-transaction reset leaves the
+		// worktree on the right branch at the wrong tree; every other entry
+		// resets to the top ref's candidate. A crash between the
+		// apply-progress write and the worktree sync can leave the worktree
+		// at the old tree even though every ref is at its candidate. All of
+		// these are idempotent when the worktree is already current.
 		parentWorktree := parentRepo.WorktreePath
 		if parentWorktree == "" {
 			parentWorktree = parentRepo.Path
@@ -390,18 +409,29 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 		if top == nil {
 			return fmt.Errorf("repo %s records no refs during closure", entry.Repo)
 		}
-		if err := o.deps.Worktrees.ResetToCommit(parentWorktree, top.CandidateSHA); err != nil {
-			syncErr := fmt.Errorf("syncing parent worktree for repo %s: %w", entry.Repo, err)
+		syncErr := error(nil)
+		if entry.PreviousTop != nil {
+			if current := o.deps.Worktrees.CurrentBranch(parentWorktree); current != top.Branch {
+				syncErr = o.deps.Worktrees.SwitchBranch(parentWorktree, top.Branch)
+			}
+			if syncErr == nil && previousTopDeleted(entry) {
+				syncErr = o.deps.Worktrees.ResetToCommit(parentWorktree, top.CandidateSHA)
+			}
+		} else {
+			syncErr = o.deps.Worktrees.ResetToCommit(parentWorktree, top.CandidateSHA)
+		}
+		if syncErr != nil {
+			wrapped := fmt.Errorf("syncing parent worktree for repo %s: %w", entry.Repo, syncErr)
 			// The journal's attention record and the relationship event own
 			// this failure; the phase stays applied so recovery semantics
 			// are unchanged and the pass remains resumable, and the child's
 			// run carries no failure record until a later phase classifies
 			// it.
-			finding := entryFinding(entry, errcat.IntegrationWorktreeSyncFailed, syncErr.Error())
+			finding := entryFinding(entry, errcat.IntegrationWorktreeSyncFailed, wrapped.Error())
 			if err := o.parkIntegrationAttention(child, journal, []integrationFinding{finding}); err != nil {
 				return fmt.Errorf("recording closure sync attention: %w", err)
 			}
-			return syncErr
+			return wrapped
 		}
 		if entry.PendingSync {
 			entry.PendingSync = false
@@ -411,17 +441,51 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 		}
 	}
 
-	// Persist every entry's remap onto the parent run. The remap carries
-	// absolute SHAs keyed by roadmap phase and layer position, so the write
-	// is idempotent and a crash before it is repaired by this merged-phase
-	// re-entry.
+	// Persist every entry's remap, the merged marking of every deleted
+	// ref's stack entry — the dropped layer's pull request state becomes
+	// merged with its tip and last-pushed SHA cleared, keeping the
+	// pull-request URL as the durable record — and, for a transaction that
+	// appended layers, the appended layer definitions with per-repository
+	// tips equal to the candidates — onto the parent run, all in one write.
+	// Everything carries absolute SHAs or idempotent state, so the write is
+	// idempotent and a crash before it is repaired by this merged-phase
+	// re-entry (and the startup scan through the journal's appended-layer
+	// list).
 	if err := o.deps.Store.Modify(parentID, func(f *feature.Feature) error {
 		for i := range journal.Entries {
 			feature.ApplyTransactionRemap(f, journal.Entries[i].Remap, journal.Entries[i].Repo)
+			for j := range journal.Entries[i].Refs {
+				if ref := &journal.Entries[i].Refs[j]; ref.RefKind() == feature.RepoRefKindDelete {
+					feature.MarkStackLayerMergedForRepo(f, journal.Entries[i].Repo, ref.Layer)
+				}
+			}
 		}
+		applyAppendedLayers(f, journal)
 		return nil
 	}); err != nil {
 		return fmt.Errorf("applying transaction remap to parent: %w", err)
+	}
+
+	// Observability: one repository status event per repository naming the
+	// new checked-out branch, in the shape the layer boundary split already
+	// uses. Entries without a previous top kept the parent's branch and emit
+	// nothing.
+	for i := range journal.Entries {
+		entry := &journal.Entries[i]
+		if entry.PreviousTop == nil {
+			continue
+		}
+		top := entry.TopRef()
+		if top == nil {
+			continue
+		}
+		o.emitEvent(ports.Event{
+			Type:          ports.RepoStatusChanged,
+			FeatureID:     parentID,
+			RepoName:      entry.Repo,
+			Branch:        top.Branch,
+			LayerPosition: top.Layer,
+		})
 	}
 
 	// Parent → CodeReady first (failure leaves child open, retryable).
@@ -548,6 +612,21 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 	}
 	if child.Parent.Kind == feature.ChildKindReviewFeedback {
 		return o.reviewFeedbackIntegrationTail(child, parent)
+	}
+	// The rebase child's own closure tail — retarget and republish the
+	// repositories whose journal entries list refs and which already carry
+	// pull requests — runs once; the settled marker guards its re-entry so
+	// historical children trigger no pushes and no retargets on later
+	// startups. Repositories without any pull request are left to the
+	// user's Publish action or the auto-publish handoff below, exactly as
+	// before the rebase pass, and the parent-settled event still ends the
+	// closure tail.
+	if child.Parent.Kind == feature.ChildKindRebase {
+		if child.Parent.Transaction == nil || !child.Parent.Transaction.TailSettled {
+			if err := o.rebaseIntegrationTail(child, parent); err != nil {
+				return err
+			}
+		}
 	}
 	// A parent that already reached Published needs no publish handoff:
 	// every touched repository's stack is settled, and re-entering a

@@ -49,20 +49,19 @@ func Fetch(worktreePath string) error {
 	return nil
 }
 
-// listConflictFiles returns the list of files with unmerged conflicts.
-func listConflictFiles(worktreePath string) []string {
-	cmd := readGitCmd(worktreePath, "diff", "--name-only", "--diff-filter=U")
-	out, err := cmd.Output()
+// FetchBranch refreshes one branch's remote-tracking ref from origin. The
+// forced refspec guarantees refs/remotes/origin/<branch> lands at the remote
+// tip even when the checkout's fetch configuration is single-branch or the
+// branch moved non-fast-forward. The rebase preflight uses it to refresh
+// every stack layer branch before classification and behind-ness checks.
+func FetchBranch(worktreePath, branch string) error {
+	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
+	cmd := exec.Command("git", "-C", worktreePath, "fetch", "origin", refspec)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil
+		return fmt.Errorf("fetching origin/%s: %s: %w", branch, strings.TrimSpace(string(out)), err)
 	}
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line != "" {
-			files = append(files, line)
-		}
-	}
-	return files
+	return nil
 }
 
 // PRBaseBranch returns the base branch of an open PR via the GitHub API.

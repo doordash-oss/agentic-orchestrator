@@ -23,11 +23,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -52,19 +54,88 @@ One small change.
 | 1 | Child integration slice | 1 | One phase, one reviewable slice. |
 `
 
-var journeyPhasePlanText = "# Phase 1 Plan\n\n" +
-	"## Overview\nShip the child slice.\n\n" +
-	"## Tasks\n\n" +
-	"### Task 1: Produce the child artifact\n\n" +
-	"**Repo:** repoA\n\n" +
-	"#### What to build\nWrite the child output file.\n\n" +
-	"#### Acceptance criteria\n- [ ] The child artifact exists in the worktree.\n\n" +
-	"#### Blocked by\nNone - can start immediately\n\n" +
-	"## Success Criteria\n\n" +
-	"### Automated Verification\n- [ ] Artifact present: `test -f child-output.txt`\n\n" +
-	"### Manual Verification\n- [ ] None required: internal test fixture.\n\n" +
-	"### Visual Evidence\n- [ ] None required: no user-facing rendered surface.\n\n" +
-	"### Behavioral Evidence\n- [ ] None required: automated tests provide the artifact.\n"
+// journeyTwoSliceRoadmapText is the two-phase child roadmap whose
+// `## Pull Requests` table carries two rows, so the child's own roadmap
+// approval derives a two-layer stack and the layer boundary split after
+// phase 1 moves the child worktree onto the second layer's branch.
+const journeyTwoSliceRoadmapText = `# Roadmap
+
+## Phase 1: Restructure the core flow
+
+### Goal
+
+Land the first refactor slice.
+
+### Scope
+
+One small change.
+
+## Phase 2: Harden the edges
+
+### Goal
+
+Land the second refactor slice.
+
+### Scope
+
+One small change.
+
+## Pull Requests
+
+| # | Title | Phases | Rationale |
+|---|---|---|---|
+| 1 | Restructure the core flow | 1 | One phase, one reviewable slice. |
+| 2 | Harden the edges | 2 | Builds on the first slice. |
+`
+
+// journeyPhasePlanTextFor renders the scripted phase-plan artifact for one
+// roadmap phase: the original single-phase fixture's shape with the phase
+// number and the implementer's artifact filename filled in, so a multi-phase
+// child plans a distinct artifact per phase.
+func journeyPhasePlanTextFor(phase int, artifact string) string {
+	return fmt.Sprintf("# Phase %d Plan\n\n"+
+		"## Overview\nShip the child slice.\n\n"+
+		"## Tasks\n\n"+
+		"### Task 1: Produce the child artifact\n\n"+
+		"**Repo:** repoA\n\n"+
+		"#### What to build\nWrite the %s file.\n\n"+
+		"#### Acceptance criteria\n- [ ] The child artifact exists in the worktree.\n\n"+
+		"#### Blocked by\nNone - can start immediately\n\n"+
+		"## Success Criteria\n\n"+
+		"### Automated Verification\n- [ ] Artifact present: `test -f %s`\n\n"+
+		"### Manual Verification\n- [ ] None required: internal test fixture.\n\n"+
+		"### Visual Evidence\n- [ ] None required: no user-facing rendered surface.\n\n"+
+		"### Behavioral Evidence\n- [ ] None required: automated tests provide the artifact.\n",
+		phase, artifact, artifact)
+}
+
+// journeyEchoDescriptionReply renders the scripted PR-description reply from
+// the prompt's own context lines: the layer's "Title: " line and the
+// feature's "Name: " line — the two lines the origin-aware publish context
+// controls — so the recorded PR bodies name which feature context publish
+// handed the description session.
+func journeyEchoDescriptionReply(prompt string) string {
+	title := journeyPromptLineValue(prompt, "Title: ")
+	if title == "" {
+		title = "the layer"
+	}
+	if name := journeyPromptLineValue(prompt, "Name: "); name != "" {
+		return "Scripted PR body for " + title + " describing " + name + "."
+	}
+	return "Scripted PR body for " + title + "."
+}
+
+// journeyPromptLineValue returns the first trimmed line of prompt that starts
+// with marker, with the marker stripped; empty when no line matches.
+func journeyPromptLineValue(prompt, marker string) string {
+	for _, line := range strings.Split(prompt, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, marker) {
+			return strings.TrimSpace(strings.TrimPrefix(line, marker))
+		}
+	}
+	return ""
+}
 
 // journeyChildPhaseRunner wires scripted plan sessions plus stubbed
 // implement and final-review kernels so the journey exercises the real
@@ -86,6 +157,19 @@ type journeyPhaseRunnerOptions struct {
 	// merge setup left in each behind repo's child worktree (conflicting
 	// target fixture) and complete the merge commit.
 	resolveRebaseConflicts bool
+	// childRoadmapText overrides the scripted roadmap artifact text; empty
+	// keeps the single-phase, single-row default.
+	childRoadmapText string
+	// perPhaseChildFiles makes the implement stub write AND commit one
+	// distinct file per roadmap phase (child-phase-<n>.txt) instead of
+	// leaving a single uncommitted child-output.txt, so a multi-row roadmap's
+	// layer boundary split records a distinct tip per child layer.
+	perPhaseChildFiles bool
+	// echoDescriptionContext makes the scripted description session echo the
+	// feature name and layer title parsed from the prompt, so PR bodies
+	// record which feature context publish handed the session (the parent's
+	// for roadmap-derived layers, the origin child's for appended layers).
+	echoDescriptionContext bool
 }
 
 // journeyChildPhaseRunnerWithOpts is the configurable core of
@@ -93,8 +177,17 @@ type journeyPhaseRunnerOptions struct {
 func journeyChildPhaseRunnerWithOpts(t *testing.T, sm *session.Manager, store *feature.Store, stateDir string, opts journeyPhaseRunnerOptions) *agent.PhaseRunner {
 	t.Helper()
 	scriptsDir := t.TempDir()
+	// Session scripts may be (re)built while an earlier session's subprocess
+	// is still reading its own script, so every script path is unique.
+	var scriptSeq atomic.Int64
+	nextScript := func(name string) string {
+		return fmt.Sprintf("%s-%d.sh", name, scriptSeq.Add(1))
+	}
 
 	pr := agent.NewPhaseRunner(sm, store, stateDir)
+	// The BuildSessionFn parameter shadows opts; capture the runner options
+	// under their own name for the closures below.
+	runnerOpts := opts
 	pr.BuildSessionFn = func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 		// Plan sessions write their artifact into the run-scoped artifact
 		// directory and finish with the structured agentico-outcome; the
@@ -104,27 +197,39 @@ func journeyChildPhaseRunnerWithOpts(t *testing.T, sm *session.Manager, store *f
 		var script string
 		switch {
 		case opts.Phase != feature.PhasePlan || f == nil:
-			script = testutil.WriteScript(t, scriptsDir, "description.sh", testutil.JSONLInit+"\n"+
+			reply := "TITLE: Child integration\n\nBODY: Integrated the refactor child."
+			if runnerOpts.echoDescriptionContext {
+				reply = journeyEchoDescriptionReply(opts.Prompt)
+			}
+			script = testutil.WriteScript(t, scriptsDir, nextScript("description"), testutil.JSONLInit+"\n"+
 				`read -r _agentic_init`+"\n"+
-				testutil.JSONLAssistant("TITLE: Child integration\n\nBODY: Integrated the refactor child.")+"\n"+
+				testutil.JSONLAssistant(reply)+"\n"+
 				testutil.JSONLSuccess+"\n")
 		case strings.Contains(strings.ToLower(opts.Prompt), "roadmap"):
+			roadmapText := runnerOpts.childRoadmapText
+			if roadmapText == "" {
+				roadmapText = journeyRoadmapText
+			}
 			artifactDir := agent.RoadmapDir(stateDir, f)
-			script = testutil.WriteScript(t, scriptsDir, "roadmap.sh", testutil.JSONLInit+"\n"+
+			script = testutil.WriteScript(t, scriptsDir, nextScript("roadmap"), testutil.JSONLInit+"\n"+
 				`read -r _agentic_init`+"\n"+
 				fmt.Sprintf("mkdir -p %q", artifactDir)+"\n"+
-				fmt.Sprintf("cat > %q <<'ROADMAP_EOF'\n%s\nROADMAP_EOF", filepath.Join(artifactDir, "roadmap.md"), journeyRoadmapText)+"\n"+
+				fmt.Sprintf("cat > %q <<'ROADMAP_EOF'\n%s\nROADMAP_EOF", filepath.Join(artifactDir, "roadmap.md"), roadmapText)+"\n"+
 				testutil.JSONLSuccess+"\n")
 		default:
 			phaseNum := f.CurrentRoadmapPhase
 			if phaseNum == 0 {
 				phaseNum = 1
 			}
+			artifact := "child-output.txt"
+			if runnerOpts.perPhaseChildFiles {
+				artifact = fmt.Sprintf("child-phase-%d.txt", phaseNum)
+			}
 			artifactDir := agent.PhasePlanDir(stateDir, f, phaseNum)
-			script = testutil.WriteScript(t, scriptsDir, "phase-plan.sh", testutil.JSONLInit+"\n"+
+			script = testutil.WriteScript(t, scriptsDir, nextScript("phase-plan"), testutil.JSONLInit+"\n"+
 				`read -r _agentic_init`+"\n"+
 				fmt.Sprintf("mkdir -p %q", artifactDir)+"\n"+
-				fmt.Sprintf("cat > %q <<'PLAN_EOF'\n%s\nPLAN_EOF", filepath.Join(artifactDir, "plan.md"), journeyPhasePlanText)+"\n"+
+				fmt.Sprintf("cat > %q <<'PLAN_EOF'\n%s\nPLAN_EOF", filepath.Join(artifactDir, "plan.md"), journeyPhasePlanTextFor(phaseNum, artifact))+"\n"+
 				testutil.JSONLSuccess+"\n")
 		}
 		return []string{"bash", script}, nil, &ports.SessionOpts{
@@ -140,7 +245,7 @@ func journeyChildPhaseRunnerWithOpts(t *testing.T, sm *session.Manager, store *f
 		// (reset to the fork point) or a conflict resolution.
 		if c.Feature.Parent != nil && c.Feature.Parent.Kind == feature.ChildKindRebase {
 			for _, repo := range c.Feature.Repos {
-				if !c.Feature.IsRebaseBehindRepo(repo.Name) {
+				if !c.Feature.IsRebaseWorkRepo(repo.Name) {
 					continue
 				}
 				wt := repo.WorktreePath
@@ -163,17 +268,37 @@ func journeyChildPhaseRunnerWithOpts(t *testing.T, sm *session.Manager, store *f
 				}
 			}
 		}
-		// Stand in for the implement kernel: leave one real change in the
-		// child worktree for the integration boundary to commit and merge.
+		// Stand in for the implement kernel: either leave one real change in
+		// the child worktree for the integration boundary to commit, or —
+		// with perPhaseChildFiles — write and commit one distinct file per
+		// roadmap phase so the layer boundary split records a distinct tip
+		// per child layer.
+		phase := 1
+		if c.Feature.CurrentRoadmapPhase > 0 {
+			phase = c.Feature.CurrentRoadmapPhase
+		}
 		for _, repo := range c.Feature.Repos {
 			if c.Feature.Parent != nil &&
 				c.Feature.Parent.Kind == feature.ChildKindRebase &&
-				!c.Feature.IsRebaseBehindRepo(repo.Name) {
+				!c.Feature.IsRebaseWorkRepo(repo.Name) {
 				continue
 			}
 			wt := repo.WorktreePath
 			if wt == "" {
 				wt = repo.Path
+			}
+			if opts.perPhaseChildFiles {
+				file := fmt.Sprintf("child-phase-%d.txt", phase)
+				if err := os.WriteFile(filepath.Join(wt, file), []byte(fmt.Sprintf("child phase %d work\n", phase)), 0o644); err != nil {
+					return nil, fmt.Errorf("write %s: %w", file, err)
+				}
+				if _, err := journeyGitIn(wt, "add", "-A"); err != nil {
+					return nil, fmt.Errorf("stage child phase %d: %w", phase, err)
+				}
+				if _, err := journeyGitIn(wt, "commit", "-m", fmt.Sprintf("child phase %d work", phase)); err != nil {
+					return nil, fmt.Errorf("commit child phase %d: %w", phase, err)
+				}
+				continue
 			}
 			if err := os.WriteFile(filepath.Join(wt, "child-output.txt"), []byte("child work\n"), 0o644); err != nil {
 				return nil, fmt.Errorf("write child output: %w", err)
@@ -197,6 +322,43 @@ func journeyChildPhaseRunnerWithOpts(t *testing.T, sm *session.Manager, store *f
 		}, nil
 	}
 	return pr
+}
+
+// failingPRRemoteOps delegates git remote operations while replacing only the
+// external GitHub PR call with a deterministic failure; journeys that need
+// successful PR creation omit it and use the production remote operations.
+type failingPRRemoteOps struct{}
+
+func (failingPRRemoteOps) Push(worktreePath, branch string) error {
+	return git.Push(worktreePath, branch)
+}
+
+func (failingPRRemoteOps) PushLayerBranch(worktreePath, branch, localSHA, lastPushedSHA string) (string, error) {
+	return git.PushLayerBranch(worktreePath, branch, localSHA, lastPushedSHA)
+}
+
+func (failingPRRemoteOps) CreatePR(string, string, string, string, string, bool) (string, error) {
+	return "", fmt.Errorf("scripted PR creation failure")
+}
+
+func (failingPRRemoteOps) PRBaseBranch(repoPath, prURL string) string {
+	return git.PRBaseBranch(repoPath, prURL)
+}
+
+func (failingPRRemoteOps) PRState(repoPath, prURL string) (string, error) {
+	return git.PRState(repoPath, prURL)
+}
+
+func (failingPRRemoteOps) GetPRBody(prURL string) (string, error) {
+	return git.GetPRBody(prURL)
+}
+
+func (failingPRRemoteOps) UpdatePRBody(prURL, body string) error {
+	return git.UpdatePRBody(prURL, body)
+}
+
+func (failingPRRemoteOps) UpdatePRBase(prURL, base string) error {
+	return git.UpdatePRBaseBranch(prURL, base)
 }
 
 // journeyGitIn runs one git command in a worktree with the test identity,
@@ -421,27 +583,34 @@ func waitForJourneyChildClosed(t *testing.T, baseURL string, store *feature.Stor
 	t.Fatalf("child %s never closed (or cleanup never settled); last: %s", childID, lastJSON)
 }
 
-// waitForParentPublishOutcome polls until the parent's per-repo publication
-// state records a terminal result (a stack layer pull request on success, a
-// stored failure record on failure).
-func waitForParentPublishOutcome(t *testing.T, store *feature.Store, parentID string) {
+// waitForJourneyStackLayersPublished polls until the parent is Published
+// with wantLayers stack layers and an open pull request for repoName on
+// every layer, so assertions never race a closure's auto-publish tail.
+func waitForJourneyStackLayersPublished(t *testing.T, store *feature.Store, parentID, repoName string, wantLayers int) {
 	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)
+	var last string
 	for time.Now().Before(deadline) {
 		parent, err := store.Load(parentID)
-		if err == nil {
-			if st := parent.RepoStates["repoA"]; st != nil && (parent.StackRepoHasPullRequest("repoA") || st.Error != nil) {
-				return
+		if err == nil && parent != nil {
+			last = fmt.Sprintf("status=%s layers=%d checkpoints=%+v", parent.Status, len(parent.Stack), parent.Checkpoints)
+			if parent.Status == feature.StatusPublished && len(parent.Stack) == wantLayers {
+				settled := true
+				for _, layer := range parent.Stack {
+					entry := layer.Repos[repoName]
+					if entry.PRURL == "" || entry.PRState != feature.StackPRStateOpen {
+						settled = false
+						break
+					}
+				}
+				if settled {
+					return
+				}
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	parent, _ := store.Load(parentID)
-	var repoState feature.RepoState
-	if state := parent.RepoStates["repoA"]; state != nil {
-		repoState = *state
-	}
-	t.Fatalf("parent %s publication never settled: status=%s checkpoints=%+v repoA=%+v", parentID, parent.Status, parent.Checkpoints, repoState)
+	t.Fatalf("parent %s never settled on %d published stack layers; last: %s", parentID, wantLayers, last)
 }
 
 func journeyFeatureBody(baseURL, featureID string) map[string]any {

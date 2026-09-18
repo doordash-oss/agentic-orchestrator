@@ -37,16 +37,27 @@ type FakePullRequest struct {
 	Merged bool
 }
 
+// FakePullPatch records one accepted PATCH and the fields it set; a nil
+// field means the request did not touch it.
+type FakePullPatch struct {
+	Repo   string
+	Number int
+	Body   *string
+	State  *string
+	Base   *string
+}
+
 // FakePullStore serves the pull-request REST surface for one GitHub owner on
 // a FakeGitHubAPI: POST creates a numbered pull request, GET returns its
-// state and body, and PATCH updates its body and state. Records are kept in
-// creation order so tests can assert the exact PR creation sequence.
+// state and body, and PATCH updates its body, state, and base. Records are
+// kept in creation order so tests can assert the exact PR creation sequence.
 type FakePullStore struct {
 	owner   string
 	mu      sync.Mutex
 	next    map[string]int
 	pulls   map[string]*FakePullRequest
 	created []*FakePullRequest
+	patches []FakePullPatch
 	patched int
 }
 
@@ -153,6 +164,7 @@ func (s *FakePullStore) installRepo(t *testing.T, fake *FakeGitHubAPI, repo stri
 			var payload struct {
 				Body  *string `json:"body"`
 				State *string `json:"state"`
+				Base  *string `json:"base"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Errorf("decode patch payload for %s#%d: %v", repo, number, err)
@@ -168,6 +180,15 @@ func (s *FakePullStore) installRepo(t *testing.T, fake *FakeGitHubAPI, repo stri
 				if payload.State != nil {
 					pr.State = *payload.State
 				}
+				if payload.Base != nil {
+					pr.Base = *payload.Base
+				}
+				s.patches = append(s.patches, FakePullPatch{
+					Repo: repo, Number: number,
+					Body:  copyStringRef(payload.Body),
+					State: copyStringRef(payload.State),
+					Base:  copyStringRef(payload.Base),
+				})
 				s.patched++
 			}
 			s.mu.Unlock()
@@ -213,11 +234,33 @@ func (s *FakePullStore) CreatedCount(repo string) int {
 	return count
 }
 
-// PatchedCount counts accepted body/state updates.
+// PatchedCount counts accepted body/state/base updates.
 func (s *FakePullStore) PatchedCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.patched
+}
+
+// Patches returns the accepted PATCH records in arrival order.
+func (s *FakePullStore) Patches() []FakePullPatch {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]FakePullPatch(nil), s.patches...)
+}
+
+// MarkMerged marks one stored pull request merged. GitHub reports a merged
+// pull request as closed with a merged_at timestamp, so both are set
+// together; the answer reports whether the pull request exists.
+func (s *FakePullStore) MarkMerged(repo string, number int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pr, ok := s.pulls[pullKey(repo, number)]
+	if !ok {
+		return false
+	}
+	pr.Merged = true
+	pr.State = "closed"
+	return true
 }
 
 // Pull returns one stored pull request record.
@@ -233,6 +276,16 @@ func (s *FakePullStore) Pull(repo string, number int) (FakePullRequest, bool) {
 
 func pullKey(repo string, number int) string {
 	return repo + "#" + strconv.Itoa(number)
+}
+
+// copyStringRef copies a patch payload string pointer so a returned patch
+// record never aliases the decoded request value.
+func copyStringRef(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	copied := *s
+	return &copied
 }
 
 func pullNumber(rest string) (int, bool) {

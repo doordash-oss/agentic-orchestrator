@@ -438,16 +438,17 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 			continue
 		}
 
-		// Read and classify every listed ref. An entry is at-candidate only
-		// when every ref sits at its candidate, at-anchor only when every
-		// ref sits at its anchor; anything mixed is a race.
+		// Read and classify every listed ref — absent-aware, so a created
+		// ref's absence plays the anchor's role. An entry is at-candidate
+		// only when every ref sits at its candidate, at-anchor only when
+		// every ref sits at its anchor; anything mixed is a race.
 		entryAllAtCandidate := len(entry.Refs) > 0
 		entryAllAtAnchor := len(entry.Refs) > 0
 		entryRaced := false
 		for j := range entry.Refs {
 			ref := &entry.Refs[j]
 			refName := "refs/heads/" + ref.Branch
-			current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, refName)
+			current, absent, err := o.deps.Worktrees.RefSHAOrAbsent(parentRepo.Path, refName)
 			if err != nil {
 				findings = append(findings, entryFinding(entry, errcat.IntegrationCandidateFailed,
 					fmt.Sprintf("reading ref %s: %v", refName, err)))
@@ -457,15 +458,19 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 				continue
 			}
 			ref.ObservedSHA = current
-			switch ref.Classify(current) {
+			switch ref.Classify(current, absent) {
 			case feature.RefAtCandidate:
 				entryAllAtAnchor = false
 			case feature.RefAtAnchor:
 				entryAllAtCandidate = false
 			default:
+				observed := current
+				if absent {
+					observed = "absent"
+				}
 				findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
 					fmt.Sprintf("ref %s externally moved: anchor %s candidate %s observed %s",
-						refName, ref.AnchorSHA, ref.CandidateSHA, current)))
+						refName, ref.AnchorSHA, ref.CandidateSHA, observed)))
 				entryRaced = true
 				entryAllAtCandidate = false
 				entryAllAtAnchor = false

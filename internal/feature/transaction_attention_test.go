@@ -27,7 +27,7 @@ import (
 
 func attentionRecordFixture() *errcat.FailureRecord {
 	return &errcat.FailureRecord{
-		Code: errcat.IntegrationMergeConflict,
+		Code: errcat.IntegrationRebaseConflict,
 		Context: &errcat.RecordContext{
 			Repositories: []errcat.CodeRepository{{
 				Name:          "repo-a",
@@ -36,7 +36,7 @@ func attentionRecordFixture() *errcat.FailureRecord {
 				ChildHeadSHA:  "9b1e445",
 			}},
 		},
-		Diagnostics: "repo-a: merge conflict: [internal/api.go]",
+		Diagnostics: "repo-a: rebase replay conflict: [internal/api.go]",
 	}
 }
 
@@ -57,7 +57,7 @@ func TestTransactionJournalRoundTripsAttentionRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "code: integration_merge_conflict") {
+	if !strings.Contains(string(raw), "code: integration_rebase_conflict") {
 		t.Fatalf("YAML does not carry the record code:\n%s", raw)
 	}
 	var got TransactionJournal
@@ -67,8 +67,8 @@ func TestTransactionJournalRoundTripsAttentionRecord(t *testing.T) {
 	if got.Phase != TransactionPhaseAttention || len(got.Entries) != 1 {
 		t.Fatalf("round-trip lost journal state: %+v", got)
 	}
-	if got.Attention == nil || got.Attention.Code != errcat.IntegrationMergeConflict ||
-		got.Attention.Diagnostics != "repo-a: merge conflict: [internal/api.go]" ||
+	if got.Attention == nil || got.Attention.Code != errcat.IntegrationRebaseConflict ||
+		got.Attention.Diagnostics != "repo-a: rebase replay conflict: [internal/api.go]" ||
 		got.Attention.Context == nil || len(got.Attention.Context.Repositories) != 1 ||
 		len(got.Attention.Context.Repositories[0].ConflictFiles) != 1 {
 		t.Fatalf("round-trip lost the attention record: %+v", got.Attention)
@@ -159,7 +159,7 @@ func TestSavedJournalWritesNoDeletedEntryKeys(t *testing.T) {
 		}
 	}
 	attention, _ := tx["attention"].(map[string]any)
-	if attention == nil || attention["code"] != string(errcat.IntegrationMergeConflict) {
+	if attention == nil || attention["code"] != string(errcat.IntegrationRebaseConflict) {
 		t.Fatalf("saved journal attention record = %v, want the canonical record", attention)
 	}
 }
@@ -217,7 +217,7 @@ func TestIntegrationAttentionAccessors(t *testing.T) {
 		t.Fatalf("attention-phase journal without a record reports none: %+v", rec)
 	}
 	withRecord := newChild(&TransactionJournal{Phase: TransactionPhaseAttention, Attention: attentionRecordFixture()})
-	if rec := withRecord.IntegrationAttentionRecord(); rec == nil || rec.Code != errcat.IntegrationMergeConflict {
+	if rec := withRecord.IntegrationAttentionRecord(); rec == nil || rec.Code != errcat.IntegrationRebaseConflict {
 		t.Fatalf("IntegrationAttentionRecord() = %+v, want the stored record", rec)
 	}
 }

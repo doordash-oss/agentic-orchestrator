@@ -196,6 +196,11 @@ func (c *Client) UpdatePRBody(owner, repo string, number int, body string) error
 	return c.patchPR(owner, repo, number, map[string]any{"body": body})
 }
 
+// UpdatePRBase retargets a PR's base branch.
+func (c *Client) UpdatePRBase(owner, repo string, number int, base string) error {
+	return c.patchPR(owner, repo, number, map[string]any{"base": base})
+}
+
 // ClosePR closes a PR without merging.
 func (c *Client) ClosePR(owner, repo string, number int) error {
 	return c.patchPR(owner, repo, number, map[string]any{"state": "closed"})

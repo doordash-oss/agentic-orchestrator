@@ -346,6 +346,54 @@ func TestUpdatePRBody_Error(t *testing.T) {
 	}
 }
 
+func TestUpdatePRBaseBranchRetargetsPullRequestBase(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	store := testutil.NewFakePullStore("acme")
+	store.Install(t, fake, "widgets")
+
+	// Seed one open pull request through the fake's create endpoint.
+	resp, err := http.Post(fake.URL+"/repos/acme/widgets/pulls", "application/json",
+		strings.NewReader(`{"title":"T","head":"feature/x","base":"main","body":"B"}`))
+	if err != nil {
+		t.Fatalf("seeding pull request: %v", err)
+	}
+	resp.Body.Close()
+
+	prURL := store.URL("widgets", 1)
+	if err := UpdatePRBaseBranch(prURL, "develop"); err != nil {
+		t.Fatalf("UpdatePRBaseBranch() error = %v", err)
+	}
+
+	// The retarget must be observable through the read path, not just a 200.
+	if got := PRBaseBranch("", prURL); got != "develop" {
+		t.Fatalf("PRBaseBranch() = %q; want %q", got, "develop")
+	}
+	if store.PatchedCount() != 1 {
+		t.Fatalf("PatchedCount() = %d; want 1", store.PatchedCount())
+	}
+	patches := store.Patches()
+	if len(patches) != 1 || patches[0].Base == nil || *patches[0].Base != "develop" {
+		t.Fatalf("Patches() = %+v; want one base patch to develop", patches)
+	}
+}
+
+func TestUpdatePRBaseBranch_Error(t *testing.T) {
+	if err := UpdatePRBaseBranch("https://github.com/acme/widgets/issues/7", "develop"); err == nil {
+		t.Fatal("expected error from UpdatePRBaseBranch with malformed URL")
+	}
+
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/invalid/nonexistent/pulls/99999", 404, `{"message":"Not Found"}`)
+
+	err := UpdatePRBaseBranch("https://github.com/invalid/nonexistent/pull/99999", "develop")
+	if err == nil {
+		t.Fatal("expected error from UpdatePRBaseBranch with invalid repo")
+	}
+	if !strings.Contains(err.Error(), "retargeting PR base") {
+		t.Errorf("expected error containing 'retargeting PR base', got: %v", err)
+	}
+}
+
 func TestGetPRBody_Error(t *testing.T) {
 	fake := testutil.InstallFakeGitHubAPI(t)
 	fake.HandleJSON("/repos/invalid/nonexistent/pulls/99999", 404, `{"message":"Not Found"}`)

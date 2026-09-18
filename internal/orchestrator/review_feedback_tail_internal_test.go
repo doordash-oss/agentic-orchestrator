@@ -82,6 +82,10 @@ func (r *tailRecordingRemoteOps) UpdatePRBody(prURL, body string) error {
 	return git.UpdatePRBody(prURL, body)
 }
 
+func (r *tailRecordingRemoteOps) UpdatePRBase(prURL, base string) error {
+	return git.UpdatePRBaseBranch(prURL, base)
+}
+
 func (r *tailRecordingRemoteOps) layerPushes() []tailLayerPush {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -41,16 +41,17 @@ import (
 // git repo, a parent branch checked out, and a child worktree with committed
 // child changes.
 type multiRepoTransactionFixture struct {
-	t           *testing.T
-	repoDirs    []string
-	parentSHA   []string
-	store       *feature.Store
-	mgr         *feature.Manager
-	wm          *git.WorktreeManager
-	parent      *feature.Feature
-	child       *feature.Feature
-	childWTs    []string
-	childBranch string
+	t              *testing.T
+	repoDirs       []string
+	parentSHA      []string
+	store          *feature.Store
+	mgr            *feature.Manager
+	wm             *git.WorktreeManager
+	parent         *feature.Feature
+	child          *feature.Feature
+	childWTs       []string
+	childBranch    string
+	appendedBranch string
 }
 
 func newMultiRepoTransactionFixture(t *testing.T, numRepos int) *multiRepoTransactionFixture {
@@ -98,35 +99,58 @@ func newMultiRepoTransactionFixture(t *testing.T, numRepos int) *multiRepoTransa
 		bases = append(bases, feature.ChildRepoBase{Repo: repoName, SHA: parentSHA, ParentBranch: "feature/parent"})
 	}
 
+	// The child's recorded layer tip per repository: the head after the
+	// committed child change, before integration commits anything remaining.
+	childTips := make([]string, numRepos)
+	for i, wt := range childWTs {
+		childTips[i] = txGit(t, wt, "rev-parse", "HEAD")
+	}
+
 	store := feature.NewStore(filepath.Join(t.TempDir(), "features"))
 	parent := &feature.Feature{
-		ID:            "parent-tx",
-		Name:          "Parent TX",
-		Slug:          "parent-tx",
-		Status:        feature.StatusPublished,
-		CurrentPhase:  feature.PhasePublish,
-		Created:       time.Now(),
-		ActiveRun:     1,
-		RunCount:      1,
-		Checkpoints:   feature.Checkpoints{ManualPublish: true},
-		Repos:         parentRepos,
+		ID:           "parent-tx",
+		Name:         "Parent TX",
+		Slug:         "parent-tx",
+		Status:       feature.StatusPublished,
+		CurrentPhase: feature.PhasePublish,
+		Created:      time.Now(),
+		ActiveRun:    1,
+		RunCount:     1,
+		Checkpoints:  feature.Checkpoints{ManualPublish: true},
+		Repos:        parentRepos,
+		// A one-layer stack on the checked-out parent branch, so refactor
+		// children append their layers onto it.
+		Stack: []feature.StackLayer{{
+			Position: 1, Title: "Parent layer", Slug: "parent-layer", Phases: []int{1}, Branch: "feature/parent",
+		}},
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 	parent.RepoStates = make(map[string]*feature.RepoState, numRepos)
 	for _, pr := range parentRepos {
 		parent.RepoStates[pr.Name] = &feature.RepoState{Touched: true}
 	}
+	childStackRepos := make(map[string]feature.StackRepoEntry, numRepos)
+	for i := range childRepos {
+		childStackRepos[childRepos[i].Name] = feature.StackRepoEntry{TipSHA: childTips[i]}
+	}
 	child := &feature.Feature{
-		ID:            "child-tx",
-		Name:          "Child TX",
-		Slug:          "child-tx",
-		Status:        feature.StatusReviewPassed,
-		CurrentPhase:  feature.PhaseFinalReview,
-		Pipeline:      feature.PipelineMedium,
-		Created:       time.Now(),
-		ActiveRun:     1,
-		RunCount:      1,
-		Repos:         childRepos,
+		ID:           "child-tx",
+		Name:         "Child TX",
+		Slug:         "child-tx",
+		Status:       feature.StatusReviewPassed,
+		CurrentPhase: feature.PhaseFinalReview,
+		Pipeline:     feature.PipelineMedium,
+		Created:      time.Now(),
+		ActiveRun:    1,
+		RunCount:     1,
+		Repos:        childRepos,
+		// A one-layer stack on the child branch namespace with the recorded
+		// per-repository tips, so refactor integration appends it as parent
+		// position 2.
+		Stack: []feature.StackLayer{{
+			Position: 1, Title: "Child layer", Slug: "child-layer", Phases: []int{1}, Branch: childBranch,
+			Repos: childStackRepos,
+		}},
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Parent: &feature.ChildRelationship{
 			ParentID: parent.ID,
@@ -152,6 +176,7 @@ func newMultiRepoTransactionFixture(t *testing.T, numRepos int) *multiRepoTransa
 		t: t, repoDirs: repoDirs, parentSHA: parentSHAs,
 		store: store, mgr: mgr, wm: wm,
 		parent: parent, child: child, childWTs: childWTs, childBranch: childBranch,
+		appendedBranch: git.LayerBranchName(parent.WorkspaceSlug(), 2, "child-layer"),
 	}
 }
 
@@ -220,11 +245,19 @@ func TestTransactionTwoRepoHappyPath(t *testing.T) {
 		t.Fatalf("parent status = %s, want CodeReady", parent.Status)
 	}
 
-	// Every parent branch has an explicit two-parent merge commit.
-	for i, dir := range fx.repoDirs {
-		parents := txGit(t, dir, "rev-list", "--parents", "-n", "1", "HEAD")
-		if fields := len(strings.Fields(parents)); fields != 3 {
-			t.Fatalf("repo %d: merge parents = %q, want two-parent merge commit", i, parents)
+	// Every repository's appended layer branch was created at the child
+	// head, the existing parent layer's ref is unchanged, and the worktree
+	// switched onto the appended branch.
+	for i := range fx.repoDirs {
+		want := child.Parent.Transaction.Entries[i].ChildHeadSHA
+		if got := fx.refSHA(i, "refs/heads/"+fx.appendedBranch); got != want {
+			t.Fatalf("repo %d: appended branch ref = %s, want child head %s", i, got, want)
+		}
+		if got := fx.refSHA(i, "refs/heads/feature/parent"); got != fx.parentSHA[i] {
+			t.Fatalf("repo %d: parent branch ref = %s, want unchanged %s", i, got, fx.parentSHA[i])
+		}
+		if branch := txGit(t, fx.repoDirs[i], "branch", "--show-current"); branch != fx.appendedBranch {
+			t.Fatalf("repo %d: worktree branch = %q, want appended branch %q", i, branch, fx.appendedBranch)
 		}
 	}
 	if child.Parent.Transaction == nil || child.Parent.Transaction.Phase != feature.TransactionPhaseMerged {
@@ -240,7 +273,8 @@ func TestTransactionTwoRepoHappyPath(t *testing.T) {
 }
 
 // TestTransactionThreeRepoHappyPath proves the full boundary with three
-// repositories, verifying explicit merge-parent ordering.
+// repositories: every repository gains the appended layer's created ref at
+// the child head while its existing parent layer ref stays unchanged.
 func TestTransactionThreeRepoHappyPath(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-git integration test")
@@ -256,20 +290,23 @@ func TestTransactionThreeRepoHappyPath(t *testing.T) {
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 		t.Fatalf("child close outcome = %q, want completed", child.Parent.CloseOutcome)
 	}
-	for i, dir := range fx.repoDirs {
-		parents := txGit(t, dir, "rev-list", "--parents", "-n", "1", "HEAD")
-		fields := strings.Fields(parents)
-		if len(fields) != 3 {
-			t.Fatalf("repo %d: merge parents = %q, want two-parent merge commit", i, parents)
-		}
-		// First parent is the parent tip, second is the child head.
+	for i := range fx.repoDirs {
 		journal := child.Parent.Transaction
 		entry := journal.EntryByRepo(child.Repos[i].Name)
 		if entry == nil {
 			t.Fatalf("repo %d: journal entry missing", i)
 		}
-		if top := entry.TopRef(); top == nil || fields[1] != top.AnchorSHA {
-			t.Fatalf("repo %d: first parent = %s, want anchor %+v", i, fields[1], entry.TopRef())
+		// The appended branch sits at the child head, which descends from
+		// the previous top tip.
+		top := entry.TopRef()
+		if top == nil || top.RefKind() != feature.RepoRefKindCreate {
+			t.Fatalf("repo %d: top ref = %+v, want a created ref", i, top)
+		}
+		if got := fx.refSHA(i, "refs/heads/"+fx.appendedBranch); got != entry.ChildHeadSHA {
+			t.Fatalf("repo %d: appended branch ref = %s, want child head %s", i, got, entry.ChildHeadSHA)
+		}
+		if got := fx.refSHA(i, "refs/heads/feature/parent"); got != fx.parentSHA[i] {
+			t.Fatalf("repo %d: parent branch ref = %s, want unchanged %s", i, got, fx.parentSHA[i])
 		}
 	}
 }
@@ -336,8 +373,9 @@ func TestTransactionDirtyAggregation(t *testing.T) {
 	}
 }
 
-// TestTransactionPreparationFailureLeavesRefsUnchanged proves a conflict or
-// operational failure during preparation leaves every parent ref unchanged.
+// TestTransactionPreparationFailureLeavesRefsUnchanged proves a preparation
+// failure — here a parent tip the child's history does not descend from, the
+// append analog of a merge conflict — leaves every parent ref unchanged.
 func TestTransactionPreparationFailureLeavesRefsUnchanged(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-git integration test")
@@ -345,9 +383,9 @@ func TestTransactionPreparationFailureLeavesRefsUnchanged(t *testing.T) {
 	fx := newMultiRepoTransactionFixture(t, 2)
 	o := fx.orchestrator()
 
-	// Create a conflicting change on the second repo's parent branch and pin
-	// the persisted base to the new tip so the drift gate does not fire and
-	// the merge-conflict path is exercised.
+	// Diverge the second repo's parent branch from the child's history and
+	// pin the persisted base to the new tip so the drift gate does not fire
+	// and the ancestry-violation path is exercised.
 	testutil.CommitFile(t, fx.repoDirs[1], "child.txt", "parent-side conflict\n", "conflicting parent commit")
 	child, _ := fx.store.Load(fx.child.ID)
 	child.Parent.Bases[1].SHA = fx.refSHA(1, "refs/heads/feature/parent")
@@ -376,15 +414,20 @@ func TestTransactionPreparationFailureLeavesRefsUnchanged(t *testing.T) {
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
-	// The record classifies the conflict park and carries the conflict file
-	// in the repository block.
-	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationMergeConflict {
-		t.Fatalf("attention record = %+v, want integration_merge_conflict", tx.Attention)
+	// The record classifies the ancestry-violation park: no replay is
+	// attempted, so the diverged tip is a candidate failure, not a conflict.
+	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationCandidateFailed {
+		t.Fatalf("attention record = %+v, want integration_candidate_failed", tx.Attention)
+	}
+	if !strings.Contains(tx.Attention.Diagnostics, "ancestry") {
+		t.Fatalf("attention diagnostics = %q, want the ancestry-chain violation named", tx.Attention.Diagnostics)
 	}
 	if tx.Attention.Context == nil || len(tx.Attention.Context.Repositories) != 1 ||
-		tx.Attention.Context.Repositories[0].Name != child.Repos[1].Name ||
-		len(tx.Attention.Context.Repositories[0].ConflictFiles) == 0 {
-		t.Fatalf("attention repositories = %+v, want repo 1 with conflict files", tx.Attention.Context)
+		tx.Attention.Context.Repositories[0].Name != child.Repos[1].Name {
+		t.Fatalf("attention repositories = %+v, want repo 1", tx.Attention.Context)
+	}
+	if branches := txGit(t, fx.repoDirs[1], "branch", "--list", fx.appendedBranch); branches != "" {
+		t.Fatalf("appended branch %s created although preparation failed", fx.appendedBranch)
 	}
 }
 
@@ -483,13 +526,32 @@ func TestTransactionParentDriftRetryAcknowledges(t *testing.T) {
 		t.Fatalf("attention record = %+v, want integration_parent_ref_drift after renewed drift", child.Parent.Transaction.Attention)
 	}
 
-	// Retry at the unchanged tip acknowledges the drift and completes.
+	// Retry at the unchanged tip acknowledges the drift — the gate passes —
+	// but the append cannot absorb a tip the child's history does not descend
+	// from: no replay is attempted, so preparation parks with the
+	// candidate-failed attention naming the ancestry violation.
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("acknowledging runChildIntegration() error = %v", err)
 	}
 	_, child = fx.reload()
+	tx = child.Parent.Transaction
+	if tx == nil || tx.Phase != feature.TransactionPhaseAttention ||
+		tx.Attention == nil || tx.Attention.Code != errcat.IntegrationCandidateFailed {
+		t.Fatalf("transaction after acknowledgment = %+v, want candidate-failed attention (no replay)", tx)
+	}
+	if !strings.Contains(tx.Attention.Diagnostics, "ancestry") {
+		t.Fatalf("attention diagnostics = %q, want the ancestry-chain violation named", tx.Attention.Diagnostics)
+	}
+
+	// Remediate: restore the parent branch to its creation-time base and
+	// retry; the append completes.
+	txGit(t, fx.repoDirs[0], "reset", "--hard", fx.parentSHA[0])
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("remediating runChildIntegration() error = %v", err)
+	}
+	_, child = fx.reload()
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
-		t.Fatalf("child close outcome = %q, want completed after acknowledgment", child.Parent.CloseOutcome)
+		t.Fatalf("child close outcome = %q, want completed after remediation", child.Parent.CloseOutcome)
 	}
 }
 
@@ -547,11 +609,14 @@ func TestTransactionParentDriftMultiRepoAggregation(t *testing.T) {
 	}
 }
 
-// TestTransactionParentDriftExemptsPriorCandidate proves a resumed rebuild
-// after a partial apply — where a parent tip equals a candidate the
-// transaction itself produced — is not mistaken for external drift and the
-// integration completes.
-func TestTransactionParentDriftExemptsPriorCandidate(t *testing.T) {
+// TestTransactionAppendPartialApplyCrashRollsBackAndRetries proves a crash
+// between one repository's ref transaction and its durable apply progress is
+// converged by the startup scan: the provable partial apply is rolled back —
+// the created ref deleted, the worktree switched back to the previous top —
+// and a retry re-prepares and completes. A parent tip a refactor transaction
+// produced can never be mistaken for drift, because append transactions never
+// move the parent branch.
+func TestTransactionAppendPartialApplyCrashRollsBackAndRetries(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-git integration test")
 	}
@@ -568,23 +633,42 @@ func TestTransactionParentDriftExemptsPriorCandidate(t *testing.T) {
 		t.Fatal("journal is nil")
 	}
 
-	// Manually apply only the first repo (simulating a crash after its ref
-	// CAS and worktree sync but before durable apply progress).
-	entry := &journal.Entries[0]
-	top := entry.TopRef()
-	ref := "refs/heads/" + top.Branch
-	if err := git.UpdateRefCAS(fx.repoDirs[0], ref, top.AnchorSHA, top.CandidateSHA); err != nil {
-		t.Fatalf("manual apply repo 0: %v", err)
+	// Simulate the crash: repo 0's ref transaction and worktree switch ran,
+	// but no apply progress was persisted and the aggregate phase is still
+	// applying.
+	top := journal.Entries[0].TopRef()
+	txGit(t, fx.repoDirs[0], "branch", top.Branch, top.CandidateSHA)
+	txGit(t, fx.repoDirs[0], "checkout", top.Branch)
+	journal.Phase = feature.TransactionPhaseApplying
+	if err := o.persistTransaction(child.ID, journal); err != nil {
+		t.Fatalf("persist applying journal: %v", err)
 	}
-	txGit(t, fx.repoDirs[0], "reset", "--hard", top.CandidateSHA)
 
+	// The startup scan rolls back the provable partial apply.
+	if err := o.ReconcileIntegrationTransactions(); err != nil {
+		t.Fatalf("ReconcileIntegrationTransactions() error = %v", err)
+	}
+	if branches := txGit(t, fx.repoDirs[0], "branch", "--list", fx.appendedBranch); branches != "" {
+		t.Fatalf("repo 0: appended branch still present after rollback: %s", branches)
+	}
+	if got := fx.refSHA(0, "refs/heads/feature/parent"); got != fx.parentSHA[0] {
+		t.Fatalf("repo 0: parent branch ref = %s, want unchanged %s", got, fx.parentSHA[0])
+	}
+	if branch := txGit(t, fx.repoDirs[0], "branch", "--show-current"); branch != "feature/parent" {
+		t.Fatalf("repo 0: worktree branch = %q, want the previous top branch after rollback", branch)
+	}
+	stored, _ := fx.store.Load(fx.child.ID)
+	if stored.Parent.Transaction == nil || stored.Parent.Transaction.Phase != feature.TransactionPhaseRolledBack {
+		t.Fatalf("transaction phase = %+v, want rolled_back after the scan", stored.Parent.Transaction)
+	}
+
+	// A retry re-prepares from scratch and completes.
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
-		t.Fatalf("RunChildIntegration() resume error = %v", err)
+		t.Fatalf("RunChildIntegration() retry error = %v", err)
 	}
-
 	_, child = fx.reload()
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
-		t.Fatalf("child close outcome = %q, want completed on resume", child.Parent.CloseOutcome)
+		t.Fatalf("child close outcome = %q, want completed on retry", child.Parent.CloseOutcome)
 	}
 	if child.Parent.Transaction.Phase != feature.TransactionPhaseMerged {
 		t.Fatalf("transaction phase = %s, want merged", child.Parent.Transaction.Phase)
@@ -685,15 +769,17 @@ func TestTransactionRollbackOnLaterFailure(t *testing.T) {
 		t.Fatal("journal is nil")
 	}
 
-	// Record old SHAs for rollback verification.
+	// Record the previous-top tips for rollback verification.
 	oldSHAs := make([]string, len(journal.Entries))
 	for i := range journal.Entries {
-		oldSHAs[i] = journal.Entries[i].TopRef().AnchorSHA
+		if prev := journal.Entries[i].PreviousTopRef(); prev != nil {
+			oldSHAs[i] = prev.TipSHA
+		}
 	}
 
-	// Externally move the third repo's ref to simulate a CAS failure.
-	// This will cause the apply of repo 2 to fail, triggering rollback
-	// of repos 0 and 1.
+	// Externally move the third repo's parent branch so the atomic verify of
+	// its previous top fails. This will cause the apply of repo 2 to fail,
+	// triggering rollback of repos 0 and 1.
 	txGit(t, fx.repoDirs[2], "checkout", "feature/parent")
 	testutil.CommitFile(t, fx.repoDirs[2], "race.txt", "external\n", "external race before repo 2 apply")
 
@@ -708,12 +794,24 @@ func TestTransactionRollbackOnLaterFailure(t *testing.T) {
 	if tx == nil {
 		t.Fatal("transaction journal missing")
 	}
-	// Repos 0 and 1 should be rolled back (ref back at old SHA).
+	// Repos 0 and 1 are rolled back: their created refs are deleted, their
+	// parent branches never moved, and their worktrees are back on the
+	// previous top branch.
 	for i := 0; i < 2; i++ {
+		if branches := txGit(t, fx.repoDirs[i], "branch", "--list", fx.appendedBranch); branches != "" {
+			t.Fatalf("repo %d: appended branch still present after rollback: %s", i, branches)
+		}
 		got := fx.refSHA(i, "refs/heads/feature/parent")
 		if got != oldSHAs[i] {
-			t.Fatalf("repo %d: ref = %s after rollback, want old SHA %s", i, got, oldSHAs[i])
+			t.Fatalf("repo %d: parent branch ref = %s after rollback, want previous top tip %s", i, got, oldSHAs[i])
 		}
+		if branch := txGit(t, fx.repoDirs[i], "branch", "--show-current"); branch != "feature/parent" {
+			t.Fatalf("repo %d: worktree branch = %q, want the previous top branch after rollback", i, branch)
+		}
+	}
+	// Repo 2's appended branch was never created.
+	if branches := txGit(t, fx.repoDirs[2], "branch", "--list", fx.appendedBranch); branches != "" {
+		t.Fatalf("repo 2: appended branch present despite the failed apply: %s", branches)
 	}
 }
 
@@ -767,13 +865,10 @@ func TestTransactionStartupReconciliationApplied(t *testing.T) {
 	}
 
 	// Manually apply every ref (simulating a crash after all ref updates
-	// but before closure).
+	// but before closure): each created ref is created at its candidate.
 	for i := range journal.Entries {
 		top := journal.Entries[i].TopRef()
-		ref := "refs/heads/" + top.Branch
-		if err := git.UpdateRefCAS(fx.repoDirs[i], ref, top.AnchorSHA, top.CandidateSHA); err != nil {
-			t.Fatalf("manual apply repo %d: %v", i, err)
-		}
+		txGit(t, fx.repoDirs[i], "branch", top.Branch, top.CandidateSHA)
 	}
 
 	// Simulate startup reconciliation.
@@ -787,6 +882,26 @@ func TestTransactionStartupReconciliationApplied(t *testing.T) {
 	}
 	if child.Parent.Transaction.Phase != feature.TransactionPhaseMerged {
 		t.Fatalf("transaction phase = %s, want merged", child.Parent.Transaction.Phase)
+	}
+
+	// The closure persisted the appended layers onto the parent's stack with
+	// per-repository tips equal to the created refs, and every worktree sits
+	// on the new top branch.
+	freshParent, _ := fx.store.Load(fx.parent.ID)
+	if len(freshParent.Stack) != 2 {
+		t.Fatalf("parent stack layers = %d, want 2 after reconciled closure", len(freshParent.Stack))
+	}
+	for i := range fx.repoDirs {
+		appended := freshParent.Stack[1]
+		if appended.Branch != fx.appendedBranch || appended.Origin == nil {
+			t.Fatalf("persisted appended layer = %+v, want the appended branch with its origin", appended)
+		}
+		if got := appended.Repos[freshParent.Repos[i].Name].TipSHA; got != journal.Entries[i].TopRef().CandidateSHA {
+			t.Fatalf("repo %d: appended layer tip = %s, want the created ref's candidate %s", i, got, journal.Entries[i].TopRef().CandidateSHA)
+		}
+		if branch := txGit(t, fx.repoDirs[i], "branch", "--show-current"); branch != fx.appendedBranch {
+			t.Fatalf("repo %d: worktree branch = %q, want new top branch %q", i, branch, fx.appendedBranch)
+		}
 	}
 }
 
@@ -820,11 +935,22 @@ func TestTransactionStartupReconciliationPreparedButUnapplied(t *testing.T) {
 		t.Fatalf("reconcileIntegrationTransactions() error = %v", err)
 	}
 
-	// All parent refs unchanged.
+	// All parent refs unchanged, no appended branch created, and the journal
+	// stays retryable: a created ref that is absent classifies as at-anchor,
+	// so the scan neither applies, rolls back, nor parks.
 	for i := range fx.repoDirs {
 		if got := fx.refSHA(i, "refs/heads/feature/parent"); got != preRefs[i] {
 			t.Fatalf("repo %d: parent ref moved from %s to %s during reconciliation", i, preRefs[i], got)
 		}
+		if branches := txGit(t, fx.repoDirs[i], "branch", "--list", fx.appendedBranch); branches != "" {
+			t.Fatalf("repo %d: appended branch created during reconciliation", i)
+		}
+	}
+	stored, _ := fx.store.Load(fx.child.ID)
+	if stored.Parent.Transaction == nil ||
+		stored.Parent.Transaction.Phase != feature.TransactionPhasePrepared ||
+		stored.Parent.Transaction.Attention != nil {
+		t.Fatalf("journal after scan = %+v, want the prepared phase without attention (left retryable)", stored.Parent.Transaction)
 	}
 }
 
@@ -848,19 +974,20 @@ func TestTransactionStartupReconciliationExternalMovement(t *testing.T) {
 		t.Fatal("journal is nil")
 	}
 
-	// Externally move the first repo's parent branch to an unrelated commit.
-	txGit(t, fx.repoDirs[0], "checkout", "feature/parent")
-	testutil.CommitFile(t, fx.repoDirs[0], "external.txt", "external\n", "external movement")
-	externalSHA := fx.refSHA(0, "refs/heads/feature/parent")
+	// Externally create the first repo's appended branch at an unrelated
+	// commit: a created ref observed anywhere other than absent or its
+	// candidate is a race.
+	txGit(t, fx.repoDirs[0], "branch", fx.appendedBranch, fx.parentSHA[0])
+	externalSHA := fx.parentSHA[0]
 
 	// Simulate startup reconciliation.
 	if err := o.ReconcileIntegrationTransactions(); err != nil {
 		t.Fatalf("reconcileIntegrationTransactions() error = %v", err)
 	}
 
-	// The externally moved ref should be preserved.
-	if got := fx.refSHA(0, "refs/heads/feature/parent"); got != externalSHA {
-		t.Fatalf("repo 0: ref = %s, want preserved external %s", got, externalSHA)
+	// The externally created ref should be preserved.
+	if got := fx.refSHA(0, "refs/heads/"+fx.appendedBranch); got != externalSHA {
+		t.Fatalf("repo 0: appended branch ref = %s, want preserved external %s", got, externalSHA)
 	}
 
 	_, child = fx.reload()
@@ -918,6 +1045,24 @@ func (w *failingResetWorktrees) ResetToCommit(worktreePath, commitSHA string) er
 		return fmt.Errorf("simulated worktree sync failure")
 	}
 	return w.WorktreeManager.ResetToCommit(worktreePath, commitSHA)
+}
+
+// failingSwitchWorktrees wraps the real worktree manager and fails the
+// branch switch for the target repo, simulating a worktree-sync failure
+// after a successful append apply transaction.
+type failingSwitchWorktrees struct {
+	*git.WorktreeManager
+	failRepoDir string
+	failed      bool
+	failAlways  bool
+}
+
+func (w *failingSwitchWorktrees) SwitchBranch(worktreePath, branch string) error {
+	if worktreePath == w.failRepoDir && (w.failAlways || !w.failed) {
+		w.failed = true
+		return fmt.Errorf("simulated worktree switch failure")
+	}
+	return w.WorktreeManager.SwitchBranch(worktreePath, branch)
 }
 
 // TestTransactionFirstApplyFailureRollsBack proves a failure on the first
@@ -982,10 +1127,10 @@ func TestTransactionApplySyncFailureContinuesForward(t *testing.T) {
 		t.Fatal("journal is nil")
 	}
 
-	// Apply with a worktree manager that fails ResetToCommit for repo 1
+	// Apply with a worktree manager that fails the branch switch for repo 1
 	// (the second repo). The failure persists through the immediate closure
 	// attempt so the journal's pending-sync diagnostic can be asserted.
-	resetWT := &failingResetWorktrees{
+	switchWT := &failingSwitchWorktrees{
 		WorktreeManager: fx.wm,
 		failRepoDir:     fx.repoDirs[1],
 		failAlways:      true,
@@ -993,18 +1138,18 @@ func TestTransactionApplySyncFailureContinuesForward(t *testing.T) {
 	applyO := New(Deps{
 		Lifecycle: fx.mgr,
 		Store:     fx.store,
-		Worktrees: resetWT,
+		Worktrees: switchWT,
 	}, Hooks{})
 
 	if err := applyO.applyTransactionCandidates(child, parent, journal); err != nil {
 		t.Fatalf("applyTransactionCandidates() error = %v, want nil with attention", err)
 	}
 
-	// Every ref advances despite the environmental sync failure.
+	// Every created ref advances despite the environmental sync failure.
 	for i := range fx.repoDirs {
-		got := fx.refSHA(i, "refs/heads/feature/parent")
+		got := fx.refSHA(i, "refs/heads/"+fx.appendedBranch)
 		if want := journal.Entries[i].TopRef().CandidateSHA; got != want {
-			t.Fatalf("repo %d: ref = %s, want candidate %s", i, got, want)
+			t.Fatalf("repo %d: appended branch ref = %s, want candidate %s", i, got, want)
 		}
 	}
 	stored, _ := fx.store.Load(fx.child.ID)
@@ -1058,6 +1203,9 @@ func TestTransactionApplySyncFailureContinuesForward(t *testing.T) {
 		if got := txGit(t, fx.repoDirs[i], "rev-parse", "HEAD"); got != journal.Entries[i].TopRef().CandidateSHA {
 			t.Fatalf("repo %d worktree HEAD = %s, want candidate %s", i, got, journal.Entries[i].TopRef().CandidateSHA)
 		}
+		if branch := txGit(t, fx.repoDirs[i], "branch", "--show-current"); branch != fx.appendedBranch {
+			t.Fatalf("repo %d: worktree branch = %q, want appended branch %q", i, branch, fx.appendedBranch)
+		}
 	}
 }
 
@@ -1107,11 +1255,20 @@ func TestTransactionPassThroughSyncFailureRollsBackApplied(t *testing.T) {
 	// Recreate the child as a rebase child where repoA was behind its target
 	// at creation and repoB was already up to date (pass-through). Reset
 	// repoB's child branch to the parent anchor so the pass-through
-	// ancestor invariant holds.
+	// ancestor invariant holds. repoA carries a persisted restack result —
+	// a single kept layer (the parent stack's layer 1) whose rebuilt top is
+	// the parent tip, so the child head (parent tip plus the child commit)
+	// descends from it and the rewrite candidate is the child head.
 	txGit(t, fx.childWTs[1], "reset", "--hard", fx.parentSHA[1])
 	child, _ := fx.store.Load(fx.child.ID)
 	child.Parent.Kind = feature.ChildKindRebase
-	child.Parent.RebaseBehind = []string{"repoA"}
+	child.Parent.RebaseWorkRepos = []string{"repoA"}
+	child.Parent.RebaseRestacks = []feature.RebaseRepoRestack{{
+		Repo:        "repoA",
+		RebuiltTips: map[int]string{1: fx.parentSHA[0]},
+		RebuiltTop:  fx.parentSHA[0],
+		AnchorRemap: map[int]string{1: fx.parentSHA[0]},
+	}}
 	child.Parent.RebaseTargets = []feature.RebaseRepoTarget{{
 		Repo: "repoA", Target: "feature/parent", Ref: "feature/parent",
 		TargetSHA: fx.parentSHA[0],

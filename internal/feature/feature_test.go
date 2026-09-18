@@ -1468,6 +1468,97 @@ func TestCopyStackLayersIndependentRepoEntries(t *testing.T) {
 	}
 }
 
+// TestCopyStackLayersDeepCopiesOrigin pins the full copy contract: a layer's
+// origin record is deep-copied, so mutating the copy's origin never reaches
+// the sealed stack it came from.
+func TestCopyStackLayersDeepCopiesOrigin(t *testing.T) {
+	stack := []StackLayer{
+		{
+			Position: 3, Title: "Appended", Slug: "appended", Branch: "feature/demo-a1b2c3d4/3-appended",
+			Origin: &StackLayerOrigin{SourceFeatureID: "child-001", SourceLayerPosition: 1},
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			},
+		},
+	}
+	copied := CopyStackLayers(stack)
+	if copied[0].Origin == nil || copied[0].Origin == stack[0].Origin {
+		t.Fatalf("copied origin = %+v, want a distinct deep copy", copied[0].Origin)
+	}
+	copied[0].Origin.SourceFeatureID = "child-999"
+	copied[0].Origin.SourceLayerPosition = 9
+	if got := stack[0].Origin; got.SourceFeatureID != "child-001" || got.SourceLayerPosition != 1 {
+		t.Fatalf("source origin mutated to %+v; the copy must be independent", got)
+	}
+}
+
+// TestCopyStackLayersForPartialRewindDropsAppendedLayers pins the partial
+// rewind contract: roadmap-derived layers at or above the target keep their
+// definitions with cleared per-repository entries, appended layers (those
+// carrying an origin) are dropped entirely, and layers below the target keep
+// their entries untouched.
+func TestCopyStackLayersForPartialRewindDropsAppendedLayers(t *testing.T) {
+	stack := []StackLayer{
+		{
+			Position: 1, Title: "Base", Slug: "base", Branch: "feature/demo-a1b2c3d4/1-base",
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			},
+		},
+		{
+			Position: 2, Title: "Top", Slug: "top", Branch: "feature/demo-a1b2c3d4/2-top",
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			},
+		},
+		{
+			Position: 3, Title: "Appended one", Slug: "appended-one", Branch: "feature/demo-a1b2c3d4/3-appended-one",
+			Origin: &StackLayerOrigin{SourceFeatureID: "child-001", SourceLayerPosition: 1},
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "cccccccccccccccccccccccccccccccccccccccc"},
+			},
+		},
+		{
+			Position: 4, Title: "Appended two", Slug: "appended-two", Branch: "feature/demo-a1b2c3d4/4-appended-two",
+			Origin: &StackLayerOrigin{SourceFeatureID: "child-001", SourceLayerPosition: 2},
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "dddddddddddddddddddddddddddddddddddddddd"},
+			},
+		},
+	}
+
+	copied := CopyStackLayersForPartialRewind(stack, 2)
+	if len(copied) != 2 {
+		t.Fatalf("partial rewind copy has %d layers, want 2 (appended layers dropped): %+v", len(copied), copied)
+	}
+	if copied[0].Position != 1 || copied[0].Repos["repo-a"].TipSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("layer below the target lost its entries: %+v", copied[0])
+	}
+	if copied[1].Position != 2 || copied[1].Branch != "feature/demo-a1b2c3d4/2-top" {
+		t.Fatalf("target layer lost its definition: %+v", copied[1])
+	}
+	if copied[1].Repos != nil {
+		t.Fatalf("target layer kept per-repository entries: %+v", copied[1].Repos)
+	}
+	for _, layer := range copied {
+		if layer.Origin != nil {
+			t.Fatalf("partial rewind copy kept an appended layer: %+v", layer)
+		}
+	}
+
+	// A full copy preserves every layer and its origin.
+	full := CopyStackLayers(stack)
+	if len(full) != 4 {
+		t.Fatalf("full copy has %d layers, want 4", len(full))
+	}
+	if full[2].Origin == nil || full[2].Origin.SourceFeatureID != "child-001" || full[2].Origin.SourceLayerPosition != 1 {
+		t.Fatalf("full copy lost layer 3's origin: %+v", full[2].Origin)
+	}
+	if full[3].Origin == nil || full[3].Origin.SourceFeatureID != "child-001" || full[3].Origin.SourceLayerPosition != 2 {
+		t.Fatalf("full copy lost layer 4's origin: %+v", full[3].Origin)
+	}
+}
+
 func TestStackLayerReadHelpers(t *testing.T) {
 	f := &Feature{
 		Stack: []StackLayer{

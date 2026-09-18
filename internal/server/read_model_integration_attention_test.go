@@ -41,12 +41,12 @@ var removedEntryWireKeys = []string{
 var removedAttentionItemCodes = []string{"dirty_parent", "integration_conflict", "integration_attention"}
 
 // mergeConflictRecord is the stored canonical record for a child parked on a
-// merge conflict: one repository with two conflict files and oversized raw
+// rebase replay conflict: one repository with two conflict files and oversized raw
 // diagnostics, so projections pin both the catalog rendering and the
 // diagnostics bound.
 func mergeConflictRecord() *errcat.FailureRecord {
 	return &errcat.FailureRecord{
-		Code: errcat.IntegrationMergeConflict,
+		Code: errcat.IntegrationRebaseConflict,
 		Context: &errcat.RecordContext{
 			Repositories: []errcat.CodeRepository{{
 				Name:          repoNameSelf,
@@ -93,14 +93,14 @@ func canonicalAttentionFrom(t *testing.T, projection map[string]any) map[string]
 // diagnostics.
 func assertCanonicalMergeConflict(t *testing.T, attention map[string]any) {
 	t.Helper()
-	if attention["code"] != string(errcat.IntegrationMergeConflict) {
-		t.Fatalf("attention code = %v, want %q", attention["code"], errcat.IntegrationMergeConflict)
+	if attention["code"] != string(errcat.IntegrationRebaseConflict) {
+		t.Fatalf("attention code = %v, want %q", attention["code"], errcat.IntegrationRebaseConflict)
 	}
 	if attention["class"] != string(errcat.ClassNeedsAction) {
 		t.Fatalf("attention class = %v, want %q", attention["class"], errcat.ClassNeedsAction)
 	}
-	if attention["title"] != "Integration merge conflict" {
-		t.Fatalf("attention title = %v, want the catalog title %q", attention["title"], "Integration merge conflict")
+	if attention["title"] != "Rebase replay conflict" {
+		t.Fatalf("attention title = %v, want the catalog title %q", attention["title"], "Rebase replay conflict")
 	}
 	summary, _ := attention["summary"].(string)
 	if !strings.Contains(summary, repoNameSelf) || !strings.Contains(summary, "2 files") {
@@ -167,7 +167,7 @@ func assertEntryCarriesOnlyProgressState(t *testing.T, entry map[string]any) {
 
 // TestIntegrationAttentionProjectsCanonicalRecordOnBothSurfaces pins the
 // single-owner read model: a child parked with a stored
-// integration_merge_conflict record renders the same canonical error object
+// integration_rebase_conflict record renders the same canonical error object
 // on the child's transaction and on the parent's active-child summary on both
 // the detail and list routes, and a clean child carries no attention on
 // either surface.

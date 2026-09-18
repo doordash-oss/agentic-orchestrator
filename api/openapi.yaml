@@ -4676,6 +4676,10 @@ components:
         freshness:
           type: string
           description: Server-authored freshness state.
+        rebase_hint:
+          type: string
+          maxLength: 500
+          description: Server-authored rebase hint, present when a merged layer whose entry still holds a tip sits below a kept layer with commits — the repository reads behind and the hint names the merged layer and points at the rebase pass that restacks the chain. Omitted when there is no such layer.
         error:
           $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
@@ -6112,6 +6116,12 @@ components:
           type: string
         observed_sha:
           type: string
+        kind:
+          type: string
+          description: >-
+            Ref update kind - rewrite (an update to an existing ref), create
+            (a ref that did not exist before the transaction), or delete (a
+            ref that did exist, removed while sitting at its anchor).
     Usage:
       type: object
       properties:

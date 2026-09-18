@@ -170,6 +170,16 @@ func (f *Feature) StackRepoHasPullRequest(repoName string) bool {
 	return false
 }
 
+// OrderedStackLayers returns the stack's layers sorted ascending by position.
+// A copy, so callers never mutate the run's slice through it. The rebase
+// preflight walks it to classify every layer and refresh layer branches.
+func (f *Feature) OrderedStackLayers() []StackLayer {
+	if f == nil {
+		return nil
+	}
+	return orderedStackLayersForRead(f.Stack)
+}
+
 // orderedStackLayersForRead returns the stack's layers sorted ascending by
 // position. A copy, so callers never mutate the run's slice through a read
 // helper.

@@ -22,7 +22,6 @@ import (
 // integrationAttentionCodeList is the closed set of integration attention
 // codes, pinned by the class, block, and action assertions below.
 var integrationAttentionCodeList = []Code{
-	IntegrationMergeConflict,
 	IntegrationParentDirty,
 	IntegrationParentRefDrift,
 	IntegrationRefRace,
@@ -31,9 +30,9 @@ var integrationAttentionCodeList = []Code{
 	IntegrationWorktreeSyncFailed,
 	IntegrationRolledBack,
 	IntegrationCandidateFailed,
+	IntegrationRebaseConflict,
 	RebaseGateTargetMissing,
 	RebaseGateNotAncestor,
-	RebaseGateMergeInProgress,
 	RebaseGateConflictMarkers,
 	RebaseGatePassthroughModified,
 }
@@ -73,7 +72,7 @@ func TestIntegrationAttentionCodesAreNeedsAction(t *testing.T) {
 // without context, and no raw diagnostics leaking into the summary.
 func TestIntegrationAttentionSummaryTemplates(t *testing.T) {
 	rendered := New(
-		IntegrationMergeConflict,
+		IntegrationRebaseConflict,
 		WithRepositories(CodeRepository{
 			Name:          "repo-a",
 			Branch:        "main",
@@ -83,7 +82,7 @@ func TestIntegrationAttentionSummaryTemplates(t *testing.T) {
 			Name:          "repo-a",
 			ConflictFiles: []string{"internal/api.go", "internal/api_test.go"},
 		}}}),
-		WithDiagnostics("repo-a: merge candidate conflict: [internal/api.go, internal/api_test.go]"),
+		WithDiagnostics("repo-a: rebase replay conflict: [internal/api.go, internal/api_test.go]"),
 	)
 	if !strings.Contains(rendered.Summary, "repo-a") {
 		t.Fatalf("summary does not name the repository: %q", rendered.Summary)
@@ -91,17 +90,17 @@ func TestIntegrationAttentionSummaryTemplates(t *testing.T) {
 	if !strings.Contains(rendered.Summary, "2 files") {
 		t.Fatalf("summary does not name the conflict-file count: %q", rendered.Summary)
 	}
-	if strings.Contains(rendered.Summary, "merge candidate conflict:") {
+	if strings.Contains(rendered.Summary, "rebase replay conflict:") {
 		t.Fatalf("summary leaks raw diagnostics: %q", rendered.Summary)
 	}
 	if rendered.Diagnostics == "" {
 		t.Fatal("diagnostics not carried on the rendered error")
 	}
 
-	static := New(IntegrationMergeConflict)
-	entry, ok := Lookup(IntegrationMergeConflict)
+	static := New(IntegrationRebaseConflict)
+	entry, ok := Lookup(IntegrationRebaseConflict)
 	if !ok {
-		t.Fatal("integration_merge_conflict missing from catalog")
+		t.Fatal("integration_rebase_conflict missing from catalog")
 	}
 	if static.Summary != entry.Summary {
 		t.Fatalf("no-context summary = %q; want static %q", static.Summary, entry.Summary)
@@ -158,7 +157,7 @@ func TestIntegrationAttentionSummaryTemplates(t *testing.T) {
 // at render time.
 func TestIntegrationAttentionDropsUndeclaredBlocks(t *testing.T) {
 	rendered := New(
-		IntegrationMergeConflict,
+		IntegrationRebaseConflict,
 		WithRepositories(CodeRepository{Name: "repo-a", ConflictFiles: []string{"a.go"}}),
 		WithPhase(CodePhase{Name: "implement"}),
 		WithCommand(CodeCommand{ExitCode: 1}),
@@ -183,7 +182,7 @@ func TestIntegrationAttentionDropsUndeclaredBlocks(t *testing.T) {
 // diagnostics.
 func TestRenderRecordIntegrationAttention(t *testing.T) {
 	rendered := RenderRecord(FailureRecord{
-		Code: IntegrationMergeConflict,
+		Code: IntegrationRebaseConflict,
 		Context: &RecordContext{
 			Repositories: []CodeRepository{{
 				Name:          "repo-a",
@@ -191,7 +190,7 @@ func TestRenderRecordIntegrationAttention(t *testing.T) {
 				ConflictFiles: []string{"internal/api.go"},
 			}},
 		},
-		Diagnostics: "repo-a: merge candidate conflict: [internal/api.go]",
+		Diagnostics: "repo-a: rebase replay conflict: [internal/api.go]",
 	})
 	if rendered.Class != ClassNeedsAction {
 		t.Fatalf("class = %q; want needs_action", rendered.Class)
@@ -202,7 +201,7 @@ func TestRenderRecordIntegrationAttention(t *testing.T) {
 	if rendered.Remediation == nil || len(rendered.Remediation.Actions) != 1 || rendered.Remediation.Actions[0] != "retry" {
 		t.Fatalf("record render must reference the retry action: %#v", rendered.Remediation)
 	}
-	if rendered.Diagnostics != "repo-a: merge candidate conflict: [internal/api.go]" {
+	if rendered.Diagnostics != "repo-a: rebase replay conflict: [internal/api.go]" {
 		t.Fatalf("diagnostics not preserved: %q", rendered.Diagnostics)
 	}
 	if rendered.Context == nil || len(rendered.Context.Repositories) != 1 ||

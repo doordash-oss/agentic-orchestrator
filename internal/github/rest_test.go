@@ -166,6 +166,9 @@ func TestPRWriteEndpoints(t *testing.T) {
 	if err := client.UpdatePRBody("acme", "widgets", 7, "new body"); err != nil {
 		t.Fatalf("UpdatePRBody() error = %v", err)
 	}
+	if err := client.UpdatePRBase("acme", "widgets", 7, "develop"); err != nil {
+		t.Fatalf("UpdatePRBase() error = %v", err)
+	}
 	if err := client.ClosePR("acme", "widgets", 7); err != nil {
 		t.Fatalf("ClosePR() error = %v", err)
 	}
@@ -178,7 +181,53 @@ func TestPRWriteEndpoints(t *testing.T) {
 	if fake.RequestCount(`PATCH /repos/acme/widgets/pulls/7 {"body":"new body"}`) != 1 {
 		t.Fatalf("requests = %v; want one body PATCH", fake.Requests())
 	}
+	if fake.RequestCount(`{"base":"develop"}`) != 1 {
+		t.Fatalf("requests = %v; want one base PATCH", fake.Requests())
+	}
 	if fake.RequestCount(`{"state":"closed"}`) != 1 {
 		t.Fatalf("requests = %v; want one close PATCH", fake.Requests())
+	}
+}
+
+func TestUpdatePRBaseRetargetsPullRequestBase(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	store := testutil.NewFakePullStore("acme")
+	store.Install(t, fake, "widgets")
+
+	client, _ := github.ForHost("github.com")
+	url, err := client.CreatePR(github.CreatePRParams{
+		Owner: "acme", Repo: "widgets", Head: "feature/x", Base: "main",
+		Title: "T", Body: "B",
+	})
+	if err != nil {
+		t.Fatalf("CreatePR() error = %v", err)
+	}
+	if url != store.URL("widgets", 1) {
+		t.Fatalf("CreatePR() = %q; want %q", url, store.URL("widgets", 1))
+	}
+
+	if err := client.UpdatePRBase("acme", "widgets", 1, "develop"); err != nil {
+		t.Fatalf("UpdatePRBase() error = %v", err)
+	}
+
+	// A subsequent read must observe the retargeted base, not just a 200.
+	info, err := client.GetPR("acme", "widgets", 1)
+	if err != nil {
+		t.Fatalf("GetPR() error = %v", err)
+	}
+	if info.BaseRef != "develop" {
+		t.Fatalf("GetPR() base = %q; want %q", info.BaseRef, "develop")
+	}
+
+	if store.PatchedCount() != 1 {
+		t.Fatalf("PatchedCount() = %d; want 1", store.PatchedCount())
+	}
+	patches := store.Patches()
+	if len(patches) != 1 || patches[0].Repo != "widgets" || patches[0].Number != 1 ||
+		patches[0].Base == nil || *patches[0].Base != "develop" {
+		t.Fatalf("Patches() = %+v; want one widgets#1 base patch to develop", patches)
+	}
+	if pr, ok := store.Pull("widgets", 1); !ok || pr.Base != "develop" {
+		t.Fatalf("Pull(widgets, 1) = %+v, %v; want stored base develop", pr, ok)
 	}
 }

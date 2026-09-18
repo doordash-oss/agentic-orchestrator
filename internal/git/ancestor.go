@@ -14,6 +14,32 @@
 
 package git
 
+import (
+	"fmt"
+	"strings"
+)
+
+// MergeBaseSHA resolves the merge base of a and b in the repository at
+// repoPath. It returns an error when either argument is empty or git cannot
+// resolve a merge base (unrelated histories), so callers treat an
+// unresolvable base as a hard failure rather than silently substituting one
+// side.
+func MergeBaseSHA(repoPath, a, b string) (string, error) {
+	if a == "" || b == "" {
+		return "", fmt.Errorf("merge-base requires two commits (got %q, %q)", a, b)
+	}
+	cmd := readGitCmd(repoPath, "merge-base", a, b)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("merge-base %s %s in %s: %w", a, b, repoPath, err)
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 || fields[0] == "" {
+		return "", fmt.Errorf("merge-base %s %s in %s resolved no commit", a, b, repoPath)
+	}
+	return fields[0], nil
+}
+
 // IsAncestor reports whether ancestor is an ancestor of descendant in the
 // repository at repoPath. It shells out to
 // `git merge-base --is-ancestor <ancestor> <descendant>`, which exits 0 when

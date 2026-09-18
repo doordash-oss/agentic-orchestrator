@@ -49,8 +49,11 @@ type WorktreeOps interface {
 	CurrentHeadSHA(worktreePath string) (string, error)
 	CurrentBranch(worktreePath string) string
 	RefSHA(repoPath, ref string) (string, error)
+	// RefSHAOrAbsent reads a ref like RefSHA but reports a missing ref as
+	// absent=true with an empty SHA and no error; only a genuine git failure
+	// is an error.
+	RefSHAOrAbsent(repoPath, ref string) (sha string, absent bool, err error)
 	UpdateRef(repoPath, ref, oldSHA, newSHA string) error
-	CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error)
 	InspectCleanliness(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
 	// RenameBranch renames the branch checked out in the worktree in place.
 	RenameBranch(worktreePath, oldName, newName string) error

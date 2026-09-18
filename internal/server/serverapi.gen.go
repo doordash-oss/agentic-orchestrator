@@ -2053,7 +2053,10 @@ type CompletionPreflightRepo struct {
 
 	// PushMode Repository-level push mode — rewrite when any layer's remote branch carries commits its tip does not contain, else fast_forward. Present only when the repository has at least one pull request on some layer.
 	PushMode CompletionPreflightRepoPushMode `json:"push_mode,omitempty"`
-	Repo     string                          `json:"repo"`
+
+	// RebaseHint Server-authored rebase hint, present when a merged layer whose entry still holds a tip sits below a kept layer with commits — the repository reads behind and the hint names the merged layer and points at the rebase pass that restacks the chain. Omitted when there is no such layer.
+	RebaseHint string `json:"rebase_hint,omitempty"`
+	Repo       string `json:"repo"`
 
 	// Status Server-authored completion status — eligible, already_published, unpublished_changes, completed, unmerged_changes, ineligible, untouched, or blocked.
 	Status  string `json:"status"`
@@ -3182,9 +3185,12 @@ type RepoTransactionEntry struct {
 
 // RepoTransactionRef defines model for RepoTransactionRef.
 type RepoTransactionRef struct {
-	AnchorSha     string `json:"anchor_sha,omitempty"`
-	Branch        string `json:"branch,omitempty"`
-	CandidateSha  string `json:"candidate_sha,omitempty"`
+	AnchorSha    string `json:"anchor_sha,omitempty"`
+	Branch       string `json:"branch,omitempty"`
+	CandidateSha string `json:"candidate_sha,omitempty"`
+
+	// Kind Ref update kind - rewrite (an update to an existing ref), create (a ref that did not exist before the transaction), or delete (a ref that did exist, removed while sitting at its anchor).
+	Kind          string `json:"kind,omitempty"`
 	LayerPosition int    `json:"layer_position,omitempty"`
 	ObservedSha   string `json:"observed_sha,omitempty"`
 }

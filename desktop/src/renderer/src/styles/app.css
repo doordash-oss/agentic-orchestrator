@@ -2441,6 +2441,13 @@ body {
   color: var(--muted);
 }
 
+/* The server-authored rebase hint under the freshness fact: plain advisory
+ * text in the pane's own voice — never error markup, which ErrorSurface owns. */
+.aftercare-facts__rebase-hint {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+}
+
 /* ─── The sheet family ────────────────────────────────────────────────────
  * The generic window-modal sheet: the scrim covers the entire window,
  * sidebar included, and the sheet descends from the window's top edge —
@@ -8158,6 +8165,15 @@ body {
   grid-column: 1 / -1;
   border-left: 2px solid var(--attention);
   padding-left: var(--space-2);
+}
+
+/* The server-authored freshness phrase and rebase hint in a publish row:
+ * advisory text in the sheet's voice — never error markup, which
+ * ErrorSurface owns. */
+.completion-workspace__freshness {
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+  overflow-wrap: anywhere;
 }
 
 /* The per-repository stack preview under a publish row: one line per layer

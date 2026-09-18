@@ -101,6 +101,24 @@ func (e *RestackConflictError) Error() string {
 		e.SegmentFrom, e.SegmentTo, e.CommitSHA, e.ConflictFiles)
 }
 
+// extractConflictFiles reads the conflict file list from a worktree with an
+// in-progress cherry-pick or merge.
+func extractConflictFiles(worktreePath string) []string {
+	cmd := readGitCmd(worktreePath, "diff", "--name-only", "--diff-filter=U")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files
+}
+
 // restackSegLabel returns the label bounding a segment's upper end, or a
 // readable placeholder for the region above the top cut point.
 func restackSegLabel(cutPoints []RestackCutPoint, idx int) string {

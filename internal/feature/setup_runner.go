@@ -287,8 +287,6 @@ func (m *Manager) executeSetupTask(f *Feature, task SetupTask, logPath string) (
 	switch task.Kind {
 	case SetupTaskWorktree:
 		return m.executeWorktreeSetupTask(f, task, logPath)
-	case SetupTaskMerge:
-		return m.executeMergeSetupTask(f, task, logPath)
 	case SetupTaskImage:
 		return m.executeImageSetupTask(f, task, logPath)
 	case SetupTaskAttachment:
@@ -378,36 +376,6 @@ func (m *Manager) reuseExpectedWorktree(task SetupTask) error {
 		}
 	}
 	return nil
-}
-
-// executeMergeSetupTask merges the resolved target ref (task.StartPoint) into
-// the repo's freshly created child worktree. Conflicts complete the task: the
-// worktree keeps the in-progress merge for the pass to resolve. MergeInto is
-// idempotent, so re-execution after a lost completion never re-merges.
-func (m *Manager) executeMergeSetupTask(f *Feature, task SetupTask, logPath string) (SetupTask, error) {
-	idx := repoIndexByName(f, task.Repo)
-	if idx < 0 {
-		return task, fmt.Errorf("repo %q no longer exists on feature", task.Repo)
-	}
-	worktree := f.Repos[idx].WorktreePath
-	if worktree == "" {
-		return task, fmt.Errorf("repo %q has no worktree to merge into", task.Repo)
-	}
-	if task.StartPoint == "" {
-		return task, fmt.Errorf("merge setup task %s is missing a target ref", task.Key)
-	}
-	result := git.MergeInto(worktree, task.StartPoint, "Merge "+task.StartPoint)
-	switch result.Outcome {
-	case git.MergeIntoSuccess:
-		appendSetupLog(logPath, "merged %s into worktree %s", task.StartPoint, worktree)
-	case git.MergeIntoConflict:
-		appendSetupLog(logPath, "merge of %s stopped on conflicts; the worktree %s holds an in-progress merge for the pass to resolve (conflicts: %s)",
-			task.StartPoint, worktree, strings.Join(result.ConflictFiles, ", "))
-	default:
-		return task, fmt.Errorf("merging %s into worktree %s: %w", task.StartPoint, worktree, result.Err)
-	}
-	task.Path = worktree
-	return task, nil
 }
 
 func (m *Manager) executeImageSetupTask(f *Feature, task SetupTask, logPath string) (SetupTask, error) {
@@ -504,16 +472,16 @@ func setupFailureOwner(setup *SetupState, taskKey string) SetupTask {
 }
 
 // setupFailureCode classifies one setup failure by its owning task's kind:
-// worktree and merge tasks fail as worktree_setup_failed, image and
-// attachment tasks as setup_asset_copy_failed, and the abandoned-setup path
-// (reconciliation, async runner errors that recorded no task failure,
-// pre-task failures) as setup_interrupted.
+// worktree tasks fail as worktree_setup_failed, image and attachment tasks
+// as setup_asset_copy_failed, and the abandoned-setup path (reconciliation,
+// async runner errors that recorded no task failure, pre-task failures) as
+// setup_interrupted.
 func setupFailureCode(owner SetupTask, interrupted bool) errcat.Code {
 	if interrupted || owner.Key == "" {
 		return errcat.SetupInterrupted
 	}
 	switch owner.Kind {
-	case SetupTaskWorktree, SetupTaskMerge:
+	case SetupTaskWorktree:
 		return errcat.WorktreeSetupFailed
 	case SetupTaskImage, SetupTaskAttachment:
 		return errcat.SetupAssetCopyFailed
@@ -532,7 +500,7 @@ func setupFailureRecords(setup *SetupState, owner SetupTask, interrupted bool, r
 	taskRecord = errcat.FailureRecord{Code: code, Diagnostics: rawErr}
 	var taskCtx errcat.RecordContext
 	switch owner.Kind {
-	case SetupTaskWorktree, SetupTaskMerge:
+	case SetupTaskWorktree:
 		if owner.Repo != "" {
 			taskCtx.Repositories = []errcat.CodeRepository{{Name: owner.Repo, Branch: owner.Branch}}
 		}

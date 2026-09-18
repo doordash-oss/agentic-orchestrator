@@ -3832,6 +3832,7 @@ func TestCompletionPreflightRepoCarriesPendingDeliveryFields(t *testing.T) {
 		PushMode:              CompletionPreflightRepoPushModeRewrite,
 		PendingDirtyFiles:     []string{"a.go", "b.go"},
 		PendingDirtyFileTotal: 2,
+		RebaseHint:            "Layer 1 (Foundation) is merged below kept work — run the rebase pass to restack the layers above.",
 	}
 	data, err := json.Marshal(repo)
 	if err != nil {
@@ -3864,6 +3865,10 @@ func TestCompletionPreflightRepoCarriesPendingDeliveryFields(t *testing.T) {
 	}
 	if decoded["pending_dirty_file_total"] != float64(2) {
 		t.Errorf("pending_dirty_file_total = %v; want 2", decoded["pending_dirty_file_total"])
+	}
+	if hint, _ := decoded["rebase_hint"].(string); hint == "" ||
+		!strings.Contains(hint, "Layer 1") || !strings.Contains(hint, "rebase pass") {
+		t.Errorf("rebase_hint = %v; want the hint naming layer 1 and the rebase pass", decoded["rebase_hint"])
 	}
 }
 

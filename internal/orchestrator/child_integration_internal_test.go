@@ -39,24 +39,28 @@ import (
 )
 
 type childIntegrationFixture struct {
-	t             *testing.T
-	repoDir       string
-	childWorktree string
-	childBranch   string
-	parentBranch  string
-	parentBaseSHA string
-	store         *feature.Store
-	mgr           *feature.Manager
-	wm            *git.WorktreeManager
-	parent        *feature.Feature
-	child         *feature.Feature
+	t              *testing.T
+	repoDir        string
+	childWorktree  string
+	childBranch    string
+	parentBranch   string
+	parentBaseSHA  string
+	appendedBranch string
+	store          *feature.Store
+	mgr            *feature.Manager
+	wm             *git.WorktreeManager
+	parent         *feature.Feature
+	child          *feature.Feature
 }
 
 // newChildIntegrationFixture builds a real single-repository parent/child
 // pair: the parent branch is checked out at repoDir, the child branch lives
 // in a disposable worktree pinned at the captured parent base with one
 // committed child change plus one uncommitted change (to prove integration
-// commits remaining work before touching the parent).
+// commits remaining work before touching the parent). The parent carries a
+// one-layer stack on its checked-out branch and the child a one-layer stack
+// on its own branch with the recorded tip, so refactor integration appends
+// the child's layer as parent position 2 on the appendedBranch.
 func newChildIntegrationFixture(t *testing.T, parentStatus feature.Status, manualPublish bool) *childIntegrationFixture {
 	t.Helper()
 	repoDir := testutil.InitGitRepo(t)
@@ -68,6 +72,7 @@ func newChildIntegrationFixture(t *testing.T, parentStatus feature.Status, manua
 	childBranch := "feature/child-integ"
 	childIntegrationGit(t, repoDir, "worktree", "add", "-b", childBranch, childWorktree, parentBaseSHA)
 	testutil.CommitFile(t, childWorktree, "child.txt", "child work\n", "child change")
+	childTipSHA := childIntegrationGit(t, childWorktree, "rev-parse", "HEAD")
 	if err := os.WriteFile(childWorktree+"/pending.txt", []byte("not yet committed\n"), 0o644); err != nil {
 		t.Fatalf("write pending file: %v", err)
 	}
@@ -117,6 +122,10 @@ func newChildIntegrationFixture(t *testing.T, parentStatus feature.Status, manua
 			BaseBranch:   "main",
 		}},
 		RepoStates: map[string]*feature.RepoState{"repoA": {Touched: true}},
+		Stack: []feature.StackLayer{{
+			Position: 1, Title: "Child layer", Slug: "child-layer", Phases: []int{1}, Branch: childBranch,
+			Repos: map[string]feature.StackRepoEntry{"repoA": {TipSHA: childTipSHA}},
+		}},
 		Parent: &feature.ChildRelationship{
 			ParentID: parent.ID,
 			Kind:     feature.ChildKindRefactor,
@@ -137,7 +146,8 @@ func newChildIntegrationFixture(t *testing.T, parentStatus feature.Status, manua
 	return &childIntegrationFixture{
 		t: t, repoDir: repoDir, childWorktree: childWorktree, childBranch: childBranch,
 		parentBranch: "feature/parent", parentBaseSHA: parentBaseSHA,
-		store: store, mgr: mgr, wm: wm, parent: parent, child: child,
+		appendedBranch: git.LayerBranchName(parent.WorkspaceSlug(), 2, "child-layer"),
+		store:          store, mgr: mgr, wm: wm, parent: parent, child: child,
 	}
 }
 
@@ -286,20 +296,23 @@ func TestChildIntegrationHappyPath(t *testing.T) {
 	}
 
 	parent, child := fx.reload()
-	// Parent branch now carries an explicit merge commit with two parents.
-	parents := childIntegrationGit(t, fx.repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
-	if fields := len(strings.Fields(parents)); fields != 3 {
-		t.Fatalf("parent merge commit parents = %q, want two parents", parents)
+	// The parent worktree switched onto the appended layer's branch at the
+	// child head; the existing parent layer's ref is byte-identical.
+	if branch := childIntegrationGit(t, fx.repoDir, "branch", "--show-current"); branch != fx.appendedBranch {
+		t.Fatalf("parent worktree branch = %q, want appended layer branch %q", branch, fx.appendedBranch)
+	}
+	if got := childIntegrationGit(t, fx.repoDir, "rev-parse", "refs/heads/"+fx.parentBranch); got != fx.parentBaseSHA {
+		t.Fatalf("parent branch ref = %s, want unchanged %s", got, fx.parentBaseSHA)
 	}
 	if _, err := os.Stat(fx.repoDir + "/child.txt"); err != nil {
-		t.Fatalf("merged child content missing: %v", err)
+		t.Fatalf("appended child content missing: %v", err)
 	}
 	if _, err := os.Stat(fx.repoDir + "/pending.txt"); err != nil {
-		t.Fatalf("previously-uncommitted child content missing from merge: %v", err)
+		t.Fatalf("previously-uncommitted child content missing from the appended layer: %v", err)
 	}
 
-	// Child closure record: outcome, timestamp, integration anchors, merge
-	// HEAD matching the parent tip, no cleanup warning.
+	// Child closure record: outcome, timestamp, the created ref's candidate
+	// matching the parent worktree HEAD, no cleanup warning.
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 		t.Fatalf("child close outcome = %q, want %q", child.Parent.CloseOutcome, feature.ChildCloseOutcomeCompleted)
 	}
@@ -310,13 +323,34 @@ func TestChildIntegrationHappyPath(t *testing.T) {
 	if tx == nil {
 		t.Fatal("child transaction record missing")
 	}
-	top := tx.Entries[0].TopRef()
-	if len(tx.Entries) != 1 || top == nil || top.Branch != fx.parentBranch || top.AnchorSHA == "" || tx.Entries[0].ChildHeadSHA == "" {
+	if len(tx.Entries) != 1 || tx.Entries[0].ChildHeadSHA == "" {
 		t.Fatalf("transaction anchors incomplete: %+v", tx)
 	}
-	mergeHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
-	if top.ObservedSHA != mergeHEAD {
-		t.Fatalf("transaction merge head = %s, want parent tip %s", top.ObservedSHA, mergeHEAD)
+	top := tx.Entries[0].TopRef()
+	if top == nil || top.RefKind() != feature.RepoRefKindCreate || top.Branch != fx.appendedBranch ||
+		top.Layer != 2 || top.AnchorSHA != "" || top.CandidateSHA != tx.Entries[0].ChildHeadSHA {
+		t.Fatalf("transaction created ref = %+v, want appended layer 2 on %s at the child head", top, fx.appendedBranch)
+	}
+	if prev := tx.Entries[0].PreviousTopRef(); prev == nil || prev.Branch != fx.parentBranch || prev.Layer != 1 || prev.TipSHA != fx.parentBaseSHA {
+		t.Fatalf("transaction previous top = %+v, want layer 1 on %s at %s", prev, fx.parentBranch, fx.parentBaseSHA)
+	}
+	if len(tx.AppendedLayers) != 1 || tx.AppendedLayers[0].Position != 2 || tx.AppendedLayers[0].Branch != fx.appendedBranch ||
+		tx.AppendedLayers[0].Origin == nil || tx.AppendedLayers[0].Origin.SourceFeatureID != child.ID || tx.AppendedLayers[0].Origin.SourceLayerPosition != 1 {
+		t.Fatalf("appended layer definitions = %+v, want one layer at position 2 with the child origin", tx.AppendedLayers)
+	}
+	appendedHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
+	if top.ObservedSHA != appendedHEAD {
+		t.Fatalf("transaction appended head = %s, want parent worktree HEAD %s", top.ObservedSHA, appendedHEAD)
+	}
+	if len(parent.Stack) != 2 {
+		t.Fatalf("parent stack layers = %d, want 2 after closure", len(parent.Stack))
+	}
+	if appended := parent.Stack[1]; appended.Position != 2 || appended.Branch != fx.appendedBranch ||
+		appended.Origin == nil || appended.Repos["repoA"].TipSHA != appendedHEAD {
+		t.Fatalf("persisted appended layer = %+v, want position 2 on %s with tip %s", appended, fx.appendedBranch, appendedHEAD)
+	}
+	if parent.Repos[0].Branch != fx.appendedBranch {
+		t.Fatalf("parent repo record branch = %q, want %s", parent.Repos[0].Branch, fx.appendedBranch)
 	}
 	if tx.Entries[0].Cleanup != nil {
 		t.Fatalf("unexpected cleanup warning record: %#v", tx.Entries[0].Cleanup)
@@ -377,12 +411,14 @@ func TestChildIntegrationDirtyParentBlocksMerge(t *testing.T) {
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
-	top := tx.Entries[0].TopRef()
-	if len(tx.Entries) != 1 || tx.Entries[0].ChildHeadSHA == "" || top == nil || top.AnchorSHA == "" {
-		t.Fatalf("anchors must be durable before parent mutation: %+v", tx)
+	if len(tx.Entries) != 1 || tx.Entries[0].ChildHeadSHA == "" {
+		t.Fatalf("child head must be durable before parent mutation: %+v", tx)
 	}
-	if top.CandidateSHA != "" {
-		t.Fatalf("candidate recorded (%s) although the merge was blocked", top.CandidateSHA)
+	if prev := tx.Entries[0].PreviousTopRef(); prev == nil || prev.Branch != fx.parentBranch || prev.TipSHA != preHEAD {
+		t.Fatalf("previous top must be durable before parent mutation: %+v", tx.Entries[0].PreviousTop)
+	}
+	if refs := tx.Entries[0].Refs; len(refs) != 0 {
+		t.Fatalf("created refs recorded (%+v) although the append was blocked", refs)
 	}
 	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationParentDirty {
 		t.Fatalf("attention record = %+v, want integration_parent_dirty", tx.Attention)
@@ -412,32 +448,36 @@ func TestChildIntegrationDirtyParentBlocksMerge(t *testing.T) {
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 		t.Fatalf("child close outcome = %q after restart, want completed", child.Parent.CloseOutcome)
 	}
-	parents := childIntegrationGit(t, fx.repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
-	if fields := len(strings.Fields(parents)); fields != 3 {
-		t.Fatalf("parent merge commit parents = %q, want two parents after retry", parents)
+	if branch := childIntegrationGit(t, fx.repoDir, "branch", "--show-current"); branch != fx.appendedBranch {
+		t.Fatalf("parent worktree branch = %q, want appended layer branch %q after retry", branch, fx.appendedBranch)
+	}
+	if got := childIntegrationGit(t, fx.repoDir, "rev-parse", "refs/heads/"+fx.parentBranch); got != preHEAD {
+		t.Fatalf("parent branch ref = %s, want unchanged %s after retry", got, preHEAD)
 	}
 	if parent.Status != feature.StatusCodeReady {
 		t.Fatalf("parent status = %s, want CodeReady", parent.Status)
 	}
 }
 
-// TestChildIntegrationConflictAttentionAndRetry proves a conflicting merge
-// aborts cleanly (parent ref at its anchor, child branch preserved, no
-// leftover merge state), records structured attention, and a retry after
+// TestChildIntegrationDivergenceAttentionAndRetry proves a parent that
+// diverged from the child's history — the refactor analog of a merge
+// conflict, since append preparation requires the candidates to descend
+// from the parent tip — parks with the candidate-failed attention, leaves
+// the parent ref untouched, preserves the child branch, and a retry after
 // the divergence is resolved integrates normally.
-func TestChildIntegrationConflictAttentionAndRetry(t *testing.T) {
+func TestChildIntegrationDivergenceAttentionAndRetry(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-git integration test")
 	}
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
 
-	// Conflict on child.txt: the child added it, the parent adds a different
-	// file with the same name.
-	testutil.CommitFile(t, fx.repoDir, "child.txt", "parent-side conflict\n", "conflicting parent commit")
+	// Divergence: the parent advances past the launch base with its own
+	// commit, so the child head no longer descends from the parent tip.
+	testutil.CommitFile(t, fx.repoDir, "parent-side.txt", "parent divergence\n", "diverging parent commit")
 	preHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
 	// Pin the persisted base to the new tip so the parent-drift gate does not
-	// fire and the merge-conflict path is exercised.
+	// fire and the ancestry violation path is exercised.
 	pinned, _ := fx.store.Load(fx.child.ID)
 	pinned.Parent.Bases[0].SHA = preHEAD
 	if err := fx.store.Save(pinned); err != nil {
@@ -448,10 +488,13 @@ func TestChildIntegrationConflictAttentionAndRetry(t *testing.T) {
 		t.Fatalf("runChildIntegration() error = %v, want nil with recorded attention", err)
 	}
 	if got := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD"); got != preHEAD {
-		t.Fatalf("parent ref = %s, want unchanged %s after conflict abort", got, preHEAD)
+		t.Fatalf("parent ref = %s, want unchanged %s after divergence park", got, preHEAD)
 	}
 	if status := childIntegrationGit(t, fx.repoDir, "status", "--porcelain"); status != "" {
-		t.Fatalf("parent worktree not clean after abort: %q", status)
+		t.Fatalf("parent worktree not clean after park: %q", status)
+	}
+	if branches := childIntegrationGit(t, fx.repoDir, "branch", "--list", fx.appendedBranch); branches != "" {
+		t.Fatalf("appended branch %s created although the append was parked", fx.appendedBranch)
 	}
 
 	_, child := fx.reload()
@@ -459,20 +502,18 @@ func TestChildIntegrationConflictAttentionAndRetry(t *testing.T) {
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
-	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationMergeConflict {
-		t.Fatalf("attention record = %+v, want integration_merge_conflict", tx.Attention)
+	if tx.Attention == nil || tx.Attention.Code != errcat.IntegrationCandidateFailed {
+		t.Fatalf("attention record = %+v, want integration_candidate_failed", tx.Attention)
 	}
-	if tx.Attention.Context == nil || len(tx.Attention.Context.Repositories) != 1 ||
-		len(tx.Attention.Context.Repositories[0].ConflictFiles) == 0 ||
-		tx.Attention.Context.Repositories[0].ConflictFiles[0] != "child.txt" {
-		t.Fatalf("attention repositories = %+v, want the conflicted child.txt in conflict_files", tx.Attention.Context)
+	if !strings.Contains(tx.Attention.Diagnostics, "ancestry") {
+		t.Fatalf("attention diagnostics = %q, want the ancestry-chain violation named", tx.Attention.Diagnostics)
 	}
 	if child.Parent.CloseOutcome != "" {
-		t.Fatalf("child closed on conflicted integration")
+		t.Fatalf("child closed on diverged integration")
 	}
 	// Child branch and worktree survive.
 	if branches := childIntegrationGit(t, fx.repoDir, "branch", "--list", fx.childBranch); branches == "" {
-		t.Fatal("child branch was deleted on conflicted integration")
+		t.Fatal("child branch was deleted on diverged integration")
 	}
 
 	// Resolve the divergence on the parent side and retry via Restart,
@@ -492,7 +533,7 @@ func TestChildIntegrationConflictAttentionAndRetry(t *testing.T) {
 	}
 	_, child = fx.reload()
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
-		t.Fatalf("child close outcome = %q after conflict retry, want completed", child.Parent.CloseOutcome)
+		t.Fatalf("child close outcome = %q after divergence retry, want completed", child.Parent.CloseOutcome)
 	}
 	if top := child.Parent.Transaction.Entries[0].TopRef(); top == nil || top.CandidateSHA == "" {
 		t.Fatal("candidate not recorded after retry")
@@ -718,10 +759,10 @@ func TestChildIntegrationCleanupWarningNonFatal(t *testing.T) {
 	if cleanup.Diagnostics == "" {
 		t.Fatal("cleanup warning diagnostics missing the raw cause")
 	}
-	// The merge boundary is durable and complete.
-	parents := childIntegrationGit(t, fx.repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
-	if fields := len(strings.Fields(parents)); fields != 3 {
-		t.Fatalf("parent merge commit parents = %q, want two parents", parents)
+	// The append boundary is durable and complete: the worktree sits on the
+	// appended layer's branch and the existing parent layer is untouched.
+	if branch := childIntegrationGit(t, fx.repoDir, "branch", "--show-current"); branch != fx.appendedBranch {
+		t.Fatalf("parent worktree branch = %q, want appended layer branch %q", branch, fx.appendedBranch)
 	}
 
 	// Automatic reconciliation owns the post-close cleanup tail. Closed
@@ -780,9 +821,13 @@ func TestChildIntegrationAutoPublish(t *testing.T) {
 		p, _ := o.deps.Lifecycle.Get(fx.parent.ID)
 		childClosedAtPublish = c.Parent.CloseOutcome == feature.ChildCloseOutcomeCompleted &&
 			p.Status == feature.StatusCodeReady
-		const prURL = "https://example/pr/1"
-		if err := o.deps.Lifecycle.RecordStackLayerPR(featureID, repoName, 1, prURL, ""); err != nil {
-			return err
+		// Record pull requests for every layer of the (now two-layer)
+		// stack so the all-published check settles the parent.
+		for _, position := range []int{1, 2} {
+			prURL := fmt.Sprintf("https://example/pr/%d", position)
+			if err := o.deps.Lifecycle.RecordStackLayerPR(featureID, repoName, position, prURL, ""); err != nil {
+				return err
+			}
 		}
 		if err := o.deps.Lifecycle.SetRepoPublished(featureID, repoName); err != nil {
 			return err
@@ -968,13 +1013,12 @@ func TestAdvanceAfterFinalReviewRoutesChildToIntegration(t *testing.T) {
 	if parent.Status != feature.StatusCodeReady {
 		t.Fatalf("parent status = %s, want CodeReady", parent.Status)
 	}
-	parents := childIntegrationGit(t, fx.repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
-	if fields := len(strings.Fields(parents)); fields != 3 {
-		t.Fatalf("parent merge commit parents = %q, want two-parent boundary", parents)
+	if branch := childIntegrationGit(t, fx.repoDir, "branch", "--show-current"); branch != fx.appendedBranch {
+		t.Fatalf("parent worktree branch = %q, want appended layer branch %q", branch, fx.appendedBranch)
 	}
 }
 
-// TestChildIntegrationMergeAppliesRecordedChildHead proves the merge applies
+// TestChildIntegrationMergeAppliesRecordedChildHead proves the append applies
 // the recorded child head SHA, not the mutable child branch: the candidate
 // creation uses the durable ChildHeadSHA captured during preparation.
 func TestChildIntegrationMergeAppliesRecordedChildHead(t *testing.T) {
@@ -993,11 +1037,11 @@ func TestChildIntegrationMergeAppliesRecordedChildHead(t *testing.T) {
 		t.Fatal("child head anchor not recorded")
 	}
 
-	// The merge second parent must be the recorded child head, proving the
+	// The created ref must sit at the recorded child head, proving the
 	// candidate used the durable SHA, not the mutable branch name.
-	second := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD^2")
-	if second != recordedHead {
-		t.Fatalf("merge second parent = %s, want recorded child head %s", second, recordedHead)
+	appended := childIntegrationGit(t, fx.repoDir, "rev-parse", "refs/heads/"+fx.appendedBranch)
+	if appended != recordedHead {
+		t.Fatalf("appended branch ref = %s, want recorded child head %s", appended, recordedHead)
 	}
 
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
@@ -1049,16 +1093,17 @@ func TestChildIntegrationParentBranchMismatch(t *testing.T) {
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 		t.Fatalf("child close outcome = %q, want completed after restoring the recorded branch", child.Parent.CloseOutcome)
 	}
-	mergeHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "feature/parent")
-	if top := child.Parent.Transaction.Entries[0].TopRef(); top == nil || top.ObservedSHA != mergeHEAD {
-		t.Fatalf("merge head = %+v, want recorded %s on feature/parent", top, mergeHEAD)
+	if branch := childIntegrationGit(t, fx.repoDir, "branch", "--show-current"); branch != fx.appendedBranch {
+		t.Fatalf("parent worktree branch = %q, want appended layer branch %q after retry", branch, fx.appendedBranch)
 	}
-	parents := childIntegrationGit(t, fx.repoDir, "rev-list", "--parents", "-n", "1", "feature/parent")
-	if fields := len(strings.Fields(parents)); fields != 3 {
-		t.Fatalf("parent merge commit parents = %q, want two-parent boundary", parents)
+	if got := childIntegrationGit(t, fx.repoDir, "rev-parse", "refs/heads/"+fx.parentBranch); got != preHEAD {
+		t.Fatalf("parent branch ref = %s, want unchanged %s; integration must never rewrite it", got, preHEAD)
+	}
+	if top := child.Parent.Transaction.Entries[0].TopRef(); top == nil || top.ObservedSHA != top.CandidateSHA {
+		t.Fatalf("created ref = %+v, want observed at its candidate after retry", top)
 	}
 	if got := childIntegrationGit(t, fx.repoDir, "rev-parse", "stray-branch"); got != preHEAD {
-		t.Fatalf("stray branch moved to %s; integration must only touch the recorded parent branch", got)
+		t.Fatalf("stray branch moved to %s; integration must only create the appended branch", got)
 	}
 }
 
@@ -1153,9 +1198,9 @@ func TestChildIntegrationCloseWriteFailureIsRetryable(t *testing.T) {
 	}
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
-	// Transaction path Modify calls on child: 1=prep progress, 2=prepared,
-	// 3=applying, 4=apply progress, 5=applied, 6=close write.
-	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 6, err: errors.New("simulated close-write failure")}
+	// Transaction path Modify calls on child: 1=prepared, 2=applying,
+	// 3=apply progress, 4=applied, 5=close write.
+	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 5, err: errors.New("simulated close-write failure")}
 	o.deps.Store = store
 
 	err := o.RunChildIntegration(fx.child.ID)
@@ -1192,12 +1237,12 @@ func TestChildIntegrationCleanupWarningPersistenceFailure(t *testing.T) {
 	}
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
-	// Transaction path Modify calls on child: 1=prep progress, 2=prepared,
-	// 3=applying, 4=apply progress, 5=applied, 6=close write, 7=merged,
-	// 8=cleanup warning record. (The closure-error clear that used to sit
-	// between close and merged was removed with the child last-error mirror.)
+	// Transaction path Modify calls on child: 1=prepared, 2=applying,
+	// 3=apply progress, 4=applied, 5=close write, 6=merged, 7=cleanup
+	// warning record. (The closure-error clear that used to sit between
+	// close and merged was removed with the child last-error mirror.)
 	o.deps.Worktrees = failingRemoveWorktrees{WorktreeManager: fx.wm, removeErr: errors.New("simulated worktree removal failure")}
-	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 8, err: errors.New("simulated warning-write failure")}
+	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 7, err: errors.New("simulated warning-write failure")}
 	o.deps.Store = store
 
 	err := o.RunChildIntegration(fx.child.ID)
@@ -1507,9 +1552,8 @@ func TestRestartPhase_ReviewPassedFinalReviewNilTransaction_DispatchesIntegratio
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 		t.Fatalf("child close outcome = %q, want completed integration", child.Parent.CloseOutcome)
 	}
-	parents := childIntegrationGit(t, fx.repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
-	if fields := len(strings.Fields(parents)); fields != 3 {
-		t.Fatalf("parent merge commit parents = %q, want two-parent merge", parents)
+	if branch := childIntegrationGit(t, fx.repoDir, "branch", "--show-current"); branch != fx.appendedBranch {
+		t.Fatalf("parent worktree branch = %q, want appended layer branch %q", branch, fx.appendedBranch)
 	}
 	if parent.Status != feature.StatusCodeReady {
 		t.Fatalf("parent status = %s, want CodeReady", parent.Status)

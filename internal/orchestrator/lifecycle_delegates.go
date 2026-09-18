@@ -807,6 +807,23 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	// race subsequent Store.Modify writes.
 	o.StopFeatureSessions(featureID)
 
+	// A rebase child at Created restarts the harness restack loop: the
+	// restack replaces the planning and implement phases, and a pass parked
+	// on a replay conflict re-runs the loop from scratch. A landed restack
+	// dispatches the Final Review — the pass's single verification round —
+	// through the normal dispatch path; a parked one reports the attention
+	// record and dispatches nothing.
+	if f.IsChild() && f.Parent != nil && f.Parent.Kind == feature.ChildKindRebase && f.Status == feature.StatusCreated {
+		landed, err := o.runRebaseRestackPass(featureID)
+		if err != nil {
+			return RestartOutcome{}, err
+		}
+		if !landed {
+			return RestartOutcome{Action: RestartNoOp}, nil
+		}
+		return RestartOutcome{Action: RestartDispatchPhase, Phase: feature.PhaseFinalReview}, nil
+	}
+
 	// An active child with resumable integration state replays the integration
 	// boundary — never Plan, Implement, or an already-approved Final Review.
 	// Closed cleanup tails are owned exclusively by automatic reconciliation.

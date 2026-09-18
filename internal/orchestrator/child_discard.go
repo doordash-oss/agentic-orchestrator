@@ -365,7 +365,7 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 		for j := range entry.Refs {
 			ref := &entry.Refs[j]
 			refName := "refs/heads/" + ref.Branch
-			current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, refName)
+			current, absent, err := o.deps.Worktrees.RefSHAOrAbsent(parentRepo.Path, refName)
 			if err != nil {
 				allSafe = false
 				entrySafe = false
@@ -374,24 +374,28 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 				break
 			}
 			ref.ObservedSHA = current
-			switch ref.Classify(current) {
+			switch ref.Classify(current, absent) {
 			case feature.RefAtCandidate:
-				// Ref still at its candidate — roll it back to its anchor in
-				// the entry's single transaction below.
-				rollbackRefs = append(rollbackRefs, git.RefUpdate{
-					Ref:    refName,
-					OldSHA: ref.CandidateSHA,
-					NewSHA: ref.AnchorSHA,
-				})
+				// Ref still at its candidate — a created ref is deleted, a
+				// deleted ref recreated at its anchor, a rewrite ref
+				// restored to its anchor — in the entry's single transaction
+				// below.
+				rollbackRefs = append(rollbackRefs, rollbackRefUpdateFor(ref))
 			case feature.RefAtAnchor:
-				// Already rolled back (possibly externally).
+				// Already rolled back (possibly externally); a created ref's
+				// absence and a deleted ref's presence at its anchor
+				// included.
 			default:
 				// Externally moved — cannot overwrite.
 				allSafe = false
 				entrySafe = false
+				observed := current
+				if absent {
+					observed = "absent"
+				}
 				findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
 					fmt.Sprintf("repo %s ref %s externally moved: anchor %s candidate %s observed %s",
-						entry.Repo, refName, ref.AnchorSHA, ref.CandidateSHA, current)))
+						entry.Repo, refName, ref.AnchorSHA, ref.CandidateSHA, observed)))
 			}
 			if !entrySafe {
 				break
@@ -408,12 +412,25 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 				continue
 			}
 			entry.ApplyState = feature.RepoApplyRolledBack
-			// Sync parent worktree back to the top anchor.
+			// Restore the parent worktree and record: an entry that appended
+			// layers switches back to the previous top branch — its ref was
+			// only ever verified, never moved — and points the repository
+			// record back at it; every other entry resets to the top anchor.
 			parentWorktree := parentRepo.WorktreePath
 			if parentWorktree == "" {
 				parentWorktree = parentRepo.Path
 			}
-			if top := entry.TopRef(); top != nil {
+			if entry.PreviousTop != nil {
+				if err := o.deps.Worktrees.SwitchBranch(parentWorktree, entry.PreviousTop.Branch); err != nil {
+					allSafe = false
+					findings = append(findings, entryFinding(entry, errcat.IntegrationWorktreeSyncFailed,
+						fmt.Sprintf("repo %s switching parent worktree back to %s: %v", entry.Repo, entry.PreviousTop.Branch, err)))
+					continue
+				}
+				if err := o.moveParentRepoBranch(parent.ID, entry.Repo, entry.PreviousTop.Branch); err != nil {
+					return false, fmt.Errorf("restoring parent branch record for repo %s: %w", entry.Repo, err)
+				}
+			} else if top := entry.TopRef(); top != nil {
 				if err := o.deps.Worktrees.ResetToCommit(parentWorktree, top.AnchorSHA); err != nil {
 					allSafe = false
 					findings = append(findings, entryFinding(entry, errcat.IntegrationWorktreeSyncFailed,

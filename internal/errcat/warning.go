@@ -22,7 +22,7 @@ import (
 // Warning codes, one per distinct remediation. All are warning class with no
 // action references: a warning never blocks progress, never gates a lane,
 // and never offers an action. The feature codes are computed at the boundary
-// that produces them; the relationship codes are the two optional records a
+// that produces them; the relationship codes are the optional records a
 // transaction journal entry can store; the rewind and repository-diff codes
 // classify their carriers' typed failures at the mutation-target boundary;
 // the relocation codes report the Final Review fixer's best-effort fix
@@ -44,6 +44,10 @@ const (
 	// feedback integration tail (push, reply, thread resolution) did not
 	// finish; each failure is one diagnostics line.
 	ReviewFeedbackTailIncomplete Code = "review_feedback_tail_incomplete"
+	// StackBaseRetargetFailed reports a repository whose stack-layer pull
+	// request could not be retargeted to the parent layer's branch during
+	// publish; the pull request keeps its current base.
+	StackBaseRetargetFailed Code = "stack_base_retarget_failed"
 	// RewindPullRequestCloseFailed reports a repository whose pull request
 	// could not be closed during a rewind.
 	RewindPullRequestCloseFailed Code = "rewind_pull_request_close_failed"
@@ -106,6 +110,7 @@ const (
 var relationshipWarningCodes = map[Code]bool{
 	ChildCleanupIncomplete:       true,
 	ReviewFeedbackTailIncomplete: true,
+	StackBaseRetargetFailed:      true,
 }
 
 // IsRelationshipWarning reports whether code is one of the relationship
@@ -232,6 +237,31 @@ func warningLayerClause(position int, title string) string {
 		return fmt.Sprintf("layer %d (%q)", position, title)
 	}
 	return fmt.Sprintf("layer %d", position)
+}
+
+// stackBaseRetargetFailedSummary names the repository, its stack layer, and
+// the pull request whose base retarget failed. The intended base stays out of
+// the summary on purpose: a stored journal record rebuilds these params from
+// the repositories block alone, so the summary must not depend on anything a
+// record cannot persist; the intended base is named by the remediation.
+func stackBaseRetargetFailedSummary(p Params) string {
+	repos, ok := warningRepoParams(p)
+	if !ok {
+		return ""
+	}
+	repo := repos[0]
+	clause := warningRepoClause(repo)
+	if clause == "" {
+		return ""
+	}
+	sentence := fmt.Sprintf("Retargeting the pull request for %s", clause)
+	if repo.LayerPosition > 0 {
+		sentence += fmt.Sprintf(" in %s", warningLayerClause(repo.LayerPosition, repo.LayerTitle))
+	}
+	if url := strings.TrimSpace(repo.PullRequestURL); url != "" {
+		sentence += fmt.Sprintf(" at %s", url)
+	}
+	return sentence + " to the parent layer's branch failed; the pull request keeps its current base."
 }
 
 // fixRelocatedAboveLayerSummary names the repository, the requested layer,

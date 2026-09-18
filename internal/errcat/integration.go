@@ -24,7 +24,6 @@ import (
 // transaction boundary; all are fix-then-retry preconditions that reference
 // the retry action and declare only the repositories block.
 const (
-	IntegrationMergeConflict        Code = "integration_merge_conflict"
 	IntegrationParentDirty          Code = "integration_parent_dirty"
 	IntegrationParentRefDrift       Code = "integration_parent_ref_drift"
 	IntegrationRefRace              Code = "integration_ref_race"
@@ -33,18 +32,20 @@ const (
 	IntegrationWorktreeSyncFailed   Code = "integration_worktree_sync_failed"
 	IntegrationRolledBack           Code = "integration_rolled_back"
 	IntegrationCandidateFailed      Code = "integration_candidate_failed"
-	RebaseGateTargetMissing         Code = "rebase_gate_target_missing"
-	RebaseGateNotAncestor           Code = "rebase_gate_not_ancestor"
-	RebaseGateMergeInProgress       Code = "rebase_gate_merge_in_progress"
-	RebaseGateConflictMarkers       Code = "rebase_gate_conflict_markers"
-	RebaseGatePassthroughModified   Code = "rebase_gate_passthrough_modified"
+	// IntegrationRebaseConflict parks a rebase pass whose harness restack
+	// replay conflicted: the segment and commit being replayed and the
+	// conflicted files are named in the record.
+	IntegrationRebaseConflict     Code = "integration_rebase_conflict"
+	RebaseGateTargetMissing       Code = "rebase_gate_target_missing"
+	RebaseGateNotAncestor         Code = "rebase_gate_not_ancestor"
+	RebaseGateConflictMarkers     Code = "rebase_gate_conflict_markers"
+	RebaseGatePassthroughModified Code = "rebase_gate_passthrough_modified"
 )
 
 // integrationAttentionCodes is the closed set of codes a parked integration
 // transaction can carry. RenderRecord uses it to pick the summary parameter
 // shape; the journal never stores a code outside this set.
 var integrationAttentionCodes = map[Code]bool{
-	IntegrationMergeConflict:        true,
 	IntegrationParentDirty:          true,
 	IntegrationParentRefDrift:       true,
 	IntegrationRefRace:              true,
@@ -53,9 +54,9 @@ var integrationAttentionCodes = map[Code]bool{
 	IntegrationWorktreeSyncFailed:   true,
 	IntegrationRolledBack:           true,
 	IntegrationCandidateFailed:      true,
+	IntegrationRebaseConflict:       true,
 	RebaseGateTargetMissing:         true,
 	RebaseGateNotAncestor:           true,
-	RebaseGateMergeInProgress:       true,
 	RebaseGateConflictMarkers:       true,
 	RebaseGatePassthroughModified:   true,
 }
@@ -157,26 +158,6 @@ func changeWord(count int) string {
 		return "change"
 	}
 	return "changes"
-}
-
-// integrationMergeConflictSummary names the repository and conflict-file
-// count of the failed merge candidate.
-func integrationMergeConflictSummary(p Params) string {
-	repos, ok := integrationParams(p)
-	if !ok {
-		return ""
-	}
-	return integrationOneOrMany(repos, func(repo CodeRepository) string {
-		name := strings.TrimSpace(repo.Name)
-		if name == "" {
-			return ""
-		}
-		count := len(repo.ConflictFiles)
-		if count > 0 {
-			return fmt.Sprintf("The merge candidate for repository %q conflicted on %d %s.", name, count, fileWord(count))
-		}
-		return fmt.Sprintf("The merge candidate for repository %q conflicted.", name)
-	}, "The integration merge conflicted in repositories:")
 }
 
 // integrationParentDirtySummary names the repository and dirty-file count of
@@ -291,6 +272,26 @@ func integrationCandidateFailedSummary(p Params) string {
 	}, "Preparing merge candidates failed in repositories:")
 }
 
+// integrationRebaseConflictSummary names the repository whose restack
+// replay conflicted, with the affected files when known.
+func integrationRebaseConflictSummary(p Params) string {
+	repos, ok := integrationParams(p)
+	if !ok {
+		return ""
+	}
+	return integrationOneOrMany(repos, func(repo CodeRepository) string {
+		name := strings.TrimSpace(repo.Name)
+		if name == "" {
+			return ""
+		}
+		count := len(repo.ConflictFiles)
+		if count > 0 {
+			return fmt.Sprintf("Replaying the stack onto the resolved target conflicted in repository %q on %d %s.", name, count, fileWord(count))
+		}
+		return fmt.Sprintf("Replaying the stack onto the resolved target conflicted in repository %q.", name)
+	}, "Replaying the stack onto the resolved target conflicted in repositories:")
+}
+
 // rebaseGateTargetMissingSummary names the repository whose creation-time
 // rebase target is missing.
 func rebaseGateTargetMissingSummary(p Params) string {
@@ -313,18 +314,6 @@ func rebaseGateNotAncestorSummary(p Params) string {
 	return integrationOneOrMany(repos, func(repo CodeRepository) string {
 		return integrationNamedRepo(repo, "The pass branch for repository %q is no longer an ancestor of its rebase target.")
 	}, "Pass branches are no longer ancestors of their rebase targets in repositories:")
-}
-
-// rebaseGateMergeInProgressSummary names the repository with a merge in
-// progress.
-func rebaseGateMergeInProgressSummary(p Params) string {
-	repos, ok := integrationParams(p)
-	if !ok {
-		return ""
-	}
-	return integrationOneOrMany(repos, func(repo CodeRepository) string {
-		return integrationNamedRepo(repo, "Repository %q has a merge in progress.")
-	}, "Repositories have a merge in progress:")
 }
 
 // rebaseGateConflictMarkersSummary names the repository carrying unresolved

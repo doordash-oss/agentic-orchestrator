@@ -109,6 +109,7 @@ export class CompletionService {
             }),
         ...(repo.blocker ? { blocker: repo.blocker } : {}),
         ...(repo.freshness ? { freshness: repo.freshness } : {}),
+        ...(repo.rebase_hint ? { rebaseHint: repo.rebase_hint } : {}),
         // The canonical object crosses IPC intact except diagnostics, which
         // pass through the same redaction as every other raw text the
         // renderer receives.

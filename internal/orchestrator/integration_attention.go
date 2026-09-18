@@ -61,9 +61,10 @@ func (c integrationRepoContext) block() errcat.CodeRepository {
 }
 
 // repoContextFromEntry derives the block context from a journal entry's
-// durable progress state: name, the top ref's branch and SHAs, and the child
-// head. Conflict and dirty files are contributed by the parking site, which
-// observed them.
+// durable progress state: name, the top ref's branch and SHAs — or, for an
+// append-preparation entry before staging records its created refs, the
+// previous top's branch and tip — and the child head. Conflict and dirty
+// files are contributed by the parking site, which observed them.
 func repoContextFromEntry(entry *feature.RepoTransactionEntry) integrationRepoContext {
 	if entry == nil {
 		return integrationRepoContext{}
@@ -76,6 +77,9 @@ func repoContextFromEntry(entry *feature.RepoTransactionEntry) integrationRepoCo
 		ctx.Branch = top.Branch
 		ctx.CandidateSHA = top.CandidateSHA
 		ctx.ObservedSHA = top.ObservedSHA
+	} else if prev := entry.PreviousTopRef(); prev != nil {
+		ctx.Branch = prev.Branch
+		ctx.ObservedSHA = prev.TipSHA
 	}
 	return ctx
 }

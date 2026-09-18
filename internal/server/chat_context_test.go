@@ -257,7 +257,7 @@ func chatContextSeedChild(t *testing.T, store *feature.Store) {
 		Transaction: &feature.TransactionJournal{
 			Phase: feature.TransactionPhaseAttention,
 			Attention: &errcat.FailureRecord{
-				Code: errcat.IntegrationMergeConflict,
+				Code: errcat.IntegrationRebaseConflict,
 				Context: &errcat.RecordContext{
 					Repositories: []errcat.CodeRepository{{Name: "repo-a", ConflictFiles: []string{"main.go"}}},
 				},
@@ -385,10 +385,10 @@ func TestChatContextResolverBuildsBundlePerScope(t *testing.T) {
 			name: "transaction attention",
 			context: map[string]any{
 				"scope":      "transaction",
-				"code":       "integration_merge_conflict",
+				"code":       "integration_rebase_conflict",
 				"feature_id": "feat-child-pass",
 			},
-			wantHeading: "needs-action[integration_merge_conflict]: Integration merge conflict",
+			wantHeading: "needs-action[integration_rebase_conflict]: Rebase replay conflict",
 			wantDetail:  chatContextLongDiagnostics("attention"),
 		},
 		{
@@ -401,7 +401,7 @@ func TestChatContextResolverBuildsBundlePerScope(t *testing.T) {
 			},
 			wantHeading: "warning[child_cleanup_incomplete]: Cleanup incomplete",
 			wantDetail:  chatContextLongDiagnostics("cleanup"),
-			notContains: "integration_merge_conflict",
+			notContains: "integration_rebase_conflict",
 		},
 		{
 			name: "repository publish error",

@@ -1521,6 +1521,10 @@ type CompletionRepoResult struct {
 	// can exceed the sample length.
 	PendingDirtyFiles     []string
 	PendingDirtyFileTotal int
+	// RebaseHint names the merged layer that still holds a tip below kept
+	// work with commits and points at the rebase pass that restacks the
+	// chain. Empty when no merged layer sits below kept work.
+	RebaseHint string
 }
 
 // repoPublishable reports whether repo is publishable. A nil Publishable
@@ -1572,8 +1576,20 @@ func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPrefligh
 			repoResult.Error = state.Error
 		}
 		repoResult.Status = completionRepoStatus(f, repo, state, publishable)
-		repoResult = o.applyPendingDelivery(f, repo, repoResult)
+		// The preflight is the stack's status refresh: read every layer
+		// pull request's live state and persist merged/closed monotonically
+		// before the per-layer entries are derived, so the entries and the
+		// run's stack agree on the remote fact.
+		liveStates := o.liveStackPRStates(f, repo, publishable)
+		repoResult = o.applyPendingDelivery(f, repo, repoResult, liveStates)
 		freshness, blocker, _ := o.repoFreshnessAndBlocker(o.rebaseFreshnessInputForRepo(f, repo))
+		// A merged layer holding a tip below kept work means the chain needs
+		// the rebase pass even when the local remote-tracking comparison
+		// reports up to date: the layers above must be restacked onto the
+		// merged base.
+		if repoResult.RebaseHint != "" && freshness == preflightFreshnessUpToDate {
+			freshness = preflightFreshnessBehind
+		}
 		repoResult.Freshness = freshness
 		repoResult.Blocker = blocker
 		if repoResult.Blocker != "" {

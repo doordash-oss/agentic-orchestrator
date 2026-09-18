@@ -86,6 +86,49 @@ func TestPRBaseBranchReturnsBaseRefAndEmptyOnError(t *testing.T) {
 	}
 }
 
+// TestFetchBranchForcesRemoteTrackingRefUpdate proves the invariant FetchBranch
+// exists for: even when the remote branch moved non-fast-forward, the forced
+// refspec lands refs/remotes/origin/<branch> at the remote tip.
+func TestFetchBranchForcesRemoteTrackingRefUpdate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("drives a real git repository with a bare origin")
+	}
+	t.Parallel()
+
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repo, "feature/test")
+	testutil.CommitFile(t, repo, "feature.txt", "first\n", "first commit")
+	testutil.SimulatePush(t, repo, bare, "feature/test", "feature/test")
+
+	// Rewrite the remote branch non-fast-forward from a clone so the stale
+	// tracking ref can only catch up through the forced refspec.
+	clone := t.TempDir()
+	gitClone(t, bare, clone)
+	runGit(t, clone, "checkout", "-B", "feature/test", "main")
+	testutil.CommitFile(t, clone, "feature.txt", "rewritten history\n", "rewritten commit")
+	runGit(t, bare, "fetch", clone, "+feature/test:refs/heads/feature/test")
+
+	staleTip := runGit(t, repo, "rev-parse", "refs/remotes/origin/feature/test")
+	remoteTip := runGit(t, bare, "rev-parse", "refs/heads/feature/test")
+	if staleTip == remoteTip {
+		t.Fatalf("remote branch did not move non-fast-forward: both at %s", remoteTip)
+	}
+
+	if err := FetchBranch(repo, "feature/test"); err != nil {
+		t.Fatalf("FetchBranch: %v", err)
+	}
+	trackedTip := runGit(t, repo, "rev-parse", "refs/remotes/origin/feature/test")
+	if trackedTip != remoteTip {
+		t.Fatalf("refs/remotes/origin/feature/test = %s, want forced remote tip %s", trackedTip, remoteTip)
+	}
+
+	// A branch the remote does not have must surface the fetch error rather
+	// than silently leaving a stale tracking ref in place.
+	if err := FetchBranch(repo, "feature/missing"); err == nil {
+		t.Fatal("FetchBranch() = nil error, want error for a branch absent on the remote")
+	}
+}
+
 // helpers for rebase tests
 
 func gitClone(t *testing.T, bare, dest string) {
@@ -109,13 +152,14 @@ func gitPush(t *testing.T, repoPath, branch string) {
 	testutil.SimulatePush(t, repoPath, bareDir, branch, branch)
 }
 
-func runGit(t *testing.T, dir string, args ...string) {
+func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := gitCmd(dir, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
+	return strings.TrimSpace(string(out))
 }
 
 func gitCmd(dir string, args ...string) *exec.Cmd {

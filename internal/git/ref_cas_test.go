@@ -76,204 +76,6 @@ func runGitRefTest(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// TestCreateMergeCandidateProducesTwoParentCommit proves the merge candidate
-// is an explicit two-parent no-ff merge commit created without advancing the
-// parent ref.
-func TestCreateMergeCandidateProducesTwoParentCommit(t *testing.T) {
-	repo := testutil.InitGitRepo(t)
-	testutil.CommitFile(t, repo, "base.txt", "base\n", "parent base")
-	parentTip := runGitRefTest(t, repo, "rev-parse", "HEAD")
-
-	runGitRefTest(t, repo, "checkout", "-b", "child-branch")
-	testutil.CommitFile(t, repo, "child.txt", "child work\n", "child commit")
-	childHead := runGitRefTest(t, repo, "rev-parse", "HEAD")
-	runGitRefTest(t, repo, "checkout", "main")
-
-	// Record the parent ref before candidate creation.
-	parentRefBefore := runGitRefTest(t, repo, "rev-parse", "refs/heads/main")
-
-	result, err := gitpkg.CreateMergeCandidate(repo, parentTip, childHead, "merge candidate")
-	if err != nil {
-		t.Fatalf("CreateMergeCandidate() error = %v", err)
-	}
-	if result.CandidateSHA == "" {
-		t.Fatal("candidate SHA is empty")
-	}
-
-	// Parent ref must not have moved.
-	parentRefAfter := runGitRefTest(t, repo, "rev-parse", "refs/heads/main")
-	if parentRefAfter != parentRefBefore {
-		t.Fatalf("parent ref moved from %s to %s during candidate creation", parentRefBefore, parentRefAfter)
-	}
-
-	// The candidate commit has two parents: parent tip and child head.
-	parents := runGitRefTest(t, repo, "rev-list", "--parents", "-n", "1", result.CandidateSHA)
-	fields := strings.Fields(parents)
-	if len(fields) != 3 {
-		t.Fatalf("candidate parents = %q, want two-parent merge commit", parents)
-	}
-	if fields[1] != parentTip {
-		t.Fatalf("candidate first parent = %s, want %s", fields[1], parentTip)
-	}
-	if fields[2] != childHead {
-		t.Fatalf("candidate second parent = %s, want %s", fields[2], childHead)
-	}
-
-	// The merge commit subject matches.
-	subject := runGitRefTest(t, repo, "log", "-n", "1", "--format=%s", result.CandidateSHA)
-	if subject != "merge candidate" {
-		t.Fatalf("candidate subject = %q, want %q", subject, "merge candidate")
-	}
-}
-
-// TestCreateMergeCandidateAcceptsCleanParentAdvancement proves a parent that
-// moved forward after the child launched still creates a valid candidate.
-func TestCreateMergeCandidateAcceptsCleanParentAdvancement(t *testing.T) {
-	repo := testutil.InitGitRepo(t)
-	testutil.CommitFile(t, repo, "base.txt", "base\n", "parent base")
-
-	runGitRefTest(t, repo, "checkout", "-b", "child-branch")
-	testutil.CommitFile(t, repo, "child.txt", "child work\n", "child commit")
-	childHead := runGitRefTest(t, repo, "rev-parse", "HEAD")
-	runGitRefTest(t, repo, "checkout", "main")
-	testutil.CommitFile(t, repo, "other.txt", "parent moved\n", "parent advanced")
-	parentTip := runGitRefTest(t, repo, "rev-parse", "HEAD")
-
-	result, err := gitpkg.CreateMergeCandidate(repo, parentTip, childHead, "merge candidate")
-	if err != nil {
-		t.Fatalf("CreateMergeCandidate() error = %v, want clean merge of advanced parent", err)
-	}
-	parents := runGitRefTest(t, repo, "rev-list", "--parents", "-n", "1", result.CandidateSHA)
-	if fields := len(strings.Fields(parents)); fields != 3 {
-		t.Fatalf("candidate parents = %q, want two-parent merge commit", parents)
-	}
-}
-
-// TestCreateMergeCandidateWithoutConfiguredIdentity proves the merge commit
-// carries the Agentico fallback identity when nothing else configures one.
-// Hosts that cannot derive an identity from the system reject the commit with
-// "empty ident name"; asserting the committer covers both kinds of host,
-// since a host that can derive one would otherwise stamp its own.
-func TestCreateMergeCandidateWithoutConfiguredIdentity(t *testing.T) {
-	repo := testutil.InitGitRepo(t)
-	testutil.CommitFile(t, repo, "base.txt", "base\n", "parent base")
-	parentTip := runGitRefTest(t, repo, "rev-parse", "HEAD")
-
-	runGitRefTest(t, repo, "checkout", "-b", "child-branch")
-	testutil.CommitFile(t, repo, "child.txt", "child work\n", "child commit")
-	childHead := runGitRefTest(t, repo, "rev-parse", "HEAD")
-	runGitRefTest(t, repo, "checkout", "main")
-
-	// Strip every identity source the merge could otherwise inherit.
-	runGitRefTest(t, repo, "config", "--unset", "user.email")
-	runGitRefTest(t, repo, "config", "--unset", "user.name")
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
-	for _, key := range []string{
-		"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
-		"GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
-		"EMAIL",
-	} {
-		// t.Setenv registers the restore; the unset makes the variable absent
-		// rather than set-and-empty, which git rejects outright.
-		t.Setenv(key, "")
-		if err := os.Unsetenv(key); err != nil {
-			t.Fatalf("unset %s: %v", key, err)
-		}
-	}
-
-	result, err := gitpkg.CreateMergeCandidate(repo, parentTip, childHead, "merge candidate")
-	if err != nil {
-		t.Fatalf("CreateMergeCandidate() error = %v, want candidate without configured identity", err)
-	}
-	if result.CandidateSHA == "" {
-		t.Fatal("candidate SHA is empty")
-	}
-	committer := runGitRefTest(t, repo, "show", "-s", "--format=%cn <%ce>", result.CandidateSHA)
-	if committer != "Agentico <agentico@localhost>" {
-		t.Fatalf("candidate committer = %q, want the Agentico fallback identity", committer)
-	}
-}
-
-// TestCreateMergeCandidateConflictReturnsFiles proves a conflicting merge
-// returns the conflict file list and leaves the parent ref untouched.
-func TestCreateMergeCandidateConflictReturnsFiles(t *testing.T) {
-	repo := testutil.InitGitRepo(t)
-	testutil.CommitFile(t, repo, "shared.txt", "base\n", "parent base")
-
-	runGitRefTest(t, repo, "checkout", "-b", "child-branch")
-	testutil.CommitFile(t, repo, "shared.txt", "child edit\n", "child commit")
-	childHead := runGitRefTest(t, repo, "rev-parse", "HEAD")
-	runGitRefTest(t, repo, "checkout", "main")
-	testutil.CommitFile(t, repo, "shared.txt", "parent edit\n", "conflicting parent commit")
-	parentTip := runGitRefTest(t, repo, "rev-parse", "HEAD")
-
-	parentRefBefore := runGitRefTest(t, repo, "rev-parse", "refs/heads/main")
-
-	result, err := gitpkg.CreateMergeCandidate(repo, parentTip, childHead, "merge candidate")
-	if err == nil {
-		t.Fatal("CreateMergeCandidate() error = nil, want conflict error")
-	}
-	if len(result.ConflictFiles) == 0 {
-		t.Fatal("conflict files empty, want at least one")
-	}
-	foundShared := false
-	for _, f := range result.ConflictFiles {
-		if f == "shared.txt" {
-			foundShared = true
-		}
-	}
-	if !foundShared {
-		t.Fatalf("conflict files = %v, want shared.txt", result.ConflictFiles)
-	}
-
-	// Parent ref must not have moved.
-	parentRefAfter := runGitRefTest(t, repo, "rev-parse", "refs/heads/main")
-	if parentRefAfter != parentRefBefore {
-		t.Fatalf("parent ref moved from %s to %s during conflict", parentRefBefore, parentRefAfter)
-	}
-
-	// Worktree must be clean (no leftover merge state).
-	status := runGitRefTest(t, repo, "status", "--porcelain")
-	if status != "" {
-		t.Fatalf("worktree not clean after conflict: %q", status)
-	}
-}
-
-// TestCreateMergeCandidateWorktreeCleanAfter proves the parent worktree is
-// not altered by candidate creation — no leftover worktrees or merge state.
-func TestCreateMergeCandidateWorktreeCleanAfter(t *testing.T) {
-	repo := testutil.InitGitRepo(t)
-	testutil.CommitFile(t, repo, "base.txt", "base\n", "parent base")
-	parentTip := runGitRefTest(t, repo, "rev-parse", "HEAD")
-
-	runGitRefTest(t, repo, "checkout", "-b", "child-branch")
-	testutil.CommitFile(t, repo, "child.txt", "child work\n", "child commit")
-	childHead := runGitRefTest(t, repo, "rev-parse", "HEAD")
-	runGitRefTest(t, repo, "checkout", "main")
-
-	_, err := gitpkg.CreateMergeCandidate(repo, parentTip, childHead, "merge candidate")
-	if err != nil {
-		t.Fatalf("CreateMergeCandidate() error = %v", err)
-	}
-
-	// No leftover worktrees.
-	worktreeList := runGitRefTest(t, repo, "worktree", "list")
-	if strings.Count(worktreeList, "\n") > 0 {
-		// More than one line means extra worktrees remain.
-		lines := strings.Split(worktreeList, "\n")
-		var extra int
-		for _, line := range lines {
-			if line != "" && !strings.Contains(line, filepath.Base(repo)) {
-				extra++
-			}
-		}
-		if extra > 0 {
-			t.Fatalf("leftover worktrees after candidate creation: %s", worktreeList)
-		}
-	}
-}
-
 // TestUpdateRefCASSuccess proves a compare-and-swap ref update succeeds when
 // the ref matches the expected old SHA.
 func TestUpdateRefCASSuccess(t *testing.T) {
@@ -435,5 +237,300 @@ func TestUpdateRefsTransactionEmptyIsNoOp(t *testing.T) {
 	}
 	if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/main"); got != mainBefore {
 		t.Fatalf("main = %s, want unchanged %s", got, mainBefore)
+	}
+}
+
+// refState reports a ref's SHA and whether it exists, independently of the
+// functions under test: exit code 1 from rev-parse --verify --quiet means the
+// ref is absent.
+func refState(t *testing.T, repo, ref string) (string, bool) {
+	t.Helper()
+	cmd := exec.Command("git", "-C", repo, "rev-parse", "--verify", "--quiet", ref)
+	cmd.Env = testutil.GitTestEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
+}
+
+// TestReadRefSHAOrAbsent proves the absent-aware reader returns the SHA for a
+// present ref, absent=true with no error for a missing ref, and an error only
+// when git itself fails (here: a path that is not a repository).
+func TestReadRefSHAOrAbsent(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	headSHA := runGitRefTest(t, repo, "rev-parse", "refs/heads/main")
+
+	sha, absent, err := gitpkg.ReadRefSHAOrAbsent(repo, "refs/heads/main")
+	if err != nil || absent || sha != headSHA {
+		t.Fatalf("ReadRefSHAOrAbsent(present) = %q, %v, %v; want %s, false, nil", sha, absent, err, headSHA)
+	}
+
+	sha, absent, err = gitpkg.ReadRefSHAOrAbsent(repo, "refs/heads/nonexistent")
+	if err != nil || !absent || sha != "" {
+		t.Fatalf("ReadRefSHAOrAbsent(missing) = %q, %v, %v; want empty SHA, true, nil", sha, absent, err)
+	}
+
+	_, absent, err = gitpkg.ReadRefSHAOrAbsent(t.TempDir(), "refs/heads/main")
+	if err == nil || absent {
+		t.Fatalf("ReadRefSHAOrAbsent(non-repo) absent = %v, err = %v; want a genuine read error, not absent", absent, err)
+	}
+}
+
+// TestUpdateRefsTransactionCreatesRefsOnAbsence proves a batch of create
+// lines (empty old SHA) creates the refs at their new SHAs, and re-running
+// the same batch fails with the compare-and-swap mismatch error naming the
+// now-existing ref.
+func TestUpdateRefsTransactionCreatesRefsOnAbsence(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	tip := runGitRefTest(t, repo, "rev-parse", "refs/heads/main")
+	next := testutil.CommitFile(t, repo, "next.txt", "next\n", "next commit")
+
+	updates := []gitpkg.RefUpdate{
+		{Ref: "refs/heads/stack/one", NewSHA: tip},
+		{Ref: "refs/heads/stack/two", NewSHA: next},
+	}
+	if err := gitpkg.UpdateRefsTransaction(repo, updates); err != nil {
+		t.Fatalf("UpdateRefsTransaction(create) error = %v", err)
+	}
+	if got, ok := refState(t, repo, "refs/heads/stack/one"); !ok || got != tip {
+		t.Fatalf("stack/one = %q, %v; want %s, present", got, ok, tip)
+	}
+	if got, ok := refState(t, repo, "refs/heads/stack/two"); !ok || got != next {
+		t.Fatalf("stack/two = %q, %v; want %s, present", got, ok, next)
+	}
+
+	// The same batch again: both refs exist, so the first create's
+	// absence expectation is violated.
+	err := gitpkg.UpdateRefsTransaction(repo, updates)
+	var mismatch *gitpkg.RefCASMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("UpdateRefsTransaction(re-run) error = %v, want *RefCASMismatchError", err)
+	}
+	if mismatch.Ref != "refs/heads/stack/one" {
+		t.Fatalf("mismatch ref = %q, want refs/heads/stack/one", mismatch.Ref)
+	}
+	if mismatch.Observed != tip {
+		t.Fatalf("mismatch observed = %s, want %s", mismatch.Observed, tip)
+	}
+	if got, ok := refState(t, repo, "refs/heads/stack/one"); !ok || got != tip {
+		t.Fatalf("stack/one = %q, %v; want unchanged %s, present", got, ok, tip)
+	}
+	if got, ok := refState(t, repo, "refs/heads/stack/two"); !ok || got != next {
+		t.Fatalf("stack/two = %q, %v; want unchanged %s, present", got, ok, next)
+	}
+}
+
+// TestUpdateRefsTransactionCreateVerifyUpdateIsAtomic proves one batch can
+// mix a create, a verify of an unchanged ref, and a plain update; a wrong
+// expectation on any line fails the whole batch with the mismatch error and
+// leaves every ref as it was.
+func TestUpdateRefsTransactionCreateVerifyUpdateIsAtomic(t *testing.T) {
+	type lineFailure struct {
+		name    string
+		mutate  func(t *testing.T, repo, a, b, next string) []gitpkg.RefUpdate
+		wantRef string
+		// wantObservedKey names which per-subtest SHA ("a", "b", or "next")
+		// the mismatch must report; the SHAs only exist inside each subtest.
+		wantObservedKey string
+		// wantNewPresent records whether the case pre-creates feature/new
+		// (the create-line violation case); the failed batch must leave it
+		// exactly as it was: present at next, or absent.
+		wantNewPresent bool
+	}
+	cases := []lineFailure{
+		{
+			name: "create line finds the ref already present",
+			mutate: func(t *testing.T, repo, a, b, next string) []gitpkg.RefUpdate {
+				runGitRefTest(t, repo, "branch", "feature/new", next)
+				return []gitpkg.RefUpdate{
+					{Ref: "refs/heads/feature/new", NewSHA: next},
+					{Ref: "refs/heads/feature/a", OldSHA: a, NewSHA: a},
+					{Ref: "refs/heads/feature/b", OldSHA: b, NewSHA: next},
+				}
+			},
+			wantRef:         "refs/heads/feature/new",
+			wantObservedKey: "next",
+			wantNewPresent:  true,
+		},
+		{
+			name: "verify line expects a stale SHA",
+			mutate: func(t *testing.T, repo, a, b, next string) []gitpkg.RefUpdate {
+				return []gitpkg.RefUpdate{
+					{Ref: "refs/heads/feature/new", NewSHA: next},
+					{Ref: "refs/heads/feature/a", OldSHA: next, NewSHA: next},
+					{Ref: "refs/heads/feature/b", OldSHA: b, NewSHA: next},
+				}
+			},
+			wantRef:         "refs/heads/feature/a",
+			wantObservedKey: "a",
+		},
+		{
+			name: "update line expects a stale SHA",
+			mutate: func(t *testing.T, repo, a, b, next string) []gitpkg.RefUpdate {
+				return []gitpkg.RefUpdate{
+					{Ref: "refs/heads/feature/new", NewSHA: next},
+					{Ref: "refs/heads/feature/a", OldSHA: a, NewSHA: a},
+					{Ref: "refs/heads/feature/b", OldSHA: next, NewSHA: next},
+				}
+			},
+			wantRef:         "refs/heads/feature/b",
+			wantObservedKey: "b",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := testutil.InitGitRepo(t)
+			runGitRefTest(t, repo, "branch", "feature/a")
+			runGitRefTest(t, repo, "branch", "feature/b")
+			a := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/a")
+			b := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/b")
+			next := testutil.CommitFile(t, repo, "next.txt", "next\n", "next commit")
+
+			updates := tc.mutate(t, repo, a, b, next)
+			err := gitpkg.UpdateRefsTransaction(repo, updates)
+			var mismatch *gitpkg.RefCASMismatchError
+			if !errors.As(err, &mismatch) {
+				t.Fatalf("UpdateRefsTransaction() error = %v, want *RefCASMismatchError", err)
+			}
+			if mismatch.Ref != tc.wantRef {
+				t.Fatalf("mismatch ref = %q, want %q", mismatch.Ref, tc.wantRef)
+			}
+			wantObserved := map[string]string{"a": a, "b": b, "next": next}[tc.wantObservedKey]
+			if mismatch.Observed != wantObserved {
+				t.Fatalf("mismatch observed = %s, want %s", mismatch.Observed, wantObserved)
+			}
+			if got, ok := refState(t, repo, "refs/heads/feature/new"); tc.wantNewPresent != (ok && got == next) {
+				t.Fatalf("feature/new = %q, %v; wantNewPresent = %v", got, ok, tc.wantNewPresent)
+			}
+			if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/a"); got != a {
+				t.Fatalf("feature/a = %s, want unchanged %s", got, a)
+			}
+			if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/b"); got != b {
+				t.Fatalf("feature/b = %s, want unchanged %s", got, b)
+			}
+		})
+	}
+
+	// With every expectation satisfied the mixed batch applies in one go.
+	repo := testutil.InitGitRepo(t)
+	runGitRefTest(t, repo, "branch", "feature/a")
+	runGitRefTest(t, repo, "branch", "feature/b")
+	a := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/a")
+	b := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/b")
+	next := testutil.CommitFile(t, repo, "next.txt", "next\n", "next commit")
+
+	err := gitpkg.UpdateRefsTransaction(repo, []gitpkg.RefUpdate{
+		{Ref: "refs/heads/feature/new", NewSHA: next},
+		{Ref: "refs/heads/feature/a", OldSHA: a, NewSHA: a},
+		{Ref: "refs/heads/feature/b", OldSHA: b, NewSHA: next},
+	})
+	if err != nil {
+		t.Fatalf("UpdateRefsTransaction(mixed) error = %v", err)
+	}
+	if got, ok := refState(t, repo, "refs/heads/feature/new"); !ok || got != next {
+		t.Fatalf("feature/new = %q, %v; want %s, present", got, ok, next)
+	}
+	if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/a"); got != a {
+		t.Fatalf("feature/a = %s, want unchanged %s (verify)", got, a)
+	}
+	if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/b"); got != next {
+		t.Fatalf("feature/b = %s, want %s (updated)", got, next)
+	}
+}
+
+// TestUpdateRefsTransactionDeletesRefs proves a delete line (empty new SHA)
+// removes the ref when it sits at the expected SHA, refuses with the mismatch
+// error and leaves the ref when the expectation is stale, and refuses a
+// delete of an absent ref without touching the batch's other lines.
+func TestUpdateRefsTransactionDeletesRefs(t *testing.T) {
+	t.Run("delete expecting the current SHA removes the ref", func(t *testing.T) {
+		repo := testutil.InitGitRepo(t)
+		runGitRefTest(t, repo, "branch", "feature/a")
+		a := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/a")
+
+		err := gitpkg.UpdateRefsTransaction(repo, []gitpkg.RefUpdate{
+			{Ref: "refs/heads/feature/a", OldSHA: a},
+		})
+		if err != nil {
+			t.Fatalf("UpdateRefsTransaction(delete) error = %v", err)
+		}
+		if got, ok := refState(t, repo, "refs/heads/feature/a"); ok {
+			t.Fatalf("feature/a = %s, want the ref deleted", got)
+		}
+	})
+
+	t.Run("delete with a stale expectation fails and leaves the ref", func(t *testing.T) {
+		repo := testutil.InitGitRepo(t)
+		runGitRefTest(t, repo, "branch", "feature/a")
+		a := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/a")
+		moved := testutil.CommitFile(t, repo, "moved.txt", "moved\n", "moved commit")
+		runGitRefTest(t, repo, "branch", "-f", "feature/a", moved)
+
+		err := gitpkg.UpdateRefsTransaction(repo, []gitpkg.RefUpdate{
+			{Ref: "refs/heads/feature/a", OldSHA: a},
+		})
+		var mismatch *gitpkg.RefCASMismatchError
+		if !errors.As(err, &mismatch) {
+			t.Fatalf("UpdateRefsTransaction(stale delete) error = %v, want *RefCASMismatchError", err)
+		}
+		if mismatch.Ref != "refs/heads/feature/a" {
+			t.Fatalf("mismatch ref = %q, want refs/heads/feature/a", mismatch.Ref)
+		}
+		if mismatch.Observed != moved {
+			t.Fatalf("mismatch observed = %s, want %s", mismatch.Observed, moved)
+		}
+		if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/a"); got != moved {
+			t.Fatalf("feature/a = %s, want the ref left at %s", got, moved)
+		}
+	})
+
+	t.Run("deleting an absent ref fails without touching other lines", func(t *testing.T) {
+		repo := testutil.InitGitRepo(t)
+		runGitRefTest(t, repo, "branch", "feature/a")
+		a := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/a")
+		next := testutil.CommitFile(t, repo, "next.txt", "next\n", "next commit")
+
+		err := gitpkg.UpdateRefsTransaction(repo, []gitpkg.RefUpdate{
+			{Ref: "refs/heads/feature/missing", OldSHA: a},
+			{Ref: "refs/heads/feature/a", OldSHA: a, NewSHA: next},
+		})
+		var mismatch *gitpkg.RefCASMismatchError
+		if !errors.As(err, &mismatch) {
+			t.Fatalf("UpdateRefsTransaction(absent delete) error = %v, want *RefCASMismatchError", err)
+		}
+		if mismatch.Ref != "refs/heads/feature/missing" {
+			t.Fatalf("mismatch ref = %q, want refs/heads/feature/missing", mismatch.Ref)
+		}
+		if mismatch.Observed != "absent" {
+			t.Fatalf("mismatch observed = %q, want the absent observation", mismatch.Observed)
+		}
+		if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/a"); got != a {
+			t.Fatalf("feature/a = %s, want unchanged %s", got, a)
+		}
+	})
+}
+
+// TestUpdateRefsTransactionRejectsDegenerateUpdates proves an update with
+// neither an old nor a new SHA — neither a create nor a delete — is refused
+// with a clear error before git runs.
+func TestUpdateRefsTransactionRejectsDegenerateUpdates(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	err := gitpkg.UpdateRefsTransaction(repo, []gitpkg.RefUpdate{
+		{Ref: "refs/heads/feature/a"},
+	})
+	if err == nil {
+		t.Fatal("UpdateRefsTransaction(degenerate) error = nil, want a refusal")
+	}
+	var mismatch *gitpkg.RefCASMismatchError
+	if errors.As(err, &mismatch) {
+		t.Fatalf("UpdateRefsTransaction(degenerate) error = %v, want a plain error, not a mismatch", err)
+	}
+	if !strings.Contains(err.Error(), "refs/heads/feature/a") {
+		t.Fatalf("error = %v, want it to name the degenerate ref", err)
+	}
+	if _, ok := refState(t, repo, "refs/heads/feature/a"); ok {
+		t.Fatal("feature/a exists, want the refusal to have touched nothing")
 	}
 }

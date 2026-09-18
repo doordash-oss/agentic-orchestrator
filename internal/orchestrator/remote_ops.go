@@ -26,6 +26,7 @@ type RemoteOps interface {
 	PRState(repoPath, prURL string) (string, error)
 	GetPRBody(prURL string) (string, error)
 	UpdatePRBody(prURL, body string) error
+	UpdatePRBase(prURL, base string) error
 }
 
 type gitRemoteOps struct{}
@@ -56,4 +57,8 @@ func (gitRemoteOps) GetPRBody(prURL string) (string, error) {
 
 func (gitRemoteOps) UpdatePRBody(prURL, body string) error {
 	return git.UpdatePRBody(prURL, body)
+}
+
+func (gitRemoteOps) UpdatePRBase(prURL, base string) error {
+	return git.UpdatePRBaseBranch(prURL, base)
 }

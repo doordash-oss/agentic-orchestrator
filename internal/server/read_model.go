@@ -164,6 +164,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 					entry.Refs = append(entry.Refs, RepoTransactionRef{
 						Branch:        r.Branch,
 						LayerPosition: r.Layer,
+						Kind:          string(r.RefKind()),
 						AnchorSha:     r.AnchorSHA,
 						CandidateSha:  r.CandidateSHA,
 						ObservedSha:   r.ObservedSHA,

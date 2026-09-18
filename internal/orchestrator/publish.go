@@ -101,8 +101,20 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 		return tipErr
 	}
 
+	// The checked-out branch owns the refreshed tip. The highest-position
+	// layer is the checked-out one in every pre-rebase shape, but a rebase
+	// pass that dropped the top layer leaves the worktree on the highest
+	// kept layer's branch while the dropped layer's merged entry keeps its
+	// cleared tip — writing the new top's SHA there would resurrect the
+	// dropped layer as a walk base. A layer dropped in this repository is
+	// therefore skipped; every repository's layers merged away leaves the
+	// position at zero and the write a no-op.
 	topPosition := 0
 	for _, layer := range f.Stack {
+		entry := layer.Repos[repoName]
+		if entry.PRState == feature.StackPRStateMerged && entry.TipSHA == "" {
+			continue
+		}
 		if layer.Position > topPosition {
 			topPosition = layer.Position
 		}
@@ -125,7 +137,7 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 		return baseErr
 	}
 
-	walkErr := o.walkStackLayers(f, repo, layers, baseSHA)
+	walkErr := o.walkStackLayers(f, repo, layers, baseSHA, opts.UpdateOnly)
 	// The stack-section refresh runs whether or not the walk stopped early:
 	// pull requests created earlier in the pass still deserve current links.
 	o.reinjectStackSections(featureID, repoName)
@@ -135,8 +147,10 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 // walkStackLayers delivers one repository's stack, ascending by position.
 // entries is the walk's local view of the repository's per-layer entries; it
 // is updated as the walk records outcomes so later layers decide (base
-// branch, stack section) against what this pass just did.
-func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureRepo, layers []feature.StackLayer, baseSHA string) error {
+// branch, stack section) against what this pass just did. updateOnly
+// restricts the walk to layers that already carry a pull request: layers
+// without one are left untouched for a later full publish.
+func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureRepo, layers []feature.StackLayer, baseSHA string, updateOnly bool) error {
 	workDir := repoWorkDir(repo)
 	repoName := repo.Name
 	repoPath := repo.Path
@@ -148,11 +162,23 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 	for _, layer := range layers {
 		entries[layer.Position] = layer.Repos[repoName]
 	}
+	// A merged entry whose tip was cleared is transparent to the walk: its
+	// local ref is gone, so it owns neither commits, nor a lower cut point,
+	// nor a base branch. A merged entry that still holds a tip keeps the
+	// Phase 7 behavior — its branch is still a valid base and cut point,
+	// because the rebase pass has not dropped it yet.
+	absentForWalk := func(entry feature.StackRepoEntry) bool {
+		return entry.PRState == feature.StackPRStateMerged && entry.TipSHA == ""
+	}
 	lowerCut := func(i int) string {
-		if i == 0 {
-			return baseSHA
+		for j := i - 1; j >= 0; j-- {
+			entry := entries[layers[j].Position]
+			if absentForWalk(entry) {
+				continue
+			}
+			return entry.TipSHA
 		}
-		return entries[layers[i-1].Position].TipSHA
+		return baseSHA
 	}
 
 	// Precompute which layers carry commits in this repository: the
@@ -161,6 +187,9 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 	hasCommits := make(map[int]bool, len(layers))
 	predictedPRs := 0
 	for i, layer := range layers {
+		if absentForWalk(entries[layer.Position]) {
+			continue
+		}
 		if git.HasCommitsBeyond(workDir, entries[layer.Position].TipSHA, lowerCut(i)) {
 			hasCommits[layer.Position] = true
 			predictedPRs++
@@ -169,6 +198,12 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 
 	for i, layer := range layers {
 		entry := entries[layer.Position]
+		if absentForWalk(entry) {
+			// Dropped by a merged rebase pass: nothing to deliver and no
+			// branch to publish; the entry already records the merged pull
+			// request, so the all-published check counts it settled.
+			continue
+		}
 		if !hasCommits[layer.Position] {
 			// Nothing to deliver for this layer here: mark the entry so the
 			// all-published check counts it as settled.
@@ -219,8 +254,16 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 			continue
 		}
 
-		// No pull request yet: the description is generated first so a
-		// failed session pushes nothing.
+		// No pull request yet. An update-only walk (a manual-publish
+		// rebase tail republishing existing pull requests) leaves the
+		// layer for a later full publish: creating pull requests for
+		// never-published layers still requires auto-publish or the
+		// user's Publish action.
+		if updateOnly {
+			continue
+		}
+
+		// The description is generated first so a failed session pushes nothing.
 		prCtx := o.buildLayerPRContext(f, repo, layer, lowerCut(i), entry.TipSHA)
 		body, generateErr := o.generatePRDescription(f, prCtx)
 		if generateErr != nil {
@@ -402,16 +445,29 @@ func (o *Orchestrator) generatePRDescription(f *feature.Feature, prCtx agent.PRC
 // metadata, the layer's roadmap row (position, title, phases, rationale
 // re-read from the roadmap on disk best-effort), the whole stack view, and
 // the layer's own commit bodies and diff stat between the lower cut point
-// and the layer tip. Individual fetch failures degrade gracefully — empty
-// fields are acceptable inputs to the prompt and generator.
+// and the layer tip. A roadmap-derived layer is described from the run's
+// own feature and roadmap; a layer with an origin (an appended layer) is
+// described from the origin feature instead — its name, description, and
+// the roadmap row at the origin position — while the position and title
+// stay the parent's persisted layer. Individual fetch failures degrade
+// gracefully — empty fields are acceptable inputs to the prompt and
+// generator.
 func (o *Orchestrator) buildLayerPRContext(f *feature.Feature, repo feature.FeatureRepo, layer feature.StackLayer, lowerCutSHA, tipSHA string) agent.PRContext {
 	prCtx := agent.PRContext{
-		FeatureName:        f.Name,
-		FeatureDescription: f.Description,
-		LayerPosition:      layer.Position,
-		LayerTitle:         layer.Title,
-		LayerPhases:        layer.Phases,
-		LayerRationale:     o.stackLayerRationale(f, layer.Position),
+		LayerPosition: layer.Position,
+		LayerTitle:    layer.Title,
+	}
+	if layer.Origin != nil {
+		origin := o.loadOriginLayerContext(*layer.Origin)
+		prCtx.FeatureName = origin.name
+		prCtx.FeatureDescription = origin.description
+		prCtx.LayerPhases = origin.phases
+		prCtx.LayerRationale = origin.rationale
+	} else {
+		prCtx.FeatureName = f.Name
+		prCtx.FeatureDescription = f.Description
+		prCtx.LayerPhases = layer.Phases
+		prCtx.LayerRationale = o.stackLayerRationale(f, layer.Position)
 	}
 	for _, l := range orderedStackLayers(f) {
 		prCtx.Stack = append(prCtx.Stack, prompts.PRStackLayerView{
@@ -433,26 +489,76 @@ func (o *Orchestrator) buildLayerPRContext(f *feature.Feature, repo feature.Feat
 	return prCtx
 }
 
+// originLayerContext is the origin-aware feature context for an appended
+// layer's PR body: the origin (child) feature's name and description plus
+// the phases and rationale of the origin roadmap's row at the origin
+// position.
+type originLayerContext struct {
+	name        string
+	description string
+	phases      []int
+	rationale   string
+}
+
+// loadOriginLayerContext resolves an appended layer's feature context from
+// its origin, best-effort — a re-read exactly like the layer rationale
+// re-read, never a publish failure. A missing origin feature or an
+// unreadable origin roadmap leaves every field empty; a readable roadmap
+// whose table carries no row at the origin position still names the layer
+// from the loaded origin feature while the phases and rationale stay empty.
+func (o *Orchestrator) loadOriginLayerContext(origin feature.StackLayerOrigin) originLayerContext {
+	if origin.SourceFeatureID == "" || o.deps.Lifecycle == nil {
+		return originLayerContext{}
+	}
+	originF, err := o.deps.Lifecycle.Get(origin.SourceFeatureID)
+	if err != nil || originF == nil {
+		return originLayerContext{}
+	}
+	row, readable := o.stackLayerRoadmapRow(originF, origin.SourceLayerPosition)
+	if !readable {
+		return originLayerContext{}
+	}
+	ctx := originLayerContext{name: originF.Name, description: originF.Description}
+	if row != nil {
+		ctx.phases = row.Phases
+		ctx.rationale = row.Rationale
+	}
+	return ctx
+}
+
 // stackLayerRationale re-reads the layer's rationale row from the roadmap on
 // disk, best-effort: the run's stack snapshot deliberately carries no
 // rationale, and an unavailable or edited roadmap yields an empty string the
 // description prompt omits.
 func (o *Orchestrator) stackLayerRationale(f *feature.Feature, layerPosition int) string {
+	row, _ := o.stackLayerRoadmapRow(f, layerPosition)
+	if row == nil {
+		return ""
+	}
+	return row.Rationale
+}
+
+// stackLayerRoadmapRow re-reads one row of the roadmap's `## Pull Requests`
+// table from the feature's roadmap artifact on disk, best-effort. readable
+// is false when the roadmap cannot be resolved or read; a readable roadmap
+// whose table carries no row at layerPosition returns readable with a nil
+// row.
+func (o *Orchestrator) stackLayerRoadmapRow(f *feature.Feature, layerPosition int) (row *agent.RoadmapPullRequest, readable bool) {
 	roadmapPath := o.resolveArtifactPath(f, "roadmap")
 	if roadmapPath == "" {
-		return ""
+		return nil, false
 	}
 	data, err := os.ReadFile(roadmapPath)
 	if err != nil {
-		return ""
+		return nil, false
 	}
 	rows, _ := agent.ParseRoadmapPullRequests(string(data))
-	for _, row := range rows {
-		if row.Position == layerPosition {
-			return row.Rationale
+	for i := range rows {
+		if rows[i].Position == layerPosition {
+			return &rows[i], true
 		}
 	}
-	return ""
+	return nil, true
 }
 
 // applyLayerCrossRefs injects the per-layer cross-repo section into the
@@ -568,13 +674,19 @@ func creationStackSection(layers []feature.StackLayer, entries map[int]feature.S
 // stackLayerBaseBranch resolves the base branch for a new layer PR: the
 // branch of the nearest lower layer whose pull request in this repository is
 // in a non-closed state (open or merged — a merged lower layer's branch is
-// still the review base), else the repository's base branch.
+// still the review base) and whose tip has not been cleared by a rebase
+// pass (a dropped layer's branch no longer exists), else the repository's
+// base branch.
 func stackLayerBaseBranch(layers []feature.StackLayer, entries map[int]feature.StackRepoEntry, currentIndex int, repoBaseBranch string) string {
 	for j := currentIndex - 1; j >= 0; j-- {
 		entry := entries[layers[j].Position]
-		if entry.PRURL != "" && entry.PRState != feature.StackPRStateClosed {
-			return layers[j].Branch
+		if entry.PRURL == "" || entry.PRState == feature.StackPRStateClosed {
+			continue
 		}
+		if entry.PRState == feature.StackPRStateMerged && entry.TipSHA == "" {
+			continue
+		}
+		return layers[j].Branch
 	}
 	return repoBaseBranch
 }

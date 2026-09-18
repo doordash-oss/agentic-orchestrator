@@ -281,6 +281,14 @@ type StackRepoEntry struct {
 	NoCommits     bool         `yaml:"no_commits,omitempty" json:"no_commits,omitempty"`
 }
 
+// StackLayerOrigin records where an appended stack layer came from: the
+// child feature whose roadmap produced it and that child's layer position.
+// Roadmap-derived layers leave it nil.
+type StackLayerOrigin struct {
+	SourceFeatureID     string `yaml:"source_feature_id,omitempty" json:"source_feature_id,omitempty"`
+	SourceLayerPosition int    `yaml:"source_layer_position,omitempty" json:"source_layer_position,omitempty"`
+}
+
 // StackLayer is one pull-request layer of a feature's delivery stack,
 // derived from one `## Pull Requests` table row of the approved roadmap.
 // Branch is the layer's shared branch name feature/<slug>-<id>/<k>-<layer-
@@ -291,7 +299,9 @@ type StackRepoEntry struct {
 // holds the per-repository entries the layer boundaries fill in: each
 // repository's layer tip (a boundary snapshot — the checked-out branch ref
 // stays authoritative between boundaries), last pushed SHA, and pull
-// request URL and state.
+// request URL and state. Origin records the child feature and layer
+// position an appended layer came from; roadmap-derived layers leave it
+// nil.
 type StackLayer struct {
 	Position int                       `yaml:"position" json:"position"`
 	Title    string                    `yaml:"title,omitempty" json:"title,omitempty"`
@@ -299,6 +309,7 @@ type StackLayer struct {
 	Phases   []int                     `yaml:"phases,omitempty" json:"phases,omitempty"`
 	Branch   string                    `yaml:"branch,omitempty" json:"branch,omitempty"`
 	Repos    map[string]StackRepoEntry `yaml:"repos,omitempty" json:"repos,omitempty"`
+	Origin   *StackLayerOrigin         `yaml:"origin,omitempty" json:"origin,omitempty"`
 }
 
 // CopyStackLayers returns a deep copy of stack so a forked run and the
@@ -318,18 +329,36 @@ func CopyStackLayers(stack []StackLayer) []StackLayer {
 			}
 			out[i].Repos = repos
 		}
+		if layer.Origin != nil {
+			origin := *layer.Origin
+			out[i].Origin = &origin
+		}
 	}
 	return out
 }
 
 // CopyStackLayersForPartialRewind deep-copies stack for a partial rewind to a
-// phase of the layer at layerPosition: every layer definition (position,
-// title, slug, phases, branch) is kept, while the per-repository entries of
-// the target layer and every layer above are cleared — the worktrees were
-// reset, so the next layer boundary re-records them against the new tips.
-// Layers below the target layer keep their entries untouched.
+// phase of the layer at layerPosition: every roadmap-derived layer definition
+// (position, title, slug, phases, branch) is kept, while the per-repository
+// entries of the target layer and every layer above are cleared — the
+// worktrees were reset, so the next layer boundary re-records them against
+// the new tips. Layers below the target layer keep their entries untouched.
+// Appended layers (those carrying an origin) are dropped entirely: they are
+// not derivable from the parent's roadmap, and they always sit above roadmap
+// layers, so "at or above the target" covers them.
 func CopyStackLayersForPartialRewind(stack []StackLayer, layerPosition int) []StackLayer {
 	out := CopyStackLayers(stack)
+	if len(out) == 0 {
+		return out
+	}
+	kept := out[:0]
+	for _, layer := range out {
+		if layer.Origin != nil {
+			continue
+		}
+		kept = append(kept, layer)
+	}
+	out = kept
 	for i := range out {
 		if layerPosition > 0 && out[i].Position >= layerPosition {
 			out[i].Repos = nil

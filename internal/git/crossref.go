@@ -232,6 +232,22 @@ func UpdatePRBody(prURL, newBody string) error {
 	return nil
 }
 
+// UpdatePRBaseBranch retargets a GitHub PR's base branch by URL.
+func UpdatePRBaseBranch(prURL, base string) error {
+	owner, repo, number, err := ParsePRURL(prURL)
+	if err != nil {
+		return err
+	}
+	client, err := github.ForHost(prURLHost(prURL))
+	if err != nil {
+		return err
+	}
+	if err := client.UpdatePRBase(owner, repo, number, base); err != nil {
+		return fmt.Errorf("retargeting PR base: %w", err)
+	}
+	return nil
+}
+
 // GetPRBody fetches the body of a GitHub PR by URL.
 func GetPRBody(prURL string) (string, error) {
 	owner, repo, number, err := ParsePRURL(prURL)

@@ -2224,6 +2224,8 @@ export interface components {
             blocker?: string;
             /** @description Server-authored freshness state. */
             freshness?: string;
+            /** @description Server-authored rebase hint, present when a merged layer whose entry still holds a tip sits below a kept layer with commits — the repository reads behind and the hint names the merged layer and points at the rebase pass that restacks the chain. Omitted when there is no such layer. */
+            rebase_hint?: string;
             /** @description Canonical catalog-rendered publish failure record this repository owns, when any. */
             error?: components["schemas"]["Error"];
             /** @description Server-authored base branch for this repository. */
@@ -2843,6 +2845,8 @@ export interface components {
             anchor_sha?: string;
             candidate_sha?: string;
             observed_sha?: string;
+            /** @description Ref update kind - rewrite (an update to an existing ref), create (a ref that did not exist before the transaction), or delete (a ref that did exist, removed while sitting at its anchor). */
+            kind?: string;
         };
         Usage: {
             input_tokens?: number;

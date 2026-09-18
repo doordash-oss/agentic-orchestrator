@@ -1059,6 +1059,63 @@ describe('PublishModal', () => {
     expect(within(row).getByRole('checkbox', { name: 'api' })).toBeVisible();
   });
 
+  it('renders the repository rebase hint beside its freshness when present', () => {
+    render(
+      <PublishModal
+        {...props({
+          preflight: preflightWith({
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+                pendingCommits: 1,
+                freshness: 'behind',
+                rebaseHint:
+                  'Layer 1 (Foundation) is merged below kept work — run the rebase pass to restack the layers above.',
+              },
+            ],
+          }),
+        })}
+      />,
+    );
+
+    const row = screen
+      .getByRole('checkbox', { name: 'api' })
+      .closest('.completion-workspace__publish-repo') as HTMLElement;
+    const meta = row.querySelector('.completion-workspace__publish-repo-meta') as HTMLElement;
+    expect(meta).toHaveTextContent('Behind');
+    expect(meta).toHaveTextContent('Layer 1 (Foundation) is merged below kept work');
+    expect(meta).toHaveTextContent('run the rebase pass to restack the layers above');
+  });
+
+  it('renders no rebase hint when the preflight carries none', () => {
+    render(
+      <PublishModal
+        {...props({
+          preflight: preflightWith({
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+                pendingCommits: 1,
+              },
+            ],
+          }),
+        })}
+      />,
+    );
+
+    expect(document.querySelector('.completion-workspace__freshness')).toBeNull();
+    const row = screen
+      .getByRole('checkbox', { name: 'api' })
+      .closest('.completion-workspace__publish-repo') as HTMLElement;
+    expect(row).not.toHaveTextContent('rebase pass');
+  });
+
   it('previews the stack in the already-published group with merged and closed verbs', () => {
     render(
       <PublishModal

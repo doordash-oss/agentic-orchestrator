@@ -1633,6 +1633,9 @@ export const CompletionPreflightRepoSchema = z.object({
   pull_requests: z.array(ServerPullRequestEntrySchema).optional(),
   blocker: z.string().optional(),
   freshness: z.string().optional(),
+  // Server-authored rebase hint, present when a merged layer whose entry
+  // still holds a tip sits below a kept layer with commits.
+  rebase_hint: z.string().max(500).optional(),
   // Canonical error rendering the repository's stored publish-failure
   // record; absent when the repository has not failed.
   error: CanonicalErrorSchema.optional(),

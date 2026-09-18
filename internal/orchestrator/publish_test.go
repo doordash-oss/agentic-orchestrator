@@ -798,6 +798,9 @@ func (realGitPublishRemoteOps) GetPRBody(prURL string) (string, error) {
 func (realGitPublishRemoteOps) UpdatePRBody(prURL, body string) error {
 	return git.UpdatePRBody(prURL, body)
 }
+func (realGitPublishRemoteOps) UpdatePRBase(prURL, base string) error {
+	return git.UpdatePRBaseBranch(prURL, base)
+}
 
 // The first manual CodeReady publish has no remote pull-request branch yet.
 // It still travels through PushLayerBranch, which must create that branch

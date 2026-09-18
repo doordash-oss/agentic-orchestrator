@@ -959,18 +959,22 @@ func failureRecordNamesFinalReview(rec *errcat.FailureRecord) bool {
 
 // validTransitions maps each status to the set of statuses it can transition to.
 var validTransitions = map[Status][]Status{
-	StatusCreated:             {StatusInquiring, StatusResearching, StatusBuildingKB, StatusPlanReady, StatusFailed},
-	StatusResearching:         {StatusDesignReady, StatusPlanReady, StatusFailed, StatusInterrupted},
-	StatusBuildingKB:          {StatusCreated, StatusFailed, StatusInterrupted},
-	StatusInquiring:           {StatusInquireReady, StatusFailed, StatusInterrupted},
-	StatusInquireReady:        {StatusResearching, StatusFailed},
-	StatusDesignReady:         {StatusDesigning, StatusFailed},
-	StatusDesigning:           {StatusPlanReady, StatusFailed, StatusInterrupted},
-	StatusPlanReady:           {StatusPlanning, StatusFailed},
-	StatusPlanning:            {StatusImplementReady, StatusPlanNeedsReview, StatusFailed, StatusInterrupted},
-	StatusImplementReady:      {StatusImplementing, StatusFailed},
-	StatusImplementing:        {StatusReviewPassed, StatusImplementReady, StatusNeedUserInput, StatusFailed, StatusInterrupted},
-	StatusNeedUserInput:       {StatusImplementing, StatusFailed, StatusInterrupted},
+	StatusResearching:    {StatusDesignReady, StatusPlanReady, StatusFailed, StatusInterrupted},
+	StatusBuildingKB:     {StatusCreated, StatusFailed, StatusInterrupted},
+	StatusInquiring:      {StatusInquireReady, StatusFailed, StatusInterrupted},
+	StatusInquireReady:   {StatusResearching, StatusFailed},
+	StatusDesignReady:    {StatusDesigning, StatusFailed},
+	StatusDesigning:      {StatusPlanReady, StatusFailed, StatusInterrupted},
+	StatusPlanReady:      {StatusPlanning, StatusFailed},
+	StatusPlanning:       {StatusImplementReady, StatusPlanNeedsReview, StatusFailed, StatusInterrupted},
+	StatusImplementReady: {StatusImplementing, StatusFailed},
+	StatusImplementing:   {StatusReviewPassed, StatusImplementReady, StatusNeedUserInput, StatusFailed, StatusInterrupted},
+	StatusNeedUserInput:  {StatusImplementing, StatusFailed, StatusInterrupted},
+	// Created → ReviewPassed exists for rebase children: the harness restack
+	// replaces the planning and implement phases, so a started pass lands
+	// directly at a durably approved-shaped state whose single verification
+	// round (the deferred Final Review) then dispatches.
+	StatusCreated:             {StatusInquiring, StatusResearching, StatusBuildingKB, StatusPlanReady, StatusReviewPassed, StatusFailed},
 	StatusReviewPassed:        {StatusCodeReady, StatusDone, StatusImplementing, StatusImplementReady, StatusFailed, StatusPlanning, StatusReviewing, StatusFinalReviewing},
 	StatusFinalReviewing:      {StatusCodeReady, StatusReviewPassed, StatusFailed, StatusInterrupted},
 	StatusReviewing:           {StatusCodeReady, StatusFailed, StatusInterrupted},

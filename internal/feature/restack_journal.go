@@ -200,6 +200,32 @@ func ApplyTransactionRemap(f *Feature, remap RestackRemap, repository string) {
 	applyRestackRemap(f, remap, repository)
 }
 
+// MarkStackLayerMergedForRepo settles one repository's entry on the stack
+// layer at the given position after a transaction deleted that layer's ref:
+// the pull request state becomes merged, the tip and last-pushed SHA are
+// cleared (the ref no longer exists), and the pull request URL is kept as
+// the durable record of the delivered layer. Called from the closure's
+// single parent write, so it must stay a pure function of the feature;
+// idempotent — a layer already marked merged is left alone.
+func MarkStackLayerMergedForRepo(f *Feature, repository string, layerPosition int) {
+	if f == nil {
+		return
+	}
+	for i := range f.Stack {
+		if f.Stack[i].Position != layerPosition {
+			continue
+		}
+		if f.Stack[i].Repos == nil {
+			f.Stack[i].Repos = make(map[string]StackRepoEntry)
+		}
+		entry := f.Stack[i].Repos[repository]
+		entry.TipSHA = ""
+		entry.LastPushedSHA = ""
+		entry.PRState = StackPRStateMerged
+		f.Stack[i].Repos[repository] = entry
+	}
+}
+
 // RestackRemapForRepository computes the anchor and tip remap for one
 // repository given an old-to-new SHA map: every roadmap-phase anchor and
 // every layer tip of the repository whose current SHA appears in the map is

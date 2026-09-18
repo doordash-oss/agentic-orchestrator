@@ -183,7 +183,7 @@ func TestStoreSaveAndLoadRebaseTargetsRoundTrip(t *testing.T) {
 					TargetSHA:   "fedcba9876543210fedcba9876543210fedcba98",
 				},
 			},
-			RebaseBehind: []string{"repoA", "repoB"},
+			RebaseWorkRepos: []string{"repoA", "repoB"},
 		},
 	}
 	if err := store.Save(f); err != nil {
@@ -211,8 +211,8 @@ func TestStoreSaveAndLoadRebaseTargetsRoundTrip(t *testing.T) {
 	if gotB.TargetSHA != "fedcba9876543210fedcba9876543210fedcba98" {
 		t.Errorf("repoB TargetSHA = %q, want persisted SHA", gotB.TargetSHA)
 	}
-	if !reflect.DeepEqual(loaded.Parent.RebaseBehind, []string{"repoA", "repoB"}) {
-		t.Errorf("loaded RebaseBehind = %+v, want [repoA repoB]", loaded.Parent.RebaseBehind)
+	if !reflect.DeepEqual(loaded.Parent.RebaseWorkRepos, []string{"repoA", "repoB"}) {
+		t.Errorf("loaded RebaseWorkRepos = %+v, want [repoA repoB]", loaded.Parent.RebaseWorkRepos)
 	}
 
 	// Accessor round-trip.

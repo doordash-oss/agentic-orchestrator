@@ -319,9 +319,10 @@ func (t *journeyMutationTarget) RebaseFeature(featureID string, _ server.RebaseF
 		return resp, err
 	}
 	spec := feature.RebaseChildSpec{
-		Bases:   preflight.Bases,
-		Targets: preflight.Targets,
-		Behind:  preflight.Behind,
+		Bases:       preflight.Bases,
+		Targets:     preflight.Targets,
+		LayerStates: preflight.LayerStates,
+		WorkRepos:   preflight.WorkRepos,
 	}
 	var child *feature.Feature
 	if err := t.orch.WithRelationshipWriteLock(func() error {
@@ -344,6 +345,57 @@ func (t *journeyMutationTarget) StartFeature(featureID string) (server.FeatureSt
 		return resp, err
 	}
 	resp.Result = "started"
+	return resp, nil
+}
+
+// CompletionPreflight mirrors the production orchestrator→REST mapping so
+// the journeys read the completion preflight through the same surface the
+// desktop consumes, including the rebase pass's per-layer push modes and
+// rebase hint.
+func (t *journeyMutationTarget) CompletionPreflight(featureID string) (server.CompletionPreflightResponse, error) {
+	result, err := t.orch.CompletionPreflight(featureID)
+	if err != nil {
+		return server.CompletionPreflightResponse{FeatureID: featureID}, err
+	}
+	resp := server.CompletionPreflightResponse{
+		APIVersion:      server.APIVersion,
+		FeatureID:       result.FeatureID,
+		SourceRevision:  result.SourceRevision,
+		CanMarkDone:     result.CanMarkDone,
+		MarkDoneBlocker: result.MarkDoneBlocker,
+	}
+	for _, r := range result.Repos {
+		repo := server.CompletionPreflightRepo{
+			Repo:                  r.Repo,
+			Publishable:           r.Publishable,
+			Touched:               r.Touched,
+			Status:                r.Status,
+			Blocker:               r.Blocker,
+			Freshness:             r.Freshness,
+			Error:                 server.WireRepoError(r.Error),
+			BaseBranch:            r.BaseBranch,
+			Branch:                r.Branch,
+			PendingCommits:        r.PendingCommits,
+			PendingDirty:          r.PendingDirty,
+			PushMode:              server.CompletionPreflightRepoPushMode(r.PushMode),
+			PendingDirtyFiles:     r.PendingDirtyFiles,
+			PendingDirtyFileTotal: r.PendingDirtyFileTotal,
+			RebaseHint:            r.RebaseHint,
+		}
+		for _, entry := range r.PullRequests {
+			repo.PullRequests = append(repo.PullRequests, server.PullRequestEntry{
+				Position:       entry.Position,
+				Title:          entry.Title,
+				Branch:         entry.Branch,
+				URL:            entry.URL,
+				State:          server.PullRequestEntryState(entry.State),
+				NoCommits:      entry.NoCommits,
+				PushedUpToDate: entry.PushedUpToDate,
+				PushMode:       server.PullRequestEntryPushMode(entry.PushMode),
+			})
+		}
+		resp.Repos = append(resp.Repos, repo)
+	}
 	return resp, nil
 }
 

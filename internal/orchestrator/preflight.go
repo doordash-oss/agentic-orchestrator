@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -125,6 +126,59 @@ func completionDestinationRef(repo feature.FeatureRepo, publishable bool) string
 // commits in a range without a dedicated rev-list helper in the git package.
 const commitBodiesRangeSeparator = "---commit---"
 
+// liveStackPRStates reads every stack layer pull request's live state for one
+// publishable repository through the remote operations — the completion
+// preflight's status refresh. A determinate merged or closed state is
+// persisted onto the run's stack through the lifecycle, monotonically: only
+// merged or closed is ever written, so a recorded merged or closed entry can
+// never be downgraded, and the write is a no-op when the entry already records
+// it. The returned map carries the live state (open, merged, or closed) for
+// every layer whose lookup was determinate; an indeterminate lookup (error or
+// unrecognised state) is omitted so the recorded state stands. A
+// closed-unmerged pull request found here is observed and persisted only —
+// blocker parking for it stays with Phase 15.
+func (o *Orchestrator) liveStackPRStates(f *feature.Feature, repo feature.FeatureRepo, publishable bool) map[int]feature.StackPRState {
+	if !publishable || len(f.Stack) == 0 {
+		return nil
+	}
+	workDir := repoWorkDir(repo)
+	if workDir == "" {
+		return nil
+	}
+	var live map[int]feature.StackPRState
+	for _, layer := range orderedStackLayers(f) {
+		entry, hasEntry := layer.Repos[repo.Name]
+		if !hasEntry || entry.PRURL == "" {
+			continue
+		}
+		state, err := o.deps.Remote.PRState(workDir, entry.PRURL)
+		if err != nil {
+			// Indeterminate: the recorded state stands and no hint is
+			// derived from this lookup.
+			continue
+		}
+		switch state {
+		case git.PRStateMerged:
+			if entry.PRState != feature.StackPRStateMerged {
+				_ = o.deps.Lifecycle.SetStackLayerPRState(f.ID, repo.Name, layer.Position, feature.StackPRStateMerged)
+			}
+		case git.PRStateClosed:
+			if entry.PRState != feature.StackPRStateClosed {
+				_ = o.deps.Lifecycle.SetStackLayerPRState(f.ID, repo.Name, layer.Position, feature.StackPRStateClosed)
+			}
+		case git.PRStateOpen:
+			// Open never downgrades a recorded merged or closed entry.
+		default:
+			continue
+		}
+		if live == nil {
+			live = make(map[int]feature.StackPRState)
+		}
+		live[layer.Position] = feature.StackPRState(state)
+	}
+	return live
+}
+
 // applyPendingDelivery folds undelivered-work measurements into a repository's
 // preflight result and distinguishes a stale pull request or base branch from a
 // delivered one. A publishable repository on a stacked run is measured per
@@ -133,9 +187,9 @@ const commitBodiesRangeSeparator = "---commit---"
 // (merge delivery, pre-stack runs) keeps the single-destination measurement
 // and carries no entries. An unresolvable destination leaves the result
 // untouched.
-func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.FeatureRepo, result CompletionRepoResult) CompletionRepoResult {
+func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.FeatureRepo, result CompletionRepoResult, liveStates map[int]feature.StackPRState) CompletionRepoResult {
 	if result.Publishable && len(f.Stack) > 0 {
-		return o.applyStackPendingDelivery(f, repo, result)
+		return o.applyStackPendingDelivery(f, repo, result, liveStates)
 	}
 	dest := completionDestinationRef(repo, result.Publishable)
 	work, ok := git.PendingAgainst(repoWorkDir(repo), dest)
@@ -169,14 +223,18 @@ func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.Fea
 // past the lower cut point — the previous layer's tip, or the resolved base
 // for layer 1 (remote-tracking base preferred, as today); the same rule
 // decides the live no-commits marker, mirroring the publish walk's
-// emptiness rule so the preview is exact. The pending count sums each
-// unpushed layer's commits (the full layer range when it never pushed);
-// the repository-level push mode is rewrite when any layer's remote branch
-// holds commits its tip does not contain, else fast_forward, present only
-// when some layer carries a pull request. An unresolvable base mirrors the
-// legacy unresolved-destination contract: the pending fields and entries
-// stay untouched rather than guessing.
-func (o *Orchestrator) applyStackPendingDelivery(f *feature.Feature, repo feature.FeatureRepo, result CompletionRepoResult) CompletionRepoResult {
+// emptiness rule so the preview is exact. Each entry's state is the live
+// pull-request state when the lookup was determinate (a recorded merged or
+// closed entry is never downgraded to open), else the recorded state. The
+// pending count sums each unpushed layer's commits (the full layer range
+// when it never pushed); the repository-level push mode is rewrite when any
+// layer's remote branch holds commits its tip does not contain, else
+// fast_forward, present only when some layer carries a pull request. A
+// merged layer whose entry still holds a tip below a kept layer with commits
+// sets the rebase hint naming that merged layer. An unresolvable base
+// mirrors the legacy unresolved-destination contract: the pending fields and
+// entries stay untouched rather than guessing.
+func (o *Orchestrator) applyStackPendingDelivery(f *feature.Feature, repo feature.FeatureRepo, result CompletionRepoResult, liveStates map[int]feature.StackPRState) CompletionRepoResult {
 	workDir := repoWorkDir(repo)
 	if workDir == "" {
 		return result
@@ -196,6 +254,10 @@ func (o *Orchestrator) applyStackPendingDelivery(f *feature.Feature, repo featur
 	rewrite := false
 	anyPR := false
 	preflightEntries := make([]CompletionPullRequestEntry, 0, len(layers))
+	// Per-layer shape for the rebase hint: a merged layer whose entry still
+	// holds a tip, and a kept (not merged, not closed) layer with commits.
+	mergedWithTip := make([]bool, len(layers))
+	keptWithCommits := make([]bool, len(layers))
 	for i, layer := range layers {
 		entry := entries[layer.Position]
 		cut := baseSHA
@@ -206,7 +268,8 @@ func (o *Orchestrator) applyStackPendingDelivery(f *feature.Feature, repo featur
 		// tip does not reach past the lower cut point — so a not-yet-
 		// published empty layer is already marked here.
 		hasCommits := git.HasCommitsBeyond(workDir, entry.TipSHA, cut)
-		state := stackPreflightPRState(entry)
+		live, liveKnown := liveStates[layer.Position]
+		state := stackPreflightPRStateWithLive(entry, live, liveKnown)
 		pushedUpToDate := entry.PRURL != "" && entry.TipSHA == entry.LastPushedSHA
 		pushMode := completionPushModeNone
 		switch {
@@ -249,6 +312,31 @@ func (o *Orchestrator) applyStackPendingDelivery(f *feature.Feature, repo featur
 			PushedUpToDate: pushedUpToDate,
 			PushMode:       pushMode,
 		})
+		mergedWithTip[i] = state == string(feature.StackPRStateMerged) && entry.TipSHA != ""
+		keptWithCommits[i] = state != string(feature.StackPRStateMerged) &&
+			state != string(feature.StackPRStateClosed) && hasCommits
+	}
+	// The rebase hint: the lowest merged layer whose entry still holds a tip
+	// with kept work with commits above it — the chain above a merged base
+	// must be restacked onto that base, so the repository reads behind even
+	// when the local remote-tracking comparison reports up to date.
+	for i, layer := range layers {
+		if !mergedWithTip[i] {
+			continue
+		}
+		keptAbove := false
+		for j := i + 1; j < len(layers); j++ {
+			if keptWithCommits[j] {
+				keptAbove = true
+				break
+			}
+		}
+		if keptAbove {
+			result.RebaseHint = fmt.Sprintf(
+				"Layer %d (%s) is merged below kept work — run the rebase pass to restack the layers above.",
+				layer.Position, layer.Title)
+			break
+		}
 	}
 	result.PullRequests = preflightEntries
 	result.PendingCommits = pendingCommits
@@ -288,6 +376,28 @@ func stackPreflightPRState(entry feature.StackRepoEntry) string {
 	default:
 		return string(feature.StackPRStateOpen)
 	}
+}
+
+// stackPreflightPRStateWithLive folds a determinate live lookup into a layer
+// entry's preflight state. The live state wins except that a live open never
+// downgrades a recorded merged or closed entry — merged and closed are
+// monotonic remote facts. An indeterminate lookup (ok false) keeps the
+// recorded state.
+func stackPreflightPRStateWithLive(entry feature.StackRepoEntry, live feature.StackPRState, liveKnown bool) string {
+	if entry.PRURL == "" {
+		return string(feature.StackPRStateNone)
+	}
+	if liveKnown {
+		switch live {
+		case feature.StackPRStateMerged, feature.StackPRStateClosed:
+			return string(live)
+		case feature.StackPRStateOpen:
+			if entry.PRState != feature.StackPRStateMerged && entry.PRState != feature.StackPRStateClosed {
+				return string(feature.StackPRStateOpen)
+			}
+		}
+	}
+	return stackPreflightPRState(entry)
 }
 
 // stackRangeCommitCount counts the commits in lower..tip through the ranged

@@ -316,16 +316,6 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 			}
 			return o.commitRound(input)
 		}
-		// Phase-exit gate: rebase children re-verify the mechanical rebase
-		// exit facts before the implement loop declares success, surfacing
-		// violations as fix-round feedback instead of failing later at the
-		// integration gate. Non-rebase features get no gate (nil = no-op).
-		o.deps.PhaseRunner.PhaseExitGateFor = func(f *feature.Feature) agent.PhaseExitGate {
-			if f == nil || f.Parent == nil || f.Parent.Kind != feature.ChildKindRebase {
-				return nil
-			}
-			return func() string { return o.rebaseGateFeedback(f) }
-		}
 	}
 	o.runMultiRepoImplFn = func(
 		f *feature.Feature,
@@ -533,6 +523,29 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 	}
 
 	phase := f.CurrentPhase
+
+	// A rebase child at Created runs the harness restack loop instead of
+	// dispatching a planning phase. The loop is synchronous and idempotent;
+	// on success the child is at ReviewPassed with its current phase Final
+	// Review, and the fall-through below dispatches the deferred Final
+	// Review — the pass's single verification round — exactly as a feature
+	// restarting mid-Final-Review is dispatched today. A replay conflict
+	// parks the pass (durable attention journal) and the start returns.
+	if f.IsChild() && f.Parent.Kind == feature.ChildKindRebase && f.Status == feature.StatusCreated {
+		landed, err := o.runRebaseRestackPass(featureID)
+		if err != nil {
+			return err
+		}
+		if !landed {
+			return nil
+		}
+		f, err = o.deps.Lifecycle.Get(featureID)
+		if err != nil {
+			return fmt.Errorf("loading feature after restack: %w", err)
+		}
+		phase = feature.PhaseFinalReview
+	}
+
 	// For new features, fall back to the pipeline's first phase.
 	//
 	// For interrupted features, the CurrentPhase field carries intent — it is
@@ -2007,6 +2020,11 @@ func (o *Orchestrator) Publish(featureID string) error {
 
 type PublishOptions struct {
 	Repos []string
+	// UpdateOnly restricts the walk to layers that already carry a pull
+	// request: rebased layers with one are pushed with their lease and their
+	// stack sections refreshed, while layers without a pull request are left
+	// for a later full publish (the user's Publish action or auto-publish).
+	UpdateOnly bool
 }
 
 // PublishWithOptions runs the publish pipeline for all repos, or for the

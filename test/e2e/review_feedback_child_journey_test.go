@@ -287,9 +287,12 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	postReviewSessionProceed(t, srv.URL, childID)
 	waitForJourneyChildClosed(t, srv.URL, store, childID)
 	// The closure tail (cleanup, KB promotion) settles before the
-	// review-feedback tail runs. Wait for the parent to reach Published
-	// (set by the tail) so assertions observe the completed tail.
+	// review-feedback tail runs. The tail's republish walk moves the
+	// parent back to Published well before its final durable marker, so
+	// wait for the tail-settled marker itself — assertions must observe
+	// the completed tail, not race it.
 	waitForJourneyStatus(t, srv.URL, parent.ID, feature.StatusPublished.String())
+	waitForStackedReviewFeedbackTailSettled(t, store, childID)
 
 	closedChild, err := store.Load(childID)
 	if err != nil {

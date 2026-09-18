@@ -2096,6 +2096,7 @@ func (t *serverMutationTarget) CompletionPreflight(featureID string) (serverrunt
 			PushMode:              serverruntime.CompletionPreflightRepoPushMode(r.PushMode),
 			PendingDirtyFiles:     r.PendingDirtyFiles,
 			PendingDirtyFileTotal: r.PendingDirtyFileTotal,
+			RebaseHint:            r.RebaseHint,
 		}
 		for _, entry := range r.PullRequests {
 			repo.PullRequests = append(repo.PullRequests, serverruntime.PullRequestEntry{
@@ -2240,9 +2241,10 @@ func (t *serverMutationTarget) RebaseFeature(featureID string, _ serverruntime.R
 		return resp, err
 	}
 	spec := feature.RebaseChildSpec{
-		Bases:   preflight.Bases,
-		Targets: preflight.Targets,
-		Behind:  preflight.Behind,
+		Bases:       preflight.Bases,
+		Targets:     preflight.Targets,
+		LayerStates: preflight.LayerStates,
+		WorkRepos:   preflight.WorkRepos,
 	}
 	var child *feature.Feature
 	if wErr := t.orch.WithRelationshipWriteLock(func() error {

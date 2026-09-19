@@ -1327,10 +1327,15 @@ func TestTransactionPassThroughSyncFailureRollsBackApplied(t *testing.T) {
 }
 
 // TestTransactionUnchangedRepoPassesThrough proves a non-rebase child that
-// left one repository untouched integrates without asking git to merge a head
-// that is already the parent anchor: the untouched repo becomes a pass-through
-// candidate, the changed repo still gets a real two-parent merge, and the
-// apply phase advances only the changed repo's ref.
+// left one repository untouched integrates it without asking git to merge a
+// head that is already the parent anchor. The two kinds stage the untouched
+// repository differently — the refactor child's append path records a created
+// ref for the appended layer at the parent tip, and the review-feedback
+// child's relocation path records a pass-through top ref whose candidate
+// equals its anchor — while the changed repository records a real candidate:
+// an appended layer at the child head for the refactor child, a relocated
+// top ref for the review-feedback child. The apply phase advances only the
+// changed repository's parent-facing refs.
 func TestTransactionUnchangedRepoPassesThrough(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-git integration test")
@@ -1374,17 +1379,75 @@ func TestTransactionUnchangedRepoPassesThrough(t *testing.T) {
 			if untouched.PrepState != feature.RepoPrepPrepared {
 				t.Fatalf("repo 0: prep state = %q, want prepared", untouched.PrepState)
 			}
-			if untouched.CandidateSHA != untouched.ParentAnchorSHA || untouched.CandidateSHA != fx.parentSHA[0] {
-				t.Fatalf("repo 0: CandidateSHA = %s, want pass-through anchor %s", untouched.CandidateSHA, fx.parentSHA[0])
+			untouchedTop := untouched.TopRef()
+			if untouchedTop == nil {
+				t.Fatalf("repo 0: refs = %+v, want a top ref", untouched.Refs)
 			}
-
 			changed := journal.Entries[1]
 			if changed.PrepState != feature.RepoPrepPrepared {
 				t.Fatalf("repo 1: prep state = %q, want prepared", changed.PrepState)
 			}
-			parents := txGit(t, fx.repoDirs[1], "rev-list", "--parents", "-n", "1", changed.CandidateSHA)
-			if fields := strings.Fields(parents); len(fields) != 3 || fields[1] != changed.ParentAnchorSHA || fields[2] != changed.ChildHeadSHA {
-				t.Fatalf("repo 1: candidate parents = %q, want merge of %s and %s", parents, changed.ParentAnchorSHA, changed.ChildHeadSHA)
+			changedTop := changed.TopRef()
+			if changedTop == nil {
+				t.Fatalf("repo 1: refs = %+v, want a top ref", changed.Refs)
+			}
+
+			if tt.kind == feature.ChildKindRefactor {
+				// The append path records, for the repository the child did
+				// not touch, a created ref on the appended layer-2 branch
+				// whose candidate equals the parent anchor, with the
+				// previous top naming feature/parent at layer 1.
+				if untouchedTop.RefKind() != feature.RepoRefKindCreate {
+					t.Fatalf("repo 0: top ref = %+v, want a created ref", untouchedTop)
+				}
+				if untouchedTop.Branch != fx.appendedBranch || untouchedTop.Layer != 2 {
+					t.Fatalf("repo 0: top ref = %+v, want the appended layer-2 branch %q", untouchedTop, fx.appendedBranch)
+				}
+				if untouchedTop.AnchorSHA != "" {
+					t.Fatalf("repo 0: top ref anchor = %q, want empty for a created ref", untouchedTop.AnchorSHA)
+				}
+				if untouchedTop.CandidateSHA != fx.parentSHA[0] {
+					t.Fatalf("repo 0: top ref candidate = %s, want the parent anchor %s", untouchedTop.CandidateSHA, fx.parentSHA[0])
+				}
+				if prev := untouched.PreviousTop; prev == nil ||
+					prev.Branch != "feature/parent" || prev.Layer != 1 || prev.TipSHA != fx.parentSHA[0] {
+					t.Fatalf("repo 0: previous top = %+v, want feature/parent at layer 1 with the anchor as tip", untouched.PreviousTop)
+				}
+				// The changed repository's created ref candidate is its child
+				// head — a single-parent commit on the anchor, no merge.
+				if changedTop.RefKind() != feature.RepoRefKindCreate || changedTop.Branch != fx.appendedBranch {
+					t.Fatalf("repo 1: top ref = %+v, want a created ref on %q", changedTop, fx.appendedBranch)
+				}
+				if changedTop.CandidateSHA != changed.ChildHeadSHA {
+					t.Fatalf("repo 1: top ref candidate = %s, want the child head %s", changedTop.CandidateSHA, changed.ChildHeadSHA)
+				}
+				parents := txGit(t, fx.repoDirs[1], "rev-list", "--parents", "-n", "1", changed.ChildHeadSHA)
+				if fields := strings.Fields(parents); len(fields) != 2 || fields[1] != fx.parentSHA[1] {
+					t.Fatalf("repo 1: child head parents = %q, want a single-parent commit on the anchor %s", parents, fx.parentSHA[1])
+				}
+			} else {
+				// The relocation path records, for the repository the child
+				// did not touch, a pass-through top ref on the parent branch
+				// whose candidate equals its anchor, and no relocated commits.
+				if untouchedTop.RefKind() != feature.RepoRefKindRewrite || untouchedTop.Branch != "feature/parent" || untouchedTop.Layer != 1 {
+					t.Fatalf("repo 0: top ref = %+v, want a pass-through ref on feature/parent at layer 1", untouchedTop)
+				}
+				if untouchedTop.CandidateSHA != untouchedTop.AnchorSHA || untouchedTop.CandidateSHA != fx.parentSHA[0] {
+					t.Fatalf("repo 0: top ref = %+v, want candidate equal to the anchor %s", untouchedTop, fx.parentSHA[0])
+				}
+				if len(untouched.Relocated) != 0 {
+					t.Fatalf("repo 0: relocated = %v, want none for an untouched repository", untouched.Relocated)
+				}
+				// The changed repository's candidate differs from its anchor,
+				// descends from it, and the relocated map carries the child
+				// commit.
+				if changedTop.CandidateSHA == changedTop.AnchorSHA {
+					t.Fatalf("repo 1: top ref = %+v, want a candidate away from the anchor", changedTop)
+				}
+				txGit(t, fx.repoDirs[1], "merge-base", "--is-ancestor", changedTop.AnchorSHA, changedTop.CandidateSHA)
+				if _, ok := changed.Relocated[changed.ChildHeadSHA]; !ok {
+					t.Fatalf("repo 1: relocated = %v, want the child head %s carried", changed.Relocated, changed.ChildHeadSHA)
+				}
 			}
 
 			// Neither parent ref moves during preparation.
@@ -1403,11 +1466,30 @@ func TestTransactionUnchangedRepoPassesThrough(t *testing.T) {
 			if got := fx.refSHA(0, "refs/heads/feature/parent"); got != fx.parentSHA[0] {
 				t.Fatalf("repo 0: ref = %s after apply, want untouched anchor %s", got, fx.parentSHA[0])
 			}
-			if got := fx.refSHA(1, "refs/heads/feature/parent"); got != changed.CandidateSHA {
-				t.Fatalf("repo 1: ref = %s after apply, want candidate %s", got, changed.CandidateSHA)
+			if tt.kind == feature.ChildKindRefactor {
+				// The appended layer branch exists in both repositories — at
+				// the anchor in the untouched one, at the child head in the
+				// changed one — and feature/parent never moved.
+				if got := fx.refSHA(0, "refs/heads/"+fx.appendedBranch); got != fx.parentSHA[0] {
+					t.Fatalf("repo 0: appended branch = %s after apply, want the anchor %s", got, fx.parentSHA[0])
+				}
+				if got := fx.refSHA(1, "refs/heads/"+fx.appendedBranch); got != changed.ChildHeadSHA {
+					t.Fatalf("repo 1: appended branch = %s after apply, want the child head %s", got, changed.ChildHeadSHA)
+				}
+				if got := fx.refSHA(1, "refs/heads/feature/parent"); got != fx.parentSHA[1] {
+					t.Fatalf("repo 1: ref = %s after apply, want unchanged %s", got, fx.parentSHA[1])
+				}
+			} else {
+				// Only the changed repository's feature/parent moved, to the
+				// relocated candidate.
+				if got := fx.refSHA(1, "refs/heads/feature/parent"); got != changedTop.CandidateSHA {
+					t.Fatalf("repo 1: ref = %s after apply, want the candidate %s", got, changedTop.CandidateSHA)
+				}
 			}
 			_, reloaded := fx.reload()
-			if reloaded.Parent.Transaction == nil || reloaded.Parent.Transaction.Attention != nil {
+			if reloaded.Parent.Transaction == nil ||
+				reloaded.Parent.Transaction.Phase != feature.TransactionPhaseApplied ||
+				reloaded.Parent.Transaction.Attention != nil {
 				t.Fatalf("persisted transaction = %+v, want applied journal without attention", reloaded.Parent.Transaction)
 			}
 		})

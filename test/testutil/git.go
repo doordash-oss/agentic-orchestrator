@@ -156,9 +156,11 @@ func InitPublishReadyGitRepo(t *testing.T) (string, string) {
 func SimulatePush(t *testing.T, srcRepo, bareRepo, srcBranch, dstBranch string) {
 	t.Helper()
 
-	// 1. Fetch objects + ref from srcRepo directly into the bare repo.
-	//    "git fetch <path> <src>:<dst>" transfers objects and creates the ref.
-	runGit(t, bareRepo, "fetch", srcRepo, srcBranch+":refs/heads/"+dstBranch)
+	// 1. Fetch objects + ref from srcRepo directly into the bare repo. The
+	//    forced refspec makes the helper a force-update: restoring a remote
+	//    branch to an earlier SHA (a retry leg rewinding a simulated
+	//    divergence) is a non-fast-forward move.
+	runGit(t, bareRepo, "fetch", srcRepo, "+"+srcBranch+":refs/heads/"+dstBranch)
 
 	// 2. Fetch from origin so the local repo sees origin/<dstBranch>.
 	runGit(t, srcRepo, "fetch", "origin")

@@ -555,6 +555,7 @@ export async function setTheme(handle: AppHandle, theme: 'light' | 'dark'): Prom
 export type SettingsPaneLabel =
   | 'Workspace roots'
   | 'Servers'
+  | 'Slack'
   | 'Providers'
   | 'Appearance'
   | 'Updates'

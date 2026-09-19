@@ -754,7 +754,7 @@ export async function waitFor(
  */
 export function minimalEnv(world?: JourneyWorld): Record<string, string> {
   const env: Record<string, string> = {
-    PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+    PATH: '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
     TMPDIR: process.env['TMPDIR'] ?? os.tmpdir(),
     LANG: process.env['LANG'] ?? 'en_US.UTF-8',
     AGENTICO_E2E_ALLOW_LARGE_WINDOW: '1',

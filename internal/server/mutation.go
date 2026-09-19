@@ -27,6 +27,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
@@ -252,9 +253,13 @@ type HelpAnswerRequest struct {
 }
 
 type RuntimeConfigMutationRequest struct {
-	Defaults       RuntimeDefaultsMutation `json:"defaults,omitempty"`
-	WorkspaceRoots *[]string               `json:"workspace_roots,omitempty"`
-	Notifications  *NotificationConfig     `json:"notifications,omitempty"`
+	Defaults        RuntimeDefaultsMutation `json:"defaults,omitempty"`
+	WorkspaceRoots  *[]string               `json:"workspace_roots,omitempty"`
+	Notifications   *NotificationConfig     `json:"notifications,omitempty"`
+	Slack           *SlackConfigMutation    `json:"slack,omitempty"`
+	SlackValidation *ports.SlackValidation  `json:"-"`
+	SlackCheckedAt  time.Time               `json:"-"`
+	SlackWarning    *errcat.Error           `json:"-"`
 }
 
 // RuntimeDefaultsMutation is the patch representation of DefaultsConfig.
@@ -1239,6 +1244,9 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		if req.WorkspaceRoots != nil && !validateWorkspaceRootPaths(w, *req.WorkspaceRoots) {
 			return
 		}
+		if req.Slack != nil && !h.prepareSlackMutation(w, r.Context(), &req) {
+			return
+		}
 		resp, err := h.mutations.RuntimeConfig(req)
 		if err != nil {
 			writeMutationError(w, err)
@@ -1252,11 +1260,69 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 			// nothing.
 			h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
 		}
+		if resp.Result == resultUpdated && h.slack != nil && req.Slack != nil {
+			switch {
+			case req.Slack.ClearToken != nil && *req.Slack.ClearToken:
+				h.slack.ClearStatus()
+			case req.SlackValidation != nil:
+				h.slack.RecordValidationSuccess(req.SlackCheckedAt)
+			case req.SlackWarning != nil:
+				h.slack.RecordValidationFailure(req.SlackCheckedAt, *req.SlackWarning)
+			}
+		}
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		w.Header().Set("Allow", "GET, PATCH, PUT")
 		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 	}
+}
+
+func (h *apiHandler) prepareSlackMutation(w http.ResponseWriter, ctx context.Context, req *RuntimeConfigMutationRequest) bool {
+	mutation := req.Slack
+	if mutation.Token != nil && mutation.ClearToken != nil && *mutation.ClearToken {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics("slack token and clear_token cannot be sent together"))
+		return false
+	}
+	if mutation.Token == nil {
+		return true
+	}
+	if *mutation.Token == "" {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics("slack token must not be empty"))
+		return false
+	}
+	if h.slack == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, errcat.SlackUnreachable)
+		return false
+	}
+	checkedAt := time.Now().UTC()
+	validation, err := h.slack.Validate(ctx, *mutation.Token)
+	if err == nil {
+		req.SlackValidation = &validation
+		req.SlackCheckedAt = checkedAt
+		return true
+	}
+	var validationErr *ports.SlackValidationError
+	if !errors.As(err, &validationErr) {
+		writeAPIError(w, http.StatusBadGateway, errcat.SlackUnreachable)
+		return false
+	}
+	if validationErr.Canonical.Code == errcat.SlackUnreachable {
+		req.SlackWarning = &validationErr.Canonical
+		req.SlackCheckedAt = checkedAt
+		return true
+	}
+	writeRenderedSlackError(w, validationErr.Canonical)
+	return false
+}
+
+func writeRenderedSlackError(w http.ResponseWriter, canonical errcat.Error) {
+	status := http.StatusBadRequest
+	if canonical.Code == errcat.SlackUnreachable {
+		status = http.StatusBadGateway
+	}
+	writeJSON(w, status, ErrorResponse{APIVersion: APIVersion, Error: wireError(canonical)})
 }
 
 // validateWorkspaceRootPaths rejects runtime-config workspace roots that do

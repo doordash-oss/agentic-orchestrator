@@ -150,6 +150,22 @@ function makeServices(): IpcServices {
     getServerTokenStatus: vi.fn(() => ({ status: 'local' as const })),
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn((patch) => ({ ...defaultSettings(), ...patch })),
+    getSlackSettings: vi.fn(() => Promise.resolve({ supported: false as const })),
+    updateSlackSettings: vi.fn(() => Promise.resolve({ supported: false as const })),
+    validateSlackSettings: vi.fn(() =>
+      Promise.resolve({
+        tokenType: 'bot' as const,
+        identity: {
+          teamId: 'T123',
+          teamName: 'Acme',
+          userId: 'U123',
+          displayName: 'Agentico',
+          botId: 'B123',
+        },
+        grantedScopes: ['chat:write'],
+        missingScopes: [],
+      }),
+    ),
     openSettingsWindow: vi.fn(() => ({ opened: true })),
     getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
     setTheme: vi.fn((preference) => ({ preference, resolved: 'light' as const })),
@@ -551,6 +567,42 @@ describe('registerIpcHandlers', () => {
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
     expect(services.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('bounds Slack settings requests and rejects token-bearing responses', async () => {
+    const services = makeServices();
+    const { handlers } = register(services);
+    const rejected = (await handlers.get(IPC_CHANNELS.slackSettingsUpdate)!(goodEvent, {
+      token: '',
+    })) as { ok: boolean; error?: { code: string } };
+    expect(rejected.ok).toBe(false);
+    expect(rejected.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.updateSlackSettings).not.toHaveBeenCalled();
+
+    services.getSlackSettings = vi.fn(() =>
+      Promise.resolve({ supported: false, token: 'xoxb-leak' } as never),
+    );
+    const leaky = (await handlers.get(IPC_CHANNELS.slackSettingsGet)!(goodEvent)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(leaky.ok).toBe(false);
+    expect(leaky.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(JSON.stringify(leaky)).not.toContain('xoxb-leak');
+  });
+
+  it('passes the optional Slack validation token only through the dedicated channel', async () => {
+    const { handlers, services } = register();
+    const request = { token: 'xoxp-111-222-secret' };
+    const result = (await handlers.get(IPC_CHANNELS.slackSettingsValidate)!(
+      goodEvent,
+      request,
+    )) as { ok: boolean; value?: { tokenType: string } };
+
+    expect(result.ok).toBe(true);
+    expect(result.value?.tokenType).toBe('bot');
+    expect(services.validateSlackSettings).toHaveBeenCalledWith(request);
+    expect(JSON.stringify(result)).not.toContain(request.token);
   });
 
   it('rejects unsafe provider names before invoking model refresh', async () => {

@@ -42,6 +42,9 @@ export const IPC_CHANNELS = {
   serverTokenStatus: 'agentico:servers:token-status',
   settingsGet: 'agentico:settings:get',
   settingsUpdate: 'agentico:settings:update',
+  slackSettingsGet: 'agentico:slack-settings:get',
+  slackSettingsUpdate: 'agentico:slack-settings:update',
+  slackSettingsValidate: 'agentico:slack-settings:validate',
   windowOpenSettings: 'agentico:window:open-settings',
   themeGet: 'agentico:theme:get',
   themeSet: 'agentico:theme:set',
@@ -3638,6 +3641,7 @@ export const SETTINGS_PANES = [
   'providers',
   'appearance',
   'updates',
+  'slack',
   'notifications',
   'diagnostics',
   'advanced',
@@ -3962,6 +3966,77 @@ export const WorkspaceDefaultsSchema = z.strictObject({
 });
 export type WorkspaceDefaults = z.output<typeof WorkspaceDefaultsSchema>;
 
+// --- Slack settings ----------------------------------------------------------
+
+export const SlackIdentitySchema = z.strictObject({
+  teamId: z.string().min(1).max(200),
+  teamName: z.string().min(1).max(500),
+  userId: z.string().min(1).max(200),
+  displayName: z.string().min(1).max(500),
+  botId: z.string().min(1).max(200).nullable(),
+});
+export type SlackIdentity = z.output<typeof SlackIdentitySchema>;
+
+export const SlackStatusSchema = z.strictObject({
+  state: z.enum(['not_configured', 'connected', 'warning']),
+  lastError: CanonicalErrorSchema.nullable(),
+  lastCheckedAt: z.string().datetime().nullable(),
+});
+export type SlackStatus = z.output<typeof SlackStatusSchema>;
+
+const SupportedSlackSettingsSchema = z.strictObject({
+  supported: z.literal(true),
+  enabled: z.boolean(),
+  tokenSet: z.boolean(),
+  tokenHint: z.string().max(64),
+  tokenType: z.enum(['bot', 'user']).nullable(),
+  identity: SlackIdentitySchema.nullable(),
+  grantedScopes: z.array(z.string().min(1).max(200)).max(100),
+  missingScopes: z.array(z.string().min(1).max(200)).max(100),
+  status: SlackStatusSchema,
+  manifest: z.string().max(256 * 1024),
+});
+
+export const SlackSettingsSnapshotSchema = z.discriminatedUnion('supported', [
+  z.strictObject({ supported: z.literal(false) }),
+  SupportedSlackSettingsSchema,
+]);
+export const SlackSettingsSchema = SlackSettingsSnapshotSchema;
+export type SlackSettingsSnapshot = z.output<typeof SlackSettingsSnapshotSchema>;
+
+export const SlackSettingsDraftSchema = z
+  .strictObject({
+    enabled: z.boolean().optional(),
+    token: z
+      .string()
+      .min(1)
+      .max(16 * 1024)
+      .optional(),
+    clearToken: z.boolean().optional(),
+  })
+  .refine((draft) => !(draft.token !== undefined && draft.clearToken === true), {
+    message: 'token and clearToken are mutually exclusive',
+  });
+export const SlackSettingsUpdateRequestSchema = SlackSettingsDraftSchema;
+export type SlackSettingsDraft = z.output<typeof SlackSettingsDraftSchema>;
+
+export const SlackValidationRequestSchema = z.strictObject({
+  token: z
+    .string()
+    .min(1)
+    .max(16 * 1024)
+    .optional(),
+});
+export type SlackValidationRequest = z.output<typeof SlackValidationRequestSchema>;
+
+export const SlackValidationResultSchema = z.strictObject({
+  tokenType: z.enum(['bot', 'user']),
+  identity: SlackIdentitySchema,
+  grantedScopes: z.array(z.string().min(1).max(200)).max(100),
+  missingScopes: z.array(z.string().min(1).max(200)).max(100),
+});
+export type SlackValidationResult = z.output<typeof SlackValidationResultSchema>;
+
 export const CatalogueModelSchema = z.strictObject({
   id: z.string().min(1).max(200),
   displayName: z.string().max(200).optional(),
@@ -4058,6 +4133,18 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   [IPC_CHANNELS.settingsUpdate]: {
     request: z.tuple([SettingsPatchSchema]),
     response: SettingsSchema,
+  },
+  [IPC_CHANNELS.slackSettingsGet]: {
+    request: z.tuple([]),
+    response: SlackSettingsSnapshotSchema,
+  },
+  [IPC_CHANNELS.slackSettingsUpdate]: {
+    request: z.tuple([SlackSettingsDraftSchema]),
+    response: SlackSettingsSnapshotSchema,
+  },
+  [IPC_CHANNELS.slackSettingsValidate]: {
+    request: z.tuple([SlackValidationRequestSchema]),
+    response: SlackValidationResultSchema,
   },
   [IPC_CHANNELS.windowOpenSettings]: {
     request: z.tuple([SettingsOpenRequestSchema]),
@@ -4536,6 +4623,9 @@ export interface AgenticoApi {
   onRouteRequest(listener: (event: AppRouteEvent) => void): () => void;
   getSettings(): Promise<Settings>;
   updateSettings(patch: SettingsPatch): Promise<Settings>;
+  getSlackSettings(): Promise<SlackSettingsSnapshot>;
+  updateSlackSettings(draft: SlackSettingsDraft): Promise<SlackSettingsSnapshot>;
+  validateSlackSettings(request: SlackValidationRequest): Promise<SlackValidationResult>;
   openSettingsWindow(request: SettingsOpenRequest): Promise<SettingsOpenResult>;
   getThemePreference(): Promise<ThemeInfo>;
   setThemePreference(preference: ThemePreference): Promise<ThemeInfo>;

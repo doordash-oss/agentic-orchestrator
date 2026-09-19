@@ -1241,10 +1241,74 @@ func (h *apiHandler) handleRuntimeConfig(w http.ResponseWriter, r *http.Request)
 			OTelServiceName: cfg.Observability.OTelServiceName,
 		},
 		Providers: providers,
+		Slack:     h.slackRuntimeConfig(cfg),
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
 	h.writeRevisionedJSON(w, r, revision, resp)
+}
+
+func (h *apiHandler) slackRuntimeConfig(cfg *config.Config) SlackRuntimeConfig {
+	service := h.slack
+	if service == nil {
+		return SlackRuntimeConfig{}
+	}
+	slackConfig := cfg.Slack
+	token := ""
+	enabled := false
+	var identity *SlackIdentity
+	granted := []string{}
+	if slackConfig != nil {
+		token = slackConfig.Token
+		enabled = slackConfig.Enabled
+		granted = append(granted, slackConfig.GrantedScopes...)
+		if slackConfig.Identity != nil {
+			identity = &SlackIdentity{
+				TeamID:      slackConfig.Identity.TeamID,
+				TeamName:    slackConfig.Identity.TeamName,
+				UserID:      slackConfig.Identity.UserID,
+				DisplayName: slackConfig.Identity.DisplayName,
+				BotID:       slackConfig.Identity.BotID,
+			}
+		}
+	}
+	status := service.Status(ports.SlackStatusInput{Token: token, HasIdentity: identity != nil})
+	wireStatus := SlackStatus{State: SlackStatusState(status.State), LastCheckedAt: status.LastChecked}
+	if status.LastError != nil {
+		lastError := wireError(*status.LastError)
+		wireStatus.LastError = &lastError
+	}
+	projection := SlackRuntimeConfig{
+		Enabled:       enabled,
+		TokenSet:      token != "",
+		TokenHint:     config.SlackTokenHint(token),
+		Identity:      identity,
+		GrantedScopes: granted,
+		MissingScopes: []string{},
+		Status:        wireStatus,
+		Manifest:      service.Manifest(),
+	}
+	switch config.SlackTokenType(token) {
+	case "bot":
+		tokenType := SlackRuntimeConfigTokenTypeBot
+		projection.TokenType = &tokenType
+	case "user":
+		tokenType := SlackRuntimeConfigTokenTypeUser
+		projection.TokenType = &tokenType
+	}
+	if token != "" {
+		grantedSet := make(map[string]struct{}, len(granted))
+		for _, scope := range granted {
+			grantedSet[scope] = struct{}{}
+		}
+		for _, scope := range service.RequiredScopes() {
+			if _, ok := grantedSet[scope]; !ok {
+				projection.MissingScopes = append(projection.MissingScopes, scope)
+			}
+		}
+		sort.Strings(projection.MissingScopes)
+	}
+	return projection
 }
 
 func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request, featureID string) {

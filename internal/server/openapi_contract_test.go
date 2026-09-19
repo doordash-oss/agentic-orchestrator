@@ -526,6 +526,8 @@ func topLevelPatternForPath(path string) string {
 		return "/api/v1/features/"
 	case strings.HasPrefix(path, apiPathConfigRuntime):
 		return apiPathConfigRuntime
+	case path == apiPathSlackValidate:
+		return apiPathSlackValidate
 	case path == apiPathCatalogModels:
 		return apiPathCatalogModels
 	case path == apiPathCatalogRefresh:
@@ -624,6 +626,7 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: apiPathConfigRuntime},
 		{method: "patch", path: apiPathConfigRuntime, mutation: true},
 		{method: "put", path: apiPathConfigRuntime, mutation: true},
+		{method: "post", path: apiPathSlackValidate, mutation: true},
 		{method: httpMethodGet, path: apiPathCatalogModels},
 		{method: httpMethodPost, path: apiPathCatalogRefresh, mutation: true},
 		{method: httpMethodGet, path: apiPathRuntimeReadiness},

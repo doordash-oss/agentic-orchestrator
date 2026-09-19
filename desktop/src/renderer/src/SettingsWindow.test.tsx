@@ -37,6 +37,7 @@ beforeEach(() => {
 const PANE_ORDER = [
   'Workspace roots',
   'Servers',
+  'Slack',
   'Providers',
   'Appearance',
   'Updates',
@@ -50,6 +51,7 @@ const PANE_ORDER = [
 const PANE_REGION_LABEL: Record<string, string> = {
   'workspace-roots': 'Workspace roots',
   servers: 'Servers',
+  slack: 'Slack',
   providers: 'Provider readiness',
   appearance: 'Appearance',
   updates: 'Updates',

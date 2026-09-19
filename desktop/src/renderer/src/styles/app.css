@@ -9372,6 +9372,159 @@ body {
   color: var(--muted);
 }
 
+/* Slack setup keeps the pane operational and compact. The numbered guide is
+ * the one branded moment; connection controls reuse the Settings vocabulary. */
+.slack-settings {
+  --slack-accent: #2eb67d;
+}
+
+.slack-settings__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.slack-settings__status strong {
+  font: 700 0.875rem/1.35 var(--bench-font-text);
+}
+
+.slack-settings__status span {
+  color: var(--muted);
+  font: 0.6875rem/1.3 var(--bench-font-mono);
+}
+
+.slack-settings__guide {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.slack-settings__guide-toggle {
+  width: max-content;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font: 700 0.8125rem/1.3 var(--bench-font-text);
+  cursor: pointer;
+}
+
+.slack-settings__guide-toggle::before {
+  content: '›';
+  display: inline-block;
+  margin-right: var(--space-2);
+  color: var(--slack-accent);
+  transform: rotate(0deg);
+}
+
+.slack-settings__guide-toggle[aria-expanded='true']::before {
+  transform: rotate(90deg);
+}
+
+.slack-settings__guide ol {
+  counter-reset: slack-step;
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.slack-settings__guide li {
+  counter-increment: slack-step;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 2px var(--space-2);
+  align-items: start;
+}
+
+.slack-settings__guide li::before {
+  content: counter(slack-step);
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid color-mix(in srgb, var(--slack-accent) 60%, var(--hairline));
+  border-radius: 50%;
+  color: var(--slack-accent);
+  font: 700 0.6875rem var(--bench-font-mono);
+}
+
+.slack-settings__guide li > strong,
+.slack-settings__guide li > span,
+.slack-settings__guide li > div {
+  grid-column: 2;
+}
+
+.slack-settings__guide li > strong {
+  font: 600 0.8125rem/1.35 var(--bench-font-text);
+}
+
+.slack-settings__guide li > span {
+  color: var(--muted);
+  font: 0.75rem/1.4 var(--bench-font-text);
+}
+
+.slack-settings__fields,
+.slack-settings__check {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.slack-settings__token-field,
+.slack-settings__token-display {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.slack-settings__token-field > span,
+.slack-settings__token-display > span {
+  font: 600 0.75rem/1.3 var(--bench-font-text);
+}
+
+.slack-settings__token-field input {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  background: var(--content);
+  color: var(--text);
+  font: 0.8125rem var(--bench-font-mono);
+}
+
+.slack-settings__token-field input:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.slack-settings__token-display code {
+  width: max-content;
+  color: var(--muted);
+  font: 0.8125rem var(--bench-font-mono);
+}
+
+.slack-settings__remove-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--hairline));
+  border-radius: var(--radius);
+  color: var(--bad);
+  font: 0.75rem/1.4 var(--bench-font-text);
+}
+
+.slack-settings__check > p {
+  margin: 0;
+  color: var(--muted);
+  font: 0.75rem/1.4 var(--bench-font-text);
+}
+
 /* --- Restart-pending banner --- */
 
 .restart-pending__banner {

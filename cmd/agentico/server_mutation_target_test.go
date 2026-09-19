@@ -1260,6 +1260,104 @@ func TestServerMutationTargetRuntimeConfigRediscoverReposWhenWorkspaceRootsUncha
 	}
 }
 
+func TestServerMutationTargetRuntimeConfigPersistsSlackLifecycle(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	cfg := config.NewDefault()
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+	enabled := true
+	token := "xoxb-secret-1234"
+	checkedAt := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
+
+	result, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{Enabled: &enabled, Token: &token},
+		SlackValidation: &ports.SlackValidation{
+			TokenType: ports.SlackTokenBot,
+			Identity: ports.SlackIdentity{
+				TeamID: "T123", TeamName: "Acme", UserID: "U123", DisplayName: "Agentico", BotID: "B123",
+			},
+			GrantedScopes: []string{"chat:write", "users:read"},
+			MissingScopes: []string{},
+		},
+		SlackCheckedAt: checkedAt,
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig(save Slack) error = %v", err)
+	}
+	if result.Result != resultUpdated || cfg.Slack == nil || !cfg.Slack.Enabled ||
+		cfg.Slack.Token != token || cfg.Slack.Identity == nil ||
+		cfg.Slack.Identity.TeamName != "Acme" || !cfg.Slack.LastValidatedAt.Equal(checkedAt) {
+		t.Fatalf("saved Slack config = %#v, result = %#v", cfg.Slack, result)
+	}
+	if info, err := os.Stat(configPath); err != nil {
+		t.Fatalf("Stat config error = %v", err)
+	} else if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("config mode = %#o; want 0600 with token", got)
+	}
+
+	enabled = false
+	result, err = target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{Enabled: &enabled},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig(disable Slack) error = %v", err)
+	}
+	if result.Result != resultUpdated || cfg.Slack.Enabled || cfg.Slack.Token != token {
+		t.Fatalf("disabled Slack config = %#v, result = %#v", cfg.Slack, result)
+	}
+
+	clear := true
+	result, err = target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{ClearToken: &clear},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig(clear Slack) error = %v", err)
+	}
+	if result.Result != resultUpdated || cfg.Slack.Token != "" || cfg.Slack.Identity != nil ||
+		len(cfg.Slack.GrantedScopes) != 0 || !cfg.Slack.LastValidatedAt.IsZero() {
+		t.Fatalf("cleared Slack config = %#v, result = %#v", cfg.Slack, result)
+	}
+}
+
+func TestServerMutationTargetStoreSlackValidationRefreshesStoredToken(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	cfg := config.NewDefault()
+	cfg.Slack = &config.SlackConfig{Token: "xoxp-stored-1234"}
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+	checkedAt := time.Date(2026, time.September, 19, 13, 0, 0, 0, time.UTC)
+	validation := ports.SlackValidation{
+		TokenType: ports.SlackTokenUser,
+		Identity: ports.SlackIdentity{
+			TeamID: "T123", TeamName: "Acme", UserID: "U234", DisplayName: "Ada",
+		},
+		GrantedScopes: []string{"chat:write"},
+		MissingScopes: []string{},
+	}
+
+	if err := target.StoreSlackValidation(&validation, checkedAt); err != nil {
+		t.Fatalf("StoreSlackValidation() error = %v", err)
+	}
+	if cfg.Slack.Token != "xoxp-stored-1234" || cfg.Slack.Identity == nil ||
+		cfg.Slack.Identity.DisplayName != "Ada" || !cfg.Slack.LastValidatedAt.Equal(checkedAt) {
+		t.Fatalf("refreshed Slack config = %#v", cfg.Slack)
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("Load config error = %v", err)
+	}
+	if loaded.Slack == nil || loaded.Slack.Token != "xoxp-stored-1234" ||
+		loaded.Slack.Identity == nil || loaded.Slack.Identity.DisplayName != "Ada" {
+		t.Fatalf("persisted Slack config = %#v", loaded.Slack)
+	}
+}
+
 func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing.T) {
 	runtimeDir := t.TempDir()
 	configPath := filepath.Join(runtimeDir, "config.yaml")

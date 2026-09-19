@@ -228,6 +228,15 @@ describe('redactText', () => {
     const out = redactText('GET http://127.0.0.1:9999/api?token=supersecretvalue1234 failed');
     expect(out).not.toContain('supersecretvalue1234');
   });
+
+  it('redacts Slack bot and user tokens without a bearer prefix', () => {
+    const bot = 'xoxb-111111111111-222222222222-secret';
+    const user = 'xoxp-333333333333-444444444444-secret';
+    const out = redactText(`Slack rejected ${bot}; retrying ${user}`);
+    expect(out).not.toContain(bot);
+    expect(out).not.toContain(user);
+    expect(out.match(/\[redacted\]/g)).toHaveLength(2);
+  });
 });
 
 describe('redactedCanonicalError', () => {

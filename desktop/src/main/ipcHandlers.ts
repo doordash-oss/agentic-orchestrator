@@ -78,6 +78,10 @@ import {
   type SettingsOpenRequest,
   type SettingsOpenResult,
   type SettingsPatch,
+  type SlackSettingsDraft,
+  type SlackSettingsSnapshot,
+  type SlackValidationRequest,
+  type SlackValidationResult,
   type SetupDispatchResult,
   type ThemeInfo,
   type ThemePreference,
@@ -183,6 +187,9 @@ export interface IpcServices {
   ): Promise<ServerTokenStatusResult> | ServerTokenStatusResult;
   getSettings(): Settings;
   updateSettings(patch: SettingsPatch): Settings;
+  getSlackSettings?(): Promise<SlackSettingsSnapshot>;
+  updateSlackSettings?(draft: SlackSettingsDraft): Promise<SlackSettingsSnapshot>;
+  validateSlackSettings?(request: SlackValidationRequest): Promise<SlackValidationResult>;
   openSettingsWindow(request: SettingsOpenRequest): SettingsOpenResult;
   getTheme(): ThemeInfo;
   setTheme(preference: ThemePreference): ThemeInfo;
@@ -375,6 +382,11 @@ export function registerIpcHandlers(
       services.getServerTokenStatus(request),
     [IPC_CHANNELS.settingsGet]: () => services.getSettings(),
     [IPC_CHANNELS.settingsUpdate]: (_event, patch: SettingsPatch) => services.updateSettings(patch),
+    [IPC_CHANNELS.slackSettingsGet]: () => services.getSlackSettings?.(),
+    [IPC_CHANNELS.slackSettingsUpdate]: (_event, draft: SlackSettingsDraft) =>
+      services.updateSlackSettings?.(draft),
+    [IPC_CHANNELS.slackSettingsValidate]: (_event, request: SlackValidationRequest) =>
+      services.validateSlackSettings?.(request),
     [IPC_CHANNELS.windowOpenSettings]: (_event, request: SettingsOpenRequest) =>
       services.openSettingsWindow(request),
     [IPC_CHANNELS.themeGet]: () => services.getTheme(),

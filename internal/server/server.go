@@ -94,6 +94,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		Config:                      opts.Config,
 		Registry:                    opts.Registry,
 		Sessions:                    opts.Sessions,
+		Slack:                       opts.Slack,
 		Events:                      opts.Events,
 		DomainEvents:                opts.DomainEvents,
 		Mutations:                   opts.Mutations,

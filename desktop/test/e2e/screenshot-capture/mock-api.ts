@@ -2751,6 +2751,21 @@ index 5c32b6a..8a9b3c1 100644
         title: 'Complete repository-aware Electron workflow',
         body: 'Adds the completion workspace, bounded diffs, explicit merge and mark-done controls, cleanup, and protected deletion.',
       }),
+    getSlackSettings: () => Promise.resolve(slackSettingsForScene(scene)),
+    updateSlackSettings: () => Promise.resolve(slackSettingsForScene(scene)),
+    validateSlackSettings: () =>
+      Promise.resolve({
+        tokenType: 'bot' as const,
+        identity: {
+          teamId: 'T123',
+          teamName: 'Agentico Workspace',
+          userId: 'U123',
+          displayName: 'Agentico',
+          botId: 'B123',
+        },
+        grantedScopes: Array.from({ length: 13 }, (_, index) => `scope:${index + 1}`),
+        missingScopes: [],
+      }),
     openExternal: () => Promise.resolve({ ok: true }),
     revealPath: () => Promise.resolve({ ok: true }),
     writeClipboardText: () => Promise.resolve({ ok: true }),
@@ -2772,7 +2787,65 @@ function settingsScenePane(scene: string): SettingsPaneId {
   if (scene === 'settings-appearance') return 'appearance';
   if (scene === 'settings-workspace-roots') return 'workspace-roots';
   if (scene === 'settings-providers') return 'providers';
+  if (scene.startsWith('settings-slack-')) return 'slack';
   return 'updates';
+}
+
+function slackSettingsForScene(scene: string) {
+  const base = {
+    supported: true as const,
+    manifest: '{"display_information":{"name":"Agentico"}}',
+    grantedScopes: [] as string[],
+    missingScopes: [] as string[],
+  };
+  if (scene === 'settings-slack-connected') {
+    return {
+      ...base,
+      enabled: true,
+      tokenSet: true,
+      tokenHint: '8F2Q',
+      tokenType: 'bot' as const,
+      identity: {
+        teamId: 'T123',
+        teamName: 'Agentico Workspace',
+        userId: 'U123',
+        displayName: 'Agentico',
+        botId: 'B123',
+      },
+      grantedScopes: Array.from({ length: 13 }, (_, index) => `scope:${index + 1}`),
+      status: { state: 'connected' as const, lastError: null, lastCheckedAt: null },
+    };
+  }
+  if (scene === 'settings-slack-warning') {
+    return {
+      ...base,
+      enabled: true,
+      tokenSet: true,
+      tokenHint: '8F2Q',
+      tokenType: 'bot' as const,
+      identity: null,
+      status: {
+        state: 'warning' as const,
+        lastCheckedAt: '2026-09-19T12:00:00Z',
+        lastError: {
+          code: 'slack_unreachable',
+          class: 'warning' as const,
+          title: 'Slack could not be reached',
+          summary: 'The token was saved, but Slack did not answer.',
+          remediation: { hint: 'Check connectivity, then try Check connection again.' },
+        },
+      },
+    };
+  }
+  return {
+    ...base,
+    enabled: false,
+    tokenSet: false,
+    tokenHint: '',
+    tokenType: null,
+    identity: null,
+    status: { state: 'not_configured' as const, lastError: null, lastCheckedAt: null },
+  };
 }
 
 function updateStateForScene(scene: string): UpdateState {

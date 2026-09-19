@@ -53,6 +53,7 @@ import (
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
+	slackintegration "github.com/doordash-oss/agentic-orchestrator/internal/slack"
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"go.uber.org/fx"
@@ -1017,6 +1018,7 @@ type runtimeBootstrap struct {
 	phaseRunner     *agent.PhaseRunner
 	observer        *observe.Observer
 	permissionCache *permission.Cache
+	slack           ports.SlackService
 	worktrees       feature.WorktreeOps
 	eventCh         chan interface{}
 	runtime         serverruntime.RuntimeIdentity
@@ -1917,6 +1919,50 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 		cfg.Notifications.MuteFeatureInput = req.Notifications.MuteFeatureInput
 		changed = true
 	}
+	if req.Slack != nil {
+		if cfg.Slack == nil {
+			cfg.Slack = &config.SlackConfig{}
+			changed = true
+		}
+		slackConfig := cfg.Slack
+		if req.Slack.Enabled != nil && slackConfig.Enabled != *req.Slack.Enabled {
+			slackConfig.Enabled = *req.Slack.Enabled
+			changed = true
+		}
+		if req.Slack.ClearToken != nil && *req.Slack.ClearToken {
+			if slackConfig.Token != "" || slackConfig.Identity != nil ||
+				len(slackConfig.GrantedScopes) > 0 || !slackConfig.LastValidatedAt.IsZero() {
+				changed = true
+			}
+			slackConfig.Token = ""
+			slackConfig.Identity = nil
+			slackConfig.GrantedScopes = nil
+			slackConfig.LastValidatedAt = time.Time{}
+		} else if req.Slack.Token != nil {
+			if slackConfig.Token != *req.Slack.Token {
+				changed = true
+			}
+			slackConfig.Token = *req.Slack.Token
+			switch {
+			case req.SlackValidation != nil:
+				slackConfig.Identity = &config.SlackIdentity{
+					TeamID:      req.SlackValidation.Identity.TeamID,
+					TeamName:    req.SlackValidation.Identity.TeamName,
+					UserID:      req.SlackValidation.Identity.UserID,
+					DisplayName: req.SlackValidation.Identity.DisplayName,
+					BotID:       req.SlackValidation.Identity.BotID,
+				}
+				slackConfig.GrantedScopes = append([]string(nil), req.SlackValidation.GrantedScopes...)
+				slackConfig.LastValidatedAt = req.SlackCheckedAt.UTC()
+				changed = true
+			case req.SlackWarning != nil:
+				slackConfig.Identity = nil
+				slackConfig.GrantedScopes = nil
+				slackConfig.LastValidatedAt = time.Time{}
+				changed = true
+			}
+		}
+	}
 	if err := config.Save(t.configPath, cfg); err != nil {
 		return serverruntime.RuntimeConfigUpdateResponse{}, err
 	}
@@ -1926,6 +1972,39 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 		status = resultUpdated
 	}
 	return serverruntime.RuntimeConfigUpdateResponse{Result: status}, nil
+}
+
+func (t *serverMutationTarget) StoreSlackValidation(validation *ports.SlackValidation, checkedAt time.Time) error {
+	if t.configPath == "" {
+		return errors.New("config path is not available")
+	}
+	if validation == nil {
+		return errors.New("Slack validation is required")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	cfg := t.cfg
+	if cfg == nil {
+		cfg = config.NewDefault()
+	}
+	if cfg.Slack == nil || cfg.Slack.Token == "" {
+		return errors.New("stored Slack token is not configured")
+	}
+	cfg.Slack.Identity = &config.SlackIdentity{
+		TeamID:      validation.Identity.TeamID,
+		TeamName:    validation.Identity.TeamName,
+		UserID:      validation.Identity.UserID,
+		DisplayName: validation.Identity.DisplayName,
+		BotID:       validation.Identity.BotID,
+	}
+	cfg.Slack.GrantedScopes = append([]string(nil), validation.GrantedScopes...)
+	cfg.Slack.LastValidatedAt = checkedAt.UTC()
+	if err := config.Save(t.configPath, cfg); err != nil {
+		return err
+	}
+	t.cfg = cfg
+	return nil
 }
 
 func (t *serverMutationTarget) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {
@@ -2875,6 +2954,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	var phaseRunner *agent.PhaseRunner
 	var observer *observe.Observer
 	var permissionCache *permission.Cache
+	var slackService ports.SlackService
 	var worktrees feature.WorktreeOps
 	providerModules, err := providerFxModules(enabledProviders)
 	if err != nil {
@@ -2893,11 +2973,12 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 		session.Module,
 		observe.Module,
 		permission.Module,
+		slackintegration.Module,
 		llm.Module,
 		fx.Options(providerModules...),
 		agent.Module,
 		orchestrator.Module,
-		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache, &worktrees),
+		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache, &slackService, &worktrees),
 		fx.NopLogger,
 	)
 	boot.fxApp = fxApp
@@ -3001,6 +3082,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	boot.phaseRunner = phaseRunner
 	boot.observer = observer
 	boot.permissionCache = permissionCache
+	boot.slack = slackService
 	boot.worktrees = worktrees
 	boot.eventCh = eventCh
 	boot.workspaceDir = workspaceDir
@@ -3226,6 +3308,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		Config:       boot.cfg,
 		Registry:     boot.registry,
 		Sessions:     boot.sessionManager,
+		Slack:        boot.slack,
 		Events:       boot.eventCh,
 		DomainEvents: boot.orchestrator.Events(),
 		Mutations: &serverMutationTarget{

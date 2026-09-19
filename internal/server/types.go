@@ -61,6 +61,7 @@ type Options struct {
 	Config               *config.Config
 	Registry             *llm.Registry
 	Sessions             ports.SessionManager
+	Slack                ports.SlackService
 	Events               <-chan interface{}
 	DomainEvents         <-chan ports.Event
 	Mutations            MutationTarget
@@ -124,6 +125,7 @@ type HandlerOptions struct {
 	Config                      *config.Config
 	Registry                    *llm.Registry
 	Sessions                    ports.SessionManager
+	Slack                       ports.SlackService
 	Events                      <-chan interface{}
 	DomainEvents                <-chan ports.Event
 	Mutations                   MutationTarget

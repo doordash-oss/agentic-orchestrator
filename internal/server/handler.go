@@ -62,6 +62,7 @@ type apiHandler struct {
 	cfg         *config.Config
 	registry    *llm.Registry
 	sessions    ports.SessionManager
+	slack       ports.SlackService
 	broker      *eventBroker
 	mutations   MutationTarget
 	// uploads owns the octet-stream upload staging area under the runtime
@@ -173,6 +174,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		cfg:                     opts.Config,
 		registry:                opts.Registry,
 		sessions:                opts.Sessions,
+		slack:                   opts.Slack,
 		broker:                  newEventBroker(opts.Events, opts.DomainEvents),
 		mutations:               opts.Mutations,
 		uploads:                 newUploadStore(opts.Runtime.StateDir),
@@ -260,6 +262,7 @@ const (
 	apiPathHealth                  = "/api/v1/health"
 	apiPathFeatures                = "/api/v1/features"
 	apiPathConfigRuntime           = "/api/v1/config/runtime"
+	apiPathSlackValidate           = "/api/v1/integrations/slack/validate"
 	apiPathCatalogModels           = "/api/v1/catalog/models"
 	apiPathCatalogRefresh          = "/api/v1/catalog/models/refresh"
 	apiPathReadiness               = "/api/v1/readiness"
@@ -307,6 +310,7 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathFeatures, func(h *apiHandler) http.HandlerFunc { return h.handleFeaturesRoot }},
 	{apiPathFeatures + "/", func(h *apiHandler) http.HandlerFunc { return h.handleFeatureRoutes }},
 	{apiPathConfigRuntime, func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeConfigRoute }},
+	{apiPathSlackValidate, func(h *apiHandler) http.HandlerFunc { return h.handleSlackValidateRoute }},
 	{apiPathCatalogModels, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleModelCatalog) }},
 	{apiPathCatalogRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleProviderModelRefreshRoute }},
 	{apiPathRuntimeReadiness, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleRuntimeReadiness) }},

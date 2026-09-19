@@ -947,6 +947,63 @@ func (e SSEEventErrorClass) Valid() bool {
 	}
 }
 
+// Defines values for SlackRuntimeConfigTokenType.
+const (
+	SlackRuntimeConfigTokenTypeBot  SlackRuntimeConfigTokenType = "bot"
+	SlackRuntimeConfigTokenTypeUser SlackRuntimeConfigTokenType = "user"
+)
+
+// Valid indicates whether the value is a known member of the SlackRuntimeConfigTokenType enum.
+func (e SlackRuntimeConfigTokenType) Valid() bool {
+	switch e {
+	case SlackRuntimeConfigTokenTypeBot:
+		return true
+	case SlackRuntimeConfigTokenTypeUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackStatusState.
+const (
+	Connected     SlackStatusState = "connected"
+	NotConfigured SlackStatusState = "not_configured"
+	Warning       SlackStatusState = "warning"
+)
+
+// Valid indicates whether the value is a known member of the SlackStatusState enum.
+func (e SlackStatusState) Valid() bool {
+	switch e {
+	case Connected:
+		return true
+	case NotConfigured:
+		return true
+	case Warning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackValidateResponseTokenType.
+const (
+	SlackValidateResponseTokenTypeBot  SlackValidateResponseTokenType = "bot"
+	SlackValidateResponseTokenTypeUser SlackValidateResponseTokenType = "user"
+)
+
+// Valid indicates whether the value is a known member of the SlackValidateResponseTokenType enum.
+func (e SlackValidateResponseTokenType) Valid() bool {
+	switch e {
+	case SlackValidateResponseTokenTypeBot:
+		return true
+	case SlackValidateResponseTokenTypeUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskActivityState.
 const (
 	TaskActivityStateCancelled TaskActivityState = "cancelled"
@@ -1505,6 +1562,21 @@ func (e ValidateReviewDraftParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for ValidateSlackParamsXAgenticoClient.
+const (
+	ValidateSlackParamsXAgenticoClientLocal ValidateSlackParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the ValidateSlackParamsXAgenticoClient enum.
+func (e ValidateSlackParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case ValidateSlackParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AnswerPermissionParamsXAgenticoClient.
 const (
 	AnswerPermissionParamsXAgenticoClientLocal AnswerPermissionParamsXAgenticoClient = "local"
@@ -1837,13 +1909,13 @@ func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
 
 // Defines values for UpdateWorkspaceRepositorySourceParamsXAgenticoClient.
 const (
-	UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
+	Local UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the UpdateWorkspaceRepositorySourceParamsXAgenticoClient enum.
 func (e UpdateWorkspaceRepositorySourceParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -4099,6 +4171,14 @@ type RunSummary struct {
 	StartedAt                       *time.Time `json:"started_at,omitempty"`
 }
 
+// RuntimeConfigMutation defines model for RuntimeConfigMutation.
+type RuntimeConfigMutation struct {
+	Defaults       map[string]interface{} `json:"defaults,omitempty"`
+	Notifications  NotificationConfig     `json:"notifications,omitempty"`
+	Slack          SlackConfigMutation    `json:"slack,omitempty"`
+	WorkspaceRoots []string               `json:"workspace_roots,omitempty"`
+}
+
 // RuntimeConfigResponse defines model for RuntimeConfigResponse.
 type RuntimeConfigResponse struct {
 	APIVersion      string             `json:"api_version"`
@@ -4110,6 +4190,7 @@ type RuntimeConfigResponse struct {
 	Providers       []string           `json:"providers"`
 	Repos           []ConfigRepo       `json:"repos"`
 	Runtime         RuntimeIdentity    `json:"runtime"`
+	Slack           SlackRuntimeConfig `json:"slack,omitempty"`
 	WorkspaceRoots  []string           `json:"workspace_roots,omitempty"`
 }
 
@@ -4287,6 +4368,71 @@ type SetupTask struct {
 	Status           string     `json:"status"`
 	UseCurrentBranch bool       `json:"use_current_branch,omitempty"`
 }
+
+// SlackConfigMutation defines model for SlackConfigMutation.
+type SlackConfigMutation struct {
+	ClearToken *bool `json:"clear_token,omitempty"`
+	Enabled    *bool `json:"enabled,omitempty"`
+
+	// Token Write-only Slack OAuth token. Never returned by the API.
+	Token *string `json:"token,omitempty"`
+}
+
+// SlackIdentity defines model for SlackIdentity.
+type SlackIdentity struct {
+	BotID       string `json:"bot_id,omitempty"`
+	DisplayName string `json:"display_name"`
+	TeamID      string `json:"team_id"`
+	TeamName    string `json:"team_name"`
+	UserID      string `json:"user_id"`
+}
+
+// SlackRuntimeConfig defines model for SlackRuntimeConfig.
+type SlackRuntimeConfig struct {
+	Enabled       bool                         `json:"enabled"`
+	GrantedScopes []string                     `json:"granted_scopes"`
+	Identity      *SlackIdentity               `json:"identity,omitempty"`
+	Manifest      string                       `json:"manifest"`
+	MissingScopes []string                     `json:"missing_scopes"`
+	Status        SlackStatus                  `json:"status"`
+	TokenHint     string                       `json:"token_hint"`
+	TokenSet      bool                         `json:"token_set"`
+	TokenType     *SlackRuntimeConfigTokenType `json:"token_type,omitempty"`
+}
+
+// SlackRuntimeConfigTokenType defines model for SlackRuntimeConfig.TokenType.
+type SlackRuntimeConfigTokenType string
+
+// SlackStatus defines model for SlackStatus.
+type SlackStatus struct {
+	LastCheckedAt *time.Time `json:"last_checked_at,omitempty"`
+
+	// LastError Canonical catalog-rendered error.
+	LastError *Error           `json:"last_error,omitempty"`
+	State     SlackStatusState `json:"state"`
+}
+
+// SlackStatusState defines model for SlackStatus.State.
+type SlackStatusState string
+
+// SlackValidateRequest defines model for SlackValidateRequest.
+type SlackValidateRequest struct {
+	// Token Optional write-only draft token; omitted to validate the stored token.
+	Token *string `json:"token,omitempty"`
+}
+
+// SlackValidateResponse defines model for SlackValidateResponse.
+type SlackValidateResponse struct {
+	APIVersion    string                         `json:"api_version"`
+	GrantedScopes []string                       `json:"granted_scopes"`
+	Identity      SlackIdentity                  `json:"identity"`
+	Meta          ResponseMeta                   `json:"meta,omitempty"`
+	MissingScopes []string                       `json:"missing_scopes"`
+	TokenType     SlackValidateResponseTokenType `json:"token_type"`
+}
+
+// SlackValidateResponseTokenType defines model for SlackValidateResponse.TokenType.
+type SlackValidateResponseTokenType string
 
 // StageUploadResponse defines model for StageUploadResponse.
 type StageUploadResponse struct {
@@ -4700,9 +4846,6 @@ type RefreshProviderModelsParams struct {
 // RefreshProviderModelsParamsXAgenticoClient defines parameters for RefreshProviderModels.
 type RefreshProviderModelsParamsXAgenticoClient string
 
-// PatchRuntimeConfigJSONBody defines parameters for PatchRuntimeConfig.
-type PatchRuntimeConfigJSONBody map[string]interface{}
-
 // PatchRuntimeConfigParams defines parameters for PatchRuntimeConfig.
 type PatchRuntimeConfigParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -4711,9 +4854,6 @@ type PatchRuntimeConfigParams struct {
 
 // PatchRuntimeConfigParamsXAgenticoClient defines parameters for PatchRuntimeConfig.
 type PatchRuntimeConfigParamsXAgenticoClient string
-
-// PutRuntimeConfigJSONBody defines parameters for PutRuntimeConfig.
-type PutRuntimeConfigJSONBody map[string]interface{}
 
 // PutRuntimeConfigParams defines parameters for PutRuntimeConfig.
 type PutRuntimeConfigParams struct {
@@ -4901,6 +5041,15 @@ type GetRunLogContentParams struct {
 	Offset Offset `form:"offset,omitempty" json:"offset,omitempty"`
 	Limit  Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
+
+// ValidateSlackParams defines parameters for ValidateSlack.
+type ValidateSlackParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient ValidateSlackParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// ValidateSlackParamsXAgenticoClient defines parameters for ValidateSlack.
+type ValidateSlackParamsXAgenticoClient string
 
 // AnswerPermissionParams defines parameters for AnswerPermission.
 type AnswerPermissionParams struct {
@@ -5172,10 +5321,10 @@ type UpdateWorkspaceRepositorySourceParamsXAgenticoClient string
 type RefreshProviderModelsJSONRequestBody = ProviderModelRefreshRequest
 
 // PatchRuntimeConfigJSONRequestBody defines body for PatchRuntimeConfig for application/json ContentType.
-type PatchRuntimeConfigJSONRequestBody PatchRuntimeConfigJSONBody
+type PatchRuntimeConfigJSONRequestBody = RuntimeConfigMutation
 
 // PutRuntimeConfigJSONRequestBody defines body for PutRuntimeConfig for application/json ContentType.
-type PutRuntimeConfigJSONRequestBody PutRuntimeConfigJSONBody
+type PutRuntimeConfigJSONRequestBody = RuntimeConfigMutation
 
 // CreateFeatureJSONRequestBody defines body for CreateFeature for application/json ContentType.
 type CreateFeatureJSONRequestBody = CreateFeatureMutationRequest
@@ -5215,6 +5364,9 @@ type SaveReviewDraftJSONRequestBody = ReviewDraftUpdateRequest
 
 // ValidateReviewDraftJSONRequestBody defines body for ValidateReviewDraft for application/json ContentType.
 type ValidateReviewDraftJSONRequestBody = ReviewDraftValidationRequest
+
+// ValidateSlackJSONRequestBody defines body for ValidateSlack for application/json ContentType.
+type ValidateSlackJSONRequestBody = SlackValidateRequest
 
 // AnswerPermissionJSONRequestBody defines body for AnswerPermission for application/json ContentType.
 type AnswerPermissionJSONRequestBody = PermissionAnswerSchema

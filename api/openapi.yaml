@@ -694,7 +694,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
+        $ref: "#/components/requestBodies/RuntimeConfigMutation"
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
@@ -713,7 +713,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
+        $ref: "#/components/requestBodies/RuntimeConfigMutation"
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
@@ -721,6 +721,27 @@ paths:
           $ref: "#/components/responses/ErrorResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/integrations/slack/validate:
+    post:
+      operationId: validateSlack
+      summary: Validate a Slack connection.
+      description: >-
+        Validates the provided write-only token without saving it, or validates
+        and refreshes the stored token when token is omitted.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/SlackValidateRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/SlackValidateResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
 
   /api/v1/catalog/models:
     get:
@@ -1795,6 +1816,18 @@ components:
           schema:
             type: object
             additionalProperties: true
+    RuntimeConfigMutation:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RuntimeConfigMutation"
+    SlackValidateRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SlackValidateRequest"
     ProviderModelRefreshRequest:
       required: true
       content:
@@ -1846,6 +1879,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RuntimeConfigResponse"
+    SlackValidateResponse:
+      description: Validated Slack identity and granted scopes.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SlackValidateResponse"
     ModelCatalogResponse:
       description: Model catalog.
       content:
@@ -3642,6 +3681,131 @@ components:
             publishability:
               $ref: "#/components/schemas/Publishability"
               x-go-name: Publish
+    SlackIdentity:
+      type: object
+      additionalProperties: false
+      required: [team_id, team_name, user_id, display_name]
+      properties:
+        team_id:
+          type: string
+        team_name:
+          type: string
+        user_id:
+          type: string
+        display_name:
+          type: string
+        bot_id:
+          type: string
+    SlackStatus:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [not_configured, connected, warning]
+        last_error:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+        last_checked_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+    SlackRuntimeConfig:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          enabled,
+          token_set,
+          token_hint,
+          granted_scopes,
+          missing_scopes,
+          status,
+          manifest,
+        ]
+      properties:
+        enabled:
+          type: boolean
+        token_set:
+          type: boolean
+        token_hint:
+          type: string
+        token_type:
+          type: string
+          enum: [bot, user]
+          x-go-type-skip-optional-pointer: false
+        identity:
+          $ref: "#/components/schemas/SlackIdentity"
+          x-go-type-skip-optional-pointer: false
+        granted_scopes:
+          type: array
+          items:
+            type: string
+        missing_scopes:
+          type: array
+          items:
+            type: string
+        status:
+          $ref: "#/components/schemas/SlackStatus"
+        manifest:
+          type: string
+    SlackConfigMutation:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+          x-go-type-skip-optional-pointer: false
+        token:
+          type: string
+          description: Write-only Slack OAuth token. Never returned by the API.
+          x-go-type-skip-optional-pointer: false
+        clear_token:
+          type: boolean
+          x-go-type-skip-optional-pointer: false
+    RuntimeConfigMutation:
+      type: object
+      additionalProperties: false
+      properties:
+        defaults:
+          type: object
+          additionalProperties: true
+        workspace_roots:
+          type: array
+          items:
+            type: string
+        notifications:
+          $ref: "#/components/schemas/NotificationConfig"
+        slack:
+          $ref: "#/components/schemas/SlackConfigMutation"
+    SlackValidateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+          description: Optional write-only draft token; omitted to validate the stored token.
+          x-go-type-skip-optional-pointer: false
+    SlackValidateResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [token_type, identity, granted_scopes, missing_scopes]
+          properties:
+            token_type:
+              type: string
+              enum: [bot, user]
+            identity:
+              $ref: "#/components/schemas/SlackIdentity"
+            granted_scopes:
+              type: array
+              items:
+                type: string
+            missing_scopes:
+              type: array
+              items:
+                type: string
     RuntimeConfigResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -3679,6 +3843,8 @@ components:
               type: array
               items:
                 type: string
+            slack:
+              $ref: "#/components/schemas/SlackRuntimeConfig"
     ModelCatalogResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

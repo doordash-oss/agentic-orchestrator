@@ -83,6 +83,10 @@ import {
   RepositorySourceReconcileRequestSchema,
   RepositorySourceReconcileResultSchema,
   RepositorySourcesResultSchema,
+  SlackSettingsSchema,
+  SlackSettingsUpdateRequestSchema,
+  SlackValidationRequestSchema,
+  SlackValidationResultSchema,
 } from './ipc';
 import * as ipcModule from './ipc';
 import { assertNoPrototypePollution } from './sanitize';
@@ -704,6 +708,70 @@ describe('IPC channel registry', () => {
     for (const channel of [...Object.values(IPC_CHANNELS), ...Object.values(IPC_EVENTS)]) {
       expect(channel.startsWith('agentico:')).toBe(true);
     }
+  });
+});
+
+describe('Slack IPC schemas', () => {
+  it('accepts the bounded token-free projection and unsupported marker', () => {
+    expect(SlackSettingsSchema.parse({ supported: false })).toStrictEqual({ supported: false });
+    expect(
+      SlackSettingsSchema.safeParse({
+        supported: true,
+        enabled: true,
+        tokenSet: true,
+        tokenHint: '1234',
+        tokenType: 'bot',
+        identity: {
+          teamId: 'T123',
+          teamName: 'Acme',
+          userId: 'U123',
+          displayName: 'Agentico',
+          botId: null,
+        },
+        grantedScopes: [],
+        missingScopes: [],
+        status: {
+          state: 'connected',
+          lastError: null,
+          lastCheckedAt: null,
+        },
+        manifest: '{}',
+        token: 'xoxb-leak',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects empty tokens, unknown fields, and token-plus-clear updates', () => {
+    expect(SlackSettingsUpdateRequestSchema.safeParse({ token: '' }).success).toBe(false);
+    expect(
+      SlackSettingsUpdateRequestSchema.safeParse({
+        token: 'xoxb-valid',
+        clearToken: true,
+      }).success,
+    ).toBe(false);
+    expect(SlackSettingsUpdateRequestSchema.safeParse({ enabled: true, rogue: true }).success).toBe(
+      false,
+    );
+    expect(SlackValidationRequestSchema.safeParse({ token: '' }).success).toBe(false);
+  });
+
+  it('accepts validation results without any token field', () => {
+    const result = {
+      tokenType: 'user',
+      identity: {
+        teamId: 'T123',
+        teamName: 'Acme',
+        userId: 'U123',
+        displayName: 'Ada',
+        botId: null,
+      },
+      grantedScopes: ['chat:write'],
+      missingScopes: [],
+    };
+    expect(SlackValidationResultSchema.parse(result)).toStrictEqual(result);
+    expect(SlackValidationResultSchema.safeParse({ ...result, token: 'xoxp-leak' }).success).toBe(
+      false,
+    );
   });
 });
 

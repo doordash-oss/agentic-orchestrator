@@ -534,6 +534,26 @@ export interface paths {
         patch: operations["patchRuntimeConfig"];
         trace?: never;
     };
+    "/api/v1/integrations/slack/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate a Slack connection.
+         * @description Validates the provided write-only token without saving it, or validates and refreshes the stored token when token is omitted.
+         */
+        post: operations["validateSlack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/catalog/models": {
         parameters: {
             query?: never;
@@ -1835,6 +1855,57 @@ export interface components {
             original: components["schemas"]["FeatureConfig"];
             publishability: components["schemas"]["Publishability"];
         };
+        SlackIdentity: {
+            team_id: string;
+            team_name: string;
+            user_id: string;
+            display_name: string;
+            bot_id?: string;
+        };
+        SlackStatus: {
+            /** @enum {string} */
+            state: "not_configured" | "connected" | "warning";
+            last_error?: components["schemas"]["Error"];
+            /** Format: date-time */
+            last_checked_at?: string;
+        };
+        SlackRuntimeConfig: {
+            enabled: boolean;
+            token_set: boolean;
+            token_hint: string;
+            /** @enum {string} */
+            token_type?: "bot" | "user";
+            identity?: components["schemas"]["SlackIdentity"];
+            granted_scopes: string[];
+            missing_scopes: string[];
+            status: components["schemas"]["SlackStatus"];
+            manifest: string;
+        };
+        SlackConfigMutation: {
+            enabled?: boolean;
+            /** @description Write-only Slack OAuth token. Never returned by the API. */
+            token?: string;
+            clear_token?: boolean;
+        };
+        RuntimeConfigMutation: {
+            defaults?: {
+                [key: string]: unknown;
+            };
+            workspace_roots?: string[];
+            notifications?: components["schemas"]["NotificationConfig"];
+            slack?: components["schemas"]["SlackConfigMutation"];
+        };
+        SlackValidateRequest: {
+            /** @description Optional write-only draft token; omitted to validate the stored token. */
+            token?: string;
+        };
+        SlackValidateResponse: components["schemas"]["JSONResponse"] & {
+            /** @enum {string} */
+            token_type: "bot" | "user";
+            identity: components["schemas"]["SlackIdentity"];
+            granted_scopes: string[];
+            missing_scopes: string[];
+        };
         RuntimeConfigResponse: components["schemas"]["JSONResponse"] & {
             runtime: components["schemas"]["RuntimeIdentity"];
             model_defaults: components["schemas"]["ModelDefaults"];
@@ -1844,6 +1915,7 @@ export interface components {
             notifications: components["schemas"]["NotificationConfig"];
             observability: components["schemas"]["Observability"];
             providers: string[];
+            slack?: components["schemas"]["SlackRuntimeConfig"];
         };
         ModelCatalogResponse: components["schemas"]["JSONResponse"] & {
             provider_order: string[];
@@ -3193,6 +3265,15 @@ export interface components {
                 "application/json": components["schemas"]["RuntimeConfigResponse"];
             };
         };
+        /** @description Validated Slack identity and granted scopes. */
+        SlackValidateResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["SlackValidateResponse"];
+            };
+        };
         /** @description Model catalog. */
         ModelCatalogResponse: {
             headers: {
@@ -3598,6 +3679,16 @@ export interface components {
                 "application/json": {
                     [key: string]: unknown;
                 };
+            };
+        };
+        RuntimeConfigMutation: {
+            content: {
+                "application/json": components["schemas"]["RuntimeConfigMutation"];
+            };
+        };
+        SlackValidateRequest: {
+            content: {
+                "application/json": components["schemas"]["SlackValidateRequest"];
             };
         };
         ProviderModelRefreshRequest: {
@@ -4270,7 +4361,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: components["requestBodies"]["JSONMutation"];
+        requestBody: components["requestBodies"]["RuntimeConfigMutation"];
         responses: {
             200: components["responses"]["ActionResponse"];
             400: components["responses"]["ErrorResponse"];
@@ -4287,11 +4378,29 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: components["requestBodies"]["JSONMutation"];
+        requestBody: components["requestBodies"]["RuntimeConfigMutation"];
         responses: {
             200: components["responses"]["ActionResponse"];
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    validateSlack: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["SlackValidateRequest"];
+        responses: {
+            200: components["responses"]["SlackValidateResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            502: components["responses"]["ErrorResponse"];
         };
     };
     listModels: {

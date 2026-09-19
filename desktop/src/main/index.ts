@@ -1450,6 +1450,8 @@ if (!hasSingleInstanceLock) {
       getSlackSettings: () => slackSettings.get(),
       updateSlackSettings: (draft) => slackSettings.update(draft),
       validateSlackSettings: (request) => slackSettings.validate(request),
+      resolveSlackRecipient: (request) => slackSettings.resolveRecipient(request),
+      sendSlackTestMessage: (request) => slackSettings.sendTestMessage(request),
       openSettingsWindow: (request) => ({
         opened: openSettingsWindow(request.section ?? null, request.focus ?? null),
       }),

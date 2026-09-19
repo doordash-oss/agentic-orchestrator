@@ -51,7 +51,11 @@ func TestSlackConfigRoundTripAndLegacyOmission(t *testing.T) {
 			DisplayName: "Agentico",
 			BotID:       "B123",
 		},
-		GrantedScopes:   []string{"chat:write", "channels:read"},
+		GrantedScopes: []string{"chat:write", "channels:read"},
+		DefaultRecipients: []SlackRecipient{
+			{TypedText: "@ada", Kind: "user", ID: "U12345678", DisplayName: "Ada Lovelace"},
+			{TypedText: "#eng", Kind: "channel", ID: "C12345678", DisplayName: "#eng"},
+		},
 		LastValidatedAt: validatedAt,
 	}
 	legacy.Slack = want
@@ -64,6 +68,19 @@ func TestSlackConfigRoundTripAndLegacyOmission(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded.Slack, want) {
 		t.Fatalf("Slack round trip = %#v; want %#v", loaded.Slack, want)
+	}
+
+	want.DefaultRecipients = nil
+	legacy.Slack = want
+	if err := Save(path, legacy); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "default_recipients:") {
+		t.Fatalf("empty recipients were persisted:\n%s", data)
 	}
 }
 

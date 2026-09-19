@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,12 +32,19 @@ import (
 )
 
 type fakeSlackService struct {
-	validation ports.SlackValidation
-	err        error
-	calls      atomic.Int64
-	lastToken  string
-	successAt  time.Time
-	failureAt  time.Time
+	validation     ports.SlackValidation
+	err            error
+	resolved       ports.SlackRecipient
+	resolveErr     error
+	results        []ports.SlackDeliveryResult
+	sendErr        error
+	calls          atomic.Int64
+	lastToken      string
+	lastInput      string
+	lastName       string
+	lastRecipients []ports.SlackRecipient
+	successAt      time.Time
+	failureAt      time.Time
 }
 
 func (s *fakeSlackService) Manifest() string         { return "{}" }
@@ -49,6 +57,26 @@ func (s *fakeSlackService) Validate(_ context.Context, token string) (ports.Slac
 	s.calls.Add(1)
 	s.lastToken = token
 	return s.validation, s.err
+}
+func (s *fakeSlackService) ResolveRecipient(
+	_ context.Context,
+	token string,
+	input string,
+) (ports.SlackRecipient, error) {
+	s.lastToken = token
+	s.lastInput = input
+	return s.resolved, s.resolveErr
+}
+func (s *fakeSlackService) SendTestMessage(
+	_ context.Context,
+	token string,
+	serverName string,
+	recipients []ports.SlackRecipient,
+) ([]ports.SlackDeliveryResult, error) {
+	s.lastToken = token
+	s.lastName = serverName
+	s.lastRecipients = append([]ports.SlackRecipient(nil), recipients...)
+	return append([]ports.SlackDeliveryResult(nil), s.results...), s.sendErr
 }
 func (s *fakeSlackService) RecordValidationSuccess(at time.Time) { s.successAt = at }
 func (s *fakeSlackService) RecordValidationFailure(at time.Time, _ errcat.Error) {
@@ -63,6 +91,7 @@ type slackMutationRecorder struct {
 	generation   uint64
 	stored       *ports.SlackValidation
 	storedAt     time.Time
+	recipients   []ports.SlackRecipient
 }
 
 func (r *slackMutationRecorder) RuntimeConfig(RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error) {
@@ -98,9 +127,27 @@ func (r *slackMutationRecorder) SlackCredentialCurrent(token string, generation 
 	return r.token == token && r.generation == generation
 }
 
+func (r *slackMutationRecorder) LoadSlackDeliveryConfig() (string, []ports.SlackRecipient) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.token, append([]ports.SlackRecipient(nil), r.recipients...)
+}
+
 func postSlackValidate(handler http.Handler, body any, trusted bool) *httptest.ResponseRecorder {
 	payload, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, apiPathSlackValidate, bytes.NewReader(payload))
+	req.Header.Set("Content-Type", contentTypeJSON)
+	if trusted {
+		req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+	}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	return w
+}
+
+func postSlackOperation(handler http.Handler, path string, body any, trusted bool) *httptest.ResponseRecorder {
+	payload, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(payload))
 	req.Header.Set("Content-Type", contentTypeJSON)
 	if trusted {
 		req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
@@ -138,13 +185,17 @@ func TestSlackValidateRouteProvidedTokenDoesNotPersist(t *testing.T) {
 		t.Fatal("response leaked the Slack token")
 	}
 	var body struct {
-		MissingScopes json.RawMessage `json:"missing_scopes"`
+		MissingScopes      json.RawMessage `json:"missing_scopes"`
+		SuggestedRecipient json.RawMessage `json:"suggested_recipient"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if string(body.MissingScopes) != "[]" {
 		t.Fatalf("missing_scopes JSON = %s; want []", body.MissingScopes)
+	}
+	if string(body.SuggestedRecipient) != "null" {
+		t.Fatalf("suggested_recipient JSON = %s; want null for bot token", body.SuggestedRecipient)
 	}
 }
 
@@ -154,7 +205,7 @@ func TestSlackValidateRouteStoredTokenRefreshesCache(t *testing.T) {
 	service := &fakeSlackService{validation: ports.SlackValidation{
 		TokenType: ports.SlackTokenUser,
 		Identity: ports.SlackIdentity{
-			TeamID: "T123", TeamName: "Acme", UserID: "U234", DisplayName: "Ada",
+			TeamID: "T123", TeamName: "Acme", UserID: "U234", UserName: "ada", DisplayName: "Ada",
 		},
 		GrantedScopes: []string{"chat:write"},
 		MissingScopes: []string{},
@@ -173,6 +224,15 @@ func TestSlackValidateRouteStoredTokenRefreshesCache(t *testing.T) {
 	}
 	if service.successAt.IsZero() || recorder.storedAt.IsZero() {
 		t.Fatal("stored-token validation did not record its check time")
+	}
+	var body SlackValidateResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.SuggestedRecipient == nil ||
+		body.SuggestedRecipient.TypedText != "@ada" ||
+		body.SuggestedRecipient.ID != "U234" {
+		t.Fatalf("suggested recipient = %#v; want owner", body.SuggestedRecipient)
 	}
 }
 
@@ -194,6 +254,52 @@ func (s *delayedSlackService) Validate(ctx context.Context, token string) (ports
 		return s.validation, s.err
 	case <-ctx.Done():
 		return ports.SlackValidation{}, ctx.Err()
+	}
+}
+
+type delayedResolveSlackService struct {
+	fakeSlackService
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *delayedResolveSlackService) ResolveRecipient(
+	ctx context.Context,
+	token string,
+	input string,
+) (ports.SlackRecipient, error) {
+	s.lastToken = token
+	s.lastInput = input
+	close(s.started)
+	select {
+	case <-s.release:
+		return s.resolved, s.resolveErr
+	case <-ctx.Done():
+		return ports.SlackRecipient{}, ctx.Err()
+	}
+}
+
+type delayedSendSlackService struct {
+	fakeSlackService
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *delayedSendSlackService) SendTestMessage(
+	ctx context.Context,
+	token string,
+	serverName string,
+	recipients []ports.SlackRecipient,
+) ([]ports.SlackDeliveryResult, error) {
+	s.lastToken = token
+	s.lastName = serverName
+	s.lastRecipients = append([]ports.SlackRecipient(nil), recipients...)
+	close(s.started)
+	select {
+	case <-s.release:
+		return append([]ports.SlackDeliveryResult(nil), s.results...), s.sendErr
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
@@ -353,5 +459,246 @@ func TestSlackRuntimeMutationValidationFailuresDoNotReachTarget(t *testing.T) {
 	}
 	if bytes.Contains(w.Body.Bytes(), []byte("xoxb-invalid-1234")) {
 		t.Fatal("error response leaked the Slack token")
+	}
+}
+
+func TestSlackRuntimeMutationRejectsInvalidRecipientsAtomically(t *testing.T) {
+	tests := []struct {
+		name       string
+		recipients []map[string]any
+		wantField  string
+	}{
+		{
+			name: "missing display name",
+			recipients: []map[string]any{{
+				"typed_text": "@ada", "kind": "user", "id": "U12345678",
+			}},
+			wantField: "default_recipients[0].display_name",
+		},
+		{
+			name: "unknown kind",
+			recipients: []map[string]any{{
+				"typed_text": "@ada", "kind": "group", "id": "U12345678", "display_name": "Ada",
+			}},
+			wantField: "default_recipients[0].kind",
+		},
+		{
+			name: "duplicate destination",
+			recipients: []map[string]any{
+				{"typed_text": "@ada", "kind": "user", "id": "U12345678", "display_name": "Ada"},
+				{"typed_text": "ada@example.com", "kind": "user", "id": "U12345678", "display_name": "Ada"},
+			},
+			wantField: "default_recipients[1] duplicates entry 0",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &slackMutationRecorder{}
+			handler := newAPIHandler(HandlerOptions{
+				Config: config.NewDefault(), Slack: &fakeSlackService{}, Mutations: recorder,
+				DisableHostValidation: true,
+			}).routes()
+
+			w := patchTrustedJSON(handler, apiPathConfigRuntime, map[string]any{
+				"notifications": map[string]any{"mute_feature_input": true},
+				"slack":         map[string]any{"default_recipients": tc.recipients},
+			})
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s; want 400", w.Code, w.Body.String())
+			}
+			if recorder.runtimeCalls.Load() != 0 {
+				t.Fatal("invalid recipient mutation reached the target")
+			}
+			if !strings.Contains(w.Body.String(), tc.wantField) {
+				t.Fatalf("body = %s; want diagnostics containing %q", w.Body.String(), tc.wantField)
+			}
+		})
+	}
+}
+
+func TestSlackRecipientResolveRouteUsesDraftAndStoredTokens(t *testing.T) {
+	service := &fakeSlackService{resolved: ports.SlackRecipient{
+		TypedText: "ada@example.com", Kind: ports.SlackRecipientUser,
+		ID: "U12345678", DisplayName: "Ada Lovelace",
+	}}
+	recorder := &slackMutationRecorder{token: "xoxp-stored-1234"}
+	handler := newAPIHandler(HandlerOptions{
+		Config: config.NewDefault(), Slack: service, Mutations: recorder,
+		DisableHostValidation: true,
+	}).routes()
+
+	w := postSlackOperation(handler, apiPathSlackRecipientResolve, map[string]any{
+		"input": "ada@example.com", "token": "xoxp-draft-5678",
+	}, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("draft resolve status = %d body=%s; want 200", w.Code, w.Body.String())
+	}
+	if service.lastToken != "xoxp-draft-5678" || service.lastInput != "ada@example.com" {
+		t.Fatalf("draft resolve token/input = %q/%q", service.lastToken, service.lastInput)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("xoxp-draft-5678")) {
+		t.Fatal("draft resolve response leaked token")
+	}
+
+	w = postSlackOperation(handler, apiPathSlackRecipientResolve, map[string]any{
+		"input": "@ada",
+	}, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("stored resolve status = %d body=%s; want 200", w.Code, w.Body.String())
+	}
+	if service.lastToken != "xoxp-stored-1234" || service.lastInput != "@ada" {
+		t.Fatalf("stored resolve token/input = %q/%q", service.lastToken, service.lastInput)
+	}
+}
+
+func TestSlackTestMessageRouteUsesCurrentRowsAndReturnsPartialFailures(t *testing.T) {
+	notInChannel := errcat.New(
+		errcat.SlackNotInChannel,
+		errcat.WithParams(errcat.SlackRecipientParams{Recipient: "#private-ops"}),
+		errcat.WithRemediationHint("Invite the Agentico app to #private-ops in Slack, then try again."),
+	)
+	user := ports.SlackRecipient{
+		TypedText: "@ada", Kind: ports.SlackRecipientUser, ID: "U12345678", DisplayName: "Ada",
+	}
+	channel := ports.SlackRecipient{
+		TypedText: "#private-ops", Kind: ports.SlackRecipientChannel,
+		ID: "C12345678", DisplayName: "#private-ops",
+	}
+	service := &fakeSlackService{results: []ports.SlackDeliveryResult{
+		{Recipient: user, Delivered: true},
+		{Recipient: channel, Error: &notInChannel},
+	}}
+	recorder := &slackMutationRecorder{
+		token: "xoxb-stored-1234",
+		recipients: []ports.SlackRecipient{{
+			TypedText: "#stored", Kind: ports.SlackRecipientChannel,
+			ID: "C87654321", DisplayName: "#stored",
+		}},
+	}
+	handler := newAPIHandler(HandlerOptions{
+		Name: "Local agent", Config: config.NewDefault(), Slack: service, Mutations: recorder,
+		DisableHostValidation: true,
+	}).routes()
+
+	w := postSlackOperation(handler, apiPathSlackTestMessage, map[string]any{
+		"recipients": []map[string]any{
+			{"typed_text": user.TypedText, "kind": user.Kind, "id": user.ID, "display_name": user.DisplayName},
+			{"typed_text": channel.TypedText, "kind": channel.Kind, "id": channel.ID, "display_name": channel.DisplayName},
+		},
+	}, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
+	}
+	if service.lastToken != "xoxb-stored-1234" || service.lastName != "Local agent" ||
+		len(service.lastRecipients) != 2 || service.lastRecipients[0].ID != user.ID {
+		t.Fatalf("send arguments = token %q name %q recipients %#v", service.lastToken, service.lastName, service.lastRecipients)
+	}
+	var response SlackTestMessageResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Results) != 2 || !response.Results[0].Delivered ||
+		response.Results[1].Error == nil ||
+		response.Results[1].Error.Code != string(errcat.SlackNotInChannel) {
+		t.Fatalf("results = %#v; want delivered then not-in-channel", response.Results)
+	}
+}
+
+func TestSlackTestMessageRouteFallsBackToStoredDefaults(t *testing.T) {
+	stored := ports.SlackRecipient{
+		TypedText: "#eng", Kind: ports.SlackRecipientChannel, ID: "C12345678", DisplayName: "#eng",
+	}
+	service := &fakeSlackService{results: []ports.SlackDeliveryResult{{Recipient: stored, Delivered: true}}}
+	recorder := &slackMutationRecorder{
+		token: "xoxb-stored-1234", recipients: []ports.SlackRecipient{stored},
+	}
+	handler := newAPIHandler(HandlerOptions{
+		Name: "Local agent", Config: config.NewDefault(), Slack: service, Mutations: recorder,
+		DisableHostValidation: true,
+	}).routes()
+
+	w := postSlackOperation(handler, apiPathSlackTestMessage, map[string]any{}, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
+	}
+	if len(service.lastRecipients) != 1 || service.lastRecipients[0] != stored {
+		t.Fatalf("recipients = %#v; want stored defaults", service.lastRecipients)
+	}
+}
+
+func TestSlackExplicitOperationsDoNotBlockRuntimeWrites(t *testing.T) {
+	t.Run("resolve", func(t *testing.T) {
+		service := &delayedResolveSlackService{
+			fakeSlackService: fakeSlackService{resolved: ports.SlackRecipient{
+				TypedText: "@ada", Kind: ports.SlackRecipientUser,
+				ID: "U12345678", DisplayName: "Ada",
+			}},
+			started: make(chan struct{}),
+			release: make(chan struct{}),
+		}
+		recorder := &slackMutationRecorder{token: "xoxp-stored-1234"}
+		handler := newAPIHandler(HandlerOptions{
+			Config: config.NewDefault(), Slack: service, Mutations: recorder,
+			DisableHostValidation: true,
+		}).routes()
+
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			done <- postSlackOperation(handler, apiPathSlackRecipientResolve, map[string]any{
+				"input": "@ada",
+			}, true)
+		}()
+		<-service.started
+		assertUnrelatedSlackWriteCompletes(t, handler)
+		close(service.release)
+		if w := <-done; w.Code != http.StatusOK {
+			t.Fatalf("resolve status = %d body=%s; want 200", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("test message", func(t *testing.T) {
+		recipient := ports.SlackRecipient{
+			TypedText: "#eng", Kind: ports.SlackRecipientChannel,
+			ID: "C12345678", DisplayName: "#eng",
+		}
+		service := &delayedSendSlackService{
+			fakeSlackService: fakeSlackService{
+				results: []ports.SlackDeliveryResult{{Recipient: recipient, Delivered: true}},
+			},
+			started: make(chan struct{}),
+			release: make(chan struct{}),
+		}
+		recorder := &slackMutationRecorder{
+			token: "xoxb-stored-1234", recipients: []ports.SlackRecipient{recipient},
+		}
+		handler := newAPIHandler(HandlerOptions{
+			Name: "Local agent", Config: config.NewDefault(), Slack: service, Mutations: recorder,
+			DisableHostValidation: true,
+		}).routes()
+
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			done <- postSlackOperation(handler, apiPathSlackTestMessage, map[string]any{}, true)
+		}()
+		<-service.started
+		assertUnrelatedSlackWriteCompletes(t, handler)
+		close(service.release)
+		if w := <-done; w.Code != http.StatusOK {
+			t.Fatalf("test message status = %d body=%s; want 200", w.Code, w.Body.String())
+		}
+	})
+}
+
+func assertUnrelatedSlackWriteCompletes(t testing.TB, handler http.Handler) {
+	t.Helper()
+	start := time.Now()
+	write := patchTrustedJSON(handler, apiPathConfigRuntime, map[string]any{
+		"notifications": map[string]any{"mute_feature_input": true},
+	})
+	if write.Code != http.StatusOK {
+		t.Fatalf("unrelated write status = %d body=%s; want 200", write.Code, write.Body.String())
+	}
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("unrelated write elapsed = %s; Slack operation held a mutation lock", elapsed)
 	}
 }

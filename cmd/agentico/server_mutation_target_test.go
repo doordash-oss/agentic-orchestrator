@@ -1273,7 +1273,14 @@ func TestServerMutationTargetRuntimeConfigPersistsSlackLifecycle(t *testing.T) {
 	checkedAt := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
 
 	result, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
-		Slack: &serverruntime.SlackConfigMutation{Enabled: &enabled, Token: &token},
+		Slack: &serverruntime.SlackConfigMutation{
+			Enabled: &enabled,
+			Token:   &token,
+			DefaultRecipients: &[]serverruntime.SlackRecipient{
+				{TypedText: "@ada", Kind: serverruntime.SlackRecipientKindUser, ID: "U12345678", DisplayName: "Ada"},
+				{TypedText: "#eng", Kind: serverruntime.SlackRecipientKindChannel, ID: "C12345678", DisplayName: "#eng"},
+			},
+		},
 		SlackValidation: &ports.SlackValidation{
 			TokenType: ports.SlackTokenBot,
 			Identity: ports.SlackIdentity{
@@ -1289,7 +1296,8 @@ func TestServerMutationTargetRuntimeConfigPersistsSlackLifecycle(t *testing.T) {
 	}
 	if result.Result != resultUpdated || cfg.Slack == nil || !cfg.Slack.Enabled ||
 		cfg.Slack.Token != token || cfg.Slack.Identity == nil ||
-		cfg.Slack.Identity.TeamName != "Acme" || !cfg.Slack.LastValidatedAt.Equal(checkedAt) {
+		cfg.Slack.Identity.TeamName != "Acme" || len(cfg.Slack.DefaultRecipients) != 2 ||
+		!cfg.Slack.LastValidatedAt.Equal(checkedAt) {
 		t.Fatalf("saved Slack config = %#v, result = %#v", cfg.Slack, result)
 	}
 	if info, err := os.Stat(configPath); err != nil {
@@ -1317,8 +1325,146 @@ func TestServerMutationTargetRuntimeConfigPersistsSlackLifecycle(t *testing.T) {
 		t.Fatalf("RuntimeConfig(clear Slack) error = %v", err)
 	}
 	if result.Result != resultUpdated || cfg.Slack.Token != "" || cfg.Slack.Identity != nil ||
-		len(cfg.Slack.GrantedScopes) != 0 || !cfg.Slack.LastValidatedAt.IsZero() {
+		len(cfg.Slack.GrantedScopes) != 0 || len(cfg.Slack.DefaultRecipients) != 2 ||
+		!cfg.Slack.LastValidatedAt.IsZero() {
 		t.Fatalf("cleared Slack config = %#v, result = %#v", cfg.Slack, result)
+	}
+}
+
+func TestServerMutationTargetRuntimeConfigSlackRecipientSemantics(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	cfg := config.NewDefault()
+	cfg.Slack = &config.SlackConfig{
+		DefaultRecipients: []config.SlackRecipient{
+			{TypedText: "#existing", Kind: "channel", ID: "C11111111", DisplayName: "#existing"},
+		},
+	}
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+
+	enabled := true
+	if _, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{Enabled: &enabled},
+	}); err != nil {
+		t.Fatalf("RuntimeConfig(omitted recipients) error = %v", err)
+	}
+	if got := cfg.Slack.DefaultRecipients; len(got) != 1 || got[0].ID != "C11111111" {
+		t.Fatalf("omitted recipients changed stored list: %#v", got)
+	}
+
+	empty := []serverruntime.SlackRecipient{}
+	if _, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{DefaultRecipients: &empty},
+	}); err != nil {
+		t.Fatalf("RuntimeConfig(clear recipients) error = %v", err)
+	}
+	if len(cfg.Slack.DefaultRecipients) != 0 {
+		t.Fatalf("empty recipients did not clear list: %#v", cfg.Slack.DefaultRecipients)
+	}
+}
+
+func TestServerMutationTargetRuntimeConfigAutoFillsUserTokenOwner(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	cfg := config.NewDefault()
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+	token := "xoxp-secret-1234"
+
+	_, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{Token: &token},
+		SlackValidation: &ports.SlackValidation{
+			TokenType: ports.SlackTokenUser,
+			Identity: ports.SlackIdentity{
+				UserID: "U12345678", DisplayName: "Ada Lovelace", UserName: "ada",
+			},
+		},
+		SlackCheckedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig() error = %v", err)
+	}
+	want := []config.SlackRecipient{{
+		TypedText: "@ada", Kind: "user", ID: "U12345678", DisplayName: "Ada Lovelace",
+	}}
+	if !reflect.DeepEqual(cfg.Slack.DefaultRecipients, want) {
+		t.Fatalf("owner recipients = %#v; want %#v", cfg.Slack.DefaultRecipients, want)
+	}
+}
+
+func TestServerMutationTargetRuntimeConfigOwnerAutoFillGuards(t *testing.T) {
+	existing := []config.SlackRecipient{{
+		TypedText: "#eng", Kind: "channel", ID: "C12345678", DisplayName: "#eng",
+	}}
+	tests := []struct {
+		name      string
+		token     string
+		tokenType ports.SlackTokenType
+		stored    []config.SlackRecipient
+		requested *[]serverruntime.SlackRecipient
+		want      []config.SlackRecipient
+	}{
+		{
+			name:      "bot token",
+			token:     "xoxb-secret-1234",
+			tokenType: ports.SlackTokenBot,
+			want:      nil,
+		},
+		{
+			name:      "explicit empty list",
+			token:     "xoxp-secret-1234",
+			tokenType: ports.SlackTokenUser,
+			requested: &[]serverruntime.SlackRecipient{},
+			want:      nil,
+		},
+		{
+			name:      "existing recipients",
+			token:     "xoxp-secret-1234",
+			tokenType: ports.SlackTokenUser,
+			stored:    existing,
+			want:      existing,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runtimeDir := t.TempDir()
+			configPath := filepath.Join(runtimeDir, "config.yaml")
+			cfg := config.NewDefault()
+			if tc.stored != nil {
+				cfg.Slack = &config.SlackConfig{
+					DefaultRecipients: append([]config.SlackRecipient(nil), tc.stored...),
+				}
+			}
+			if err := config.Save(configPath, cfg); err != nil {
+				t.Fatalf("Save config error = %v", err)
+			}
+			target := serverMutationTarget{cfg: cfg, configPath: configPath}
+
+			_, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+				Slack: &serverruntime.SlackConfigMutation{
+					Token:             &tc.token,
+					DefaultRecipients: tc.requested,
+				},
+				SlackValidation: &ports.SlackValidation{
+					TokenType: tc.tokenType,
+					Identity: ports.SlackIdentity{
+						UserID: "U12345678", UserName: "ada", DisplayName: "Ada Lovelace",
+					},
+				},
+				SlackCheckedAt: time.Now(),
+			})
+			if err != nil {
+				t.Fatalf("RuntimeConfig() error = %v", err)
+			}
+			if !reflect.DeepEqual(cfg.Slack.DefaultRecipients, tc.want) {
+				t.Fatalf("recipients = %#v; want %#v", cfg.Slack.DefaultRecipients, tc.want)
+			}
+		})
 	}
 }
 

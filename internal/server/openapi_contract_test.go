@@ -528,6 +528,10 @@ func topLevelPatternForPath(path string) string {
 		return apiPathConfigRuntime
 	case path == apiPathSlackValidate:
 		return apiPathSlackValidate
+	case path == apiPathSlackRecipientResolve:
+		return apiPathSlackRecipientResolve
+	case path == apiPathSlackTestMessage:
+		return apiPathSlackTestMessage
 	case path == apiPathCatalogModels:
 		return apiPathCatalogModels
 	case path == apiPathCatalogRefresh:
@@ -627,6 +631,8 @@ func documentedServerRoutes() []documentedRoute {
 		{method: "patch", path: apiPathConfigRuntime, mutation: true},
 		{method: "put", path: apiPathConfigRuntime, mutation: true},
 		{method: "post", path: apiPathSlackValidate, mutation: true},
+		{method: "post", path: apiPathSlackRecipientResolve, mutation: true},
+		{method: "post", path: apiPathSlackTestMessage, mutation: true},
 		{method: httpMethodGet, path: apiPathCatalogModels},
 		{method: httpMethodPost, path: apiPathCatalogRefresh, mutation: true},
 		{method: httpMethodGet, path: apiPathRuntimeReadiness},

@@ -2765,7 +2765,46 @@ index 5c32b6a..8a9b3c1 100644
         },
         grantedScopes: Array.from({ length: 13 }, (_, index) => `scope:${index + 1}`),
         missingScopes: [],
+        suggestedRecipient: null,
       }),
+    resolveSlackRecipient: (request) => {
+      if (scene === 'settings-slack-recipients' && request.input === '#private-ops') {
+        return Promise.reject(
+          canonicalRejection({
+            code: 'slack_not_in_channel',
+            class: 'warning',
+            title: 'Agentico is not in this channel',
+            summary: 'Agentico cannot send to #private-ops.',
+            remediation: { hint: 'Invite the Agentico app to #private-ops in Slack, then retry.' },
+          }),
+        );
+      }
+      return Promise.reject(new Error('unused in screenshot capture'));
+    },
+    sendSlackTestMessage: () => {
+      if (scene === 'settings-slack-test-message') {
+        const recipients = slackSettingsForScene(scene).defaultRecipients;
+        return Promise.resolve({
+          results: [
+            { recipient: recipients[0]!, delivered: true, error: null },
+            {
+              recipient: recipients[1]!,
+              delivered: false,
+              error: {
+                code: 'slack_not_in_channel',
+                class: 'warning' as const,
+                title: 'Agentico is not in this channel',
+                summary: 'Agentico cannot send to #private-ops.',
+                remediation: {
+                  hint: 'Invite the Agentico app to #private-ops in Slack, then retry.',
+                },
+              },
+            },
+          ],
+        });
+      }
+      return Promise.reject(new Error('unused in screenshot capture'));
+    },
     openExternal: () => Promise.resolve({ ok: true }),
     revealPath: () => Promise.resolve({ ok: true }),
     writeClipboardText: () => Promise.resolve({ ok: true }),
@@ -2797,7 +2836,52 @@ function slackSettingsForScene(scene: string) {
     manifest: '{"display_information":{"name":"Agentico"}}',
     grantedScopes: [] as string[],
     missingScopes: [] as string[],
+    defaultRecipients: [] as Array<{
+      typedText: string;
+      kind: 'user' | 'channel';
+      id: string;
+      displayName: string;
+    }>,
   };
+  if (scene === 'settings-slack-recipients' || scene === 'settings-slack-test-message') {
+    const owner = {
+      typedText: '@ada',
+      kind: 'user' as const,
+      id: 'U123',
+      displayName: 'Ada Lovelace',
+    };
+    const channel =
+      scene === 'settings-slack-recipients'
+        ? {
+            typedText: '#eng',
+            kind: 'channel' as const,
+            id: 'C12345678',
+            displayName: '#eng',
+          }
+        : {
+            typedText: '#private-ops',
+            kind: 'channel' as const,
+            id: 'C87654321',
+            displayName: '#private-ops',
+          };
+    return {
+      ...base,
+      enabled: true,
+      tokenSet: true,
+      tokenHint: '8F2Q',
+      tokenType: 'user' as const,
+      identity: {
+        teamId: 'T123',
+        teamName: 'Agentico Workspace',
+        userId: owner.id,
+        displayName: owner.displayName,
+        botId: null,
+      },
+      grantedScopes: Array.from({ length: 13 }, (_, index) => `scope:${index + 1}`),
+      defaultRecipients: [owner, channel],
+      status: { state: 'connected' as const, lastError: null, lastCheckedAt: null },
+    };
+  }
   if (scene === 'settings-slack-connected') {
     return {
       ...base,

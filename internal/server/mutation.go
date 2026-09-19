@@ -1244,6 +1244,10 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		if req.WorkspaceRoots != nil && !validateWorkspaceRootPaths(w, *req.WorkspaceRoots) {
 			return
 		}
+		if req.Slack != nil && req.Slack.DefaultRecipients != nil &&
+			!validateSlackRecipients(w, *req.Slack.DefaultRecipients) {
+			return
+		}
 		if req.Slack != nil && !h.prepareSlackMutation(w, r.Context(), &req) {
 			return
 		}
@@ -1281,6 +1285,40 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		w.Header().Set("Allow", "GET, PATCH, PUT")
 		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 	}
+}
+
+func validateSlackRecipients(w http.ResponseWriter, recipients []SlackRecipient) bool {
+	seen := make(map[string]int, len(recipients))
+	for index, recipient := range recipients {
+		field := ""
+		switch {
+		case strings.TrimSpace(recipient.TypedText) == "":
+			field = "typed_text"
+		case !recipient.Kind.Valid():
+			field = "kind"
+		case strings.TrimSpace(recipient.ID) == "":
+			field = "id"
+		case strings.TrimSpace(recipient.DisplayName) == "":
+			field = "display_name"
+		}
+		if field != "" {
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+				errcat.WithDiagnostics(fmt.Sprintf(
+					"slack.default_recipients[%d].%s is invalid", index, field,
+				)))
+			return false
+		}
+		key := string(recipient.Kind) + "\x00" + recipient.ID
+		if previous, ok := seen[key]; ok {
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+				errcat.WithDiagnostics(fmt.Sprintf(
+					"slack.default_recipients[%d] duplicates entry %d", index, previous,
+				)))
+			return false
+		}
+		seen[key] = index
+	}
+	return true
 }
 
 func (h *apiHandler) prepareSlackMutation(w http.ResponseWriter, ctx context.Context, req *RuntimeConfigMutationRequest) bool {

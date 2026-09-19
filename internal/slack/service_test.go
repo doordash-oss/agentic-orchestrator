@@ -46,7 +46,7 @@ func TestServiceValidateBotAndUserTokens(t *testing.T) {
 				},
 				Headers: http.Header{"X-Oauth-Scopes": []string{strings.Join(RequiredScopes(), ",")}},
 			})
-			service := NewService(WithClientFactory(func(token string) (authTester, error) {
+			service := NewService(WithClientFactory(func(token string) (slackClient, error) {
 				return NewClient(token, WithBaseURL(server.URL()))
 			}))
 			got, err := service.Validate(t.Context(), tc.token)
@@ -54,7 +54,8 @@ func TestServiceValidateBotAndUserTokens(t *testing.T) {
 				t.Fatalf("Validate() error = %v", err)
 			}
 			if got.TokenType != tc.wantType || got.Identity.BotID != tc.botID ||
-				got.Identity.TeamID != "T123" || len(got.MissingScopes) != 0 {
+				got.Identity.TeamID != "T123" || got.Identity.UserName != "agentico" ||
+				got.Identity.DisplayName != "agentico" || len(got.MissingScopes) != 0 {
 				t.Fatalf("Validate() = %#v; want %s identity with no missing scopes", got, tc.wantType)
 			}
 		})
@@ -64,7 +65,7 @@ func TestServiceValidateBotAndUserTokens(t *testing.T) {
 func TestServiceValidationCanonicalErrors(t *testing.T) {
 	t.Run("unsupported makes no request", func(t *testing.T) {
 		server := testsupport.New(t)
-		service := NewService(WithClientFactory(func(token string) (authTester, error) {
+		service := NewService(WithClientFactory(func(token string) (slackClient, error) {
 			return NewClient(token, WithBaseURL(server.URL()))
 		}))
 		_, err := service.Validate(t.Context(), "xoxa-secret-1234")
@@ -102,8 +103,23 @@ func TestServiceValidationCanonicalErrors(t *testing.T) {
 		}
 	})
 
+	t.Run("missing scope envelope", func(t *testing.T) {
+		server := testsupport.New(t)
+		server.Script("auth.test", testsupport.Response{
+			Body: map[string]any{
+				"ok": false, "error": "missing_scope", "needed": "users:read.email",
+			},
+		})
+		service := serviceForServer(server)
+		_, err := service.Validate(t.Context(), "xoxb-secret-1234")
+		canonical := assertSlackCode(t, err, errcat.SlackMissingScopes)
+		if !strings.Contains(canonical.Summary, "users:read.email") {
+			t.Fatalf("missing-scope envelope summary = %q; want needed scope", canonical.Summary)
+		}
+	})
+
 	t.Run("unreachable", func(t *testing.T) {
-		service := NewService(WithClientFactory(func(token string) (authTester, error) {
+		service := NewService(WithClientFactory(func(token string) (slackClient, error) {
 			return NewClient(token, WithBaseURL("http://127.0.0.1:1/api/"), WithTimeout(100*time.Millisecond))
 		}))
 		_, err := service.Validate(t.Context(), "xoxb-secret-1234")
@@ -163,7 +179,7 @@ func TestServiceStatusDerivationAndPublication(t *testing.T) {
 }
 
 func serviceForServer(server *testsupport.Server) *Service {
-	return NewService(WithClientFactory(func(token string) (authTester, error) {
+	return NewService(WithClientFactory(func(token string) (slackClient, error) {
 		return NewClient(token, WithBaseURL(server.URL()))
 	}))
 }

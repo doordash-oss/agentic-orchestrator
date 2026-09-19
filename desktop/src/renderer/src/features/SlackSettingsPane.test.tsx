@@ -45,6 +45,7 @@ function notConfigured(): SlackSettingsSnapshot {
     identity: null,
     grantedScopes: [],
     missingScopes: [],
+    defaultRecipients: [],
     status: { state: 'not_configured', lastError: null, lastCheckedAt: null },
     manifest,
   };
@@ -66,6 +67,7 @@ function connected(overrides: Partial<Extract<SlackSettingsSnapshot, { supported
     },
     grantedScopes: ['chat:write', 'users:read'],
     missingScopes: [],
+    defaultRecipients: [],
     status: {
       state: 'connected' as const,
       lastError: null,
@@ -163,11 +165,13 @@ describe('SlackSettingsPane', () => {
         identity: connected().identity!,
         grantedScopes: ['chat:write'],
         missingScopes: [],
+        suggestedRecipient: null,
       },
     });
     render(<SlackSettingsPane />);
 
     expect(await screen.findByText('Token saved, but Slack could not be reached')).toBeVisible();
+    expect(screen.getAllByText(/^Last checked /)).toHaveLength(1);
     await user.click(screen.getByRole('button', { name: 'Check connection' }));
     await waitFor(() => expect(mock.api.validateSlackSettings).toHaveBeenCalledWith({}));
     expect(await screen.findByText(/1 scopes granted/)).toBeVisible();
@@ -227,6 +231,7 @@ describe('SlackSettingsPane', () => {
       identity: connected().identity!,
       grantedScopes: ['chat:write'],
       missingScopes: [],
+      suggestedRecipient: null,
     });
 
     expect(await screen.findByText(/1 scopes granted/)).toBeVisible();
@@ -243,6 +248,7 @@ describe('SlackSettingsPane', () => {
         identity: connected().identity!,
         grantedScopes: ['chat:write'],
         missingScopes: [],
+        suggestedRecipient: null,
       },
     });
     render(<SlackSettingsPane />);
@@ -321,6 +327,7 @@ describe('SlackSettingsPane', () => {
       identity: connected().identity!,
       grantedScopes: ['chat:write'],
       missingScopes: [],
+      suggestedRecipient: null,
     });
     await Promise.resolve();
 
@@ -359,6 +366,7 @@ describe('SlackSettingsPane', () => {
       identity: connected().identity!,
       grantedScopes: ['chat:write'],
       missingScopes: [],
+      suggestedRecipient: null,
     });
     await Promise.resolve();
 
@@ -376,6 +384,7 @@ describe('SlackSettingsPane', () => {
         identity: connected().identity!,
         grantedScopes: ['chat:write'],
         missingScopes: [],
+        suggestedRecipient: null,
       },
     });
     render(<SlackSettingsPane />);
@@ -406,5 +415,186 @@ describe('SlackSettingsPane', () => {
     await user.click(screen.getByRole('button', { name: 'Reset' }));
     expect(screen.queryByText(/scopes granted/)).not.toBeInTheDocument();
     expect(screen.getByText('••••••••1234')).toBeVisible();
+  });
+
+  it('resolves recipients on blur and Enter, rejects duplicates, and saves only resolved rows', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected(),
+    });
+    mock.api.resolveSlackRecipient
+      .mockResolvedValueOnce({
+        typedText: 'ada@example.com',
+        kind: 'user',
+        id: 'U23456789',
+        displayName: 'Ada Lovelace',
+      })
+      .mockResolvedValueOnce({
+        typedText: '@ada',
+        kind: 'user',
+        id: 'U23456789',
+        displayName: 'Ada Lovelace',
+      });
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('button', { name: 'Add recipient' }));
+    const first = screen.getByRole('textbox', { name: 'Recipient 1' });
+    await user.type(first, 'ada@example.com');
+    await user.tab();
+    expect(await screen.findByText('Ada Lovelace')).toBeVisible();
+    expect(mock.api.resolveSlackRecipient).toHaveBeenNthCalledWith(1, {
+      input: 'ada@example.com',
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Add recipient' }));
+    const second = screen.getByRole('textbox', { name: 'Recipient 2' });
+    await user.type(second, '@ada{Enter}');
+    expect(await screen.findByText('Already in the list')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    expect(screen.getByText('Resolve or remove every recipient before saving.')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Remove recipient 2' }));
+    mock.api.updateSlackSettings.mockResolvedValue(
+      connected({
+        defaultRecipients: [
+          {
+            typedText: 'ada@example.com',
+            kind: 'user',
+            id: 'U23456789',
+            displayName: 'Ada Lovelace',
+          },
+        ],
+      }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(mock.api.updateSlackSettings).toHaveBeenCalledWith({
+        enabled: true,
+        defaultRecipients: [
+          {
+            typedText: 'ada@example.com',
+            kind: 'user',
+            id: 'U23456789',
+            displayName: 'Ada Lovelace',
+          },
+        ],
+      }),
+    );
+  });
+
+  it('uses a draft token for resolution and disables rows without any token', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: notConfigured(),
+    });
+    mock.api.resolveSlackRecipient.mockResolvedValue({
+      typedText: '#eng',
+      kind: 'channel',
+      id: 'C12345678',
+      displayName: '#eng',
+    });
+    render(<SlackSettingsPane />);
+
+    await screen.findByText('Not set up');
+    await user.click(screen.getByRole('button', { name: 'Add recipient' }));
+    expect(screen.getByRole('textbox', { name: 'Recipient 1' })).toBeDisabled();
+    expect(screen.getByText('Add a Slack token before resolving recipients.')).toBeVisible();
+
+    await user.type(screen.getByLabelText('Slack token'), 'xoxb-draft-token');
+    const input = screen.getByRole('textbox', { name: 'Recipient 1' });
+    expect(input).toBeEnabled();
+    await user.type(input, '#eng{Enter}');
+    await waitFor(() =>
+      expect(mock.api.resolveSlackRecipient).toHaveBeenCalledWith({
+        input: '#eng',
+        token: 'xoxb-draft-token',
+      }),
+    );
+  });
+
+  it('marks the stored user-token owner as you and previews a validation suggestion', async () => {
+    const user = userEvent.setup();
+    const owner = {
+      typedText: '@ada',
+      kind: 'user' as const,
+      id: 'U123',
+      displayName: 'Ada',
+    };
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected({
+        tokenType: 'user',
+        identity: { ...connected().identity!, displayName: 'Ada', botId: null },
+        defaultRecipients: [owner],
+      }),
+      slackValidation: {
+        tokenType: 'user',
+        identity: { ...connected().identity!, displayName: 'Ada', botId: null },
+        grantedScopes: ['chat:write'],
+        missingScopes: [],
+        suggestedRecipient: owner,
+      },
+    });
+    render(<SlackSettingsPane />);
+
+    expect(await screen.findByText('you')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Remove recipient 1' }));
+    await user.click(screen.getByRole('button', { name: 'Check connection' }));
+    expect(await screen.findByText('You will be notified by default.')).toBeVisible();
+    expect(mock.api.validateSlackSettings).toHaveBeenCalledWith({});
+  });
+
+  it('renders test-message delivery results and clears them when rows change', async () => {
+    const user = userEvent.setup();
+    const recipients = [
+      {
+        typedText: '@ada',
+        kind: 'user' as const,
+        id: 'U12345678',
+        displayName: 'Ada',
+      },
+      {
+        typedText: '#private-ops',
+        kind: 'channel' as const,
+        id: 'C12345678',
+        displayName: '#private-ops',
+      },
+    ];
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected({ defaultRecipients: recipients }),
+    });
+    mock.api.sendSlackTestMessage.mockResolvedValue({
+      results: [
+        { recipient: recipients[0], delivered: true, error: null },
+        {
+          recipient: recipients[1],
+          delivered: false,
+          error: {
+            code: 'slack_not_in_channel',
+            class: 'warning',
+            title: 'Agentico is not in this channel',
+            summary: 'Agentico could not send to #private-ops.',
+            remediation: { hint: 'Invite the Agentico app to #private-ops in Slack.' },
+          },
+        },
+      ],
+    });
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    const send = screen.getByRole('button', { name: 'Send test message' });
+    expect(send).toBeEnabled();
+    await user.click(send);
+    expect(await screen.findByText('Sent')).toBeVisible();
+    expect(screen.getByText('Agentico could not send to #private-ops.')).toBeVisible();
+    expect(screen.getByText('Invite the Agentico app to #private-ops in Slack.')).toBeVisible();
+    expect(mock.api.sendSlackTestMessage).toHaveBeenCalledWith({ recipients });
+
+    await user.type(screen.getByRole('textbox', { name: 'Recipient 1' }), '-edited');
+    expect(screen.queryByText('Sent')).not.toBeInTheDocument();
   });
 });

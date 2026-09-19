@@ -26,12 +26,19 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-type authTester interface {
+type slackClient interface {
 	AuthTest(ctx context.Context) (AuthTestResponse, error)
+	LookupUserByEmail(ctx context.Context, email string) (User, error)
+	UserInfo(ctx context.Context, userID string) (User, error)
+	UsersList(ctx context.Context, cursor string, limit int) (UsersPage, error)
+	ConversationsList(ctx context.Context, cursor string, limit int) (ConversationsPage, error)
+	ConversationInfo(ctx context.Context, channelID string) (Conversation, error)
+	OpenConversation(ctx context.Context, userID string) (string, error)
+	PostMessage(ctx context.Context, channelID, text string) error
 }
 
-// ClientFactory constructs the token-bound client used for one validation.
-type ClientFactory func(token string) (authTester, error)
+// ClientFactory constructs the token-bound client used for one operation.
+type ClientFactory func(token string) (slackClient, error)
 
 // ServiceOption customizes the Slack service.
 type ServiceOption func(*Service)
@@ -65,7 +72,7 @@ var _ ports.SlackService = (*Service)(nil)
 // NewService constructs a service without validating or making a network call.
 func NewService(opts ...ServiceOption) *Service {
 	service := &Service{
-		newClient: func(token string) (authTester, error) {
+		newClient: func(token string) (slackClient, error) {
 			return NewClient(token)
 		},
 		publish: func() {},
@@ -119,6 +126,7 @@ func (s *Service) Validate(ctx context.Context, token string) (ports.SlackValida
 			TeamID:       auth.TeamID,
 			TeamName:     auth.TeamName,
 			UserID:       auth.UserID,
+			UserName:     auth.UserName,
 			DisplayName:  auth.UserName,
 			WorkspaceURL: auth.WorkspaceURL,
 			BotID:        auth.BotID,
@@ -185,6 +193,9 @@ func (s *Service) setSnapshot(checkedAt time.Time, canonical *errcat.Error) {
 func classifyValidationError(token string, err error) error {
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
+		if slackErrorCode(apiErr.SlackError) == "missing_scope" {
+			return missingScopeError(apiErr)
+		}
 		return canonicalError(errcat.New(
 			errcat.SlackInvalidToken,
 			errcat.WithDiagnostics("Slack auth.test returned "+scrub(token, apiErr.SlackError)),

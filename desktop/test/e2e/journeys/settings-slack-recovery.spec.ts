@@ -67,7 +67,7 @@ test('Slack settings recover a saved token after Slack becomes reachable', async
       settings.getByText('Token saved, but Slack could not be reached', { exact: true }),
     ).toBeVisible();
     await expect(settings.getByText('Slack could not be reached', { exact: true })).toBeVisible();
-    await expect(settings.getByText(/^Last checked /)).toBeVisible();
+    await expect(settings.getByText(/^Last checked /)).toHaveCount(1);
     await expect(settings.locator('.slack-settings__token-display code')).toHaveText(/4r2k$/);
     await expect(save).toBeDisabled();
 
@@ -90,8 +90,8 @@ test('Slack settings recover a saved token after Slack becomes reachable', async
     expect(await settings.locator('body').innerText()).not.toContain(token);
 
     expect(fakeSlack.requests()).toEqual([
-      { method: 'POST', path: '/api/auth.test', bearerPresent: true },
-      { method: 'POST', path: '/api/auth.test', bearerPresent: true },
+      { method: 'POST', path: '/api/auth.test', bearerPresent: true, fields: {} },
+      { method: 'POST', path: '/api/auth.test', bearerPresent: true, fields: {} },
     ]);
     const recoveredConfig = fs.readFileSync(world.configPath, 'utf8');
     expect(recoveredConfig).toContain(`token: ${token}`);

@@ -1258,10 +1258,19 @@ func (h *apiHandler) slackRuntimeConfig(cfg *config.Config) SlackRuntimeConfig {
 	enabled := false
 	var identity *SlackIdentity
 	granted := []string{}
+	recipients := []SlackRecipient{}
 	if slackConfig != nil {
 		token = slackConfig.Token
 		enabled = slackConfig.Enabled
 		granted = append(granted, slackConfig.GrantedScopes...)
+		for _, recipient := range slackConfig.DefaultRecipients {
+			recipients = append(recipients, SlackRecipient{
+				TypedText:   recipient.TypedText,
+				Kind:        SlackRecipientKind(recipient.Kind),
+				ID:          recipient.ID,
+				DisplayName: recipient.DisplayName,
+			})
+		}
 		if slackConfig.Identity != nil {
 			identity = &SlackIdentity{
 				TeamID:      slackConfig.Identity.TeamID,
@@ -1279,14 +1288,15 @@ func (h *apiHandler) slackRuntimeConfig(cfg *config.Config) SlackRuntimeConfig {
 		wireStatus.LastError = &lastError
 	}
 	projection := SlackRuntimeConfig{
-		Enabled:       enabled,
-		TokenSet:      token != "",
-		TokenHint:     config.SlackTokenHint(token),
-		Identity:      identity,
-		GrantedScopes: granted,
-		MissingScopes: []string{},
-		Status:        wireStatus,
-		Manifest:      service.Manifest(),
+		Enabled:           enabled,
+		TokenSet:          token != "",
+		TokenHint:         config.SlackTokenHint(token),
+		Identity:          identity,
+		GrantedScopes:     granted,
+		MissingScopes:     []string{},
+		DefaultRecipients: recipients,
+		Status:            wireStatus,
+		Manifest:          service.Manifest(),
 	}
 	switch config.SlackTokenType(token) {
 	case "bot":

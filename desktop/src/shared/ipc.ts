@@ -45,6 +45,8 @@ export const IPC_CHANNELS = {
   slackSettingsGet: 'agentico:slack-settings:get',
   slackSettingsUpdate: 'agentico:slack-settings:update',
   slackSettingsValidate: 'agentico:slack-settings:validate',
+  slackRecipientResolve: 'agentico:slack-settings:recipient-resolve',
+  slackTestMessageSend: 'agentico:slack-settings:test-message-send',
   windowOpenSettings: 'agentico:window:open-settings',
   themeGet: 'agentico:theme:get',
   themeSet: 'agentico:theme:set',
@@ -3984,6 +3986,32 @@ export const SlackStatusSchema = z.strictObject({
 });
 export type SlackStatus = z.output<typeof SlackStatusSchema>;
 
+export const SlackRecipientSchema = z.strictObject({
+  typedText: z.string().min(1).max(500),
+  kind: z.enum(['user', 'channel']),
+  id: z.string().min(1).max(200),
+  displayName: z.string().min(1).max(500),
+});
+export type SlackRecipient = z.output<typeof SlackRecipientSchema>;
+
+export const SlackRecipientListSchema = z
+  .array(SlackRecipientSchema)
+  .max(100)
+  .superRefine((recipients, context) => {
+    const seen = new Set<string>();
+    recipients.forEach((recipient, index) => {
+      const key = `${recipient.kind}:${recipient.id}`;
+      if (seen.has(key)) {
+        context.addIssue({
+          code: 'custom',
+          path: [index, 'id'],
+          message: 'Slack recipients must be unique by kind and id',
+        });
+      }
+      seen.add(key);
+    });
+  });
+
 const SupportedSlackSettingsSchema = z.strictObject({
   supported: z.literal(true),
   enabled: z.boolean(),
@@ -3993,6 +4021,7 @@ const SupportedSlackSettingsSchema = z.strictObject({
   identity: SlackIdentitySchema.nullable(),
   grantedScopes: z.array(z.string().min(1).max(200)).max(100),
   missingScopes: z.array(z.string().min(1).max(200)).max(100),
+  defaultRecipients: SlackRecipientListSchema,
   status: SlackStatusSchema,
   manifest: z.string().max(256 * 1024),
 });
@@ -4013,6 +4042,7 @@ export const SlackSettingsDraftSchema = z
       .max(16 * 1024)
       .optional(),
     clearToken: z.boolean().optional(),
+    defaultRecipients: SlackRecipientListSchema.optional(),
   })
   .refine((draft) => !(draft.token !== undefined && draft.clearToken === true), {
     message: 'token and clearToken are mutually exclusive',
@@ -4034,8 +4064,38 @@ export const SlackValidationResultSchema = z.strictObject({
   identity: SlackIdentitySchema,
   grantedScopes: z.array(z.string().min(1).max(200)).max(100),
   missingScopes: z.array(z.string().min(1).max(200)).max(100),
+  suggestedRecipient: SlackRecipientSchema.nullable(),
 });
 export type SlackValidationResult = z.output<typeof SlackValidationResultSchema>;
+
+export const SlackRecipientResolveRequestSchema = z.strictObject({
+  input: z.string().min(1).max(500),
+  token: z
+    .string()
+    .min(1)
+    .max(16 * 1024)
+    .optional(),
+});
+export type SlackRecipientResolveRequest = z.output<typeof SlackRecipientResolveRequestSchema>;
+
+export const SlackTestMessageRequestSchema = z.strictObject({
+  recipients: SlackRecipientListSchema.min(1),
+});
+export type SlackTestMessageRequest = z.output<typeof SlackTestMessageRequestSchema>;
+
+export const SlackTestMessageRecipientResultSchema = z.strictObject({
+  recipient: SlackRecipientSchema,
+  delivered: z.boolean(),
+  error: CanonicalErrorSchema.nullable(),
+});
+export type SlackTestMessageRecipientResult = z.output<
+  typeof SlackTestMessageRecipientResultSchema
+>;
+
+export const SlackTestMessageResultSchema = z.strictObject({
+  results: z.array(SlackTestMessageRecipientResultSchema).max(100),
+});
+export type SlackTestMessageResult = z.output<typeof SlackTestMessageResultSchema>;
 
 export const CatalogueModelSchema = z.strictObject({
   id: z.string().min(1).max(200),
@@ -4145,6 +4205,14 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   [IPC_CHANNELS.slackSettingsValidate]: {
     request: z.tuple([SlackValidationRequestSchema]),
     response: SlackValidationResultSchema,
+  },
+  [IPC_CHANNELS.slackRecipientResolve]: {
+    request: z.tuple([SlackRecipientResolveRequestSchema]),
+    response: SlackRecipientSchema,
+  },
+  [IPC_CHANNELS.slackTestMessageSend]: {
+    request: z.tuple([SlackTestMessageRequestSchema]),
+    response: SlackTestMessageResultSchema,
   },
   [IPC_CHANNELS.windowOpenSettings]: {
     request: z.tuple([SettingsOpenRequestSchema]),
@@ -4626,6 +4694,8 @@ export interface AgenticoApi {
   getSlackSettings(): Promise<SlackSettingsSnapshot>;
   updateSlackSettings(draft: SlackSettingsDraft): Promise<SlackSettingsSnapshot>;
   validateSlackSettings(request: SlackValidationRequest): Promise<SlackValidationResult>;
+  resolveSlackRecipient(request: SlackRecipientResolveRequest): Promise<SlackRecipient>;
+  sendSlackTestMessage(request: SlackTestMessageRequest): Promise<SlackTestMessageResult>;
   openSettingsWindow(request: SettingsOpenRequest): Promise<SettingsOpenResult>;
   getThemePreference(): Promise<ThemeInfo>;
   setThemePreference(preference: ThemePreference): Promise<ThemeInfo>;

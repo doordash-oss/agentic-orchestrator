@@ -1934,6 +1934,21 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 			slackConfig.Enabled = *req.Slack.Enabled
 			changed = true
 		}
+		if req.Slack.DefaultRecipients != nil {
+			recipients := make([]config.SlackRecipient, 0, len(*req.Slack.DefaultRecipients))
+			for _, recipient := range *req.Slack.DefaultRecipients {
+				recipients = append(recipients, config.SlackRecipient{
+					TypedText:   recipient.TypedText,
+					Kind:        string(recipient.Kind),
+					ID:          recipient.ID,
+					DisplayName: recipient.DisplayName,
+				})
+			}
+			if !slices.Equal(slackConfig.DefaultRecipients, recipients) {
+				slackConfig.DefaultRecipients = recipients
+				changed = true
+			}
+		}
 		if req.Slack.ClearToken != nil && *req.Slack.ClearToken {
 			if slackConfig.Token != "" || slackConfig.Identity != nil ||
 				len(slackConfig.GrantedScopes) > 0 || !slackConfig.LastValidatedAt.IsZero() {
@@ -1959,6 +1974,16 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 				}
 				slackConfig.GrantedScopes = append([]string(nil), req.SlackValidation.GrantedScopes...)
 				slackConfig.LastValidatedAt = req.SlackCheckedAt.UTC()
+				if req.Slack.DefaultRecipients == nil &&
+					len(slackConfig.DefaultRecipients) == 0 &&
+					req.SlackValidation.TokenType == ports.SlackTokenUser {
+					slackConfig.DefaultRecipients = []config.SlackRecipient{{
+						TypedText:   "@" + req.SlackValidation.Identity.UserName,
+						Kind:        string(ports.SlackRecipientUser),
+						ID:          req.SlackValidation.Identity.UserID,
+						DisplayName: req.SlackValidation.Identity.DisplayName,
+					}}
+				}
 				changed = true
 			case req.SlackWarning != nil:
 				slackConfig.Identity = nil
@@ -1989,6 +2014,24 @@ func (t *serverMutationTarget) LoadSlackCredential() (string, uint64) {
 		return "", t.slackCredentialGeneration
 	}
 	return t.cfg.Slack.Token, t.slackCredentialGeneration
+}
+
+func (t *serverMutationTarget) LoadSlackDeliveryConfig() (string, []ports.SlackRecipient) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cfg == nil || t.cfg.Slack == nil {
+		return "", nil
+	}
+	recipients := make([]ports.SlackRecipient, 0, len(t.cfg.Slack.DefaultRecipients))
+	for _, recipient := range t.cfg.Slack.DefaultRecipients {
+		recipients = append(recipients, ports.SlackRecipient{
+			TypedText:   recipient.TypedText,
+			Kind:        ports.SlackRecipientKind(recipient.Kind),
+			ID:          recipient.ID,
+			DisplayName: recipient.DisplayName,
+		})
+	}
+	return t.cfg.Slack.Token, recipients
 }
 
 func (t *serverMutationTarget) SlackCredentialCurrent(token string, generation uint64) bool {

@@ -34,6 +34,10 @@ type slackValidationStore interface {
 	SlackCredentialCurrent(token string, generation uint64) bool
 }
 
+type slackDeliveryStore interface {
+	LoadSlackDeliveryConfig() (string, []ports.SlackRecipient)
+}
+
 func (h *apiHandler) handleSlackValidateRoute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -116,12 +120,174 @@ func (h *apiHandler) handleSlackValidateRoute(w http.ResponseWriter, r *http.Req
 		h.slackCredentialMu.Unlock()
 	}
 	writeJSON(w, http.StatusOK, SlackValidateResponse{
-		APIVersion:    APIVersion,
-		TokenType:     SlackValidateResponseTokenType(validation.TokenType),
-		Identity:      slackIdentityDTO(validation.Identity),
-		GrantedScopes: append(make([]string, 0, len(validation.GrantedScopes)), validation.GrantedScopes...),
-		MissingScopes: append(make([]string, 0, len(validation.MissingScopes)), validation.MissingScopes...),
+		APIVersion:         APIVersion,
+		TokenType:          SlackValidateResponseTokenType(validation.TokenType),
+		Identity:           slackIdentityDTO(validation.Identity),
+		GrantedScopes:      append(make([]string, 0, len(validation.GrantedScopes)), validation.GrantedScopes...),
+		MissingScopes:      append(make([]string, 0, len(validation.MissingScopes)), validation.MissingScopes...),
+		SuggestedRecipient: suggestedSlackRecipient(validation),
 	})
+}
+
+func (h *apiHandler) handleSlackRecipientResolveRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
+		return
+	}
+	if !h.requireTrustedMutation(w, r) {
+		return
+	}
+	var req SlackRecipientResolveRequest
+	if !decodeMutationJSON(w, r, &req) {
+		return
+	}
+	if h.slack == nil {
+		writeAPIError(w, http.StatusBadGateway, errcat.SlackUnreachable)
+		return
+	}
+	if req.Input == "" {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics("recipient text must not be empty"))
+		return
+	}
+	token := ""
+	if req.Token != nil {
+		token = *req.Token
+		if token == "" {
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+				errcat.WithDiagnostics("slack token must not be empty"))
+			return
+		}
+	} else {
+		store, ok := h.mutations.(slackValidationStore)
+		if !ok {
+			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
+			return
+		}
+		token, _ = store.LoadSlackCredential()
+		if token == "" {
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+				errcat.WithDiagnostics("no stored Slack token is configured"))
+			return
+		}
+	}
+	recipient, err := h.slack.ResolveRecipient(r.Context(), token, req.Input)
+	if err != nil {
+		writeSlackOperationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, SlackRecipientResolveResponse{
+		APIVersion: APIVersion,
+		Recipient:  slackRecipientDTO(recipient),
+	})
+}
+
+func (h *apiHandler) handleSlackTestMessageRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
+		return
+	}
+	if !h.requireTrustedMutation(w, r) {
+		return
+	}
+	var req SlackTestMessageRequest
+	if !decodeMutationJSON(w, r, &req) {
+		return
+	}
+	if req.Recipients != nil && !validateSlackRecipients(w, *req.Recipients) {
+		return
+	}
+	if h.slack == nil {
+		writeAPIError(w, http.StatusBadGateway, errcat.SlackUnreachable)
+		return
+	}
+	store, ok := h.mutations.(slackDeliveryStore)
+	if !ok {
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
+		return
+	}
+	token, storedRecipients := store.LoadSlackDeliveryConfig()
+	if token == "" {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics("no stored Slack token is configured"))
+		return
+	}
+	recipients := storedRecipients
+	if req.Recipients != nil {
+		recipients = slackRecipientsFromDTO(*req.Recipients)
+	}
+	if len(recipients) == 0 {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics("at least one Slack recipient is required"))
+		return
+	}
+	results, err := h.slack.SendTestMessage(r.Context(), token, h.name, recipients)
+	if err != nil {
+		writeSlackOperationError(w, err)
+		return
+	}
+	wireResults := make([]SlackDeliveryResult, 0, len(results))
+	for _, result := range results {
+		wireResult := SlackDeliveryResult{
+			Recipient: slackRecipientDTO(result.Recipient),
+			Delivered: result.Delivered,
+		}
+		if result.Error != nil {
+			rendered := wireError(*result.Error)
+			wireResult.Error = &rendered
+		}
+		wireResults = append(wireResults, wireResult)
+	}
+	writeJSON(w, http.StatusOK, SlackTestMessageResponse{
+		APIVersion: APIVersion,
+		Results:    wireResults,
+	})
+}
+
+func writeSlackOperationError(w http.ResponseWriter, err error) {
+	var slackErr *ports.SlackValidationError
+	if !errors.As(err, &slackErr) {
+		writeAPIError(w, http.StatusBadGateway, errcat.SlackUnreachable)
+		return
+	}
+	writeRenderedSlackError(w, slackErr.Canonical)
+}
+
+func suggestedSlackRecipient(validation ports.SlackValidation) *SlackRecipient {
+	if validation.TokenType != ports.SlackTokenUser {
+		return nil
+	}
+	recipient := slackRecipientDTO(ports.SlackRecipient{
+		TypedText:   "@" + validation.Identity.UserName,
+		Kind:        ports.SlackRecipientUser,
+		ID:          validation.Identity.UserID,
+		DisplayName: validation.Identity.DisplayName,
+	})
+	return &recipient
+}
+
+func slackRecipientDTO(recipient ports.SlackRecipient) SlackRecipient {
+	return SlackRecipient{
+		TypedText:   recipient.TypedText,
+		Kind:        SlackRecipientKind(recipient.Kind),
+		ID:          recipient.ID,
+		DisplayName: recipient.DisplayName,
+	}
+}
+
+func slackRecipientsFromDTO(recipients []SlackRecipient) []ports.SlackRecipient {
+	result := make([]ports.SlackRecipient, 0, len(recipients))
+	for _, recipient := range recipients {
+		result = append(result, ports.SlackRecipient{
+			TypedText:   recipient.TypedText,
+			Kind:        ports.SlackRecipientKind(recipient.Kind),
+			ID:          recipient.ID,
+			DisplayName: recipient.DisplayName,
+		})
+	}
+	return result
 }
 
 func slackIdentityDTO(identity ports.SlackIdentity) SlackIdentity {

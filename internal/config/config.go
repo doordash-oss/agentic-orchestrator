@@ -49,11 +49,19 @@ type Config struct {
 // successfully validated identity. Token type and hint are derived at read
 // time so they cannot drift from the stored credential.
 type SlackConfig struct {
-	Enabled         bool           `yaml:"enabled"`
-	Token           string         `yaml:"token,omitempty"`
-	Identity        *SlackIdentity `yaml:"identity,omitempty"`
-	GrantedScopes   []string       `yaml:"granted_scopes,omitempty"`
-	LastValidatedAt time.Time      `yaml:"last_validated_at,omitempty"`
+	Enabled           bool             `yaml:"enabled"`
+	Token             string           `yaml:"token,omitempty"`
+	Identity          *SlackIdentity   `yaml:"identity,omitempty"`
+	GrantedScopes     []string         `yaml:"granted_scopes,omitempty"`
+	DefaultRecipients []SlackRecipient `yaml:"default_recipients,omitempty"`
+	LastValidatedAt   time.Time        `yaml:"last_validated_at,omitempty"`
+}
+
+type SlackRecipient struct {
+	TypedText   string `yaml:"typed_text"`
+	Kind        string `yaml:"kind"`
+	ID          string `yaml:"id"`
+	DisplayName string `yaml:"display_name"`
 }
 
 type SlackIdentity struct {

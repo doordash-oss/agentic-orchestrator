@@ -264,6 +264,8 @@ const (
 	apiPathFeatures                = "/api/v1/features"
 	apiPathConfigRuntime           = "/api/v1/config/runtime"
 	apiPathSlackValidate           = "/api/v1/integrations/slack/validate"
+	apiPathSlackRecipientResolve   = "/api/v1/integrations/slack/recipients/resolve"
+	apiPathSlackTestMessage        = "/api/v1/integrations/slack/test-message"
 	apiPathCatalogModels           = "/api/v1/catalog/models"
 	apiPathCatalogRefresh          = "/api/v1/catalog/models/refresh"
 	apiPathReadiness               = "/api/v1/readiness"
@@ -312,6 +314,8 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathFeatures + "/", func(h *apiHandler) http.HandlerFunc { return h.handleFeatureRoutes }},
 	{apiPathConfigRuntime, func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeConfigRoute }},
 	{apiPathSlackValidate, func(h *apiHandler) http.HandlerFunc { return h.handleSlackValidateRoute }},
+	{apiPathSlackRecipientResolve, func(h *apiHandler) http.HandlerFunc { return h.handleSlackRecipientResolveRoute }},
+	{apiPathSlackTestMessage, func(h *apiHandler) http.HandlerFunc { return h.handleSlackTestMessageRoute }},
 	{apiPathCatalogModels, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleModelCatalog) }},
 	{apiPathCatalogRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleProviderModelRefreshRoute }},
 	{apiPathRuntimeReadiness, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleRuntimeReadiness) }},

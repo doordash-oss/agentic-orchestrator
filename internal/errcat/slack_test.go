@@ -28,6 +28,14 @@ func TestSlackCodesContract(t *testing.T) {
 		{SlackUnsupportedToken, ClassBlocking},
 		{SlackMissingScopes, ClassBlocking},
 		{SlackUnreachable, ClassWarning},
+		{SlackUserNotFound, ClassWarning},
+		{SlackChannelNotFound, ClassWarning},
+		{SlackNotInChannel, ClassWarning},
+		{SlackChannelArchived, ClassWarning},
+		{SlackAmbiguousHandle, ClassWarning},
+		{SlackScanCapReached, ClassWarning},
+		{SlackUnrecognizedRecipient, ClassWarning},
+		{SlackDeliveryFailed, ClassWarning},
 	}
 	for _, tc := range cases {
 		entry, ok := Lookup(tc.code)
@@ -43,6 +51,42 @@ func TestSlackCodesContract(t *testing.T) {
 		if len(entry.Actions) != 0 || len(entry.Blocks) != 0 {
 			t.Errorf("Lookup(%q) actions/blocks = %#v/%#v; want none", tc.code, entry.Actions, entry.Blocks)
 		}
+	}
+}
+
+func TestSlackRecipientErrorsRenderSpecificGuidance(t *testing.T) {
+	ambiguous := New(SlackAmbiguousHandle, WithParams(SlackAmbiguousHandleParams{
+		Handle:     "@alex",
+		MatchCount: 2,
+	}))
+	if !strings.Contains(ambiguous.Summary, "2") ||
+		!strings.Contains(ambiguous.Summary, "@alex") ||
+		!strings.Contains(ambiguous.Remediation.Hint, "email") ||
+		!strings.Contains(ambiguous.Remediation.Hint, "member ID") {
+		t.Fatalf("ambiguous handle error = %#v; want count, handle, and disambiguation guidance", ambiguous)
+	}
+
+	scanCap := New(SlackScanCapReached, WithParams(SlackScanCapReachedParams{
+		Name:    "@alex",
+		Kind:    "members",
+		Scanned: 4000,
+	}))
+	if !strings.Contains(scanCap.Summary, "@alex") ||
+		!strings.Contains(scanCap.Summary, "4,000") ||
+		!strings.Contains(scanCap.Summary, "members") ||
+		!strings.Contains(scanCap.Remediation.Hint, "email") ||
+		!strings.Contains(scanCap.Remediation.Hint, "Slack ID") {
+		t.Fatalf("scan cap error = %#v; want scanned count and alternate lookup guidance", scanCap)
+	}
+
+	notInChannel := New(
+		SlackNotInChannel,
+		WithParams(SlackRecipientParams{Recipient: "#eng"}),
+		WithRemediationHint("Invite the Agentico app to #eng in Slack, then try again."),
+	)
+	if !strings.Contains(notInChannel.Summary, "#eng") ||
+		!strings.Contains(notInChannel.Remediation.Hint, "Invite the Agentico app to #eng in Slack") {
+		t.Fatalf("not-in-channel error = %#v; want channel-specific invite guidance", notInChannel)
 	}
 }
 

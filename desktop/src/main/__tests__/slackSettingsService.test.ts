@@ -32,6 +32,14 @@ const projection = {
   },
   granted_scopes: ['chat:write', 'users:read'],
   missing_scopes: [],
+  default_recipients: [
+    {
+      typed_text: '@ada',
+      kind: 'user',
+      id: 'U12345678',
+      display_name: 'Ada Lovelace',
+    },
+  ],
   status: {
     state: 'connected',
     last_error: null,
@@ -76,6 +84,14 @@ describe('SlackSettingsService', () => {
       },
       grantedScopes: ['chat:write', 'users:read'],
       missingScopes: [],
+      defaultRecipients: [
+        {
+          typedText: '@ada',
+          kind: 'user',
+          id: 'U12345678',
+          displayName: 'Ada Lovelace',
+        },
+      ],
       status: {
         state: 'connected',
         lastError: null,
@@ -127,6 +143,52 @@ describe('SlackSettingsService', () => {
     expect(JSON.stringify(result)).not.toContain(token);
   });
 
+  it('forwards default recipients only when the draft carries them', async () => {
+    const server = transport(
+      response({ api_version: 'v1' }),
+      response({ api_version: 'v1', slack: projection }),
+    );
+    const service = new SlackSettingsService({ transport: server });
+    const recipients = [
+      {
+        typedText: '@ada',
+        kind: 'user' as const,
+        id: 'U12345678',
+        displayName: 'Ada Lovelace',
+      },
+      {
+        typedText: '#eng',
+        kind: 'channel' as const,
+        id: 'C12345678',
+        displayName: '#eng',
+      },
+    ];
+
+    await service.update({ defaultRecipients: recipients });
+
+    expect(server.apiRequest).toHaveBeenNthCalledWith(1, '/api/v1/config/runtime', {
+      method: 'PATCH',
+      body: {
+        slack: {
+          default_recipients: [
+            {
+              typed_text: '@ada',
+              kind: 'user',
+              id: 'U12345678',
+              display_name: 'Ada Lovelace',
+            },
+            {
+              typed_text: '#eng',
+              kind: 'channel',
+              id: 'C12345678',
+              display_name: '#eng',
+            },
+          ],
+        },
+      },
+    });
+  });
+
   it('validates with and without a draft token', async () => {
     const token = 'xoxp-111-222-secret';
     const validated = {
@@ -140,6 +202,12 @@ describe('SlackSettingsService', () => {
       },
       granted_scopes: ['chat:write'],
       missing_scopes: [],
+      suggested_recipient: {
+        typed_text: '@ada',
+        kind: 'user',
+        id: 'U23456789',
+        display_name: 'Ada',
+      },
     };
     const server = transport(response(validated), response(validated));
     const service = new SlackSettingsService({ transport: server });
@@ -156,7 +224,128 @@ describe('SlackSettingsService', () => {
       body: {},
     });
     expect(draftResult).toStrictEqual(storedResult);
+    expect(draftResult.suggestedRecipient).toStrictEqual({
+      typedText: '@ada',
+      kind: 'user',
+      id: 'U23456789',
+      displayName: 'Ada',
+    });
     expect(JSON.stringify(draftResult)).not.toContain(token);
+  });
+
+  it('resolves one recipient with an optional draft token and redacts the result', async () => {
+    const token = 'xoxp-111-222-secret';
+    const server = transport(
+      response({
+        api_version: 'v1',
+        recipient: {
+          typed_text: 'ada@example.com',
+          kind: 'user',
+          id: 'U23456789',
+          display_name: 'Ada Lovelace',
+        },
+      }),
+    );
+    const service = new SlackSettingsService({ transport: server });
+
+    const result = await service.resolveRecipient({ input: 'ada@example.com', token });
+
+    expect(server.apiRequest).toHaveBeenCalledWith(
+      '/api/v1/integrations/slack/recipients/resolve',
+      {
+        method: 'POST',
+        body: { input: 'ada@example.com', token },
+      },
+    );
+    expect(result).toStrictEqual({
+      typedText: 'ada@example.com',
+      kind: 'user',
+      id: 'U23456789',
+      displayName: 'Ada Lovelace',
+    });
+    expect(JSON.stringify(result)).not.toContain(token);
+  });
+
+  it('sends a test message and maps delivered and failed recipient results', async () => {
+    const recipients = [
+      {
+        typedText: '@ada',
+        kind: 'user' as const,
+        id: 'U12345678',
+        displayName: 'Ada Lovelace',
+      },
+      {
+        typedText: '#private-ops',
+        kind: 'channel' as const,
+        id: 'C12345678',
+        displayName: '#private-ops',
+      },
+    ];
+    const server = transport(
+      response({
+        api_version: 'v1',
+        meta: {
+          as_of_seq: 0,
+          generated_at: '0001-01-01T00:00:00Z',
+          revision: '',
+        },
+        results: [
+          {
+            recipient: {
+              typed_text: '@ada',
+              kind: 'user',
+              id: 'U12345678',
+              display_name: 'Ada Lovelace',
+            },
+            delivered: true,
+          },
+          {
+            recipient: {
+              typed_text: '#private-ops',
+              kind: 'channel',
+              id: 'C12345678',
+              display_name: '#private-ops',
+            },
+            delivered: false,
+            error: {
+              code: 'slack_not_in_channel',
+              class: 'warning',
+              title: 'Agentico is not in this channel',
+              summary: 'Agentico could not send to #private-ops.',
+              remediation: { hint: 'Invite the Agentico app to #private-ops in Slack.' },
+            },
+          },
+        ],
+      }),
+    );
+    const service = new SlackSettingsService({ transport: server });
+
+    const result = await service.sendTestMessage({ recipients });
+
+    expect(server.apiRequest).toHaveBeenCalledWith('/api/v1/integrations/slack/test-message', {
+      method: 'POST',
+      body: {
+        recipients: [
+          {
+            typed_text: '@ada',
+            kind: 'user',
+            id: 'U12345678',
+            display_name: 'Ada Lovelace',
+          },
+          {
+            typed_text: '#private-ops',
+            kind: 'channel',
+            id: 'C12345678',
+            display_name: '#private-ops',
+          },
+        ],
+      },
+    });
+    expect(result.results[0]).toMatchObject({ delivered: true });
+    expect(result.results[1]).toMatchObject({
+      delivered: false,
+      error: { code: 'slack_not_in_channel' },
+    });
   });
 
   it('discards a response when the connected server identity changes', async () => {
@@ -173,6 +362,67 @@ describe('SlackSettingsService', () => {
     });
 
     await expect(service.get()).rejects.toMatchObject({
+      canonical: { code: 'E_SERVER_SWITCHED' },
+    });
+  });
+
+  it.each([
+    {
+      name: 'recipient resolution',
+      run: (service: SlackSettingsService) =>
+        service.resolveRecipient({ input: 'ada@example.com' }),
+      body: {
+        api_version: 'v1',
+        recipient: {
+          typed_text: 'ada@example.com',
+          kind: 'user',
+          id: 'U23456789',
+          display_name: 'Ada Lovelace',
+        },
+      },
+    },
+    {
+      name: 'test-message delivery',
+      run: (service: SlackSettingsService) =>
+        service.sendTestMessage({
+          recipients: [
+            {
+              typedText: '@ada',
+              kind: 'user',
+              id: 'U12345678',
+              displayName: 'Ada Lovelace',
+            },
+          ],
+        }),
+      body: {
+        api_version: 'v1',
+        results: [
+          {
+            recipient: {
+              typed_text: '@ada',
+              kind: 'user',
+              id: 'U12345678',
+              display_name: 'Ada Lovelace',
+            },
+            delivered: true,
+          },
+        ],
+      },
+    },
+  ])('discards $name when the connected server identity changes', async ({ run, body }) => {
+    let generation = 1;
+    const server = {
+      apiRequest: vi.fn(async () => {
+        generation = 2;
+        return response(body);
+      }),
+    };
+    const service = new SlackSettingsService({
+      transport: server,
+      identity: () => ({ serverKey: 'server-a', generation }),
+    });
+
+    await expect(run(service)).rejects.toMatchObject({
       canonical: { code: 'E_SERVER_SWITCHED' },
     });
   });

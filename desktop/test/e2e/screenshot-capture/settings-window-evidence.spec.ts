@@ -158,4 +158,39 @@ test('settings window visual evidence', async ({ page }) => {
     page,
     'settings-window-on-the-slack-pane-warning-state-with-the-unreachable-error-and-c-900x640',
   );
+
+  for (const theme of ['light', 'dark'] as const) {
+    await openSettingsScene(page, 'settings-slack-recipients', theme, 'Slack', 'Slack');
+    await page.getByRole('button', { name: 'Add recipient' }).click();
+    const recipient = page.getByRole('textbox', { name: 'Recipient 3' });
+    await recipient.fill('#private-ops');
+    await recipient.blur();
+    const recipientError = page.locator('#slack-recipient-3-error');
+    await expect(recipientError).toContainText('Agentico cannot send to #private-ops.');
+    await expect(recipientError).toContainText(
+      'Invite the Agentico app to #private-ops in Slack, then retry.',
+    );
+    await recipient.scrollIntoViewIfNeeded();
+    await shoot(
+      page,
+      theme === 'light'
+        ? 'settings-window-on-the-slack-pane-connected-as-a-user-notify-by-default-showing-900x640'
+        : 'settings-window-on-the-slack-pane-connected-as-a-user-notify-by-default-showing-900x640-5ae269d2',
+    );
+  }
+
+  for (const theme of ['light', 'dark'] as const) {
+    await openSettingsScene(page, 'settings-slack-test-message', theme, 'Slack', 'Slack');
+    await page.getByRole('button', { name: 'Send test message' }).click();
+    const results = page.getByRole('list', { name: 'Test message results' });
+    await expect(results.getByText('Sent')).toBeVisible();
+    await expect(results.getByText('Agentico cannot send to #private-ops.')).toBeVisible();
+    await results.scrollIntoViewIfNeeded();
+    await shoot(
+      page,
+      theme === 'light'
+        ? 'settings-window-on-the-slack-pane-after-send-test-message-results-showing-one-de-900x640'
+        : 'settings-window-on-the-slack-pane-after-send-test-message-results-showing-one-de-900x640-b207d051',
+    );
+  }
 });

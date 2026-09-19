@@ -38,6 +38,8 @@ import (
 const (
 	slackRuntimeConfigPath = "/api/v1/config/runtime"
 	slackValidatePath      = "/api/v1/integrations/slack/validate"
+	slackResolvePath       = "/api/v1/integrations/slack/recipients/resolve"
+	slackTestMessagePath   = "/api/v1/integrations/slack/test-message"
 	slackEventsPath        = "/api/v1/events"
 )
 
@@ -250,8 +252,14 @@ func TestSlackServerComposedNonDisclosure(t *testing.T) {
 				Body:    validSlackAuthBody("Save Agent"),
 				Headers: fullSlackScopesHeader(),
 			},
-			path:        slackRuntimeConfigPath,
-			body:        map[string]any{"slack": map[string]any{"enabled": true}},
+			path: slackRuntimeConfigPath,
+			body: map[string]any{"slack": map[string]any{
+				"enabled": true,
+				"default_recipients": []map[string]any{{
+					"typed_text": "#eng", "kind": "channel",
+					"id": "C12345678", "display_name": "#eng",
+				}},
+			}},
 			wantStatus:  http.StatusOK,
 			expectEvent: true,
 		},
@@ -367,6 +375,67 @@ func TestSlackServerComposedNonDisclosure(t *testing.T) {
 			runtime.assertNoTokenDisclosure(response, tc.expectEvent)
 		})
 	}
+}
+
+func TestSlackServerComposedRecipientOperationNonDisclosure(t *testing.T) {
+	t.Run("resolve success and failure", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			token      string
+			script     testsupport.Response
+			wantStatus int
+		}{
+			{
+				name:  "success",
+				token: "xoxp-resolve-success-distinctive-1234",
+				script: testsupport.Response{Body: map[string]any{
+					"ok": true,
+					"user": map[string]any{
+						"id": "U12345678", "name": "ada", "real_name": "Ada Lovelace",
+						"profile": map[string]any{"display_name": "Ada"},
+					},
+				}},
+				wantStatus: http.StatusOK,
+			},
+			{
+				name:  "failure",
+				token: "xoxp-resolve-failure-distinctive-1234",
+				script: testsupport.Response{Body: map[string]any{
+					"ok": false, "error": "invalid_auth: xoxp-resolve-failure-distinctive-1234",
+				}},
+				wantStatus: http.StatusBadRequest,
+			},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				runtime := newComposedSlackRuntime(t, tc.token, false)
+				runtime.fake.Script("users.lookupByEmail", tc.script)
+				status, response := runtime.request(http.MethodPost, slackResolvePath, map[string]any{
+					"input": "ada@example.com", "token": tc.token,
+				})
+				if status != tc.wantStatus {
+					t.Fatalf("status = %d body=%s; want %d", status, response, tc.wantStatus)
+				}
+				runtime.assertNoTokenDisclosure(response, false)
+			})
+		}
+	})
+
+	t.Run("test message partial failure", func(t *testing.T) {
+		const token = "xoxb-test-message-distinctive-1234"
+		runtime := newComposedSlackRuntime(t, token, true)
+		runtime.cfg.Slack.DefaultRecipients = []config.SlackRecipient{{
+			TypedText: "#eng", Kind: "channel", ID: "C12345678", DisplayName: "#eng",
+		}}
+		runtime.fake.Script("chat.postMessage", testsupport.Response{Body: map[string]any{
+			"ok": false, "error": "not_in_channel: " + token,
+		}})
+		status, response := runtime.request(http.MethodPost, slackTestMessagePath, map[string]any{})
+		if status != http.StatusOK {
+			t.Fatalf("status = %d body=%s; want 200", status, response)
+		}
+		runtime.assertNoTokenDisclosure(response, false)
+	})
 }
 
 func TestSlackServerDelayedStoredValidationIsCredentialFenced(t *testing.T) {

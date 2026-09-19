@@ -947,6 +947,24 @@ func (e SSEEventErrorClass) Valid() bool {
 	}
 }
 
+// Defines values for SlackRecipientKind.
+const (
+	SlackRecipientKindChannel SlackRecipientKind = "channel"
+	SlackRecipientKindUser    SlackRecipientKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the SlackRecipientKind enum.
+func (e SlackRecipientKind) Valid() bool {
+	switch e {
+	case SlackRecipientKindChannel:
+		return true
+	case SlackRecipientKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SlackRuntimeConfigTokenType.
 const (
 	SlackRuntimeConfigTokenTypeBot  SlackRuntimeConfigTokenType = "bot"
@@ -988,16 +1006,16 @@ func (e SlackStatusState) Valid() bool {
 
 // Defines values for SlackValidateResponseTokenType.
 const (
-	SlackValidateResponseTokenTypeBot  SlackValidateResponseTokenType = "bot"
-	SlackValidateResponseTokenTypeUser SlackValidateResponseTokenType = "user"
+	Bot  SlackValidateResponseTokenType = "bot"
+	User SlackValidateResponseTokenType = "user"
 )
 
 // Valid indicates whether the value is a known member of the SlackValidateResponseTokenType enum.
 func (e SlackValidateResponseTokenType) Valid() bool {
 	switch e {
-	case SlackValidateResponseTokenTypeBot:
+	case Bot:
 		return true
-	case SlackValidateResponseTokenTypeUser:
+	case User:
 		return true
 	default:
 		return false
@@ -1556,6 +1574,36 @@ const (
 func (e ValidateReviewDraftParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case ValidateReviewDraftParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ResolveSlackRecipientParamsXAgenticoClient.
+const (
+	ResolveSlackRecipientParamsXAgenticoClientLocal ResolveSlackRecipientParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the ResolveSlackRecipientParamsXAgenticoClient enum.
+func (e ResolveSlackRecipientParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case ResolveSlackRecipientParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SendSlackTestMessageParamsXAgenticoClient.
+const (
+	SendSlackTestMessageParamsXAgenticoClientLocal SendSlackTestMessageParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the SendSlackTestMessageParamsXAgenticoClient enum.
+func (e SendSlackTestMessageParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case SendSlackTestMessageParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -4371,11 +4419,21 @@ type SetupTask struct {
 
 // SlackConfigMutation defines model for SlackConfigMutation.
 type SlackConfigMutation struct {
-	ClearToken *bool `json:"clear_token,omitempty"`
-	Enabled    *bool `json:"enabled,omitempty"`
+	ClearToken        *bool             `json:"clear_token,omitempty"`
+	DefaultRecipients *[]SlackRecipient `json:"default_recipients,omitempty"`
+	Enabled           *bool             `json:"enabled,omitempty"`
 
 	// Token Write-only Slack OAuth token. Never returned by the API.
 	Token *string `json:"token,omitempty"`
+}
+
+// SlackDeliveryResult defines model for SlackDeliveryResult.
+type SlackDeliveryResult struct {
+	Delivered bool `json:"delivered"`
+
+	// Error Canonical catalog-rendered error.
+	Error     *Error         `json:"error,omitempty"`
+	Recipient SlackRecipient `json:"recipient"`
 }
 
 // SlackIdentity defines model for SlackIdentity.
@@ -4387,17 +4445,44 @@ type SlackIdentity struct {
 	UserID      string `json:"user_id"`
 }
 
+// SlackRecipient defines model for SlackRecipient.
+type SlackRecipient struct {
+	DisplayName string             `json:"display_name"`
+	ID          string             `json:"id"`
+	Kind        SlackRecipientKind `json:"kind"`
+	TypedText   string             `json:"typed_text"`
+}
+
+// SlackRecipientKind defines model for SlackRecipient.Kind.
+type SlackRecipientKind string
+
+// SlackRecipientResolveRequest defines model for SlackRecipientResolveRequest.
+type SlackRecipientResolveRequest struct {
+	Input string `json:"input"`
+
+	// Token Optional write-only draft token; omitted to use the stored token.
+	Token *string `json:"token,omitempty"`
+}
+
+// SlackRecipientResolveResponse defines model for SlackRecipientResolveResponse.
+type SlackRecipientResolveResponse struct {
+	APIVersion string         `json:"api_version"`
+	Meta       ResponseMeta   `json:"meta,omitempty"`
+	Recipient  SlackRecipient `json:"recipient"`
+}
+
 // SlackRuntimeConfig defines model for SlackRuntimeConfig.
 type SlackRuntimeConfig struct {
-	Enabled       bool                         `json:"enabled"`
-	GrantedScopes []string                     `json:"granted_scopes"`
-	Identity      *SlackIdentity               `json:"identity,omitempty"`
-	Manifest      string                       `json:"manifest"`
-	MissingScopes []string                     `json:"missing_scopes"`
-	Status        SlackStatus                  `json:"status"`
-	TokenHint     string                       `json:"token_hint"`
-	TokenSet      bool                         `json:"token_set"`
-	TokenType     *SlackRuntimeConfigTokenType `json:"token_type,omitempty"`
+	DefaultRecipients []SlackRecipient             `json:"default_recipients"`
+	Enabled           bool                         `json:"enabled"`
+	GrantedScopes     []string                     `json:"granted_scopes"`
+	Identity          *SlackIdentity               `json:"identity,omitempty"`
+	Manifest          string                       `json:"manifest"`
+	MissingScopes     []string                     `json:"missing_scopes"`
+	Status            SlackStatus                  `json:"status"`
+	TokenHint         string                       `json:"token_hint"`
+	TokenSet          bool                         `json:"token_set"`
+	TokenType         *SlackRuntimeConfigTokenType `json:"token_type,omitempty"`
 }
 
 // SlackRuntimeConfigTokenType defines model for SlackRuntimeConfig.TokenType.
@@ -4415,6 +4500,18 @@ type SlackStatus struct {
 // SlackStatusState defines model for SlackStatus.State.
 type SlackStatusState string
 
+// SlackTestMessageRequest defines model for SlackTestMessageRequest.
+type SlackTestMessageRequest struct {
+	Recipients *[]SlackRecipient `json:"recipients,omitempty"`
+}
+
+// SlackTestMessageResponse defines model for SlackTestMessageResponse.
+type SlackTestMessageResponse struct {
+	APIVersion string                `json:"api_version"`
+	Meta       ResponseMeta          `json:"meta,omitempty"`
+	Results    []SlackDeliveryResult `json:"results"`
+}
+
 // SlackValidateRequest defines model for SlackValidateRequest.
 type SlackValidateRequest struct {
 	// Token Optional write-only draft token; omitted to validate the stored token.
@@ -4423,12 +4520,13 @@ type SlackValidateRequest struct {
 
 // SlackValidateResponse defines model for SlackValidateResponse.
 type SlackValidateResponse struct {
-	APIVersion    string                         `json:"api_version"`
-	GrantedScopes []string                       `json:"granted_scopes"`
-	Identity      SlackIdentity                  `json:"identity"`
-	Meta          ResponseMeta                   `json:"meta,omitempty"`
-	MissingScopes []string                       `json:"missing_scopes"`
-	TokenType     SlackValidateResponseTokenType `json:"token_type"`
+	APIVersion         string                         `json:"api_version"`
+	GrantedScopes      []string                       `json:"granted_scopes"`
+	Identity           SlackIdentity                  `json:"identity"`
+	Meta               ResponseMeta                   `json:"meta,omitempty"`
+	MissingScopes      []string                       `json:"missing_scopes"`
+	SuggestedRecipient *SlackRecipient                `json:"suggested_recipient"`
+	TokenType          SlackValidateResponseTokenType `json:"token_type"`
 }
 
 // SlackValidateResponseTokenType defines model for SlackValidateResponse.TokenType.
@@ -5042,6 +5140,24 @@ type GetRunLogContentParams struct {
 	Limit  Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// ResolveSlackRecipientParams defines parameters for ResolveSlackRecipient.
+type ResolveSlackRecipientParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient ResolveSlackRecipientParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// ResolveSlackRecipientParamsXAgenticoClient defines parameters for ResolveSlackRecipient.
+type ResolveSlackRecipientParamsXAgenticoClient string
+
+// SendSlackTestMessageParams defines parameters for SendSlackTestMessage.
+type SendSlackTestMessageParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient SendSlackTestMessageParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// SendSlackTestMessageParamsXAgenticoClient defines parameters for SendSlackTestMessage.
+type SendSlackTestMessageParamsXAgenticoClient string
+
 // ValidateSlackParams defines parameters for ValidateSlack.
 type ValidateSlackParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -5364,6 +5480,12 @@ type SaveReviewDraftJSONRequestBody = ReviewDraftUpdateRequest
 
 // ValidateReviewDraftJSONRequestBody defines body for ValidateReviewDraft for application/json ContentType.
 type ValidateReviewDraftJSONRequestBody = ReviewDraftValidationRequest
+
+// ResolveSlackRecipientJSONRequestBody defines body for ResolveSlackRecipient for application/json ContentType.
+type ResolveSlackRecipientJSONRequestBody = SlackRecipientResolveRequest
+
+// SendSlackTestMessageJSONRequestBody defines body for SendSlackTestMessage for application/json ContentType.
+type SendSlackTestMessageJSONRequestBody = SlackTestMessageRequest
 
 // ValidateSlackJSONRequestBody defines body for ValidateSlack for application/json ContentType.
 type ValidateSlackJSONRequestBody = SlackValidateRequest

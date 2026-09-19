@@ -17,8 +17,10 @@ limitations under the License.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   CanonicalError,
+  SlackRecipient,
   SlackSettingsDraft,
   SlackSettingsSnapshot,
+  SlackTestMessageResult,
   SlackValidationResult,
 } from '../../../shared/ipc';
 import { ErrorSurface } from '../components/ErrorSurface';
@@ -32,6 +34,54 @@ const TOKEN_ERROR_CODES = new Set([
   'slack_unsupported_token',
   'slack_missing_scopes',
 ]);
+
+type RecipientRowStatus = 'idle' | 'resolving' | 'resolved' | 'error';
+
+interface RecipientRow {
+  key: number;
+  input: string;
+  resolved: SlackRecipient | null;
+  status: RecipientRowStatus;
+  error: CanonicalError | null;
+  message: string | null;
+}
+
+function rowsFromRecipients(recipients: readonly SlackRecipient[], nextKey: () => number) {
+  return recipients.map((recipient): RecipientRow => ({
+    key: nextKey(),
+    input: recipient.typedText,
+    resolved: recipient,
+    status: 'resolved',
+    error: null,
+    message: null,
+  }));
+}
+
+function recipientListsEqual(
+  left: readonly SlackRecipient[],
+  right: readonly SlackRecipient[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((recipient, index) => {
+      const other = right[index];
+      return (
+        other !== undefined &&
+        recipient.typedText === other.typedText &&
+        recipient.kind === other.kind &&
+        recipient.id === other.id &&
+        recipient.displayName === other.displayName
+      );
+    })
+  );
+}
+
+function recipientErrorMessage(row: RecipientRow): string | null {
+  if (row.message !== null) return row.message;
+  if (row.error === null) return null;
+  const hint = row.error.remediation?.hint;
+  return hint === undefined ? row.error.summary : `${row.error.summary} ${hint}`;
+}
 
 function formatCheckedAt(value: string | null | undefined): string | null {
   if (value === null || value === undefined || value === '') return null;
@@ -63,6 +113,9 @@ export function SlackSettingsPane() {
   const checkRevision = useRef(0);
   const checkedCredentialKey = useRef<string | null>(null);
   const tokenInputRef = useRef<HTMLInputElement>(null);
+  const nextRecipientKey = useRef(0);
+  const recipientRevisions = useRef(new Map<number, number>());
+  const recipientInputs = useRef(new Map<number, HTMLInputElement>());
   const [snapshot, setSnapshot] = useState<SlackSettingsSnapshot | null>(null);
   const [loadError, setLoadError] = useState<CanonicalError | null>(null);
   const [enabled, setEnabled] = useState(false);
@@ -77,10 +130,30 @@ export function SlackSettingsPane() {
   const [checkResult, setCheckResult] = useState<SlackValidationResult | null>(null);
   const [checkError, setCheckError] = useState<CanonicalError | null>(null);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const [recipientRows, setRecipientRows] = useState<RecipientRow[]>([]);
+  const [focusRecipientKey, setFocusRecipientKey] = useState<number | null>(null);
+  const [sendingTest, setSendingTest] = useState(false);
+  const [testResult, setTestResult] = useState<SlackTestMessageResult | null>(null);
+  const [testError, setTestError] = useState<CanonicalError | null>(null);
 
   const baselineEnabled = snapshot?.supported === true ? snapshot.enabled : false;
+  const baselineRecipients =
+    snapshot?.supported === true ? snapshot.defaultRecipients : ([] as SlackRecipient[]);
   const tokenSet = snapshot?.supported === true && snapshot.tokenSet && !clearToken;
-  const dirty = enabled !== baselineEnabled || token !== '' || clearToken;
+  const resolvedRecipients = recipientRows.flatMap((row) =>
+    row.input.trim() !== '' && row.resolved !== null ? [row.resolved] : [],
+  );
+  const hasInvalidRecipients = recipientRows.some(
+    (row) => row.input.trim() !== '' && row.resolved === null,
+  );
+  const recipientsDirty = !recipientListsEqual(resolvedRecipients, baselineRecipients);
+  const dirty = enabled !== baselineEnabled || token !== '' || clearToken || recipientsDirty;
+
+  const clearTestFeedback = useCallback(() => {
+    setSendingTest(false);
+    setTestResult(null);
+    setTestError(null);
+  }, []);
 
   const clearCheckFeedback = useCallback(() => {
     checkRevision.current += 1;
@@ -103,10 +176,18 @@ export function SlackSettingsPane() {
       setReplacing(false);
       setClearToken(false);
       setGuideOpen(next.supported ? !next.tokenSet : false);
+      recipientRevisions.current.clear();
+      setRecipientRows(
+        next.supported
+          ? rowsFromRecipients(next.defaultRecipients, () => ++nextRecipientKey.current)
+          : [],
+      );
+      setFocusRecipientKey(null);
+      clearTestFeedback();
       setSaveError(null);
       setLoadError(null);
     },
-    [clearCheckFeedback],
+    [clearCheckFeedback, clearTestFeedback],
   );
 
   const reload = useCallback(
@@ -144,10 +225,13 @@ export function SlackSettingsPane() {
     setClearToken(false);
     setSaving(false);
     setSaveError(null);
+    setRecipientRows([]);
+    recipientRevisions.current.clear();
+    clearTestFeedback();
     clearCheckFeedback();
     setSaved(false);
     if (connection.status === 'ready') reload();
-  }, [clearCheckFeedback, connection.serverKey, connection.status, reload]);
+  }, [clearCheckFeedback, clearTestFeedback, connection.serverKey, connection.status, reload]);
 
   useEffect(() => {
     return window.agentico.onAppEvent((event) => {
@@ -168,6 +252,7 @@ export function SlackSettingsPane() {
 
   const updateToken = (value: string) => {
     clearCheckFeedback();
+    clearTestFeedback();
     setToken(value);
     setSaved(false);
     setSaveError(null);
@@ -178,20 +263,143 @@ export function SlackSettingsPane() {
     if (tokenFieldError !== null) tokenInputRef.current?.focus();
   }, [tokenFieldError]);
 
+  useEffect(() => {
+    if (focusRecipientKey === null) return;
+    const input = recipientInputs.current.get(focusRecipientKey);
+    if (input !== undefined && !input.disabled) input.focus();
+    setFocusRecipientKey(null);
+  }, [focusRecipientKey, recipientRows]);
+
   const draft = useMemo<SlackSettingsDraft>(
     () => ({
       enabled,
       ...(token === '' ? {} : { token }),
       ...(clearToken ? { clearToken: true } : {}),
+      ...(recipientsDirty ? { defaultRecipients: resolvedRecipients } : {}),
     }),
-    [clearToken, enabled, token],
+    [clearToken, enabled, recipientsDirty, resolvedRecipients, token],
   );
+
+  const updateRecipientInput = (key: number, value: string) => {
+    recipientRevisions.current.set(key, (recipientRevisions.current.get(key) ?? 0) + 1);
+    clearTestFeedback();
+    setSaved(false);
+    setSaveError(null);
+    setRecipientRows((rows) =>
+      rows.map((row) =>
+        row.key === key
+          ? {
+              ...row,
+              input: value,
+              resolved: null,
+              status: 'idle',
+              error: null,
+              message: null,
+            }
+          : row,
+      ),
+    );
+  };
+
+  const resolveRecipient = (key: number) => {
+    const row = recipientRows.find((candidate) => candidate.key === key);
+    const input = row?.input.trim() ?? '';
+    if (
+      row === undefined ||
+      input === '' ||
+      row.status === 'resolving' ||
+      (row.resolved !== null && row.resolved.typedText === input) ||
+      (!tokenSet && token === '')
+    ) {
+      return;
+    }
+    const epoch = operationEpoch.current;
+    const revision = (recipientRevisions.current.get(key) ?? 0) + 1;
+    recipientRevisions.current.set(key, revision);
+    setRecipientRows((rows) =>
+      rows.map((candidate) =>
+        candidate.key === key
+          ? {
+              ...candidate,
+              input,
+              resolved: null,
+              status: 'resolving',
+              error: null,
+              message: null,
+            }
+          : candidate,
+      ),
+    );
+    void window.agentico
+      .resolveSlackRecipient({ input, ...(token === '' ? {} : { token }) })
+      .then((recipient) => {
+        if (epoch !== operationEpoch.current || recipientRevisions.current.get(key) !== revision) {
+          return;
+        }
+        setRecipientRows((rows) => {
+          const duplicate = rows.some(
+            (candidate) =>
+              candidate.key !== key &&
+              candidate.resolved?.kind === recipient.kind &&
+              candidate.resolved.id === recipient.id,
+          );
+          return rows.map((candidate) =>
+            candidate.key === key
+              ? {
+                  ...candidate,
+                  resolved: duplicate ? null : recipient,
+                  status: duplicate ? 'error' : 'resolved',
+                  error: null,
+                  message: duplicate ? 'Already in the list' : null,
+                }
+              : candidate,
+          );
+        });
+      })
+      .catch((error: unknown) => {
+        if (epoch !== operationEpoch.current || recipientRevisions.current.get(key) !== revision) {
+          return;
+        }
+        setRecipientRows((rows) =>
+          rows.map((candidate) =>
+            candidate.key === key
+              ? {
+                  ...candidate,
+                  resolved: null,
+                  status: 'error',
+                  error: parseIpcError(error),
+                  message: null,
+                }
+              : candidate,
+          ),
+        );
+      });
+  };
+
+  const addRecipient = () => {
+    const key = ++nextRecipientKey.current;
+    recipientRevisions.current.set(key, 0);
+    setRecipientRows((rows) => [
+      ...rows,
+      { key, input: '', resolved: null, status: 'idle', error: null, message: null },
+    ]);
+    setFocusRecipientKey(key);
+  };
+
+  const removeRecipient = (key: number) => {
+    recipientRevisions.current.delete(key);
+    clearTestFeedback();
+    setSaved(false);
+    setSaveError(null);
+    setRecipientRows((rows) => rows.filter((row) => row.key !== key));
+  };
 
   const save = () => {
     const epoch = operationEpoch.current;
     setSaving(true);
     setSaved(false);
     setSaveError(null);
+    clearTestFeedback();
     void window.agentico
       .updateSlackSettings(draft)
       .then((next) => {
@@ -221,7 +429,7 @@ export function SlackSettingsPane() {
       .then((result) => {
         if (epoch !== operationEpoch.current || revision !== checkRevision.current) return;
         setCheckResult(result);
-        if (checksStoredToken) reload(revision, true);
+        if (checksStoredToken && !dirty) reload(revision, true);
       })
       .catch((error: unknown) => {
         if (epoch === operationEpoch.current && revision === checkRevision.current) {
@@ -232,6 +440,24 @@ export function SlackSettingsPane() {
         if (epoch === operationEpoch.current && revision === checkRevision.current) {
           setChecking(false);
         }
+      });
+  };
+
+  const sendTestMessage = () => {
+    const epoch = operationEpoch.current;
+    setSendingTest(true);
+    setTestResult(null);
+    setTestError(null);
+    void window.agentico
+      .sendSlackTestMessage({ recipients: resolvedRecipients })
+      .then((result) => {
+        if (epoch === operationEpoch.current) setTestResult(result);
+      })
+      .catch((error: unknown) => {
+        if (epoch === operationEpoch.current) setTestError(parseIpcError(error));
+      })
+      .finally(() => {
+        if (epoch === operationEpoch.current) setSendingTest(false);
       });
   };
 
@@ -251,6 +477,21 @@ export function SlackSettingsPane() {
       </section>
     );
   }
+
+  const canResolveRecipients = token !== '' || tokenSet;
+  const testDisabledHint =
+    !snapshot.tokenSet || clearToken
+      ? clearToken
+        ? 'Save or undo the pending token removal before sending.'
+        : 'Save a Slack token before sending a test message.'
+      : token !== ''
+        ? 'Save or discard the replacement token before sending.'
+        : resolvedRecipients.length === 0
+          ? 'Add and resolve at least one recipient before sending.'
+          : hasInvalidRecipients
+            ? 'Resolve or remove every recipient before sending.'
+            : null;
+  const canSendTest = testDisabledHint === null && !sendingTest;
 
   return (
     <section className="settings-panel__section slack-settings" aria-label="Slack">
@@ -401,6 +642,89 @@ export function SlackSettingsPane() {
           </div>
         )}
 
+        <section className="slack-settings__recipients" aria-labelledby="slack-recipients-title">
+          <div className="slack-settings__subsection-head">
+            <div>
+              <h3 id="slack-recipients-title">Notify by default</h3>
+              <p>
+                These people and channels receive every feature&apos;s updates from this server.
+              </p>
+            </div>
+            <button type="button" className="setup-wizard__action" onClick={addRecipient}>
+              Add recipient
+            </button>
+          </div>
+          <div className="slack-settings__recipient-list">
+            {recipientRows.map((row, index) => {
+              const rowNumber = index + 1;
+              const inputId = `slack-recipient-${row.key}`;
+              const errorId = `${inputId}-error`;
+              const errorMessage = recipientErrorMessage(row);
+              const isOwner =
+                row.resolved?.kind === 'user' &&
+                snapshot.tokenType === 'user' &&
+                snapshot.identity?.userId === row.resolved.id;
+              return (
+                <div className="slack-settings__recipient-row" key={row.key}>
+                  <div className="slack-settings__recipient-field">
+                    <label className="sr-only" htmlFor={inputId}>
+                      Recipient {rowNumber}
+                    </label>
+                    <input
+                      ref={(element) => {
+                        if (element === null) recipientInputs.current.delete(row.key);
+                        else recipientInputs.current.set(row.key, element);
+                      }}
+                      id={inputId}
+                      value={row.input}
+                      placeholder="Email, @handle, #channel, or Slack ID"
+                      disabled={!canResolveRecipients}
+                      aria-invalid={fieldAriaInvalid(errorMessage !== null)}
+                      aria-describedby={fieldAriaDescribedBy(errorId, errorMessage !== null)}
+                      onChange={(event) => updateRecipientInput(row.key, event.currentTarget.value)}
+                      onBlur={() => resolveRecipient(row.key)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          resolveRecipient(row.key);
+                        }
+                      }}
+                    />
+                    {row.status === 'resolving' ? (
+                      <span className="slack-settings__recipient-status" role="status">
+                        Resolving...
+                      </span>
+                    ) : row.resolved !== null ? (
+                      <span
+                        className="slack-settings__recipient-status slack-settings__recipient-status--resolved"
+                        role="status"
+                      >
+                        <span aria-hidden="true">✓</span>
+                        {row.resolved.displayName}
+                        {isOwner ? <span className="slack-settings__you-pill">you</span> : null}
+                      </span>
+                    ) : null}
+                    <FieldError id={errorId} message={errorMessage} />
+                  </div>
+                  <button
+                    type="button"
+                    className="settings-panel__root-btn"
+                    aria-label={`Remove recipient ${rowNumber}`}
+                    onClick={() => removeRecipient(row.key)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          {!canResolveRecipients && recipientRows.length > 0 ? (
+            <p className="slack-settings__hint" role="status">
+              Add a Slack token before resolving recipients.
+            </p>
+          ) : null}
+        </section>
+
         <label className="settings-panel__toggle">
           <input
             type="checkbox"
@@ -427,10 +751,15 @@ export function SlackSettingsPane() {
           {checking ? 'Checking...' : 'Check connection'}
         </button>
         {checkResult ? (
-          <p role="status">
-            Connected to {checkResult.identity.teamName} as {checkResult.identity.displayName} (
-            {checkResult.tokenType}); {checkResult.grantedScopes.length} scopes granted.
-          </p>
+          <>
+            <p role="status">
+              Connected to {checkResult.identity.teamName} as {checkResult.identity.displayName} (
+              {checkResult.tokenType}); {checkResult.grantedScopes.length} scopes granted.
+            </p>
+            {checkResult.suggestedRecipient !== null && resolvedRecipients.length === 0 ? (
+              <p role="status">You will be notified by default.</p>
+            ) : null}
+          </>
         ) : null}
         {checkError ? <ErrorSurface error={checkError} variant="compact" /> : null}
       </div>
@@ -442,11 +771,13 @@ export function SlackSettingsPane() {
           <span className="config-editor__status" role="status">
             {saving
               ? 'Saving...'
-              : dirty
-                ? 'Unsaved changes'
-                : saved
-                  ? 'Saved.'
-                  : 'Changes apply to this server.'}
+              : hasInvalidRecipients
+                ? 'Resolve or remove every recipient before saving.'
+                : dirty
+                  ? 'Unsaved changes'
+                  : saved
+                    ? 'Saved.'
+                    : 'Changes apply to this server.'}
           </span>
         )}
         <div className="config-editor__actions">
@@ -461,13 +792,53 @@ export function SlackSettingsPane() {
           <button
             type="button"
             className="config-editor__btn config-editor__btn--primary"
-            disabled={!dirty || saving || (!snapshot.tokenSet && token === '')}
+            disabled={
+              !dirty || saving || hasInvalidRecipients || (!snapshot.tokenSet && token === '')
+            }
             onClick={save}
           >
             Save changes
           </button>
         </div>
       </footer>
+
+      <section className="slack-settings__test" aria-labelledby="slack-test-title">
+        <div className="slack-settings__subsection-head">
+          <div>
+            <h3 id="slack-test-title">Test delivery</h3>
+            <p>Send one test message to every resolved recipient above.</p>
+          </div>
+          <button
+            type="button"
+            className="setup-wizard__action"
+            disabled={!canSendTest}
+            onClick={sendTestMessage}
+          >
+            {sendingTest ? 'Sending...' : 'Send test message'}
+          </button>
+        </div>
+        {testDisabledHint !== null ? (
+          <p className="slack-settings__hint">{testDisabledHint}</p>
+        ) : null}
+        {testError ? <ErrorSurface error={testError} variant="compact" /> : null}
+        {testResult ? (
+          <ul className="slack-settings__test-results" aria-label="Test message results">
+            {testResult.results.map((result) => (
+              <li key={`${result.recipient.kind}:${result.recipient.id}`}>
+                <strong>{result.recipient.displayName}</strong>
+                {result.delivered ? (
+                  <span className="slack-settings__test-sent">
+                    <span aria-hidden="true">✓</span>
+                    Sent
+                  </span>
+                ) : result.error !== null ? (
+                  <ErrorSurface error={result.error} variant="compact" />
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
     </section>
   );
 }

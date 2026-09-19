@@ -743,6 +743,49 @@ paths:
         "502":
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/v1/integrations/slack/recipients/resolve:
+    post:
+      operationId: resolveSlackRecipient
+      summary: Resolve a Slack notification recipient.
+      description: >-
+        Resolves one person or channel using an optional write-only draft token,
+        or the stored token when token is omitted. The result is not persisted.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/SlackRecipientResolveRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/SlackRecipientResolveResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/integrations/slack/test-message:
+    post:
+      operationId: sendSlackTestMessage
+      summary: Send a Slack test message.
+      description: >-
+        Sends a test message with the stored token to the supplied resolved
+        recipients, or to the stored defaults when recipients are omitted.
+        Destination failures are returned per recipient.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/SlackTestMessageRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/SlackTestMessageResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/catalog/models:
     get:
       operationId: listModels
@@ -1828,6 +1871,18 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/SlackValidateRequest"
+    SlackRecipientResolveRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SlackRecipientResolveRequest"
+    SlackTestMessageRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SlackTestMessageRequest"
     ProviderModelRefreshRequest:
       required: true
       content:
@@ -1885,6 +1940,18 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/SlackValidateResponse"
+    SlackRecipientResolveResponse:
+      description: Resolved Slack recipient.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SlackRecipientResolveResponse"
+    SlackTestMessageResponse:
+      description: Per-recipient Slack test-message results.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SlackTestMessageResponse"
     ModelCatalogResponse:
       description: Model catalog.
       content:
@@ -3696,6 +3763,20 @@ components:
           type: string
         bot_id:
           type: string
+    SlackRecipient:
+      type: object
+      additionalProperties: false
+      required: [typed_text, kind, id, display_name]
+      properties:
+        typed_text:
+          type: string
+        kind:
+          type: string
+          enum: [user, channel]
+        id:
+          type: string
+        display_name:
+          type: string
     SlackStatus:
       type: object
       additionalProperties: false
@@ -3721,6 +3802,7 @@ components:
           token_hint,
           granted_scopes,
           missing_scopes,
+          default_recipients,
           status,
           manifest,
         ]
@@ -3746,6 +3828,10 @@ components:
           type: array
           items:
             type: string
+        default_recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlackRecipient"
         status:
           $ref: "#/components/schemas/SlackStatus"
         manifest:
@@ -3763,6 +3849,11 @@ components:
           x-go-type-skip-optional-pointer: false
         clear_token:
           type: boolean
+          x-go-type-skip-optional-pointer: false
+        default_recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlackRecipient"
           x-go-type-skip-optional-pointer: false
     RuntimeConfigMutation:
       type: object
@@ -3787,11 +3878,31 @@ components:
           type: string
           description: Optional write-only draft token; omitted to validate the stored token.
           x-go-type-skip-optional-pointer: false
+    SlackRecipientResolveRequest:
+      type: object
+      additionalProperties: false
+      required: [input]
+      properties:
+        input:
+          type: string
+        token:
+          type: string
+          description: Optional write-only draft token; omitted to use the stored token.
+          x-go-type-skip-optional-pointer: false
+    SlackTestMessageRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlackRecipient"
+          x-go-type-skip-optional-pointer: false
     SlackValidateResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
         - type: object
-          required: [token_type, identity, granted_scopes, missing_scopes]
+          required: [token_type, identity, granted_scopes, missing_scopes, suggested_recipient]
           properties:
             token_type:
               type: string
@@ -3806,6 +3917,41 @@ components:
               type: array
               items:
                 type: string
+            suggested_recipient:
+              allOf:
+                - $ref: "#/components/schemas/SlackRecipient"
+              nullable: true
+              x-go-type-skip-optional-pointer: false
+    SlackRecipientResolveResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [recipient]
+          properties:
+            recipient:
+              $ref: "#/components/schemas/SlackRecipient"
+    SlackDeliveryResult:
+      type: object
+      additionalProperties: false
+      required: [recipient, delivered]
+      properties:
+        recipient:
+          $ref: "#/components/schemas/SlackRecipient"
+        delivered:
+          type: boolean
+        error:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+    SlackTestMessageResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [results]
+          properties:
+            results:
+              type: array
+              items:
+                $ref: "#/components/schemas/SlackDeliveryResult"
     RuntimeConfigResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

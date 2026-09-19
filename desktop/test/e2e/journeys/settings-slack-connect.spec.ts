@@ -75,7 +75,7 @@ test('Slack settings save a valid token through the packaged app', async ({}, te
     expect(await settings.locator('body').innerText()).not.toContain(token);
 
     expect(fakeSlack.requests()).toEqual([
-      { method: 'POST', path: '/api/auth.test', bearerPresent: true },
+      { method: 'POST', path: '/api/auth.test', bearerPresent: true, fields: {} },
     ]);
     expect(fs.statSync(world.configPath).mode & 0o777).toBe(0o600);
     const config = fs.readFileSync(world.configPath, 'utf8');

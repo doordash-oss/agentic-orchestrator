@@ -486,6 +486,8 @@ export interface AgenticoMock {
     getSlackSettings: ReturnType<typeof vi.fn>;
     updateSlackSettings: ReturnType<typeof vi.fn>;
     validateSlackSettings: ReturnType<typeof vi.fn>;
+    resolveSlackRecipient: ReturnType<typeof vi.fn>;
+    sendSlackTestMessage: ReturnType<typeof vi.fn>;
     getDiagnostics: ReturnType<typeof vi.fn>;
     revealDiagnostics: ReturnType<typeof vi.fn>;
     clearDiagnostics: ReturnType<typeof vi.fn>;
@@ -862,6 +864,10 @@ export function installAgenticoMock(
         ? Promise.reject(new Error('validateSlackSettings not mocked'))
         : Promise.resolve(overrides.slackValidation),
     ),
+    resolveSlackRecipient: vi.fn(() =>
+      Promise.reject(new Error('resolveSlackRecipient not mocked')),
+    ),
+    sendSlackTestMessage: vi.fn(() => Promise.reject(new Error('sendSlackTestMessage not mocked'))),
     restartToUpdate: vi.fn(() =>
       Promise.resolve({
         ...updates,

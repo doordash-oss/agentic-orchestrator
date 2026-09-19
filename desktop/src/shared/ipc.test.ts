@@ -767,11 +767,42 @@ describe('Slack IPC schemas', () => {
       },
       grantedScopes: ['chat:write'],
       missingScopes: [],
+      suggestedRecipient: {
+        typedText: '@ada',
+        kind: 'user',
+        id: 'U12345678',
+        displayName: 'Ada',
+      },
     };
     expect(SlackValidationResultSchema.parse(result)).toStrictEqual(result);
     expect(SlackValidationResultSchema.safeParse({ ...result, token: 'xoxp-leak' }).success).toBe(
       false,
     );
+  });
+
+  it('accepts bounded Slack recipients and rejects duplicate draft destinations', () => {
+    const recipients = [
+      {
+        typedText: '@ada',
+        kind: 'user',
+        id: 'U12345678',
+        displayName: 'Ada',
+      },
+      {
+        typedText: '#eng',
+        kind: 'channel',
+        id: 'C12345678',
+        displayName: '#eng',
+      },
+    ];
+    expect(
+      SlackSettingsUpdateRequestSchema.safeParse({ defaultRecipients: recipients }).success,
+    ).toBe(true);
+    expect(
+      SlackSettingsUpdateRequestSchema.safeParse({
+        defaultRecipients: [...recipients, { ...recipients[0], typedText: 'ada@example.com' }],
+      }).success,
+    ).toBe(false);
   });
 });
 

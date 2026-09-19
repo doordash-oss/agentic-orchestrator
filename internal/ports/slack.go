@@ -35,9 +35,33 @@ type SlackIdentity struct {
 	TeamID       string `json:"team_id"`
 	TeamName     string `json:"team_name"`
 	UserID       string `json:"user_id"`
+	UserName     string `json:"user_name"`
 	DisplayName  string `json:"display_name"`
 	WorkspaceURL string `json:"workspace_url,omitempty"`
 	BotID        string `json:"bot_id,omitempty"`
+}
+
+// SlackRecipientKind identifies a resolved Slack destination.
+type SlackRecipientKind string
+
+const (
+	SlackRecipientUser    SlackRecipientKind = "user"
+	SlackRecipientChannel SlackRecipientKind = "channel"
+)
+
+// SlackRecipient is a user-entered destination resolved to a Slack ID.
+type SlackRecipient struct {
+	TypedText   string             `json:"typed_text"`
+	Kind        SlackRecipientKind `json:"kind"`
+	ID          string             `json:"id"`
+	DisplayName string             `json:"display_name"`
+}
+
+// SlackDeliveryResult reports one recipient's test-message outcome.
+type SlackDeliveryResult struct {
+	Recipient SlackRecipient `json:"recipient"`
+	Delivered bool           `json:"delivered"`
+	Error     *errcat.Error  `json:"error,omitempty"`
 }
 
 // SlackValidation is the credential metadata established by auth.test.
@@ -70,7 +94,7 @@ type SlackStatusSnapshot struct {
 	LastChecked *time.Time
 }
 
-// SlackValidationError carries the canonical error returned by validation.
+// SlackValidationError carries a canonical Slack operation error.
 type SlackValidationError struct {
 	Canonical errcat.Error
 }
@@ -84,6 +108,13 @@ type SlackService interface {
 	Manifest() string
 	RequiredScopes() []string
 	Validate(ctx context.Context, token string) (SlackValidation, error)
+	ResolveRecipient(ctx context.Context, token, text string) (SlackRecipient, error)
+	SendTestMessage(
+		ctx context.Context,
+		token string,
+		serverName string,
+		recipients []SlackRecipient,
+	) ([]SlackDeliveryResult, error)
 	Status(input SlackStatusInput) SlackStatusSnapshot
 	RecordValidationSuccess(checkedAt time.Time)
 	RecordValidationFailure(checkedAt time.Time, canonical errcat.Error)

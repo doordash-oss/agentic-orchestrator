@@ -41,6 +41,7 @@ const (
 // APIError is a successful HTTP response whose Slack envelope was not ok.
 type APIError struct {
 	SlackError string
+	Needed     string
 }
 
 func (e *APIError) Error() string {
@@ -78,6 +79,37 @@ type AuthTestResponse struct {
 	WorkspaceURL  string
 	BotID         string
 	GrantedScopes []string
+}
+
+// User is the Slack member data needed for recipient resolution.
+type User struct {
+	ID          string
+	Name        string
+	RealName    string
+	DisplayName string
+	Deleted     bool
+	IsBot       bool
+}
+
+// UsersPage is one cursor page from users.list.
+type UsersPage struct {
+	Users      []User
+	NextCursor string
+}
+
+// Conversation is the Slack channel data needed for recipient resolution.
+type Conversation struct {
+	ID         string
+	Name       string
+	IsPrivate  bool
+	IsMember   bool
+	IsArchived bool
+}
+
+// ConversationsPage is one cursor page from conversations.list.
+type ConversationsPage struct {
+	Conversations []Conversation
+	NextCursor    string
 }
 
 // ClientOption customizes a Slack client.
@@ -158,6 +190,7 @@ func (c *Client) AuthTest(ctx context.Context) (AuthTestResponse, error) {
 	var envelope struct {
 		OK     bool   `json:"ok"`
 		Error  string `json:"error"`
+		Needed string `json:"needed"`
 		Team   string `json:"team"`
 		TeamID string `json:"team_id"`
 		User   string `json:"user"`
@@ -165,12 +198,12 @@ func (c *Client) AuthTest(ctx context.Context) (AuthTestResponse, error) {
 		URL    string `json:"url"`
 		BotID  string `json:"bot_id"`
 	}
-	scopes, err := c.call(ctx, "auth.test", &envelope)
+	scopes, err := c.call(ctx, "auth.test", nil, &envelope)
 	if err != nil {
 		return AuthTestResponse{}, err
 	}
 	if !envelope.OK {
-		return AuthTestResponse{}, &APIError{SlackError: scrub(c.token, envelope.Error)}
+		return AuthTestResponse{}, c.apiError(envelope.Error, envelope.Needed)
 	}
 	return AuthTestResponse{
 		TeamID:        envelope.TeamID,
@@ -183,16 +216,236 @@ func (c *Client) AuthTest(ctx context.Context) (AuthTestResponse, error) {
 	}, nil
 }
 
-func (c *Client) call(ctx context.Context, method string, target any) ([]string, error) {
+// LookupUserByEmail calls users.lookupByEmail.
+func (c *Client) LookupUserByEmail(ctx context.Context, email string) (User, error) {
+	var envelope struct {
+		OK     bool    `json:"ok"`
+		Error  string  `json:"error"`
+		Needed string  `json:"needed"`
+		User   apiUser `json:"user"`
+	}
+	fields := url.Values{"email": {email}}
+	if _, err := c.call(ctx, "users.lookupByEmail", fields, &envelope); err != nil {
+		return User{}, err
+	}
+	if !envelope.OK {
+		return User{}, c.apiError(envelope.Error, envelope.Needed)
+	}
+	return envelope.User.user(), nil
+}
+
+// UserInfo calls users.info.
+func (c *Client) UserInfo(ctx context.Context, userID string) (User, error) {
+	var envelope struct {
+		OK     bool    `json:"ok"`
+		Error  string  `json:"error"`
+		Needed string  `json:"needed"`
+		User   apiUser `json:"user"`
+	}
+	fields := url.Values{"user": {userID}}
+	if _, err := c.call(ctx, "users.info", fields, &envelope); err != nil {
+		return User{}, err
+	}
+	if !envelope.OK {
+		return User{}, c.apiError(envelope.Error, envelope.Needed)
+	}
+	return envelope.User.user(), nil
+}
+
+// UsersList calls one cursor page of users.list.
+func (c *Client) UsersList(ctx context.Context, cursor string, limit int) (UsersPage, error) {
+	var envelope struct {
+		OK       bool      `json:"ok"`
+		Error    string    `json:"error"`
+		Needed   string    `json:"needed"`
+		Members  []apiUser `json:"members"`
+		Metadata struct {
+			NextCursor string `json:"next_cursor"`
+		} `json:"response_metadata"`
+	}
+	fields := url.Values{"limit": {strconv.Itoa(limit)}}
+	if cursor != "" {
+		fields.Set("cursor", cursor)
+	}
+	if _, err := c.call(ctx, "users.list", fields, &envelope); err != nil {
+		return UsersPage{}, err
+	}
+	if !envelope.OK {
+		return UsersPage{}, c.apiError(envelope.Error, envelope.Needed)
+	}
+	page := UsersPage{
+		Users:      make([]User, len(envelope.Members)),
+		NextCursor: strings.TrimSpace(envelope.Metadata.NextCursor),
+	}
+	for index, member := range envelope.Members {
+		page.Users[index] = member.user()
+	}
+	return page, nil
+}
+
+// ConversationsList calls one cursor page of conversations.list.
+func (c *Client) ConversationsList(
+	ctx context.Context,
+	cursor string,
+	limit int,
+) (ConversationsPage, error) {
+	var envelope struct {
+		OK       bool              `json:"ok"`
+		Error    string            `json:"error"`
+		Needed   string            `json:"needed"`
+		Channels []apiConversation `json:"channels"`
+		Metadata struct {
+			NextCursor string `json:"next_cursor"`
+		} `json:"response_metadata"`
+	}
+	fields := url.Values{
+		"types":            {"public_channel,private_channel"},
+		"exclude_archived": {"false"},
+		"limit":            {strconv.Itoa(limit)},
+	}
+	if cursor != "" {
+		fields.Set("cursor", cursor)
+	}
+	if _, err := c.call(ctx, "conversations.list", fields, &envelope); err != nil {
+		return ConversationsPage{}, err
+	}
+	if !envelope.OK {
+		return ConversationsPage{}, c.apiError(envelope.Error, envelope.Needed)
+	}
+	page := ConversationsPage{
+		Conversations: make([]Conversation, len(envelope.Channels)),
+		NextCursor:    strings.TrimSpace(envelope.Metadata.NextCursor),
+	}
+	for index, channel := range envelope.Channels {
+		page.Conversations[index] = channel.conversation()
+	}
+	return page, nil
+}
+
+// ConversationInfo calls conversations.info.
+func (c *Client) ConversationInfo(ctx context.Context, channelID string) (Conversation, error) {
+	var envelope struct {
+		OK      bool            `json:"ok"`
+		Error   string          `json:"error"`
+		Needed  string          `json:"needed"`
+		Channel apiConversation `json:"channel"`
+	}
+	fields := url.Values{"channel": {channelID}}
+	if _, err := c.call(ctx, "conversations.info", fields, &envelope); err != nil {
+		return Conversation{}, err
+	}
+	if !envelope.OK {
+		return Conversation{}, c.apiError(envelope.Error, envelope.Needed)
+	}
+	return envelope.Channel.conversation(), nil
+}
+
+// OpenConversation opens a direct message and returns its channel ID.
+func (c *Client) OpenConversation(ctx context.Context, userID string) (string, error) {
+	var envelope struct {
+		OK      bool   `json:"ok"`
+		Error   string `json:"error"`
+		Needed  string `json:"needed"`
+		Channel struct {
+			ID string `json:"id"`
+		} `json:"channel"`
+	}
+	fields := url.Values{"users": {userID}}
+	if _, err := c.call(ctx, "conversations.open", fields, &envelope); err != nil {
+		return "", err
+	}
+	if !envelope.OK {
+		return "", c.apiError(envelope.Error, envelope.Needed)
+	}
+	return envelope.Channel.ID, nil
+}
+
+// PostMessage sends a plain-text chat.postMessage request.
+func (c *Client) PostMessage(ctx context.Context, channelID, text string) error {
+	var envelope struct {
+		OK     bool   `json:"ok"`
+		Error  string `json:"error"`
+		Needed string `json:"needed"`
+	}
+	fields := url.Values{
+		"channel": {channelID},
+		"text":    {text},
+	}
+	if _, err := c.call(ctx, "chat.postMessage", fields, &envelope); err != nil {
+		return err
+	}
+	if !envelope.OK {
+		return c.apiError(envelope.Error, envelope.Needed)
+	}
+	return nil
+}
+
+type apiUser struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	RealName string `json:"real_name"`
+	Profile  struct {
+		DisplayName string `json:"display_name"`
+	} `json:"profile"`
+	Deleted bool `json:"deleted"`
+	IsBot   bool `json:"is_bot"`
+}
+
+func (u apiUser) user() User {
+	return User{
+		ID:          u.ID,
+		Name:        u.Name,
+		RealName:    u.RealName,
+		DisplayName: u.Profile.DisplayName,
+		Deleted:     u.Deleted,
+		IsBot:       u.IsBot,
+	}
+}
+
+type apiConversation struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	IsPrivate  bool   `json:"is_private"`
+	IsMember   bool   `json:"is_member"`
+	IsArchived bool   `json:"is_archived"`
+}
+
+func (c apiConversation) conversation() Conversation {
+	return Conversation{
+		ID:         c.ID,
+		Name:       c.Name,
+		IsPrivate:  c.IsPrivate,
+		IsMember:   c.IsMember,
+		IsArchived: c.IsArchived,
+	}
+}
+
+func (c *Client) apiError(slackError, needed string) *APIError {
+	return &APIError{
+		SlackError: scrub(c.token, slackError),
+		Needed:     scrub(c.token, needed),
+	}
+}
+
+func (c *Client) call(
+	ctx context.Context,
+	method string,
+	fields url.Values,
+	target any,
+) ([]string, error) {
 	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	endpoint := c.baseURL.ResolveReference(&url.URL{Path: method})
+	encodedFields := ""
+	if fields != nil {
+		encodedFields = fields.Encode()
+	}
 	req, err := http.NewRequestWithContext(
 		requestCtx,
 		http.MethodPost,
 		endpoint.String(),
-		strings.NewReader(""),
+		strings.NewReader(encodedFields),
 	)
 	if err != nil {
 		return nil, c.transportError(0, 0, err)

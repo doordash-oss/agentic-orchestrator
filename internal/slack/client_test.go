@@ -211,3 +211,155 @@ func TestClientEnvironmentBaseURL(t *testing.T) {
 		t.Fatalf("AuthTest() with %s error = %v", EnvSlackAPIBase, err)
 	}
 }
+
+func TestClientUserMethodsSendFormFieldsAndDecodeMembers(t *testing.T) {
+	server := testsupport.New(t)
+	server.Script("users.lookupByEmail", testsupport.Response{Body: map[string]any{
+		"ok": true,
+		"user": map[string]any{
+			"id": "U12345678", "name": "alex", "real_name": "Alex Example",
+			"profile": map[string]any{"display_name": "Alex E."},
+		},
+	}})
+	server.Script("users.info", testsupport.Response{Body: map[string]any{
+		"ok": true,
+		"user": map[string]any{
+			"id": "U87654321", "name": "sam", "deleted": true, "is_bot": true,
+			"profile": map[string]any{"display_name": "Sam"},
+		},
+	}})
+	server.Script("users.list",
+		testsupport.Response{Body: map[string]any{
+			"ok": true,
+			"members": []any{
+				map[string]any{"id": "U11111111", "name": "first"},
+			},
+			"response_metadata": map[string]any{"next_cursor": "next-users"},
+		}},
+		testsupport.Response{Body: map[string]any{
+			"ok": true,
+			"members": []any{
+				map[string]any{"id": "U22222222", "name": "second"},
+			},
+			"response_metadata": map[string]any{"next_cursor": ""},
+		}},
+	)
+	client, err := NewClient("xoxb-secret-1234", WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	emailUser, err := client.LookupUserByEmail(t.Context(), "alex@example.com")
+	if err != nil {
+		t.Fatalf("LookupUserByEmail() error = %v", err)
+	}
+	if emailUser.ID != "U12345678" || emailUser.Name != "alex" ||
+		emailUser.RealName != "Alex Example" || emailUser.DisplayName != "Alex E." {
+		t.Fatalf("LookupUserByEmail() = %#v; want decoded member", emailUser)
+	}
+	infoUser, err := client.UserInfo(t.Context(), "U87654321")
+	if err != nil {
+		t.Fatalf("UserInfo() error = %v", err)
+	}
+	if !infoUser.Deleted || !infoUser.IsBot {
+		t.Fatalf("UserInfo() = %#v; want deleted bot flags", infoUser)
+	}
+	firstPage, err := client.UsersList(t.Context(), "", 200)
+	if err != nil {
+		t.Fatalf("UsersList(first) error = %v", err)
+	}
+	secondPage, err := client.UsersList(t.Context(), firstPage.NextCursor, 200)
+	if err != nil {
+		t.Fatalf("UsersList(second) error = %v", err)
+	}
+	if firstPage.NextCursor != "next-users" || len(secondPage.Users) != 1 ||
+		secondPage.Users[0].ID != "U22222222" {
+		t.Fatalf("UsersList pages = %#v / %#v; want cursor walk", firstPage, secondPage)
+	}
+
+	if got := server.Requests("users.lookupByEmail")[0].Fields["email"]; got != "alex@example.com" {
+		t.Fatalf("users.lookupByEmail email = %#v; want alex@example.com", got)
+	}
+	if got := server.Requests("users.info")[0].Fields["user"]; got != "U87654321" {
+		t.Fatalf("users.info user = %#v; want U87654321", got)
+	}
+	listRequests := server.Requests("users.list")
+	if len(listRequests) != 2 || listRequests[0].Fields["limit"] != "200" ||
+		listRequests[1].Fields["cursor"] != "next-users" {
+		t.Fatalf("users.list requests = %#v; want limit and second-page cursor", listRequests)
+	}
+}
+
+func TestClientConversationAndMessageMethodsSendFormFields(t *testing.T) {
+	server := testsupport.New(t)
+	server.Script("conversations.list", testsupport.Response{Body: map[string]any{
+		"ok": true,
+		"channels": []any{
+			map[string]any{
+				"id": "C12345678", "name": "eng", "is_private": true,
+				"is_member": true, "is_archived": false,
+			},
+		},
+		"response_metadata": map[string]any{"next_cursor": "next-channels"},
+	}})
+	server.Script("conversations.info", testsupport.Response{Body: map[string]any{
+		"ok": true,
+		"channel": map[string]any{
+			"id": "G87654321", "name": "private-ops", "is_private": true,
+			"is_member": false, "is_archived": true,
+		},
+	}})
+	server.Script("conversations.open", testsupport.Response{Body: map[string]any{
+		"ok": true, "channel": map[string]any{"id": "D12345678"},
+	}})
+	server.Script("chat.postMessage", testsupport.Response{Body: map[string]any{
+		"ok": true, "channel": "D12345678", "ts": "1.0",
+	}})
+	client, err := NewClient("xoxb-secret-1234", WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := client.ConversationsList(t.Context(), "", 200)
+	if err != nil {
+		t.Fatalf("ConversationsList() error = %v", err)
+	}
+	if len(page.Conversations) != 1 || !page.Conversations[0].IsPrivate ||
+		!page.Conversations[0].IsMember || page.NextCursor != "next-channels" {
+		t.Fatalf("ConversationsList() = %#v; want decoded conversation page", page)
+	}
+	channel, err := client.ConversationInfo(t.Context(), "G87654321")
+	if err != nil {
+		t.Fatalf("ConversationInfo() error = %v", err)
+	}
+	if channel.ID != "G87654321" || channel.IsMember || !channel.IsArchived {
+		t.Fatalf("ConversationInfo() = %#v; want archived non-member channel", channel)
+	}
+	dmChannel, err := client.OpenConversation(t.Context(), "U12345678")
+	if err != nil {
+		t.Fatalf("OpenConversation() error = %v", err)
+	}
+	if dmChannel != "D12345678" {
+		t.Fatalf("OpenConversation() = %q; want D12345678", dmChannel)
+	}
+	if err := client.PostMessage(t.Context(), dmChannel, "Agentico test"); err != nil {
+		t.Fatalf("PostMessage() error = %v", err)
+	}
+
+	listFields := server.Requests("conversations.list")[0].Fields
+	if listFields["types"] != "public_channel,private_channel" ||
+		listFields["exclude_archived"] != "false" ||
+		listFields["limit"] != "200" {
+		t.Fatalf("conversations.list fields = %#v; want types, archived, and limit", listFields)
+	}
+	if got := server.Requests("conversations.info")[0].Fields["channel"]; got != "G87654321" {
+		t.Fatalf("conversations.info channel = %#v; want G87654321", got)
+	}
+	if got := server.Requests("conversations.open")[0].Fields["users"]; got != "U12345678" {
+		t.Fatalf("conversations.open users = %#v; want U12345678", got)
+	}
+	postFields := server.Requests("chat.postMessage")[0].Fields
+	if postFields["channel"] != "D12345678" || postFields["text"] != "Agentico test" {
+		t.Fatalf("chat.postMessage fields = %#v; want channel and text", postFields)
+	}
+}

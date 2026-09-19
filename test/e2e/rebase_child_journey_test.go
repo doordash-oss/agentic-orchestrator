@@ -546,6 +546,9 @@ func (realJourneyRemoteOps) UpdatePRBody(prURL, body string) error {
 func (realJourneyRemoteOps) UpdatePRBase(prURL, base string) error {
 	return git.UpdatePRBaseBranch(prURL, base)
 }
+func (realJourneyRemoteOps) ReopenPullRequest(repoPath, branch, prURL string) error {
+	return git.ReopenPullRequest(repoPath, branch, prURL)
+}
 
 func (fx *rebaseHarnessJourney) reloadParent() *feature.Feature {
 	fx.t.Helper()
@@ -1583,5 +1586,200 @@ func TestRebaseHarnessGateFailureJourney(t *testing.T) {
 	}
 	if got := journeyStackRefSnapshot(t, fx.repoDir); got != stackRefsBefore {
 		t.Fatalf("parent stack refs changed by the parked integration:\nbefore:\n%s\nafter:\n%s", stackRefsBefore, got)
+	}
+}
+
+// closedRefusalFeatureDetail fetches the feature detail object over REST.
+func closedRefusalFeatureDetail(t *testing.T, baseURL, featureID string) map[string]any {
+	t.Helper()
+	detail, _ := getJourneyJSON(t, baseURL+"/api/v1/features/"+featureID)["feature"].(map[string]any)
+	if detail == nil {
+		t.Fatalf("feature detail for %s missing or malformed", featureID)
+	}
+	return detail
+}
+
+// closedRefusalRepoError returns the catalog-rendered stored error record one
+// repository owns in the feature detail, or nil when the repository carries
+// none.
+func closedRefusalRepoError(t *testing.T, baseURL, featureID, repo string) map[string]any {
+	t.Helper()
+	repos, _ := closedRefusalFeatureDetail(t, baseURL, featureID)["repo_status"].([]any)
+	for _, r := range repos {
+		entry, _ := r.(map[string]any)
+		if entry["name"] == repo {
+			record, _ := entry["error"].(map[string]any)
+			return record
+		}
+	}
+	t.Fatalf("feature detail for %s lists no %s repository status entry", featureID, repo)
+	return nil
+}
+
+// closedRefusalActionEnabled reports whether the feature's action catalog
+// lists one action as enabled; a missing action reads as disabled.
+func closedRefusalActionEnabled(t *testing.T, baseURL, featureID, actionID string) bool {
+	t.Helper()
+	actions, _ := closedRefusalFeatureDetail(t, baseURL, featureID)["actions"].([]any)
+	for _, a := range actions {
+		entry, _ := a.(map[string]any)
+		if entry["id"] == actionID {
+			enabled, _ := entry["enabled"].(bool)
+			return enabled
+		}
+	}
+	return false
+}
+
+// closedRefusalSourceRevision reads the feature's current meta revision, the
+// source-revision guard the resolution actions carry.
+func closedRefusalSourceRevision(t *testing.T, baseURL, featureID string) string {
+	t.Helper()
+	// The stale guard compares against the completion preflight's worktree
+	// fingerprint, not the detail payload hash, so the journey reads the
+	// revision from the same surface the desktop does.
+	out := getJourneyJSON(t, baseURL+"/api/v1/features/"+featureID+"/completion/preflight")
+	if revision, ok := out["source_revision"].(string); ok && revision != "" {
+		return revision
+	}
+	t.Fatalf("completion preflight source revision for %s missing: %+v", featureID, out)
+	return ""
+}
+
+// closedRefusalRepositoryContext returns the single repository context entry
+// of a canonical wire error, failing when the block is absent or ambiguous.
+func closedRefusalRepositoryContext(t *testing.T, errInfo map[string]any) map[string]any {
+	t.Helper()
+	ctxBlock, _ := errInfo["context"].(map[string]any)
+	if ctxBlock == nil {
+		t.Fatalf("canonical error carries no context: %+v", errInfo)
+	}
+	repos, _ := ctxBlock["repositories"].([]any)
+	if len(repos) != 1 {
+		t.Fatalf("canonical error repository context = %+v, want exactly one entry", repos)
+	}
+	entry, _ := repos[0].(map[string]any)
+	if entry == nil {
+		t.Fatalf("canonical error repository context entry malformed: %+v", repos[0])
+	}
+	return entry
+}
+
+// TestRebaseClosedPullRequestRefusalResolvedThroughReopenJourney drives the
+// closed-pull-request refusal variant: layer 2's pull request reads closed on
+// the remote, so the rebase launch is refused over REST with the canonical
+// closed code — whose repository context names the repository, the layer
+// position, the layer title, and the pull request URL — no child is created,
+// and the repository is parked with the stored closed record while the action
+// catalog enables reopen-pull-request. The Reopen action then flips the pull
+// request back to open on the fake, clears the stored record, and records the
+// layer open.
+func TestRebaseClosedPullRequestRefusalResolvedThroughReopenJourney(t *testing.T) {
+	fx := newRebaseHarnessJourney(t, rebaseHarnessOpts{})
+
+	// An external close of layer 2's pull request on the remote.
+	if !fx.pulls.MarkClosed("repo-a", fx.prNum2) {
+		t.Fatalf("marking layer 2 pull request %d closed on the fake", fx.prNum2)
+	}
+
+	// The rebase launch over REST is refused with the canonical closed code.
+	status, payload := postActionStatus(t, fx.srv.URL, fx.parentID, "rebase", `{}`)
+	if status != http.StatusConflict {
+		t.Fatalf("rebase action status = %d, want %d (closed stack pull request); body: %s", status, http.StatusConflict, payload)
+	}
+	var errResp map[string]any
+	if err := json.Unmarshal(payload, &errResp); err != nil {
+		t.Fatalf("decode rebase error body %s: %v", payload, err)
+	}
+	if result, _ := errResp["result"].(string); result == "created" {
+		t.Fatalf("refused rebase response result = %q, want no created result", result)
+	}
+	errInfo, _ := errResp["error"].(map[string]any)
+	if errInfo == nil {
+		t.Fatalf("rebase error body carries no canonical error: %s", payload)
+	}
+	if code, _ := errInfo["code"].(string); code != "publish_stack_pull_request_closed" {
+		t.Fatalf("rebase refusal code = %q, want publish_stack_pull_request_closed", code)
+	}
+	repoCtx := closedRefusalRepositoryContext(t, errInfo)
+	if name, _ := repoCtx["name"].(string); name != "repo-a" {
+		t.Fatalf("refusal repository = %q, want repo-a", name)
+	}
+	if pos, _ := repoCtx["layer_position"].(float64); int(pos) != 2 {
+		t.Fatalf("refusal layer_position = %v, want 2", repoCtx["layer_position"])
+	}
+	if title, _ := repoCtx["layer_title"].(string); title != "Layer two" {
+		t.Fatalf("refusal layer_title = %q, want Layer two", title)
+	}
+	if url, _ := repoCtx["pull_request_url"].(string); url != fx.prURL2 {
+		t.Fatalf("refusal pull_request_url = %q, want %s", url, fx.prURL2)
+	}
+
+	// No child feature was created and the parent has no active child.
+	features, err := fx.store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	for _, f := range features {
+		if f.IsChild() && f.Parent != nil && f.Parent.ParentID == fx.parentID {
+			t.Fatalf("unexpected child %s created for the closed-pull-request parent", f.ID)
+		}
+	}
+	if detail := closedRefusalFeatureDetail(t, fx.srv.URL, fx.parentID); detail["active_child"] != nil {
+		t.Fatalf("parent detail active_child = %+v, want none after the refused launch", detail["active_child"])
+	}
+
+	// The repository is parked: the stored closed record surfaces on repo-a
+	// with the same layer context, and the catalog enables reopen-pull-request.
+	parked := closedRefusalRepoError(t, fx.srv.URL, fx.parentID, "repo-a")
+	if parked == nil {
+		t.Fatal("repo-a stores no closed record after the refused rebase launch")
+	}
+	if code, _ := parked["code"].(string); code != "publish_stack_pull_request_closed" {
+		t.Fatalf("parked repo-a record code = %q, want publish_stack_pull_request_closed", code)
+	}
+	parkedCtx := closedRefusalRepositoryContext(t, parked)
+	if pos, _ := parkedCtx["layer_position"].(float64); int(pos) != 2 {
+		t.Fatalf("parked record layer_position = %v, want 2", parkedCtx["layer_position"])
+	}
+	if url, _ := parkedCtx["pull_request_url"].(string); url != fx.prURL2 {
+		t.Fatalf("parked record pull_request_url = %q, want %s", url, fx.prURL2)
+	}
+	if !closedRefusalActionEnabled(t, fx.srv.URL, fx.parentID, "reopen-pull-request") {
+		t.Fatal("action catalog does not enable reopen-pull-request for the parked repository")
+	}
+
+	// Resolve through Reopen over REST with the current source revision.
+	sourceRevision := closedRefusalSourceRevision(t, fx.srv.URL, fx.parentID)
+	body := fmt.Sprintf(`{"source_revision":%q,"repository":"repo-a","layer":2}`, sourceRevision)
+	reopenStatus, reopenPayload := postActionStatus(t, fx.srv.URL, fx.parentID, "reopen-pull-request", body)
+	if reopenStatus != http.StatusOK {
+		t.Fatalf("reopen-pull-request status = %d, want %d; body: %s", reopenStatus, http.StatusOK, reopenPayload)
+	}
+	var reopenResp map[string]any
+	if err := json.Unmarshal(reopenPayload, &reopenResp); err != nil {
+		t.Fatalf("decode reopen response %s: %v", reopenPayload, err)
+	}
+	if result, _ := reopenResp["result"].(string); result != "reopened" {
+		t.Fatalf("reopen result = %q, want reopened", result)
+	}
+
+	// The closed record is cleared from the repository and the pull request
+	// reads open on the fake; the parent records the layer open with the same
+	// pull request, and the catalog no longer enables reopen.
+	if cleared := closedRefusalRepoError(t, fx.srv.URL, fx.parentID, "repo-a"); cleared != nil {
+		t.Fatalf("repo-a still stores a record after Reopen: %+v", cleared)
+	}
+	pr, ok := fx.pulls.Pull("repo-a", fx.prNum2)
+	if !ok || pr.State != "open" {
+		t.Fatalf("layer 2 pull request after Reopen = %+v, want open", pr)
+	}
+	parent := fx.reloadParent()
+	entry := parent.Stack[1].Repos["repo-a"]
+	if entry.PRState != feature.StackPRStateOpen || entry.PRURL != fx.prURL2 {
+		t.Fatalf("parent layer 2 entry after Reopen = %+v, want open at %s", entry, fx.prURL2)
+	}
+	if closedRefusalActionEnabled(t, fx.srv.URL, fx.parentID, "reopen-pull-request") {
+		t.Fatal("action catalog still enables reopen-pull-request after the resolution")
 	}
 }

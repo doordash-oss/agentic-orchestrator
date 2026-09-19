@@ -17,6 +17,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
@@ -508,6 +510,80 @@ func (t *journeyMutationTarget) PublishFeature(featureID string, req server.Publ
 		return server.PublishFeatureResponse{FeatureID: featureID, Result: "failed"}, err
 	}
 	return server.PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
+}
+
+// journeyRejectStalePreflight mirrors the production source-revision guard:
+// a request carrying a revision that is no longer current is a conflict
+// before any orchestrator work starts.
+func (t *journeyMutationTarget) rejectStalePreflight(featureID, sourceRevision string) error {
+	if sourceRevision == "" {
+		return nil
+	}
+	current, err := t.orch.CompletionPreflightSourceRevision(featureID)
+	if err != nil {
+		return err
+	}
+	if current == sourceRevision {
+		return nil
+	}
+	return &server.ActionConflictError{
+		Err:    orchestrator.ErrStalePreflight,
+		Detail: fmt.Sprintf("stale completion preflight: source revision %q is not current (%q)", sourceRevision, current),
+	}
+}
+
+// journeyPullRequestResolutionConflictError mirrors the production reopen
+// and recreate error mapping: stored-record failures carry the canonical
+// code and repository context on the wire, and the moot-state refusal maps
+// to the generic conflict code.
+func journeyPullRequestResolutionConflictError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if record, ok := orchestrator.PullRequestResolutionConflictRecord(err); ok {
+		options := errcat.RecordOptions(record)
+		options = append(options, errcat.WithDiagnostics(err.Error()))
+		return &server.ActionConflictError{
+			Err:     err,
+			Code:    record.Code,
+			Options: options,
+		}
+	}
+	var moot *orchestrator.PublishRecreateMootError
+	if errors.As(err, &moot) {
+		return &server.ActionConflictError{Err: err, Detail: moot.Error()}
+	}
+	return nil
+}
+
+func (t *journeyMutationTarget) ReopenPullRequestFeature(featureID string, req server.ReopenPullRequestRequest) (server.ReopenPullRequestResponse, error) {
+	resp := server.ReopenPullRequestResponse{FeatureID: featureID, Result: "failed"}
+	if err := t.rejectStalePreflight(featureID, req.SourceRevision); err != nil {
+		return resp, err
+	}
+	if err := t.orch.ReopenPullRequest(featureID, req.Repository, req.Layer); err != nil {
+		if conflict := journeyPullRequestResolutionConflictError(err); conflict != nil {
+			return server.ReopenPullRequestResponse{FeatureID: featureID, Result: "conflict"}, conflict
+		}
+		return resp, err
+	}
+	resp.Result = "reopened"
+	return resp, nil
+}
+
+func (t *journeyMutationTarget) RecreatePullRequestFeature(featureID string, req server.RecreatePullRequestRequest) (server.RecreatePullRequestResponse, error) {
+	resp := server.RecreatePullRequestResponse{FeatureID: featureID, Result: "failed"}
+	if err := t.rejectStalePreflight(featureID, req.SourceRevision); err != nil {
+		return resp, err
+	}
+	if err := t.orch.RecreatePullRequest(featureID, req.Repository, req.Layer); err != nil {
+		if conflict := journeyPullRequestResolutionConflictError(err); conflict != nil {
+			return server.RecreatePullRequestResponse{FeatureID: featureID, Result: "conflict"}, conflict
+		}
+		return resp, err
+	}
+	resp.Result = "recreated"
+	return resp, nil
 }
 
 func (t *journeyMutationTarget) MarkDone(featureID string, _ server.GuardedFeatureActionRequest) (server.MarkDoneResponse, error) {

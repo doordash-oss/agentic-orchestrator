@@ -226,7 +226,7 @@ func (o *Orchestrator) classifyRebaseRepoLayers(parent *feature.Feature, repo *f
 				if entry.PRState != feature.StackPRStateClosed {
 					_ = o.deps.Lifecycle.SetStackLayerPRState(parent.ID, repo.Name, layer.Position, feature.StackPRStateClosed)
 				}
-				return nil, false, false, false, &PublishStackClosedError{
+				closedErr := &PublishStackClosedError{
 					RepoName:      repo.Name,
 					Branch:        layer.Branch,
 					LayerPosition: layer.Position,
@@ -234,6 +234,11 @@ func (o *Orchestrator) classifyRebaseRepoLayers(parent *feature.Feature, repo *f
 					PRURL:         entry.PRURL,
 					State:         live,
 				}
+				// Park the repository on the same needs-action record publish
+				// stores, so the closed-PR blocker carries its resolutions no
+				// matter which surface detected it.
+				o.storePublishFailure(parent, repo.Name, closedErr)
+				return nil, false, false, false, closedErr
 			default:
 				// Open or indeterminate (lookup error, unrecognised state)
 				// reads as kept: a transient API failure must not block a

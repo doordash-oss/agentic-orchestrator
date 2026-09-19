@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
@@ -316,6 +317,18 @@ func (t *journeyMutationTarget) RebaseFeature(featureID string, _ server.RebaseF
 	resp := server.RebaseFeatureResponse{ParentID: featureID, Result: "failed"}
 	preflight, err := t.orch.RebaseChildPreflight(featureID)
 	if err != nil {
+		// A closed stack pull request refuses launch as a conflict carrying
+		// the canonical closed code and its repository context — the same
+		// classification the preflight stored on the repository.
+		if record, ok := orchestrator.StackClosedConflictRecord(err); ok {
+			options := errcat.RecordOptions(record)
+			options = append(options, errcat.WithDiagnostics(err.Error()))
+			return resp, &server.ActionConflictError{
+				Err:     err,
+				Code:    record.Code,
+				Options: options,
+			}
+		}
 		return resp, err
 	}
 	spec := feature.RebaseChildSpec{

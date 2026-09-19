@@ -19,7 +19,12 @@ limitations under the License.
  * inputs are the strict renderer-facing views; nothing here talks to the
  * preload API or stores state.
  */
-import type { FeatureSnapshot, FeatureSetupView, OwnedError } from '../../../shared/ipc';
+import type {
+  CanonicalError,
+  FeatureSnapshot,
+  FeatureSetupView,
+  OwnedError,
+} from '../../../shared/ipc';
 import { ERROR_CLASS_LABELS } from '../../../shared/ipc';
 import type { ErrorSurfaceAction } from '../components/ErrorSurface';
 
@@ -380,6 +385,21 @@ export function catalogErrorAction(
           .map((reason) => displayFeatureMessage(disabledReasonCopy(reason)))
           .join(' '),
   };
+}
+
+/**
+ * The stack layer a repository-scoped canonical error names, read from the
+ * error's own repository context. The closed-pull-request family carries the
+ * failing layer's position there; an error without one addresses the whole
+ * repository, so the layer-scoped resolutions (reopen, recreate) are not
+ * offerable from it.
+ */
+export function errorLayerContext(
+  error: CanonicalError,
+): { repository: string; layer: number } | null {
+  const repo = error.context?.repositories?.[0];
+  if (repo === undefined || repo.layer_position === undefined) return null;
+  return { repository: repo.name, layer: repo.layer_position };
 }
 
 /**

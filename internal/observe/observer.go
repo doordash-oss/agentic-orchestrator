@@ -1431,6 +1431,12 @@ const (
 	LayerPublishActionBlocked LayerPublishAction = "blocked"
 	// LayerPublishActionFailed marks a layer whose publish step failed.
 	LayerPublishActionFailed LayerPublishAction = "failed"
+	// LayerPublishActionReopened marks a closed layer pull request the
+	// reopen action restored to open on the remote.
+	LayerPublishActionReopened LayerPublishAction = "reopened"
+	// LayerPublishActionRecreated marks a closed layer pull request the
+	// recreate action replaced with a fresh pull request.
+	LayerPublishActionRecreated LayerPublishAction = "recreated"
 )
 
 // LayerPublishEvent is the outcome record one feature.layer_publish event

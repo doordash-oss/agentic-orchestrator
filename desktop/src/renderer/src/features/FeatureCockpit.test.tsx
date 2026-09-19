@@ -575,6 +575,78 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(within(aftercare).getByRole('button', { name: /Start rebase pass/ })).toBeEnabled();
   });
 
+  it('resolves a closed-pull-request rebase refusal through Reopen from the refusal card', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        id: FEATURE_ID,
+        status: 'Published',
+        actions: [
+          { id: 'rebase', enabled: true, disabledReasons: [] },
+          { id: 'publish', enabled: true, disabledReasons: [] },
+          { id: 'reopen-pull-request', enabled: true, disabledReasons: [] },
+          { id: 'recreate-pull-request', enabled: true, disabledReasons: [] },
+        ],
+      }),
+    });
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-1',
+      repos: [{ repo: 'web', publishable: true, touched: true, status: 'eligible' }],
+    });
+    mock.api.launchRebaseChild.mockRejectedValue(
+      ipcError(
+        'publish_stack_pull_request_closed',
+        'The layer 2 pull request for repository "web" was closed without merging.',
+        {
+          class: 'needs_action',
+          title: 'Stack pull request closed',
+          remediation: 'Reopen the pull request on GitHub, or recreate it from the local branch.',
+          actions: ['reopen-pull-request', 'recreate-pull-request'],
+          context: {
+            repositories: [
+              {
+                name: 'web',
+                branch: 'agentico/search-revamp-2',
+                layer_position: 2,
+                layer_title: 'Search revamp layer 2',
+                pull_request_url: 'https://github.com/org/web/pull/12',
+              },
+            ],
+          },
+        },
+      ),
+    );
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
+    await user.click(within(aftercare).getByRole('button', { name: /Start rebase pass/ }));
+
+    // The refusal keeps its caption and carries the catalog-resolved
+    // resolutions: Reopen as the primary, Recreate as the secondary. The
+    // buttons arm once the completion preflight's source revision loads.
+    const card = await within(aftercare).findByRole('alert');
+    expect(within(card).getByText('Rebase was rejected')).toBeVisible();
+    expect(within(card).getByText('Stack pull request closed')).toBeVisible();
+    const reopen = await within(card).findByRole('button', { name: 'Reopen pull request' });
+    expect(reopen).toHaveClass('error-surface__action');
+    expect(within(card).getByRole('button', { name: 'Recreate pull request' })).toHaveClass(
+      'error-surface__secondary-action',
+    );
+
+    await user.click(reopen);
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: FEATURE_ID,
+        action: 'reopen-pull-request',
+        body: { repository: 'web', layer: 2, source_revision: 'rev-1' },
+      }),
+    );
+    // The dispatch converges through the feature refresh, not a child launch.
+    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalled());
+    expect(mock.api.launchRebaseChild).toHaveBeenCalledOnce();
+  });
+
   it('renders an inline typed failure for a target-resolution error and clears it on the next attempt', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({

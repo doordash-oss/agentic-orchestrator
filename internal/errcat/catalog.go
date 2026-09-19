@@ -723,8 +723,8 @@ var catalog = map[Code]Entry{
 		summaryParams: func(p Params) string {
 			return publishStackPullRequestClosedSummary(p)
 		},
-		Remediation: "Reopen the closed pull request on the remote, then retry.",
-		Actions:     []string{"publish"},
+		Remediation: "Reopen the closed pull request to restore it on GitHub, or recreate it as a fresh pull request for the same layer branch.",
+		Actions:     []string{"reopen-pull-request", "recreate-pull-request"},
 	},
 	PublishStackMissing: {
 		Class:   ClassNeedsAction,
@@ -769,6 +769,39 @@ var catalog = map[Code]Entry{
 		},
 		Remediation: "Check the repository and remote, then retry.",
 		Actions:     []string{"publish"},
+	},
+	PublishReopenFailed: {
+		Class:   ClassNeedsAction,
+		Title:   "Pull-request reopen failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Reopening the closed stack pull request failed because the remote refused the change.",
+		summaryParams: func(p Params) string {
+			return publishReopenFailedSummary(p)
+		},
+		Remediation: "Retry reopen, or recreate the pull request as a fresh one for the same layer branch.",
+		Actions:     []string{"reopen-pull-request", "recreate-pull-request"},
+	},
+	PublishHeadBranchMissing: {
+		Class:   ClassNeedsAction,
+		Title:   "Pull-request head branch missing",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "The layer branch of the closed stack pull request no longer exists on the remote, so it cannot be reopened.",
+		summaryParams: func(p Params) string {
+			return publishHeadBranchMissingSummary(p)
+		},
+		Remediation: "Recreate the pull request; Recreate pushes the layer branch again and opens a fresh pull request for it.",
+		Actions:     []string{"recreate-pull-request"},
+	},
+	PublishRecreateFailed: {
+		Class:   ClassNeedsAction,
+		Title:   "Pull-request recreation failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Creating the replacement pull request for the closed stack layer failed.",
+		summaryParams: func(p Params) string {
+			return publishRecreateFailedSummary(p)
+		},
+		Remediation: "Check GitHub access, then retry Recreate.",
+		Actions:     []string{"recreate-pull-request"},
 	},
 
 	// --- Relationship-guard codes -------------------------------------------

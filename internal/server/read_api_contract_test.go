@@ -1392,6 +1392,8 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		actionResume,
 		actionRestart,
 		actionPublish,
+		actionReopenPullRequest,
+		actionRecreatePullRequest,
 		actionMerge,
 		actionRewind,
 		actionRebase,

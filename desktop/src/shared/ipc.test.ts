@@ -799,6 +799,55 @@ describe('operational IPC schemas', () => {
     ).toBe(false);
   });
 
+  it('accepts the closed-pull-request resolution requests and rejects malformed bodies', () => {
+    for (const action of ['reopen-pull-request', 'recreate-pull-request'] as const) {
+      expect(
+        FeatureActionRequestSchema.parse({
+          featureId: 'abcd1234',
+          action,
+          body: { repository: 'repo-a', layer: 2, source_revision: 'rev-1' },
+        }),
+      ).toStrictEqual({
+        featureId: 'abcd1234',
+        action,
+        body: { repository: 'repo-a', layer: 2, source_revision: 'rev-1' },
+      });
+      // A missing body, an empty repository, a non-positive layer, an empty
+      // source revision, and unknown keys all fail closed.
+      expect(FeatureActionRequestSchema.safeParse({ featureId: 'abcd1234', action }).success).toBe(
+        false,
+      );
+      expect(
+        FeatureActionRequestSchema.safeParse({
+          featureId: 'abcd1234',
+          action,
+          body: { repository: '', layer: 2, source_revision: 'rev-1' },
+        }).success,
+      ).toBe(false);
+      expect(
+        FeatureActionRequestSchema.safeParse({
+          featureId: 'abcd1234',
+          action,
+          body: { repository: 'repo-a', layer: 0, source_revision: 'rev-1' },
+        }).success,
+      ).toBe(false);
+      expect(
+        FeatureActionRequestSchema.safeParse({
+          featureId: 'abcd1234',
+          action,
+          body: { repository: 'repo-a', layer: 2, source_revision: '' },
+        }).success,
+      ).toBe(false);
+      expect(
+        FeatureActionRequestSchema.safeParse({
+          featureId: 'abcd1234',
+          action,
+          body: { repository: 'repo-a', layer: 2, source_revision: 'rev-1', repos: ['repo-a'] },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
   it('bounds transcript windows and keeps row cursors distinct from global event cursors', () => {
     expect(
       SessionTranscriptRequestSchema.parse({ sessionId: 'session-1', offset: 4, limit: 100 }),

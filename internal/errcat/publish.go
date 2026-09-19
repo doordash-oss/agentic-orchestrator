@@ -30,6 +30,9 @@ const (
 	PublishPullRequestFailed      Code = "publish_pull_request_failed"
 	PublishDescriptionFailed      Code = "publish_description_failed"
 	PublishPushFailed             Code = "publish_push_failed"
+	PublishReopenFailed           Code = "publish_reopen_failed"
+	PublishHeadBranchMissing      Code = "publish_head_branch_missing"
+	PublishRecreateFailed         Code = "publish_recreate_failed"
 )
 
 // publishFailureCodes is the closed set of codes a repository publish
@@ -44,6 +47,9 @@ var publishFailureCodes = map[Code]bool{
 	PublishPullRequestFailed:      true,
 	PublishDescriptionFailed:      true,
 	PublishPushFailed:             true,
+	PublishReopenFailed:           true,
+	PublishHeadBranchMissing:      true,
+	PublishRecreateFailed:         true,
 }
 
 // IsPublishFailure reports whether code is one of the publish failure codes
@@ -136,6 +142,49 @@ func publishStackPullRequestClosedSummary(p Params) string {
 		subject += fmt.Sprintf(" (%s)", params.PullRequestURL)
 	}
 	return "The stack pull request for repository " + subject + " is closed without merge and cannot receive new commits."
+}
+
+// publishReopenFailedSummary names the repository, stack layer, pull
+// request, and the remote's refusal of a reopen attempt that failed.
+func publishReopenFailedSummary(p Params) string {
+	params, ok := publishRepoParams(p)
+	if !ok {
+		return ""
+	}
+	subject := publishRepoName(params)
+	if params.PullRequestURL != "" {
+		subject += fmt.Sprintf(" (%s)", params.PullRequestURL)
+	}
+	return "Reopening the stack pull request for repository " + subject + " failed because the remote refused the change."
+}
+
+// publishHeadBranchMissingSummary names the repository, stack layer, and
+// pull request whose head branch no longer exists on the remote, so only
+// Recreate can resolve it.
+func publishHeadBranchMissingSummary(p Params) string {
+	params, ok := publishRepoParams(p)
+	if !ok {
+		return ""
+	}
+	subject := publishRepoName(params)
+	if params.PullRequestURL != "" {
+		subject += fmt.Sprintf(" (%s)", params.PullRequestURL)
+	}
+	return "The layer branch for repository " + subject + " no longer exists on the remote, so the closed stack pull request cannot be reopened; Recreate will push the branch again."
+}
+
+// publishRecreateFailedSummary names the repository and stack layer whose
+// replacement pull-request creation failed.
+func publishRecreateFailedSummary(p Params) string {
+	params, ok := publishRepoParams(p)
+	if !ok {
+		return ""
+	}
+	subject := publishRepoName(params)
+	if params.PullRequestURL != "" {
+		subject += fmt.Sprintf(" (%s)", params.PullRequestURL)
+	}
+	return "Creating the replacement pull request for repository " + subject + " failed."
 }
 
 // publishStackMissingSummary names the repository of a run that reached

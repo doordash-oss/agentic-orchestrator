@@ -849,6 +849,9 @@ func wireError(rendered errcat.Error) Error {
 				ChildHeadSha:      repo.ChildHeadSHA,
 				CandidateSha:      repo.CandidateSHA,
 				ObservedSha:       repo.ObservedSHA,
+				LayerPosition:     repo.LayerPosition,
+				LayerTitle:        repo.LayerTitle,
+				PullRequestURL:    repo.PullRequestURL,
 			})
 		}
 		if rendered.Context.Phase != nil {

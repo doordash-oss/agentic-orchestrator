@@ -27,6 +27,10 @@ type RemoteOps interface {
 	GetPRBody(prURL string) (string, error)
 	UpdatePRBody(prURL, body string) error
 	UpdatePRBase(prURL, base string) error
+	// ReopenPullRequest sets a closed stack pull request back to open on
+	// GitHub, probing the layer branch's remote ref first: a missing head
+	// branch answers git.ErrPRHeadBranchMissing without any API call.
+	ReopenPullRequest(repoPath, branch, prURL string) error
 }
 
 type gitRemoteOps struct{}
@@ -61,4 +65,8 @@ func (gitRemoteOps) UpdatePRBody(prURL, body string) error {
 
 func (gitRemoteOps) UpdatePRBase(prURL, base string) error {
 	return git.UpdatePRBaseBranch(prURL, base)
+}
+
+func (gitRemoteOps) ReopenPullRequest(repoPath, branch, prURL string) error {
+	return git.ReopenPullRequest(repoPath, branch, prURL)
 }

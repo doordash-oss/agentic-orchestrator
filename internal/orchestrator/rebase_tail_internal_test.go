@@ -93,6 +93,10 @@ func (r *rebaseTailRemoteOps) UpdatePRBase(prURL, base string) error {
 	return git.UpdatePRBaseBranch(prURL, base)
 }
 
+func (r *rebaseTailRemoteOps) ReopenPullRequest(repoPath, branch, prURL string) error {
+	return git.ReopenPullRequest(repoPath, branch, prURL)
+}
+
 func (r *rebaseTailRemoteOps) layerPushes() []tailLayerPush {
 	r.mu.Lock()
 	defer r.mu.Unlock()

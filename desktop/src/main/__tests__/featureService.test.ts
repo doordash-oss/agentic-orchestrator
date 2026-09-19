@@ -1190,6 +1190,41 @@ describe('FeatureService.dispatchAction', () => {
     expect(calls[0]?.init?.timeoutMs).toBe(600000);
   });
 
+  it('passes the closed-pull-request resolution bodies through, bounding recreate like publish', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: { api_version: 'v1', feature_id: 'abcd1234ef567890', result: 'resolved' },
+    }));
+
+    await expect(
+      service.dispatchAction({
+        featureId: 'abcd1234ef567890',
+        action: 'reopen-pull-request',
+        body: { repository: 'web', layer: 2, source_revision: 'rev-1' },
+      }),
+    ).resolves.toMatchObject({ action: 'reopen-pull-request', result: 'resolved' });
+    expect(calls[0]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/reopen-pull-request');
+    // Reopen is one idempotent forge call: the ordinary bound, body verbatim.
+    expect(calls[0]?.init).toStrictEqual({
+      method: 'POST',
+      body: { repository: 'web', layer: 2, source_revision: 'rev-1' },
+    });
+
+    await service.dispatchAction({
+      featureId: 'abcd1234ef567890',
+      action: 'recreate-pull-request',
+      body: { repository: 'web', layer: 2, source_revision: 'rev-1' },
+    });
+    expect(calls[1]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/recreate-pull-request');
+    // Recreate pushes and may run a description session: the long bound.
+    expect(calls[1]?.init?.timeoutMs).toBe(600000);
+    expect(calls[1]?.init?.body).toStrictEqual({
+      repository: 'web',
+      layer: 2,
+      source_revision: 'rev-1',
+    });
+  });
+
   it('keeps the ordinary bound for short lifecycle actions', async () => {
     const { service, calls } = makeService(() => ({
       status: 200,

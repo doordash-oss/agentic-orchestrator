@@ -134,3 +134,66 @@ type PublishDispatchError struct {
 func (e *PublishDispatchError) Error() string { return e.Err.Error() }
 
 func (e *PublishDispatchError) Unwrap() error { return e.Err }
+
+// PublishReopenFailedError reports a reopen attempt the remote refused for
+// a reason other than a missing head branch. The layer fields and the
+// pull-request URL travel in the error so the stored canonical record can
+// name them.
+type PublishReopenFailedError struct {
+	RepoName      string
+	Branch        string
+	LayerPosition int
+	LayerTitle    string
+	PRURL         string
+	Err           error
+}
+
+func (e *PublishReopenFailedError) Error() string {
+	return fmt.Sprintf("reopening stack pull request %s for layer %d (%s) failed: %v", e.PRURL, e.LayerPosition, e.LayerTitle, e.Err)
+}
+
+func (e *PublishReopenFailedError) Unwrap() error { return e.Err }
+
+// PublishHeadBranchMissingError reports a closed stack pull request whose
+// head branch no longer exists on the remote, so reopening cannot restore
+// it; only recreation can resolve the condition.
+type PublishHeadBranchMissingError struct {
+	RepoName      string
+	Branch        string
+	LayerPosition int
+	LayerTitle    string
+	PRURL         string
+}
+
+func (e *PublishHeadBranchMissingError) Error() string {
+	return fmt.Sprintf("stack pull request %s for layer %d (%s) has no head branch %q on the remote; it cannot be reopened", e.PRURL, e.LayerPosition, e.LayerTitle, e.Branch)
+}
+
+// PublishRecreateFailedError reports a failed pull-request recreation: the
+// layer branch pushed but the replacement pull request could not be opened.
+type PublishRecreateFailedError struct {
+	RepoName      string
+	LayerPosition int
+	LayerTitle    string
+	PRURL         string
+	Err           error
+}
+
+func (e *PublishRecreateFailedError) Error() string {
+	return fmt.Sprintf("recreating stack pull request for layer %d (%s) failed: %v", e.LayerPosition, e.LayerTitle, e.Err)
+}
+
+func (e *PublishRecreateFailedError) Unwrap() error { return e.Err }
+
+// PublishRecreateMootError reports a recreate attempt whose pull request is
+// live open or merged, so there is nothing to recreate. The live state was
+// recorded before the refusal.
+type PublishRecreateMootError struct {
+	RepoName      string
+	LayerPosition int
+	State         string
+}
+
+func (e *PublishRecreateMootError) Error() string {
+	return fmt.Sprintf("layer %d's pull request for repo %s is %s; there is nothing to recreate", e.LayerPosition, e.RepoName, e.State)
+}

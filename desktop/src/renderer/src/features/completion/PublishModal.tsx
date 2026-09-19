@@ -20,13 +20,13 @@ import type {
   FeatureActionResult,
   FeatureActionView,
   PullRequestEntryView,
-  PublishFeatureActionRequest,
+  PublishFamilyActionRequest,
 } from '../../../../shared/ipc';
 import { E_REQUEST_TIMEOUT, buildCanonicalError } from '../../../../shared/errors';
 import { ErrorSurface, type ErrorSurfaceAction } from '../../components/ErrorSurface';
 import { useModalDismiss } from '../../components/useModalDismiss';
 import { sentenceCase } from '../aftercareReceipt';
-import { catalogErrorAction } from '../featureView';
+import { catalogErrorAction, errorLayerContext } from '../featureView';
 import { parseIpcError } from '../../wizard/ipcError';
 import type { CanonicalError } from '../../../../shared/ipc';
 import { PrLinkButton, isEligibleForPublish } from './completionShared';
@@ -35,6 +35,29 @@ import { UNPUBLISHED_CHANGES, pendingDeliveryDetail } from './pendingDelivery';
 const PUBLISH_TIMEOUT_LOCKED_MESSAGE =
   'Publish may still be running. Quit and reopen Agentico before publishing again.';
 const PUBLISH_ACTION_ID = 'publish';
+const REOPEN_ACTION_ID = 'reopen-pull-request';
+const RECREATE_ACTION_ID = 'recreate-pull-request';
+
+type LayerActionId = typeof REOPEN_ACTION_ID | typeof RECREATE_ACTION_ID;
+
+/** The remediation action ids a repository row card knows how to resolve. */
+const RESOLVABLE_ACTION_IDS: ReadonlySet<string> = new Set([
+  PUBLISH_ACTION_ID,
+  REOPEN_ACTION_ID,
+  RECREATE_ACTION_ID,
+]);
+
+/**
+ * The needs-action codes whose stored record parks a repository on a closed
+ * stack layer pull request; their remediation offers the layer-scoped
+ * resolutions.
+ */
+const CLOSED_PR_ERROR_CODES: ReadonlySet<string> = new Set([
+  'publish_stack_pull_request_closed',
+  'publish_reopen_failed',
+  'publish_head_branch_missing',
+  'publish_recreate_failed',
+]);
 
 /**
  * The publish timeout's canonical warning: the request outran its bound and
@@ -64,7 +87,7 @@ export interface PublishModalProps {
   preflight: CompletionPreflightResult;
   /** The feature's server action catalog; each row card resolves `publish` in it. */
   actions: readonly FeatureActionView[];
-  dispatchAction(request: PublishFeatureActionRequest): Promise<FeatureActionResult>;
+  dispatchAction(request: PublishFamilyActionRequest): Promise<FeatureActionResult>;
   openExternal(url: string): Promise<{ ok: boolean }>;
   onDispatched(): void | Promise<void>;
   onClose(): void;
@@ -202,16 +225,8 @@ export function PublishModal({
     });
   }, []);
 
-  const runPublish = useCallback(
-    async (repos: string[]) => {
-      const request: PublishFeatureActionRequest = {
-        featureId,
-        action: 'publish',
-        body: {
-          source_revision: preflight.sourceRevision,
-          repos,
-        },
-      };
+  const runActionRequest = useCallback(
+    async (request: PublishFamilyActionRequest) => {
       setPublishBusy(true);
       setPublishResult(null);
       try {
@@ -246,7 +261,20 @@ export function PublishModal({
         setPublishBusy(false);
       }
     },
-    [dispatchAction, featureId, onDispatched, preflight.sourceRevision, setPublishTimeoutLocked],
+    [dispatchAction, onDispatched, setPublishTimeoutLocked],
+  );
+
+  const runPublish = useCallback(
+    (repos: string[]) =>
+      runActionRequest({
+        featureId,
+        action: 'publish',
+        body: {
+          source_revision: preflight.sourceRevision,
+          repos,
+        },
+      }),
+    [featureId, preflight.sourceRevision, runActionRequest],
   );
 
   const handlePublish = useCallback(async () => {
@@ -264,28 +292,78 @@ export function PublishModal({
     [preflight.sourceRevision, publishLocked, publishBusy, runPublish],
   );
 
-  // One resolver per row card: the label is fixed, the enabled state is the
-  // catalog's `publish` state plus the modal's own preconditions, and the
-  // disabled reason reports whichever blocks it.
-  const retryActionFor = useCallback(() => {
-    const modalReason =
-      publishBusy || publishLocked
-        ? 'A publish is already running.'
-        : preflight.sourceRevision.trim() === ''
-          ? 'Refresh the preflight, then retry.'
-          : undefined;
-    return (actionId: string): ErrorSurfaceAction | undefined => {
-      if (actionId !== PUBLISH_ACTION_ID) return undefined;
-      const base = catalogErrorAction({ actions }, actionId, 'Retry publish');
-      if (base === undefined) return undefined;
-      const reason = base.enabled ? modalReason : base.disabledReason;
-      return {
-        ...base,
-        enabled: base.enabled && modalReason === undefined,
-        ...(reason === undefined ? {} : { disabledReason: reason }),
+  // Reopen and recreate dispatch with the repository and layer read from the
+  // row's own error context and the preflight's source revision, then refresh
+  // exactly as retry publish does — the same runner owns busy, timeout lock,
+  // and the post-dispatch preflight refresh.
+  const handleLayerAction = useCallback(
+    async (repo: PublishRepo, action: LayerActionId) => {
+      if (publishBusy || publishLocked || preflight.sourceRevision.trim() === '') return;
+      const layer = closedPullRequestLayerOf(repo);
+      if (layer === null) return;
+      const body = {
+        repository: layer.repository,
+        layer: layer.layer,
+        source_revision: preflight.sourceRevision,
       };
-    };
-  }, [actions, preflight.sourceRevision, publishBusy, publishLocked]);
+      await runActionRequest(
+        action === REOPEN_ACTION_ID
+          ? { featureId, action: 'reopen-pull-request', body }
+          : { featureId, action: 'recreate-pull-request', body },
+      );
+    },
+    [featureId, preflight.sourceRevision, publishLocked, publishBusy, runActionRequest],
+  );
+
+  // One action handler per row card: the layer-scoped resolutions dispatch
+  // their own typed requests; every other resolved id (publish) retries only
+  // this repository.
+  const rowActionHandler = useCallback(
+    (repo: PublishRepo) => (actionId: string) => {
+      if (actionId === REOPEN_ACTION_ID || actionId === RECREATE_ACTION_ID) {
+        void handleLayerAction(repo, actionId);
+        return;
+      }
+      void handleRetryPublish(repo);
+    },
+    [handleLayerAction, handleRetryPublish],
+  );
+
+  // One resolver per row card: the labels are fixed, the enabled state is the
+  // catalog's state plus the modal's own preconditions, and the disabled
+  // reason reports whichever blocks it. The layer-scoped resolutions are
+  // offered only when the row's own error is a closed-PR family record whose
+  // context names the failing layer.
+  const retryActionFor = useCallback(
+    (repo: PublishRepo) => {
+      const modalReason =
+        publishBusy || publishLocked
+          ? 'A publish is already running.'
+          : preflight.sourceRevision.trim() === ''
+            ? 'Refresh the preflight, then retry.'
+            : undefined;
+      const layer = closedPullRequestLayerOf(repo);
+      return (actionId: string): ErrorSurfaceAction | undefined => {
+        if (!RESOLVABLE_ACTION_IDS.has(actionId)) return undefined;
+        if (actionId !== PUBLISH_ACTION_ID && layer === null) return undefined;
+        const label =
+          actionId === REOPEN_ACTION_ID
+            ? 'Reopen pull request'
+            : actionId === RECREATE_ACTION_ID
+              ? 'Recreate pull request'
+              : 'Retry publish';
+        const base = catalogErrorAction({ actions }, actionId, label);
+        if (base === undefined) return undefined;
+        const reason = base.enabled ? modalReason : base.disabledReason;
+        return {
+          ...base,
+          enabled: base.enabled && modalReason === undefined,
+          ...(reason === undefined ? {} : { disabledReason: reason }),
+        };
+      };
+    },
+    [actions, preflight.sourceRevision, publishBusy, publishLocked],
+  );
 
   const rejection =
     publishResult !== null && !publishResult.ok && publishResult.reconciling !== true
@@ -320,8 +398,8 @@ export function PublishModal({
                   checked={publishRepos.has(repo.repo)}
                   onToggle={togglePublishRepo}
                   openExternal={openExternal}
-                  resolveAction={retryActionFor()}
-                  onRetryPublish={() => void handleRetryPublish(repo)}
+                  resolveAction={retryActionFor(repo)}
+                  onAction={rowActionHandler(repo)}
                 />
               ))}
               {unpublishedRepos.length > 0 ? (
@@ -335,8 +413,8 @@ export function PublishModal({
                       checked={publishRepos.has(repo.repo)}
                       onToggle={togglePublishRepo}
                       openExternal={openExternal}
-                      resolveAction={retryActionFor()}
-                      onRetryPublish={() => void handleRetryPublish(repo)}
+                      resolveAction={retryActionFor(repo)}
+                      onAction={rowActionHandler(repo)}
                     />
                   ))}
                 </div>
@@ -412,6 +490,18 @@ export function PublishModal({
 }
 
 type PublishRepo = CompletionPreflightResult['repos'][number];
+
+/**
+ * The closed stack layer the row's own error names: the repository and layer
+ * position read from a closed-PR family record's repository context. Null
+ * when the row carries no such record or its context names no layer, in
+ * which case the layer-scoped resolutions are not offerable.
+ */
+function closedPullRequestLayerOf(repo: PublishRepo): { repository: string; layer: number } | null {
+  const error = repo.error;
+  if (error === undefined || !CLOSED_PR_ERROR_CODES.has(error.code)) return null;
+  return errorLayerContext(error);
+}
 
 /**
  * The publish row's freshness line: the server's freshness phrase with the
@@ -501,7 +591,7 @@ function PublishRepoRow({
   onToggle,
   openExternal,
   resolveAction,
-  onRetryPublish,
+  onAction,
 }: {
   repo: PublishRepo;
   featureId: string;
@@ -509,7 +599,7 @@ function PublishRepoRow({
   onToggle(repo: string): void;
   openExternal(url: string): Promise<{ ok: boolean }>;
   resolveAction(actionId: string): ErrorSurfaceAction | undefined;
-  onRetryPublish(): void;
+  onAction(actionId: string): void;
 }): React.ReactElement {
   const freshnessHint = repoFreshnessHint(repo);
   return (
@@ -546,7 +636,7 @@ function PublishRepoRow({
         <ErrorSurface
           error={repo.error}
           resolveAction={resolveAction}
-          onAction={onRetryPublish}
+          onAction={onAction}
           explain={{
             // The stored publish-failure record lives on the repository's
             // own state; the modal has no feature name in scope, so the

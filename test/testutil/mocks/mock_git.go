@@ -21,16 +21,17 @@ import (
 // MockRemoteOps is the small test substitute for orchestrator-owned remote
 // operations.
 type MockRemoteOps struct {
-	PushFn            func(worktreePath, branch string) error
-	PushLayerBranchFn func(repoPath, branch, localSHA, lastPushedSHA string) (string, error)
-	CreatePRFn        func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
-	PRBaseBranchFn    func(repoPath, prURL string) string
-	PRStateFn         func(repoPath, prURL string) (string, error)
-	GetPRBodyFn       func(prURL string) (string, error)
-	UpdatePRBodyFn    func(prURL, body string) error
-	UpdatePRBaseFn    func(prURL, base string) error
-	DefaultError      error
-	Calls             []MockCall
+	PushFn              func(worktreePath, branch string) error
+	PushLayerBranchFn   func(repoPath, branch, localSHA, lastPushedSHA string) (string, error)
+	CreatePRFn          func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
+	PRBaseBranchFn      func(repoPath, prURL string) string
+	PRStateFn           func(repoPath, prURL string) (string, error)
+	GetPRBodyFn         func(prURL string) (string, error)
+	UpdatePRBodyFn      func(prURL, body string) error
+	UpdatePRBaseFn      func(prURL, base string) error
+	ReopenPullRequestFn func(repoPath, branch, prURL string) error
+	DefaultError        error
+	Calls               []MockCall
 }
 
 func NewMockRemoteOps() *MockRemoteOps { return &MockRemoteOps{} }
@@ -97,6 +98,14 @@ func (m *MockRemoteOps) UpdatePRBase(prURL, base string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "UpdatePRBase", Args: []any{prURL, base}})
 	if m.UpdatePRBaseFn != nil {
 		return m.UpdatePRBaseFn(prURL, base)
+	}
+	return m.DefaultError
+}
+
+func (m *MockRemoteOps) ReopenPullRequest(repoPath, branch, prURL string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "ReopenPullRequest", Args: []any{repoPath, branch, prURL}})
+	if m.ReopenPullRequestFn != nil {
+		return m.ReopenPullRequestFn(repoPath, branch, prURL)
 	}
 	return m.DefaultError
 }

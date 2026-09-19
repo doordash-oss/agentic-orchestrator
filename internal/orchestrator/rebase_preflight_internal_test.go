@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -67,6 +68,9 @@ func (r *preflightRemoteOps) UpdatePRBody(prURL, body string) error {
 }
 func (r *preflightRemoteOps) UpdatePRBase(prURL, base string) error {
 	return nil
+}
+func (r *preflightRemoteOps) ReopenPullRequest(repoPath, branch, prURL string) error {
+	return git.ReopenPullRequest(repoPath, branch, prURL)
 }
 
 // rebasePreflightFixture builds the pre-rebase published stack the preflight
@@ -299,7 +303,9 @@ func TestRebasePreflight_ClassifiesMergedLayerBehindReposAsWork(t *testing.T) {
 
 // TestRebasePreflight_ClosedPullRequestRefusesLaunch proves a closed-unmerged
 // pull request in the stack refuses the launch with the Phase 7 stack-closed
-// error naming the repository, the layer, its title, and its URL.
+// error naming the repository, the layer, its title, and its URL — and parks
+// the repository on the closed record the publish walk stores, naming the
+// same layer, while creating no child feature.
 func TestRebasePreflight_ClosedPullRequestRefusesLaunch(t *testing.T) {
 	fx := newRebasePreflightFixture(t, preflightFixtureOpts{AdvanceMainA: true})
 	fx.remote.states[fx.prURL2] = git.PRStateClosed
@@ -315,6 +321,38 @@ func TestRebasePreflight_ClosedPullRequestRefusesLaunch(t *testing.T) {
 	}
 	if closed.RepoName != "repoa" || closed.LayerPosition != 2 || closed.LayerTitle != "Layer two" || closed.PRURL != fx.prURL2 {
 		t.Fatalf("stack-closed error = %+v, want repoa layer 2 (Layer two) at %s", closed, fx.prURL2)
+	}
+
+	// The refusal parks the repository on the same needs-action record the
+	// publish walk stores, so the closed-PR blocker carries its resolutions
+	// no matter which surface detected it.
+	parent, err := fx.store.Load(fx.parentID)
+	if err != nil {
+		t.Fatalf("load parent: %v", err)
+	}
+	record := parent.RepoStates["repoa"].Error
+	if record == nil || record.Code != errcat.PublishStackPullRequestClosed {
+		t.Fatalf("repoa stored record = %+v, want publish_stack_pull_request_closed", record)
+	}
+	if record.Context == nil || len(record.Context.Repositories) != 1 {
+		t.Fatalf("repoa record context = %+v, want exactly one repositories block", record.Context)
+	}
+	block := record.Context.Repositories[0]
+	if block.Name != "repoa" || block.LayerPosition != 2 || block.LayerTitle != "Layer two" || block.PullRequestURL != fx.prURL2 {
+		t.Fatalf("repoa record block = %+v, want repoa layer 2 (Layer two) at %s", block, fx.prURL2)
+	}
+	if entry := stackRepoEntryFor(parent, 2, "repoa"); entry.PRState != feature.StackPRStateClosed {
+		t.Fatalf("parent stack layer 2 state = %q, want closed persisted at preflight", entry.PRState)
+	}
+
+	// The refused launch creates no child feature: the store still holds
+	// exactly the parent.
+	stored, err := fx.store.List()
+	if err != nil {
+		t.Fatalf("list store: %v", err)
+	}
+	if len(stored) != 1 || stored[0].ID != fx.parentID {
+		t.Fatalf("stored features = %d, want only the parent %s (no child created)", len(stored), fx.parentID)
 	}
 }
 

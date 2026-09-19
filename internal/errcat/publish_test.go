@@ -23,7 +23,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// allPublishFailureCodes lists the seven catalog codes a repository publish
+// allPublishFailureCodes lists the ten catalog codes a repository publish
 // failure can carry, in catalog order.
 var allPublishFailureCodes = []Code{
 	PublishRemoteDiverged,
@@ -33,12 +33,32 @@ var allPublishFailureCodes = []Code{
 	PublishPullRequestFailed,
 	PublishDescriptionFailed,
 	PublishPushFailed,
+	PublishReopenFailed,
+	PublishHeadBranchMissing,
+	PublishRecreateFailed,
 }
 
-// TestPublishFailureCodesAreNeedsActionPublishRetry pins the publish-failure
-// contract: all seven codes are needs_action, reference the publish action,
-// and declare exactly the repositories block.
-func TestPublishFailureCodesAreNeedsActionPublishRetry(t *testing.T) {
+// publishFailureActions pins the action list every publish-failure code
+// references. The closed, reopen-failed, and head-branch-missing family
+// resolves through reopen/recreate; the delivery failures retry publish.
+var publishFailureActions = map[Code][]string{
+	PublishRemoteDiverged:         {"publish"},
+	PublishRemoteChanged:          {"publish"},
+	PublishStackPullRequestClosed: {"reopen-pull-request", "recreate-pull-request"},
+	PublishStackMissing:           {"publish"},
+	PublishPullRequestFailed:      {"publish"},
+	PublishDescriptionFailed:      {"publish"},
+	PublishPushFailed:             {"publish"},
+	PublishReopenFailed:           {"reopen-pull-request", "recreate-pull-request"},
+	PublishHeadBranchMissing:      {"recreate-pull-request"},
+	PublishRecreateFailed:         {"recreate-pull-request"},
+}
+
+// TestPublishFailureCodesAreNeedsActionWithPinnedActions pins the
+// publish-failure contract: all ten codes are needs_action, reference
+// exactly their pinned action list, and declare exactly the repositories
+// block.
+func TestPublishFailureCodesAreNeedsActionWithPinnedActions(t *testing.T) {
 	for _, code := range allPublishFailureCodes {
 		entry, ok := Lookup(code)
 		if !ok {
@@ -47,8 +67,16 @@ func TestPublishFailureCodesAreNeedsActionPublishRetry(t *testing.T) {
 		if entry.Class != ClassNeedsAction {
 			t.Errorf("%s: class is %q; want needs_action", code, entry.Class)
 		}
-		if len(entry.Actions) != 1 || entry.Actions[0] != "publish" {
-			t.Errorf("%s: actions = %#v; want [publish]", code, entry.Actions)
+		want := publishFailureActions[code]
+		if len(entry.Actions) != len(want) {
+			t.Errorf("%s: actions = %#v; want %#v", code, entry.Actions, want)
+		} else {
+			for i, action := range want {
+				if entry.Actions[i] != action {
+					t.Errorf("%s: actions = %#v; want %#v", code, entry.Actions, want)
+					break
+				}
+			}
 		}
 		if len(entry.Blocks) != 1 || entry.Blocks[0] != BlockRepositories {
 			t.Errorf("%s: blocks = %#v; want exactly the repositories block", code, entry.Blocks)
@@ -60,7 +88,7 @@ func TestPublishFailureCodesAreNeedsActionPublishRetry(t *testing.T) {
 }
 
 // TestIsPublishFailureReturnsTrueForExactlyThePublishCodes pins the closed
-// set: the helper is true for the seven publish codes and nothing else.
+// set: the helper is true for the ten publish codes and nothing else.
 func TestIsPublishFailureReturnsTrueForExactlyThePublishCodes(t *testing.T) {
 	want := map[Code]bool{}
 	for _, code := range allPublishFailureCodes {
@@ -116,11 +144,13 @@ func TestRenderRecordPublishStackPullRequestClosedNamesRepositoryLayerAndPR(t *t
 		t.Fatalf("class = %q; want needs_action", rendered.Class)
 	}
 	if rendered.Remediation == nil ||
-		rendered.Remediation.Hint != "Reopen the closed pull request on the remote, then retry." {
-		t.Fatalf("remediation = %#v; want the reopen hint", rendered.Remediation)
+		rendered.Remediation.Hint != "Reopen the closed pull request to restore it on GitHub, or recreate it as a fresh pull request for the same layer branch." {
+		t.Fatalf("remediation = %#v; want the reopen-or-recreate hint", rendered.Remediation)
 	}
-	if len(rendered.Remediation.Actions) != 1 || rendered.Remediation.Actions[0] != "publish" {
-		t.Fatalf("publish_stack_pull_request_closed must reference the publish action: %#v", rendered.Remediation)
+	if len(rendered.Remediation.Actions) != 2 ||
+		rendered.Remediation.Actions[0] != "reopen-pull-request" ||
+		rendered.Remediation.Actions[1] != "recreate-pull-request" {
+		t.Fatalf("publish_stack_pull_request_closed must reference reopen then recreate: %#v", rendered.Remediation)
 	}
 	if rendered.Context == nil || len(rendered.Context.Repositories) != 1 {
 		t.Fatalf("repositories block not carried: %#v", rendered.Context)
@@ -129,6 +159,80 @@ func TestRenderRecordPublishStackPullRequestClosedNamesRepositoryLayerAndPR(t *t
 	if repo.LayerPosition != 2 || repo.LayerTitle != "Fix auth" ||
 		repo.PullRequestURL != "https://github.com/acme/publish-web/pull/12" {
 		t.Fatalf("repositories block lost the stack fields: %#v", repo)
+	}
+}
+
+// TestRenderRecordPullRequestResolutionCodesNameRepositoryLayerAndPR pins
+// the closed-PR resolution family: reopen-failed, head-branch-missing, and
+// recreate-failed records render layer-aware summaries naming the
+// repository, layer, and pull request, with the pinned remediation and
+// action lists.
+func TestRenderRecordPullRequestResolutionCodesNameRepositoryLayerAndPR(t *testing.T) {
+	cases := []struct {
+		code     Code
+		summary  string
+		hint     string
+		actions  []string
+		diagRecv bool
+	}{
+		{
+			code:    PublishReopenFailed,
+			summary: `Reopening the stack pull request for repository "publish-web" at layer 2 (Fix auth) (https://github.com/acme/publish-web/pull/12) failed because the remote refused the change.`,
+			hint:    "Retry reopen, or recreate the pull request as a fresh one for the same layer branch.",
+			actions: []string{"reopen-pull-request", "recreate-pull-request"},
+		},
+		{
+			code:    PublishHeadBranchMissing,
+			summary: `The layer branch for repository "publish-web" at layer 2 (Fix auth) (https://github.com/acme/publish-web/pull/12) no longer exists on the remote, so the closed stack pull request cannot be reopened; Recreate will push the branch again.`,
+			hint:    "Recreate the pull request; Recreate pushes the layer branch again and opens a fresh pull request for it.",
+			actions: []string{"recreate-pull-request"},
+		},
+		{
+			code:    PublishRecreateFailed,
+			summary: `Creating the replacement pull request for repository "publish-web" at layer 2 (Fix auth) (https://github.com/acme/publish-web/pull/12) failed.`,
+			hint:    "Check GitHub access, then retry Recreate.",
+			actions: []string{"recreate-pull-request"},
+		},
+	}
+	for _, tc := range cases {
+		rendered := RenderRecord(FailureRecord{
+			Code: tc.code,
+			Context: &RecordContext{
+				Repositories: []CodeRepository{{
+					Name:           "publish-web",
+					Branch:         "agentico/my-feature",
+					LayerPosition:  2,
+					LayerTitle:     "Fix auth",
+					PullRequestURL: "https://github.com/acme/publish-web/pull/12",
+				}},
+			},
+			Diagnostics: "raw detail",
+		})
+		if rendered.Summary != tc.summary {
+			t.Errorf("%s: summary = %q; want %q", tc.code, rendered.Summary, tc.summary)
+		}
+		if strings.Contains(rendered.Summary, "raw detail") {
+			t.Errorf("%s: summary leaks diagnostics: %q", tc.code, rendered.Summary)
+		}
+		if rendered.Class != ClassNeedsAction {
+			t.Errorf("%s: class = %q; want needs_action", tc.code, rendered.Class)
+		}
+		if rendered.Remediation == nil || rendered.Remediation.Hint != tc.hint {
+			t.Errorf("%s: remediation = %#v; want hint %q", tc.code, rendered.Remediation, tc.hint)
+		}
+		if len(rendered.Remediation.Actions) != len(tc.actions) {
+			t.Errorf("%s: actions = %#v; want %#v", tc.code, rendered.Remediation.Actions, tc.actions)
+		} else {
+			for i, action := range tc.actions {
+				if rendered.Remediation.Actions[i] != action {
+					t.Errorf("%s: actions = %#v; want %#v", tc.code, rendered.Remediation.Actions, tc.actions)
+					break
+				}
+			}
+		}
+		if rendered.Context == nil || len(rendered.Context.Repositories) != 1 {
+			t.Errorf("%s: repositories block not carried: %#v", tc.code, rendered.Context)
+		}
 	}
 }
 

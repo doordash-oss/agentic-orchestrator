@@ -1586,6 +1586,8 @@ export const FeatureOperationalActionSchema = z.enum([
   'mark-done',
   'cleanup',
   'delete',
+  'reopen-pull-request',
+  'recreate-pull-request',
 ]);
 export type FeatureOperationalAction = z.output<typeof FeatureOperationalActionSchema>;
 
@@ -1617,6 +1619,24 @@ export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
   }),
   z.strictObject({
     featureId: FeatureIdSchema,
+    action: z.literal('reopen-pull-request'),
+    body: z.strictObject({
+      repository: z.string().min(1).max(200),
+      layer: z.number().int().min(1),
+      source_revision: CompletionSourceRevisionSchema,
+    }),
+  }),
+  z.strictObject({
+    featureId: FeatureIdSchema,
+    action: z.literal('recreate-pull-request'),
+    body: z.strictObject({
+      repository: z.string().min(1).max(200),
+      layer: z.number().int().min(1),
+      source_revision: CompletionSourceRevisionSchema,
+    }),
+  }),
+  z.strictObject({
+    featureId: FeatureIdSchema,
     action: z.enum(['merge', 'mark-done']),
     body: z.strictObject({
       source_revision: CompletionSourceRevisionSchema,
@@ -1642,6 +1662,23 @@ export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
 ]);
 export type FeatureActionRequest = z.output<typeof FeatureActionRequestSchema>;
 export type PublishFeatureActionRequest = Extract<FeatureActionRequest, { action: 'publish' }>;
+export type ReopenPullRequestFeatureActionRequest = Extract<
+  FeatureActionRequest,
+  { action: 'reopen-pull-request' }
+>;
+export type RecreatePullRequestFeatureActionRequest = Extract<
+  FeatureActionRequest,
+  { action: 'recreate-pull-request' }
+>;
+/**
+ * The publish-family mutation requests the completion surfaces dispatch:
+ * publish itself plus the two closed-pull-request resolutions, which carry
+ * the repository and stack layer position from the error's own context.
+ */
+export type PublishFamilyActionRequest = Extract<
+  FeatureActionRequest,
+  { action: 'publish' | 'reopen-pull-request' | 'recreate-pull-request' }
+>;
 
 // Compile-time drift guard: every FeatureOperationalActionSchema member must
 // appear as a FeatureActionRequestSchema branch's action literal. If an action
@@ -1662,6 +1699,8 @@ const _featureActionCatalogueSubset: {
   'mark-done': z.never(),
   cleanup: z.never(),
   delete: z.never(),
+  'reopen-pull-request': z.never(),
+  'recreate-pull-request': z.never(),
 };
 void _featureActionCatalogueSubset;
 

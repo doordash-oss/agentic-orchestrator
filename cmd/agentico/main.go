@@ -1843,6 +1843,42 @@ func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntim
 	return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
 }
 
+func (t *serverMutationTarget) ReopenPullRequestFeature(featureID string, req serverruntime.ReopenPullRequestRequest) (serverruntime.ReopenPullRequestResponse, error) {
+	resp := serverruntime.ReopenPullRequestResponse{FeatureID: featureID, Result: resultFailed}
+	if t.orch == nil {
+		return resp, errors.New("orchestrator is not available")
+	}
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		return resp, err
+	}
+	if err := t.orch.ReopenPullRequest(featureID, req.Repository, req.Layer); err != nil {
+		if conflict := pullRequestResolutionConflictError(err); conflict != nil {
+			return serverruntime.ReopenPullRequestResponse{FeatureID: featureID, Result: resultConflict}, conflict
+		}
+		return resp, err
+	}
+	resp.Result = "reopened"
+	return resp, nil
+}
+
+func (t *serverMutationTarget) RecreatePullRequestFeature(featureID string, req serverruntime.RecreatePullRequestRequest) (serverruntime.RecreatePullRequestResponse, error) {
+	resp := serverruntime.RecreatePullRequestResponse{FeatureID: featureID, Result: resultFailed}
+	if t.orch == nil {
+		return resp, errors.New("orchestrator is not available")
+	}
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		return resp, err
+	}
+	if err := t.orch.RecreatePullRequest(featureID, req.Repository, req.Layer); err != nil {
+		if conflict := pullRequestResolutionConflictError(err); conflict != nil {
+			return serverruntime.RecreatePullRequestResponse{FeatureID: featureID, Result: resultConflict}, conflict
+		}
+		return resp, err
+	}
+	resp.Result = "recreated"
+	return resp, nil
+}
+
 func (t *serverMutationTarget) MergeFeature(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MergeFeatureResponse, error) {
 	if t.orch == nil {
 		return serverruntime.MergeFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
@@ -2244,6 +2280,13 @@ func (t *serverMutationTarget) RebaseFeature(featureID string, _ serverruntime.R
 	}
 	preflight, err := t.orch.RebaseChildPreflight(featureID)
 	if err != nil {
+		// A closed stack pull request refuses launch as a conflict carrying
+		// the canonical closed code and its repository context — the same
+		// classification the preflight stored on the repository — instead
+		// of a generic bad request.
+		if conflict := closedPullRequestConflictError(err); conflict != nil {
+			return resp, conflict
+		}
 		return resp, err
 	}
 	spec := feature.RebaseChildSpec{
@@ -2364,6 +2407,52 @@ func actionConflictError(err error) error {
 	// that stores the repository's record, so the HTTP rejection and the
 	// stored record agree.
 	if record, ok := orchestrator.PublishConflictRecord(err); ok {
+		options := errcat.RecordOptions(record)
+		options = append(options, errcat.WithDiagnostics(err.Error()))
+		return &serverruntime.ActionConflictError{
+			Err:     err,
+			Code:    record.Code,
+			Options: options,
+		}
+	}
+	return nil
+}
+
+// pullRequestResolutionConflictError maps a reopen or recreate failure onto
+// the conflict envelope. Stored-record failures carry the canonical code
+// and repository context — the same classification that stored the
+// repository's record — and the moot-state refusal carries the generic
+// conflict code. Validation failures map to nil and stay bad requests.
+func pullRequestResolutionConflictError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if record, ok := orchestrator.PullRequestResolutionConflictRecord(err); ok {
+		options := errcat.RecordOptions(record)
+		options = append(options, errcat.WithDiagnostics(err.Error()))
+		return &serverruntime.ActionConflictError{
+			Err:     err,
+			Code:    record.Code,
+			Options: options,
+		}
+	}
+	var moot *orchestrator.PublishRecreateMootError
+	if errors.As(err, &moot) {
+		return &serverruntime.ActionConflictError{Err: err, Detail: moot.Error()}
+	}
+	return nil
+}
+
+// closedPullRequestConflictError maps a rebase preflight refusal caused by a
+// closed stack pull request onto the conflict envelope carrying the
+// canonical closed code and repository context — the same classification
+// the preflight stored on the repository. Every other preflight refusal
+// keeps its existing mapping.
+func closedPullRequestConflictError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if record, ok := orchestrator.StackClosedConflictRecord(err); ok {
 		options := errcat.RecordOptions(record)
 		options = append(options, errcat.WithDiagnostics(err.Error()))
 		return &serverruntime.ActionConflictError{

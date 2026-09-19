@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
@@ -177,6 +178,57 @@ func (o *Orchestrator) liveStackPRStates(f *feature.Feature, repo feature.Featur
 		live[layer.Position] = feature.StackPRState(state)
 	}
 	return live
+}
+
+// parkClosedStackPullRequest stores the closed-PR record on the repository
+// when the preflight's live refresh observed a closed-unmerged pull request.
+// The lowest closed layer is chosen; the record is written after every state
+// persist of the pass — a per-layer state write clears the stored record, so
+// the store is the last write of the pass — and the write is skipped when
+// the repository already stores the closed code for that layer. The stored
+// record is returned so the preflight result can carry it.
+func (o *Orchestrator) parkClosedStackPullRequest(f *feature.Feature, repo feature.FeatureRepo, liveStates map[int]feature.StackPRState) *errcat.FailureRecord {
+	if len(liveStates) == 0 {
+		return nil
+	}
+	lowestPosition := 0
+	var lowestLayer feature.StackLayer
+	var lowestEntry feature.StackRepoEntry
+	for _, layer := range orderedStackLayers(f) {
+		if liveStates[layer.Position] != feature.StackPRStateClosed {
+			continue
+		}
+		entry, ok := layer.Repos[repo.Name]
+		if !ok || entry.PRURL == "" {
+			continue
+		}
+		if lowestPosition == 0 || layer.Position < lowestPosition {
+			lowestPosition, lowestLayer, lowestEntry = layer.Position, layer, entry
+		}
+	}
+	if lowestPosition == 0 {
+		return nil
+	}
+	if state := f.RepoStates[repo.Name]; state != nil && state.Error != nil &&
+		state.Error.Code == errcat.PublishStackPullRequestClosed &&
+		state.Error.Context != nil {
+		for _, block := range state.Error.Context.Repositories {
+			if block.LayerPosition == lowestPosition {
+				return nil
+			}
+		}
+	}
+	closedErr := &PublishStackClosedError{
+		RepoName:      repo.Name,
+		Branch:        lowestLayer.Branch,
+		LayerPosition: lowestLayer.Position,
+		LayerTitle:    lowestLayer.Title,
+		PRURL:         lowestEntry.PRURL,
+		State:         git.PRStateClosed,
+	}
+	o.storePublishFailure(f, repo.Name, closedErr)
+	record := publishFailureRecord(repo.Name, lowestLayer.Branch, closedErr)
+	return &record
 }
 
 // applyPendingDelivery folds undelivered-work measurements into a repository's

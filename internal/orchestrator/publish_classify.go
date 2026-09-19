@@ -34,6 +34,9 @@ import (
 //   - rewritten-push changed        → publish_remote_changed
 //   - pull-request creation         → publish_pull_request_failed
 //   - description generation        → publish_description_failed
+//   - reopen refusal                → publish_reopen_failed
+//   - missing head branch           → publish_head_branch_missing
+//   - pull-request recreation       → publish_recreate_failed
 //   - commit, push, artifact scrub
 //     → publish_push_failed
 func publishFailureRecord(repoName, branch string, err error) errcat.FailureRecord {
@@ -46,6 +49,9 @@ func publishFailureRecord(repoName, branch string, err error) errcat.FailureReco
 	var created *PublishPRCreateError
 	var described *PublishDescriptionError
 	var pushed *PublishPushError
+	var reopenFailed *PublishReopenFailedError
+	var headMissing *PublishHeadBranchMissingError
+	var recreateFailed *PublishRecreateFailedError
 	switch {
 	case errors.As(err, &diverged):
 		code = errcat.PublishRemoteDiverged
@@ -87,6 +93,27 @@ func publishFailureRecord(repoName, branch string, err error) errcat.FailureReco
 		}
 		block.LayerPosition = pushed.LayerPosition
 		block.LayerTitle = pushed.LayerTitle
+	case errors.As(err, &reopenFailed):
+		code = errcat.PublishReopenFailed
+		if reopenFailed.Branch != "" {
+			block.Branch = reopenFailed.Branch
+		}
+		block.LayerPosition = reopenFailed.LayerPosition
+		block.LayerTitle = reopenFailed.LayerTitle
+		block.PullRequestURL = reopenFailed.PRURL
+	case errors.As(err, &headMissing):
+		code = errcat.PublishHeadBranchMissing
+		if headMissing.Branch != "" {
+			block.Branch = headMissing.Branch
+		}
+		block.LayerPosition = headMissing.LayerPosition
+		block.LayerTitle = headMissing.LayerTitle
+		block.PullRequestURL = headMissing.PRURL
+	case errors.As(err, &recreateFailed):
+		code = errcat.PublishRecreateFailed
+		block.LayerPosition = recreateFailed.LayerPosition
+		block.LayerTitle = recreateFailed.LayerTitle
+		block.PullRequestURL = recreateFailed.PRURL
 	}
 	return errcat.FailureRecord{
 		Code:        code,
@@ -109,6 +136,44 @@ func PublishConflictRecord(err error) (errcat.FailureRecord, bool) {
 		return publishFailureRecord(changed.RepoName, changed.Branch, err), true
 	}
 	return errcat.FailureRecord{}, false
+}
+
+// StackClosedConflictRecord classifies a closed-stack-PR refusal — the
+// rebase preflight's launch refusal — into the canonical record the
+// repository state stores, so a preflight surface can reject with the same
+// canonical code and context. It reports false for every other error.
+func StackClosedConflictRecord(err error) (errcat.FailureRecord, bool) {
+	var closed *PublishStackClosedError
+	if errors.As(err, &closed) {
+		return publishFailureRecord(closed.RepoName, closed.Branch, err), true
+	}
+	return errcat.FailureRecord{}, false
+}
+
+// PullRequestResolutionConflictRecord classifies a reopen or recreate
+// mutation failure that stored a canonical record on the repository — the
+// resolution refusals plus the push and description failures the actions
+// reuse — so the HTTP envelope and the stored record agree. It reports
+// false for validation and moot-state failures, which carry no record.
+func PullRequestResolutionConflictRecord(err error) (errcat.FailureRecord, bool) {
+	var reopenFailed *PublishReopenFailedError
+	var headMissing *PublishHeadBranchMissingError
+	var recreateFailed *PublishRecreateFailedError
+	var pushed *PublishPushError
+	var described *PublishDescriptionError
+	switch {
+	case errors.As(err, &reopenFailed):
+		return publishFailureRecord(reopenFailed.RepoName, reopenFailed.Branch, err), true
+	case errors.As(err, &headMissing):
+		return publishFailureRecord(headMissing.RepoName, headMissing.Branch, err), true
+	case errors.As(err, &recreateFailed):
+		return publishFailureRecord(recreateFailed.RepoName, "", err), true
+	case errors.As(err, &pushed):
+		return publishFailureRecord(pushed.RepoName, pushed.Branch, err), true
+	case errors.As(err, &described):
+		return publishFailureRecord(described.RepoName, "", err), true
+	}
+	return PublishConflictRecord(err)
 }
 
 // storePublishFailure classifies err at the publish boundary and stores the

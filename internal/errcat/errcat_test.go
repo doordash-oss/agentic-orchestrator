@@ -317,7 +317,9 @@ func TestWithRemediationHintOverridesAuthoredHint(t *testing.T) {
 	if rendered.Remediation == nil || rendered.Remediation.Hint != "Resolve the conflict, then retry" {
 		t.Fatalf("remediation hint = %q; want override", rendered.Remediation.Hint)
 	}
-	if len(rendered.Remediation.Actions) != 1 || rendered.Remediation.Actions[0] != "publish" {
+	if len(rendered.Remediation.Actions) != 2 ||
+		rendered.Remediation.Actions[0] != "reopen-pull-request" ||
+		rendered.Remediation.Actions[1] != "recreate-pull-request" {
 		t.Fatalf("remediation actions = %#v; want the entry's actions preserved", rendered.Remediation.Actions)
 	}
 }

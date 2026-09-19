@@ -35,6 +35,9 @@ type FakePullRequest struct {
 	Draft  bool
 	State  string
 	Merged bool
+	// HeadDeleted marks the head branch deleted on the remote; a state
+	// change back to open answers GitHub's branch-deleted 422.
+	HeadDeleted bool
 }
 
 // FakePullPatch records one accepted PATCH and the fields it set; a nil
@@ -173,6 +176,26 @@ func (s *FakePullStore) installRepo(t *testing.T, fake *FakeGitHubAPI, repo stri
 			}
 			s.mu.Lock()
 			pr, found := s.pulls[pullKey(repo, number)]
+			if found && payload.State != nil && *payload.State == "open" && pr.Merged {
+				s.mu.Unlock()
+				// GitHub refuses to reopen a merged pull request.
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+					"message": "Validation Failed",
+					"errors":  []map[string]string{{"message": "cannot reopen a merged pull request"}},
+				})
+				return
+			}
+			if found && payload.State != nil && *payload.State == "open" && pr.HeadDeleted {
+				s.mu.Unlock()
+				// GitHub refuses a state change whose head branch no
+				// longer exists on the remote; the wording must satisfy
+				// the client's branch-deleted 422 classification.
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+					"message": "Validation Failed",
+					"errors":  []map[string]string{{"message": "the head branch has been deleted"}},
+				})
+				return
+			}
 			if found {
 				if payload.Body != nil {
 					pr.Body = *payload.Body
@@ -260,6 +283,34 @@ func (s *FakePullStore) MarkMerged(repo string, number int) bool {
 	}
 	pr.Merged = true
 	pr.State = "closed"
+	return true
+}
+
+// MarkClosed marks one stored pull request closed without merge, mirroring
+// an external close on GitHub. The answer reports whether the pull request
+// exists.
+func (s *FakePullStore) MarkClosed(repo string, number int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pr, ok := s.pulls[pullKey(repo, number)]
+	if !ok {
+		return false
+	}
+	pr.State = "closed"
+	return true
+}
+
+// MarkHeadDeleted marks one stored pull request's head branch deleted on
+// the remote; a later state change back to open answers GitHub's
+// branch-deleted 422. The answer reports whether the pull request exists.
+func (s *FakePullStore) MarkHeadDeleted(repo string, number int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pr, ok := s.pulls[pullKey(repo, number)]
+	if !ok {
+		return false
+	}
+	pr.HeadDeleted = true
 	return true
 }
 

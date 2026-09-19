@@ -235,6 +235,37 @@ describe('ErrorSurface structured details', () => {
     expect(screen.getByText('Remote-only commits')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
   });
+
+  it('renders the layer position, title, and pull-request URL a repository context carries', () => {
+    // Closed-pull-request records name the failing stack layer; the layer
+    // rides the repository head and the pull request renders as text (the
+    // error surface has no external-link affordance).
+    const error: CanonicalError = {
+      code: 'publish_stack_pull_request_closed',
+      class: 'needs_action',
+      title: 'Stack pull request closed',
+      summary: 'The layer 2 pull request for repository "web" was closed without merging.',
+      context: {
+        repositories: [
+          {
+            name: 'web',
+            branch: 'agentico/search-revamp-2',
+            layer_position: 2,
+            layer_title: 'Search revamp layer 2',
+            pull_request_url: 'https://github.com/org/web/pull/12',
+          },
+        ],
+      },
+    };
+    render(<ErrorSurface error={error} variant="full" />);
+    expect(screen.getByText('web')).toBeInTheDocument();
+    expect(screen.getByText('Layer 2 — Search revamp layer 2')).toBeInTheDocument();
+    expect(screen.getByText('agentico/search-revamp-2')).toBeInTheDocument();
+    expect(screen.getByText('Pull request')).toHaveClass('error-surface__sha-label');
+    expect(screen.getByText('https://github.com/org/web/pull/12')).toHaveClass(
+      'error-surface__sha-value',
+    );
+  });
 });
 
 describe('ErrorSurface primary-action slot', () => {
@@ -281,6 +312,115 @@ describe('ErrorSurface primary-action slot', () => {
     cleanup();
     render(<ErrorSurface error={FULL_ERROR} resolveAction={vi.fn(() => undefined)} />);
     expect(screen.queryByRole('button')).toBeNull();
+  });
+});
+
+describe('ErrorSurface catalog secondary actions', () => {
+  const CLOSED_PR_ERROR: CanonicalError = {
+    code: 'publish_stack_pull_request_closed',
+    class: 'needs_action',
+    title: 'Stack pull request closed',
+    summary: 'The layer 2 pull request for repository "web" was closed without merging.',
+    remediation: {
+      hint: 'Reopen the pull request on GitHub, or recreate it from the local branch.',
+      actions: ['reopen-pull-request', 'recreate-pull-request'],
+    },
+  };
+
+  it('renders the first action as the primary button and the rest as secondary buttons that dispatch their own ids', async () => {
+    const onAction = vi.fn();
+    const resolveAction = vi.fn((actionId: string): ErrorSurfaceAction | undefined => {
+      if (actionId === 'reopen-pull-request')
+        return { enabled: true, label: 'Reopen pull request' };
+      if (actionId === 'recreate-pull-request')
+        return { enabled: true, label: 'Recreate pull request' };
+      return undefined;
+    });
+    render(
+      <ErrorSurface error={CLOSED_PR_ERROR} resolveAction={resolveAction} onAction={onAction} />,
+    );
+    const primary = screen.getByRole('button', { name: 'Reopen pull request' });
+    expect(primary).toHaveClass('error-surface__action');
+    const secondary = screen.getByRole('button', { name: 'Recreate pull request' });
+    expect(secondary).toHaveClass('error-surface__secondary-action');
+    expect(secondary.closest('.error-surface__action-row')).not.toBeNull();
+    expect(primary.closest('.error-surface__action-row')).toBe(
+      secondary.closest('.error-surface__action-row'),
+    );
+    expect(screen.getAllByRole('button')).toHaveLength(2);
+    const user = userEvent.setup();
+    await user.click(primary);
+    await user.click(secondary);
+    expect(onAction).toHaveBeenCalledTimes(2);
+    expect(onAction).toHaveBeenNthCalledWith(1, 'reopen-pull-request');
+    expect(onAction).toHaveBeenNthCalledWith(2, 'recreate-pull-request');
+  });
+
+  it('renders a disabled secondary action with its own reason exactly once', () => {
+    render(
+      <ErrorSurface
+        error={CLOSED_PR_ERROR}
+        resolveAction={vi.fn((actionId: string): ErrorSurfaceAction | undefined =>
+          actionId === 'reopen-pull-request'
+            ? { enabled: true, label: 'Reopen pull request' }
+            : {
+                enabled: false,
+                label: 'Recreate pull request',
+                disabledReason: 'No closed pull request.',
+              },
+        )}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Reopen pull request' })).toBeVisible();
+    expect(screen.getAllByText('No closed pull request.')).toHaveLength(1);
+  });
+
+  it('renders a reason shared by the primary and a disabled secondary only once', () => {
+    const disabledReason = 'A child is running.';
+    render(
+      <ErrorSurface
+        error={CLOSED_PR_ERROR}
+        resolveAction={vi.fn((): ErrorSurfaceAction => ({
+          enabled: false,
+          label: 'Unavailable',
+          disabledReason,
+        }))}
+      />,
+    );
+    expect(screen.getAllByText(disabledReason)).toHaveLength(1);
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('renders an unresolved secondary id as nothing, keeping a single-action read exactly as before', () => {
+    render(
+      <ErrorSurface
+        error={CLOSED_PR_ERROR}
+        resolveAction={vi.fn((actionId: string): ErrorSurfaceAction | undefined =>
+          actionId === 'reopen-pull-request'
+            ? { enabled: true, label: 'Reopen pull request' }
+            : undefined,
+        )}
+      />,
+    );
+    const buttons = screen.getAllByRole('button');
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]).toHaveAccessibleName('Reopen pull request');
+    expect(buttons[0]).toHaveClass('error-surface__action');
+  });
+
+  it('does not duplicate the prop secondary action when a catalog secondary carries its label', () => {
+    render(
+      <ErrorSurface
+        error={CLOSED_PR_ERROR}
+        resolveAction={vi.fn((actionId: string): ErrorSurfaceAction | undefined =>
+          actionId === 'recreate-pull-request'
+            ? { enabled: true, label: 'Recreate pull request' }
+            : undefined,
+        )}
+        secondaryAction={{ label: 'Recreate pull request', onAction: vi.fn() }}
+      />,
+    );
+    expect(screen.getAllByRole('button', { name: 'Recreate pull request' })).toHaveLength(1);
   });
 });
 

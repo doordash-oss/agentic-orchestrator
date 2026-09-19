@@ -33,6 +33,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
@@ -2364,6 +2365,28 @@ func TestServerMutationTargetCompletionActionsRejectStaleSourceRevision(t *testi
 				return string(result.Status), err
 			},
 		},
+		{
+			name: "reopen pull request",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.ReopenPullRequestFeature(featureID, serverruntime.ReopenPullRequestRequest{
+					SourceRevision: staleRevision,
+					Repository:     testRepoAName,
+					Layer:          1,
+				})
+				return result.Result, err
+			},
+		},
+		{
+			name: "recreate pull request",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.RecreatePullRequestFeature(featureID, serverruntime.RecreatePullRequestRequest{
+					SourceRevision: staleRevision,
+					Repository:     testRepoAName,
+					Layer:          1,
+				})
+				return result.Result, err
+			},
+		},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
@@ -2398,6 +2421,174 @@ func TestServerMutationTargetCompletionActionsRejectStaleSourceRevision(t *testi
 			}
 			if _, err := store.Load(f.ID); err != nil {
 				t.Fatalf("feature was mutated or deleted despite stale preflight: %v", err)
+			}
+		})
+	}
+}
+
+// resolutionFixturePRURL is the closed pull request recorded on the
+// reopen/recreate adapter fixture's single stack layer.
+const resolutionFixturePRURL = "https://github.com/acme/repo-a/pull/12"
+
+// newPullRequestResolutionTarget builds the closed-layer fixture shared by
+// the reopen/recreate adapter tests: a code-ready publishable feature whose
+// single stack layer records a closed pull request, wired to an orchestrator
+// with a MockRemoteOps so resolution refusals surface hermetically.
+func newPullRequestResolutionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature, *mocks.MockRemoteOps) {
+	t.Helper()
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	repoPath := filepath.Join(runtimeDir, testRepoAName)
+	initMutationGitRepo(t, repoPath)
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("resolve closed pull request", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	publishable := true
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusCodeReady
+		ff.CurrentPhase = feature.PhasePublish
+		for i := range ff.Repos {
+			ff.Repos[i].Publishable = &publishable
+			ff.Repos[i].Branch = "feature/resolve-closed-pull-request"
+			ff.Repos[i].Path = repoPath
+		}
+		// SetRepoPublishError stores the resolution record only for a
+		// repository whose state entry exists, so seed it like the publish
+		// fixture does.
+		ff.RepoStates = map[string]*feature.RepoState{testRepoAName: {Touched: true}}
+		ff.Stack = []feature.StackLayer{{
+			Position: 1,
+			Title:    "Single layer",
+			Slug:     "single-layer",
+			Phases:   []int{1},
+			Branch:   "feature/resolve-closed-pull-request",
+			Repos: map[string]feature.StackRepoEntry{
+				testRepoAName: {
+					PRURL:         resolutionFixturePRURL,
+					PRState:       feature.StackPRStateClosed,
+					TipSHA:        "1111111111111111111111111111111111111111",
+					LastPushedSHA: "1111111111111111111111111111111111111111",
+				},
+			},
+		}}
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+	remote := mocks.NewMockRemoteOps()
+	remote.PRStateFn = func(repoPath, prURL string) (string, error) {
+		return git.PRStateClosed, nil
+	}
+	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store, Remote: remote}, orchestrator.Hooks{})
+	return serverMutationTarget{orch: orch, store: store}, store, f, remote
+}
+
+// TestServerMutationTargetPullRequestResolutionActionsMapStoredRecordConflicts
+// pins the adapter's conflict mapping for the closed-PR resolution actions:
+// a stored-record refusal from the orchestrator answers with the canonical
+// conflict envelope — code and repository context carrying the layer fields —
+// and the repository's stored record agrees, mirroring the publish adapter's
+// conflict mapping test.
+func TestServerMutationTargetPullRequestResolutionActionsMapStoredRecordConflicts(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		code    errcat.Code
+		prepare func(*mocks.MockRemoteOps)
+		run     func(*serverMutationTarget, string) (string, error)
+	}{
+		{
+			name: "reopen refused",
+			code: errcat.PublishReopenFailed,
+			prepare: func(remote *mocks.MockRemoteOps) {
+				remote.ReopenPullRequestFn = func(repoPath, branch, prURL string) error {
+					return errors.New("GitHub refused the state change")
+				}
+			},
+			run: func(target *serverMutationTarget, featureID string) (string, error) {
+				result, err := target.ReopenPullRequestFeature(featureID, serverruntime.ReopenPullRequestRequest{
+					Repository: testRepoAName,
+					Layer:      1,
+				})
+				return result.Result, err
+			},
+		},
+		{
+			name: "head branch missing",
+			code: errcat.PublishHeadBranchMissing,
+			prepare: func(remote *mocks.MockRemoteOps) {
+				remote.ReopenPullRequestFn = func(repoPath, branch, prURL string) error {
+					return fmt.Errorf("%w: branch %q", git.ErrPRHeadBranchMissing, branch)
+				}
+			},
+			run: func(target *serverMutationTarget, featureID string) (string, error) {
+				result, err := target.ReopenPullRequestFeature(featureID, serverruntime.ReopenPullRequestRequest{
+					Repository: testRepoAName,
+					Layer:      1,
+				})
+				return result.Result, err
+			},
+		},
+		{
+			name: "recreate failed at PR creation",
+			code: errcat.PublishRecreateFailed,
+			prepare: func(remote *mocks.MockRemoteOps) {
+				remote.PushLayerBranchFn = func(repoPath, branch, localSHA, lastPushedSHA string) (string, error) {
+					return "2222222222222222222222222222222222222222", nil
+				}
+				remote.GetPRBodyFn = func(prURL string) (string, error) {
+					return "closed pull request body", nil
+				}
+				remote.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
+					return "", errors.New("GitHub create failed")
+				}
+			},
+			run: func(target *serverMutationTarget, featureID string) (string, error) {
+				result, err := target.RecreatePullRequestFeature(featureID, serverruntime.RecreatePullRequestRequest{
+					Repository: testRepoAName,
+					Layer:      1,
+				})
+				return result.Result, err
+			},
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			target, store, f, remote := newPullRequestResolutionTarget(t)
+			tc.prepare(remote)
+
+			result, err := tc.run(&target, f.ID)
+			if err == nil {
+				t.Fatal("resolution action error = nil, want stored-record conflict")
+			}
+			var conflict *serverruntime.ActionConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("resolution action error = %T %v; want ActionConflictError", err, err)
+			}
+			if conflict.Code != tc.code {
+				t.Fatalf("ActionConflictError.Code = %q; want %q", conflict.Code, tc.code)
+			}
+			if result != resultConflict {
+				t.Fatalf("resolution action result = %q; want %q", result, resultConflict)
+			}
+			rendered := errcat.New(tc.code, conflict.Options...)
+			if rendered.Context == nil || len(rendered.Context.Repositories) != 1 {
+				t.Fatalf("rendered context = %+v; want one repository", rendered.Context)
+			}
+			repo := rendered.Context.Repositories[0]
+			if repo.Name != testRepoAName || repo.LayerPosition != 1 || repo.LayerTitle != "Single layer" || repo.PullRequestURL != resolutionFixturePRURL {
+				t.Fatalf("rendered repository = %+v; want %s layer 1 with the closed pull request", repo, testRepoAName)
+			}
+			loaded, err := store.Load(f.ID)
+			if err != nil {
+				t.Fatalf("Load feature: %v", err)
+			}
+			state := loaded.RepoStates[testRepoAName]
+			if state == nil || state.Error == nil || state.Error.Code != tc.code {
+				t.Fatalf("stored repository record = %+v; want %s", state, tc.code)
 			}
 		})
 	}

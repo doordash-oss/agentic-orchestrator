@@ -16,8 +16,10 @@ package github_test // external test package so it can use testutil
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/github"
@@ -229,5 +231,48 @@ func TestUpdatePRBaseRetargetsPullRequestBase(t *testing.T) {
 	}
 	if pr, ok := store.Pull("widgets", 1); !ok || pr.Base != "develop" {
 		t.Fatalf("Pull(widgets, 1) = %+v, %v; want stored base develop", pr, ok)
+	}
+}
+
+func TestReopenPRPostsStateOpen(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/acme/widgets/pulls/7", 200, `{}`)
+
+	client, _ := github.ForHost("github.com")
+	if err := client.ReopenPR("acme", "widgets", 7); err != nil {
+		t.Fatalf("ReopenPR() error = %v", err)
+	}
+	if fake.RequestCount(`PATCH /repos/acme/widgets/pulls/7 {"state":"open"}`) != 1 {
+		t.Fatalf("requests = %v; want one reopen PATCH posting state=open", fake.Requests())
+	}
+}
+
+func TestReopenPRClassifiesBranchDeleted422(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/acme/widgets/pulls/7", http.StatusUnprocessableEntity,
+		`{"message":"Validation Failed","errors":[{"message":"The branch has been deleted"}]}`)
+
+	client, _ := github.ForHost("github.com")
+	err := client.ReopenPR("acme", "widgets", 7)
+	if !errors.Is(err, github.ErrHeadBranchDeleted) {
+		t.Fatalf("ReopenPR() error = %v; want ErrHeadBranchDeleted", err)
+	}
+}
+
+func TestReopenPRReturnsOther422Unclassified(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/acme/widgets/pulls/7", http.StatusUnprocessableEntity,
+		`{"message":"Validation Failed","errors":[{"message":"cannot reopen a merged pull request"}]}`)
+
+	client, _ := github.ForHost("github.com")
+	err := client.ReopenPR("acme", "widgets", 7)
+	if err == nil {
+		t.Fatal("ReopenPR() = nil error, want the 422 refusal")
+	}
+	if errors.Is(err, github.ErrHeadBranchDeleted) {
+		t.Fatalf("ReopenPR() error = %v; a different 422 must not classify as ErrHeadBranchDeleted", err)
+	}
+	if !strings.Contains(err.Error(), "cannot reopen a merged pull request") {
+		t.Fatalf("ReopenPR() error = %v; want the API text carried through", err)
 	}
 }

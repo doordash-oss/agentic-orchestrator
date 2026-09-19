@@ -1171,6 +1171,45 @@ describe('Repository publish-failure error contract', () => {
     expect(parsed.data?.context?.repositories?.[0]?.remote_only_commits).toBe(3);
   });
 
+  it('accepts the layer fields on a canonical error repository entry and rejects stale shapes', () => {
+    const layerError = {
+      ...repoError,
+      code: 'publish_stack_pull_request_closed',
+      context: {
+        repositories: [
+          {
+            name: 'repo-a',
+            branch: 'feature/f',
+            layer_position: 2,
+            layer_title: 'Search revamp layer 2',
+            pull_request_url: 'https://github.com/org/repo-a/pull/12',
+          },
+        ],
+      },
+    };
+    const parsed = CanonicalErrorSchema.safeParse(layerError);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.context?.repositories?.[0]?.layer_position).toBe(2);
+    expect(parsed.data?.context?.repositories?.[0]?.layer_title).toBe('Search revamp layer 2');
+    expect(parsed.data?.context?.repositories?.[0]?.pull_request_url).toBe(
+      'https://github.com/org/repo-a/pull/12',
+    );
+    // A non-integer layer position and unknown keys (the pre-layer wire shape
+    // spelled the URL differently) fail closed.
+    expect(
+      CanonicalErrorSchema.safeParse({
+        ...layerError,
+        context: { repositories: [{ name: 'repo-a', layer_position: 2.5 }] },
+      }).success,
+    ).toBe(false);
+    expect(
+      CanonicalErrorSchema.safeParse({
+        ...layerError,
+        context: { repositories: [{ name: 'repo-a', layer: 2, pr_url: 'https://x.test/pull/1' }] },
+      }).success,
+    ).toBe(false);
+  });
+
   it('rejects stale last_error keys on the repository status and preflight repository', () => {
     expect(ServerRepoStatusSchema.safeParse({ ...repoStatus, last_error: 'boom' }).success).toBe(
       false,

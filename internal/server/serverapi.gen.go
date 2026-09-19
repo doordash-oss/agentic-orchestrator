@@ -295,24 +295,26 @@ func (e ErrorScope) Valid() bool {
 
 // Defines values for FeatureAction.
 const (
-	FeatureActionCleanup            FeatureAction = "cleanup"
-	FeatureActionDelete             FeatureAction = "delete"
-	FeatureActionDiscard            FeatureAction = "discard"
-	FeatureActionMarkDone           FeatureAction = "mark-done"
-	FeatureActionMerge              FeatureAction = "merge"
-	FeatureActionNeedUserInput      FeatureAction = "need-user-input"
-	FeatureActionNeedUserInputDraft FeatureAction = "need-user-input-draft"
-	FeatureActionPauseStop          FeatureAction = "pause-stop"
-	FeatureActionPublish            FeatureAction = "publish"
-	FeatureActionRebase             FeatureAction = "rebase"
-	FeatureActionRefactor           FeatureAction = "refactor"
-	FeatureActionRestart            FeatureAction = "restart"
-	FeatureActionResume             FeatureAction = "resume"
-	FeatureActionRetry              FeatureAction = "retry"
-	FeatureActionReviewFeedback     FeatureAction = "review-feedback"
-	FeatureActionRewind             FeatureAction = "rewind"
-	FeatureActionSetup              FeatureAction = "setup"
-	FeatureActionStart              FeatureAction = "start"
+	FeatureActionCleanup             FeatureAction = "cleanup"
+	FeatureActionDelete              FeatureAction = "delete"
+	FeatureActionDiscard             FeatureAction = "discard"
+	FeatureActionMarkDone            FeatureAction = "mark-done"
+	FeatureActionMerge               FeatureAction = "merge"
+	FeatureActionNeedUserInput       FeatureAction = "need-user-input"
+	FeatureActionNeedUserInputDraft  FeatureAction = "need-user-input-draft"
+	FeatureActionPauseStop           FeatureAction = "pause-stop"
+	FeatureActionPublish             FeatureAction = "publish"
+	FeatureActionRebase              FeatureAction = "rebase"
+	FeatureActionRecreatePullRequest FeatureAction = "recreate-pull-request"
+	FeatureActionRefactor            FeatureAction = "refactor"
+	FeatureActionReopenPullRequest   FeatureAction = "reopen-pull-request"
+	FeatureActionRestart             FeatureAction = "restart"
+	FeatureActionResume              FeatureAction = "resume"
+	FeatureActionRetry               FeatureAction = "retry"
+	FeatureActionReviewFeedback      FeatureAction = "review-feedback"
+	FeatureActionRewind              FeatureAction = "rewind"
+	FeatureActionSetup               FeatureAction = "setup"
+	FeatureActionStart               FeatureAction = "start"
 )
 
 // Valid indicates whether the value is a known member of the FeatureAction enum.
@@ -338,7 +340,11 @@ func (e FeatureAction) Valid() bool {
 		return true
 	case FeatureActionRebase:
 		return true
+	case FeatureActionRecreatePullRequest:
+		return true
 	case FeatureActionRefactor:
+		return true
+	case FeatureActionReopenPullRequest:
 		return true
 	case FeatureActionRestart:
 		return true
@@ -1211,6 +1217,21 @@ func (e RebaseFeatureParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for RecreatePullRequestFeatureParamsXAgenticoClient.
+const (
+	RecreatePullRequestFeatureParamsXAgenticoClientLocal RecreatePullRequestFeatureParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the RecreatePullRequestFeatureParamsXAgenticoClient enum.
+func (e RecreatePullRequestFeatureParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case RecreatePullRequestFeatureParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RefactorFeatureParamsXAgenticoClient.
 const (
 	RefactorFeatureParamsXAgenticoClientLocal RefactorFeatureParamsXAgenticoClient = "local"
@@ -1220,6 +1241,21 @@ const (
 func (e RefactorFeatureParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case RefactorFeatureParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReopenPullRequestFeatureParamsXAgenticoClient.
+const (
+	ReopenPullRequestFeatureParamsXAgenticoClientLocal ReopenPullRequestFeatureParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the ReopenPullRequestFeatureParamsXAgenticoClient enum.
+func (e ReopenPullRequestFeatureParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case ReopenPullRequestFeatureParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -2320,8 +2356,17 @@ type ErrorRepositoryContext struct {
 	CommitSha     string   `json:"commit_sha,omitempty"`
 	ConflictFiles []string `json:"conflict_files,omitempty"`
 	DirtyFiles    []string `json:"dirty_files,omitempty"`
-	Name          string   `json:"name"`
-	ObservedSha   string   `json:"observed_sha,omitempty"`
+
+	// LayerPosition Stack layer position of the repository's failing layer, when the code is layer-scoped.
+	LayerPosition int `json:"layer_position,omitempty"`
+
+	// LayerTitle Roadmap table title of the stack layer the code names, when known.
+	LayerTitle  string `json:"layer_title,omitempty"`
+	Name        string `json:"name"`
+	ObservedSha string `json:"observed_sha,omitempty"`
+
+	// PullRequestURL Pull-request URL of the stack layer the code names, when known.
+	PullRequestURL string `json:"pull_request_url,omitempty"`
 
 	// RebaseTarget Rebase target branch of a conflicted publish pull-rebase, when known.
 	RebaseTarget string `json:"rebase_target,omitempty"`
@@ -3049,6 +3094,26 @@ type RecoverySnapshotResponse struct {
 	SnapshotID string         `json:"snapshot_id"`
 }
 
+// RecreatePullRequestRequest defines model for RecreatePullRequestRequest.
+type RecreatePullRequestRequest struct {
+	// Layer Stack layer position of the closed pull request.
+	Layer int `json:"layer"`
+
+	// Repository Repository name whose stack layer holds the closed pull request.
+	Repository string `json:"repository"`
+
+	// SourceRevision Completion preflight source revision guard, as publish carries.
+	SourceRevision string `json:"source_revision,omitempty"`
+}
+
+// RecreatePullRequestResponse defines model for RecreatePullRequestResponse.
+type RecreatePullRequestResponse struct {
+	APIVersion string       `json:"api_version"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	Result     string       `json:"result"`
+}
+
 // RefactorFeatureRequest defines model for RefactorFeatureRequest.
 type RefactorFeatureRequest struct {
 	AttachmentUploads []string                `json:"attachment_uploads,omitempty"`
@@ -3155,6 +3220,26 @@ type RelationshipChildSummary struct {
 
 	// Warnings Canonical warning-class errors for this child's stored cleanup and review-feedback tail records; absent when both settled cleanly.
 	Warnings []Error `json:"warnings"`
+}
+
+// ReopenPullRequestRequest defines model for ReopenPullRequestRequest.
+type ReopenPullRequestRequest struct {
+	// Layer Stack layer position of the closed pull request.
+	Layer int `json:"layer"`
+
+	// Repository Repository name whose stack layer holds the closed pull request.
+	Repository string `json:"repository"`
+
+	// SourceRevision Completion preflight source revision guard, as publish carries.
+	SourceRevision string `json:"source_revision,omitempty"`
+}
+
+// ReopenPullRequestResponse defines model for ReopenPullRequestResponse.
+type ReopenPullRequestResponse struct {
+	APIVersion string       `json:"api_version"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	Result     string       `json:"result"`
 }
 
 // RepoStatus defines model for RepoStatus.
@@ -4465,6 +4550,15 @@ type RebaseFeatureParams struct {
 // RebaseFeatureParamsXAgenticoClient defines parameters for RebaseFeature.
 type RebaseFeatureParamsXAgenticoClient string
 
+// RecreatePullRequestFeatureParams defines parameters for RecreatePullRequestFeature.
+type RecreatePullRequestFeatureParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient RecreatePullRequestFeatureParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// RecreatePullRequestFeatureParamsXAgenticoClient defines parameters for RecreatePullRequestFeature.
+type RecreatePullRequestFeatureParamsXAgenticoClient string
+
 // RefactorFeatureParams defines parameters for RefactorFeature.
 type RefactorFeatureParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -4473,6 +4567,15 @@ type RefactorFeatureParams struct {
 
 // RefactorFeatureParamsXAgenticoClient defines parameters for RefactorFeature.
 type RefactorFeatureParamsXAgenticoClient string
+
+// ReopenPullRequestFeatureParams defines parameters for ReopenPullRequestFeature.
+type ReopenPullRequestFeatureParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient ReopenPullRequestFeatureParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// ReopenPullRequestFeatureParamsXAgenticoClient defines parameters for ReopenPullRequestFeature.
+type ReopenPullRequestFeatureParamsXAgenticoClient string
 
 // ReviewFeedbackFeatureParams defines parameters for ReviewFeedbackFeature.
 type ReviewFeedbackFeatureParams struct {
@@ -4854,8 +4957,14 @@ type CreateFeatureJSONRequestBody = CreateFeatureMutationRequest
 // RebaseFeatureJSONRequestBody defines body for RebaseFeature for application/json ContentType.
 type RebaseFeatureJSONRequestBody = RebaseFeatureRequest
 
+// RecreatePullRequestFeatureJSONRequestBody defines body for RecreatePullRequestFeature for application/json ContentType.
+type RecreatePullRequestFeatureJSONRequestBody = RecreatePullRequestRequest
+
 // RefactorFeatureJSONRequestBody defines body for RefactorFeature for application/json ContentType.
 type RefactorFeatureJSONRequestBody = RefactorFeatureRequest
+
+// ReopenPullRequestFeatureJSONRequestBody defines body for ReopenPullRequestFeature for application/json ContentType.
+type ReopenPullRequestFeatureJSONRequestBody = ReopenPullRequestRequest
 
 // ReviewFeedbackFeatureJSONRequestBody defines body for ReviewFeedbackFeature for application/json ContentType.
 type ReviewFeedbackFeatureJSONRequestBody = ReviewFeedbackFeatureRequest

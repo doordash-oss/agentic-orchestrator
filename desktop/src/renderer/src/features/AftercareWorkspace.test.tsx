@@ -251,6 +251,43 @@ describe('AftercareWorkspace runway', () => {
     expect(screen.getByText('No action is needed right now.')).toBeVisible();
   });
 
+  it('renders catalog-resolved resolutions on the action-error card through the threaded resolver', async () => {
+    const user = userEvent.setup();
+    const onActionErrorAction = vi.fn();
+    renderWorkspace({
+      snapshot: featureSnapshot({ status: 'Published', actions: [] }),
+      actionError: {
+        action: 'Rebase',
+        error: {
+          code: 'publish_stack_pull_request_closed',
+          class: 'needs_action',
+          title: 'Stack pull request closed',
+          summary: 'The layer 2 pull request for repository "web" was closed without merging.',
+          remediation: {
+            hint: 'Reopen the pull request on GitHub, or recreate it from the local branch.',
+            actions: ['reopen-pull-request', 'recreate-pull-request'],
+          },
+          context: { repositories: [{ name: 'web', layer_position: 2 }] },
+        },
+      },
+      actionErrorResolveAction: (actionId) =>
+        actionId === 'reopen-pull-request'
+          ? { enabled: true, label: 'Reopen pull request' }
+          : actionId === 'recreate-pull-request'
+            ? { enabled: true, label: 'Recreate pull request' }
+            : undefined,
+      actionErrorOnAction: onActionErrorAction,
+    });
+    expect(screen.getByText('Rebase was rejected')).toBeVisible();
+    const primary = screen.getByRole('button', { name: 'Reopen pull request' });
+    expect(primary).toHaveClass('error-surface__action');
+    expect(screen.getByRole('button', { name: 'Recreate pull request' })).toHaveClass(
+      'error-surface__secondary-action',
+    );
+    await user.click(primary);
+    expect(onActionErrorAction).toHaveBeenCalledWith('reopen-pull-request');
+  });
+
   it('offers the first local merge as a runway row', async () => {
     const user = userEvent.setup();
     const props = renderWorkspace({

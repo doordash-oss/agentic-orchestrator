@@ -120,6 +120,8 @@ type MutationTarget interface {
 	EndChat() (ChatEndResponse, error)
 	RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error)
 	PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error)
+	ReopenPullRequestFeature(featureID string, req ReopenPullRequestRequest) (ReopenPullRequestResponse, error)
+	RecreatePullRequestFeature(featureID string, req RecreatePullRequestRequest) (RecreatePullRequestResponse, error)
 	MergeFeature(featureID string, req GuardedFeatureActionRequest) (MergeFeatureResponse, error)
 	RewindFeature(featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error)
 	RetryFeature(featureID string) (RetryFeatureResponse, error)
@@ -727,7 +729,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case actionSetup, actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionRefactor, actionReviewFeedback, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionDiscard:
+		case actionSetup, actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionRefactor, actionReviewFeedback, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionDiscard, actionReopenPullRequest, actionRecreatePullRequest:
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
@@ -1037,6 +1039,36 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			return true
 		}
 		defaultActionFields(&resp, featureID, "published")
+		writeActionJSON(w, http.StatusOK, &resp)
+	case actionReopenPullRequest:
+		if subaction != "" {
+			return false
+		}
+		var req ReopenPullRequestRequest
+		if !decodeMutationJSON(w, r, &req) || !validatePullRequestResolutionRequest(w, req.Repository, req.Layer) {
+			return true
+		}
+		resp, err := h.mutations.ReopenPullRequestFeature(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		defaultActionFields(&resp, featureID, "reopened")
+		writeActionJSON(w, http.StatusOK, &resp)
+	case actionRecreatePullRequest:
+		if subaction != "" {
+			return false
+		}
+		var req RecreatePullRequestRequest
+		if !decodeMutationJSON(w, r, &req) || !validatePullRequestResolutionRequest(w, req.Repository, req.Layer) {
+			return true
+		}
+		resp, err := h.mutations.RecreatePullRequestFeature(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		defaultActionFields(&resp, featureID, "recreated")
 		writeActionJSON(w, http.StatusOK, &resp)
 	case actionMerge, actionMarkDone, actionDelete:
 		if subaction != "" {
@@ -1696,6 +1728,19 @@ func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, mod
 				errcat.WithDiagnostics("effort."+r.label+" value "+r.val+" is not supported by the selected "+r.label+" model"))
 			return false
 		}
+	}
+	return true
+}
+
+// validatePullRequestResolutionRequest validates the shared reopen/recreate
+// request shape: a required repository name and a positive layer position.
+func validatePullRequestResolutionRequest(w http.ResponseWriter, repo string, layer int) bool {
+	if !validateRepoName(w, repo, true) {
+		return false
+	}
+	if layer < 1 {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("layer must be a positive stack layer position"))
+		return false
 	}
 	return true
 }

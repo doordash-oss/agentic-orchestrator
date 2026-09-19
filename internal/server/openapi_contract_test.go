@@ -179,6 +179,7 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 		"name", "branch", "conflict_files", "dirty_files",
 		"child_head_sha", "candidate_sha", "observed_sha",
 		"commit_sha", "attempts",
+		"layer_position", "layer_title", "pull_request_url",
 	)
 	errorProps := schemaProperties(spec.Components.Schemas["Error"])
 	for _, forbidden := range []string{"message", "status", "target"} {
@@ -267,6 +268,60 @@ const apiPathReviewFeedbackFetch = "/api/v1/features/{feature_id}/actions/review
 const apiPathReviewFeedbackSelection = "/api/v1/features/{feature_id}/actions/review-feedback/selection"
 
 const apiPathReviewFeedbackAction = "/api/v1/features/{feature_id}/actions/review-feedback"
+
+const apiPathReopenPullRequestAction = "/api/v1/features/{feature_id}/actions/reopen-pull-request"
+const apiPathRecreatePullRequestAction = "/api/v1/features/{feature_id}/actions/recreate-pull-request"
+
+// TestPullRequestResolutionOperationsBindTypedSchemas pins the statically
+// documented reopen/recreate operations: each request body references its
+// typed schema (repository, layer, source_revision), the generated action
+// enum admits both action ids, and the success/typed error responses are
+// declared.
+func TestPullRequestResolutionOperationsBindTypedSchemas(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	for _, tc := range []struct {
+		path            string
+		operationID     string
+		requestSchema   string
+		responseSchema  string
+		actionID        string
+		generatedAction FeatureAction
+	}{
+		{apiPathReopenPullRequestAction, "reopenPullRequestFeature", "ReopenPullRequestRequest", "ReopenPullRequestResponse", "reopen-pull-request", FeatureActionReopenPullRequest},
+		{apiPathRecreatePullRequestAction, "recreatePullRequestFeature", "RecreatePullRequestRequest", "RecreatePullRequestResponse", "recreate-pull-request", FeatureActionRecreatePullRequest},
+	} {
+		op := lookupOpenAPIOperation(t, spec, http.MethodPost, tc.path)
+		if op.OperationID != tc.operationID {
+			t.Fatalf("%s operationId = %q, want %s", tc.path, op.OperationID, tc.operationID)
+		}
+		schemaRef := nestedYAMLRef(t, op.RequestBody, "content", "application/json", "schema")
+		if schemaRef != "#/components/schemas/"+tc.requestSchema {
+			t.Fatalf("%s requestBody schema = %q, want %s", tc.path, schemaRef, tc.requestSchema)
+		}
+		resp200 := declaredOpenAPIResponse(t, op, "200")
+		respSchemaRef := nestedYAMLRef(t, responseContentMap(t, resp200), "schema")
+		if respSchemaRef != "#/components/schemas/"+tc.responseSchema {
+			t.Fatalf("%s 200 schema = %q, want %s", tc.path, respSchemaRef, tc.responseSchema)
+		}
+		declaredOpenAPIResponse(t, op, "400")
+		declaredOpenAPIResponse(t, op, "409")
+
+		schema, ok := spec.Components.Schemas[tc.requestSchema]
+		if !ok {
+			t.Fatalf("components.schemas.%s missing", tc.requestSchema)
+		}
+		props := schemaProperties(schema)
+		for _, required := range []string{"repository", "layer", "source_revision"} {
+			if !props[required] {
+				t.Fatalf("%s missing property %q", tc.requestSchema, required)
+			}
+		}
+
+		if tc.generatedAction != FeatureAction(tc.actionID) || !tc.generatedAction.Valid() {
+			t.Fatalf("generated action enum must include %q", tc.actionID)
+		}
+	}
+}
 
 // TestRefactorOperationBindsTypedSchemas pins the statically documented
 // refactor operation: the request body must reference RefactorFeatureRequest
@@ -646,6 +701,8 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/refactor", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/rebase", mutation: true},
+		{method: httpMethodPost, path: apiPathReopenPullRequestAction, mutation: true},
+		{method: httpMethodPost, path: apiPathRecreatePullRequestAction, mutation: true},
 		{method: httpMethodPost, path: apiPathReviewFeedbackAction, mutation: true},
 		{method: httpMethodPost, path: apiPathReviewFeedbackFetch, mutation: true},
 		{method: httpMethodPost, path: apiPathReviewFeedbackSelection, mutation: true},

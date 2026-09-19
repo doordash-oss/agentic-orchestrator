@@ -373,6 +373,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/features/{feature_id}/actions/reopen-pull-request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reopen a closed stack pull request for one repository layer.
+         * @description Served at the same URL as `runFeatureAction` with action `reopen-pull-request`. The request names the repository, the stack layer position, and the completion preflight's source revision; a stale revision is rejected with 409 `conflict` before any side effect, exactly as publish. The orchestrator reads the live pull request state first and is idempotent: a live-open request records the layer open and clears the stored blocker without a remote write; a live-merged request records the layer merged and clears it; a closed or indeterminate state reopens the pull request on GitHub. When the layer's head branch no longer exists on the remote the action fails with 409 `publish_head_branch_missing`, whose only resolution is recreate-pull-request. Any other reopen failure returns 409 `publish_reopen_failed` and parks the repository. Validation failures (unknown repository, unknown layer, local-only repository, layer without a recorded pull request) are 400 `bad_request`; a live pull state that makes the action moot is 409 `conflict`.
+         */
+        post: operations["reopenPullRequestFeature"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/features/{feature_id}/actions/recreate-pull-request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recreate a closed stack pull request for one repository layer.
+         * @description Served at the same URL as `runFeatureAction` with action `recreate-pull-request`. The request carries the repository, the stack layer position, and the completion preflight's source revision with the same stale-revision conflict as publish. The orchestrator reads the live pull request state first: a live-open or live-merged pull request is a 409 `conflict` because there is nothing to recreate. A closed or indeterminate state pushes the layer branch through the layer-aware push (a diverged remote stores the existing remote-diverged record), reuses the closed pull request's body with the harness-owned sections re-injected — falling back to the description session when the body read fails — and opens a fresh pull request with the layer's table title, the publish walk's base rule, and the draft checkpoint. A pull-request creation failure returns 409 `publish_recreate_failed`. The old closed pull request is left untouched. Validation failures are 400 `bad_request`.
+         */
+        post: operations["recreatePullRequestFeature"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/features/{feature_id}/actions/{action}/{subaction}": {
         parameters: {
             query?: never;
@@ -1155,7 +1195,7 @@ export interface components {
          * @description Feature lifecycle action identifier.
          * @enum {string}
          */
-        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
+        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "reopen-pull-request" | "recreate-pull-request" | "discard";
         /** @description Canonical catalog-rendered error. */
         Error: {
             /** @description Stable snake_case catalog code. */
@@ -1210,6 +1250,12 @@ export interface components {
             commit_sha?: string;
             /** @description Resolution attempts spent on the replayed commit's conflict, when known. */
             attempts?: number;
+            /** @description Stack layer position of the repository's failing layer, when the code is layer-scoped. */
+            layer_position?: number;
+            /** @description Roadmap table title of the stack layer the code names, when known. */
+            layer_title?: string;
+            /** @description Pull-request URL of the stack layer the code names, when known. */
+            pull_request_url?: string;
         };
         /** @description Phase a code references. */
         ErrorPhaseContext: {
@@ -2052,6 +2098,24 @@ export interface components {
             branch?: string;
         };
         RetryFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
+        ReopenPullRequestRequest: {
+            /** @description Repository name whose stack layer holds the closed pull request. */
+            repository: string;
+            /** @description Stack layer position of the closed pull request. */
+            layer: number;
+            /** @description Completion preflight source revision guard, as publish carries. */
+            source_revision?: string;
+        };
+        RecreatePullRequestRequest: {
+            /** @description Repository name whose stack layer holds the closed pull request. */
+            repository: string;
+            /** @description Stack layer position of the closed pull request. */
+            layer: number;
+            /** @description Completion preflight source revision guard, as publish carries. */
+            source_revision?: string;
+        };
+        ReopenPullRequestResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
+        RecreatePullRequestResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         RefactorFeatureRequest: {
             name: string;
             description?: string;
@@ -3906,6 +3970,70 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
+        };
+    };
+    reopenPullRequestFeature: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReopenPullRequestRequest"];
+            };
+        };
+        responses: {
+            /** @description Layer pull request reopened or already open. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReopenPullRequestResponse"];
+                };
+            };
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
+        };
+    };
+    recreatePullRequestFeature: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecreatePullRequestRequest"];
+            };
+        };
+        responses: {
+            /** @description Layer pull request recreated and recorded open. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecreatePullRequestResponse"];
+                };
+            };
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
             409: components["responses"]["ErrorResponse"];
         };
     };

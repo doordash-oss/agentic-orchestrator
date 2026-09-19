@@ -181,8 +181,15 @@ function assertNoLocalPathsRemotely(remote: boolean, ...groups: readonly string[
 // (commit, push, then pull-request create or update per repository), which
 // legitimately takes minutes. The 30-second default would abort a request whose
 // server-side work is still progressing, so these carry their own bound.
+// Recreate runs the same push-plus-create walk for one layer and may fall back
+// to a description session, so it shares the long bound; reopen is a single
+// idempotent forge call and keeps the default.
 const LONG_MUTATION_TIMEOUT_MS = 10 * 60_000;
-const LONG_MUTATION_ACTIONS: ReadonlySet<string> = new Set(['publish', 'merge']);
+const LONG_MUTATION_ACTIONS: ReadonlySet<string> = new Set([
+  'publish',
+  'merge',
+  'recreate-pull-request',
+]);
 
 // Source acceptance and setup serialize with in-flight origin checks on the
 // repositories' shared mutation boundary, so a submit while a check is running

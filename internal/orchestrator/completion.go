@@ -1582,6 +1582,13 @@ func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPrefligh
 		// run's stack agree on the remote fact.
 		liveStates := o.liveStackPRStates(f, repo, publishable)
 		repoResult = o.applyPendingDelivery(f, repo, repoResult, liveStates)
+		// A closed-unmerged pull request the refresh observed parks the
+		// repository on the closed record — after every state persist of the
+		// pass, so the store is the last write — and the preflight result
+		// carries the parked record.
+		if parked := o.parkClosedStackPullRequest(f, repo, liveStates); parked != nil {
+			repoResult.Error = parked
+		}
 		freshness, blocker, _ := o.repoFreshnessAndBlocker(o.rebaseFreshnessInputForRepo(f, repo))
 		// A merged layer holding a tip below kept work means the chain needs
 		// the rebase pass even when the local remote-tracking comparison

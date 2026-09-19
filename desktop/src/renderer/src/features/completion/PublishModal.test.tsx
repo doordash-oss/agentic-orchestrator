@@ -37,6 +37,16 @@ const result: FeatureActionResult = {
 };
 
 const publishAction: FeatureActionView = { id: 'publish', enabled: true, disabledReasons: [] };
+const reopenAction: FeatureActionView = {
+  id: 'reopen-pull-request',
+  enabled: true,
+  disabledReasons: [],
+};
+const recreateAction: FeatureActionView = {
+  id: 'recreate-pull-request',
+  enabled: true,
+  disabledReasons: [],
+};
 
 const newPrPreflight: CompletionPreflightResult = {
   featureId,
@@ -54,6 +64,42 @@ const prFailedError: CanonicalError = {
   remediation: { hint: 'Check GitHub access, then retry.', actions: ['publish'] },
   context: { repositories: [{ name: 'web', branch: 'agentico/search-revamp' }] },
   diagnostics: 'creating pull request: POST /repos/e2e/web/pulls: 502 Bad Gateway',
+};
+
+/** The closed-stack-layer record whose remediation offers reopen then recreate. */
+const closedPrError: CanonicalError = {
+  code: 'publish_stack_pull_request_closed',
+  class: 'needs_action',
+  title: 'Stack pull request closed',
+  summary: 'The layer 2 pull request for repository "web" was closed without merging.',
+  remediation: {
+    hint: 'Reopen the pull request on GitHub, or recreate it from the local branch.',
+    actions: ['reopen-pull-request', 'recreate-pull-request'],
+  },
+  context: {
+    repositories: [
+      {
+        name: 'web',
+        branch: 'agentico/search-revamp-2',
+        layer_position: 2,
+        layer_title: 'Search revamp layer 2',
+        pull_request_url: 'https://github.com/org/web/pull/12',
+      },
+    ],
+  },
+};
+
+/** The deleted-head-branch record whose only resolution is recreate. */
+const headBranchMissingError: CanonicalError = {
+  code: 'publish_head_branch_missing',
+  class: 'needs_action',
+  title: 'Layer branch missing',
+  summary: 'The layer 2 branch for repository "web" no longer exists on the remote.',
+  remediation: {
+    hint: 'Recreate pushes the layer branch again and opens a fresh pull request.',
+    actions: ['recreate-pull-request'],
+  },
+  context: { repositories: [{ name: 'web', layer_position: 2 }] },
 };
 
 function props(over: Partial<React.ComponentProps<typeof PublishModal>> = {}) {
@@ -1159,5 +1205,158 @@ describe('PublishModal', () => {
     expect(within(group).getByText('merged')).toBeVisible();
     expect(within(group).getByText('closed')).toBeVisible();
     expect(within(group).getAllByRole('button', { name: 'PR ↗' })).toHaveLength(1);
+  });
+});
+
+describe('PublishModal closed pull-request resolutions', () => {
+  function closedRowProps(over: Partial<React.ComponentProps<typeof PublishModal>> = {}) {
+    return props({
+      actions: [publishAction, reopenAction, recreateAction] as readonly FeatureActionView[],
+      preflight: preflightWith({
+        repos: [
+          {
+            repo: 'web',
+            publishable: true,
+            touched: true,
+            status: 'eligible',
+            error: closedPrError,
+          },
+        ],
+      }),
+      ...over,
+    });
+  }
+
+  it('renders Reopen and Recreate on the closed-PR row and dispatches each with the error layer context', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockResolvedValue(result);
+    const onDispatched = vi.fn();
+    render(<PublishModal {...closedRowProps({ dispatchAction, onDispatched })} />);
+
+    let card = within(failedRepoRow()).getByRole('alert');
+    const reopen = within(card).getByRole('button', { name: 'Reopen pull request' });
+    expect(reopen).toHaveClass('error-surface__action');
+    expect(within(card).getByRole('button', { name: 'Recreate pull request' })).toHaveClass(
+      'error-surface__secondary-action',
+    );
+    // The closed record's remediation offers the resolutions, not retry publish.
+    expect(within(card).queryByRole('button', { name: 'Retry publish' })).not.toBeInTheDocument();
+
+    await user.click(reopen);
+    expect(dispatchAction).toHaveBeenCalledWith({
+      featureId,
+      action: 'reopen-pull-request',
+      body: { repository: 'web', layer: 2, source_revision: 'rev-1' },
+    });
+    await waitFor(() => expect(onDispatched).toHaveBeenCalledOnce());
+
+    card = within(failedRepoRow()).getByRole('alert');
+    await user.click(within(card).getByRole('button', { name: 'Recreate pull request' }));
+    expect(dispatchAction).toHaveBeenLastCalledWith({
+      featureId,
+      action: 'recreate-pull-request',
+      body: { repository: 'web', layer: 2, source_revision: 'rev-1' },
+    });
+    expect(onDispatched).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders Recreate alone on a row parked on the missing head branch', () => {
+    render(
+      <PublishModal
+        {...closedRowProps({
+          preflight: preflightWith({
+            repos: [
+              {
+                repo: 'web',
+                publishable: true,
+                touched: true,
+                status: 'eligible',
+                error: headBranchMissingError,
+              },
+            ],
+          }),
+        })}
+      />,
+    );
+
+    const card = within(failedRepoRow()).getByRole('alert');
+    const recreate = within(card).getByRole('button', { name: 'Recreate pull request' });
+    expect(recreate).toHaveClass('error-surface__action');
+    expect(
+      within(card).queryByRole('button', { name: 'Reopen pull request' }),
+    ).not.toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: 'Retry publish' })).not.toBeInTheDocument();
+  });
+
+  it('shows the catalog disabled reason instead of the resolution buttons when the catalog disables them', () => {
+    const reason = 'No closed pull request.';
+    render(
+      <PublishModal
+        {...closedRowProps({
+          actions: [
+            publishAction,
+            {
+              id: 'reopen-pull-request',
+              enabled: false,
+              disabledReasons: [{ code: 'no_closed_pull_request', message: reason }],
+            },
+            {
+              id: 'recreate-pull-request',
+              enabled: false,
+              disabledReasons: [{ code: 'no_closed_pull_request', message: reason }],
+            },
+          ] as readonly FeatureActionView[],
+        })}
+      />,
+    );
+
+    const card = within(failedRepoRow()).getByRole('alert');
+    expect(within(card).getAllByText(reason)).toHaveLength(1);
+    expect(
+      within(card).queryByRole('button', { name: 'Reopen pull request' }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(card).queryByRole('button', { name: 'Recreate pull request' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers only retry publish when the error context carries no layer position', () => {
+    render(
+      <PublishModal
+        {...closedRowProps({
+          preflight: preflightWith({
+            repos: [
+              {
+                repo: 'web',
+                publishable: true,
+                touched: true,
+                status: 'eligible',
+                error: prFailedError,
+              },
+            ],
+          }),
+        })}
+      />,
+    );
+
+    const card = within(failedRepoRow()).getByRole('alert');
+    expect(within(card).getByRole('button', { name: 'Retry publish' })).toBeEnabled();
+    expect(
+      within(card).queryByRole('button', { name: 'Reopen pull request' }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(card).queryByRole('button', { name: 'Recreate pull request' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('renders the layer and pull-request link text in the closed record details', async () => {
+    const user = userEvent.setup();
+    render(<PublishModal {...closedRowProps()} />);
+
+    const card = within(failedRepoRow()).getByRole('alert');
+    await user.click(within(card).getByText('Details'));
+    expect(within(card).getByText('Layer 2 — Search revamp layer 2')).toBeVisible();
+    expect(within(card).getByText('Pull request')).toBeVisible();
+    expect(within(card).getByText('https://github.com/org/web/pull/12')).toBeVisible();
   });
 });

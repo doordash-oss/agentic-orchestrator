@@ -419,6 +419,11 @@ func TestSlackServerDelayedStoredValidationIsCredentialFenced(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			const oldToken = "xoxb-old-delayed-distinctive-1234"
 			runtime := newComposedSlackRuntime(t, oldToken, true)
+			started := make(chan struct{})
+			release := make(chan struct{})
+			tc.delayed.Started = started
+			tc.delayed.Release = release
+			tc.delayed.Delay = 0
 			runtime.fake.Script("auth.test", tc.delayed)
 			if tc.replace {
 				runtime.fake.Script("auth.test", testsupport.Response{
@@ -436,33 +441,27 @@ func TestSlackServerDelayedStoredValidationIsCredentialFenced(t *testing.T) {
 				status, body := runtime.request(http.MethodPost, slackValidatePath, map[string]any{})
 				oldResult <- response{status: status, body: body}
 			}()
-			waitForSlackCalls(t, runtime.fake, 1)
+			awaitSignal(t, started, "old Slack validation to start")
 
-			start := time.Now()
-			status, body := runtime.request(http.MethodPatch, slackRuntimeConfigPath, map[string]any{
-				"notifications": map[string]any{"mute_feature_input": true},
+			assertRequestCompletes(t, "unrelated write", func() (int, []byte) {
+				return runtime.request(http.MethodPatch, slackRuntimeConfigPath, map[string]any{
+					"notifications": map[string]any{"mute_feature_input": true},
+				})
 			})
-			if status != http.StatusOK {
-				t.Fatalf("unrelated write status = %d body=%s; want 200", status, body)
-			}
-			status, body = runtime.request(http.MethodGet, slackRuntimeConfigPath, nil)
-			if status != http.StatusOK {
-				t.Fatalf("unrelated read status = %d body=%s; want 200", status, body)
-			}
-			if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
-				t.Fatalf("unrelated read/write elapsed = %s; delayed Slack call held mutation lock", elapsed)
-			}
+			assertRequestCompletes(t, "unrelated read", func() (int, []byte) {
+				return runtime.request(http.MethodGet, slackRuntimeConfigPath, nil)
+			})
 
 			if tc.replace {
 				const newToken = "xoxb-new-delayed-distinctive-5678"
-				status, body = runtime.request(http.MethodPatch, slackRuntimeConfigPath, map[string]any{
+				status, body := runtime.request(http.MethodPatch, slackRuntimeConfigPath, map[string]any{
 					"slack": map[string]any{"token": newToken},
 				})
 				if status != http.StatusOK {
 					t.Fatalf("replacement status = %d body=%s; want 200", status, body)
 				}
 			} else {
-				status, body = runtime.request(http.MethodPatch, slackRuntimeConfigPath, map[string]any{
+				status, body := runtime.request(http.MethodPatch, slackRuntimeConfigPath, map[string]any{
 					"slack": map[string]any{"clear_token": true},
 				})
 				if status != http.StatusOK {
@@ -470,7 +469,8 @@ func TestSlackServerDelayedStoredValidationIsCredentialFenced(t *testing.T) {
 				}
 			}
 
-			result := <-oldResult
+			close(release)
+			result := awaitResponse(t, oldResult, "old Slack validation to finish")
 			if result.status != tc.wantOldStatus {
 				t.Fatalf("delayed validation status = %d body=%s; want %d", result.status, result.body, tc.wantOldStatus)
 			}
@@ -487,6 +487,44 @@ func TestSlackServerDelayedStoredValidationIsCredentialFenced(t *testing.T) {
 				t.Fatalf("cleared credential was overwritten by delayed result: %#v", loaded.Slack)
 			}
 		})
+	}
+}
+
+func awaitSignal(t *testing.T, signal <-chan struct{}, description string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+	}
+}
+
+func assertRequestCompletes(t *testing.T, description string, request func() (int, []byte)) {
+	t.Helper()
+	type response struct {
+		status int
+		body   []byte
+	}
+	result := make(chan response, 1)
+	go func() {
+		status, body := request()
+		result <- response{status: status, body: body}
+	}()
+	got := awaitResponse(t, result, description)
+	if got.status != http.StatusOK {
+		t.Fatalf("%s status = %d body=%s; want 200", description, got.status, got.body)
+	}
+}
+
+func awaitResponse[T any](t *testing.T, result <-chan T, description string) T {
+	t.Helper()
+	select {
+	case got := <-result:
+		return got
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+		var zero T
+		return zero
 	}
 }
 

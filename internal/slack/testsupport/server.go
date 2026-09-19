@@ -33,6 +33,8 @@ type Response struct {
 	Body    any
 	Headers http.Header
 	Delay   time.Duration
+	Started chan<- struct{}
+	Release <-chan struct{}
 }
 
 // Request is a credential-scrubbed record of one received request.
@@ -137,6 +139,20 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
+	if response.Started != nil {
+		select {
+		case response.Started <- struct{}{}:
+		case <-r.Context().Done():
+			return
+		}
+	}
+	if response.Release != nil {
+		select {
+		case <-response.Release:
+		case <-r.Context().Done():
+			return
+		}
+	}
 	if response.Delay > 0 {
 		timer := time.NewTimer(response.Delay)
 		defer timer.Stop()

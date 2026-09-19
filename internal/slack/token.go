@@ -15,17 +15,16 @@
 package slack
 
 import (
-	"strings"
-
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // TokenTypeOf derives the OAuth token family without persisting it.
 func TokenTypeOf(token string) ports.SlackTokenType {
-	switch {
-	case strings.HasPrefix(token, "xoxb-"):
+	switch config.SlackTokenType(token) {
+	case "bot":
 		return ports.SlackTokenBot
-	case strings.HasPrefix(token, "xoxp-"):
+	case "user":
 		return ports.SlackTokenUser
 	default:
 		return ports.SlackTokenUnsupported
@@ -34,8 +33,5 @@ func TokenTypeOf(token string) ports.SlackTokenType {
 
 // TokenHint returns at most the final four token characters.
 func TokenHint(token string) string {
-	if len(token) <= 4 {
-		return token
-	}
-	return token[len(token)-4:]
+	return config.SlackTokenHint(token)
 }

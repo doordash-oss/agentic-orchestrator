@@ -16,6 +16,7 @@ package opencode
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -221,6 +222,65 @@ func TestRespondToControl_ApprovalAndDenialSelectACPOutcomes(t *testing.T) {
 			t.Fatalf("deny outcome = %+v, want selected opt-reject", out.Result.Outcome)
 		}
 	})
+}
+
+type failOnceWriter struct {
+	next   *syncBuffer
+	failed bool
+}
+
+func (w *failOnceWriter) Write(p []byte) (int, error) {
+	if !w.failed {
+		w.failed = true
+		return 0, errors.New("injected write failure")
+	}
+	return w.next.Write(p)
+}
+
+// TestRespondToControl_WriteFailurePreservesPendingPermission proves a failed
+// ACP response write does not consume OpenCode's permission options. A retry
+// must still select the original allow option rather than falling back to
+// cancelled.
+func TestRespondToControl_WriteFailurePreservesPendingPermission(t *testing.T) {
+	p, _, _ := newPostHandshakeProtocol(t)
+	const reqID = 53
+	mustParse(t, p, permissionRequestLine(t, reqID, ToolKindExecute, "Run", map[string]any{"command": "ls"}))
+
+	buf := &syncBuffer{}
+	p.SetStdin(&failOnceWriter{next: buf})
+
+	if err := p.RespondToControl("53", true, nil, ""); err == nil {
+		t.Fatal("first RespondToControl(allow) succeeded, want injected write failure")
+	}
+
+	p.mu.Lock()
+	perm, ok := p.pendingPerms["53"]
+	p.mu.Unlock()
+	if !ok {
+		t.Fatal("pending permission was consumed after failed response write")
+	}
+	if perm.allowID != "opt-allow-once" {
+		t.Fatalf("pending allow option = %q, want opt-allow-once", perm.allowID)
+	}
+
+	if err := p.RespondToControl("53", true, nil, ""); err != nil {
+		t.Fatalf("retry RespondToControl(allow) error: %v", err)
+	}
+
+	out := decodePermissionResponse(t, buf.lastLine(t))
+	if out.ID != reqID {
+		t.Fatalf("response id = %d, want %d", out.ID, reqID)
+	}
+	if out.Result.Outcome.Outcome != OutcomeSelected || out.Result.Outcome.OptionID != "opt-allow-once" {
+		t.Fatalf("retry outcome = %+v, want selected opt-allow-once", out.Result.Outcome)
+	}
+
+	p.mu.Lock()
+	_, ok = p.pendingPerms["53"]
+	p.mu.Unlock()
+	if ok {
+		t.Fatal("pending permission remained after successful response write")
+	}
 }
 
 // TestRespondToControl_DenyWithoutRejectOptionCancels proves a denial of a

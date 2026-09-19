@@ -36,6 +36,7 @@ import { expect, test } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
   closeApp,
+  closeSettings,
   evidenceShot,
   launchApp,
   openSettings,
@@ -228,8 +229,11 @@ test(
       await evidenceShot(handle, 'settings-clone-succeeded', settings);
 
       transcript.section('Closing Settings and reopening rediscovers the operation');
-      await settings.close();
-      await waitFor(() => handle!.app.windows().length === 1, 'settings window closed', 30_000);
+      // Exercise Electron's native close path, as the Settings-window journey
+      // does, instead of closing its Chromium target through Page.close().
+      await closeSettings(handle);
+      expect(settings.isClosed()).toBe(true);
+      expect(handle.page.isClosed()).toBe(false);
       const reopened = await openSettings(handle);
       await expect(reopened.locator('section[aria-label="Clone repositories"]')).toBeVisible();
       const rediscovered = reopened.locator('.settings-panel__clone-operation', {

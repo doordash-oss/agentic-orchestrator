@@ -29,6 +29,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
 // ErrNotImplemented is a legacy sentinel retained for migration-guard tests.
@@ -146,6 +147,9 @@ type Deps struct {
 	CmdRunner   ports.CommandRunner
 	Recovery    ports.RecoveryOperator
 	PhaseRunner *agent.PhaseRunner // concrete — not behind a port interface
+	// Admission is the runtime work-admission boundary. Nil disables the
+	// boundary (existing tests, runtimes without install support).
+	Admission *workadmission.Coordinator
 }
 
 // PhaseStartOutcome enumerates the possible results of starting a phase.
@@ -223,6 +227,12 @@ type Orchestrator struct {
 	// repeated API start requests idempotent even when they arrive before
 	// the first request's state transition is visible to the second.
 	featureStartControls sync.Map
+
+	// admission tracks per-feature work-admission reservations against the
+	// runtime boundary: every phase dispatch and background continuation is
+	// admitted before it launches and settles only when the feature's owned
+	// work ends. Nil when no boundary is configured.
+	admission *featureAdmissions
 
 	// publishFn is a test hook. When nil the orchestrator calls o.Publish.
 	// Tests can override this to intercept publish dispatch without touching
@@ -317,10 +327,11 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		deps.Remote = gitRemoteOps{}
 	}
 	o := &Orchestrator{
-		deps:    deps,
-		hooks:   hooks,
-		eventCh: make(chan ports.Event, eventChBuffer),
-		doneCh:  make(chan struct{}),
+		deps:      deps,
+		hooks:     hooks,
+		eventCh:   make(chan ports.Event, eventChBuffer),
+		doneCh:    make(chan struct{}),
+		admission: newFeatureAdmissions(deps.Admission),
 	}
 	o.supervisor = newPhaseSupervisor(phaseSupervisorConfig{
 		Completion:        o,
@@ -632,6 +643,12 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 // Mismatched FeatureAdvanced signals are treated as the same class of contract
 // break as missing ones.
 func (o *Orchestrator) startPhase(featureID string, phase feature.Phase) (feature.Phase, bool, error) {
+	// Admission is acquired before any phase starter dispatches work; a
+	// closed boundary refuses the launch. An existing reservation makes
+	// this a synchronous continuation transfer.
+	if err := o.admissionLaunch(featureID); err != nil {
+		return 0, false, err
+	}
 	var (
 		result PhaseStartResult
 		err    error
@@ -654,9 +671,13 @@ func (o *Orchestrator) startPhase(featureID string, phase feature.Phase) (featur
 	case feature.PhaseFinalReview, feature.PhaseReview:
 		result, err = o.startFinalReview(featureID)
 	default:
+		o.admissionSettleIfQuiet(featureID)
 		return 0, false, fmt.Errorf("unknown phase %d", phase)
 	}
 	if err != nil {
+		// Nothing launched: settle unless the feature still owns earlier
+		// work (a running status or active session keeps the reservation).
+		o.admissionSettleIfQuiet(featureID)
 		return 0, false, err
 	}
 
@@ -674,8 +695,10 @@ func (o *Orchestrator) startPhase(featureID string, phase feature.Phase) (featur
 	case PhaseSkipped:
 		return o.startPhase(featureID, result.NextPhase)
 	case PhaseNoOp:
+		o.admissionSettleIfQuiet(featureID)
 		return 0, false, nil
 	default:
+		o.admissionSettleIfQuiet(featureID)
 		return 0, false, fmt.Errorf("unknown phase start outcome %d", result.Outcome)
 	}
 }
@@ -1324,11 +1347,19 @@ func (o *Orchestrator) startFinalReview(featureID string) (PhaseStartResult, err
 		return PhaseStartResult{Outcome: PhaseNoOp}, nil
 	}
 
+	// The deferred FR run and its background tail are one continuation:
+	// reserve admission before any of it launches so no idle window opens
+	// between this dispatch and the tail's own work.
+	if err := o.admissionBeginAsync(featureID); err != nil {
+		return PhaseStartResult{}, err
+	}
 	resultCh, err := o.startDeferredFinalReview(featureID)
 	if err != nil {
+		o.admissionEndAsync(featureID)
 		return PhaseStartResult{}, err
 	}
 	o.cycleWG.Go(func() {
+		defer o.admissionEndAsync(featureID)
 		res, ok := <-resultCh
 		if err := o.finishDeferredFinalReviewResult(featureID, res, ok); err != nil {
 			o.surfaceDispatchCompletionError(featureID, err)
@@ -1420,6 +1451,9 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 	if featureInterrupted {
 		o.emitEvent(ports.Event{Type: ports.FeatureInterrupted, FeatureID: featureID})
 	}
+	// Stop paths stay available during closed admission; once the feature's
+	// sessions and gate state have settled, its reservation settles too.
+	o.admissionSettleIfQuiet(featureID)
 	return nil
 }
 
@@ -1506,6 +1540,10 @@ func (o *Orchestrator) InterruptAllRunning() error {
 // HandlePhaseCompletion dispatches a phase-completion result to the
 // appropriate per-phase handler.
 func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseCompletionInput) error {
+	// Every session completion funnels here: after the handler runs, the
+	// feature's admission reservation settles unless it still owns work or
+	// scheduled a continuation.
+	defer o.admissionSettleIfQuiet(featureID)
 	// Fence late completion callbacks from mutating a child whose
 	// relationship is closed (discarded or completed) or whose discard
 	// intent is in flight. The discard flow owns the terminal transition.

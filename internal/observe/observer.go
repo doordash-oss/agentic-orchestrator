@@ -1269,6 +1269,27 @@ func (o *Observer) ConfigChanged(sc SpanContext, before, after feature.ConfigSna
 	})
 }
 
+// ServerUpdate emits a server.update observation for one visible update
+// availability transition: from and to are the prior and new snapshot
+// statuses, result names the transition cause (for example check_success or
+// check_failed:update_check_failed). Server-level event: it carries no
+// feature context. Safe on nil receiver / disabled observer; observer
+// failures never stop discovery or the server.
+func (o *Observer) ServerUpdate(from, to, result string) {
+	if o == nil || !o.enabled {
+		return
+	}
+	o.emit(SpanContext{}, Event{
+		Timestamp: time.Now(),
+		EventType: "server.update",
+		Data: map[string]any{
+			"from":   from,
+			"to":     to,
+			"result": result,
+		},
+	})
+}
+
 // configSnapshotAttrs flattens a ConfigSnapshot into a plain map so the
 // JSONL encoder renders stable keys rather than Go struct tags.
 func configSnapshotAttrs(s feature.ConfigSnapshot) map[string]any {

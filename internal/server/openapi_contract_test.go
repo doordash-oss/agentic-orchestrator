@@ -629,6 +629,10 @@ func topLevelPatternForPath(path string) string {
 		return apiPathCatalogModels
 	case path == apiPathCatalogRefresh:
 		return apiPathCatalogRefresh
+	case path == apiPathRuntimeReadiness:
+		return apiPathRuntimeReadiness
+	case path == apiPathRuntimeReadinessRefresh:
+		return apiPathRuntimeReadinessRefresh
 	case path == apiPathReadiness:
 		return apiPathReadiness
 	case path == apiPathReadinessRefresh:
@@ -723,6 +727,8 @@ func documentedServerRoutes() []documentedRoute {
 		{method: "put", path: apiPathConfigRuntime, mutation: true},
 		{method: httpMethodGet, path: apiPathCatalogModels},
 		{method: httpMethodPost, path: apiPathCatalogRefresh, mutation: true},
+		{method: httpMethodGet, path: apiPathRuntimeReadiness},
+		{method: httpMethodPost, path: apiPathRuntimeReadinessRefresh, mutation: true},
 		{method: httpMethodGet, path: apiPathReadiness},
 		{method: httpMethodPost, path: apiPathReadinessRefresh, mutation: true},
 		{method: httpMethodPost, path: apiPathWorkspaceRepositoriesInit, mutation: true},
@@ -752,6 +758,10 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: apiPathRecovery},
 		{method: httpMethodPost, path: apiPathRecoveryActions, mutation: true},
 		{method: httpMethodGet, path: apiPathRecoveryLogs},
+		{method: httpMethodGet, path: apiPathUpdate},
+		{method: httpMethodPost, path: apiPathUpdateCheck, mutation: true},
+		{method: httpMethodPost, path: apiPathUpdateInstall, mutation: true},
+		{method: "delete", path: apiPathUpdateInstall, mutation: true},
 		{method: httpMethodGet, path: apiPathEvents, sse: true},
 		{method: httpMethodPost, path: apiPathUploads, mutation: true},
 	}

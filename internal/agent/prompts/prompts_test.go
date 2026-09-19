@@ -610,6 +610,10 @@ func TestGoldenSnapshots(t *testing.T) {
 			},
 		},
 		{
+			name:   "autoreview_format_retry",
+			render: AutoReviewFormatRetryPrompt,
+		},
+		{
 			name: "autoreview_user",
 			render: func() string {
 				return AutoReviewUserPrompt(AutoReviewUserInput{

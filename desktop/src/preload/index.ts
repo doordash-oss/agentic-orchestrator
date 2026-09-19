@@ -89,6 +89,7 @@ import {
   type RecoveryExecuteRequest,
   type RecoveryLogReadRequest,
   type UpdateInstallNowRequest,
+  type ServerUpdateInstallRequest,
   type CompletionPreflightRequest,
   type RepositoryDiffRequest,
   type OpenExternalRequest,
@@ -201,6 +202,8 @@ const api: AgenticoApi = {
     call(IPC_CHANNELS.windowOpenSettings, request),
   getThemePreference: () => call(IPC_CHANNELS.themeGet),
   setThemePreference: (preference: ThemePreference) => call(IPC_CHANNELS.themeSet, preference),
+  getRuntimeReadiness: () => call(IPC_CHANNELS.runtimeReadinessGet),
+  refreshRuntimeReadiness: () => call(IPC_CHANNELS.runtimeReadinessRefresh),
   getReadiness: () => call(IPC_CHANNELS.readinessGet),
   refreshReadiness: () => call(IPC_CHANNELS.readinessRefresh),
   pickWorkspaceDirectory: () => call(IPC_CHANNELS.workspacePickDirectory),
@@ -357,6 +360,11 @@ const api: AgenticoApi = {
   installUpdateNow: (request: UpdateInstallNowRequest) =>
     call(IPC_CHANNELS.updatesInstallNow, request),
   restartToUpdate: () => call(IPC_CHANNELS.updatesRestart),
+  getServerUpdate: () => call(IPC_CHANNELS.serverUpdatesGet),
+  checkServerUpdate: () => call(IPC_CHANNELS.serverUpdatesCheck),
+  installServerUpdate: (request: ServerUpdateInstallRequest) =>
+    call(IPC_CHANNELS.serverUpdatesInstall, request),
+  cancelServerUpdate: () => call(IPC_CHANNELS.serverUpdatesCancel),
   getDiagnostics: () => call(IPC_CHANNELS.diagnosticsGet),
   revealDiagnostics: () => call(IPC_CHANNELS.diagnosticsReveal),
   clearDiagnostics: () => call(IPC_CHANNELS.diagnosticsClear),

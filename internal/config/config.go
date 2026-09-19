@@ -48,6 +48,22 @@ type ServerConfig struct {
 	// Name overrides the server display name. Precedence is
 	// --name > server.name > the persisted generated name.
 	Name string `yaml:"name,omitempty"`
+	// Updates carries the release-availability startup settings. They are
+	// validated at server launch and, like the rest of this section,
+	// intentionally never appear on the runtime-config REST surface.
+	Updates ServerUpdatesConfig `yaml:"updates,omitempty"`
+}
+
+// ServerUpdatesConfig is the raw server.updates config map. Values stay
+// untouched strings here; the headless server parses, validates, and applies
+// them at launch (see internal/selfupdate.ResolveStartupSettings). strategy
+// and window shape automatic installs only.
+type ServerUpdatesConfig struct {
+	Policy        string `yaml:"policy,omitempty"`
+	Channel       string `yaml:"channel,omitempty"`
+	CheckInterval string `yaml:"check_interval,omitempty"`
+	Strategy      string `yaml:"strategy,omitempty"`
+	Window        string `yaml:"window,omitempty"`
 }
 
 // ProviderConfig holds per-provider overrides. CLI overrides the executable

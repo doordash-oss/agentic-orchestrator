@@ -60,6 +60,51 @@ func TestPushLayerBranch_CreatesAbsentRemoteBranch(t *testing.T) {
 	}
 }
 
+// TestPushLayerBranch_SyncsRemoteTrackingRefOnSingleBranchClone pins that a
+// lease push of a layer branch moves refs/remotes/origin/<branch> even when
+// the clone's fetch refspec only maps main.
+func TestPushLayerBranch_SyncsRemoteTrackingRefOnSingleBranchClone(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real-push layer tracking-ref regression in short mode")
+	}
+	t.Parallel()
+
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+	branch := "feature/narrow-lease"
+	testutil.CreateBranch(t, repo, branch)
+	pushedSHA := testutil.CommitFile(t, repo, "created.txt", "created\n", "create remote branch")
+	testutil.SimulatePush(t, repo, bare, branch, branch)
+
+	// Narrow the clone to main only and drop the tracking ref the push left
+	// behind, so nothing but the lease-path sync can restore it.
+	runRewriteGit(t, repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+	runRewriteGit(t, repo, "update-ref", "-d", "refs/remotes/origin/"+branch)
+
+	// Rewrite the local tip so the remote tip is neither an ancestor of nor
+	// equal to the local SHA; only the lease path pinned to the last pushed
+	// SHA can deliver it.
+	runRewriteGit(t, repo, "commit", "--amend", "-m", "rewritten local branch")
+	localSHA := localHeadSHA(t, repo)
+
+	deliveredSHA, err := PushLayerBranch(repo, branch, localSHA, pushedSHA)
+	if err != nil {
+		t.Fatalf("PushLayerBranch() error = %v; want lease push to succeed", err)
+	}
+	if deliveredSHA != localSHA {
+		t.Fatalf("PushLayerBranch() = %s; want delivered SHA %s", deliveredSHA, localSHA)
+	}
+	if got := remoteBranchSHA(t, bare, branch); got != localSHA {
+		t.Fatalf("remote tip = %s; want rewritten layer tip %s", got, localSHA)
+	}
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "refs/remotes/origin/"+branch).Output()
+	if err != nil {
+		t.Fatalf("remote-tracking ref missing after lease push: %v", err)
+	}
+	if strings.TrimSpace(string(out)) != localSHA {
+		t.Fatalf("origin/%s = %s; want pushed tip %s", branch, strings.TrimSpace(string(out)), localSHA)
+	}
+}
+
 func TestPushLayerBranch_RejectsCompetingCreationAfterAbsenceInspection(t *testing.T) {
 	repo, bare := testutil.InitPublishReadyGitRepo(t)
 	branch := "feature/competing-creation"

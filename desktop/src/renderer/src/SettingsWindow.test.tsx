@@ -78,6 +78,14 @@ function settingsWithPane(pane: Settings['settingsWindow']['pane']): Settings {
 function installSettingsWindowMock(overrides: { settings?: Settings } = {}) {
   const mock = installAgenticoMock({
     windowPurpose: 'settings',
+    connection: {
+      status: 'ready',
+      stage: 'ready',
+      detail: 'Connected.',
+      ownership: 'external',
+      kind: 'local',
+      serverKey: 'a'.repeat(32),
+    },
     readiness: readySnapshot(),
     updates: defaultUpdateState(),
     ...(overrides.settings === undefined ? {} : { settings: overrides.settings }),

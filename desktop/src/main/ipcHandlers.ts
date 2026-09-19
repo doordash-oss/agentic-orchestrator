@@ -72,6 +72,7 @@ import {
   type IpcEnvelope,
   type PickedDirectory,
   type ReadinessSnapshot,
+  type RuntimeReadinessSnapshot,
   type RepositoryState,
   type Settings,
   type SettingsOpenRequest,
@@ -156,6 +157,8 @@ import {
   type RevealPathResult,
   type MainWindowUiState,
   type UpdateInstallNowRequest,
+  type ServerUpdateInstallRequest,
+  type ServerUpdateState,
   type UpdateState,
   type DiagnosticsSnapshot,
   ipcContracts,
@@ -181,6 +184,8 @@ export interface IpcServices {
   openSettingsWindow(request: SettingsOpenRequest): SettingsOpenResult;
   getTheme(): ThemeInfo;
   setTheme(preference: ThemePreference): ThemeInfo;
+  getRuntimeReadiness(): Promise<RuntimeReadinessSnapshot>;
+  refreshRuntimeReadiness(): Promise<RuntimeReadinessSnapshot>;
   getReadiness(): Promise<ReadinessSnapshot>;
   refreshReadiness(): Promise<ReadinessSnapshot>;
   pickWorkspaceDirectory(): Promise<PickedDirectory>;
@@ -286,6 +291,10 @@ export interface IpcServices {
   installUpdateWhenIdle(): Promise<UpdateState>;
   installUpdateNow(request: UpdateInstallNowRequest): Promise<UpdateState>;
   restartToUpdate(): Promise<UpdateState> | UpdateState;
+  getServerUpdate(): Promise<ServerUpdateState>;
+  checkServerUpdate(): Promise<ServerUpdateState>;
+  installServerUpdate(request: ServerUpdateInstallRequest): Promise<ServerUpdateState>;
+  cancelServerUpdate(): Promise<ServerUpdateState>;
   getDiagnostics(): Promise<DiagnosticsSnapshot> | DiagnosticsSnapshot;
   revealDiagnostics(): Promise<{ ok: boolean }>;
   clearDiagnostics(): Promise<DiagnosticsSnapshot> | DiagnosticsSnapshot;
@@ -367,6 +376,8 @@ export function registerIpcHandlers(
       services.openSettingsWindow(request),
     [IPC_CHANNELS.themeGet]: () => services.getTheme(),
     [IPC_CHANNELS.themeSet]: (_event, preference: ThemePreference) => services.setTheme(preference),
+    [IPC_CHANNELS.runtimeReadinessGet]: () => services.getRuntimeReadiness(),
+    [IPC_CHANNELS.runtimeReadinessRefresh]: () => services.refreshRuntimeReadiness(),
     [IPC_CHANNELS.readinessGet]: () => services.getReadiness(),
     [IPC_CHANNELS.readinessRefresh]: () => services.refreshReadiness(),
     [IPC_CHANNELS.workspacePickDirectory]: () => services.pickWorkspaceDirectory(),
@@ -528,6 +539,11 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.updatesInstallNow]: (_event, request: UpdateInstallNowRequest) =>
       services.installUpdateNow(request),
     [IPC_CHANNELS.updatesRestart]: () => services.restartToUpdate(),
+    [IPC_CHANNELS.serverUpdatesGet]: () => services.getServerUpdate(),
+    [IPC_CHANNELS.serverUpdatesCheck]: () => services.checkServerUpdate(),
+    [IPC_CHANNELS.serverUpdatesInstall]: (_event, request: ServerUpdateInstallRequest) =>
+      services.installServerUpdate(request),
+    [IPC_CHANNELS.serverUpdatesCancel]: () => services.cancelServerUpdate(),
     [IPC_CHANNELS.diagnosticsGet]: () => services.getDiagnostics(),
     [IPC_CHANNELS.diagnosticsReveal]: () => services.revealDiagnostics(),
     [IPC_CHANNELS.diagnosticsClear]: () => services.clearDiagnostics(),

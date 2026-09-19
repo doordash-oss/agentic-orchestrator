@@ -270,6 +270,7 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 	}
 
 	// Stage candidates for every repository without advancing any parent ref.
+<<<<<<< HEAD
 	// A refactor child appends its layers: pure computation — created refs,
 	// previous tops, appended layer definitions, ancestry and branch-name
 	// checks — recorded on the journal without touching any ref. A rebase
@@ -287,7 +288,37 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 			// ref untouched; the journal is returned empty so the caller
 			// stops before apply.
 			return nil, err
+||||||| 65b9c760
+	// Most candidates are explicit two-parent no-ff merge commits created in a
+	// temporary detached worktree. A rebase repo that was already up to date at
+	// child creation is a pass-through candidate whose SHA is the parent anchor.
+	for i := range journal.Entries {
+		entry := &journal.Entries[i]
+		parentRepo := featureRepoByName(parent, entry.Repo)
+		if parentRepo == nil {
+			entry.PrepState = feature.RepoPrepFailed
+			journal.Phase = feature.TransactionPhaseAttention
+			finding := entryFinding(entry, errcat.IntegrationRepositoryMissing,
+				fmt.Sprintf("parent no longer has repository %s", entry.Repo))
+			return nil, o.parkIntegrationAttention(child, journal, []integrationFinding{finding})
+=======
+	// Most candidates are explicit two-parent no-ff merge commits created in a
+	// temporary detached worktree. A repo whose child head is already contained
+	// in the parent anchor (the child left it untouched, or a rebase repo was
+	// already up to date at launch) is a pass-through candidate whose SHA is
+	// the parent anchor: git has nothing to merge there.
+	for i := range journal.Entries {
+		entry := &journal.Entries[i]
+		parentRepo := featureRepoByName(parent, entry.Repo)
+		if parentRepo == nil {
+			entry.PrepState = feature.RepoPrepFailed
+			journal.Phase = feature.TransactionPhaseAttention
+			finding := entryFinding(entry, errcat.IntegrationRepositoryMissing,
+				fmt.Sprintf("parent no longer has repository %s", entry.Repo))
+			return nil, o.parkIntegrationAttention(child, journal, []integrationFinding{finding})
+>>>>>>> 3e83c96953702bf7490a7ac015371f2a0e6eac1f
 		}
+<<<<<<< HEAD
 	} else {
 		for i := range journal.Entries {
 			entry := &journal.Entries[i]
@@ -356,6 +387,35 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 					return nil, fmt.Errorf("recording pass-through candidate for repo %s: %w", entry.Repo, err)
 				}
 				continue
+||||||| 65b9c760
+		if rebasePassThroughRepo(child, entry.Repo) {
+			if !git.IsAncestor(parentRepo.Path, entry.ChildHeadSHA, entry.ParentAnchorSHA) {
+				entry.PrepState = feature.RepoPrepFailed
+				journal.Phase = feature.TransactionPhaseAttention
+				finding := entryFinding(entry, errcat.RebaseGatePassthroughModified,
+					fmt.Sprintf("rebase child modified up-to-date repo %s; only repos behind at launch may change", entry.Repo))
+				return nil, o.parkIntegrationAttention(child, journal, []integrationFinding{finding})
+			}
+			entry.CandidateSHA = entry.ParentAnchorSHA
+			entry.PrepState = feature.RepoPrepPrepared
+			if err := o.persistTransaction(child.ID, journal); err != nil {
+				return nil, fmt.Errorf("recording pass-through candidate for repo %s: %w", entry.Repo, err)
+=======
+		contained := entry.ChildHeadSHA == entry.ParentAnchorSHA ||
+			git.IsAncestor(parentRepo.Path, entry.ChildHeadSHA, entry.ParentAnchorSHA)
+		if rebasePassThroughRepo(child, entry.Repo) && !contained {
+			entry.PrepState = feature.RepoPrepFailed
+			journal.Phase = feature.TransactionPhaseAttention
+			finding := entryFinding(entry, errcat.RebaseGatePassthroughModified,
+				fmt.Sprintf("rebase child modified up-to-date repo %s; only repos behind at launch may change", entry.Repo))
+			return nil, o.parkIntegrationAttention(child, journal, []integrationFinding{finding})
+		}
+		if contained {
+			entry.CandidateSHA = entry.ParentAnchorSHA
+			entry.PrepState = feature.RepoPrepPrepared
+			if err := o.persistTransaction(child.ID, journal); err != nil {
+				return nil, fmt.Errorf("recording pass-through candidate for repo %s: %w", entry.Repo, err)
+>>>>>>> 3e83c96953702bf7490a7ac015371f2a0e6eac1f
 			}
 
 			// A review-feedback child of a stackless parent has no chain to

@@ -75,7 +75,14 @@ func (h *apiHandler) handleWorkspaceRepositoryOriginStatusRoute(w http.ResponseW
 		}
 		seen[identity.Path] = struct{}{}
 		_, refreshing := refresh[key]
-		response.Repositories = append(response.Repositories, h.originStatusRow(r.Context(), key, identity, mode, refreshing))
+		row, err := h.originStatusRow(r.Context(), key, identity, mode, refreshing)
+		if err != nil {
+			if !h.writeAdmissionRefusal(w, err) {
+				writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
+			}
+			return
+		}
+		response.Repositories = append(response.Repositories, row)
 	}
 	writeActionJSON(w, http.StatusOK, &response)
 }
@@ -83,7 +90,7 @@ func (h *apiHandler) handleWorkspaceRepositoryOriginStatusRoute(w http.ResponseW
 // originStatusRow resolves one repository's typed origin snapshot. Local-only
 // outcomes are resolved inline; a mapped source consults (and if necessary
 // schedules) the coordinator's coalesced attempt for the resolved source.
-func (h *apiHandler) originStatusRow(ctx context.Context, repoKey string, identity git.RepoIdentity, mode git.LocalSourceMode, refresh bool) RepositoryOriginStatus {
+func (h *apiHandler) originStatusRow(ctx context.Context, repoKey string, identity git.RepoIdentity, mode git.LocalSourceMode, refresh bool) (RepositoryOriginStatus, error) {
 	plan := git.PlanOriginCheck(ctx, identity.Path, mode, git.OriginCheckOptions{})
 	row := RepositoryOriginStatus{
 		RepoKey: repoKey,
@@ -121,21 +128,26 @@ func (h *apiHandler) originStatusRow(ctx context.Context, repoKey string, identi
 		checkedAt := time.Now().UTC()
 		row.CheckedAt = &checkedAt
 		attachOriginIssue(&row, plan.Status, plan.Diagnostics)
-		return row
+		return row, nil
 	}
 	if h.originChecks == nil {
 		row.Status = RepositoryOriginStatusStatus(git.OriginCheckUnknown)
 		row.Issue = wireErrorPtr(errcat.New(errcat.OriginCheckUnavailable,
 			errcat.WithDiagnostics("origin checks are not available on this runtime")))
-		return row
+		return row, nil
 	}
-	completed, ok, _ := h.originChecks.ensure(identity, plan, identity.Path, refresh)
+	completed, ok, _, err := h.originChecks.ensure(identity, plan, identity.Path, refresh)
+	if err != nil {
+		// A closed admission boundary refused the new attempt; cached
+		// completed results above remain readable.
+		return RepositoryOriginStatus{}, err
+	}
 	if !ok {
 		row.Status = RepositoryOriginStatusStatus(git.OriginCheckChecking)
-		return row
+		return row, nil
 	}
 	row.applyCompleted(completed)
-	return row
+	return row, nil
 }
 
 func (row *RepositoryOriginStatus) applyCompleted(completed *originCompleted) {

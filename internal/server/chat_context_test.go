@@ -176,11 +176,11 @@ func TestChatStartRejectsMalformedContextReferences(t *testing.T) {
 	}
 }
 
-// chatContextLongDiagnostics builds raw diagnostics well past the 240
-// character safe-display bound so tests can pin that the hidden bundle
-// carries the full stored text, not the bounded projection.
+// chatContextLongDiagnostics builds raw diagnostics well past the
+// safe-display bound so tests can pin that the hidden bundle carries the
+// full stored text, not the bounded projection.
 func chatContextLongDiagnostics(marker string) string {
-	return "raw failure detail for " + marker + ": " + strings.Repeat("context line; ", 60) + "end " + marker
+	return "raw failure detail for " + marker + ": " + strings.Repeat("context line; ", 160) + "end " + marker
 }
 
 // chatContextTestAPI is one handler instance serving chat-start requests
@@ -353,7 +353,7 @@ func chatContextSeedRecovery(t *testing.T, api *apiHandler) (snapshotID, itemKey
 // TestChatContextResolverBuildsBundlePerScope pins the resolver's five
 // scopes: a matching reference yields 200 and the mutation target receives
 // a bundle containing the catalog heading with the code, the full stored
-// diagnostics beyond the 240 character bound, and the home's log path.
+// diagnostics beyond the safe-display bound, and the home's log path.
 func TestChatContextResolverBuildsBundlePerScope(t *testing.T) {
 	t.Parallel()
 	store := feature.NewStore(t.TempDir())
@@ -447,8 +447,8 @@ func TestChatContextResolverBuildsBundlePerScope(t *testing.T) {
 			if !strings.Contains(bundle, tc.wantHeading) {
 				t.Fatalf("bundle missing catalog heading %q:\n%s", tc.wantHeading, bundle)
 			}
-			if len(tc.wantDetail) <= 240 {
-				t.Fatalf("test bug: wantDetail must exceed the 240 character bound (len %d)", len(tc.wantDetail))
+			if len(tc.wantDetail) <= maxStoredDiagnosticsLen {
+				t.Fatalf("test bug: wantDetail must exceed the %d character bound (len %d)", maxStoredDiagnosticsLen, len(tc.wantDetail))
 			}
 			if !strings.Contains(bundle, tc.wantDetail) {
 				t.Fatalf("bundle missing full diagnostics:\n%s", bundle)

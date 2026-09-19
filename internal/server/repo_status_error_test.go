@@ -15,15 +15,16 @@
 package server
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-const repoStatusPRCreateDiagnostics = "creating pull request: POST /repos/org/repo-a/pulls: 502 Bad Gateway " +
+var repoStatusPRCreateDiagnostics = "creating pull request: POST /repos/org/repo-a/pulls: 502 Bad Gateway " +
 	"with a diagnostics tail well past the safe-display bound so the projection must bound it " +
-	"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	strings.Repeat("a", maxStoredDiagnosticsLen)
 
 // TestFeatureDetailRepoStatusCarriesCanonicalError pins the repository-status
 // projection: a repository carrying a stored publish-failure record renders

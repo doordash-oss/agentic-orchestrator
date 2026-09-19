@@ -18,7 +18,7 @@ import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CanonicalErrorException } from '../../shared/errors';
-import { ReadinessSnapshotSchema } from '../../shared/ipc';
+import { ReadinessSnapshotSchema, RuntimeReadinessSnapshotSchema } from '../../shared/ipc';
 import type { ApiRequestInit, HttpResult } from '../gateway/runtimeGateway';
 import { SetupService, type SetupServiceDeps } from '../setup';
 import { CreationFilesService } from '../creationFiles';
@@ -565,5 +565,41 @@ describe('SetupService locality enforcement', () => {
       canonical: { code: 'E_REQUIRES_LOCAL_SERVER' },
     });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('runtime-only setup', () => {
+  it('loads and refreshes mandatory readiness without inventing an empty repository catalog', async () => {
+    const body = serverReadiness();
+    delete body['workspace'];
+    const { service, calls } = makeService(() => ({ status: 200, body }));
+    const snapshot = await service.getRuntimeReadiness();
+    expect(RuntimeReadinessSnapshotSchema.parse(snapshot)).toEqual(snapshot);
+    expect(snapshot).not.toHaveProperty('repositories');
+    expect(snapshot).not.toHaveProperty('workspaceRoots');
+    await service.refreshRuntimeReadiness();
+    expect(calls.map((call) => call.path)).toEqual([
+      '/api/v1/readiness/runtime',
+      '/api/v1/readiness/runtime/refresh',
+    ]);
+  });
+
+  it('projects legacy combined snapshots without allowing repository issues to gate setup', async () => {
+    const body = serverReadiness({
+      issues: [
+        {
+          code: 'repository_inspection_failed',
+          class: 'blocking',
+          title: 'Git failed',
+          summary: 'Git failed',
+        },
+      ],
+    });
+    const { service } = makeService(() => ({ status: 200, body }));
+    const snapshot = await service.getRuntimeReadiness();
+    expect(snapshot.issues.map((issue) => issue.code)).toEqual([
+      'unauthenticated',
+      'models_unavailable',
+    ]);
   });
 });

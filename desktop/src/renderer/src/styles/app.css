@@ -5027,6 +5027,19 @@ body {
   padding: var(--space-2);
 }
 
+/* Recovery expands within the centered card so the list stays in its flow. */
+.shell-card__server-switcher {
+  display: block;
+}
+
+.shell-card__server-switcher .server-switcher {
+  position: relative;
+  bottom: auto;
+  width: 100%;
+  max-width: none;
+  margin-top: var(--space-2);
+}
+
 /* While the sidebar is collapsed (below the ~700px auto-collapse breakpoint
  * or by the user's explicit choice) its footer — the switcher's wide-layout
  * home — is display:none, so the shell re-homes the same control into this
@@ -8720,8 +8733,12 @@ body {
   background: var(--color-scrim);
 }
 
-.restart-prompt {
+.restart-prompt__backdrop > [role='dialog'] {
   width: min(480px, 100%);
+}
+
+.restart-prompt {
+  width: 100%;
   border: 1px solid var(--accent);
   border-radius: var(--radius);
   padding: var(--space-5);
@@ -9317,6 +9334,12 @@ body {
   color: var(--accent);
   border-color: transparent;
   background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.settings-panel__server-kind[data-kind='update'] {
+  color: var(--attention);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--attention) 12%, transparent);
 }
 
 .settings-panel__server-status {

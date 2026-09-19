@@ -71,6 +71,7 @@ export function ServerSwitcher({
   currentLabel,
   tone,
   enabled,
+  variant = 'footer',
   openRequest = null,
   onRouteHandled,
 }: {
@@ -78,8 +79,10 @@ export function ServerSwitcher({
   currentLabel: string;
   /** The existing footer tone contract: ready | progress | error | ama. */
   tone: string;
-  /** False unless the workspace is connected — the popover only opens ready. */
+  /** Whether server selection is available on the hosting surface. */
   enabled: boolean;
+  /** Recovery uses an action button on the disconnected connection shell. */
+  variant?: 'footer' | 'recovery';
   /** Route-and-focus signal from the global "Switch Server…" command. */
   openRequest?: { id: number } | null;
   /**
@@ -91,7 +94,17 @@ export function ServerSwitcher({
 }) {
   const [open, setOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<ServerListSnapshot | null>(null);
-  const rows = useMemo(() => switcherItems(snapshot), [snapshot]);
+  // Failures can retain the last server identity. Nothing is connected on
+  // the recovery surface, so that identity must not disable a retry or Start.
+  const rows = useMemo(
+    () =>
+      switcherItems(
+        snapshot !== null && variant === 'recovery'
+          ? { ...snapshot, rows: snapshot.rows.map((row) => ({ ...row, current: false })) }
+          : snapshot,
+      ),
+    [snapshot, variant],
+  );
   const [highlight, setHighlight] = useState(0);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -204,21 +217,31 @@ export function ServerSwitcher({
   };
 
   return (
-    <ToolbarPopoverAnchor className="sidebar__server">
+    <ToolbarPopoverAnchor
+      className={variant === 'recovery' ? 'shell-card__server-switcher' : 'sidebar__server'}
+    >
       <button
         ref={anchorRef}
         type="button"
-        className="sidebar__server-control"
+        className={variant === 'recovery' ? 'setup-wizard__action' : 'sidebar__server-control'}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`${currentLabel} — switch server`}
+        aria-label={
+          variant === 'recovery' ? 'Choose another server' : `${currentLabel} — switch server`
+        }
         disabled={!enabled}
         onClick={() => setOpen((value) => !value)}
       >
-        <span className="sidebar__server-dot" aria-hidden="true" data-tone={tone}>
-          ●
-        </span>
-        <span className="sidebar__server-name">{currentLabel}</span>
+        {variant === 'recovery' ? (
+          'Choose another server'
+        ) : (
+          <>
+            <span className="sidebar__server-dot" aria-hidden="true" data-tone={tone}>
+              ●
+            </span>
+            <span className="sidebar__server-name">{currentLabel}</span>
+          </>
+        )}
       </button>
       <ToolbarPopover
         open={open}
@@ -307,6 +330,11 @@ export function ServerSwitcher({
                     {row.kind === 'remote' ? (
                       <span className="settings-panel__server-kind" data-kind="remote">
                         Remote
+                      </span>
+                    ) : null}
+                    {row.serverUpdate?.available === true ? (
+                      <span className="settings-panel__server-kind" data-kind="update">
+                        v{row.serverUpdate.latest} available
                       </span>
                     ) : null}
                   </span>

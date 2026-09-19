@@ -22,6 +22,8 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,8 +36,10 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 type childIntegrationFixture struct {
@@ -1558,4 +1562,157 @@ func TestRestartPhase_ReviewPassedFinalReviewNilTransaction_DispatchesIntegratio
 	if parent.Status != feature.StatusCodeReady {
 		t.Fatalf("parent status = %s, want CodeReady", parent.Status)
 	}
+}
+
+// reviewFeedbackTailFixture seeds a review-feedback child with one selected
+// inline comment on repoA and a parent PR URL, so the tail exercises the
+// push, reply, and resolve steps.
+func reviewFeedbackTailFixture(t *testing.T) *childIntegrationFixture {
+	t.Helper()
+	fx := newChildIntegrationFixture(t, feature.StatusPublished, false)
+	if err := fx.store.Modify(fx.parent.ID, func(f *feature.Feature) error {
+		f.RepoStates["repoA"].PRURL = "https://github.com/org/repo/pull/1"
+		return nil
+	}); err != nil {
+		t.Fatalf("seed parent PR URL: %v", err)
+	}
+	if err := fx.store.Modify(fx.child.ID, func(f *feature.Feature) error {
+		f.Parent.Kind = feature.ChildKindReviewFeedback
+		f.ReviewFeedback = []feature.ReviewFeedbackComment{{Repo: "repoA", ID: 7, Type: git.CommentTypeReview}}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed review feedback: %v", err)
+	}
+	return fx
+}
+
+// fakeGitHubForTail serves the tail's GitHub calls: comment replies return
+// an empty object, and every GraphQL call answers with one unresolved thread
+// for comment 7 (the resolve mutation ignores the extra fields).
+func fakeGitHubForTail(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "graphql") {
+			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"T7","isResolved":false,"comments":{"nodes":[{"databaseId":7}]}}]}}},"resolveReviewThread":{"thread":{"isResolved":true}}}}`))
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	restore := github.OverrideForTest(srv.URL, "test-token")
+	t.Cleanup(restore)
+	return srv
+}
+
+// TestReviewFeedbackTailPushFailureStaysRetryable pins the failure shape:
+// a rejected push records the tail warning on the child, stores a publish
+// failure on the parent's repository state so the parent surfaces it, and
+// leaves the tail unsettled. Integrating the pass again with a working
+// remote finds the parent already Published, completes the replies, clears
+// both records, and settles.
+func TestReviewFeedbackTailPushFailureStaysRetryable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := reviewFeedbackTailFixture(t)
+	fakeGitHubForTail(t)
+
+	remote := mocks.NewMockRemoteOps()
+	remote.PullRebaseFn = func(string, string) error { return nil }
+	remote.PushFn = func(string, string) error { return errors.New("rejected (non-fast-forward)") }
+	o := New(Deps{Lifecycle: fx.mgr, Store: fx.store, Worktrees: fx.wm, Remote: remote}, Hooks{})
+
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("RunChildIntegration() error = %v", err)
+	}
+	parent, child := fx.reload()
+	if parent.Status != feature.StatusPublished {
+		t.Fatalf("parent status = %s, want Published", parent.Status)
+	}
+	tx := child.Parent.Transaction
+	if tx == nil || tx.TailSettled {
+		t.Fatalf("transaction = %+v, want unsettled tail", tx)
+	}
+	entry := tx.EntryByRepo("repoA")
+	if entry == nil || entry.Tail == nil || !strings.Contains(entry.Tail.Diagnostics, "push failed: rejected") {
+		t.Fatalf("tail record = %+v, want push failure diagnostics", entry)
+	}
+	repoErr := parent.RepoStates["repoA"].Error
+	if repoErr == nil || repoErr.Code != errcat.PublishPushFailed {
+		t.Fatalf("parent repo error = %+v, want %s", repoErr, errcat.PublishPushFailed)
+	}
+
+	// Retry with a working remote.
+	remote.PushFn = func(string, string) error { return nil }
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("retry RunChildIntegration() error = %v", err)
+	}
+	parent, child = fx.reload()
+	if parent.Status != feature.StatusPublished {
+		t.Fatalf("parent status after retry = %s, want Published", parent.Status)
+	}
+	if parent.RepoStates["repoA"].Error != nil {
+		t.Fatalf("parent repo error after retry = %+v, want cleared", parent.RepoStates["repoA"].Error)
+	}
+	tx = child.Parent.Transaction
+	if tx == nil || !tx.TailSettled {
+		t.Fatalf("transaction after retry = %+v, want settled tail (tail: %s)", tx, tailDiagnostics(tx, "repoA"))
+	}
+	if entry := tx.EntryByRepo("repoA"); entry == nil || entry.Tail != nil {
+		t.Fatalf("tail record after retry = %+v, want cleared", entry)
+	}
+	addressed, err := fx.store.LoadAddressedReviewFeedbackIDs(fx.parent.ID, "repoA")
+	if err != nil {
+		t.Fatalf("load addressed IDs: %v", err)
+	}
+	if !addressed[7] {
+		t.Fatalf("addressed IDs = %v, want comment 7 recorded", addressed)
+	}
+}
+
+// TestReviewFeedbackTailSettlesOnSuccess pins the clean path: with a working
+// remote and GitHub, one integration pushes, replies, resolves, records the
+// addressed ID, and settles without any tail or parent repo record.
+func TestReviewFeedbackTailSettlesOnSuccess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := reviewFeedbackTailFixture(t)
+	fakeGitHubForTail(t)
+
+	pushes := 0
+	remote := mocks.NewMockRemoteOps()
+	remote.PullRebaseFn = func(string, string) error { return nil }
+	remote.PushFn = func(string, string) error { pushes++; return nil }
+	o := New(Deps{Lifecycle: fx.mgr, Store: fx.store, Worktrees: fx.wm, Remote: remote}, Hooks{})
+
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("RunChildIntegration() error = %v", err)
+	}
+	if pushes != 1 {
+		t.Fatalf("pushes = %d, want 1", pushes)
+	}
+	parent, child := fx.reload()
+	if parent.RepoStates["repoA"].Error != nil {
+		t.Fatalf("parent repo error = %+v, want nil", parent.RepoStates["repoA"].Error)
+	}
+	tx := child.Parent.Transaction
+	if tx == nil || !tx.TailSettled {
+		t.Fatalf("transaction = %+v, want settled tail (tail: %s)", tx, tailDiagnostics(tx, "repoA"))
+	}
+	if entry := tx.EntryByRepo("repoA"); entry == nil || entry.Tail != nil {
+		t.Fatalf("tail record = %+v, want none", entry)
+	}
+}
+
+func tailDiagnostics(tx *feature.TransactionJournal, repo string) string {
+	if tx == nil {
+		return ""
+	}
+	if entry := tx.EntryByRepo(repo); entry != nil && entry.Tail != nil {
+		return entry.Tail.Diagnostics
+	}
+	return ""
 }

@@ -829,7 +829,7 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		o.emitPhaseCompleted(featureID, feature.PhaseImplement, errors.New(errMsg))
 		return o.markFailedWithEvent(featureID, failureRecordWithIteration(
 			failureRecordWithRepos(repoFailureCode(result), feature.PhaseImplement, result.FailedRepos, errMsg),
-			o.currentIteration(featureID),
+			o.currentIteration(featureID, feature.PhaseImplement),
 		))
 	default:
 		errMsg := fmt.Sprintf("unknown multi-repo FinalStatus %q", result.FinalStatus)
@@ -1433,7 +1433,7 @@ func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *ag
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
 		return o.markFinalReviewFailedWithEvent(featureID, failureRecordWithIteration(
 			failureRecordWithRepos(repoFailureCode(res), feature.PhaseFinalReview, res.FailedRepos, errMsg),
-			o.currentIteration(featureID),
+			o.currentIteration(featureID, feature.PhaseFinalReview),
 		))
 	default:
 		errMsg := fmt.Sprintf("unknown final review FinalStatus %q", res.FinalStatus)

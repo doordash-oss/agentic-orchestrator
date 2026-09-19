@@ -238,10 +238,11 @@ describe('ConnectionShell', () => {
     });
     expect(screen.getByText('E_INCOMPATIBLE_SERVER')).toBeInTheDocument();
     expect(screen.getByText(/update the agentico desktop app/i)).toBeInTheDocument();
-    // The only action offered is Retry — never stop/kill of the external server.
+    // Recovery can retry or choose another server, never stop the external server.
     const buttons = screen.getAllByRole('button');
-    expect(buttons).toHaveLength(1);
+    expect(buttons).toHaveLength(2);
     expect(buttons[0]).toHaveTextContent(/retry/i);
+    expect(buttons[1]).toHaveTextContent('Choose another server');
   });
 
   it('offers retry on a crash and routes it through the retry IPC op', async () => {
@@ -304,7 +305,7 @@ describe('ConnectionShell', () => {
             // The gateway folds the launch command context and bounded log
             // tail into the canonical error's diagnostics string.
             diagnostics:
-              'bundled agentico server --config [path] --state-dir [path]\n' +
+              'bundled agentico server --config [path] --state-dir [path] --updates=off\n' +
               'startup failed at [path]\n' +
               'credential=[redacted]',
           },

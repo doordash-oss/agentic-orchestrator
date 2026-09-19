@@ -16,6 +16,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -437,9 +439,13 @@ func TestStartSessionSeedsInitialPromptContextEstimate(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "initial-context.sh")
+	// Consume both the initialize request and the prompt before exiting, so
+	// process cleanup cannot close stdin while StartSession is still writing.
 	if err := os.WriteFile(scriptPath, []byte(`#!/bin/bash
 echo '{"type":"system","subtype":"init","session_id":"s1","model":"test"}'
-read -t 10 line || true
+IFS= read -r -t 10 initialize || exit 1
+IFS= read -r -t 10 prompt || exit 1
+printf '%s\n' "$prompt" > received-prompt.json
 echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}'
 `), 0o755); err != nil {
 		t.Fatalf("writing script: %v", err)
@@ -458,6 +464,18 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	case <-sess.Done():
 	case <-time.After(15 * time.Second):
 		t.Fatal("session did not complete within timeout")
+	}
+
+	received, err := os.ReadFile(filepath.Join(tmpDir, "received-prompt.json"))
+	if err != nil {
+		t.Fatalf("reading received prompt: %v", err)
+	}
+	var input llm.UserInputMessage
+	if err := json.Unmarshal(received, &input); err != nil {
+		t.Fatalf("decoding received prompt: %v", err)
+	}
+	if input != llm.NewUserInput(prompt) {
+		t.Fatalf("received prompt = %+v, want user message containing %q", input, prompt)
 	}
 
 	usage := sess.LatestUsage()

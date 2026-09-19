@@ -89,7 +89,7 @@ export interface HttpResult {
 }
 
 /** Mutating verbs allowed against the connected runtime's REST API. */
-export type ApiMethod = 'GET' | 'POST' | 'PATCH' | 'PUT';
+export type ApiMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
 export interface ApiRequestInit {
   method?: ApiMethod;
@@ -147,7 +147,13 @@ export interface GatewayDeps {
   /** Bounded JSON request; throws on network failure. GET when no method. */
   fetchJson(
     url: string,
-    options: { token?: string; timeoutMs: number; method?: ApiMethod; body?: unknown },
+    options: {
+      token?: string;
+      timeoutMs: number;
+      method?: ApiMethod;
+      body?: unknown;
+      signal?: AbortSignal;
+    },
   ): Promise<HttpResult>;
   /**
    * Bounded binary POST (raw octet-stream body, JSON response) for the
@@ -237,6 +243,9 @@ export class RuntimeGateway {
   private busy = false;
   private shuttingDown = false;
   private generation = 0;
+  private connectionReads = new AbortController();
+  private initialReadiness: { generation: number; result: HttpResult } | null = null;
+  private legacyReadiness = false;
   private launchCommandContext: string | null = null;
   /**
    * The runtime directory the gateway actually resolved and connected with.
@@ -407,11 +416,31 @@ export class RuntimeGateway {
       throw new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED'));
     }
     const method = init.method ?? 'GET';
-    return this.deps.fetchJson(`${this.baseUrl}${path}`, {
-      token: this.token,
-      timeoutMs: init.timeoutMs ?? this.timeouts.apiRequestMs,
-      ...(method === 'GET' ? {} : { method, body: init.body ?? {} }),
-    });
+    if (path === '/api/v1/readiness/runtime' && method === 'GET') {
+      const initial = this.initialReadiness;
+      this.initialReadiness = null;
+      if (initial?.generation === this.generation) return initial.result;
+      return this.requestRuntimeReadiness(this.baseUrl, this.token, false, init.timeoutMs);
+    }
+    if (method !== 'GET') this.initialReadiness = null;
+    if (path === '/api/v1/readiness/runtime/refresh' && method === 'POST') {
+      return this.requestRuntimeReadiness(this.baseUrl, this.token, true, init.timeoutMs);
+    }
+    const generation = this.generation;
+    try {
+      const result = await this.deps.fetchJson(`${this.baseUrl}${path}`, {
+        token: this.token,
+        timeoutMs: init.timeoutMs ?? this.timeouts.apiRequestMs,
+        ...(method === 'GET'
+          ? { signal: this.connectionReads.signal }
+          : { method, body: init.body ?? {} }),
+      });
+      this.assertCurrentGeneration(generation);
+      return result;
+    } catch (error) {
+      this.assertCurrentGeneration(generation);
+      throw error;
+    }
   }
 
   /**
@@ -496,7 +525,7 @@ export class RuntimeGateway {
       return false;
     }
     this.busy = true;
-    const generation = ++this.generation;
+    const generation = this.invalidateConnectionReads();
     try {
       await this.connect(generation);
     } catch (err) {
@@ -553,7 +582,7 @@ export class RuntimeGateway {
     if (this.shuttingDown) {
       return this.state;
     }
-    this.generation += 1;
+    this.invalidateConnectionReads();
     await this.resetConnection({ stopChild: true });
     this.setState({
       status: 'idle',
@@ -589,7 +618,7 @@ export class RuntimeGateway {
         return this.state;
       }
       this.busy = true;
-      const generation = ++this.generation;
+      const generation = this.invalidateConnectionReads();
       try {
         await this.attachRemote(generation, known);
       } catch (err) {
@@ -600,7 +629,7 @@ export class RuntimeGateway {
       return this.state;
     }
     this.busy = true;
-    const generation = ++this.generation;
+    const generation = this.invalidateConnectionReads();
     try {
       await this.attachCandidate(generation, candidate, 'error');
     } catch (err) {
@@ -643,7 +672,7 @@ export class RuntimeGateway {
       .knownServers()
       .known.find((entry) => entry.serverKey === request.serverKey);
     this.busy = true;
-    const generation = ++this.generation;
+    const generation = this.invalidateConnectionReads();
     try {
       // Deliberately no stopChild(): the app-owned child survives the switch.
       await this.resetConnection({ resetCrashAttempts: true });
@@ -755,7 +784,7 @@ export class RuntimeGateway {
     };
     const switchContext: SwitchContext = { attempted, previous, startLocal: true };
     this.busy = true;
-    const generation = ++this.generation;
+    const generation = this.invalidateConnectionReads();
     try {
       // Deliberately no stopChild(): a surviving app-owned child is re-owned
       // below rather than restarted, and a remote connection has no child.
@@ -906,7 +935,7 @@ export class RuntimeGateway {
     this.busy = true;
     // The generation bump fences any in-flight attach and any background
     // remote re-probe for the removed connection.
-    const generation = ++this.generation;
+    const generation = this.invalidateConnectionReads();
     try {
       await this.resetConnection();
       this.setState({
@@ -992,7 +1021,7 @@ export class RuntimeGateway {
     ) {
       return;
     }
-    this.generation += 1;
+    this.invalidateConnectionReads();
     this.token = null;
     this.baseUrl = null;
     this.supervision.clearReadySince();
@@ -1029,7 +1058,7 @@ export class RuntimeGateway {
    */
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
-    this.generation += 1; // invalidate in-flight connect work
+    this.invalidateConnectionReads(); // invalidate in-flight connect work
     await this.resetConnection({
       stopChild: true,
       clearConnectedRuntimeDir: true,
@@ -1040,9 +1069,10 @@ export class RuntimeGateway {
   // --- connect cycle ---------------------------------------------------------
 
   private async connect(generation: number): Promise<void> {
-    // never leave a stray child from an earlier cycle
+    // Deliberately no stopChild(): a retry after losing the selected server
+    // must leave a live app-owned child running; launch() replaces it only
+    // when the cycle ends up spawning.
     await this.resetConnection({
-      stopChild: true,
       clearLaunchContext: true,
       clearPendingCandidates: true,
     });
@@ -1392,6 +1422,14 @@ export class RuntimeGateway {
   // --- launch path -----------------------------------------------------------
 
   private async launch(generation: number, selected: SelectedRuntime): Promise<void> {
+    if (this.supervision.hasLiveChild()) {
+      // Never run two app-owned children: a live one the cycle could not
+      // re-attach to is stopped before spawning its replacement.
+      await this.supervision.stop();
+      if (this.cancelled(generation)) {
+        return;
+      }
+    }
     this.setState({
       status: 'launching',
       stage: 'connect',
@@ -1412,8 +1450,16 @@ export class RuntimeGateway {
       return;
     }
 
-    const args = ['server', '--config', selected.configPath, '--state-dir', selected.stateDir];
-    this.launchCommandContext = 'bundled agentico server --config [path] --state-dir [path]';
+    const args = [
+      'server',
+      '--config',
+      selected.configPath,
+      '--state-dir',
+      selected.stateDir,
+      '--updates=off',
+    ];
+    this.launchCommandContext =
+      'bundled agentico server --config [path] --state-dir [path] --updates=off';
     let child: ServerChildLike;
     try {
       child = this.deps.spawnServer(resolved.path, args);
@@ -1652,20 +1698,66 @@ export class RuntimeGateway {
   // --- helpers ---------------------------------------------------------------
 
   private async fetchReadiness(baseUrl: string): Promise<boolean> {
-    if (this.token === null) {
-      return false;
-    }
+    if (this.token === null) return false;
+    const generation = this.generation;
     try {
-      const result = await this.deps.fetchJson(`${trimBase(baseUrl)}/api/v1/readiness`, {
-        token: this.token,
-        // The first readiness request may perform bounded provider CLI probes.
-        // It is authenticated API work, not the tiny liveness health check.
-        timeoutMs: this.timeouts.apiRequestMs,
-      });
+      const result = await this.requestRuntimeReadiness(baseUrl, this.token, false);
+      this.assertCurrentGeneration(generation);
+      if (result.status === 200) this.initialReadiness = { generation, result };
       return result.status === 200;
     } catch {
       return false;
     }
+  }
+
+  /** A 404 is the only compatibility fallback; auth, network and schema
+   * failures never trigger a second request to a different endpoint. */
+  private async requestRuntimeReadiness(
+    baseUrl: string,
+    token: string,
+    refresh: boolean,
+    timeoutMs = this.timeouts.apiRequestMs,
+  ): Promise<HttpResult> {
+    const generation = this.generation;
+    const signal = this.connectionReads.signal;
+    const legacy = this.legacyReadiness;
+    const request = (legacy: boolean): Promise<HttpResult> =>
+      this.deps.fetchJson(
+        `${trimBase(baseUrl)}/api/v1/readiness${legacy ? '' : '/runtime'}${refresh ? '/refresh' : ''}`,
+        {
+          token,
+          timeoutMs,
+          signal,
+          ...(refresh ? { method: 'POST' as const, body: {} } : {}),
+        },
+      );
+    try {
+      let result = await request(legacy);
+      this.assertCurrentGeneration(generation);
+      if (!legacy && result.status === 404) {
+        this.legacyReadiness = true;
+        result = await request(true);
+        this.assertCurrentGeneration(generation);
+      }
+      return result;
+    } catch (error) {
+      this.assertCurrentGeneration(generation);
+      throw error;
+    }
+  }
+
+  private assertCurrentGeneration(generation: number): void {
+    if (this.cancelled(generation)) {
+      throw new CanonicalErrorException(buildCanonicalError('E_SERVER_SWITCHED'));
+    }
+  }
+
+  private invalidateConnectionReads(): number {
+    this.connectionReads.abort();
+    this.connectionReads = new AbortController();
+    this.initialReadiness = null;
+    this.legacyReadiness = false;
+    return ++this.generation;
   }
 
   private cancelled(generation: number): boolean {

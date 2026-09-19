@@ -28,6 +28,7 @@ import {
   IPC_CHANNELS,
   defaultSettings,
   type DiagnosticsSnapshot,
+  type ServerUpdateState,
   type UpdateState,
 } from '../../src/shared/ipc';
 
@@ -79,6 +80,16 @@ function updateState(): UpdateState {
     packageFormat: 'macos' as const,
     signatureStatus: 'unknown' as const,
     message: 'Agentico is up to date.',
+  };
+}
+
+function serverUpdateState(): ServerUpdateState {
+  return {
+    status: 'up_to_date' as const,
+    policy: 'notify' as const,
+    currentVersion: '0.1.0',
+    installation: 'tarball',
+    signature: 'unverified' as const,
   };
 }
 
@@ -151,6 +162,8 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     openSettingsWindow: vi.fn(() => ({ opened: true })),
     getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
     setTheme: vi.fn((preference) => ({ preference, resolved: 'dark' as const })),
+    getRuntimeReadiness: vi.fn(() => Promise.reject(new Error('unused'))),
+    refreshRuntimeReadiness: vi.fn(() => Promise.reject(new Error('unused'))),
     getReadiness: vi.fn(() => Promise.reject(new Error('unused'))),
     refreshReadiness: vi.fn(() => Promise.reject(new Error('unused'))),
     pickWorkspaceDirectory: vi.fn(() => Promise.resolve({ path: null })),
@@ -277,6 +290,10 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     installUpdateWhenIdle: vi.fn(() => Promise.resolve(updateState())),
     installUpdateNow: vi.fn(() => Promise.resolve(updateState())),
     restartToUpdate: vi.fn(() => updateState()),
+    getServerUpdate: vi.fn(() => Promise.resolve(serverUpdateState())),
+    checkServerUpdate: vi.fn(() => Promise.resolve(serverUpdateState())),
+    installServerUpdate: vi.fn(() => Promise.resolve(serverUpdateState())),
+    cancelServerUpdate: vi.fn(() => Promise.resolve(serverUpdateState())),
     getDiagnostics: vi.fn(() => diagnosticsSnapshot()),
     revealDiagnostics: vi.fn(() => Promise.resolve({ ok: true })),
     clearDiagnostics: vi.fn(() => diagnosticsSnapshot()),

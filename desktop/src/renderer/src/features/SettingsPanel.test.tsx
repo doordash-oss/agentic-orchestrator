@@ -24,12 +24,27 @@ import type {
   WorkspaceDefaults,
 } from '../../../shared/ipc';
 import {
+  defaultServerUpdateState,
   defaultUpdateState,
-  installAgenticoMock,
+  installAgenticoMock as installBaseAgenticoMock,
   ipcError,
   readySnapshot,
 } from '../test/agenticoMock';
 import { SettingsPanel } from './SettingsPanel';
+
+function installAgenticoMock(overrides: Parameters<typeof installBaseAgenticoMock>[0] = {}) {
+  return installBaseAgenticoMock({
+    connection: {
+      status: 'ready',
+      stage: 'ready',
+      detail: 'Connected.',
+      ownership: 'external',
+      kind: 'local',
+      serverKey: 'a'.repeat(32),
+    },
+    ...overrides,
+  });
+}
 
 afterEach(cleanup);
 
@@ -341,6 +356,103 @@ describe('SettingsPanel updates pane', () => {
       expect(screen.queryByRole('dialog', { name: 'Install update confirmation' })).toBeNull(),
     );
     expect(trigger).toHaveFocus();
+  });
+});
+
+describe('SettingsPanel server update card', () => {
+  it('renders the connected server card with the auto policy and no idle verb', async () => {
+    installAgenticoMock({
+      connection: {
+        status: 'ready',
+        stage: 'ready',
+        detail: 'Connected.',
+        ownership: 'external',
+        kind: 'remote',
+        serverKey: 'b'.repeat(32),
+        serverName: 'flux-box',
+      },
+      readiness: readySnapshot(),
+      serverUpdate: defaultServerUpdateState({
+        status: 'available',
+        policy: 'auto',
+        latestVersion: '0.2.0',
+        releaseUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
+      }),
+    });
+    render(<SettingsPanel pane="updates" />);
+
+    const card = await screen.findByRole('region', { name: 'Server updates' });
+    expect(
+      await within(card).findByRole('heading', { name: 'Server: flux-box (v0.1.0)' }),
+    ).toBeVisible();
+    expect(
+      await within(card).findByText(
+        'Version 0.2.0 will install automatically when the server is idle.',
+      ),
+    ).toBeVisible();
+    expect(within(card).getByText('Installs automatically when idle')).toBeVisible();
+    expect(within(card).getByRole('button', { name: 'Check now' })).toBeVisible();
+    expect(within(card).getByRole('button', { name: 'Install now' })).toBeVisible();
+    expect(within(card).queryByRole('button', { name: 'Install when idle' })).toBeNull();
+  });
+
+  it('asks for consent before stopping work and forwards the permission', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      readiness: readySnapshot(),
+      serverUpdate: defaultServerUpdateState({
+        status: 'available',
+        latestVersion: '0.2.0',
+        activeWorkSummary: '1 feature and chat active on the server.',
+      }),
+    });
+    render(<SettingsPanel pane="updates" />);
+
+    const card = await screen.findByRole('region', { name: 'Server updates' });
+    await user.click(
+      await within(card).findByRole('button', { name: 'Stop work and install now' }),
+    );
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Install server update confirmation',
+    });
+    expect(dialog).toHaveTextContent('1 feature and chat active on the server.');
+    await user.click(within(dialog).getByRole('button', { name: 'Stop work and install now' }));
+    await waitFor(() =>
+      expect(mock.api.installServerUpdate).toHaveBeenCalledWith({
+        when: 'now',
+        stopActiveWork: true,
+      }),
+    );
+    expect(await within(card).findByRole('button', { name: 'Cancel install' })).toBeVisible();
+  });
+
+  it('is read-only for the app-managed local runtime', async () => {
+    installAgenticoMock({
+      connection: {
+        status: 'ready',
+        stage: 'ready',
+        detail: 'Connected.',
+        ownership: 'app-owned',
+        kind: 'local',
+        serverKey: 'a'.repeat(32),
+      },
+      readiness: readySnapshot(),
+      serverUpdate: defaultServerUpdateState({
+        status: 'disabled',
+        policy: 'off',
+        installation: 'app_bundle',
+      }),
+    });
+    render(<SettingsPanel pane="updates" />);
+    const card = await screen.findByRole('region', { name: 'Server updates' });
+    expect(
+      await within(card).findByRole('heading', { name: 'Server: Local runtime (v0.1.0)' }),
+    ).toBeVisible();
+    expect(within(card).getByText('Managed by the app')).toBeVisible();
+    expect(within(card).getByText('Bundled')).toBeVisible();
+    expect(within(card).getByText('Tracks the app')).toBeVisible();
+    expect(within(card).getByRole('button', { name: 'Check now' })).toBeDisabled();
+    expect(within(card).queryByRole('button', { name: /install/i })).toBeNull();
   });
 });
 

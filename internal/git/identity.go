@@ -72,6 +72,10 @@ func ResolveRepoIdentity(dir string) (RepoIdentity, bool) {
 	if err != nil {
 		return RepoIdentity{}, false
 	}
+	return repoIdentityFromOutput(out)
+}
+
+func repoIdentityFromOutput(out []byte) (RepoIdentity, bool) {
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	if len(lines) != 2 {
 		return RepoIdentity{}, false

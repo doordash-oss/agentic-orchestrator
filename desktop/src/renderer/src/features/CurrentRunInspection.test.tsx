@@ -17,7 +17,7 @@ limitations under the License.
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SessionSummary } from '../../../shared/ipc';
+import type { SessionSummary, VerificationItemView } from '../../../shared/ipc';
 import { installAgenticoMock, ipcError } from '../test/agenticoMock';
 import { CurrentRunInspection } from './CurrentRunInspection';
 
@@ -1131,6 +1131,49 @@ describe('CurrentRunInspection', () => {
     const overlay = await screen.findByRole('dialog', { name: 'Live agent preview' });
     expect(overlay).toHaveTextContent('Verification: 1 of 4 checks passing');
     expect(overlay).toHaveTextContent('Implementation transcript.');
+  });
+
+  it('drops verification ticks when the feature moves to another phase', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Running implementation',
+      contextPercentage: 42,
+      totalSeconds: 73,
+      totalUsd: 0.12,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    const inspection = (phase: string, roadmapPhase: number, items?: VerificationItemView[]) => (
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase={phase}
+        currentRoadmapPhase={roadmapPhase}
+        phaseStatus={items === undefined ? undefined : 'verifying'}
+        reviewGate={REVIEW_GATE}
+        verificationItems={items}
+      />
+    );
+    const view = render(
+      inspection('Implement', 1, [
+        { name: 'go test ./...', state: 'passed' },
+        { name: 'npm test', state: 'failed' },
+      ]),
+    );
+    expect(await screen.findByText('Verification: 1 of 2 checks passing')).toBeVisible();
+
+    // Same phase, items cleared by the server after the run: history stays.
+    view.rerender(inspection('Implement', 1, undefined));
+    expect(screen.getByText('Verification: 1 of 2 checks passing')).toBeVisible();
+
+    // Next roadmap phase starts planning: the previous phase's checks leave the stream.
+    view.rerender(inspection('Plan', 2, undefined));
+    await waitFor(() =>
+      expect(screen.queryByText('Verification: 1 of 2 checks passing')).not.toBeInTheDocument(),
+    );
   });
 
   it('keeps live reviewer tabs when an active gate coincides with a stale verifying marker', async () => {

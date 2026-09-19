@@ -33,6 +33,10 @@ var (
 	autoPickNumberedOptionRe      = regexp.MustCompile(`^\d+\.\s+(.+)$`)
 	autoPickConfidenceSuffixRe    = regexp.MustCompile(`(?i)\s+\[confidence:\s*(0(?:\.\d+)?|1(?:\.0+)?)\]\s*$`)
 	autoPickTrailingRecommendedRe = regexp.MustCompile(`(?i)\s+\(recommended\)\s*$`)
+	// autoPickProseConfidenceRe matches a confidence the agent wrote as prose
+	// inside an option ("Confidence 0.70.", "confidence: 0.7") instead of the
+	// structured field.
+	autoPickProseConfidenceRe = regexp.MustCompile(`(?i)\bconfidence\s*[:=]?\s*(0(?:\.\d+)?|1(?:\.0+)?)\b`)
 )
 
 type askUserAutoPickDecisionContext struct {
@@ -148,8 +152,9 @@ func parseAutoPickQuestions(input json.RawMessage) ([]autoPickQuestion, bool) {
 			Question    string `json:"question"`
 			MultiSelect bool   `json:"multiSelect"`
 			Options     []struct {
-				Label      string   `json:"label"`
-				Confidence *float64 `json:"confidence"`
+				Label       string   `json:"label"`
+				Description string   `json:"description"`
+				Confidence  *float64 `json:"confidence"`
 			} `json:"options"`
 		} `json:"questions"`
 	}
@@ -164,9 +169,13 @@ func parseAutoPickQuestions(input json.RawMessage) ([]autoPickQuestion, bool) {
 			MultiSelect: q.MultiSelect,
 		}
 		for _, opt := range q.Options {
+			label, confidence := opt.Label, opt.Confidence
+			if confidence == nil {
+				label, confidence = inferAutoPickOptionConfidence(label, opt.Description)
+			}
 			question.Options = append(question.Options, autoPickOption{
-				Label:      opt.Label,
-				Confidence: opt.Confidence,
+				Label:      label,
+				Confidence: confidence,
 			})
 		}
 		if len(question.Options) == 0 {
@@ -358,6 +367,25 @@ func inferAutoPickOptionsFromQuestionText(question string) (string, []autoPickOp
 		cleaned = strings.TrimSpace(strings.Join(trailingStem, "\n"))
 	}
 	return cleaned, options, true
+}
+
+// inferAutoPickOptionConfidence recovers a confidence the agent expressed in
+// prose when the structured field is absent. A label suffix is stripped so
+// the recorded answer stays clean; a description match leaves the label
+// untouched.
+func inferAutoPickOptionConfidence(label, description string) (string, *float64) {
+	if trimmed, confidence, trailingRecommended := splitAutoPickOptionConfidence(label); confidence != nil {
+		if trailingRecommended && !strings.Contains(strings.ToLower(trimmed), "(recommended)") {
+			trimmed += " (Recommended)"
+		}
+		return trimmed, confidence
+	}
+	if matches := autoPickProseConfidenceRe.FindStringSubmatch(description); matches != nil {
+		if confidence, err := strconv.ParseFloat(matches[1], 64); err == nil {
+			return label, &confidence
+		}
+	}
+	return label, nil
 }
 
 func isAutoPickTrailingQuestion(line string) bool {

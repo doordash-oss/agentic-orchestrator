@@ -72,6 +72,64 @@ describe('shouldRequestQuitOnMainWindowClose', () => {
 });
 
 describe('QuitCoordinator', () => {
+  it('quits anyway when a shutdown step exceeds its bound, then forces exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const log: string[] = [];
+      const deps = makeDeps({
+        detectActiveWork: vi.fn().mockResolvedValue(active([])),
+        shutdown: vi.fn().mockReturnValue(new Promise<void>(() => {})),
+        exitApplication: vi.fn(),
+        log: (line) => log.push(line),
+      });
+      const coordinator = new QuitCoordinator(deps, {
+        shutdownTimeoutMs: 1_000,
+        exitWatchdogMs: 500,
+      });
+      const decision = coordinator.requestQuitDecision();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(deps.quitApplication).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(decision).resolves.toBe(true);
+      expect(deps.quitApplication).toHaveBeenCalledTimes(1);
+      expect(deps.exitApplication).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(deps.exitApplication).toHaveBeenCalledTimes(1);
+      expect(log).toEqual([
+        'shutdown started (quitAnyway=false)',
+        'shutdown exceeded 1000ms; quitting anyway',
+        'requesting application quit',
+        'process still alive 500ms after quit; forcing exit',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('quits on a failed shutdown step and never forces exit without an exit primitive', async () => {
+    vi.useFakeTimers();
+    try {
+      const log: string[] = [];
+      const deps = makeDeps({
+        detectActiveWork: vi.fn().mockResolvedValue(active([])),
+        shutdown: vi.fn().mockRejectedValue(new Error('runtime stop threw')),
+        log: (line) => log.push(line),
+      });
+      const coordinator = new QuitCoordinator(deps, { exitWatchdogMs: 100 });
+      await expect(coordinator.requestQuitDecision()).resolves.toBe(true);
+      expect(deps.quitApplication).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(log).toEqual([
+        'shutdown started (quitAnyway=false)',
+        'shutdown step failed: runtime stop threw',
+        'shutdown failed',
+        'requesting application quit',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('quits immediately when authoritative activity is idle', async () => {
     const deps = makeDeps({
       detectActiveWork: vi.fn().mockResolvedValue(active([], false, false)),

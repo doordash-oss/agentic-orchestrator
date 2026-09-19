@@ -61,11 +61,16 @@ test('workspace sidebar: pointer, keyboard, ⌘2-9, and collapse against the pac
     transcript.section('Resize the sidebar with pointer and keyboard');
     const divider = handle.page.getByRole('separator', { name: 'Resize sidebar' });
     const sidebar = handle.page.locator('nav.sidebar');
+    // hover() runs Playwright's actionability checks (stable layout, the
+    // handle is the actual hit target) before the raw pointer gesture; a bare
+    // mouse.move to a pre-measured coordinate can land the press on whatever
+    // is painted there when the shell is still settling.
+    await divider.hover({ position: { x: 1, y: 100 } });
     const grip = await divider.boundingBox();
     if (!grip) throw new Error('Sidebar resize handle has no bounds');
-    await handle.page.mouse.move(grip.x + grip.width / 2, grip.y + 100);
     await handle.page.mouse.down();
-    await handle.page.mouse.move(grip.x + grip.width / 2 + 100, grip.y + 100, { steps: 10 });
+    await expect(divider).toHaveAttribute('data-resizing', 'true');
+    await handle.page.mouse.move(grip.x + 1 + 100, grip.y + 100, { steps: 10 });
     await handle.page.mouse.up();
     await expect(sidebar).toHaveCSS('width', '360px');
     await divider.press('ArrowRight');

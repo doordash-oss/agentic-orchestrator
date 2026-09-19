@@ -533,6 +533,17 @@ export function CurrentRunInspection({
   const [verificationTicks, setVerificationTicks] = useState<ConversationItem[]>([]);
   const observedVerificationRef = useRef<Map<string, string> | null>(null);
   const verificationTickSeqRef = useRef(0);
+  // Ticks belong to the phase run that produced them: once the feature moves
+  // to another phase (or roadmap phase), the previous checks are history the
+  // Files surface owns, not events in the new phase's stream.
+  const verificationScope = `${featureId}:${runNumber}:${currentPhase}:${currentRoadmapPhase ?? ''}`;
+  const verificationScopeRef = useRef(verificationScope);
+  useEffect(() => {
+    if (verificationScopeRef.current === verificationScope) return;
+    verificationScopeRef.current = verificationScope;
+    observedVerificationRef.current = null;
+    setVerificationTicks([]);
+  }, [verificationScope]);
   useEffect(() => {
     if (verificationItems === undefined) return;
     const observed = observedVerificationRef.current;

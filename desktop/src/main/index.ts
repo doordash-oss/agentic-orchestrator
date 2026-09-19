@@ -941,6 +941,9 @@ if (!hasSingleInstanceLock) {
       },
     });
 
+    const quitLog = (line: string): void => {
+      console.warn(`[agentico-quit] ${line}`);
+    };
     const quitCoordinator = new QuitCoordinator<BrowserWindow>(
       {
         detectActiveWork,
@@ -971,13 +974,19 @@ if (!hasSingleInstanceLock) {
         shutdown: async () => {
           stopStreams();
           accent.stop();
+          quitLog('streams stopped; stopping app-owned runtime');
           await gateway.shutdown();
+          quitLog('runtime shutdown complete');
         },
         quitApplication: () => {
           nativeCommands?.destroy();
           publishNativeCommandTestState(nativeCommands);
           app.quit();
         },
+        exitApplication: () => {
+          app.exit(0);
+        },
+        log: quitLog,
       },
       { testMode: testUserData !== null && !forceQuitDialogsInE2E },
     );

@@ -133,6 +133,7 @@ type apiHandler struct {
 	providerRefreshMu sync.Mutex
 	creationMu        sync.Mutex
 	creationResults   map[string]creationResult
+	slackCredentialMu sync.Mutex
 }
 
 type creationResult struct {

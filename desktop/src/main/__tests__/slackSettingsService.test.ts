@@ -176,4 +176,19 @@ describe('SlackSettingsService', () => {
       canonical: { code: 'E_SERVER_SWITCHED' },
     });
   });
+
+  it('classifies malformed server responses as schema mismatches', async () => {
+    const server = transport(
+      response({ api_version: 'v1', slack: { ...projection, missing_scopes: null } }),
+      response({ api_version: 'v1', token_type: 'bot' }),
+    );
+    const service = new SlackSettingsService({ transport: server });
+
+    await expect(service.get()).rejects.toMatchObject({
+      canonical: { code: 'E_SCHEMA_MISMATCH' },
+    });
+    await expect(service.validate({})).rejects.toMatchObject({
+      canonical: { code: 'E_SCHEMA_MISMATCH' },
+    });
+  });
 });

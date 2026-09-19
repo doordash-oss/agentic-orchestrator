@@ -58,6 +58,8 @@ func (e *TransportError) Error() string {
 	switch {
 	case e.StatusCode != 0 && e.RetryAfter > 0:
 		return fmt.Sprintf("Slack transport error: HTTP %d, retry after %s", e.StatusCode, e.RetryAfter)
+	case e.StatusCode != 0 && e.Detail != "":
+		return fmt.Sprintf("Slack transport error: HTTP %d: %s", e.StatusCode, e.Detail)
 	case e.StatusCode != 0:
 		return fmt.Sprintf("Slack transport error: HTTP %d", e.StatusCode)
 	case e.Detail != "":
@@ -168,7 +170,7 @@ func (c *Client) AuthTest(ctx context.Context) (AuthTestResponse, error) {
 		return AuthTestResponse{}, err
 	}
 	if !envelope.OK {
-		return AuthTestResponse{}, &APIError{SlackError: envelope.Error}
+		return AuthTestResponse{}, &APIError{SlackError: scrub(c.token, envelope.Error)}
 	}
 	return AuthTestResponse{
 		TeamID:        envelope.TeamID,

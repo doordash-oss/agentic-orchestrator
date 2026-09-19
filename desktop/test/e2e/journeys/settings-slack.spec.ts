@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+import fs from 'node:fs';
 import { expect, test } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
@@ -32,6 +33,7 @@ test('Slack settings show the not-set-up connection guide', async ({}, testInfo)
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
     presetWorkspaceRoot: true,
   });
+  fs.appendFileSync(world.configPath, 'server:\n  name: Slack empty server\n');
   createRepo(world, 'alpha', { commit: true });
   let handle: AppHandle | null = null;
   try {
@@ -43,6 +45,7 @@ test('Slack settings show the not-set-up connection guide', async ({}, testInfo)
     await selectSettingsPane(settings, 'Slack');
 
     await expect(settings.getByRole('heading', { name: 'Slack' })).toBeVisible();
+    await expect(settings.getByText('Slack empty server', { exact: true })).toBeVisible();
     await expect(settings.getByText('Not set up', { exact: true })).toBeVisible();
     const guide = settings.getByRole('button', { name: 'Set up the Slack app' });
     await expect(guide).toHaveAttribute('aria-expanded', 'true');

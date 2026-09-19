@@ -22,7 +22,7 @@ import type {
   SlackValidationResult,
 } from '../../../shared/ipc';
 import { ErrorSurface } from '../components/ErrorSurface';
-import { FieldError } from '../components/FieldError';
+import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../components/FieldError';
 import { useConnectionState } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 
@@ -55,6 +55,8 @@ export function SlackSettingsPane() {
     (connection.ownership === 'app-owned' ? 'Local runtime' : 'Connected server');
   const request = useRef(0);
   const operationEpoch = useRef(0);
+  const checkRevision = useRef(0);
+  const tokenInputRef = useRef<HTMLInputElement>(null);
   const [snapshot, setSnapshot] = useState<SlackSettingsSnapshot | null>(null);
   const [loadError, setLoadError] = useState<CanonicalError | null>(null);
   const [enabled, setEnabled] = useState(false);
@@ -74,28 +76,52 @@ export function SlackSettingsPane() {
   const tokenSet = snapshot?.supported === true && snapshot.tokenSet && !clearToken;
   const dirty = enabled !== baselineEnabled || token !== '' || clearToken;
 
-  const installSnapshot = useCallback((next: SlackSettingsSnapshot) => {
-    setSnapshot(next);
-    setEnabled(next.supported ? next.enabled : false);
-    setToken('');
-    setReplacing(false);
-    setClearToken(false);
-    setGuideOpen(next.supported ? !next.tokenSet : false);
-    setSaveError(null);
-    setLoadError(null);
+  const clearCheckFeedback = useCallback(() => {
+    checkRevision.current += 1;
+    setChecking(false);
+    setCheckResult(null);
+    setCheckError(null);
   }, []);
 
-  const reload = useCallback(() => {
-    const current = ++request.current;
-    void window.agentico
-      .getSlackSettings()
-      .then((next) => {
-        if (current === request.current) installSnapshot(next);
-      })
-      .catch((error: unknown) => {
-        if (current === request.current) setLoadError(parseIpcError(error));
-      });
-  }, [installSnapshot]);
+  const installSnapshot = useCallback(
+    (next: SlackSettingsSnapshot, preserveCheckFeedback = false) => {
+      if (!preserveCheckFeedback) clearCheckFeedback();
+      setSnapshot(next);
+      setEnabled(next.supported ? next.enabled : false);
+      setToken('');
+      setReplacing(false);
+      setClearToken(false);
+      setGuideOpen(next.supported ? !next.tokenSet : false);
+      setSaveError(null);
+      setLoadError(null);
+    },
+    [clearCheckFeedback],
+  );
+
+  const reload = useCallback(
+    (expectedCheckRevision?: number) => {
+      const current = ++request.current;
+      void window.agentico
+        .getSlackSettings()
+        .then((next) => {
+          if (
+            current === request.current &&
+            (expectedCheckRevision === undefined || expectedCheckRevision === checkRevision.current)
+          ) {
+            installSnapshot(next, expectedCheckRevision !== undefined);
+          }
+        })
+        .catch((error: unknown) => {
+          if (
+            current === request.current &&
+            (expectedCheckRevision === undefined || expectedCheckRevision === checkRevision.current)
+          ) {
+            setLoadError(parseIpcError(error));
+          }
+        });
+    },
+    [installSnapshot],
+  );
 
   useEffect(() => {
     request.current += 1;
@@ -106,13 +132,11 @@ export function SlackSettingsPane() {
     setReplacing(false);
     setClearToken(false);
     setSaving(false);
-    setChecking(false);
     setSaveError(null);
-    setCheckResult(null);
-    setCheckError(null);
+    clearCheckFeedback();
     setSaved(false);
     if (connection.status === 'ready') reload();
-  }, [connection.serverKey, connection.status, reload]);
+  }, [clearCheckFeedback, connection.serverKey, connection.status, reload]);
 
   useEffect(() => {
     return window.agentico.onAppEvent((event) => {
@@ -132,13 +156,16 @@ export function SlackSettingsPane() {
   const canCheck = token !== '' || tokenSet;
 
   const updateToken = (value: string) => {
+    clearCheckFeedback();
     setToken(value);
     setSaved(false);
     setSaveError(null);
-    setCheckResult(null);
-    setCheckError(null);
     if (snapshot?.supported === true && !snapshot.tokenSet) setEnabled(value !== '');
   };
+
+  useEffect(() => {
+    if (tokenFieldError !== null) tokenInputRef.current?.focus();
+  }, [tokenFieldError]);
 
   const draft = useMemo<SlackSettingsDraft>(
     () => ({
@@ -171,21 +198,27 @@ export function SlackSettingsPane() {
 
   const check = () => {
     const epoch = operationEpoch.current;
+    const revision = checkRevision.current;
+    const checksStoredToken = token === '';
     setChecking(true);
     setCheckResult(null);
     setCheckError(null);
     void window.agentico
-      .validateSlackSettings(token === '' ? {} : { token })
+      .validateSlackSettings(checksStoredToken ? {} : { token })
       .then((result) => {
-        if (epoch !== operationEpoch.current) return;
+        if (epoch !== operationEpoch.current || revision !== checkRevision.current) return;
         setCheckResult(result);
-        if (token === '') reload();
+        if (checksStoredToken) reload(revision);
       })
       .catch((error: unknown) => {
-        if (epoch === operationEpoch.current) setCheckError(parseIpcError(error));
+        if (epoch === operationEpoch.current && revision === checkRevision.current) {
+          setCheckError(parseIpcError(error));
+        }
       })
       .finally(() => {
-        if (epoch === operationEpoch.current) setChecking(false);
+        if (epoch === operationEpoch.current && revision === checkRevision.current) {
+          setChecking(false);
+        }
       });
   };
 
@@ -298,6 +331,7 @@ export function SlackSettingsPane() {
                 type="button"
                 className="settings-panel__root-btn settings-panel__root-btn--danger"
                 onClick={() => {
+                  clearCheckFeedback();
                   setClearToken(true);
                   setEnabled(false);
                   setSaved(false);
@@ -314,6 +348,7 @@ export function SlackSettingsPane() {
               type="button"
               className="setup-wizard__action"
               onClick={() => {
+                clearCheckFeedback();
                 setClearToken(false);
                 setEnabled(snapshot.enabled);
               }}
@@ -322,13 +357,16 @@ export function SlackSettingsPane() {
             </button>
           </div>
         ) : (
-          <label className="slack-settings__token-field">
-            <span>Slack token</span>
+          <div className="slack-settings__token-field">
+            <label htmlFor="slack-token">Slack token</label>
             <input
+              ref={tokenInputRef}
+              id="slack-token"
               type="password"
               value={token}
               autoComplete="off"
-              aria-invalid={tokenFieldError !== null}
+              aria-invalid={fieldAriaInvalid(tokenFieldError !== null)}
+              aria-describedby={fieldAriaDescribedBy('slack-token-error', tokenFieldError !== null)}
               onChange={(event) => updateToken(event.currentTarget.value)}
             />
             {tokenFieldError ? (
@@ -339,6 +377,7 @@ export function SlackSettingsPane() {
                 type="button"
                 className="setup-wizard__action"
                 onClick={() => {
+                  clearCheckFeedback();
                   setReplacing(false);
                   setToken('');
                 }}
@@ -346,7 +385,7 @@ export function SlackSettingsPane() {
                 Cancel replacement
               </button>
             ) : null}
-          </label>
+          </div>
         )}
 
         <label className="settings-panel__toggle">

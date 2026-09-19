@@ -1110,6 +1110,9 @@ type serverMutationTarget struct {
 	// dispatchAsync runs server-owned background work (durable feature
 	// setup). Nil means `go fn()`; tests inject a synchronous dispatcher.
 	dispatchAsync func(fn func())
+	// slackCredentialGeneration fences validation results across token
+	// replacement and clearing without holding mu during Slack network I/O.
+	slackCredentialGeneration uint64
 }
 
 // featureRefactorChildCreator is the narrow feature.Manager surface the
@@ -1903,6 +1906,8 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	credentialMutation := req.Slack != nil &&
+		(req.Slack.Token != nil || (req.Slack.ClearToken != nil && *req.Slack.ClearToken))
 	cfg := t.cfg
 	if cfg == nil {
 		cfg = config.NewDefault()
@@ -1967,6 +1972,9 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 		return serverruntime.RuntimeConfigUpdateResponse{}, err
 	}
 	t.cfg = cfg
+	if credentialMutation {
+		t.slackCredentialGeneration++
+	}
 	status := "unchanged"
 	if changed {
 		status = resultUpdated
@@ -1974,12 +1982,32 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 	return serverruntime.RuntimeConfigUpdateResponse{Result: status}, nil
 }
 
-func (t *serverMutationTarget) StoreSlackValidation(validation *ports.SlackValidation, checkedAt time.Time) error {
+func (t *serverMutationTarget) LoadSlackCredential() (string, uint64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cfg == nil || t.cfg.Slack == nil {
+		return "", t.slackCredentialGeneration
+	}
+	return t.cfg.Slack.Token, t.slackCredentialGeneration
+}
+
+func (t *serverMutationTarget) SlackCredentialCurrent(token string, generation uint64) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.slackCredentialCurrentLocked(token, generation)
+}
+
+func (t *serverMutationTarget) StoreSlackValidation(
+	token string,
+	generation uint64,
+	validation *ports.SlackValidation,
+	checkedAt time.Time,
+) (bool, error) {
 	if t.configPath == "" {
-		return errors.New("config path is not available")
+		return false, errors.New("config path is not available")
 	}
 	if validation == nil {
-		return errors.New("Slack validation is required")
+		return false, errors.New("Slack validation is required")
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -1988,8 +2016,8 @@ func (t *serverMutationTarget) StoreSlackValidation(validation *ports.SlackValid
 	if cfg == nil {
 		cfg = config.NewDefault()
 	}
-	if cfg.Slack == nil || cfg.Slack.Token == "" {
-		return errors.New("stored Slack token is not configured")
+	if !t.slackCredentialCurrentLocked(token, generation) {
+		return false, nil
 	}
 	cfg.Slack.Identity = &config.SlackIdentity{
 		TeamID:      validation.Identity.TeamID,
@@ -2001,10 +2029,18 @@ func (t *serverMutationTarget) StoreSlackValidation(validation *ports.SlackValid
 	cfg.Slack.GrantedScopes = append([]string(nil), validation.GrantedScopes...)
 	cfg.Slack.LastValidatedAt = checkedAt.UTC()
 	if err := config.Save(t.configPath, cfg); err != nil {
-		return err
+		return false, err
 	}
 	t.cfg = cfg
-	return nil
+	return true, nil
+}
+
+func (t *serverMutationTarget) slackCredentialCurrentLocked(token string, generation uint64) bool {
+	return t.slackCredentialGeneration == generation &&
+		t.cfg != nil &&
+		t.cfg.Slack != nil &&
+		t.cfg.Slack.Token == token &&
+		token != ""
 }
 
 func (t *serverMutationTarget) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {

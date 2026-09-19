@@ -1247,6 +1247,12 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		if req.Slack != nil && !h.prepareSlackMutation(w, r.Context(), &req) {
 			return
 		}
+		lockSlackCredential := req.Slack != nil &&
+			(req.Slack.Token != nil || (req.Slack.ClearToken != nil && *req.Slack.ClearToken))
+		if lockSlackCredential {
+			h.slackCredentialMu.Lock()
+			defer h.slackCredentialMu.Unlock()
+		}
 		resp, err := h.mutations.RuntimeConfig(req)
 		if err != nil {
 			writeMutationError(w, err)

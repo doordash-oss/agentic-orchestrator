@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -57,6 +58,9 @@ func (s *fakeSlackService) RecordValidationFailure(at time.Time, _ errcat.Error)
 type slackMutationRecorder struct {
 	MutationTarget
 	runtimeCalls atomic.Int64
+	mu           sync.Mutex
+	token        string
+	generation   uint64
 	stored       *ports.SlackValidation
 	storedAt     time.Time
 }
@@ -66,10 +70,32 @@ func (r *slackMutationRecorder) RuntimeConfig(RuntimeConfigMutationRequest) (Run
 	return RuntimeConfigUpdateResponse{Result: resultUpdated}, nil
 }
 
-func (r *slackMutationRecorder) StoreSlackValidation(validation *ports.SlackValidation, at time.Time) error {
+func (r *slackMutationRecorder) LoadSlackCredential() (string, uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.token, r.generation
+}
+
+func (r *slackMutationRecorder) StoreSlackValidation(
+	token string,
+	generation uint64,
+	validation *ports.SlackValidation,
+	at time.Time,
+) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.token != token || r.generation != generation {
+		return false, nil
+	}
 	r.stored = validation
 	r.storedAt = at
-	return nil
+	return true, nil
+}
+
+func (r *slackMutationRecorder) SlackCredentialCurrent(token string, generation uint64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.token == token && r.generation == generation
 }
 
 func postSlackValidate(handler http.Handler, body any, trusted bool) *httptest.ResponseRecorder {
@@ -111,6 +137,15 @@ func TestSlackValidateRouteProvidedTokenDoesNotPersist(t *testing.T) {
 	if bytes.Contains(w.Body.Bytes(), []byte("xoxb-secret-1234")) {
 		t.Fatal("response leaked the Slack token")
 	}
+	var body struct {
+		MissingScopes json.RawMessage `json:"missing_scopes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if string(body.MissingScopes) != "[]" {
+		t.Fatalf("missing_scopes JSON = %s; want []", body.MissingScopes)
+	}
 }
 
 func TestSlackValidateRouteStoredTokenRefreshesCache(t *testing.T) {
@@ -124,7 +159,7 @@ func TestSlackValidateRouteStoredTokenRefreshesCache(t *testing.T) {
 		GrantedScopes: []string{"chat:write"},
 		MissingScopes: []string{},
 	}}
-	recorder := &slackMutationRecorder{}
+	recorder := &slackMutationRecorder{token: cfg.Slack.Token}
 	handler := newAPIHandler(HandlerOptions{
 		Config: cfg, Slack: service, Mutations: recorder, DisableHostValidation: true,
 	}).routes()
@@ -138,6 +173,144 @@ func TestSlackValidateRouteStoredTokenRefreshesCache(t *testing.T) {
 	}
 	if service.successAt.IsZero() || recorder.storedAt.IsZero() {
 		t.Fatal("stored-token validation did not record its check time")
+	}
+}
+
+type delayedSlackService struct {
+	fakeSlackService
+	started chan string
+	release chan struct{}
+}
+
+func (s *delayedSlackService) Validate(ctx context.Context, token string) (ports.SlackValidation, error) {
+	s.calls.Add(1)
+	select {
+	case s.started <- token:
+	case <-ctx.Done():
+		return ports.SlackValidation{}, ctx.Err()
+	}
+	select {
+	case <-s.release:
+		return s.validation, s.err
+	case <-ctx.Done():
+		return ports.SlackValidation{}, ctx.Err()
+	}
+}
+
+func TestSlackValidateRouteDiscardsDelayedStoredCredentialResults(t *testing.T) {
+	tests := []struct {
+		name       string
+		validation ports.SlackValidation
+		err        error
+	}{
+		{
+			name: "success",
+			validation: ports.SlackValidation{
+				TokenType: ports.SlackTokenBot,
+				Identity: ports.SlackIdentity{
+					TeamID: "T-old", TeamName: "Old", UserID: "U-old", DisplayName: "Old Agent",
+				},
+				GrantedScopes: []string{"chat:write"},
+				MissingScopes: []string{},
+			},
+		},
+		{
+			name: "failure",
+			err: &ports.SlackValidationError{
+				Canonical: errcat.New(errcat.SlackUnreachable),
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.NewDefault()
+			cfg.Slack = &config.SlackConfig{Token: "xoxb-old-1234"}
+			service := &delayedSlackService{
+				fakeSlackService: fakeSlackService{validation: tc.validation, err: tc.err},
+				started:          make(chan string, 1),
+				release:          make(chan struct{}),
+			}
+			recorder := &slackMutationRecorder{token: cfg.Slack.Token, generation: 7}
+			handler := newAPIHandler(HandlerOptions{
+				Config: cfg, Slack: service, Mutations: recorder, DisableHostValidation: true,
+			}).routes()
+
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				done <- postSlackValidate(handler, map[string]any{}, true)
+			}()
+			if token := <-service.started; token != "xoxb-old-1234" {
+				t.Fatalf("validated token = %q; want old token", token)
+			}
+			recorder.mu.Lock()
+			recorder.token = "xoxb-new-5678"
+			recorder.generation++
+			recorder.mu.Unlock()
+			close(service.release)
+
+			w := <-done
+			if tc.err == nil && w.Code != http.StatusOK {
+				t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
+			}
+			if tc.err != nil && w.Code != http.StatusBadGateway {
+				t.Fatalf("status = %d body=%s; want 502", w.Code, w.Body.String())
+			}
+			if recorder.stored != nil {
+				t.Fatalf("stale validation persisted: %#v", recorder.stored)
+			}
+			if !service.successAt.IsZero() || !service.failureAt.IsZero() {
+				t.Fatalf("stale validation changed status: success=%s failure=%s", service.successAt, service.failureAt)
+			}
+		})
+	}
+}
+
+func TestSlackValidateRouteDoesNotBlockUnrelatedRuntimeAccess(t *testing.T) {
+	cfg := config.NewDefault()
+	cfg.Slack = &config.SlackConfig{Token: "xoxb-stored-1234"}
+	service := &delayedSlackService{
+		fakeSlackService: fakeSlackService{validation: ports.SlackValidation{
+			TokenType: ports.SlackTokenBot,
+			Identity: ports.SlackIdentity{
+				TeamID: "T123", TeamName: "Acme", UserID: "U123", DisplayName: "Agentico",
+			},
+			GrantedScopes: []string{"chat:write"},
+			MissingScopes: []string{},
+		}},
+		started: make(chan string, 1),
+		release: make(chan struct{}),
+	}
+	recorder := &slackMutationRecorder{token: cfg.Slack.Token}
+	handler := newAPIHandler(HandlerOptions{
+		Config: cfg, Slack: service, Mutations: recorder, DisableHostValidation: true,
+	}).routes()
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- postSlackValidate(handler, map[string]any{}, true)
+	}()
+	<-service.started
+
+	start := time.Now()
+	write := patchTrustedJSON(handler, apiPathConfigRuntime, map[string]any{
+		"notifications": map[string]any{"mute_feature_input": true},
+	})
+	if write.Code != http.StatusOK {
+		t.Fatalf("unrelated write status = %d body=%s; want 200", write.Code, write.Body.String())
+	}
+	readReq := httptest.NewRequest(http.MethodGet, apiPathConfigRuntime, nil)
+	read := httptest.NewRecorder()
+	handler.ServeHTTP(read, readReq)
+	if read.Code != http.StatusOK {
+		t.Fatalf("unrelated read status = %d body=%s; want 200", read.Code, read.Body.String())
+	}
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("unrelated read/write elapsed = %s; validation held a mutation lock", elapsed)
+	}
+
+	close(service.release)
+	if w := <-done; w.Code != http.StatusOK {
+		t.Fatalf("validation status = %d body=%s; want 200", w.Code, w.Body.String())
 	}
 }
 

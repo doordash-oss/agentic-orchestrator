@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 import { z } from 'zod';
-import { CanonicalErrorSchema } from '../shared/api/parse';
+import { CanonicalErrorSchema, validateWithSchema } from '../shared/api/parse';
 import { assertCompatibleApiVersion } from '../shared/apiVersion';
 import { redactedCanonicalError } from '../shared/errors';
 import {
@@ -93,38 +93,41 @@ export class SlackSettingsService {
 
   async get(): Promise<SlackSettingsSnapshot> {
     const body = await this.request('/api/v1/config/runtime');
-    const response = RuntimeConfigResponseSchema.parse(body);
+    const response = validateWithSchema(body, RuntimeConfigResponseSchema);
     assertCompatibleApiVersion(response.api_version);
     if (response.slack === undefined) {
       return { supported: false };
     }
     const slack = response.slack;
-    return SlackSettingsSnapshotSchema.parse({
-      supported: true,
-      enabled: slack.enabled,
-      tokenSet: slack.token_set,
-      tokenHint: slack.token_hint,
-      tokenType: slack.token_type ?? null,
-      identity:
-        slack.identity === undefined || slack.identity === null
-          ? null
-          : mapIdentity(slack.identity),
-      grantedScopes: slack.granted_scopes,
-      missingScopes: slack.missing_scopes,
-      status: {
-        state: slack.status.state,
-        lastError:
-          slack.status.last_error === undefined || slack.status.last_error === null
+    return validateWithSchema(
+      {
+        supported: true,
+        enabled: slack.enabled,
+        tokenSet: slack.token_set,
+        tokenHint: slack.token_hint,
+        tokenType: slack.token_type ?? null,
+        identity:
+          slack.identity === undefined || slack.identity === null
             ? null
-            : redactedCanonicalError(slack.status.last_error),
-        lastCheckedAt: slack.status.last_checked_at ?? null,
+            : mapIdentity(slack.identity),
+        grantedScopes: slack.granted_scopes,
+        missingScopes: slack.missing_scopes,
+        status: {
+          state: slack.status.state,
+          lastError:
+            slack.status.last_error === undefined || slack.status.last_error === null
+              ? null
+              : redactedCanonicalError(slack.status.last_error),
+          lastCheckedAt: slack.status.last_checked_at ?? null,
+        },
+        manifest: slack.manifest,
       },
-      manifest: slack.manifest,
-    });
+      SlackSettingsSnapshotSchema,
+    );
   }
 
   async update(draft: SlackSettingsDraft): Promise<SlackSettingsSnapshot> {
-    const input = SlackSettingsDraftSchema.parse(draft);
+    const input = validateWithSchema(draft, SlackSettingsDraftSchema);
     const body = await this.request('/api/v1/config/runtime', {
       method: 'PATCH',
       body: {
@@ -135,25 +138,28 @@ export class SlackSettingsService {
         },
       },
     });
-    const response = ActionResponseSchema.parse(body);
+    const response = validateWithSchema(body, ActionResponseSchema);
     assertCompatibleApiVersion(response.api_version);
     return this.get();
   }
 
   async validate(request: SlackValidationRequest): Promise<SlackValidationResult> {
-    const input = SlackValidationRequestSchema.parse(request);
+    const input = validateWithSchema(request, SlackValidationRequestSchema);
     const body = await this.request('/api/v1/integrations/slack/validate', {
       method: 'POST',
       body: input.token === undefined ? {} : { token: input.token },
     });
-    const response = SlackValidateResponseSchema.parse(body);
+    const response = validateWithSchema(body, SlackValidateResponseSchema);
     assertCompatibleApiVersion(response.api_version);
-    return SlackValidationResultSchema.parse({
-      tokenType: response.token_type,
-      identity: mapIdentity(response.identity),
-      grantedScopes: response.granted_scopes,
-      missingScopes: response.missing_scopes,
-    });
+    return validateWithSchema(
+      {
+        tokenType: response.token_type,
+        identity: mapIdentity(response.identity),
+        grantedScopes: response.granted_scopes,
+        missingScopes: response.missing_scopes,
+      },
+      SlackValidationResultSchema,
+    );
   }
 
   private request(

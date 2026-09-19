@@ -179,7 +179,31 @@ describe('SlackSettingsPane', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
     expect(await screen.findByText('Slack rejected the token.')).toBeVisible();
-    expect(screen.getByLabelText(/Slack token/)).toHaveValue('xoxb-bad-token');
+    const tokenInput = screen.getByLabelText('Slack token', { exact: true });
+    expect(tokenInput).toHaveValue('xoxb-bad-token');
+    expect(tokenInput).toHaveAttribute('aria-describedby', 'slack-token-error');
+    expect(tokenInput).toHaveFocus();
+  });
+
+  it('recovers focus after a keyboard-submitted token rejection', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: notConfigured(),
+    });
+    mock.api.updateSlackSettings.mockRejectedValue(
+      ipcError('slack_invalid_token', 'Slack rejected the token.'),
+    );
+    render(<SlackSettingsPane />);
+
+    const tokenInput = await screen.findByLabelText('Slack token', { exact: true });
+    await user.type(tokenInput, 'xoxb-bad-token');
+    const saveButton = screen.getByRole('button', { name: 'Save changes' });
+    saveButton.focus();
+    await user.keyboard('{Enter}');
+
+    expect(await screen.findByText('Slack rejected the token.')).toBeVisible();
+    expect(screen.getByLabelText('Slack token', { exact: true })).toHaveFocus();
   });
 
   it('renders the unsupported marker without controls', async () => {
@@ -229,5 +253,85 @@ describe('SlackSettingsPane', () => {
 
     expect(screen.queryByText(/scopes granted/)).not.toBeInTheDocument();
     expect(screen.getByText('Not set up')).toBeVisible();
+  });
+
+  it('discards a delayed draft-token check after the token changes', async () => {
+    const user = userEvent.setup();
+    let resolveCheck!: (
+      value: Awaited<ReturnType<Window['agentico']['validateSlackSettings']>>,
+    ) => void;
+    const delayed = new Promise<Awaited<ReturnType<Window['agentico']['validateSlackSettings']>>>(
+      (resolve) => {
+        resolveCheck = resolve;
+      },
+    );
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: notConfigured(),
+    });
+    mock.api.validateSlackSettings.mockReturnValue(delayed);
+    render(<SlackSettingsPane />);
+
+    const tokenInput = await screen.findByLabelText('Slack token', { exact: true });
+    await user.type(tokenInput, 'xoxb-token-a');
+    await user.click(screen.getByRole('button', { name: 'Check connection' }));
+    expect(screen.getByRole('button', { name: 'Checking...' })).toBeDisabled();
+
+    await user.clear(tokenInput);
+    await user.type(tokenInput, 'xoxb-token-b');
+    expect(screen.getByRole('button', { name: 'Check connection' })).toBeEnabled();
+
+    resolveCheck({
+      tokenType: 'bot',
+      identity: connected().identity!,
+      grantedScopes: ['chat:write'],
+      missingScopes: [],
+    });
+    await Promise.resolve();
+
+    expect(screen.queryByText(/scopes granted/)).not.toBeInTheDocument();
+    expect(tokenInput).toHaveValue('xoxb-token-b');
+  });
+
+  it('clears visible check results on reset, replacement cancellation, and token removal', async () => {
+    const user = userEvent.setup();
+    installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected(),
+      slackValidation: {
+        tokenType: 'bot',
+        identity: connected().identity!,
+        grantedScopes: ['chat:write'],
+        missingScopes: [],
+      },
+    });
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('button', { name: 'Check connection' }));
+    expect(await screen.findByText(/1 scopes granted/)).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Replace' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel replacement' }));
+    expect(screen.queryByText(/scopes granted/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Check connection' }));
+    expect(await screen.findByText(/1 scopes granted/)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.queryByText(/scopes granted/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    await user.click(screen.getByRole('button', { name: 'Replace' }));
+    const tokenInput = screen.getByLabelText('Slack token', { exact: true });
+    await user.type(tokenInput, 'xoxb-token-b');
+    await user.click(screen.getByRole('button', { name: 'Check connection' }));
+    expect(await screen.findByText(/1 scopes granted/)).toBeVisible();
+    await user.type(tokenInput, '-edited');
+    expect(screen.queryByText(/scopes granted/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Check connection' }));
+    expect(await screen.findByText(/1 scopes granted/)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Reset' }));
+    expect(screen.queryByText(/scopes granted/)).not.toBeInTheDocument();
+    expect(screen.getByText('••••••••1234')).toBeVisible();
   });
 });

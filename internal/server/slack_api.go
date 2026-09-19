@@ -24,7 +24,14 @@ import (
 )
 
 type slackValidationStore interface {
-	StoreSlackValidation(validation *ports.SlackValidation, checkedAt time.Time) error
+	LoadSlackCredential() (token string, generation uint64)
+	StoreSlackValidation(
+		token string,
+		generation uint64,
+		validation *ports.SlackValidation,
+		checkedAt time.Time,
+	) (bool, error)
+	SlackCredentialCurrent(token string, generation uint64) bool
 }
 
 func (h *apiHandler) handleSlackValidateRoute(w http.ResponseWriter, r *http.Request) {
@@ -45,12 +52,15 @@ func (h *apiHandler) handleSlackValidateRoute(w http.ResponseWriter, r *http.Req
 		return
 	}
 	token := ""
+	var generation uint64
 	stored := req.Token == nil
 	if stored {
-		cfg := h.configOrDefault()
-		if cfg.Slack != nil {
-			token = cfg.Slack.Token
+		store, ok := h.mutations.(slackValidationStore)
+		if !ok {
+			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
+			return
 		}
+		token, generation = store.LoadSlackCredential()
 		if token == "" {
 			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
 				errcat.WithDiagnostics("no stored Slack token is configured"))
@@ -74,36 +84,43 @@ func (h *apiHandler) handleSlackValidateRoute(w http.ResponseWriter, r *http.Req
 			return
 		}
 		if stored {
-			h.slack.RecordValidationFailure(checkedAt, validationErr.Canonical)
-			if h.broker != nil {
-				h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
+			store := h.mutations.(slackValidationStore)
+			h.slackCredentialMu.Lock()
+			if store.SlackCredentialCurrent(token, generation) {
+				h.slack.RecordValidationFailure(checkedAt, validationErr.Canonical)
+				if h.broker != nil {
+					h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
+				}
 			}
+			h.slackCredentialMu.Unlock()
 		}
 		writeRenderedSlackError(w, validationErr.Canonical)
 		return
 	}
 
 	if stored {
-		store, ok := h.mutations.(slackValidationStore)
-		if !ok {
-			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
-			return
-		}
-		if err := store.StoreSlackValidation(&validation, checkedAt); err != nil {
+		store := h.mutations.(slackValidationStore)
+		h.slackCredentialMu.Lock()
+		applied, err := store.StoreSlackValidation(token, generation, &validation, checkedAt)
+		if err != nil {
+			h.slackCredentialMu.Unlock()
 			writeMutationError(w, err)
 			return
 		}
-		h.slack.RecordValidationSuccess(checkedAt)
-		if h.broker != nil {
-			h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
+		if applied {
+			h.slack.RecordValidationSuccess(checkedAt)
+			if h.broker != nil {
+				h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
+			}
 		}
+		h.slackCredentialMu.Unlock()
 	}
 	writeJSON(w, http.StatusOK, SlackValidateResponse{
 		APIVersion:    APIVersion,
 		TokenType:     SlackValidateResponseTokenType(validation.TokenType),
 		Identity:      slackIdentityDTO(validation.Identity),
-		GrantedScopes: append([]string(nil), validation.GrantedScopes...),
-		MissingScopes: append([]string(nil), validation.MissingScopes...),
+		GrantedScopes: append(make([]string, 0, len(validation.GrantedScopes)), validation.GrantedScopes...),
+		MissingScopes: append(make([]string, 0, len(validation.MissingScopes)), validation.MissingScopes...),
 	})
 }
 

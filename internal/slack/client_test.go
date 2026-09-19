@@ -82,6 +82,30 @@ func TestClientAuthTestAPIErrorsPreserveSlackCode(t *testing.T) {
 	}
 }
 
+func TestClientAuthTestAPIErrorsScrubEchoedToken(t *testing.T) {
+	const token = "xoxb-distinctive-secret-1234"
+	server := testsupport.New(t)
+	server.Script("auth.test", testsupport.Response{
+		Body: map[string]any{"ok": false, "error": "invalid_auth: " + token},
+	})
+	client, err := NewClient(token, WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.AuthTest(t.Context())
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("AuthTest() error = %#v; want APIError", err)
+	}
+	if strings.Contains(apiErr.SlackError, token) || strings.Contains(err.Error(), token) {
+		t.Fatalf("API error leaked token: %#v", apiErr)
+	}
+	if apiErr.SlackError != "invalid_auth: [REDACTED]" {
+		t.Fatalf("APIError.SlackError = %q; want scrubbed Slack error", apiErr.SlackError)
+	}
+}
+
 func TestClientTransportErrorsAndTokenScrubbing(t *testing.T) {
 	const token = "xoxb-distinctive-secret-1234"
 	cases := []struct {
@@ -134,6 +158,9 @@ func TestClientTransportErrorsAndTokenScrubbing(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), token) || strings.Contains(transportErr.Detail, token) {
 				t.Fatalf("transport error leaked token: %#v", transportErr)
+			}
+			if tc.name == "malformed JSON" && !strings.Contains(err.Error(), "decoding JSON response") {
+				t.Fatalf("AuthTest() error = %q; want decoding context", err)
 			}
 		})
 	}

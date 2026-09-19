@@ -1341,8 +1341,13 @@ func TestServerMutationTargetStoreSlackValidationRefreshesStoredToken(t *testing
 		MissingScopes: []string{},
 	}
 
-	if err := target.StoreSlackValidation(&validation, checkedAt); err != nil {
+	token, generation := target.LoadSlackCredential()
+	applied, err := target.StoreSlackValidation(token, generation, &validation, checkedAt)
+	if err != nil {
 		t.Fatalf("StoreSlackValidation() error = %v", err)
+	}
+	if !applied {
+		t.Fatal("StoreSlackValidation() applied = false; want true")
 	}
 	if cfg.Slack.Token != "xoxp-stored-1234" || cfg.Slack.Identity == nil ||
 		cfg.Slack.Identity.DisplayName != "Ada" || !cfg.Slack.LastValidatedAt.Equal(checkedAt) {
@@ -1355,6 +1360,79 @@ func TestServerMutationTargetStoreSlackValidationRefreshesStoredToken(t *testing
 	if loaded.Slack == nil || loaded.Slack.Token != "xoxp-stored-1234" ||
 		loaded.Slack.Identity == nil || loaded.Slack.Identity.DisplayName != "Ada" {
 		t.Fatalf("persisted Slack config = %#v", loaded.Slack)
+	}
+}
+
+func TestServerMutationTargetFencesSlackValidationByCredentialGeneration(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *serverMutationTarget)
+	}{
+		{
+			name: "replacement",
+			mutate: func(t *testing.T, target *serverMutationTarget) {
+				t.Helper()
+				token := "xoxb-new-5678"
+				if _, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+					Slack: &serverruntime.SlackConfigMutation{Token: &token},
+					SlackWarning: func() *errcat.Error {
+						value := errcat.New(errcat.SlackUnreachable)
+						return &value
+					}(),
+					SlackCheckedAt: time.Now(),
+				}); err != nil {
+					t.Fatalf("replace Slack token: %v", err)
+				}
+			},
+		},
+		{
+			name: "clearing",
+			mutate: func(t *testing.T, target *serverMutationTarget) {
+				t.Helper()
+				clear := true
+				if _, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+					Slack: &serverruntime.SlackConfigMutation{ClearToken: &clear},
+				}); err != nil {
+					t.Fatalf("clear Slack token: %v", err)
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runtimeDir := t.TempDir()
+			configPath := filepath.Join(runtimeDir, "config.yaml")
+			cfg := config.NewDefault()
+			cfg.Slack = &config.SlackConfig{Token: "xoxb-old-1234"}
+			if err := config.Save(configPath, cfg); err != nil {
+				t.Fatalf("Save config error = %v", err)
+			}
+			target := &serverMutationTarget{cfg: cfg, configPath: configPath}
+			token, generation := target.LoadSlackCredential()
+			tc.mutate(t, target)
+
+			validation := ports.SlackValidation{
+				TokenType: ports.SlackTokenBot,
+				Identity: ports.SlackIdentity{
+					TeamID: "T-old", TeamName: "Old", UserID: "U-old", DisplayName: "Old Agent",
+				},
+				GrantedScopes: []string{"chat:write"},
+				MissingScopes: []string{},
+			}
+			applied, err := target.StoreSlackValidation(token, generation, &validation, time.Now())
+			if err != nil {
+				t.Fatalf("StoreSlackValidation() error = %v", err)
+			}
+			if applied {
+				t.Fatal("StoreSlackValidation() applied = true; want stale result discarded")
+			}
+			if target.SlackCredentialCurrent(token, generation) {
+				t.Fatal("SlackCredentialCurrent() = true for stale credential")
+			}
+			if cfg.Slack != nil && cfg.Slack.Identity != nil {
+				t.Fatalf("stale identity attached to current credential: %#v", cfg.Slack)
+			}
+		})
 	}
 }
 

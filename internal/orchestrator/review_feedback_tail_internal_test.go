@@ -35,6 +35,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
@@ -96,9 +97,32 @@ func (r *tailRecordingRemoteOps) layerPushes() []tailLayerPush {
 	return append([]tailLayerPush(nil), r.pushes...)
 }
 
+// failNthModifyLedgerStore wraps *feature.Store so the review-feedback
+// addressed-ledger methods stay available while the Nth Modify against the
+// target feature fails, simulating a transient storage failure at a chosen
+// persistence boundary.
+type failNthModifyLedgerStore struct {
+	*feature.Store
+	target string
+	n      int
+	err    error
+	count  int
+}
+
+func (s *failNthModifyLedgerStore) Modify(id string, fn func(*feature.Feature) error) error {
+	if id == s.target {
+		s.count++
+		if s.count == s.n {
+			return s.err
+		}
+	}
+	return s.Store.Modify(id, fn)
+}
+
 type reviewFeedbackTailFixture struct {
 	t                                *testing.T
 	store                            *feature.Store
+	storeOverride                    ports.FeatureStore
 	mgr                              *feature.Manager
 	parentID, childID                string
 	repoA, repoB                     string
@@ -273,9 +297,13 @@ func (fx *reviewFeedbackTailFixture) runTail() error {
 	if err != nil {
 		fx.t.Fatalf("load parent: %v", err)
 	}
+	store := ports.FeatureStore(fx.store)
+	if fx.storeOverride != nil {
+		store = fx.storeOverride
+	}
 	o := New(Deps{
 		Lifecycle: fx.mgr,
-		Store:     fx.store,
+		Store:     store,
 		Remote:    fx.remote,
 	}, Hooks{})
 	return o.reviewFeedbackIntegrationTail(child, parent)
@@ -739,6 +767,83 @@ func TestReviewFeedbackTailAttemptBoundaryCoversCommentlessJournalRepos(t *testi
 	}
 	if push := pushes[len(pushes)-1]; push.branch != "layer-2" || push.localSHA != fx.newTip2A || push.lastPushedSHA != fx.tip2A {
 		t.Fatalf("retry layer push = %+v, want repoA layer-2 leased on %s", push, fx.tip2A)
+	}
+}
+
+// TestReviewFeedbackTailClearFailureKeepsAttemptIncomplete pins the error
+// handling of the attempt-start tail-record cleanup: a storage failure while
+// clearing a repository's stored tail warning keeps the attempt incomplete —
+// the stale record stays, re-marked with the clear failure, and the tail does
+// not settle — so a failed cleanup is never mistaken for a successful one. A
+// later attempt with a healthy store clears the record, repeats no replies,
+// and settles.
+func TestReviewFeedbackTailClearFailureKeepsAttemptIncomplete(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newReviewFeedbackTailFixture(t)
+
+	// Seed a stale tail record from a previous failed attempt so the
+	// cleanup has durable state to drop.
+	if err := fx.store.Modify(fx.childID, func(f *feature.Feature) error {
+		entry := f.Parent.Transaction.EntryByRepo("repoA")
+		if entry == nil {
+			return errors.New("repoA journal entry missing")
+		}
+		entry.Tail = &errcat.FailureRecord{
+			Code:        errcat.ReviewFeedbackTailIncomplete,
+			Diagnostics: "previous attempt republish failure",
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed stale tail record: %v", err)
+	}
+
+	// Fail the first child Modify — the attempt-start clear of repoA's
+	// stale tail record — while every later write stays healthy.
+	fx.storeOverride = &failNthModifyLedgerStore{
+		Store:  fx.store,
+		target: fx.childID,
+		n:      1,
+		err:    errors.New("simulated clear-write failure"),
+	}
+
+	if err := fx.runTail(); err != nil {
+		t.Fatalf("reviewFeedbackIntegrationTail() error = %v", err)
+	}
+
+	// The attempt stays incomplete: the tail does not settle and repoA's
+	// stale record survives, re-marked with the clear failure.
+	child := fx.reloadChild()
+	if child.Parent.Transaction.TailSettled {
+		t.Fatal("tail-settled marker = true after the failed clear, want false")
+	}
+	entryA := child.Parent.Transaction.EntryByRepo("repoA")
+	if entryA == nil || entryA.Tail == nil {
+		t.Fatalf("repoA tail warning = %+v, want the stale record kept", entryA)
+	}
+	if !strings.Contains(entryA.Tail.Diagnostics, "clear tail warning") || !strings.Contains(entryA.Tail.Diagnostics, "simulated clear-write failure") {
+		t.Fatalf("repoA tail warning diagnostics = %q, want the clear failure named", entryA.Tail.Diagnostics)
+	}
+	if !strings.Contains(entryA.Tail.Diagnostics, "previous attempt republish failure") {
+		t.Fatalf("repoA tail warning diagnostics = %q, want the stale diagnostics preserved", entryA.Tail.Diagnostics)
+	}
+
+	// A healthy retry clears the record, repeats no replies, and settles.
+	fx.storeOverride = nil
+	repliesBeforeRetry := fx.fake.RequestCount("/repos/example/repoa/pulls/2/comments/11/replies")
+	if err := fx.runTail(); err != nil {
+		t.Fatalf("reviewFeedbackIntegrationTail() retry error = %v", err)
+	}
+	child = fx.reloadChild()
+	if !child.Parent.Transaction.TailSettled {
+		t.Fatal("tail-settled marker after retry = false, want true")
+	}
+	if entryA = child.Parent.Transaction.EntryByRepo("repoA"); entryA == nil || entryA.Tail != nil {
+		t.Fatalf("repoA tail warning after retry = %+v, want cleared", entryA)
+	}
+	if got := fx.fake.RequestCount("/repos/example/repoa/pulls/2/comments/11/replies") - repliesBeforeRetry; got != 0 {
+		t.Fatalf("reply requests in the retry = %d, want none (the addressed ledger deduplicates)", got)
 	}
 }
 

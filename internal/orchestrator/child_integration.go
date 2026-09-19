@@ -742,8 +742,14 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 		// whose clearing the comments loop used to own. The walk below then
 		// records fresh warnings for repositories whose republish fails, so
 		// a failure from a previous attempt never survives a retried one.
+		// A clear that cannot be durably written keeps the attempt
+		// incomplete through warn, so a stale record is never mistaken for
+		// a successful cleanup.
 		for i := range child.Parent.Transaction.Entries {
-			o.clearTransactionTailWarning(child.ID, child.Parent.Transaction.Entries[i].Repo)
+			repo := child.Parent.Transaction.Entries[i].Repo
+			if err := o.clearTransactionTailWarning(child.ID, repo); err != nil {
+				warn(repo, err.Error())
+			}
 		}
 	}
 
@@ -1096,9 +1102,11 @@ type reviewFeedbackLedger interface {
 }
 
 // clearTransactionTailWarning drops the stored tail record for repoName so
-// the next attempt starts with a clean record.
-func (o *Orchestrator) clearTransactionTailWarning(childID, repoName string) {
-	_ = o.deps.Store.Modify(childID, func(f *feature.Feature) error {
+// the next attempt starts with a clean record. The error identifies the
+// child and repository so a failed journal write stays observable at the
+// attempt boundary instead of silently losing the cleanup.
+func (o *Orchestrator) clearTransactionTailWarning(childID, repoName string) error {
+	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
 		if f.Parent.Transaction == nil {
 			return nil
 		}
@@ -1108,7 +1116,10 @@ func (o *Orchestrator) clearTransactionTailWarning(childID, repoName string) {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return fmt.Errorf("clear tail warning for repository %s of child %s: %w", repoName, childID, err)
+	}
+	return nil
 }
 
 // recordTransactionTailWarning durably records a review-feedback integration

@@ -379,7 +379,6 @@ func TestSlackServerDelayedStoredValidationIsCredentialFenced(t *testing.T) {
 		{
 			name: "success after replacement",
 			delayed: testsupport.Response{
-				Delay:   400 * time.Millisecond,
 				Body:    validSlackAuthBody("Old Agent"),
 				Headers: fullSlackScopesHeader(),
 			},
@@ -389,7 +388,6 @@ func TestSlackServerDelayedStoredValidationIsCredentialFenced(t *testing.T) {
 		{
 			name: "failure after replacement",
 			delayed: testsupport.Response{
-				Delay:  400 * time.Millisecond,
 				Status: http.StatusInternalServerError,
 				Body:   "old credential failed",
 			},
@@ -399,7 +397,6 @@ func TestSlackServerDelayedStoredValidationIsCredentialFenced(t *testing.T) {
 		{
 			name: "success after clearing",
 			delayed: testsupport.Response{
-				Delay:   400 * time.Millisecond,
 				Body:    validSlackAuthBody("Old Agent"),
 				Headers: fullSlackScopesHeader(),
 			},
@@ -408,7 +405,6 @@ func TestSlackServerDelayedStoredValidationIsCredentialFenced(t *testing.T) {
 		{
 			name: "failure after clearing",
 			delayed: testsupport.Response{
-				Delay:  400 * time.Millisecond,
 				Status: http.StatusInternalServerError,
 				Body:   "old credential failed",
 			},
@@ -423,7 +419,6 @@ func TestSlackServerDelayedStoredValidationIsCredentialFenced(t *testing.T) {
 			release := make(chan struct{})
 			tc.delayed.Started = started
 			tc.delayed.Release = release
-			tc.delayed.Delay = 0
 			runtime.fake.Script("auth.test", tc.delayed)
 			if tc.replace {
 				runtime.fake.Script("auth.test", testsupport.Response{
@@ -526,16 +521,4 @@ func awaitResponse[T any](t *testing.T, result <-chan T, description string) T {
 		var zero T
 		return zero
 	}
-}
-
-func waitForSlackCalls(t *testing.T, fake *testsupport.Server, want int) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if fake.CallCount("auth.test") >= want {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("auth.test calls = %d; want at least %d", fake.CallCount("auth.test"), want)
 }

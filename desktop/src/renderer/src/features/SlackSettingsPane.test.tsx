@@ -185,6 +185,79 @@ describe('SlackSettingsPane', () => {
     expect(tokenInput).toHaveFocus();
   });
 
+  it('preserves a pending stored-token check through same-credential invalidation', async () => {
+    const user = userEvent.setup();
+    let resolveCheck!: (
+      value: Awaited<ReturnType<Window['agentico']['validateSlackSettings']>>,
+    ) => void;
+    const delayed = new Promise<Awaited<ReturnType<Window['agentico']['validateSlackSettings']>>>(
+      (resolve) => {
+        resolveCheck = resolve;
+      },
+    );
+    const warning = connected({
+      identity: null,
+      grantedScopes: [],
+      status: {
+        state: 'warning',
+        lastError: {
+          code: 'slack_unreachable',
+          class: 'warning',
+          title: 'Slack could not be reached',
+          summary: 'Slack was unreachable.',
+        },
+        lastCheckedAt: '2026-09-19T11:00:00Z',
+      },
+    });
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: warning,
+    });
+    mock.api.validateSlackSettings.mockReturnValue(delayed);
+    render(<SlackSettingsPane />);
+
+    await screen.findByText('Token saved, but Slack could not be reached');
+    await user.click(screen.getByRole('button', { name: 'Check connection' }));
+    mock.api.getSlackSettings.mockResolvedValue(connected());
+    mock.emitAppEvent({ type: 'invalidated', kind: 'config.updated' });
+    await waitFor(() => expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(2));
+
+    resolveCheck({
+      tokenType: 'bot',
+      identity: connected().identity!,
+      grantedScopes: ['chat:write'],
+      missingScopes: [],
+    });
+
+    expect(await screen.findByText(/1 scopes granted/)).toBeVisible();
+    expect(screen.getByText('Connected to Acme as Agentico (bot)')).toBeVisible();
+  });
+
+  it('preserves a completed stored-token check through same-credential invalidation', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected(),
+      slackValidation: {
+        tokenType: 'bot',
+        identity: connected().identity!,
+        grantedScopes: ['chat:write'],
+        missingScopes: [],
+      },
+    });
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('button', { name: 'Check connection' }));
+    expect(await screen.findByText(/1 scopes granted/)).toBeVisible();
+    await waitFor(() => expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(2));
+
+    mock.emitAppEvent({ type: 'invalidated', kind: 'config.updated' });
+    await waitFor(() => expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(3));
+
+    expect(screen.getByText(/1 scopes granted/)).toBeVisible();
+  });
+
   it('recovers focus after a keyboard-submitted token rejection', async () => {
     const user = userEvent.setup();
     const mock = installAgenticoMock({

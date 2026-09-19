@@ -48,6 +48,11 @@ function statusHeading(snapshot: SlackSettingsSnapshot): string {
   return `Connected to ${snapshot.identity.teamName} as ${snapshot.identity.displayName} (${snapshot.tokenType})`;
 }
 
+function credentialKey(snapshot: SlackSettingsSnapshot): string | null {
+  if (!snapshot.supported || !snapshot.tokenSet) return null;
+  return `${snapshot.tokenType ?? 'unsupported'}:${snapshot.tokenHint}`;
+}
+
 export function SlackSettingsPane() {
   const connection = useConnectionState();
   const serverLabel =
@@ -56,6 +61,7 @@ export function SlackSettingsPane() {
   const request = useRef(0);
   const operationEpoch = useRef(0);
   const checkRevision = useRef(0);
+  const checkedCredentialKey = useRef<string | null>(null);
   const tokenInputRef = useRef<HTMLInputElement>(null);
   const [snapshot, setSnapshot] = useState<SlackSettingsSnapshot | null>(null);
   const [loadError, setLoadError] = useState<CanonicalError | null>(null);
@@ -78,14 +84,19 @@ export function SlackSettingsPane() {
 
   const clearCheckFeedback = useCallback(() => {
     checkRevision.current += 1;
+    checkedCredentialKey.current = null;
     setChecking(false);
     setCheckResult(null);
     setCheckError(null);
   }, []);
 
   const installSnapshot = useCallback(
-    (next: SlackSettingsSnapshot, preserveCheckFeedback = false) => {
-      if (!preserveCheckFeedback) clearCheckFeedback();
+    (next: SlackSettingsSnapshot, preserveSameCredentialFeedback = false) => {
+      const preservesCheckFeedback =
+        preserveSameCredentialFeedback &&
+        checkedCredentialKey.current !== null &&
+        checkedCredentialKey.current === credentialKey(next);
+      if (!preservesCheckFeedback) clearCheckFeedback();
       setSnapshot(next);
       setEnabled(next.supported ? next.enabled : false);
       setToken('');
@@ -99,7 +110,7 @@ export function SlackSettingsPane() {
   );
 
   const reload = useCallback(
-    (expectedCheckRevision?: number) => {
+    (expectedCheckRevision?: number, preserveSameCredentialFeedback = false) => {
       const current = ++request.current;
       void window.agentico
         .getSlackSettings()
@@ -108,7 +119,7 @@ export function SlackSettingsPane() {
             current === request.current &&
             (expectedCheckRevision === undefined || expectedCheckRevision === checkRevision.current)
           ) {
-            installSnapshot(next, expectedCheckRevision !== undefined);
+            installSnapshot(next, preserveSameCredentialFeedback);
           }
         })
         .catch((error: unknown) => {
@@ -145,7 +156,7 @@ export function SlackSettingsPane() {
         event.type === 'invalidated' &&
         (event.kind === 'resync' || event.kind.startsWith('config'))
       ) {
-        reload();
+        reload(undefined, true);
       }
     });
   }, [dirty, reload]);
@@ -200,6 +211,8 @@ export function SlackSettingsPane() {
     const epoch = operationEpoch.current;
     const revision = checkRevision.current;
     const checksStoredToken = token === '';
+    checkedCredentialKey.current =
+      checksStoredToken && snapshot !== null ? credentialKey(snapshot) : null;
     setChecking(true);
     setCheckResult(null);
     setCheckError(null);
@@ -208,7 +221,7 @@ export function SlackSettingsPane() {
       .then((result) => {
         if (epoch !== operationEpoch.current || revision !== checkRevision.current) return;
         setCheckResult(result);
-        if (checksStoredToken) reload(revision);
+        if (checksStoredToken) reload(revision, true);
       })
       .catch((error: unknown) => {
         if (epoch === operationEpoch.current && revision === checkRevision.current) {

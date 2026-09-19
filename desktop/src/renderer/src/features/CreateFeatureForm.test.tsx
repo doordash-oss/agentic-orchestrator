@@ -97,6 +97,32 @@ describe('the creation sheet across its four steps', () => {
     expect(document.querySelector('.error-surface')).toBeNull();
   });
 
+  it('shows Git inspection failure instead of treating the repository as unborn', async () => {
+    const mock = installAgenticoMock({
+      defaults: creationDefaults({
+        repositories: [
+          {
+            name: 'broken-git',
+            path: '/work/broken-git',
+            valid: true,
+            featureReady: false,
+            issue: {
+              code: 'repository_inspection_failed',
+              class: 'blocking',
+              title: 'Repository inspection failed',
+              summary: 'Git could not inspect this repository.',
+              remediation: { hint: 'Repair Git and retry.' },
+            },
+          },
+        ],
+      }),
+    });
+    await renderForm(mock);
+    expect(screen.getByText('Git could not inspect this repository.')).toBeVisible();
+    expect(screen.getByRole('checkbox', { name: /broken-git/ })).toBeDisabled();
+    expect(screen.queryByText(/No commits yet/)).toBeNull();
+  });
+
   it('leads an empty workspace with the folder picker instead of a filter miss', async () => {
     const mock = installAgenticoMock({ defaults: creationDefaults({ repositories: [] }) });
     await renderForm(mock);

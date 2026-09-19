@@ -93,6 +93,7 @@ describe('isTrustedSender against a live WindowRegistry trust set', () => {
       {
         create: () => ({ id: (nextId += 1) }),
         focus: vi.fn(),
+        isDestroyed: () => false,
         isCrashed: () => false,
         reload: vi.fn(),
         webContentsId: (window) => window.id,

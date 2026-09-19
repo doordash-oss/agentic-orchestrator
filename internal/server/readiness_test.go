@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
@@ -1290,5 +1292,164 @@ func TestReadinessReportsServerResolvedRepositoryIdentity(t *testing.T) {
 		if repo.Identity == nil || *repo.Identity == *service.Identity {
 			t.Fatalf("replaced git directory must invalidate the identity: old %+v new %+v", service.Identity, repo.Identity)
 		}
+	}
+}
+
+// A broken Git installation must not gate connecting to a usable runtime.
+func TestRuntimeReadinessDoesNotInspectRepositories(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(root, "git-called")
+	script := "#!/bin/sh\necho called >> \"" + marker + "\"\necho 'Xcode license has not been accepted' >&2\nexit 69\n"
+	if err := os.WriteFile(filepath.Join(root, "git"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{root}
+	provider := &readinessProbeProvider{
+		MockProvider: &mocks.MockProvider{ProviderName: "ready", CLIDetected: true, Models: []string{"fake-model"}},
+		status:       staticReadiness(llm.ProviderReadiness{Ready: true}),
+	}
+	handler := NewHandler(HandlerOptions{Config: cfg, Registry: newReadinessRegistry(provider), Mutations: &createFeatureRecorder{}, DisableHostValidation: true})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/readiness/runtime", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("runtime readiness: %d %s", w.Code, w.Body.String())
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot["ready"] != true {
+		t.Fatalf("runtime must be ready: %s", w.Body.String())
+	}
+	if _, exists := snapshot["workspace"]; exists {
+		t.Fatal("runtime response must not contain workspace discovery")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("runtime readiness invoked Git: %v", err)
+	}
+	w = postTrustedJSON(handler, "/api/v1/readiness/runtime/refresh", map[string]any{})
+	if w.Code != http.StatusOK {
+		t.Fatalf("runtime refresh: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("runtime refresh invoked Git: %v", err)
+	}
+}
+
+func TestReadinessReportsOneSharedGitFailure(t *testing.T) {
+	root := t.TempDir()
+	for i := range 24 {
+		if err := os.MkdirAll(filepath.Join(root, fmt.Sprintf("repo-%02d", i), ".git"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	marker := filepath.Join(root, "calls")
+	t.Setenv("AGENTICO_GIT_PROBE_LOG", marker)
+	script := "#!/bin/sh\necho called >> \"$AGENTICO_GIT_PROBE_LOG\"\necho 'Review the Xcode license agreements' >&2\nexit 69\n"
+	if err := os.WriteFile(filepath.Join(root, "git"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{root}
+	snapshot := workspaceReadiness(context.Background(), cfg)
+	if len(snapshot.Repositories) != 24 {
+		t.Fatalf("repositories = %d", len(snapshot.Repositories))
+	}
+	for _, repo := range snapshot.Repositories {
+		if !repo.Valid || repo.FeatureReady || repo.Identity != nil || repo.Issue == nil || repo.Issue.Code != "repository_inspection_failed" {
+			t.Fatalf("Git failure must be explicit, never an unborn repository: %+v", repo)
+		}
+		if !strings.Contains(repo.Issue.Diagnostics, filepath.Join(root, "git")) || !strings.Contains(repo.Issue.Diagnostics, "Xcode license") {
+			t.Fatalf("missing executable or failure detail: %+v", repo.Issue)
+		}
+	}
+	calls, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(calls) != "called\n" {
+		t.Fatalf("expected one installation check, got %q", calls)
+	}
+}
+
+func TestWorkspaceReadinessBoundsConcurrentGitAndCancelsQueuedWork(t *testing.T) {
+	root := t.TempDir()
+	markers := filepath.Join(root, "started")
+	if err := os.Mkdir(markers, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 24 {
+		if err := os.MkdirAll(filepath.Join(root, fmt.Sprintf("repo-%02d", i), ".git"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("AGENTICO_GIT_PROBE_MARKERS", markers)
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'git version fixture'; exit 0; fi\necho started > \"$AGENTICO_GIT_PROBE_MARKERS/$$\"\nwhile :; do /bin/sleep 1; done\n"
+	if err := os.WriteFile(filepath.Join(root, "git"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{root}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan WorkspaceReadiness, 1)
+	finished := make(chan struct{})
+	go func() { defer close(finished); done <- workspaceReadiness(ctx, cfg) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(3 * time.Second):
+			t.Error("repository scan did not terminate during cleanup")
+		}
+	})
+	// All eight workers must enter their commands before any is released.
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		entries, err := os.ReadDir(markers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) == 8 {
+			break
+		}
+		if len(entries) > 8 {
+			t.Fatalf("too many simultaneous probes: %d", len(entries))
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			cancel()
+			<-done
+			t.Fatal("repository checks did not run concurrently")
+		}
+	}
+	cancel()
+	select {
+	case snapshot := <-done:
+		for _, repo := range snapshot.Repositories {
+			if repo.Issue == nil || repo.Identity != nil {
+				t.Fatalf("cancelled probe became usable: %+v", repo)
+			}
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled Git process groups did not terminate")
+	}
+	entries, err := os.ReadDir(markers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 8 {
+		t.Fatalf("queued work spawned commands after cancellation: %d", len(entries))
 	}
 }

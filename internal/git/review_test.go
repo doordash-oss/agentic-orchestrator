@@ -82,6 +82,76 @@ func TestFetchPRCommentsIncludesEveryPRFeedbackSurface(t *testing.T) {
 	}
 }
 
+// TestFetchPRCommentsDropsResolvedThreadsAndBotChatter pins the filters:
+// a top-level inline comment whose thread is resolved is finished feedback,
+// and conversation comments or review summaries posted by app accounts
+// (CI, merge queue, review bots) are status noise. Human conversation
+// comments and unresolved inline threads stay, including bot-authored
+// inline review comments.
+func TestFetchPRCommentsDropsResolvedThreadsAndBotChatter(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/example/repo/pulls/7/comments", 200,
+		`[{"id":11,"path":"main.go","line":12,"body":"open thread","user":{"login":"review-bot[bot]","type":"Bot"},"created_at":"2026-07-07T10:00:00Z"},`+
+			`{"id":14,"path":"main.go","line":30,"body":"resolved thread","user":{"login":"alice","type":"User"},"created_at":"2026-07-07T10:05:00Z"}]`)
+	fake.HandleJSON("/repos/example/repo/issues/7/comments", 200,
+		`[{"id":22,"body":"human conversation","user":{"login":"bob","type":"User"},"created_at":"2026-07-07T11:00:00Z"},`+
+			`{"id":23,"body":"CI status","user":{"login":"ci[bot]","type":"Bot"},"created_at":"2026-07-07T11:05:00Z"}]`)
+	fake.HandleJSON("/repos/example/repo/pulls/7/reviews", 200,
+		`[{"id":33,"body":"human summary","user":{"login":"carol","type":"User"},"submitted_at":"2026-07-07T12:00:00Z"},`+
+			`{"id":34,"body":"bot summary","user":{"login":"review-bot[bot]","type":"Bot"},"submitted_at":"2026-07-07T12:05:00Z"}]`)
+	fake.HandleJSON("/graphql", 200,
+		`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[`+
+			`{"id":"T11","isResolved":false,"comments":{"nodes":[{"databaseId":11}]}},`+
+			`{"id":"T14","isResolved":true,"comments":{"nodes":[{"databaseId":14}]}}]}}}}}`)
+
+	comments, err := FetchPRComments(t.TempDir(), "https://github.com/example/repo/pull/7")
+	if err != nil {
+		t.Fatalf("FetchPRComments() error = %v", err)
+	}
+	var ids []int
+	for _, c := range comments {
+		ids = append(ids, c.ID)
+	}
+	if want := []int{11, 22, 33}; !equalInts(ids, want) {
+		t.Fatalf("FetchPRComments() ids = %v, want %v", ids, want)
+	}
+	if comments[0].User.Type != "Bot" {
+		t.Fatalf("inline bot comment user type = %q, want Bot carried through", comments[0].User.Type)
+	}
+}
+
+// TestFetchPRCommentsKeepsInlineCommentsWhenThreadMapUnavailable pins the
+// fallback: without thread resolution data every top-level inline comment
+// is kept rather than failing the fetch.
+func TestFetchPRCommentsKeepsInlineCommentsWhenThreadMapUnavailable(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/example/repo/pulls/7/comments", 200,
+		`[{"id":11,"path":"main.go","line":12,"body":"inline","user":{"login":"alice"},"created_at":"2026-07-07T10:00:00Z"}]`)
+	fake.HandleJSON("/repos/example/repo/issues/7/comments", 200, `[]`)
+	fake.HandleJSON("/repos/example/repo/pulls/7/reviews", 200, `[]`)
+	fake.HandleJSON("/graphql", 502, `{"message":"graphql unavailable"}`)
+
+	comments, err := FetchPRComments(t.TempDir(), "https://github.com/example/repo/pull/7")
+	if err != nil {
+		t.Fatalf("FetchPRComments() error = %v", err)
+	}
+	if len(comments) != 1 || comments[0].ID != 11 {
+		t.Fatalf("FetchPRComments() = %+v, want inline comment 11 kept", comments)
+	}
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestFetchPRCommentsSurfacesAPIErrors(t *testing.T) {
 	fake := testutil.InstallFakeGitHubAPI(t)
 	fake.HandleJSON("/repos/example/repo/pulls/7/comments", 500, `{"message":"synthetic API failure"}`)

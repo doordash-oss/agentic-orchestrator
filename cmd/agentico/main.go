@@ -49,10 +49,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"go.uber.org/fx"
 	"golang.org/x/term"
 )
@@ -138,9 +140,12 @@ type launchOptions struct {
 	refreshModels        bool
 	listenAddr           string
 	serverName           string
-	mode                 launchMode
-	validateArtifacts    validateArtifactsOptions
-	verifyEvidence       verifyEvidenceOptions
+	// updatesPolicy carries the raw --updates value (both --updates=v and
+	// --updates v forms normalize here). Empty means the flag was not passed.
+	updatesPolicy     string
+	mode              launchMode
+	validateArtifacts validateArtifactsOptions
+	verifyEvidence    verifyEvidenceOptions
 	// updateCheck is set when update mode was selected with --check / -n,
 	// requesting a check-only run that never attempts to install.
 	updateCheck bool
@@ -157,7 +162,7 @@ type verifyEvidenceOptions struct {
 	dir      string
 }
 
-type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName string) int
+type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName, updatesPolicy string) int
 
 // updater is the injectable update seam. Production
 // wiring passes the real updater, tests pass a fake. It returns the process
@@ -240,7 +245,7 @@ func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop d
 		if !ok {
 			return 1
 		}
-		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, providers, opts.refreshModels, opts.listenAddr, opts.serverName)
+		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, providers, opts.refreshModels, opts.listenAddr, opts.serverName, opts.updatesPolicy)
 	default:
 		if err := launchDesktop(); err != nil {
 			renderError(stderr, errcat.DesktopLaunchFailed, errcat.WithDiagnostics(err.Error()))
@@ -308,6 +313,15 @@ func canonicalizeStateDir(stateDir string) string {
 
 func parseLaunchArgs(args []string) (launchOptions, error) {
 	opts := defaultLaunchOptions()
+	// Driver builds (agentico_selfupdate_driver tag) recognize the
+	// selfupdate-driver subcommand here. Ordinary builds have a nil hook, so
+	// that word falls through to the launch-flag loop and rejects as an
+	// unknown command exactly like any other unrecognized first argument.
+	if len(args) > 0 && driverArgParseHook != nil {
+		if driverOpts, handled, err := driverArgParseHook(args); handled || err != nil {
+			return driverOpts, err
+		}
+	}
 	serverOnlyFlag := ""
 	// `update` is a standalone subcommand recognized only as the first
 	// argument. Its sub-flags (--check / -n) are valid only in this context;
@@ -375,7 +389,19 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 			}
 			i++
 			opts.serverName = args[i]
+		case "--updates":
+			// Separate-value form: --updates off.
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--updates requires a value")
+			}
+			i++
+			opts.updatesPolicy = args[i]
 		default:
+			if strings.HasPrefix(arg, "--updates=") {
+				// Equals form: --updates=off.
+				opts.updatesPolicy = strings.TrimPrefix(arg, "--updates=")
+				continue
+			}
 			if strings.HasPrefix(arg, "-") {
 				return opts, fmt.Errorf("unknown flag: %s", arg)
 			}
@@ -384,6 +410,20 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	}
 	if opts.mode == launchModeDesktop && serverOnlyFlag != "" {
 		return opts, fmt.Errorf("%s is available only with the headless server; run 'agentico server %s ...'", serverOnlyFlag, serverOnlyFlag)
+	}
+	// The equals form bypasses the server-only flag probe above, so reject
+	// any parsed --updates value outside server mode here.
+	if opts.updatesPolicy != "" && opts.mode != launchModeServer {
+		return opts, fmt.Errorf("--updates is available only with the headless server; run 'agentico server --updates ...'")
+	}
+	// --updates values are syntax-checked here so a typo fails fast, before
+	// any socket is opened. The effective value still resolves later —
+	// flag over AGENTICO_UPDATES over server.updates.policy — so an
+	// overridden source's "auto" never fails a launch that never uses it.
+	if opts.updatesPolicy != "" {
+		if _, ok := selfupdate.ParsePolicyValue(opts.updatesPolicy); !ok {
+			return opts, fmt.Errorf("invalid --updates value %q: expected off, notify, or auto", opts.updatesPolicy)
+		}
 	}
 	// --listen/--name values are normalized and validated here at parse time
 	// (after the server-only check above) so bad values fail fast, before any
@@ -406,7 +446,7 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 
 func isServerOnlyLaunchFlag(flag string) bool {
 	switch flag {
-	case "--config", "--state-dir", "--dangerously-skip-permissions", "--providers", "--refresh-models", "--listen", "--name":
+	case "--config", "--state-dir", "--dangerously-skip-permissions", "--providers", "--refresh-models", "--listen", "--name", "--updates":
 		return true
 	default:
 		return false
@@ -544,7 +584,13 @@ Server flags (use with 'agentico server'):
                                    Wildcards (0.0.0.0, ::) expose the server on the
                                    network and print a bearer-token connection string;
   --name <name>                    Server display name (default: generated, persisted per
-                                   runtime directory)
+                                    runtime directory)
+  --updates <policy>               Release-availability policy for the server: off, notify, or
+                                    auto (default: notify; accepts --updates=v and --updates v).
+                                    auto installs each newer release when the server is idle,
+                                    inside server.updates.window when one is set, and never
+                                    stops work. Precedence: this flag, then AGENTICO_UPDATES,
+                                    then server.updates.policy in config.yaml.
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
   --check, -n                      With 'update': check for a newer release without installing
 Global flags:
@@ -977,9 +1023,30 @@ type runtimeBootstrap struct {
 	workspaceDir    string
 	recoveryItems   []ports.RecoveryItem
 	recoveryScanOK  bool
+	selfUpdateExec  selfupdate.Executable
+	updateLease     *selfupdate.Lease
+	// updateLeaseErr records why the binary lease was not acquired when it
+	// is nil, so eligibility can distinguish ownership contention from
+	// other failures.
+	updateLeaseErr error
+	// admission is the runtime work-admission boundary: one instance shared
+	// by the orchestrator, repository work, and the HTTP server.
+	admission *workadmission.Coordinator
 }
 
-func (b *runtimeBootstrap) Close(ctx context.Context) error {
+// serverUpdates returns the raw server.updates config values, tolerating a
+// missing config so policy resolution still runs with defaults.
+func (b *runtimeBootstrap) serverUpdates() config.ServerUpdatesConfig {
+	if b == nil || b.cfg == nil {
+		return config.ServerUpdatesConfig{}
+	}
+	return b.cfg.Server.Updates
+}
+
+// StopServices stops the fx graph without releasing the instance lock: an
+// exec handoff needs service cleanup to complete while the lock is still
+// held. Idempotent.
+func (b *runtimeBootstrap) StopServices(ctx context.Context) error {
 	if b == nil {
 		return nil
 	}
@@ -988,12 +1055,38 @@ func (b *runtimeBootstrap) Close(ctx context.Context) error {
 		errStop = b.fxApp.Stop(ctx)
 		b.fxApp = nil
 	}
+	return errStop
+}
+
+// ReleaseLock closes the instance lock only. Idempotent.
+func (b *runtimeBootstrap) ReleaseLock() error {
+	if b == nil {
+		return nil
+	}
 	var errLock error
 	if b.lock != nil {
 		errLock = b.lock.Close()
 		b.lock = nil
 	}
-	return errors.Join(errStop, errLock)
+	return errLock
+}
+
+// Close stops services, releases the update lease, then releases the
+// instance lock — in that order, so the lock outlives the fx graph and no
+// later lock holder can observe a half-torn runtime. The lease close never
+// removes files. Idempotent.
+func (b *runtimeBootstrap) Close(ctx context.Context) error {
+	if b == nil {
+		return nil
+	}
+	errStop := b.StopServices(ctx)
+	var errLease error
+	if b.updateLease != nil {
+		errLease = b.updateLease.Close()
+		b.updateLease = nil
+	}
+	errLock := b.ReleaseLock()
+	return errors.Join(errStop, errLease, errLock)
 }
 
 type serverMutationTarget struct {
@@ -1009,6 +1102,9 @@ type serverMutationTarget struct {
 	phaseRunner           *agent.PhaseRunner
 	permissionCache       *permission.Cache
 	workspaceDir          string
+	// admission is the runtime work-admission boundary; nil disables the
+	// chat-launch reservation (tests).
+	admission *workadmission.Coordinator
 	// dispatchAsync runs server-owned background work (durable feature
 	// setup). Nil means `go fn()`; tests inject a synchronous dispatcher.
 	dispatchAsync func(fn func())
@@ -1194,7 +1290,13 @@ func (t *serverMutationTarget) SetupFeature(featureID string) (serverruntime.Fea
 	if dispatch == nil {
 		dispatch = func(fn func()) { go fn() }
 	}
+	// The dispatched setup owns an admission reservation from before the
+	// goroutine launches; a closed boundary refuses the work-start request.
+	if err := t.orch.PrepareAsyncWork(featureID); err != nil {
+		return resp, err
+	}
 	dispatch(func() {
+		defer t.orch.SettleAsyncWork(featureID)
 		// Errors are durable: the setup runner persists per-task and failure
 		// state on the feature and emits setup events that reach the SSE
 		// stream, so the API surface reports them via the read model.
@@ -1637,6 +1739,16 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest, hid
 		return serverruntime.ChatStartResponse{}, errors.New("phase runner is not available")
 	}
 
+	// A fresh chat session runs its provider handshake before registration
+	// makes it visible: the chat reservation covers that whole window, and
+	// a closed admission boundary refuses the launch. It settles once the
+	// registered session is detector-visible.
+	chatReservation, err := acquireChatAdmission(t.admission)
+	if err != nil {
+		return serverruntime.ChatStartResponse{}, err
+	}
+	defer chatReservation.Release()
+
 	chatSkillPath := serverChatSkillPath(t.phaseRunner.SkillsDir)
 	// Wire prompt order: skill instruction, hidden context, visible message.
 	// The stored initial prompt below stays the visible message alone.
@@ -1690,6 +1802,15 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest, hid
 		return serverruntime.ChatStartResponse{}, fmt.Errorf("start chat session: %w", err)
 	}
 	return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultStarted}, nil
+}
+
+// acquireChatAdmission reserves one chat launch; a nil boundary (tests)
+// admits trivially.
+func acquireChatAdmission(coordinator *workadmission.Coordinator) (*workadmission.Reservation, error) {
+	if coordinator == nil {
+		return nil, nil
+	}
+	return coordinator.Acquire(workadmission.CategoryChat)
 }
 
 func chatMessageWithImages(message string, images []string) string {
@@ -2361,6 +2482,11 @@ func (t *serverMutationTarget) DeleteFeature(featureID string, req serverruntime
 	if err != nil {
 		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, err
 	}
+	// A completed cascade owns no further work; pending cleanup keeps the
+	// reservation until its retry settles.
+	if result.Status == feature.CascadeDeleteCompleted {
+		t.orch.SettleFeatureWork(featureID)
+	}
 	return serverruntime.DeleteFeatureResponse{
 		FeatureID:   result.ParentID,
 		OperationID: result.OperationID,
@@ -2376,6 +2502,9 @@ func (t *serverMutationTarget) DiscardChild(featureID string) (serverruntime.Dis
 	if err := t.orch.DiscardChild(featureID); err != nil {
 		return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
+	// The discard settled: the child's reservation settles with it (any
+	// still-draining session keeps it until the completion funnel).
+	t.orch.SettleFeatureWork(featureID)
 	return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: "discarded"}, nil
 }
 
@@ -2803,6 +2932,31 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 			Config:     configPath,
 		},
 	}
+	// Best-effort binary-scoped update ownership. Any failure — including
+	// contention with the true owner (a secondary runtime serving from the
+	// same installed binary) — leaves the lease nil and the launch
+	// untouched: inability to own updates must not break boot or weaken the
+	// instance lock. The lease fd is close-on-exec, so ordinary children
+	// never inherit it.
+	if exec, execErr := selfupdate.CaptureExecutable(); execErr == nil {
+		boot.selfUpdateExec = exec
+		if lease, leaseErr := selfupdate.AcquireLease(exec, selfupdate.OwnershipRecord{
+			RuntimeDir:       runtimeDir,
+			StateDir:         stateDir,
+			Config:           configPath,
+			PID:              os.Getpid(),
+			PGID:             owner.PGID,
+			Version:          buildinfo.Version(),
+			StartedAt:        owner.StartedAt,
+			ExecutablePath:   exec.Path,
+			ExecutableDigest: exec.Digest,
+			ExecutableIno:    exec.ID.Ino,
+		}); leaseErr == nil {
+			boot.updateLease = lease
+		} else {
+			boot.updateLeaseErr = leaseErr
+		}
+	}
 	success := false
 	defer func() {
 		if !success {
@@ -2813,6 +2967,11 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	configIsNew := !fileExists(configPath)
 	workspaceDir, _ := os.Getwd()
 	eventCh := make(chan interface{}, 1000)
+	// The runtime work-admission boundary is shared by orchestration,
+	// repository work, and the HTTP surface; one instance is supplied to
+	// the fx graph and reused for the server construction below.
+	admission := workadmission.New(workadmission.Options{})
+	boot.admission = admission
 
 	var fm *feature.Manager
 	var sm *session.Manager
@@ -2851,6 +3010,9 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	if err := fxApp.Start(ctx); err != nil {
 		return nil, &runtimeInitError{fmt.Errorf("initializing: %w", err)}
 	}
+	// The work-admission boundary is installed on the fx-built orchestrator
+	// before any serving or dispatch path can run.
+	orch.SetAdmissionBoundary(admission)
 
 	detected, warnings, startupNotices, availabilityFiltered, err := checkRequiredProviders(ctx, registry)
 	if err != nil {
@@ -3002,22 +3164,108 @@ func normalizeProviderNames(enabled []string, warnBlank bool, warn func(name str
 	return valid
 }
 
-func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName string) int {
+// runServer is the server body. Ordinary builds adopt inherited update
+// handoffs and resolve interrupted transactions as production behavior;
+// driver builds (agentico_selfupdate_driver tag) additionally install
+// failure-injection and barrier seams.
+func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName, updatesPolicy string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	runtimeCtx, requestShutdown := context.WithCancel(ctx)
 	defer requestShutdown()
 
-	boot, err := bootstrapRuntime(ctx, configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, os.Stderr)
+	id := resolveLaunchIdentity(stateDir, configPath, listenAddr)
+	if id.exit {
+		return id.code
+	}
+	listenAddr = id.listenAddr
+
+	// Driver-only deterministic abort for a recovered or restarted image's
+	// own startup: the chain guard already forbids another automatic
+	// recovery, so this terminates nonzero. Nil (no-op) in ordinary builds.
+	if selfUpdateStartupAbortHook != nil {
+		if err := selfUpdateStartupAbortHook(); err != nil {
+			renderStartupFailure(os.Stderr, &runtimeInitError{err})
+			return 1
+		}
+	}
+
+	// The adopted target boots under a cooperative startup deadline: expiry
+	// routes through the recovery boundary like any other startup failure.
+	bootCtx := ctx
+	var cancelBootCtx context.CancelFunc
+	if id.adopted != nil {
+		bootCtx, cancelBootCtx = context.WithTimeout(ctx, startupDeadline())
+		defer cancelBootCtx()
+	}
+
+	// The one-shot recovery boundary for this launch chain. Every handled
+	// failure of the adopted target's startup — configuration/bootstrap
+	// errors, cooperative deadline expiry, preserved-endpoint bind failure,
+	// health failure, mandatory discovery publication failure, confirmation
+	// persistence failure, and direct target-exec failure — funnels here:
+	// tear down, restore the previous build, and exec it once with the chain
+	// guard. Ordinary launches keep their existing failure behavior.
+	rt := failedTargetRecovery{
+		lease:      id.adopted,
+		receipt:    id.adoptedReceipt,
+		exec:       selfupdate.Executable{Path: id.adoptedHandoff.ExecutablePath},
+		runtimeDir: id.adoptedHandoff.RuntimeDir,
+		bind:       id.adoptedReceipt.Bind,
+		reason:     fmt.Sprintf("target %s failed to return to service; previous build %s restored", id.adoptedReceipt.ToVersion, id.adoptedReceipt.FromVersion),
+	}
+	targetStartupFailure := func(render func(error), err error) int {
+		if id.adopted == nil {
+			render(err)
+			return 1
+		}
+		rt.reason = fmt.Sprintf("target %s failed to return to service: %v", id.adoptedReceipt.ToVersion, err)
+		return rt.recover()
+	}
+
+	boot, err := bootstrapRuntime(bootCtx, configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, os.Stderr)
 	if err != nil {
-		renderStartupFailure(os.Stderr, err)
-		return 1
+		return targetStartupFailure(func(e error) { renderStartupFailure(os.Stderr, e) }, err)
 	}
 	defer func() {
 		if err := boot.Close(context.Background()); err != nil {
 			reportDeferredClose(os.Stderr, "close runtime", err)
 		}
 	}()
+	if id.adopted != nil {
+		// bootstrapRuntime's own lease acquisition reports contention here:
+		// the adopted open file description already holds the binary-scoped
+		// flock, so its fresh non-blocking attempt cannot succeed. The
+		// adopted lease is this process's true owner.
+		boot.updateLease = id.adopted
+	} else if id.recoveryLease != nil {
+		// Recovery resolution acquired the lease before bootstrap: ownership
+		// stays continuous for this process's lifetime.
+		boot.updateLease = id.recoveryLease
+	}
+	if rt.boot == nil {
+		rt.boot = boot
+	}
+
+	// Release-availability startup configuration resolves after mandatory
+	// recovery and bootstrap, from the captured executable identity and this
+	// runtime's ownership lease.
+	updateSettings, updateErr := selfupdate.ResolveStartupSettings(selfupdate.SettingsSources{
+		Flag:                updatesPolicy,
+		Env:                 os.Getenv("AGENTICO_UPDATES"),
+		ConfigPolicy:        boot.serverUpdates().Policy,
+		ConfigChannel:       boot.serverUpdates().Channel,
+		ConfigCheckInterval: boot.serverUpdates().CheckInterval,
+		ConfigStrategy:      boot.serverUpdates().Strategy,
+		ConfigWindow:        boot.serverUpdates().Window,
+	})
+	if updateErr != nil {
+		return targetStartupFailure(func(e error) {
+			renderError(os.Stderr, errcat.UpdateConfigInvalid, errcat.WithParams(errcat.UsageParams{Reason: updateErr.Error()}))
+		}, updateErr)
+	}
+	eligibility := classifyRuntimeEligibility(boot)
+	wiring := buildUpdateOptions(boot, id, updateSettings, eligibility)
 
 	if shouldInterruptRunningOnStartup(
 		boot.recoveryScanOK,
@@ -3032,26 +3280,32 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 
 	listen, err := serverruntime.ResolveListen(listenAddr)
 	if err != nil {
-		renderStartupFailure(os.Stderr, &serverStartError{err})
-		return 1
+		return targetStartupFailure(func(e error) { renderStartupFailure(os.Stderr, &serverStartError{e}) }, err)
 	}
 	networkBind := listen.Policy == serverruntime.CompatibilityNetworkRuntimePolicy
 
 	policy := runtimeLaunchPolicy(boot.registry, dangerouslySkipPerms)
 	discoveryClient := &http.Client{Timeout: time.Second}
-	decision, err := serverruntime.PrepareDiscovery(ctx, boot.runtime.RuntimeDir, boot.runtime, policy, discoveryClient, networkBind)
+	decision, err := serverruntime.PrepareDiscovery(bootCtx, boot.runtime.RuntimeDir, boot.runtime, policy, discoveryClient, networkBind)
 	if err != nil {
-		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("validating discovery metadata: %w", err)})
-		return 1
+		return targetStartupFailure(func(e error) {
+			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("validating discovery metadata: %w", e)})
+		}, err)
 	}
 	if decision.AlreadyRunning {
+		if id.adopted != nil {
+			// The target could not take over its own runtime: recover.
+			rt.reason = "target startup found the runtime already served by another process"
+			return rt.recover()
+		}
 		renderStartupFailure(os.Stderr, alreadyRunningError{baseURL: decision.Record.BaseURL})
 		return 1
 	}
 	authToken, err := serverruntime.EnsureAuthToken(boot.runtime.RuntimeDir)
 	if err != nil {
-		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("preparing server auth token: %w", err)})
-		return 1
+		return targetStartupFailure(func(e error) {
+			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("preparing server auth token: %w", e)})
+		}, err)
 	}
 	var configName string
 	if boot.cfg != nil {
@@ -3059,11 +3313,12 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	}
 	resolvedName, err := serverruntime.ResolveServerName(serverName, configName, boot.runtime.RuntimeDir)
 	if err != nil {
-		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("resolving server name: %w", err)})
-		return 1
+		return targetStartupFailure(func(e error) {
+			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("resolving server name: %w", e)})
+		}, err)
 	}
 
-	runtimeServer, err := serverruntime.Start(ctx, serverruntime.Options{
+	runtimeServer, err := serverruntime.Start(bootCtx, serverruntime.Options{
 		Runtime:      boot.runtime,
 		LaunchPolicy: policy,
 		StartMode:    cliSubcommandServer,
@@ -3091,16 +3346,27 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 			phaseRunner:           boot.phaseRunner,
 			permissionCache:       boot.permissionCache,
 			workspaceDir:          boot.workspaceDir,
+			admission:             boot.admission,
 		},
 		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
 		},
 		Worktrees: boot.worktrees,
+		Updates:   wiring.options,
+		Admission: boot.admission,
+		Lifetime:  ctx,
 	})
 	if err != nil {
-		renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("starting server: %w", err)})
-		return 1
+		return targetStartupFailure(func(e error) {
+			renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("starting server: %w", e)})
+		}, err)
 	}
+	rt.server = runtimeServer
+	rt.authToken = authToken
+	// Complete the install lifecycle's server handle now that the server is
+	// running: install requests arriving through HTTP find it ready.
+	installLifecycle := wiring.lifecycle
+	installLifecycle.setRun(&serverRun{boot: boot, server: runtimeServer, authToken: authToken})
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -3111,9 +3377,10 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 
 	now := time.Now().UTC()
 	record := registryRecord(boot, runtimeServer, authToken, resolvedName, policy, now)
-	if err := serverruntime.PublishDiscovery(boot.runtime.RuntimeDir, record); err != nil {
-		renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("publishing discovery metadata: %w", err)})
-		return 1
+	if err := publishDiscoveryFn(boot.runtime.RuntimeDir, record); err != nil {
+		return targetStartupFailure(func(e error) {
+			renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("publishing discovery metadata: %w", e)})
+		}, err)
 	}
 
 	// The central registry entry is a verbatim copy of the published
@@ -3121,6 +3388,8 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	// Publication failure never affects serving: the server stays fully
 	// attachable via its per-runtime discovery file.
 	registryDir := serverruntime.RegistryDir(resolveRegistryParent())
+	rt.registryDir = registryDir
+	installLifecycle.setRegistryDir(registryDir)
 	if err := serverruntime.PublishRegistryEntry(registryDir, record); err != nil {
 		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
 			errcat.WithDiagnostics(fmt.Sprintf("publishing server registry entry: %v", err)))
@@ -3133,14 +3402,256 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		}()
 	}
 
+	if code, stopLaunch := confirmAdoptedStartup(id, &rt, runtimeServer); stopLaunch {
+		return code
+	}
+
 	fmt.Fprintf(os.Stderr, "Agentic server %q listening at %s\n", resolvedName, runtimeServer.BaseURL())
+	if id.restoredRollback != nil {
+		// The restored runtime reports the consumed update result as the
+		// canonical update_rolled_back failure while continuing to serve on
+		// the previous build.
+		renderError(os.Stderr, errcat.UpdateRolledBack,
+			errcat.WithParams(errcat.UpdateRolledBackParams{
+				FromVersion: id.restoredRollback.FromVersion,
+				ToVersion:   id.restoredRollback.ToVersion,
+			}),
+			errcat.WithDiagnostics(id.restoredRollback.Error))
+	}
 	if err := writeNetworkAccessNotice(os.Stderr, runtimeServer.RuntimePolicy(), runtimeServer.BaseURL(), runtimeServer.WildcardBind(), authToken, resolvedName); err != nil {
 		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
 			errcat.WithDiagnostics(fmt.Sprintf("writing network access notice: %v", err)))
 	}
-	<-runtimeCtx.Done()
+	var journey serverJourney
+	if serverJourneyHook != nil && id.adopted == nil {
+		journey = serverJourneyHook()
+	}
+	if journey != nil {
+		run, err := installLifecycle.current()
+		if err != nil {
+			return 1
+		}
+		if code := journey.run(run); code >= 0 {
+			return code
+		}
+	}
+	// A failed recovery boundary (second failure after teardown) hands its
+	// termination code to this serving goroutine: the process exits without
+	// an exec loop and without os.Exit from the install worker.
+	select {
+	case <-runtimeCtx.Done():
+	case code := <-installLifecycle.exitCode:
+		return code
+	}
 	shutdownFeatures(boot.orchestrator, boot.sessionManager)
 	return 0
+}
+
+// launchIdentity is the update-launch state resolved before bootstrap: the
+// adopted inherited handoff when this process is the exec'd target of a
+// replacement, otherwise the boot-time recovery resolution of an operator
+// launch.
+type launchIdentity struct {
+	// exit is true when the launch must stop with code (a rendered refusal;
+	// a restore decision execs and never returns).
+	exit bool
+	code int
+	// adopted is the inherited lease of the exec'd replacement target, with
+	// its validated handoff metadata and receipt.
+	adopted        *selfupdate.Lease
+	adoptedHandoff selfupdate.HandoffMetadata
+	adoptedReceipt selfupdate.Receipt
+	// recoveryLease is the binary lease acquired during boot-time recovery
+	// resolution, carried into the ordinary boot so ownership stays
+	// continuous for the process lifetime.
+	recoveryLease *selfupdate.Lease
+	// restoredRollback marks that this launch resolved (or finished) an
+	// actual rollback and should report the canonical update_rolled_back
+	// failure for the consumed update result.
+	restoredRollback *selfupdate.Receipt
+	// recoveredChain marks that this launch carries the recovery guard: it
+	// is the recovered or restarted image of a prior chain, so its own
+	// startup is held to the same health-wait bar and a further automatic
+	// recovery is forbidden.
+	recoveredChain bool
+	// listenAddr is the effective listen address after the adopted target's
+	// or the recovered build's recorded endpoint rebind.
+	listenAddr string
+}
+
+// resolveLaunchIdentity resolves the launch's update identity before general
+// bootstrap: handoff adoption for the exec'd replacement target, mandatory
+// recovery resolution for every other launch. Adoption precedes general
+// bootstrap so no child process can spawn before the inherited lease
+// descriptor is validated and made close-on-exec again; a present-but-invalid
+// handoff fails the launch closed. Recovery runs before configuration
+// loading, fx construction, bootstrap children, update-policy selection, and
+// any ownership-record overwrite: an unsafe record refuses nonzero with a
+// sanitized diagnostic; absence of a transaction preserves ordinary startup,
+// including serving without update ownership.
+func resolveLaunchIdentity(stateDir, configPath, listenAddr string) launchIdentity {
+	id := launchIdentity{listenAddr: listenAddr}
+	lease, meta, receipt, err := adoptHandoffForLaunch()
+	if err != nil {
+		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("adopting update handoff: %w", err)})
+		return launchIdentity{exit: true, code: 1}
+	}
+	id.adopted, id.adoptedHandoff, id.adoptedReceipt = lease, meta, receipt
+	if id.adopted != nil && selfUpdateAdoptedStartHook != nil {
+		selfUpdateAdoptedStartHook()
+	}
+	if id.adopted == nil {
+		res := resolveRecoveryOnBoot(stateDir, configPath, id.listenAddr)
+		if res.exit {
+			return launchIdentity{exit: true, code: res.code}
+		}
+		id.recoveryLease = res.lease
+		id.restoredRollback = res.restoredRollback
+		if res.listenOverride != "" {
+			id.listenAddr = res.listenOverride
+			id.recoveredChain = true
+		}
+		if res.recoveredChain {
+			id.recoveredChain = true
+		}
+		return id
+	}
+	if override := handoffListenAddr(id.adoptedHandoff); override != "" {
+		// The adopted target rebinds its recorded concrete endpoint; argv's
+		// --listen may still name an ephemeral port.
+		id.listenAddr = override
+	}
+	return id
+}
+
+// updateWiring bundles the resolved update subsystem for the serving
+// runtime: the update coordinator's options and the production install
+// lifecycle that carries authenticated install requests.
+type updateWiring struct {
+	options   serverruntime.UpdateOptions
+	lifecycle *productionInstallLifecycle
+}
+
+// buildUpdateOptions resolves the update subsystem after bootstrap and
+// recovery: the startup receipt exposed to clients, the release feed, the
+// coordinator options, and the production install lifecycle (wired only when
+// a real feed client exists).
+func buildUpdateOptions(boot *runtimeBootstrap, id launchIdentity, settings selfupdate.StartupSettings, eligibility selfupdate.Eligibility) updateWiring {
+	var startupUpdateReceipt *selfupdate.Receipt
+	switch {
+	case id.restoredRollback != nil:
+		startupUpdateReceipt = id.restoredRollback
+	case id.adopted != nil:
+		receiptCopy := id.adoptedReceipt
+		startupUpdateReceipt = &receiptCopy
+	}
+	var updateFeed serverruntime.FeedChecker
+	if updateFeedHook != nil {
+		// Driver-only fixture routing: deliberately built test binaries
+		// inject a local metadata feed that receives no credentials.
+		updateFeed = updateFeedHook()
+	} else {
+		slug, _ := moduleSlug()
+		updateFeed = selfupdate.NewProductionFeedClient(slug, githubToken)
+	}
+	options := serverruntime.UpdateOptions{
+		Policy:         settings.Policy,
+		Settings:       settings,
+		CurrentVersion: buildinfo.Version(),
+		Eligibility:    eligibility,
+		ExecPath:       boot.selfUpdateExec.Path,
+		StartupReceipt: startupUpdateReceipt,
+		Feed:           updateFeed,
+		Log:            func(line string) { fmt.Fprintln(os.Stderr, line) },
+		Observer:       boot.observer,
+		Admission:      boot.admission,
+	}
+	// The production install path: the same signed-release pipeline and
+	// recoverable replacement the driver journeys prove, reachable only
+	// through the authenticated install endpoint. The lifecycle's server
+	// handle is completed after the server starts; install requests can
+	// only arrive after that point.
+	lifecycle := &productionInstallLifecycle{
+		exitCode: make(chan int, 1),
+		stager: &productionReleaseStager{
+			exec:           boot.selfUpdateExec,
+			currentVersion: buildinfo.Version(),
+			eligibility:    eligibility,
+		},
+	}
+	if feedClient, ok := updateFeed.(*selfupdate.FeedClient); ok {
+		lifecycle.stager.feed = feedClient
+	}
+	if lifecycle.stager.feed != nil {
+		options.Stager = lifecycle.stager
+		options.Install = lifecycle
+	}
+	// Test-only seams for the tagged driver's explicit-stop journeys:
+	// ordinary builds keep every hook nil so production installs use the
+	// fixed stop budget, never pause before the protected-work recheck,
+	// and never inject stop failures.
+	if updateStopWorkTimeoutHook != nil {
+		if budget := updateStopWorkTimeoutHook(); budget > 0 {
+			options.StopWorkTimeout = budget
+		}
+	}
+	if updateStopEntryGateHook != nil {
+		options.StopEntryGate = updateStopEntryGateHook()
+	}
+	if updateStopFeatureFailureHook != nil {
+		options.StopFeatureHook = updateStopFeatureFailureHook()
+	}
+	if updateStopDetectionFailHook != nil {
+		options.DetectFailHook = updateStopDetectionFailHook()
+	}
+	return updateWiring{options: options, lifecycle: lifecycle}
+}
+
+// confirmAdoptedStartup gates the adopted target's transition to serving:
+// the mandatory self-health wait (a recovered build's own startup is held to
+// the same bar), then the write-once confirmation, the public receipt
+// exposure, and the settled cleanup. It returns the exit code and true when
+// the launch must stop; false means serving may proceed.
+func confirmAdoptedStartup(id launchIdentity, rt *failedTargetRecovery, runtimeServer *serverruntime.RuntimeServer) (int, bool) {
+	// No ordinary work is admitted before full bootstrap, the mandatory
+	// discovery publication, and — for the adopted target and the recovered
+	// build — the self-health wait.
+	if id.adopted == nil && !id.recoveredChain {
+		return 0, false
+	}
+	if err := waitSelfHealthy(selfHealthProbeURLs(runtimeServer), 30*time.Second); err != nil {
+		if id.adopted != nil {
+			rt.reason = fmt.Sprintf("target %s failed its health wait: %v", id.adoptedReceipt.ToVersion, err)
+			return rt.recover(), true
+		}
+		// The recovered build's own startup failure terminates nonzero: the
+		// chain guard forbids another automatic recovery.
+		renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("recovered build health wait: %w", err)})
+		return 1, true
+	}
+	if id.adopted == nil {
+		return 0, false
+	}
+	// Confirmation is write-once and only happens after full bootstrap,
+	// health wait, and discovery publication. A failure to persist
+	// confirmation stays unconfirmed and enters the recovery boundary
+	// when safe.
+	confirmedReceipt, err := confirmAdoptedTransaction(id.adoptedHandoff.ExecutablePath, id.adoptedHandoff.TransactionID)
+	if err != nil {
+		rt.reason = fmt.Sprintf("target %s could not durably confirm its update: %v", id.adoptedReceipt.ToVersion, err)
+		return rt.recover(), true
+	}
+	// The public update snapshot now exposes the confirmed outcome and its
+	// sanitized receipt.
+	runtimeServer.SetUpdateReceipt(confirmedReceipt)
+	// Cleanup failure retains the healthy target and the confirmed outcome:
+	// warn and keep serving; a later launch retries the validated cleanup.
+	if err := selfupdate.CleanupSettledTransaction(id.adoptedHandoff.ExecutablePath, id.adoptedHandoff.TransactionID, selfUpdateCleanupSeams); err != nil {
+		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
+			errcat.WithDiagnostics(fmt.Sprintf("selfupdate cleanup for confirmed transaction %s: %v", id.adoptedHandoff.TransactionID, err)))
+	}
+	fmt.Fprintf(os.Stderr, "selfupdate: confirmed %s\n", id.adoptedHandoff.TransactionID)
+	return 0, false
 }
 
 // writeNetworkAccessNotice prints the network-bind security notice and the

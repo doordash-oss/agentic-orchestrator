@@ -178,6 +178,38 @@ function pidAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Authenticated update-snapshot read against the app-owned bundled server,
+ * using the discovery record's bearer token like the other journeys' direct
+ * server calls. Only ever pointed at the app-owned child: an externally
+ * owned server's update policy is not the desktop's to assert.
+ */
+async function fetchUpdateSnapshot(
+  world: JourneyWorld,
+): Promise<{ status: unknown; policy: unknown }> {
+  const discovery = readDiscovery(world);
+  expect(discovery, 'server discovery record should exist').not.toBeNull();
+  const response = await fetch(`${discovery!.base_url}/api/v1/update`, {
+    headers: {
+      Accept: 'application/json',
+      'X-Agentico-Client': 'local',
+      ...(discovery!.auth_token === undefined
+        ? {}
+        : { Authorization: `Bearer ${discovery!.auth_token}` }),
+    },
+  });
+  const text = await response.text();
+  expect(response.ok, text).toBe(true);
+  const body = JSON.parse(text) as { update?: UpdateSnapshotFields };
+  expect(body.update, 'update snapshot should exist').toBeDefined();
+  return { status: body.update!.status, policy: body.update!.policy };
+}
+
+interface UpdateSnapshotFields {
+  status?: unknown;
+  policy?: unknown;
+}
+
 /** The switcher popover's listbox. */
 function switcherListbox(handle: AppHandle) {
   return handle.page.getByRole('listbox', { name: 'Servers' });
@@ -543,6 +575,23 @@ test('a killed target fails with retry and back-to-previous; back restores the s
     expect(restored.serverName).toBe('alpha');
     transcript.step('back-to-previous re-attached through the standard attach path');
 
+    transcript.section('Another failed attempt can recover through the configured server picker');
+    if (failedState.status !== 'error' || failedState.switchContext === undefined) {
+      throw new Error('Expected the failed switch to identify its target');
+    }
+    await handle.page.evaluate(
+      (serverKey) => window.agentico.switchConnectionServer({ serverKey }),
+      failedState.switchContext.attempted.serverKey,
+    );
+    await expect(errorCode).toHaveText('E_SWITCH_UNAVAILABLE', { timeout: 60_000 });
+    await expect(handle.page.getByRole('button', { name: 'Explain in chat' })).toHaveCount(0);
+    await handle.page.getByRole('button', { name: 'Choose another server' }).click();
+    await handle.page.getByRole('option', { name: /alpha at .+ — Available/ }).click();
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    expect((await connectionState(handle)).serverName).toBe('alpha');
+
     persistAppLogs(handle, 'server-switching-failure-app');
     transcript.write(testInfo);
   } finally {
@@ -586,6 +635,10 @@ test('the app-owned child survives a switch-away and is still stopped on quit', 
     expect(ownedDiscovery).not.toBeNull();
     const ownedPid = ownedDiscovery!.pid;
     expect(pidAlive(ownedPid)).toBe(true);
+    const ownedUpdate = await fetchUpdateSnapshot(world);
+    expect(ownedUpdate.status).toBe('disabled');
+    expect(ownedUpdate.policy).toBe('off');
+    transcript.step('app-owned child reported the disabled/off update policy');
 
     transcript.section('Start an external server mid-session and switch to it');
     const beta = startTestServer(world, 'beta', 'runtime-beta');

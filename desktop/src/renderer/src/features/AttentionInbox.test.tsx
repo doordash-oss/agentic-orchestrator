@@ -16,7 +16,7 @@ limitations under the License.
 
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState } from 'react';
+import { useState, type ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttentionItem } from '../../../shared/ipc';
 import {
@@ -135,7 +135,13 @@ const helpWaitingItem: Extract<AttentionItem, { kind: 'help' }> = {
   runningTasks: ['Indexing repository layout', 'Summarizing packages'],
 };
 
-function Harness({ items, onJump }: { items: AttentionItem[]; onJump: ReturnType<typeof vi.fn> }) {
+function Harness({
+  items,
+  onJump,
+}: {
+  items: AttentionItem[];
+  onJump: ComponentProps<typeof AttentionInbox>['onJump'];
+}) {
   const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
   return (
     <AttentionInbox

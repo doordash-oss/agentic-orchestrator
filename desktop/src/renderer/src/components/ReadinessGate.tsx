@@ -73,7 +73,7 @@ export function ReadinessGate({
   onOpenPalette?(): void;
   amaUnread?: boolean;
 }) {
-  const load = useCallback(() => window.agentico.getReadiness(), []);
+  const load = useCallback(() => window.agentico.getRuntimeReadiness(), []);
   const { state, reload, replace } = useIpcLoad(load, []);
 
   if (state.phase === 'loading') {

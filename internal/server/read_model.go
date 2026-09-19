@@ -36,6 +36,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
 const maxFeatureDetailHistoricalRuns = 5
@@ -598,6 +599,11 @@ func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSumma
 	return dto
 }
 
+// maxStoredDiagnosticsLen bounds raw diagnostics projected from stored
+// records. Remote rejections (GitHub rule violations, hook output) run to
+// several hundred characters; a tighter cap hid the line naming the cause.
+const maxStoredDiagnosticsLen = 2000
+
 // wireStoredError renders a stored failure record through the catalog onto
 // the canonical wire error, bounding raw diagnostics with the safe-display
 // helper. A nil record yields nil; every adapter that projects a stored
@@ -609,7 +615,7 @@ func wireStoredError(record *errcat.FailureRecord) *Error {
 	}
 	rendered := errcat.RenderRecord(*record)
 	wire := wireError(rendered)
-	wire.Diagnostics = SafeDisplayText(rendered.Diagnostics, 240)
+	wire.Diagnostics = SafeDisplayText(rendered.Diagnostics, maxStoredDiagnosticsLen)
 	return &wire
 }
 
@@ -1184,6 +1190,15 @@ func (h *apiHandler) probeRepoFreshness(f *feature.Feature) map[string]RepoFresh
 	if h.freshness == nil || len(f.Repos) == 0 {
 		return nil
 	}
+	// Each probe shells out to git: the fan-out owns one repository
+	// admission reservation for its full lifetime. A closed boundary never
+	// launches the probes — the projection degrades to unknown freshness
+	// rather than starting work behind the install's back.
+	release, err := h.probeAdmissionBegin()
+	if err != nil {
+		return nil
+	}
+	defer release()
 	results := make([]RepoFreshness, len(f.Repos))
 	var wg sync.WaitGroup
 	for i, repo := range f.Repos {
@@ -1392,12 +1407,33 @@ func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *h
 		return
 	}
 
+	// The refresh launches provider probes and model discovery: it owns a
+	// repository admission reservation for the request's full lifetime, and
+	// a closed boundary refuses it.
+	refreshReservation, err := h.acquireAdmission(workadmission.CategoryRepository)
+	if err != nil {
+		h.writeAdmissionRefusal(w, err)
+		return
+	}
+	defer refreshReservation.Release()
+
 	h.providerRefreshMu.Lock()
 	defer h.providerRefreshMu.Unlock()
 
 	// Ensure a complete cached snapshot exists before replacing one entry.
-	h.providerReadinessStatuses(r.Context(), false)
-	status, _ := h.refreshProviderReadiness(r.Context(), req.Provider)
+	if _, _, err := h.providerReadinessStatuses(r.Context(), false); err != nil {
+		if !h.writeAdmissionRefusal(w, err) {
+			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
+		}
+		return
+	}
+	status, _, err := h.refreshProviderReadiness(r.Context(), req.Provider)
+	if err != nil {
+		if !h.writeAdmissionRefusal(w, err) {
+			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
+		}
+		return
+	}
 	if status.Ready {
 		provider := h.registry.ByName(req.Provider)
 		discoverer, canDiscover := provider.(llm.CatalogDiscoverer)
@@ -1426,7 +1462,13 @@ func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *h
 		enricher.SetModelCatalog(models)
 	}
 
-	readiness := h.readinessSnapshot(r.Context(), false)
+	readiness, err := h.readinessSnapshot(r.Context(), false)
+	if err != nil {
+		if !h.writeAdmissionRefusal(w, err) {
+			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
+		}
+		return
+	}
 	readinessRevision := revisionForAny(readiness)
 	readiness.Meta = h.responseMeta(readinessRevision)
 	catalog := h.modelCatalogSnapshot()

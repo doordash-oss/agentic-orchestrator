@@ -1112,6 +1112,249 @@ func (e TaskActivityState) Valid() bool {
 	}
 }
 
+// Defines values for UpdateInstallRequestWhen.
+const (
+	UpdateInstallRequestWhenIdle UpdateInstallRequestWhen = "idle"
+	UpdateInstallRequestWhenNow  UpdateInstallRequestWhen = "now"
+)
+
+// Valid indicates whether the value is a known member of the UpdateInstallRequestWhen enum.
+func (e UpdateInstallRequestWhen) Valid() bool {
+	switch e {
+	case UpdateInstallRequestWhenIdle:
+		return true
+	case UpdateInstallRequestWhenNow:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdatePublicReceiptOutcome.
+const (
+	UpdatePublicReceiptOutcomeConfirmed  UpdatePublicReceiptOutcome = "confirmed"
+	UpdatePublicReceiptOutcomePending    UpdatePublicReceiptOutcome = "pending"
+	UpdatePublicReceiptOutcomeRolledBack UpdatePublicReceiptOutcome = "rolled_back"
+)
+
+// Valid indicates whether the value is a known member of the UpdatePublicReceiptOutcome enum.
+func (e UpdatePublicReceiptOutcome) Valid() bool {
+	switch e {
+	case UpdatePublicReceiptOutcomeConfirmed:
+		return true
+	case UpdatePublicReceiptOutcomePending:
+		return true
+	case UpdatePublicReceiptOutcomeRolledBack:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotChannel.
+const (
+	Stable UpdateSnapshotChannel = "stable"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotChannel enum.
+func (e UpdateSnapshotChannel) Valid() bool {
+	switch e {
+	case Stable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotInstallation.
+const (
+	UpdateSnapshotInstallationAppBundle   UpdateSnapshotInstallation = "app_bundle"
+	UpdateSnapshotInstallationDevelopment UpdateSnapshotInstallation = "development"
+	UpdateSnapshotInstallationGoInstall   UpdateSnapshotInstallation = "go_install"
+	UpdateSnapshotInstallationHomebrew    UpdateSnapshotInstallation = "homebrew"
+	UpdateSnapshotInstallationTarball     UpdateSnapshotInstallation = "tarball"
+	UpdateSnapshotInstallationUnknown     UpdateSnapshotInstallation = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotInstallation enum.
+func (e UpdateSnapshotInstallation) Valid() bool {
+	switch e {
+	case UpdateSnapshotInstallationAppBundle:
+		return true
+	case UpdateSnapshotInstallationDevelopment:
+		return true
+	case UpdateSnapshotInstallationGoInstall:
+		return true
+	case UpdateSnapshotInstallationHomebrew:
+		return true
+	case UpdateSnapshotInstallationTarball:
+		return true
+	case UpdateSnapshotInstallationUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotMethod.
+const (
+	UpdateSnapshotMethodIdle UpdateSnapshotMethod = "idle"
+	UpdateSnapshotMethodNow  UpdateSnapshotMethod = "now"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotMethod enum.
+func (e UpdateSnapshotMethod) Valid() bool {
+	switch e {
+	case UpdateSnapshotMethodIdle:
+		return true
+	case UpdateSnapshotMethodNow:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotPolicy.
+const (
+	Auto   UpdateSnapshotPolicy = "auto"
+	Notify UpdateSnapshotPolicy = "notify"
+	Off    UpdateSnapshotPolicy = "off"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotPolicy enum.
+func (e UpdateSnapshotPolicy) Valid() bool {
+	switch e {
+	case Auto:
+		return true
+	case Notify:
+		return true
+	case Off:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotSignature.
+const (
+	Unverified UpdateSnapshotSignature = "unverified"
+	Verified   UpdateSnapshotSignature = "verified"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotSignature enum.
+func (e UpdateSnapshotSignature) Valid() bool {
+	switch e {
+	case Unverified:
+		return true
+	case Verified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotStatus.
+const (
+	UpdateSnapshotStatusAvailable   UpdateSnapshotStatus = "available"
+	UpdateSnapshotStatusChecking    UpdateSnapshotStatus = "checking"
+	UpdateSnapshotStatusConfirmed   UpdateSnapshotStatus = "confirmed"
+	UpdateSnapshotStatusDisabled    UpdateSnapshotStatus = "disabled"
+	UpdateSnapshotStatusDownloading UpdateSnapshotStatus = "downloading"
+	UpdateSnapshotStatusDraining    UpdateSnapshotStatus = "draining"
+	UpdateSnapshotStatusFailed      UpdateSnapshotStatus = "failed"
+	UpdateSnapshotStatusIdle        UpdateSnapshotStatus = "idle"
+	UpdateSnapshotStatusRestarting  UpdateSnapshotStatus = "restarting"
+	UpdateSnapshotStatusScheduled   UpdateSnapshotStatus = "scheduled"
+	UpdateSnapshotStatusUnsupported UpdateSnapshotStatus = "unsupported"
+	UpdateSnapshotStatusUpToDate    UpdateSnapshotStatus = "up_to_date"
+	UpdateSnapshotStatusVerified    UpdateSnapshotStatus = "verified"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotStatus enum.
+func (e UpdateSnapshotStatus) Valid() bool {
+	switch e {
+	case UpdateSnapshotStatusAvailable:
+		return true
+	case UpdateSnapshotStatusChecking:
+		return true
+	case UpdateSnapshotStatusConfirmed:
+		return true
+	case UpdateSnapshotStatusDisabled:
+		return true
+	case UpdateSnapshotStatusDownloading:
+		return true
+	case UpdateSnapshotStatusDraining:
+		return true
+	case UpdateSnapshotStatusFailed:
+		return true
+	case UpdateSnapshotStatusIdle:
+		return true
+	case UpdateSnapshotStatusRestarting:
+		return true
+	case UpdateSnapshotStatusScheduled:
+		return true
+	case UpdateSnapshotStatusUnsupported:
+		return true
+	case UpdateSnapshotStatusUpToDate:
+		return true
+	case UpdateSnapshotStatusVerified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotStrategy.
+const (
+	Idle    UpdateSnapshotStrategy = "idle"
+	Quiesce UpdateSnapshotStrategy = "quiesce"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotStrategy enum.
+func (e UpdateSnapshotStrategy) Valid() bool {
+	switch e {
+	case Idle:
+		return true
+	case Quiesce:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSnapshotUnsupportedReason.
+const (
+	UpdateSnapshotUnsupportedReasonBundled             UpdateSnapshotUnsupportedReason = "bundled"
+	UpdateSnapshotUnsupportedReasonDevelopmentVersion  UpdateSnapshotUnsupportedReason = "development_version"
+	UpdateSnapshotUnsupportedReasonHomebrew            UpdateSnapshotUnsupportedReason = "homebrew"
+	UpdateSnapshotUnsupportedReasonLeaseUnavailable    UpdateSnapshotUnsupportedReason = "lease_unavailable"
+	UpdateSnapshotUnsupportedReasonNonReplaceable      UpdateSnapshotUnsupportedReason = "non_replaceable"
+	UpdateSnapshotUnsupportedReasonOwnershipContention UpdateSnapshotUnsupportedReason = "ownership_contention"
+	UpdateSnapshotUnsupportedReasonUnsupportedPlatform UpdateSnapshotUnsupportedReason = "unsupported_platform"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSnapshotUnsupportedReason enum.
+func (e UpdateSnapshotUnsupportedReason) Valid() bool {
+	switch e {
+	case UpdateSnapshotUnsupportedReasonBundled:
+		return true
+	case UpdateSnapshotUnsupportedReasonDevelopmentVersion:
+		return true
+	case UpdateSnapshotUnsupportedReasonHomebrew:
+		return true
+	case UpdateSnapshotUnsupportedReasonLeaseUnavailable:
+		return true
+	case UpdateSnapshotUnsupportedReasonNonReplaceable:
+		return true
+	case UpdateSnapshotUnsupportedReasonOwnershipContention:
+		return true
+	case UpdateSnapshotUnsupportedReasonUnsupportedPlatform:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FeatureSubaction.
 const (
 	FeatureSubactionFetch FeatureSubaction = "fetch"
@@ -1517,6 +1760,21 @@ func (e RefreshReadinessParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for RefreshRuntimeReadinessParamsXAgenticoClient.
+const (
+	RefreshRuntimeReadinessParamsXAgenticoClientLocal RefreshRuntimeReadinessParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the RefreshRuntimeReadinessParamsXAgenticoClient enum.
+func (e RefreshRuntimeReadinessParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case RefreshRuntimeReadinessParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ExecuteRecoveryActionsParamsXAgenticoClient.
 const (
 	ExecuteRecoveryActionsParamsXAgenticoClientLocal ExecuteRecoveryActionsParamsXAgenticoClient = "local"
@@ -1526,6 +1784,51 @@ const (
 func (e ExecuteRecoveryActionsParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case ExecuteRecoveryActionsParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CheckForUpdateParamsXAgenticoClient.
+const (
+	CheckForUpdateParamsXAgenticoClientLocal CheckForUpdateParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CheckForUpdateParamsXAgenticoClient enum.
+func (e CheckForUpdateParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CheckForUpdateParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CancelUpdateInstallParamsXAgenticoClient.
+const (
+	CancelUpdateInstallParamsXAgenticoClientLocal CancelUpdateInstallParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CancelUpdateInstallParamsXAgenticoClient enum.
+func (e CancelUpdateInstallParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CancelUpdateInstallParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InstallUpdateParamsXAgenticoClient.
+const (
+	InstallUpdateParamsXAgenticoClientLocal InstallUpdateParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the InstallUpdateParamsXAgenticoClient enum.
+func (e InstallUpdateParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case InstallUpdateParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -3033,7 +3336,7 @@ type ReadinessResponse struct {
 	APIVersion    string                 `json:"api_version"`
 	Configuration ConfigurationReadiness `json:"configuration"`
 
-	// Issues Flattened outstanding issues across all sections, each the canonical catalog-rendered error for its readiness code.
+	// Issues Flattened outstanding issues across runtime sections, each the canonical catalog-rendered error for its readiness code.
 	Issues []Error        `json:"issues,omitempty"`
 	Meta   ResponseMeta   `json:"meta,omitempty"`
 	Models ModelReadiness `json:"models"`
@@ -4129,6 +4432,24 @@ type RuntimeIdentity struct {
 	StateDir   string `json:"state_dir"`
 }
 
+// RuntimeReadinessResponse defines model for RuntimeReadinessResponse.
+type RuntimeReadinessResponse struct {
+	APIVersion    string                 `json:"api_version"`
+	Configuration ConfigurationReadiness `json:"configuration"`
+
+	// Issues Flattened outstanding issues across runtime sections, each the canonical catalog-rendered error for its readiness code.
+	Issues []Error        `json:"issues,omitempty"`
+	Meta   ResponseMeta   `json:"meta,omitempty"`
+	Models ModelReadiness `json:"models"`
+
+	// ProbedAt When provider probes last ran.
+	ProbedAt  *time.Time          `json:"probed_at,omitempty"`
+	Providers []ProviderReadiness `json:"providers"`
+
+	// Ready Mandatory readiness — true when at least one provider is usable, models are available, and the configuration is valid. Feature creation is gated on this value.
+	Ready bool `json:"ready"`
+}
+
 // SSEEvent defines model for SSEEvent.
 type SSEEvent struct {
 	APIVersion string    `json:"api_version"`
@@ -4381,6 +4702,189 @@ type TranscriptResponse struct {
 	Cursor     Cursor              `json:"cursor"`
 	Messages   []TranscriptMessage `json:"messages"`
 	Meta       ResponseMeta        `json:"meta,omitempty"`
+}
+
+// UpdateActiveWorkSummary Truthful current activity counts that gate an immediate install. Counts are advisory reads of live work, never reservations.
+type UpdateActiveWorkSummary struct {
+	// ChatActive Whether any feature chat turn is active.
+	ChatActive bool `json:"chat_active"`
+
+	// CloneCount Number of in-flight repository clone operations.
+	CloneCount int `json:"clone_count"`
+
+	// DetectionFailed Whether activity detection itself failed; the counts are then incomplete and an immediate install is refused.
+	DetectionFailed bool `json:"detection_failed"`
+
+	// FeatureCount Number of features with live activity.
+	FeatureCount int `json:"feature_count"`
+
+	// OriginCheckCount Number of in-flight origin comparisons.
+	OriginCheckCount int `json:"origin_check_count"`
+
+	// ParkedCount Number of parked operations; always zero in this phase.
+	ParkedCount int `json:"parked_count"`
+
+	// PendingAdmissions Number of held admission reservations.
+	PendingAdmissions int `json:"pending_admissions"`
+
+	// QuiescingSince When the runtime began quiescing work for an accepted install; never set in this phase.
+	QuiescingSince *time.Time `json:"quiescing_since,omitempty"`
+
+	// UploadCount Number of in-flight staged uploads.
+	UploadCount int `json:"upload_count"`
+}
+
+// UpdateInstallRequest Explicit, consented request to install the currently discovered latest stable release.
+type UpdateInstallRequest struct {
+	// Consent Explicit user consent to install a release. Must be true; any other value is refused with update_consent_required.
+	Consent bool `json:"consent"`
+
+	// StopActiveWork Stop-work permission for an immediate install; valid only with when now. Authorizes interrupting feature sessions and the singleton chat through the existing pause-stop and chat-end semantics. Repository work, protected or unknown admission reservations, and failed activity detection still refuse, and any stop failure or timeout aborts the install with update_blocked_active_work while already-stopped work stays interrupted.
+	StopActiveWork *bool `json:"stop_active_work,omitempty"`
+
+	// Version Explicit target version selector. Must name the currently discovered latest stable version; any other version is refused.
+	Version *string `json:"version,omitempty"`
+
+	// When Waiting method: now installs immediately, idle stages the operation and waits for active work to finish without interrupting it.
+	When UpdateInstallRequestWhen `json:"when"`
+}
+
+// UpdateInstallRequestWhen Waiting method: now installs immediately, idle stages the operation and waits for active work to finish without interrupting it.
+type UpdateInstallRequestWhen string
+
+// UpdatePublicReceipt Public view of the durable installation receipt: versions, outcome, times, and a sanitized error only. Transaction paths, descriptors, process environment, credentials, and raw receipt internals never cross this boundary.
+type UpdatePublicReceipt struct {
+	// CompletedAt When the receipt reached its settled outcome.
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+
+	// Error Sanitized failure reason for rolled_back receipts.
+	Error       *string                    `json:"error,omitempty"`
+	FromVersion string                     `json:"from_version"`
+	Outcome     UpdatePublicReceiptOutcome `json:"outcome"`
+	ToVersion   string                     `json:"to_version"`
+}
+
+// UpdatePublicReceiptOutcome defines model for UpdatePublicReceipt.Outcome.
+type UpdatePublicReceiptOutcome string
+
+// UpdateSnapshot Metadata-only release availability for this runtime. Availability is advisory: a check never fetches a package, manifest, checksum, or signature, never stages anything, and never changes executable bytes. The active-work summary reports the truthful current activity counts that gate an immediate install.
+type UpdateSnapshot struct {
+	// ActiveWorkSummary Truthful current activity counts that gate an immediate install. Counts are advisory reads of live work, never reservations.
+	ActiveWorkSummary UpdateActiveWorkSummary `json:"active_work_summary"`
+
+	// Channel Release channel consulted by checks. Only stable is supported.
+	Channel UpdateSnapshotChannel `json:"channel"`
+
+	// CheckIntervalSeconds Configured periodic check interval in seconds.
+	CheckIntervalSeconds int `json:"check_interval_seconds"`
+
+	// CurrentVersion Running build version as reported at startup.
+	CurrentVersion string `json:"current_version"`
+
+	// Error Canonical error for the current state: update_rolled_back for a validated rollback or suppressed newest release, update_check_failed for transient check failures. Absent when availability is healthy.
+	Error *Error `json:"error,omitempty"`
+
+	// Installation Classified installation method of the running executable.
+	Installation UpdateSnapshotInstallation `json:"installation"`
+
+	// LastCheckAt When the last check attempt finished, successful or not.
+	LastCheckAt *time.Time `json:"last_check_at,omitempty"`
+
+	// LastSuccessAt When the last successful check finished. Retained across later failed refreshes together with the metadata it produced.
+	LastSuccessAt *time.Time `json:"last_success_at,omitempty"`
+
+	// LatestReleaseURL Public release page for the discovered latest version. Never a signed download URL and never credential-bearing.
+	LatestReleaseURL *string `json:"latest_release_url,omitempty"`
+
+	// LatestVersion Greatest clean stable release discovered by the last successful check; unknown (absent) before discovery. A suppressed newest release remains visible here.
+	LatestVersion *string `json:"latest_version,omitempty"`
+
+	// Method Waiting method of the accepted install operation; present only while an install operation is active.
+	Method *UpdateSnapshotMethod `json:"method,omitempty"`
+
+	// NextCheckAt When the next periodic check is scheduled. Absent when no periodic check will run (policy off, unsupported, or shutdown).
+	NextCheckAt *time.Time `json:"next_check_at,omitempty"`
+
+	// Policy Effective startup update policy. auto installs each newer stable release when the runtime is idle and never stops work.
+	Policy UpdateSnapshotPolicy `json:"policy"`
+
+	// Receipt Sanitized public projection of the durable installation receipt history. Absent when no installation receipt exists for this executable. Metadata-only runs never create receipts.
+	Receipt *UpdatePublicReceipt `json:"receipt,omitempty"`
+
+	// Remediation Actionable next step for an unsupported installation.
+	Remediation *string `json:"remediation,omitempty"`
+
+	// RetryNotBefore Server-imposed retry floor from a 403/429 response. Local backoff and jitter never shorten it; explicit checks inside the deadline are refused without a request.
+	RetryNotBefore *time.Time `json:"retry_not_before,omitempty"`
+
+	// ScheduledFor Next maintenance-window opening an automatic install waits for; null while no window bounds the operation, because an idle wait has no deadline.
+	ScheduledFor *time.Time `json:"scheduled_for"`
+
+	// Signature Signature trust state for a would-be target. Metadata-only checks report unverified; verified appears only after an install operation verified the pinned candidate.
+	Signature UpdateSnapshotSignature `json:"signature"`
+
+	// Status Coarse availability state. downloading, verified, scheduled, draining, and restarting are reserved for the later installation slice and never emitted by the availability endpoints.
+	Status UpdateSnapshotStatus `json:"status"`
+
+	// StopActiveWork The actual stop-work permission the accepted operation retains (only meaningful with method now); present only while an operation is active.
+	StopActiveWork *bool `json:"stop_active_work,omitempty"`
+
+	// Strategy How automatic installs wait for in-flight work. quiesce is accepted and behaves as idle in this release. Never affects client-requested installs.
+	Strategy UpdateSnapshotStrategy `json:"strategy"`
+
+	// TargetContract Verified server contract of the pinned candidate; exposed only after candidate verification, never from feed metadata alone.
+	TargetContract *UpdateTargetContract `json:"target_contract,omitempty"`
+
+	// TargetVersion Version a pending installation targets; present only while an install operation is active. Never trusted from feed metadata alone.
+	TargetVersion *string `json:"target_version,omitempty"`
+
+	// UnsupportedReason Machine-readable remediation code present only while status is unsupported. ownership_contention means another live runtime owns this binary's update lease; lease_unavailable covers other lease acquisition failures.
+	UnsupportedReason *UpdateSnapshotUnsupportedReason `json:"unsupported_reason,omitempty"`
+}
+
+// UpdateSnapshotChannel Release channel consulted by checks. Only stable is supported.
+type UpdateSnapshotChannel string
+
+// UpdateSnapshotInstallation Classified installation method of the running executable.
+type UpdateSnapshotInstallation string
+
+// UpdateSnapshotMethod Waiting method of the accepted install operation; present only while an install operation is active.
+type UpdateSnapshotMethod string
+
+// UpdateSnapshotPolicy Effective startup update policy. auto installs each newer stable release when the runtime is idle and never stops work.
+type UpdateSnapshotPolicy string
+
+// UpdateSnapshotSignature Signature trust state for a would-be target. Metadata-only checks report unverified; verified appears only after an install operation verified the pinned candidate.
+type UpdateSnapshotSignature string
+
+// UpdateSnapshotStatus Coarse availability state. downloading, verified, scheduled, draining, and restarting are reserved for the later installation slice and never emitted by the availability endpoints.
+type UpdateSnapshotStatus string
+
+// UpdateSnapshotStrategy How automatic installs wait for in-flight work. quiesce is accepted and behaves as idle in this release. Never affects client-requested installs.
+type UpdateSnapshotStrategy string
+
+// UpdateSnapshotUnsupportedReason Machine-readable remediation code present only while status is unsupported. ownership_contention means another live runtime owns this binary's update lease; lease_unavailable covers other lease acquisition failures.
+type UpdateSnapshotUnsupportedReason string
+
+// UpdateSnapshotResponse defines model for UpdateSnapshotResponse.
+type UpdateSnapshotResponse struct {
+	APIVersion string       `json:"api_version"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+
+	// Update Metadata-only release availability for this runtime. Availability is advisory: a check never fetches a package, manifest, checksum, or signature, never stages anything, and never changes executable bytes. The active-work summary reports the truthful current activity counts that gate an immediate install.
+	Update UpdateSnapshot `json:"update"`
+}
+
+// UpdateTargetContract Verified server contract of the pinned install candidate, read from the downloaded release after verification; never feed metadata.
+type UpdateTargetContract struct {
+	// APIVersion Server API version the candidate declares.
+	APIVersion string `json:"api_version"`
+
+	// MinClientSchema Minimum client schema version the candidate requires.
+	MinClientSchema int `json:"min_client_schema"`
+
+	// SchemaVersion Server schema version the candidate declares.
+	SchemaVersion int `json:"schema_version"`
 }
 
 // Usage defines model for Usage.
@@ -4787,6 +5291,18 @@ type RefreshReadinessParams struct {
 // RefreshReadinessParamsXAgenticoClient defines parameters for RefreshReadiness.
 type RefreshReadinessParamsXAgenticoClient string
 
+// RefreshRuntimeReadinessJSONBody defines parameters for RefreshRuntimeReadiness.
+type RefreshRuntimeReadinessJSONBody map[string]interface{}
+
+// RefreshRuntimeReadinessParams defines parameters for RefreshRuntimeReadiness.
+type RefreshRuntimeReadinessParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient RefreshRuntimeReadinessParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// RefreshRuntimeReadinessParamsXAgenticoClient defines parameters for RefreshRuntimeReadiness.
+type RefreshRuntimeReadinessParamsXAgenticoClient string
+
 // ExecuteRecoveryActionsJSONBody defines parameters for ExecuteRecoveryActions.
 type ExecuteRecoveryActionsJSONBody map[string]interface{}
 
@@ -4821,6 +5337,39 @@ type GetSessionTranscriptParams struct {
 	Offset int64 `form:"offset,omitempty" json:"offset,omitempty"`
 	Limit  Limit `form:"limit,omitempty" json:"limit,omitempty"`
 }
+
+// CheckForUpdateJSONBody defines parameters for CheckForUpdate.
+type CheckForUpdateJSONBody map[string]interface{}
+
+// CheckForUpdateParams defines parameters for CheckForUpdate.
+type CheckForUpdateParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CheckForUpdateParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CheckForUpdateParamsXAgenticoClient defines parameters for CheckForUpdate.
+type CheckForUpdateParamsXAgenticoClient string
+
+// CancelUpdateInstallJSONBody defines parameters for CancelUpdateInstall.
+type CancelUpdateInstallJSONBody map[string]interface{}
+
+// CancelUpdateInstallParams defines parameters for CancelUpdateInstall.
+type CancelUpdateInstallParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CancelUpdateInstallParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CancelUpdateInstallParamsXAgenticoClient defines parameters for CancelUpdateInstall.
+type CancelUpdateInstallParamsXAgenticoClient string
+
+// InstallUpdateParams defines parameters for InstallUpdate.
+type InstallUpdateParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient InstallUpdateParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// InstallUpdateParamsXAgenticoClient defines parameters for InstallUpdate.
+type InstallUpdateParamsXAgenticoClient string
 
 // StageUploadParams defines parameters for StageUpload.
 type StageUploadParams struct {
@@ -5014,8 +5563,20 @@ type SendHelpPromptJSONRequestBody SendHelpPromptJSONBody
 // RefreshReadinessJSONRequestBody defines body for RefreshReadiness for application/json ContentType.
 type RefreshReadinessJSONRequestBody RefreshReadinessJSONBody
 
+// RefreshRuntimeReadinessJSONRequestBody defines body for RefreshRuntimeReadiness for application/json ContentType.
+type RefreshRuntimeReadinessJSONRequestBody RefreshRuntimeReadinessJSONBody
+
 // ExecuteRecoveryActionsJSONRequestBody defines body for ExecuteRecoveryActions for application/json ContentType.
 type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody
+
+// CheckForUpdateJSONRequestBody defines body for CheckForUpdate for application/json ContentType.
+type CheckForUpdateJSONRequestBody CheckForUpdateJSONBody
+
+// CancelUpdateInstallJSONRequestBody defines body for CancelUpdateInstall for application/json ContentType.
+type CancelUpdateInstallJSONRequestBody CancelUpdateInstallJSONBody
+
+// InstallUpdateJSONRequestBody defines body for InstallUpdate for application/json ContentType.
+type InstallUpdateJSONRequestBody = UpdateInstallRequest
 
 // StartWorkspaceCloneJSONRequestBody defines body for StartWorkspaceClone for application/json ContentType.
 type StartWorkspaceCloneJSONRequestBody = CloneStartSchema

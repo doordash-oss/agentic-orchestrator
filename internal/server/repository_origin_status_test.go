@@ -363,8 +363,8 @@ func TestOriginCheckCoordinatorCoalescesIdenticalRequests(t *testing.T) {
 		return comparisonOutcome(git.OriginCheckUpToDate)
 	}
 
-	_, _, done1 := coordinator.ensure(identity, plan, repo, false)
-	_, _, done2 := coordinator.ensure(identity, plan, repo, false)
+	_, _, done1, _ := coordinator.ensure(identity, plan, repo, false)
+	_, _, done2, _ := coordinator.ensure(identity, plan, repo, false)
 	if done1 == nil || done2 == nil {
 		t.Fatal("ensure scheduled no attempt")
 	}
@@ -374,7 +374,7 @@ func TestOriginCheckCoordinatorCoalescesIdenticalRequests(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("executor calls = %d; want one coalesced attempt", calls.Load())
 	}
-	if completed, ok, _ := coordinator.ensure(identity, plan, repo, false); !ok || completed.comparison == nil {
+	if completed, ok, _, _ := coordinator.ensure(identity, plan, repo, false); !ok || completed.comparison == nil {
 		t.Fatalf("completed result = %#v ok=%v; want the cached comparison", completed, ok)
 	}
 }
@@ -394,18 +394,18 @@ func TestOriginCheckCoordinatorRefreshStartsNewAttempt(t *testing.T) {
 		return comparisonOutcome(git.OriginCheckBehind)
 	}
 
-	_, _, firstDone := coordinator.ensure(identity, plan, repo, false)
+	_, _, firstDone, _ := coordinator.ensure(identity, plan, repo, false)
 	waitOriginAttempt(t, firstDone)
-	if completed, ok, _ := coordinator.ensure(identity, plan, repo, false); !ok || completed.comparison.Status != git.OriginCheckUpToDate {
+	if completed, ok, _, _ := coordinator.ensure(identity, plan, repo, false); !ok || completed.comparison.Status != git.OriginCheckUpToDate {
 		t.Fatalf("cached result = %#v; want the first comparison", completed)
 	}
 
-	_, _, refreshDone := coordinator.ensure(identity, plan, repo, true)
+	_, _, refreshDone, _ := coordinator.ensure(identity, plan, repo, true)
 	waitOriginAttempt(t, refreshDone)
 	if calls.Load() != 2 {
 		t.Fatalf("executor calls = %d; want a fresh attempt for the refresh", calls.Load())
 	}
-	if completed, ok, _ := coordinator.ensure(identity, plan, repo, false); !ok || completed.comparison.Status != git.OriginCheckBehind {
+	if completed, ok, _, _ := coordinator.ensure(identity, plan, repo, false); !ok || completed.comparison.Status != git.OriginCheckBehind {
 		t.Fatalf("refreshed result = %#v; want the second comparison", completed)
 	}
 }
@@ -450,7 +450,7 @@ func TestOriginCheckCoordinatorCapsConcurrencyAtFour(t *testing.T) {
 
 	dones := make([]<-chan struct{}, 0, len(repos))
 	for _, repo := range repos {
-		_, _, done := coordinator.ensure(repo.identity, repo.plan, repo.path, false)
+		_, _, done, _ := coordinator.ensure(repo.identity, repo.plan, repo.path, false)
 		dones = append(dones, done)
 	}
 	for i := 0; i < 4; i++ {
@@ -536,7 +536,7 @@ func TestOriginCheckCoordinatorDeadlineExpiresWhileQueued(t *testing.T) {
 	// Every slot is held, so this attempt can only wait; its deadline expires
 	// before it is ever admitted.
 	queuedPath, queuedIdentity, queuedPlan := originCoordinatorTestRepo(t)
-	_, _, queuedDone := coordinator.ensure(queuedIdentity, queuedPlan, queuedPath, false)
+	_, _, queuedDone, _ := coordinator.ensure(queuedIdentity, queuedPlan, queuedPath, false)
 	waitOriginAttempt(t, queuedDone)
 
 	key := originCheckKeyFor(queuedIdentity, queuedPlan)
@@ -565,7 +565,7 @@ func TestOriginCheckCoordinatorDeadlineExpiresWhileRunning(t *testing.T) {
 		return originAttemptOutcome{Unavailable: true, Diagnostics: "interrupted"}
 	}
 
-	_, _, done := coordinator.ensure(identity, plan, repo, false)
+	_, _, done, _ := coordinator.ensure(identity, plan, repo, false)
 	waitOriginAttempt(t, done)
 	key := originCheckKeyFor(identity, plan)
 	coordinator.mu.Lock()
@@ -589,7 +589,7 @@ func TestOriginCheckCoordinatorShutdownReleasesAttempts(t *testing.T) {
 		return originAttemptOutcome{Unavailable: true, Diagnostics: "runtime shut down"}
 	}
 
-	_, _, done := coordinator.ensure(identity, plan, repo, false)
+	_, _, done, _ := coordinator.ensure(identity, plan, repo, false)
 	select {
 	case <-entered:
 	case <-time.After(originCoordinatorWaitBound):
@@ -653,8 +653,8 @@ func TestOriginCheckCoordinatorSerializesLinkedWorktrees(t *testing.T) {
 		return comparisonOutcome(git.OriginCheckUpToDate)
 	}
 
-	_, _, doneMain := coordinator.ensure(identity, plan, repo, false)
-	_, _, doneLinked := coordinator.ensure(linkedIdentity, linkedPlan, linked, false)
+	_, _, doneMain, _ := coordinator.ensure(identity, plan, repo, false)
+	_, _, doneLinked, _ := coordinator.ensure(linkedIdentity, linkedPlan, linked, false)
 	select {
 	case <-entered:
 	case <-time.After(originCoordinatorWaitBound):
@@ -690,9 +690,9 @@ func TestOriginCheckCoordinatorFailedRefreshPreservesStaleComparison(t *testing.
 		}
 		return originAttemptOutcome{Unavailable: true, Diagnostics: "remote unreachable"}
 	}
-	_, _, firstDone := coordinator.ensure(identity, plan, repo, false)
+	_, _, firstDone, _ := coordinator.ensure(identity, plan, repo, false)
 	waitOriginAttempt(t, firstDone)
-	_, _, retryDone := coordinator.ensure(identity, plan, repo, true)
+	_, _, retryDone, _ := coordinator.ensure(identity, plan, repo, true)
 	waitOriginAttempt(t, retryDone)
 
 	key := originCheckKeyFor(identity, plan)
@@ -728,7 +728,7 @@ func TestRuntimeServerCloseCancelsInFlightOriginChecks(t *testing.T) {
 		return originAttemptOutcome{Unavailable: true, Diagnostics: "runtime shut down"}
 	}
 
-	_, _, done := coordinator.ensure(identity, plan, repo, false)
+	_, _, done, _ := coordinator.ensure(identity, plan, repo, false)
 
 	// A runtime server whose only live work is the origin-check coordinator:
 	// Close must cancel the attempt and reap it within the caller's deadline.

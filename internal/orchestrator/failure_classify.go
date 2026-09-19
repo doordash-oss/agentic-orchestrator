@@ -94,10 +94,13 @@ func repoFailureCode(result *agent.OrchestratorResult) errcat.Code {
 
 // currentIteration reads the feature's live iteration counter for a phase
 // failure record. Best-effort: zero when the feature cannot be loaded.
-func (o *Orchestrator) currentIteration(featureID string) int {
+func (o *Orchestrator) currentIteration(featureID string, phase feature.Phase) int {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil || f == nil {
 		return 0
+	}
+	if phase == feature.PhaseFinalReview {
+		return f.ReviewIteration
 	}
 	return f.CurrentIteration
 }

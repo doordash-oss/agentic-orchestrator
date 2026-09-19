@@ -36,6 +36,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 // crashOnRefsUpdate wraps the real worktree manager and panics after a
@@ -71,6 +72,9 @@ func rfJournalLayerBranch(pos int) string {
 // parent chain and records one ref update per changed layer, the armed
 // worktree wrapper performs the real multi-ref transaction and then dies, and
 // the startup recovery scan on a fresh orchestrator finishes the closure.
+// Both orchestrators run with a mock remote whose leased layer pushes always
+// succeed, so the post-closure review-feedback tail republishes the stack and
+// settles even though the repository has no origin.
 func TestReviewFeedbackJournalCrashRecovery(t *testing.T) {
 	if testing.Short() {
 		t.Skip("drives a real git repository through the relocation ladder")
@@ -189,11 +193,23 @@ func TestReviewFeedbackJournalCrashRecovery(t *testing.T) {
 		t.Fatalf("save child: %v", err)
 	}
 
+	// The repository has no origin, so the republish walk must run against a
+	// mock remote: every leased layer push reports the local SHA as
+	// delivered, and pull-request state stays at the mock's indeterminate
+	// default (treated as open). The shared fake GitHub API keeps the walk's
+	// best-effort pull request body refreshes off the network.
+	remote := mocks.NewMockRemoteOps()
+	remote.PushLayerBranchFn = func(repoPath, branch, localSHA, lastPushedSHA string) (string, error) {
+		return localSHA, nil
+	}
+	testutil.InstallFakeGitHubAPI(t)
+
 	crashing := &crashOnRefsUpdate{WorktreeManager: wm}
 	orch := orchestrator.New(orchestrator.Deps{
 		Lifecycle: mgr,
 		Store:     store,
 		Worktrees: crashing,
+		Remote:    remote,
 	}, orchestrator.Hooks{})
 	t.Cleanup(func() {
 		_ = orch.Shutdown()
@@ -306,11 +322,12 @@ func TestReviewFeedbackJournalCrashRecovery(t *testing.T) {
 	}
 
 	// A fresh orchestrator instance runs the startup recovery scan over the
-	// same store, manager, and worktrees.
+	// same store, manager, worktrees, and mock remote.
 	fresh := orchestrator.New(orchestrator.Deps{
 		Lifecycle: mgr,
 		Store:     store,
 		Worktrees: wm,
+		Remote:    remote,
 		Recovery:  &fakeRecoveryNoop{},
 	}, orchestrator.Hooks{})
 	t.Cleanup(func() {
@@ -406,5 +423,23 @@ func TestReviewFeedbackJournalCrashRecovery(t *testing.T) {
 	}
 	if branches := runGit(t, repoDir, "branch", "--list", childBranch); branches != "" {
 		t.Fatalf("child branch %s still present after recovery", childBranch)
+	}
+
+	// The settled tail republished through the mock remote: every layer
+	// whose tip differs from its recorded pushed SHA — each of the three
+	// layers here, none ever pushed — was delivered by a leased layer push.
+	pushedLayers := make(map[string]bool)
+	for _, call := range remote.Calls {
+		if call.Method != "PushLayerBranch" {
+			continue
+		}
+		if branch, ok := call.Args[1].(string); ok {
+			pushedLayers[branch] = true
+		}
+	}
+	for pos := 1; pos <= 3; pos++ {
+		if !pushedLayers[rfJournalLayerBranch(pos)] {
+			t.Fatalf("layer %d branch %s was not delivered by the recovery tail's republish", pos, rfJournalLayerBranch(pos))
+		}
 	}
 }

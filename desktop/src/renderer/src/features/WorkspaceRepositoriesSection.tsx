@@ -23,6 +23,7 @@ limitations under the License.
  * never opens a feature or selects into any creation draft.
  */
 import { useEffect, useRef, useState } from 'react';
+import { ErrorSurface } from '../components/ErrorSurface';
 import { parseIpcError } from '../wizard/ipcError';
 import type { ConnectionState, ReadinessSnapshot, RepositoryState } from '../../../shared/ipc';
 import { InitializeOffer, serverDescriptor } from './cloneViews';
@@ -125,10 +126,10 @@ export function WorkspaceRepositoriesSection({
                 <span className="settings-panel__repository-body">
                   <b className="settings-panel__repository-name">{repo.name}</b>
                   <code className="settings-panel__repository-path">{repo.path}</code>
-                  {!repo.valid ? (
-                    <span className="settings-panel__repository-issue">
-                      {repo.issue?.summary ?? 'Unavailable'}
-                    </span>
+                  {repo.issue !== undefined ? (
+                    <ErrorSurface error={repo.issue} variant="compact" />
+                  ) : !repo.valid ? (
+                    <span className="settings-panel__repository-issue">Unavailable</span>
                   ) : repo.featureReady ? (
                     <span className="settings-panel__repository-issue">
                       Ready for feature work.
@@ -139,7 +140,10 @@ export function WorkspaceRepositoriesSection({
                     </span>
                   )}
                 </span>
-                {repo.valid && !repo.featureReady && repo.identity !== undefined ? (
+                {repo.valid &&
+                repo.issue === undefined &&
+                !repo.featureReady &&
+                repo.identity !== undefined ? (
                   <button
                     type="button"
                     className="settings-panel__clone-action"
@@ -155,7 +159,10 @@ export function WorkspaceRepositoriesSection({
                   </button>
                 ) : null}
               </div>
-              {repo.valid && !repo.featureReady && repo.identity !== undefined ? (
+              {repo.valid &&
+              repo.issue === undefined &&
+              !repo.featureReady &&
+              repo.identity !== undefined ? (
                 <div id={`repository-${encodeURIComponent(repo.name)}-initialize`}>
                   {expandedKey === repo.name ? (
                     <InitializeOffer

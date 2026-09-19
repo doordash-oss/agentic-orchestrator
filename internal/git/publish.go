@@ -70,6 +70,19 @@ func defaultPush(worktreePath, branch string) error {
 	if err != nil {
 		return fmt.Errorf("pushing branch: %s: %w", strings.TrimSpace(string(out)), err)
 	}
+	return syncRemoteTrackingRef(worktreePath, branch, "refs/heads/"+branch)
+}
+
+// syncRemoteTrackingRef points refs/remotes/origin/<branch> at the commit
+// just pushed. git only does this itself when the clone's fetch refspec
+// maps the branch; a single-branch clone never maps feature branches, so
+// freshness probes and force-with-lease would keep comparing against a
+// stale tracking ref.
+func syncRemoteTrackingRef(worktreePath, branch, pushed string) error {
+	cmd := exec.Command("git", "-C", worktreePath, "update-ref", "refs/remotes/origin/"+branch, pushed)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("updating remote-tracking ref for %s: %s: %w", branch, strings.TrimSpace(string(out)), err)
+	}
 	return nil
 }
 

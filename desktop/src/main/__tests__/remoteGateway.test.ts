@@ -247,7 +247,7 @@ function makeEnv(options: EnvOptions = {}): Env {
         }
         return { status: 200, body: entry };
       }
-      if (url.endsWith('/api/v1/readiness')) {
+      if (url.endsWith('/api/v1/readiness') || url.endsWith('/api/v1/readiness/runtime')) {
         if (readinessErrors[base] === true) {
           return { status: 401, body: { code: 'unauthorized' } };
         }
@@ -643,6 +643,49 @@ describe('RuntimeGateway remote loss and re-probe', () => {
     // The fenced re-probe emitted nothing.
     expect(env.states.length).toBe(before);
     expect(env.gateway.getState().serverKey).toBe(ALPHA_KEY);
+  });
+
+  it('losing the selected remote and retrying leaves the app-owned local child running', async () => {
+    // Two attached servers: the bundled runtime spawned first, then the
+    // foreground switched to a remote.
+    const env = makeEnv({});
+    const queuedSleep = env.deps.sleep;
+    env.deps.sleep = () => Promise.resolve();
+    await env.gateway.start();
+    expect(env.gateway.getState().ownership).toBe('app-owned');
+    expect(env.spawnCalls).toBe(1);
+    const child = env.spawned[0]!;
+
+    env.updateServers({ upsertKnown: remoteEntry() });
+    env.tokens.save(remoteKey(), REMOTE_TOKEN);
+    const remote = await env.gateway.switchServer({ serverKey: remoteKey() });
+    expect(remote).toMatchObject({ status: 'ready', serverKey: remoteKey() });
+    env.deps.sleep = queuedSleep;
+
+    // The remote host reboots: its health probe fails.
+    const realFetch = env.deps.fetchJson;
+    env.deps.fetchJson = async (url, opts) => {
+      if (url.startsWith(REMOTE_BASE) && url.endsWith('/api/v1/health')) {
+        throw new Error('connection refused');
+      }
+      return realFetch(url, opts);
+    };
+    await env.gateway.handleGlobalStreamStale();
+    expect(requireError(env.gateway.getState()).code).toBe('E_REMOTE_SERVER_LOST_REPROBING');
+    pumpSleep(env);
+    await flush(env);
+    expect(child.stopCalls).toHaveLength(0);
+
+    // Manual retry from the lost-remote surface rescans; the local child is
+    // neither stopped nor replaced.
+    const retried = await env.gateway.retry();
+    expect(retried.status).not.toBe('ready');
+    expect(child.stopCalls).toHaveLength(0);
+    expect(child.exited).toBe(false);
+    expect(env.spawnCalls).toBe(1);
+
+    await env.gateway.shutdown();
+    expect(child.stopCalls).toHaveLength(1);
   });
 });
 

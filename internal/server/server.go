@@ -22,21 +22,30 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 )
 
 type RuntimeServer struct {
 	baseURL      string
 	policy       string
 	wildcard     bool
+	bindHost     string
+	port         int
 	startedAt    time.Time
 	srv          *http.Server
 	broker       *eventBroker
 	clones       CloneService
 	originChecks *originCheckCoordinator
+	updates      *updateCoordinator
 	done         chan error
+	// closeMu serializes Close between ordinary shutdown and an install
+	// operation's final drain, so two lifecycle owners can never drain the
+	// same serving resources concurrently. The first winner owns teardown.
+	closeMu sync.Mutex
 }
 
 func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
@@ -56,15 +65,20 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen on %s: %w", res.BindAddr, err)
 	}
+	// The concrete bound address is captured here — never by retaining the
+	// listener — so an exec-replacement handoff can rebind the exact same
+	// address in a new process image.
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		_ = ln.Close()
+		return nil, fmt.Errorf("listen on %s: unexpected address type %T", res.BindAddr, ln.Addr())
+	}
+	bindHost := tcpAddr.IP.String()
+	port := tcpAddr.Port
 	baseURL := "http://" + ln.Addr().String()
 	if policy == CompatibilityNetworkRuntimePolicy {
 		// Advertise the resolved host (the primary interface address for
 		// wildcard binds), never the wildcard bind address itself.
-		tcpAddr, ok := ln.Addr().(*net.TCPAddr)
-		if !ok {
-			_ = ln.Close()
-			return nil, fmt.Errorf("listen on %s: unexpected address type %T", res.BindAddr, ln.Addr())
-		}
 		baseURL = "http://" + net.JoinHostPort(res.AdvertiseHost, strconv.Itoa(tcpAddr.Port))
 	}
 	handler := newAPIHandler(HandlerOptions{
@@ -88,8 +102,15 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		InitializeGitRepository:     opts.InitializeGitRepository,
 		Clones:                      opts.Clones,
 		Worktrees:                   opts.Worktrees,
+		Updates:                     opts.Updates,
+		Admission:                   opts.Admission,
+		ProbeActivity:               opts.ProbeActivity,
 		RuntimePolicy:               policy,
 	})
+	lifetime := opts.Lifetime
+	if lifetime == nil {
+		lifetime = ctx
+	}
 	httpServer := &http.Server{
 		Handler: handler.routes(),
 		// ReadHeaderTimeout (not ReadTimeout) is intentional: ReadTimeout
@@ -106,7 +127,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 	if handler.uploads != nil {
 		// Reap orphaned staged uploads: once at startup, then hourly until the
 		// server lifetime context ends.
-		go handler.uploads.sweepLoop(ctx)
+		go handler.uploads.sweepLoop(lifetime)
 	}
 	if handler.clones != nil {
 		// Startup reconciliation: restore reservations, recognize published
@@ -116,17 +137,20 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		_ = handler.clones.Recover()
 		// Prune resolved terminal clone records past the retention window,
 		// hourly, exactly like upload sweeping.
-		go cloneSweepLoop(ctx, handler.clones)
+		go cloneSweepLoop(lifetime, handler.clones)
 	}
 	s := &RuntimeServer{
 		baseURL:      baseURL,
 		policy:       policy,
 		wildcard:     res.Wildcard,
+		bindHost:     bindHost,
+		port:         port,
 		startedAt:    startedAt,
 		srv:          httpServer,
 		broker:       handler.broker,
 		clones:       handler.clones,
 		originChecks: handler.originChecks,
+		updates:      handler.updates,
 		done:         make(chan error, 1),
 	}
 	go func() {
@@ -149,6 +173,12 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		defer cancel()
 		_ = s.Close(shutdownCtx)
 		return nil, err
+	}
+	// The availability scheduler starts only after health/discovery startup
+	// and never blocks readiness: the initial release check runs
+	// asynchronously inside the coordinator loop.
+	if handler.updates != nil {
+		handler.updates.start(lifetime)
 	}
 	return s, nil
 }
@@ -185,6 +215,25 @@ func (s *RuntimeServer) StartedAt() time.Time {
 	return s.startedAt
 }
 
+// BindHost reports the concrete host the listener bound, preserving wildcard
+// forms ("0.0.0.0"/"::") as bound, so an exec-replacement handoff can rebind
+// the exact same address in a new process image.
+func (s *RuntimeServer) BindHost() string {
+	if s == nil {
+		return ""
+	}
+	return s.bindHost
+}
+
+// Port reports the TCP port assigned to the listener at Start, or 0 when
+// unknown.
+func (s *RuntimeServer) Port() int {
+	if s == nil {
+		return 0
+	}
+	return s.port
+}
+
 func (s *RuntimeServer) EventEpoch() string {
 	if s == nil || s.broker == nil {
 		return ""
@@ -193,7 +242,15 @@ func (s *RuntimeServer) EventEpoch() string {
 }
 
 func (s *RuntimeServer) Close(ctx context.Context) error {
-	if s == nil || s.srv == nil {
+	if s == nil {
+		return nil
+	}
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	if s.srv == nil {
+		// A concurrent or earlier Close owns teardown; this call joins as a
+		// no-op so two lifecycle owners (ordinary shutdown and an install
+		// drain) never drain the same resources twice.
 		return nil
 	}
 	srv := s.srv
@@ -223,14 +280,47 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 			originErr = ctx.Err()
 		}
 	}
+	// The availability scheduler and any in-flight metadata check cancel and
+	// drain before HTTP shutdown; generation fencing already blocks stale
+	// completions, so a deadline expiry here only reports the wait.
+	var updateErr error
+	if s.updates != nil {
+		updateDone := make(chan struct{})
+		go func() {
+			s.updates.shutdown(ctx)
+			close(updateDone)
+		}()
+		select {
+		case <-updateDone:
+		case <-ctx.Done():
+			updateErr = ctx.Err()
+		}
+	}
 	shutdownErr := srv.Shutdown(ctx)
+	if shutdownErr != nil {
+		// Open event and session-output SSE streams never become idle, so a
+		// graceful drain can only end at the context deadline. Force-close
+		// the remaining connections then: a live stream must not keep the
+		// process (or an exec handoff) shutdown open beyond the budget.
+		shutdownErr = errors.Join(shutdownErr, srv.Close())
+	}
 	var serveErr error
 	select {
 	case serveErr = <-s.done:
 	case <-ctx.Done():
 		serveErr = ctx.Err()
 	}
-	return errors.Join(cloneErr, originErr, shutdownErr, serveErr)
+	return errors.Join(cloneErr, originErr, updateErr, shutdownErr, serveErr)
+}
+
+// SetUpdateReceipt settles the public update receipt after a write-once
+// handoff confirmation, exposing the confirmed outcome on the snapshot. It
+// is a no-op on a server whose coordinator already shut down.
+func (s *RuntimeServer) SetUpdateReceipt(receipt selfupdate.Receipt) {
+	if s == nil || s.updates == nil {
+		return
+	}
+	s.updates.confirmReceipt(receipt)
 }
 
 // cloneSweepLoop prunes expired clone records once at startup and hourly

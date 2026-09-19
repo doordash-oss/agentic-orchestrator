@@ -275,6 +275,7 @@ func TestCLICodeClassesAndTemplates(t *testing.T) {
 		GithubCredentialsMissing,
 		StartupMaintenanceFailed,
 		ShutdownIncomplete,
+		UpdateRolledBack,
 	}
 	for _, code := range warnings {
 		entry, ok := Lookup(code)

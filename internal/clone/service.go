@@ -31,6 +31,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 )
 
@@ -98,6 +99,14 @@ type Options struct {
 	Hooks Hooks
 	// GitBin overrides the git binary (rarely needed).
 	GitBin string
+	// Admission, when non-nil, is the runtime work-admission boundary
+	// every clone/create start participates in: one CategoryClone
+	// reservation is acquired at start entry and held from queue
+	// admission until the accepted operation settles (a terminal state
+	// with completed cleanup), so admitted clone work is never invisible
+	// to the boundary. Nil disables the boundary entirely; behavior is
+	// then exactly as without it.
+	Admission *workadmission.Coordinator
 }
 
 // StartInput is one clone start request.
@@ -135,6 +144,43 @@ type opState struct {
 	cancelCh   chan struct{}
 	cancelOnce sync.Once
 	hasWorker  bool
+	// reservation is the work-admission unit held from durable acceptance
+	// until the operation settles. It is process-local: a record recovered
+	// by a later process owns none, which is why releases are nil-safe.
+	// Guarded by mu.
+	reservation *workadmission.Reservation
+}
+
+// attachReservation transfers ownership of one admission reservation to
+// this operation. It must complete before the accepted record becomes
+// durable, so record visibility implies a releasable reservation: a
+// concurrent pass that settles the record can then release it without
+// leaking or double-holding. An operation owns at most one reservation; a
+// surplus reservation is settled immediately.
+func (o *opState) attachReservation(r *workadmission.Reservation) {
+	if r == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.reservation != nil {
+		r.Release()
+		return
+	}
+	o.reservation = r
+}
+
+// releaseReservationLocked settles the operation's admission reservation
+// once the operation has durably settled. The caller holds the operation
+// lock. Nil-safe (a recovered record owns no reservation) and idempotent
+// (Reservation.Release is exactly-once), so re-driven reconciliation
+// passes cannot double-release.
+func (o *opState) releaseReservationLocked() {
+	if o.reservation == nil {
+		return
+	}
+	o.reservation.Release()
+	o.reservation = nil
 }
 
 func (o *opState) signalCancel() {
@@ -200,6 +246,48 @@ func (s *Service) drainingNow() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.draining
+}
+
+// acquireStartReservation reserves one clone-category admission unit for
+// a new start/create request. It fails with *workadmission.ClosedError
+// when admission is closed. A nil coordinator disables the boundary.
+func (s *Service) acquireStartReservation() (*workadmission.Reservation, error) {
+	if s.opts.Admission == nil {
+		return nil, nil
+	}
+	return s.opts.Admission.Acquire(workadmission.CategoryClone)
+}
+
+// acquirePassReservation reserves one clone-category admission unit for a
+// reconciliation pass (startup recovery or the periodic sweep), which
+// itself performs work. ok is false when admission is closed: a periodic
+// pass skips itself and waits for a later tick rather than working behind
+// the boundary's back. A nil coordinator disables the boundary and every
+// pass runs.
+func (s *Service) acquirePassReservation() (*workadmission.Reservation, bool) {
+	if s.opts.Admission == nil {
+		return nil, true
+	}
+	res, err := s.opts.Admission.Acquire(workadmission.CategoryClone)
+	if err != nil {
+		return nil, false
+	}
+	return res, true
+}
+
+// ActiveWork reports how many operations are queued or running
+// (ActiveStates) or awaiting cleanup resolution (cleanup_pending).
+// Resolved terminal records never count. It backs server-side activity
+// detection: together with held reservations it keeps unsettled clone
+// work visible to the admission boundary's idle decision.
+func (s *Service) ActiveWork() int {
+	n := 0
+	for _, rec := range s.store.all() {
+		if ActiveStates[rec.State] || rec.State == StateCleanupPending {
+			n++
+		}
+	}
+	return n
 }
 
 // save persists the record and fires the operation-changed hook. The
@@ -401,10 +489,23 @@ func stagingNameForRecord(rec *Record) string {
 // Start validates and durably accepts a clone request, then spawns the
 // worker. The accepted snapshot returns promptly, independent of transfer
 // duration; closing the calling context does not own or cancel the worker.
+// Start fails with *workadmission.ClosedError when admission is closed.
 func (s *Service) Start(ctx context.Context, input StartInput) (Record, error) {
 	if s.drainingNow() {
 		return Record{}, serviceError(CodeUnavailable, "server is shutting down")
 	}
+	// One reservation covers the request from queue admission until the
+	// accepted operation settles; a draining refusal needs none.
+	res, err := s.acquireStartReservation()
+	if err != nil {
+		return Record{}, err
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			res.Release()
+		}
+	}()
 	if err := ValidateIdempotencyKey(input.IdempotencyKey); err != nil {
 		var verr *ValidationError
 		detail := ""
@@ -443,13 +544,19 @@ func (s *Service) Start(ctx context.Context, input StartInput) (Record, error) {
 		idempotencyKey:   input.IdempotencyKey,
 		inputFingerprint: fp,
 		remoteURL:        RedactRemote(input.Remote),
+		admission:        res,
 	})
 	if err != nil {
 		return Record{}, err
 	}
 	if replayed {
+		// A retained operation owns its own reservation (or already
+		// settled it); the request's reservation is released by defer.
 		return rec, nil
 	}
+	// Ownership transferred to the operation's coordination state inside
+	// acceptOperation; the deferred release must not fire.
+	transferred = true
 	s.spawnWorker(rec)
 	return rec.Snapshot(), nil
 }
@@ -473,6 +580,11 @@ type acceptRequest struct {
 	// spaces are disjoint across kinds today, so this only matters if that
 	// ever stops holding.
 	replayRequiresSameKind bool
+	// admission is the start request's work-admission reservation. On
+	// fresh acceptance it transfers to the operation's coordination state
+	// before the record becomes durable; on replay or any acceptance
+	// failure the caller releases it.
+	admission *workadmission.Reservation
 }
 
 // acceptOperation runs the reservation critical section shared by clone
@@ -566,6 +678,12 @@ func (s *Service) acceptOperation(req acceptRequest) (Record, bool, error) {
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
+	// The reservation transfers to the operation before durable
+	// acceptance: once the record is visible, any pass that can settle it
+	// (recovery, sweep, cancellation) can also release its reservation, so
+	// attaching must precede visibility. On a persistence failure below,
+	// the caller's deferred release settles it instead.
+	s.op(id).attachReservation(req.admission)
 	// Durable acceptance precedes any git process: a crash between here and
 	// publication is recoverable.
 	if err := s.save(&rec); err != nil {
@@ -606,8 +724,16 @@ func (s *Service) List(q ListQuery) (ListResult, error) {
 
 // Sweep prunes resolved terminal records past the retention window. It
 // removes only operation metadata, never repositories or unresolved
-// staging.
+// staging. The pass itself holds one admission reservation for its
+// duration; when admission is closed it skips itself — it is periodic and
+// can wait for a later tick rather than working behind the boundary's
+// back.
 func (s *Service) Sweep() []string {
+	res, ok := s.acquirePassReservation()
+	if !ok {
+		return nil
+	}
+	defer res.Release()
 	return s.store.prune(s.now())
 }
 

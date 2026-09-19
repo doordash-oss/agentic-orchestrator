@@ -406,6 +406,7 @@ func newFinalReviewFixture(t *testing.T, featureID string) *failureRecordFixture
 		CurrentPhase:     feature.PhaseImplement,
 		Pipeline:         feature.PipelineLarge,
 		CurrentIteration: 2,
+		ReviewIteration:  5,
 		Repos: []feature.FeatureRepo{
 			{Name: apiRepoName, Path: apiRepoWorkPath, Publishable: &pub},
 		},
@@ -488,8 +489,8 @@ func TestFailureRecord_FinalReview_Failed(t *testing.T) {
 	rec := requireStoredFailureRecord(t, fx.store, fx.f.ID)
 	requireRecordShape(t, rec, errcat.ProtocolViolation, feature.PhaseFinalReview.FailureName(), "final review blew up")
 	requireRecordRepos(t, rec, apiRepoName)
-	if rec.Context.Phase.Iteration != 2 {
-		t.Errorf("record phase iteration = %d, want the live iteration 2", rec.Context.Phase.Iteration)
+	if rec.Context.Phase.Iteration != 5 {
+		t.Errorf("record phase iteration = %d, want final-review iteration 5", rec.Context.Phase.Iteration)
 	}
 }
 

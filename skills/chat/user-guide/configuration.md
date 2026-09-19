@@ -113,11 +113,15 @@ directory, and declared writable roots. Interpolated prompt fields are
 control-sanitized and enclosed as nonce-delimited untrusted data; the original
 byte-exact command remains unchanged for caching and execution. The reviewer
 runs through the selected provider's native zero-tool mode, with no session
-persistence or user/project customization, at low effort, for one 30-second
-attempt. The response must be the exact case-sensitive `ALLOW` or `DEFER`
-token. There are no retries and no provider cascade after an attempt.
-`DEFER`, timeout, malformed output, provider failure, unexpected interaction,
-and cancellation silently return to the ordinary human prompt.
+persistence or user/project customization, at low effort, within a one-minute
+deadline. The response must be the exact case-sensitive `ALLOW` or `DEFER`
+token. A transient provider failure or a successful response with an invalid
+decision token gets one fresh attempt with the same provider and model, sharing
+the original deadline. Invalid decision text adds an explicit format reminder;
+the raw response is discarded. There are at most two attempts total, with no
+provider cascade. Protocol/stream parsing failures, refusals, and unexpected
+interactions are not retried. `DEFER`, timeout, exhausted retries, terminal
+provider failures, and cancellation return to the ordinary human prompt.
 
 Exact `ALLOW` and `DEFER` decisions use a byte-exact session-only cache.
 Long-tail requests are serialized within the session, and a model cache hit

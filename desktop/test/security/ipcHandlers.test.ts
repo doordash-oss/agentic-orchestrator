@@ -23,6 +23,7 @@ import {
   defaultSettings,
   type DiagnosticsSnapshot,
   type SessionOutputEvent,
+  type ServerUpdateState,
   type UpdateState,
 } from '../../src/shared/ipc';
 
@@ -63,6 +64,16 @@ function updateState(): UpdateState {
     nextCheckAt: '2026-07-20T16:00:00.000Z',
     releaseNotesUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
     message: 'A verified update is downloaded and ready to install.',
+  };
+}
+
+function serverUpdateState(): ServerUpdateState {
+  return {
+    status: 'up_to_date' as const,
+    policy: 'notify' as const,
+    currentVersion: '0.1.0',
+    installation: 'tarball',
+    signature: 'unverified' as const,
   };
 }
 
@@ -142,6 +153,8 @@ function makeServices(): IpcServices {
     openSettingsWindow: vi.fn(() => ({ opened: true })),
     getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
     setTheme: vi.fn((preference) => ({ preference, resolved: 'light' as const })),
+    getRuntimeReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    refreshRuntimeReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     getReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     refreshReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     pickWorkspaceDirectory: vi.fn(() => Promise.resolve({ path: null })),
@@ -309,6 +322,10 @@ function makeServices(): IpcServices {
       Promise.resolve({ ...updateState(), status: 'installing' as const }),
     ),
     restartToUpdate: vi.fn(() => ({ ...updateState(), status: 'installing' as const })),
+    getServerUpdate: vi.fn(() => Promise.resolve(serverUpdateState())),
+    checkServerUpdate: vi.fn(() => Promise.resolve(serverUpdateState())),
+    installServerUpdate: vi.fn(() => Promise.resolve(serverUpdateState())),
+    cancelServerUpdate: vi.fn(() => Promise.resolve(serverUpdateState())),
     getDiagnostics: vi.fn(() => diagnosticsSnapshot()),
     revealDiagnostics: vi.fn(() => Promise.resolve({ ok: true })),
     clearDiagnostics: vi.fn(() => diagnosticsSnapshot()),

@@ -204,6 +204,14 @@ func leasePushLayerBranch(repoPath, branch, remoteRef, expectedSHA string, remot
 		}
 		return "", fmt.Errorf("pushing layer branch: %w", pushErr)
 	}
+	// The explicit-SHA lease does not depend on the remote-tracking ref, so
+	// git never moves it on a single-branch clone. Point it at the pushed
+	// local ref the way Push does; a failed sync fails the call even though
+	// the remote already holds the commit — the next attempt observes
+	// remote tip == local SHA and plain-pushes.
+	if err := syncRemoteTrackingRef(repoPath, branch, remoteRef); err != nil {
+		return "", err
+	}
 	return rewritePushDeliveredSHA(repoPath, remoteRef)
 }
 

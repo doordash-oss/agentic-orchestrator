@@ -188,7 +188,7 @@ function makeEnv(options: EnvOptions = {}): Env {
         }
         return { status: 200, body: entry };
       }
-      if (url.endsWith('/api/v1/readiness')) {
+      if (url.endsWith('/api/v1/readiness') || url.endsWith('/api/v1/readiness/runtime')) {
         if (opts.token !== undefined && opts.token === readinessTokens[base]) {
           return { status: 200, body: { api_version: 'v1' } };
         }

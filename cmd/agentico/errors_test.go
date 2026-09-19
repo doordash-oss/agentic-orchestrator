@@ -121,7 +121,7 @@ func TestRunArgsServerProviderSelection(t *testing.T) {
 		code := runArgs(
 			[]string{cliSubcommandServer, "--config", testServerConfigPath, "--state-dir", testStateFeaturesDir, "--providers", "bogus,also-bogus"},
 			&stdout, &stderr,
-			func(string, string, bool, []string, bool, string, string) int {
+			func(string, string, bool, []string, bool, string, string, string) int {
 				launchedServer = true
 				return 0
 			},
@@ -149,7 +149,7 @@ func TestRunArgsServerProviderSelection(t *testing.T) {
 		code := runArgs(
 			[]string{cliSubcommandServer, "--config", testServerConfigPath, "--state-dir", testStateFeaturesDir, "--providers", "claude,bogus"},
 			&stdout, &stderr,
-			func(_ string, _ string, _ bool, providers []string, _ bool, _ string, _ string) int {
+			func(_ string, _ string, _ bool, providers []string, _ bool, _ string, _ string, _ string) int {
 				gotProviders = providers
 				return 0
 			},

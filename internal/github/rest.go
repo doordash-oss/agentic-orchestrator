@@ -36,6 +36,7 @@ type PRComment struct {
 	Body string `json:"body"`
 	User struct {
 		Login string `json:"login"`
+		Type  string `json:"type"`
 	} `json:"user"`
 	CreatedAt string `json:"created_at"`
 	DiffHunk  string `json:"diff_hunk"`
@@ -85,6 +86,7 @@ type PRReview struct {
 	Body string `json:"body"`
 	User struct {
 		Login string `json:"login"`
+		Type  string `json:"type"`
 	} `json:"user"`
 	SubmittedAt string `json:"submitted_at"`
 }

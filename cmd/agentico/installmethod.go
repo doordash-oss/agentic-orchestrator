@@ -19,10 +19,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"strconv"
-	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/buildinfo"
+	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 )
 
 // installMethod is how the running binary was installed, which decides the
@@ -88,109 +87,42 @@ func classifyInstallMethod(buildInfoVersion, injectedVersion, binaryDir, goBinDi
 // pseudo-version when the binary was installed from the module proxy; local
 // builds report "(devel)" (and tests/older toolchains may report ""). Trusting
 // the toolchain here means commit-pinned `go install` (a pseudo-version) is
-// correctly treated as go-install.
+// correctly treated as go-install. Thin legacy adapter over the shared
+// selfupdate helper.
 func isRealModuleVersion(v string) bool {
-	return v != "" && v != "(devel)"
+	return selfupdate.IsRealModuleVersion(v)
 }
 
 // isReleaseVersion reports whether v is a clean MAJOR.MINOR.PATCH release
-// version after trimming surrounding whitespace and a single leading "v". It is
-// hand-rolled — no new module dependency — and deliberately conservative: any
-// git-describe suffix (v1.2.3-5-gabc1234), -dirty marker, bare SHA, "dev", or
-// empty string is NOT a release, so the classifier refuses rather than risk a
-// wrong swap. It delegates to parseReleaseVersion so the acceptance set and the
-// downgrade-guard's ordering share one definition of "clean release version".
+// version. Thin legacy adapter over the shared selfupdate helper; see
+// selfupdate.IsReleaseVersion for the conservative acceptance set.
 func isReleaseVersion(v string) bool {
-	_, ok := parseReleaseVersion(v)
-	return ok
+	return selfupdate.IsReleaseVersion(v)
 }
 
 // parseReleaseVersion parses a clean MAJOR.MINOR.PATCH version into its three
-// numeric components after trimming surrounding whitespace and a single leading
-// "v". ok is false for anything that is not exactly three all-digit fields (a
-// git-describe suffix, -dirty marker, bare SHA, "dev", go-install pseudo-version,
-// or empty string) and for a field too large to fit an int, so callers never
-// attempt to order versions they cannot reason about.
+// numeric components. Thin legacy adapter over the shared selfupdate helper.
 func parseReleaseVersion(v string) (parts [3]int, ok bool) {
-	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
-	fields := strings.Split(v, ".")
-	if len(fields) != 3 {
-		return parts, false
-	}
-	for i, f := range fields {
-		if !isAllDigits(f) {
-			return parts, false
-		}
-		n, err := strconv.Atoi(f)
-		if err != nil {
-			return parts, false
-		}
-		parts[i] = n
-	}
-	return parts, true
+	return selfupdate.ParseReleaseVersion(v)
 }
 
-// compareReleaseVersions orders two release versions numerically. cmp is -1, 0,
-// or 1 for a<b, a==b, a>b, and ordered is true only when BOTH parse as clean
-// MAJOR.MINOR.PATCH versions. When either side is not a clean release version (a
-// go-install pseudo-version, a dev build, an empty string), ordered is false and
-// the caller falls back to plain inequality rather than guessing an order — so
-// the downgrade guard engages only where the comparison is trustworthy.
+// compareReleaseVersions orders two release versions numerically. Thin legacy
+// adapter over the shared selfupdate helper.
 func compareReleaseVersions(a, b string) (cmp int, ordered bool) {
-	pa, oka := parseReleaseVersion(a)
-	pb, okb := parseReleaseVersion(b)
-	if !oka || !okb {
-		return 0, false
-	}
-	for i := range 3 {
-		switch {
-		case pa[i] < pb[i]:
-			return -1, true
-		case pa[i] > pb[i]:
-			return 1, true
-		}
-	}
-	return 0, true
-}
-
-// isAllDigits reports whether s is a non-empty run of ASCII digits.
-func isAllDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return false
-		}
-	}
-	return true
+	return selfupdate.CompareReleaseVersions(a, b)
 }
 
 // sameDir reports whether two directories refer to the same location after
-// path normalization. It is pure (filepath.Clean does no I/O); any symlink
-// resolution must already have happened in the caller. An empty goBinDir never
-// matches, so a binary with no resolvable directory is not mistaken for a
-// go-install.
+// path normalization. Thin legacy adapter over the shared selfupdate helper.
 func sameDir(binaryDir, goBinDir string) bool {
-	if binaryDir == "" || goBinDir == "" {
-		return false
-	}
-	return filepath.Clean(binaryDir) == filepath.Clean(goBinDir)
+	return selfupdate.SameDir(binaryDir, goBinDir)
 }
 
-// isHomebrewBinary reports whether the symlink-resolved binary path sits inside a
-// Homebrew Cellar (<prefix>/Cellar/..., formula pours) or Caskroom
-// (<prefix>/Caskroom/..., cask binary stanzas — how the tap ships the CLI since
-// the formula→cask migration). Both segments are prefix-agnostic, covering
-// /opt/homebrew, /usr/local, and Linuxbrew. Symlink resolution happens in the
-// caller, so this stays pure and table-testable.
+// isHomebrewBinary reports whether the symlink-resolved binary path sits inside
+// a Homebrew Cellar or Caskroom. Thin legacy adapter over the shared
+// selfupdate helper.
 func isHomebrewBinary(resolvedBinaryPath string) bool {
-	if resolvedBinaryPath == "" {
-		return false
-	}
-	sep := string(os.PathSeparator)
-	return strings.Contains(resolvedBinaryPath, sep+"Cellar"+sep) ||
-		strings.Contains(resolvedBinaryPath, sep+"Caskroom"+sep)
+	return selfupdate.IsHomebrewPath(resolvedBinaryPath)
 }
 
 // installInputs are the five signals classifyInstallMethod consumes for the
@@ -261,25 +193,10 @@ func resolveBinaryDir() string {
 }
 
 // resolveGoBinDir resolves the Go bin directory from the environment without
-// invoking the `go` toolchain: GOBIN if set, else the first GOPATH entry +
-// "/bin", else ~/go/bin. The getenv and home-dir lookups are injected so the
-// precedence is unit-testable. It returns "" only when none of the three are
-// resolvable.
+// invoking the `go` toolchain. Thin legacy adapter over the shared selfupdate
+// helper.
 func resolveGoBinDir(getenv func(string) string, homeDir func() (string, error)) string {
-	if gobin := strings.TrimSpace(getenv("GOBIN")); gobin != "" {
-		return gobin
-	}
-	if gopath := strings.TrimSpace(getenv("GOPATH")); gopath != "" {
-		if parts := filepath.SplitList(gopath); len(parts) > 0 {
-			if first := strings.TrimSpace(parts[0]); first != "" {
-				return filepath.Join(first, "bin")
-			}
-		}
-	}
-	if home, err := homeDir(); err == nil && home != "" {
-		return filepath.Join(home, "go", "bin")
-	}
-	return ""
+	return selfupdate.ResolveGoBinDir(getenv, homeDir)
 }
 
 // normalizeDir best-effort resolves symlinks and normalizes a directory path so

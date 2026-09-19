@@ -2176,7 +2176,7 @@ export function CreateFeatureForm({
                                   <span className="creation-sheet__row-body">
                                     <b className="creation-sheet__row-name">{repo.name}</b>
                                     <code className="creation-sheet__row-path">{repo.path}</code>
-                                    {!repo.valid ? (
+                                    {!repo.valid || repo.issue !== undefined ? (
                                       <span className="creation-sheet__row-issue">
                                         {repo.issue?.summary ?? 'Unavailable'}
                                       </span>

@@ -8141,8 +8141,12 @@ body {
   padding: var(--space-5);
 }
 
+/* The sheet's publish rows bound both columns: an unconstrained auto column
+ * lets a long rebase hint starve the repository name down to zero, so the
+ * name column keeps a fixed share and the hint wraps inside its own
+ * bounded column instead. */
 .completion-publish-sheet .completion-workspace__publish-repo {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
   gap: var(--space-2) var(--space-3);
 }
 
@@ -8151,6 +8155,11 @@ body {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+}
+
+.completion-workspace__publish-repo-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .completion-workspace__publish-repo-meta {
@@ -8284,17 +8293,6 @@ body {
 
 .completion-workspace__merge-repo {
   grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.completion-workspace__published-repo-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-2);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-3);
-  background: var(--raised);
 }
 
 .completion-workspace__ineligible-repo-row {
@@ -10469,8 +10467,11 @@ body {
   color: #fff;
 }
 
-/* The row card sits below the repository's own meta row. */
+/* The row card sits below the repository's own meta row and spans every
+   column of the publish row, so a squeezed name column can never shrink the
+   recovery card or bury its controls. */
 .completion-workspace__publish-repo .error-surface {
+  grid-column: 1 / -1;
   margin-top: var(--space-2);
 }
 

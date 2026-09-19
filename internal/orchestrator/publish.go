@@ -206,8 +206,14 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 		}
 		if !hasCommits[layer.Position] {
 			// Nothing to deliver for this layer here: mark the entry so the
-			// all-published check counts it as settled.
-			_ = o.deps.Lifecycle.MarkStackLayerNoCommits(f.ID, repoName, layer.Position)
+			// all-published check counts it as settled. The write is durable
+			// state, not an advisory notification — a failed save stops the
+			// repository's walk instead of leaving the layer pending on disk.
+			if err := o.deps.Lifecycle.MarkStackLayerNoCommits(f.ID, repoName, layer.Position); err != nil {
+				stateErr := stackStateWriteError(repoName, layer, "mark the layer without commits", "", err)
+				o.storePublishFailure(f, repoName, stateErr)
+				return stateErr
+			}
 			entry.NoCommits = true
 			entries[layer.Position] = entry
 			continue
@@ -227,7 +233,15 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 			stopErr := o.refreshExistingLayerPR(f, repoName, repoPath, layer, &entry)
 			entries[layer.Position] = entry
 			if stopErr != nil {
-				o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionBlocked)
+				// A closed pull request blocks the layer; every other refusal
+				// from the refresh — a failed durable state write — failed the
+				// publish step instead.
+				action := observe.LayerPublishActionFailed
+				var closed *PublishStackClosedError
+				if errors.As(stopErr, &closed) {
+					action = observe.LayerPublishActionBlocked
+				}
+				o.emitLayerPublishEvent(f, repoName, layer, entry, action)
 				return stopErr
 			}
 			if entry.PRState == feature.StackPRStateMerged {
@@ -246,7 +260,12 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 					o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionFailed)
 					return pushErr
 				}
-				_ = o.deps.Lifecycle.RecordStackLayerPushedSHA(f.ID, repoName, layer.Position, pushedSHA)
+				if err := o.deps.Lifecycle.RecordStackLayerPushedSHA(f.ID, repoName, layer.Position, pushedSHA); err != nil {
+					stateErr := stackStateWriteError(repoName, layer, "record the pushed SHA", entry.PRURL, err)
+					o.storePublishFailure(f, repoName, stateErr)
+					o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionFailed)
+					return stateErr
+				}
 				entry.LastPushedSHA = pushedSHA
 				entries[layer.Position] = entry
 				o.emitLayerPublishEvent(f, repoName, layer, entry, action)
@@ -287,7 +306,12 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 				o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionFailed)
 				return pushErr
 			}
-			_ = o.deps.Lifecycle.RecordStackLayerPushedSHA(f.ID, repoName, layer.Position, pushedSHA)
+			if err := o.deps.Lifecycle.RecordStackLayerPushedSHA(f.ID, repoName, layer.Position, pushedSHA); err != nil {
+				stateErr := stackStateWriteError(repoName, layer, "record the pushed SHA", "", err)
+				o.storePublishFailure(f, repoName, stateErr)
+				o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionFailed)
+				return stateErr
+			}
 			entry.LastPushedSHA = pushedSHA
 		}
 
@@ -307,11 +331,25 @@ func (o *Orchestrator) walkStackLayers(f *feature.Feature, repo feature.FeatureR
 			o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionFailed)
 			return err
 		}
-		_ = o.deps.Lifecycle.RecordStackLayerPR(f.ID, repoName, layer.Position, prURL, pushedSHA)
+		// The durable records land before the layer reports success: the
+		// pull request exists on the remote, so a repository whose stack
+		// entry or published mark cannot be saved stops here with the
+		// already-created URL named instead of continuing to higher layers.
 		entry.PRURL = prURL
 		entry.PRState = feature.StackPRStateOpen
 		entries[layer.Position] = entry
-		_ = o.deps.Lifecycle.SetRepoPublished(f.ID, repoName)
+		if err := o.deps.Lifecycle.RecordStackLayerPR(f.ID, repoName, layer.Position, prURL, pushedSHA); err != nil {
+			stateErr := stackStateWriteError(repoName, layer, "record the created pull request", prURL, err)
+			o.storePublishFailure(f, repoName, stateErr)
+			o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionFailed)
+			return stateErr
+		}
+		if err := o.deps.Lifecycle.SetRepoPublished(f.ID, repoName); err != nil {
+			stateErr := stackStateWriteError(repoName, layer, "mark the repository published", prURL, err)
+			o.storePublishFailure(f, repoName, stateErr)
+			o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionFailed)
+			return stateErr
+		}
 		o.applyLayerCrossRefs(f, layer, repoName, prURL)
 		o.emitLayerPublishEvent(f, repoName, layer, entry, observe.LayerPublishActionCreated)
 	}
@@ -362,7 +400,11 @@ func (o *Orchestrator) refreshExistingLayerPR(f *feature.Feature, repoName, repo
 	state, stateErr := o.deps.Remote.PRState(repoPath, entry.PRURL)
 	switch {
 	case stateErr == nil && state == git.PRStateMerged:
-		_ = o.deps.Lifecycle.SetStackLayerPRState(f.ID, repoName, layer.Position, feature.StackPRStateMerged)
+		if err := o.deps.Lifecycle.SetStackLayerPRState(f.ID, repoName, layer.Position, feature.StackPRStateMerged); err != nil {
+			stateWriteErr := stackStateWriteError(repoName, layer, "record the merged pull-request state", entry.PRURL, err)
+			o.storePublishFailure(f, repoName, stateWriteErr)
+			return stateWriteErr
+		}
 		entry.PRState = feature.StackPRStateMerged
 	case stateErr == nil && state == git.PRStateClosed:
 		closedErr := &PublishStackClosedError{
@@ -376,7 +418,11 @@ func (o *Orchestrator) refreshExistingLayerPR(f *feature.Feature, repoName, repo
 		o.storePublishFailure(f, repoName, closedErr)
 		return closedErr
 	case stateErr == nil && state == git.PRStateOpen:
-		_ = o.deps.Lifecycle.SetStackLayerPRState(f.ID, repoName, layer.Position, feature.StackPRStateOpen)
+		if err := o.deps.Lifecycle.SetStackLayerPRState(f.ID, repoName, layer.Position, feature.StackPRStateOpen); err != nil {
+			stateWriteErr := stackStateWriteError(repoName, layer, "record the open pull-request state", entry.PRURL, err)
+			o.storePublishFailure(f, repoName, stateWriteErr)
+			return stateWriteErr
+		}
 		entry.PRState = feature.StackPRStateOpen
 	}
 	// An indeterminate answer (lookup error or unrecognised state) is

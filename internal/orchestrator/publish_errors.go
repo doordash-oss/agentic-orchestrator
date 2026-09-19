@@ -14,7 +14,11 @@
 
 package orchestrator
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+)
 
 // PublishRemoteDivergedError reports remote work that cannot safely be
 // replaced by the workspace's rewritten pull-request branch. LayerPosition
@@ -196,4 +200,43 @@ type PublishRecreateMootError struct {
 
 func (e *PublishRecreateMootError) Error() string {
 	return fmt.Sprintf("layer %d's pull request for repo %s is %s; there is nothing to recreate", e.LayerPosition, e.RepoName, e.State)
+}
+
+// PublishStateWriteError reports a failed durable write of a layer's publish
+// state — the pull-request record, its pushed SHA, its live state, or the
+// repository's published mark — after the remote operation it records
+// succeeded. The layer fields, the operation, and any pull request the
+// remote already created travel in the error so the stored canonical record
+// can name them; the remote change itself stands, and retrying the action
+// re-records the state.
+type PublishStateWriteError struct {
+	RepoName      string
+	LayerPosition int
+	LayerTitle    string
+	Operation     string
+	PRURL         string
+	Err           error
+}
+
+func (e *PublishStateWriteError) Error() string {
+	subject := fmt.Sprintf("layer %d (%s) of repo %q", e.LayerPosition, e.LayerTitle, e.RepoName)
+	if e.PRURL != "" {
+		subject += " with pull request " + e.PRURL
+	}
+	return fmt.Sprintf("%s for %s failed: %v", e.Operation, subject, e.Err)
+}
+
+func (e *PublishStateWriteError) Unwrap() error { return e.Err }
+
+// stackStateWriteError wraps a failed durable stack-state write with the
+// repository, layer, operation, and the pull request the write records.
+func stackStateWriteError(repoName string, layer feature.StackLayer, operation, prURL string, err error) *PublishStateWriteError {
+	return &PublishStateWriteError{
+		RepoName:      repoName,
+		LayerPosition: layer.Position,
+		LayerTitle:    layer.Title,
+		Operation:     operation,
+		PRURL:         prURL,
+		Err:           err,
+	}
 }

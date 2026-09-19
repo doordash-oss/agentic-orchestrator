@@ -425,19 +425,24 @@ export function PublishModal({
                 </p>
               ) : null}
               {publishedRepos.length > 0 ? (
-                <RepoGroup
-                  title="Already published"
-                  repos={publishedRepos}
-                  openExternal={openExternal}
-                />
+                <div className="completion-workspace__published-repos">
+                  <h4>Already published</h4>
+                  {publishedRepos.map((repo) => (
+                    <PublishRepoRow
+                      key={repo.repo}
+                      repo={repo}
+                      featureId={featureId}
+                      checked={publishRepos.has(repo.repo)}
+                      onToggle={togglePublishRepo}
+                      openExternal={openExternal}
+                      resolveAction={retryActionFor(repo)}
+                      onAction={rowActionHandler(repo)}
+                      selectable={false}
+                    />
+                  ))}
+                </div>
               ) : null}
-              {ineligibleRepos.length > 0 ? (
-                <RepoGroup
-                  title="Not publishable"
-                  repos={ineligibleRepos}
-                  openExternal={openExternal}
-                />
-              ) : null}
+              {ineligibleRepos.length > 0 ? <IneligibleRepoGroup repos={ineligibleRepos} /> : null}
             </div>
             {dirtySelected.length > 0 ? (
               <div className="completion-workspace__dirty-notice">
@@ -592,6 +597,7 @@ function PublishRepoRow({
   openExternal,
   resolveAction,
   onAction,
+  selectable = true,
 }: {
   repo: PublishRepo;
   featureId: string;
@@ -600,17 +606,27 @@ function PublishRepoRow({
   openExternal(url: string): Promise<{ ok: boolean }>;
   resolveAction(actionId: string): ErrorSurfaceAction | undefined;
   onAction(actionId: string): void;
+  /**
+   * False for rows the modal cannot select for publish (already published):
+   * no checkbox, but the full row — stack preview, freshness with its rebase
+   * hint, and the canonical error with its catalog-resolved actions — still
+   * renders, because a parked repository needs its recovery controls
+   * regardless of publish eligibility.
+   */
+  selectable?: boolean;
 }): React.ReactElement {
   const freshnessHint = repoFreshnessHint(repo);
   return (
     <div className="completion-workspace__publish-repo">
       <div className="completion-workspace__publish-repo-main">
-        <input
-          type="checkbox"
-          aria-label={repo.repo}
-          checked={checked}
-          onChange={() => onToggle(repo.repo)}
-        />
+        {selectable ? (
+          <input
+            type="checkbox"
+            aria-label={repo.repo}
+            checked={checked}
+            onChange={() => onToggle(repo.repo)}
+          />
+        ) : null}
         <span className="completion-workspace__publish-repo-name">{repo.repo}</span>
       </div>
       <div className="completion-workspace__publish-repo-meta">
@@ -654,41 +670,16 @@ function PublishRepoRow({
   );
 }
 
-function RepoGroup({
-  title,
-  repos,
-  openExternal,
-}: {
-  title: string;
-  repos: PublishRepo[];
-  openExternal(url: string): Promise<{ ok: boolean }>;
-}) {
+function IneligibleRepoGroup({ repos }: { repos: PublishRepo[] }) {
   return (
-    <div
-      className={
-        title === 'Already published'
-          ? 'completion-workspace__published-repos'
-          : 'completion-workspace__ineligible-repos'
-      }
-    >
-      <h4>{title}</h4>
+    <div className="completion-workspace__ineligible-repos">
+      <h4>Not publishable</h4>
       {repos.map((repo) => (
-        <div
-          key={repo.repo}
-          className={
-            title === 'Already published'
-              ? 'completion-workspace__published-repo-row'
-              : 'completion-workspace__ineligible-repo-row'
-          }
-        >
+        <div key={repo.repo} className="completion-workspace__ineligible-repo-row">
           <span>{repo.repo}</span>
-          {title === 'Already published' ? (
-            <StackPreview entries={repo.pullRequests ?? []} openExternal={openExternal} />
-          ) : (
-            <span className="completion-workspace__ineligible-repo-reason">
-              {repo.blocker ?? 'Local-only repository'}
-            </span>
-          )}
+          <span className="completion-workspace__ineligible-repo-reason">
+            {repo.blocker ?? 'Local-only repository'}
+          </span>
         </div>
       ))}
     </div>

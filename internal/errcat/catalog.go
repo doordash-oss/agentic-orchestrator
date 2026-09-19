@@ -770,6 +770,17 @@ var catalog = map[Code]Entry{
 		Remediation: "Check the repository and remote, then retry.",
 		Actions:     []string{"publish"},
 	},
+	PublishStateWriteFailed: {
+		Class:   ClassNeedsAction,
+		Title:   "Publish state not recorded",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Recording the publish state failed after the remote change succeeded.",
+		summaryParams: func(p Params) string {
+			return publishStateWriteFailedSummary(p)
+		},
+		Remediation: "Check the local feature store is writable, then retry; the retry re-records the state the remote already accepted.",
+		Actions:     []string{"publish"},
+	},
 	PublishReopenFailed: {
 		Class:   ClassNeedsAction,
 		Title:   "Pull-request reopen failed",

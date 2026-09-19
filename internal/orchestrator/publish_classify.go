@@ -34,6 +34,7 @@ import (
 //   - rewritten-push changed        → publish_remote_changed
 //   - pull-request creation         → publish_pull_request_failed
 //   - description generation        → publish_description_failed
+//   - durable state write           → publish_state_write_failed
 //   - reopen refusal                → publish_reopen_failed
 //   - missing head branch           → publish_head_branch_missing
 //   - pull-request recreation       → publish_recreate_failed
@@ -49,6 +50,7 @@ func publishFailureRecord(repoName, branch string, err error) errcat.FailureReco
 	var created *PublishPRCreateError
 	var described *PublishDescriptionError
 	var pushed *PublishPushError
+	var stateWrite *PublishStateWriteError
 	var reopenFailed *PublishReopenFailedError
 	var headMissing *PublishHeadBranchMissingError
 	var recreateFailed *PublishRecreateFailedError
@@ -93,6 +95,11 @@ func publishFailureRecord(repoName, branch string, err error) errcat.FailureReco
 		}
 		block.LayerPosition = pushed.LayerPosition
 		block.LayerTitle = pushed.LayerTitle
+	case errors.As(err, &stateWrite):
+		code = errcat.PublishStateWriteFailed
+		block.LayerPosition = stateWrite.LayerPosition
+		block.LayerTitle = stateWrite.LayerTitle
+		block.PullRequestURL = stateWrite.PRURL
 	case errors.As(err, &reopenFailed):
 		code = errcat.PublishReopenFailed
 		if reopenFailed.Branch != "" {
@@ -152,8 +159,9 @@ func StackClosedConflictRecord(err error) (errcat.FailureRecord, bool) {
 
 // PullRequestResolutionConflictRecord classifies a reopen or recreate
 // mutation failure that stored a canonical record on the repository — the
-// resolution refusals plus the push and description failures the actions
-// reuse — so the HTTP envelope and the stored record agree. It reports
+// resolution refusals, the push and description failures the actions reuse,
+// and the durable state writes whose failure must not report a successful
+// resolution — so the HTTP envelope and the stored record agree. It reports
 // false for validation and moot-state failures, which carry no record.
 func PullRequestResolutionConflictRecord(err error) (errcat.FailureRecord, bool) {
 	var reopenFailed *PublishReopenFailedError
@@ -161,6 +169,7 @@ func PullRequestResolutionConflictRecord(err error) (errcat.FailureRecord, bool)
 	var recreateFailed *PublishRecreateFailedError
 	var pushed *PublishPushError
 	var described *PublishDescriptionError
+	var stateWrite *PublishStateWriteError
 	switch {
 	case errors.As(err, &reopenFailed):
 		return publishFailureRecord(reopenFailed.RepoName, reopenFailed.Branch, err), true
@@ -172,6 +181,8 @@ func PullRequestResolutionConflictRecord(err error) (errcat.FailureRecord, bool)
 		return publishFailureRecord(pushed.RepoName, pushed.Branch, err), true
 	case errors.As(err, &described):
 		return publishFailureRecord(described.RepoName, "", err), true
+	case errors.As(err, &stateWrite):
+		return publishFailureRecord(stateWrite.RepoName, "", err), true
 	}
 	return PublishConflictRecord(err)
 }

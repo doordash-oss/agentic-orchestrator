@@ -112,6 +112,16 @@ func (o *Orchestrator) emitPullRequestResolutionEvents(target pullRequestResolut
 	o.emitLayerPublishEvent(target.f, target.repo.Name, target.layer, entry, action)
 }
 
+// failResolutionStateWrite wraps a failed durable stack-state write from a
+// resolution action, stores the canonical record on the repository, and
+// returns the typed error: the remote operation succeeded, so reporting
+// success would leave the stack's durable record stale with no diagnostic.
+func (o *Orchestrator) failResolutionStateWrite(target pullRequestResolutionTarget, operation, prURL string, err error) error {
+	stateErr := stackStateWriteError(target.repo.Name, target.layer, operation, prURL, err)
+	o.storePublishFailure(target.f, target.repo.Name, stateErr)
+	return stateErr
+}
+
 // ReopenPullRequest resolves a repository's closed stack pull request by
 // reopening it on GitHub. The action is idempotent: a live-open pull request
 // is recorded open — which clears the stored repository record — without a
@@ -121,7 +131,9 @@ func (o *Orchestrator) emitPullRequestResolutionEvents(target pullRequestResolut
 // section into the repository's open pull requests, and emits the
 // repository status and layer publish events. A missing head branch stores
 // the head-branch-missing record offering only Recreate; any other refusal
-// stores the reopen-failed record naming the layer and the pull request.
+// stores the reopen-failed record naming the layer and the pull request. A
+// failed durable state write stores the state-write record and returns the
+// failure — success is reported only after the stack's record is saved.
 func (o *Orchestrator) ReopenPullRequest(featureID, repoName string, layerPosition int) error {
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
@@ -135,10 +147,14 @@ func (o *Orchestrator) ReopenPullRequest(featureID, repoName string, layerPositi
 
 	switch o.livePullRequestState(target) {
 	case git.PRStateOpen:
-		_ = o.deps.Lifecycle.SetStackLayerPRState(featureID, repoName, layerPosition, feature.StackPRStateOpen)
+		if err := o.deps.Lifecycle.SetStackLayerPRState(featureID, repoName, layerPosition, feature.StackPRStateOpen); err != nil {
+			return o.failResolutionStateWrite(target, "record the open pull-request state", target.entry.PRURL, err)
+		}
 		return nil
 	case git.PRStateMerged:
-		_ = o.deps.Lifecycle.SetStackLayerPRState(featureID, repoName, layerPosition, feature.StackPRStateMerged)
+		if err := o.deps.Lifecycle.SetStackLayerPRState(featureID, repoName, layerPosition, feature.StackPRStateMerged); err != nil {
+			return o.failResolutionStateWrite(target, "record the merged pull-request state", target.entry.PRURL, err)
+		}
 		return nil
 	}
 
@@ -168,7 +184,9 @@ func (o *Orchestrator) ReopenPullRequest(featureID, repoName string, layerPositi
 
 	entry := target.entry
 	entry.PRState = feature.StackPRStateOpen
-	_ = o.deps.Lifecycle.SetStackLayerPRState(featureID, repoName, layerPosition, feature.StackPRStateOpen)
+	if err := o.deps.Lifecycle.SetStackLayerPRState(featureID, repoName, layerPosition, feature.StackPRStateOpen); err != nil {
+		return o.failResolutionStateWrite(target, "record the reopened pull-request state", target.entry.PRURL, err)
+	}
 	o.reinjectStackSections(featureID, repoName)
 	o.emitPullRequestResolutionEvents(target, entry, observe.LayerPublishActionReopened, "reopen pull request updated repository layer entry")
 	return nil
@@ -185,7 +203,10 @@ func (o *Orchestrator) ReopenPullRequest(featureID, repoName string, layerPositi
 // and creates the pull request with the layer's table title, the publish
 // walk's base rule, and the draft checkpoint. The new pull request is
 // recorded open with the pushed SHA, cross-references and stack sections
-// are re-injected, and the old closed pull request is left untouched.
+// are re-injected, and the old closed pull request is left untouched. A
+// failed durable state write stores the state-write record naming the
+// already-created replacement pull request and returns the failure —
+// success is reported only after the stack's record is saved.
 func (o *Orchestrator) RecreatePullRequest(featureID, repoName string, layerPosition int) error {
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
@@ -199,10 +220,14 @@ func (o *Orchestrator) RecreatePullRequest(featureID, repoName string, layerPosi
 
 	switch state := o.livePullRequestState(target); state {
 	case git.PRStateOpen:
-		_ = o.deps.Lifecycle.SetStackLayerPRState(featureID, repoName, layerPosition, feature.StackPRStateOpen)
+		if err := o.deps.Lifecycle.SetStackLayerPRState(featureID, repoName, layerPosition, feature.StackPRStateOpen); err != nil {
+			return o.failResolutionStateWrite(target, "record the open pull-request state", target.entry.PRURL, err)
+		}
 		return &PublishRecreateMootError{RepoName: repoName, LayerPosition: layerPosition, State: state}
 	case git.PRStateMerged:
-		_ = o.deps.Lifecycle.SetStackLayerPRState(featureID, repoName, layerPosition, feature.StackPRStateMerged)
+		if err := o.deps.Lifecycle.SetStackLayerPRState(featureID, repoName, layerPosition, feature.StackPRStateMerged); err != nil {
+			return o.failResolutionStateWrite(target, "record the merged pull-request state", target.entry.PRURL, err)
+		}
 		return &PublishRecreateMootError{RepoName: repoName, LayerPosition: layerPosition, State: state}
 	}
 
@@ -215,7 +240,9 @@ func (o *Orchestrator) RecreatePullRequest(featureID, repoName string, layerPosi
 		o.storePublishFailure(target.f, repoName, pushErr)
 		return pushErr
 	}
-	_ = o.deps.Lifecycle.RecordStackLayerPushedSHA(featureID, repoName, layerPosition, pushedSHA)
+	if err := o.deps.Lifecycle.RecordStackLayerPushedSHA(featureID, repoName, layerPosition, pushedSHA); err != nil {
+		return o.failResolutionStateWrite(target, "record the pushed SHA", target.entry.PRURL, err)
+	}
 
 	body, bodyErr := o.deps.Remote.GetPRBody(target.entry.PRURL)
 	if bodyErr != nil {
@@ -265,10 +292,18 @@ func (o *Orchestrator) RecreatePullRequest(featureID, repoName string, layerPosi
 		return recreateErr
 	}
 
+	// The durable records land before the action reports success: the
+	// replacement pull request exists on the remote, so a repository whose
+	// stack entry or published mark cannot be saved fails with the new URL
+	// named instead of clearing the blocker on disk only.
 	entry.PRURL = prURL
 	entry.PRState = feature.StackPRStateOpen
-	_ = o.deps.Lifecycle.RecordStackLayerPR(featureID, repoName, layerPosition, prURL, pushedSHA)
-	_ = o.deps.Lifecycle.SetRepoPublished(featureID, repoName)
+	if err := o.deps.Lifecycle.RecordStackLayerPR(featureID, repoName, layerPosition, prURL, pushedSHA); err != nil {
+		return o.failResolutionStateWrite(target, "record the recreated pull request", prURL, err)
+	}
+	if err := o.deps.Lifecycle.SetRepoPublished(featureID, repoName); err != nil {
+		return o.failResolutionStateWrite(target, "mark the repository published", prURL, err)
+	}
 	o.applyLayerCrossRefs(target.f, target.layer, repoName, prURL)
 	o.reinjectStackSections(featureID, repoName)
 	o.emitPullRequestResolutionEvents(target, entry, observe.LayerPublishActionRecreated, "recreate pull request updated repository layer entry")

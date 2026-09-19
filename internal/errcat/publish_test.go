@@ -23,7 +23,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// allPublishFailureCodes lists the ten catalog codes a repository publish
+// allPublishFailureCodes lists the eleven catalog codes a repository publish
 // failure can carry, in catalog order.
 var allPublishFailureCodes = []Code{
 	PublishRemoteDiverged,
@@ -33,6 +33,7 @@ var allPublishFailureCodes = []Code{
 	PublishPullRequestFailed,
 	PublishDescriptionFailed,
 	PublishPushFailed,
+	PublishStateWriteFailed,
 	PublishReopenFailed,
 	PublishHeadBranchMissing,
 	PublishRecreateFailed,
@@ -40,7 +41,8 @@ var allPublishFailureCodes = []Code{
 
 // publishFailureActions pins the action list every publish-failure code
 // references. The closed, reopen-failed, and head-branch-missing family
-// resolves through reopen/recreate; the delivery failures retry publish.
+// resolves through reopen/recreate; the delivery and state-write failures
+// retry publish.
 var publishFailureActions = map[Code][]string{
 	PublishRemoteDiverged:         {"publish"},
 	PublishRemoteChanged:          {"publish"},
@@ -49,13 +51,14 @@ var publishFailureActions = map[Code][]string{
 	PublishPullRequestFailed:      {"publish"},
 	PublishDescriptionFailed:      {"publish"},
 	PublishPushFailed:             {"publish"},
+	PublishStateWriteFailed:       {"publish"},
 	PublishReopenFailed:           {"reopen-pull-request", "recreate-pull-request"},
 	PublishHeadBranchMissing:      {"recreate-pull-request"},
 	PublishRecreateFailed:         {"recreate-pull-request"},
 }
 
 // TestPublishFailureCodesAreNeedsActionWithPinnedActions pins the
-// publish-failure contract: all ten codes are needs_action, reference
+// publish-failure contract: all eleven codes are needs_action, reference
 // exactly their pinned action list, and declare exactly the repositories
 // block.
 func TestPublishFailureCodesAreNeedsActionWithPinnedActions(t *testing.T) {
@@ -88,7 +91,7 @@ func TestPublishFailureCodesAreNeedsActionWithPinnedActions(t *testing.T) {
 }
 
 // TestIsPublishFailureReturnsTrueForExactlyThePublishCodes pins the closed
-// set: the helper is true for the ten publish codes and nothing else.
+// set: the helper is true for the eleven publish codes and nothing else.
 func TestIsPublishFailureReturnsTrueForExactlyThePublishCodes(t *testing.T) {
 	want := map[Code]bool{}
 	for _, code := range allPublishFailureCodes {
@@ -309,6 +312,12 @@ func TestPublishSummariesNameLayerOnlyWhenPresent(t *testing.T) {
 			plain:           `Publishing repository "publish-web" (branch "agentico/my-feature") failed.`,
 			withLayer:       `Publishing repository "publish-web" at layer 2 (Fix auth) (branch "agentico/my-feature") failed.`,
 			withLayerNoName: `Publishing repository "publish-web" at layer 2 (branch "agentico/my-feature") failed.`,
+		},
+		{
+			code:            PublishStateWriteFailed,
+			plain:           `Recording the publish state for repository "publish-web" failed after the remote change succeeded.`,
+			withLayer:       `Recording the publish state for repository "publish-web" at layer 2 (Fix auth) failed after the remote change succeeded.`,
+			withLayerNoName: `Recording the publish state for repository "publish-web" at layer 2 failed after the remote change succeeded.`,
 		},
 	}
 	for _, tc := range cases {

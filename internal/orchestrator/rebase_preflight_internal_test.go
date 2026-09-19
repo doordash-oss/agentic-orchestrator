@@ -461,12 +461,16 @@ func (fx *rebasePreflightFixture) recordLastPushedSHAs() {
 }
 
 // reviewerClone clones repoa's bare origin so reviewer work can be authored
-// and pushed without touching the inspected checkout.
+// and pushed without touching the inspected checkout. The clone carries no
+// identity of its own, so one is set locally: plumbing commits (commit-tree)
+// must not depend on the invoking user's git configuration.
 func (fx *rebasePreflightFixture) reviewerClone() string {
 	fx.t.Helper()
 	parent := fx.t.TempDir()
 	clone := filepath.Join(parent, "reviewer")
 	restackGit(fx.t, parent, "clone", "--quiet", fx.bareDir["repoa"], clone)
+	restackGit(fx.t, clone, "config", "user.name", "Test Committer")
+	restackGit(fx.t, clone, "config", "user.email", "test@example.com")
 	return clone
 }
 

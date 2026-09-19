@@ -30,6 +30,7 @@ const (
 	PublishPullRequestFailed      Code = "publish_pull_request_failed"
 	PublishDescriptionFailed      Code = "publish_description_failed"
 	PublishPushFailed             Code = "publish_push_failed"
+	PublishStateWriteFailed       Code = "publish_state_write_failed"
 	PublishReopenFailed           Code = "publish_reopen_failed"
 	PublishHeadBranchMissing      Code = "publish_head_branch_missing"
 	PublishRecreateFailed         Code = "publish_recreate_failed"
@@ -47,6 +48,7 @@ var publishFailureCodes = map[Code]bool{
 	PublishPullRequestFailed:      true,
 	PublishDescriptionFailed:      true,
 	PublishPushFailed:             true,
+	PublishStateWriteFailed:       true,
 	PublishReopenFailed:           true,
 	PublishHeadBranchMissing:      true,
 	PublishRecreateFailed:         true,
@@ -185,6 +187,16 @@ func publishRecreateFailedSummary(p Params) string {
 		subject += fmt.Sprintf(" (%s)", params.PullRequestURL)
 	}
 	return "Creating the replacement pull request for repository " + subject + " failed."
+}
+
+// publishStateWriteFailedSummary names the repository and stack layer whose
+// publish state could not be recorded after the remote change succeeded.
+func publishStateWriteFailedSummary(p Params) string {
+	params, ok := publishRepoParams(p)
+	if !ok {
+		return ""
+	}
+	return "Recording the publish state for repository " + publishRepoName(params) + " failed after the remote change succeeded."
 }
 
 // publishStackMissingSummary names the repository of a run that reached

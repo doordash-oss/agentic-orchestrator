@@ -1359,4 +1359,76 @@ describe('PublishModal closed pull-request resolutions', () => {
     expect(within(card).getByText('Pull request')).toBeVisible();
     expect(within(card).getByText('https://github.com/org/web/pull/12')).toBeVisible();
   });
+
+  // The recovery state renders independently of publish eligibility: an
+  // already-published repository parked on a closed lower pull request keeps
+  // the full row — no selection checkbox, but the freshness hint, the
+  // canonical error, and both catalog-resolved resolutions dispatchable.
+  it('renders and dispatches the closed-PR resolutions on an already-published repository', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockResolvedValue(result);
+    const onDispatched = vi.fn();
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          onDispatched,
+          actions: [publishAction, reopenAction, recreateAction] as readonly FeatureActionView[],
+          preflight: preflightWith({
+            repos: [
+              {
+                repo: 'web',
+                publishable: true,
+                touched: true,
+                status: 'already_published',
+                freshness: 'behind',
+                rebaseHint:
+                  'Layer 1 (Foundation) is merged below kept work — run the rebase pass to restack the layers above.',
+                error: closedPrError,
+                pullRequests: [
+                  {
+                    position: 2,
+                    title: 'Search revamp layer 2',
+                    state: 'closed',
+                    noCommits: false,
+                    pushedUpToDate: false,
+                    pushMode: 'none',
+                  },
+                ],
+              },
+            ],
+          }),
+        })}
+      />,
+    );
+
+    // With no eligible repository, the sheet offers no publish — the row's
+    // own controls own the recovery.
+    expect(screen.getByText('No eligible repositories to publish.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Publish updates' })).toBeDisabled();
+
+    const group = document.querySelector('.completion-workspace__published-repos') as HTMLElement;
+    expect(
+      within(group).getByText('web', { selector: '.completion-workspace__publish-repo-name' }),
+    ).toBeVisible();
+    expect(within(group).queryByRole('checkbox')).not.toBeInTheDocument();
+    const meta = group.querySelector('.completion-workspace__publish-repo-meta') as HTMLElement;
+    expect(meta).toHaveTextContent('Behind');
+    expect(meta).toHaveTextContent('run the rebase pass to restack the layers above');
+    expect(within(group).getByText('closed')).toBeVisible();
+
+    const card = within(group).getByRole('alert');
+    expect(card).toHaveTextContent('Stack pull request closed');
+    const reopen = within(card).getByRole('button', { name: 'Reopen pull request' });
+    expect(reopen).toBeEnabled();
+    expect(within(card).getByRole('button', { name: 'Recreate pull request' })).toBeEnabled();
+
+    await user.click(reopen);
+    expect(dispatchAction).toHaveBeenCalledWith({
+      featureId,
+      action: 'reopen-pull-request',
+      body: { repository: 'web', layer: 2, source_revision: 'rev-1' },
+    });
+    await waitFor(() => expect(onDispatched).toHaveBeenCalledOnce());
+  });
 });

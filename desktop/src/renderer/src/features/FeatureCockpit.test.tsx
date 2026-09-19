@@ -502,7 +502,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     // The card reads the new "Start rebase pass" label and reworded description.
     const card = within(aftercare).getByRole('button', { name: /Start rebase pass/ });
     expect(card).toBeVisible();
-    expect(card).toHaveTextContent(/merges each behind repository/);
+    expect(card).toHaveTextContent(/restacks each behind repository/);
     await user.click(card);
 
     // Exactly one zero-input launch call; no dialog is mounted at any point.

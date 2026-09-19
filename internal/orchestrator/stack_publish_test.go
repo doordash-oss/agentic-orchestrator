@@ -24,6 +24,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -474,6 +475,95 @@ func TestPublishStackRetryAfterPRCreateFailure(t *testing.T) {
 	}
 	if f.Status != feature.StatusPublished {
 		t.Fatalf("feature status = %s, want Published after the retry", f.Status)
+	}
+}
+
+// A durable state-write failure after a successful pull-request creation
+// stops the repository's walk with the created pull request named: the
+// stored record carries the state-write code, no layer reports created, and
+// the higher layers are left for a later publish.
+func TestPublishStackStateWriteFailureStopsWalkAndNamesCreatedPR(t *testing.T) {
+	branches := [3]string{"feature/stack-sw/1-foundation", "feature/stack-sw/2-fix-auth", "feature/stack-sw/3-top-polish"}
+	repoPath, tips := newStackedPublishRepo(t, branches, true)
+	f := &feature.Feature{
+		ID:     "feat-stack-state-write",
+		Name:   "stack state write",
+		Slug:   "stack-state-write",
+		Status: feature.StatusReviewPassed,
+		Stack:  threeLayerStack(branches, map[string][3]string{"r1": tips}),
+		Repos: []feature.FeatureRepo{
+			{Name: "r1", Path: repoPath, WorktreePath: repoPath, Branch: branches[2], BaseBranch: mainBranch},
+		},
+		RepoStates: map[string]*feature.RepoState{"r1": {Touched: true}},
+	}
+	lc := stackPublishLifecycle(f)
+	lc.RecordStackLayerPRFn = func(id, repo string, layerPosition int, prURL, pushedSHA string) error {
+		return errors.New("write feature.yaml: no space left on device")
+	}
+	fs := newFeatureStore(f)
+	installStackPublishFakeGitHub(t)
+
+	pub := mocks.NewMockRemoteOps()
+	pub.PushLayerBranchFn = func(repoPath, branch, localSHA, lastPushedSHA string) (string, error) {
+		return localSHA, nil
+	}
+	pub.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
+		return "https://github.com/org/r1/pull/1", nil
+	}
+
+	var layerEvents []observe.LayerPublishEvent
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Remote:      pub,
+		PhaseRunner: newPublishDescriptionPhaseRunner(t, "## Summary\n\nGenerated body", false),
+	}, orchestrator.Hooks{
+		OnStackLayerPublished: func(featureID string, outcome observe.LayerPublishEvent) {
+			layerEvents = append(layerEvents, outcome)
+		},
+	})
+
+	err := o.Publish(f.ID)
+	var stateWrite *orchestrator.PublishStateWriteError
+	if !errors.As(err, &stateWrite) {
+		t.Fatalf("Publish error = %T %v; want PublishStateWriteError", err, err)
+	}
+	if stateWrite.RepoName != "r1" || stateWrite.LayerPosition != 1 ||
+		stateWrite.LayerTitle != "Foundation" || stateWrite.PRURL != "https://github.com/org/r1/pull/1" {
+		t.Fatalf("PublishStateWriteError = %+v, want r1's layer 1 (Foundation) and the created pull request", stateWrite)
+	}
+	if stateWrite.Operation != "record the created pull request" {
+		t.Fatalf("PublishStateWriteError operation = %q, want the created-PR record write", stateWrite.Operation)
+	}
+
+	record := f.RepoStates["r1"].Error
+	if record == nil || record.Code != errcat.PublishStateWriteFailed {
+		t.Fatalf("stored record = %+v, want publish_state_write_failed", record)
+	}
+	repo := record.Context.Repositories[0]
+	if repo.Name != "r1" || repo.LayerPosition != 1 || repo.LayerTitle != "Foundation" ||
+		repo.PullRequestURL != "https://github.com/org/r1/pull/1" {
+		t.Fatalf("stored record block = %+v, want the repository, layer 1, and the created pull request named", repo)
+	}
+
+	// The walk stopped at layer 1: no higher layer was pushed or created, no
+	// layer reported created, and the repository's published mark was never
+	// written.
+	if created := stackRemoteCalls(pub, "CreatePR"); len(created) != 1 || created[0].Args[1] != branches[0] {
+		t.Fatalf("CreatePR calls = %+v, want exactly layer 1's", created)
+	}
+	if len(layerEvents) != 1 || layerEvents[0].Action != observe.LayerPublishActionFailed {
+		t.Fatalf("layer publish events = %+v, want exactly one failed event for layer 1", layerEvents)
+	}
+	if layerEvents[0].PRURL != "https://github.com/org/r1/pull/1" {
+		t.Fatalf("failed event pull request = %q, want the created pull request named", layerEvents[0].PRURL)
+	}
+	refuteLifecycleCall(t, lc, "SetRepoPublished")
+	if entry := f.Stack[0].Repos["r1"]; entry.PRURL != "" {
+		t.Fatalf("layer 1 entry = %+v, want no durable pull-request record (the write failed)", entry)
+	}
+	if f.Status == feature.StatusPublished {
+		t.Fatalf("feature status = %s, want the publish incomplete", f.Status)
 	}
 }
 

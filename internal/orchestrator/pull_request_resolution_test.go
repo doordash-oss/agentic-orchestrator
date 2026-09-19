@@ -833,3 +833,123 @@ func TestOrchestrator_RecreatePullRequest_ValidationRejectionsPrecedeRemoteCalls
 		t.Fatal("stored record cleared by a rejected recreate; want the closed record kept")
 	}
 }
+
+// A failed durable state write after a successful remote reopen fails the
+// action with the state-write record stored: the repository keeps no success
+// events and the layer stays recorded closed, because the durable record —
+// not the remote write — owns the blocker's resolution.
+func TestOrchestrator_ReopenPullRequest_StateWriteFailureStoresRecordAndReportsError(t *testing.T) {
+	fx := newResolutionTestFixture(t, resolutionFixtureOpts{})
+	fx.lc.SetStackLayerPRStateFn = func(id, repo string, layerPosition int, state feature.StackPRState) error {
+		return errors.New("write feature.yaml: no space left on device")
+	}
+
+	err := fx.o.ReopenPullRequest(fx.f.ID, "r1", 2)
+	var stateWrite *orchestrator.PublishStateWriteError
+	if !errors.As(err, &stateWrite) {
+		t.Fatalf("ReopenPullRequest error = %T %v; want PublishStateWriteError", err, err)
+	}
+	if stateWrite.RepoName != "r1" || stateWrite.LayerPosition != 2 ||
+		stateWrite.LayerTitle != "Fix auth" || stateWrite.PRURL != resolutionTestPR2 {
+		t.Fatalf("PublishStateWriteError = %+v, want r1's layer 2 (Fix auth) and its pull request", stateWrite)
+	}
+	if stateWrite.Operation != "record the reopened pull-request state" {
+		t.Fatalf("PublishStateWriteError operation = %q, want the reopen state write", stateWrite.Operation)
+	}
+
+	record := fx.storedRecord()
+	if record == nil || record.Code != errcat.PublishStateWriteFailed {
+		t.Fatalf("stored record = %+v, want publish_state_write_failed", record)
+	}
+	repo := record.Context.Repositories[0]
+	if repo.Name != "r1" || repo.LayerPosition != 2 || repo.LayerTitle != "Fix auth" ||
+		repo.PullRequestURL != resolutionTestPR2 {
+		t.Fatalf("stored record block = %+v, want the repository, layer 2, and the pull request named", repo)
+	}
+
+	// The remote reopen happened, but no resolution outcome was reported.
+	if got := len(stackRemoteCalls(fx.pub, "ReopenPullRequest")); got != 1 {
+		t.Fatalf("ReopenPullRequest remote calls = %d, want 1 (the remote write succeeded)", got)
+	}
+	if got := len(fx.layerEvents); got != 0 {
+		t.Fatalf("layer publish events = %d, want 0 (success is reported only after the state write)", got)
+	}
+	if got := len(fx.statusEvents()); got != 0 {
+		t.Fatalf("repository status events = %d, want 0", got)
+	}
+	if entry := fx.layer2Entry(); entry.PRState != feature.StackPRStateClosed {
+		t.Fatalf("layer 2 entry = %+v, want the pull request left recorded closed", entry)
+	}
+}
+
+// A live-open pull request whose open-state record fails is not reported as
+// a successful reopen: the idempotent path fails with the state-write record
+// instead of clearing the stored closed record only in memory.
+func TestOrchestrator_ReopenPullRequest_LiveOpenStateWriteFailureFailsTheAction(t *testing.T) {
+	fx := newResolutionTestFixture(t, resolutionFixtureOpts{liveState: git.PRStateOpen})
+	fx.lc.SetStackLayerPRStateFn = func(id, repo string, layerPosition int, state feature.StackPRState) error {
+		return errors.New("write feature.yaml: no space left on device")
+	}
+
+	err := fx.o.ReopenPullRequest(fx.f.ID, "r1", 2)
+	var stateWrite *orchestrator.PublishStateWriteError
+	if !errors.As(err, &stateWrite) {
+		t.Fatalf("ReopenPullRequest error = %T %v; want PublishStateWriteError", err, err)
+	}
+	if stateWrite.Operation != "record the open pull-request state" {
+		t.Fatalf("PublishStateWriteError operation = %q, want the open-state write", stateWrite.Operation)
+	}
+	if record := fx.storedRecord(); record == nil || record.Code != errcat.PublishStateWriteFailed {
+		t.Fatalf("stored record = %+v, want publish_state_write_failed", record)
+	}
+	if got := len(stackRemoteCalls(fx.pub, "ReopenPullRequest")); got != 0 {
+		t.Fatalf("ReopenPullRequest remote calls = %d, want 0 (the live state already reads open)", got)
+	}
+}
+
+// A failed durable record of the recreated pull request fails the action
+// naming the replacement pull request the remote already created: the stored
+// state-write record carries the new URL, no resolution outcome is reported,
+// and the repository's published mark is never written.
+func TestOrchestrator_RecreatePullRequest_StateWriteFailureNamesCreatedPullRequest(t *testing.T) {
+	fx := newResolutionTestFixture(t, resolutionFixtureOpts{})
+	fx.lc.RecordStackLayerPRFn = func(id, repo string, layerPosition int, prURL, pushedSHA string) error {
+		return errors.New("write feature.yaml: no space left on device")
+	}
+
+	err := fx.o.RecreatePullRequest(fx.f.ID, "r1", 2)
+	var stateWrite *orchestrator.PublishStateWriteError
+	if !errors.As(err, &stateWrite) {
+		t.Fatalf("RecreatePullRequest error = %T %v; want PublishStateWriteError", err, err)
+	}
+	if stateWrite.RepoName != "r1" || stateWrite.LayerPosition != 2 ||
+		stateWrite.LayerTitle != "Fix auth" || stateWrite.PRURL != resolutionTestNewPR {
+		t.Fatalf("PublishStateWriteError = %+v, want r1's layer 2 and the created pull request", stateWrite)
+	}
+	if stateWrite.Operation != "record the recreated pull request" {
+		t.Fatalf("PublishStateWriteError operation = %q, want the recreated-PR record write", stateWrite.Operation)
+	}
+
+	record := fx.storedRecord()
+	if record == nil || record.Code != errcat.PublishStateWriteFailed {
+		t.Fatalf("stored record = %+v, want publish_state_write_failed", record)
+	}
+	repo := record.Context.Repositories[0]
+	if repo.Name != "r1" || repo.LayerPosition != 2 || repo.PullRequestURL != resolutionTestNewPR {
+		t.Fatalf("stored record block = %+v, want the repository, layer 2, and the new pull request named", repo)
+	}
+
+	if got := len(stackRemoteCalls(fx.pub, "CreatePR")); got != 1 {
+		t.Fatalf("CreatePR calls = %d, want 1 (the replacement pull request exists on the remote)", got)
+	}
+	if got := len(fx.layerEvents); got != 0 {
+		t.Fatalf("layer publish events = %d, want 0 (success is reported only after the state write)", got)
+	}
+	if got := len(fx.statusEvents()); got != 0 {
+		t.Fatalf("repository status events = %d, want 0", got)
+	}
+	refuteLifecycleCall(t, fx.lc, "SetRepoPublished")
+	if entry := fx.layer2Entry(); entry.PRURL != resolutionTestPR2 || entry.PRState != feature.StackPRStateClosed {
+		t.Fatalf("layer 2 entry = %+v, want the closed pull request still recorded", entry)
+	}
+}

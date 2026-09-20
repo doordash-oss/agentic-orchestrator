@@ -9376,6 +9376,7 @@ body {
  * the one branded moment; connection controls reuse the Settings vocabulary. */
 .slack-settings {
   --slack-accent: #2eb67d;
+  --slack-success-text: var(--ok);
 }
 
 .slack-settings__status {
@@ -9597,8 +9598,13 @@ body {
 
 .slack-settings__recipient-status--resolved,
 .slack-settings__test-sent {
-  color: var(--slack-accent);
+  color: var(--slack-success-text);
   font-weight: 700;
+}
+
+.slack-settings__recipient-status--resolved > [aria-hidden='true'],
+.slack-settings__test-sent > [aria-hidden='true'] {
+  color: var(--slack-accent);
 }
 
 .slack-settings__you-pill {

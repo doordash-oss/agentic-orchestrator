@@ -144,7 +144,9 @@ test('Slack settings resolve and save default recipients', async ({}, testInfo) 
     const channel = settings.getByRole('textbox', { name: 'Recipient 3' });
     await channel.fill('#private-ops');
     await channel.blur();
-    const channelError = settings.locator('#slack-recipient-3-error');
+    const channelErrorId = await channel.getAttribute('aria-describedby');
+    expect(channelErrorId).not.toBeNull();
+    const channelError = settings.locator(`#${channelErrorId!}`);
     await expect(channelError).toContainText('Agentico is not a member of #private-ops.');
     await expect(channelError).toContainText(
       'Invite the Agentico app to #private-ops in Slack, then try again.',

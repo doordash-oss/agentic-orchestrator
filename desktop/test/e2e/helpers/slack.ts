@@ -47,7 +47,7 @@ export interface SlackRequest {
 
 export interface ScriptedSlackServer {
   baseUrl: string;
-  /** Compatibility shorthand for the Phase 1 auth.test-only journeys. */
+  /** Shorthand for queuing auth.test responses. */
   enqueue(...scripts: SlackScript[]): void;
   enqueueMethod(method: string, ...scripts: SlackScript[]): void;
   requests(): SlackRequest[];

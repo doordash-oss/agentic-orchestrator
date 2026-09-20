@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { SlackSettingsSnapshot } from '../../../shared/ipc';
@@ -547,6 +547,138 @@ describe('SlackSettingsPane', () => {
     expect(mock.api.validateSlackSettings).toHaveBeenCalledWith({});
   });
 
+  it('saves recipient removals after the stored token has been cleared', async () => {
+    const user = userEvent.setup();
+    const recipients = [
+      {
+        typedText: '@ada',
+        kind: 'user' as const,
+        id: 'U12345678',
+        displayName: 'Ada',
+      },
+      {
+        typedText: '#eng',
+        kind: 'channel' as const,
+        id: 'C12345678',
+        displayName: '#eng',
+      },
+    ];
+    const withoutToken = connected({
+      enabled: false,
+      tokenSet: false,
+      tokenHint: '',
+      tokenType: null,
+      identity: null,
+      grantedScopes: [],
+      defaultRecipients: recipients,
+      status: { state: 'not_configured', lastError: null, lastCheckedAt: null },
+    });
+    const afterRemoval = {
+      ...withoutToken,
+      defaultRecipients: [recipients[1]],
+    };
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected({ defaultRecipients: recipients }),
+    });
+    mock.api.updateSlackSettings
+      .mockResolvedValueOnce(withoutToken)
+      .mockResolvedValueOnce(afterRemoval);
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByText('Not set up')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Remove recipient 1' }));
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(mock.api.updateSlackSettings).toHaveBeenLastCalledWith({
+        enabled: false,
+        defaultRecipients: [recipients[1]],
+      }),
+    );
+
+    mock.api.getSlackSettings.mockResolvedValue(afterRemoval);
+    mock.emitAppEvent({ type: 'invalidated', kind: 'config.updated' });
+    await waitFor(() => expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('textbox', { name: 'Recipient 1' })).toHaveValue('#eng');
+    expect(screen.queryByRole('textbox', { name: 'Recipient 2' })).not.toBeInTheDocument();
+  });
+
+  it('keeps a pending recipient draft through invalidation and resets it explicitly', async () => {
+    const user = userEvent.setup();
+    let resolveRecipient!: (
+      value: Awaited<ReturnType<Window['agentico']['resolveSlackRecipient']>>,
+    ) => void;
+    const delayed = new Promise<Awaited<ReturnType<Window['agentico']['resolveSlackRecipient']>>>(
+      (resolve) => {
+        resolveRecipient = resolve;
+      },
+    );
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected(),
+    });
+    mock.api.resolveSlackRecipient.mockReturnValue(delayed);
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('button', { name: 'Add recipient' }));
+    const input = screen.getByRole('textbox', { name: 'Recipient 1' });
+    await user.type(input, '#eng{Enter}');
+    expect(await screen.findByText('Resolving...')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Reset' })).toBeEnabled();
+
+    mock.emitAppEvent({ type: 'invalidated', kind: 'config.updated' });
+    await Promise.resolve();
+    expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(1);
+    expect(input).toHaveValue('#eng');
+
+    await user.click(screen.getByRole('button', { name: 'Reset' }));
+    expect(screen.queryByRole('textbox', { name: 'Recipient 1' })).not.toBeInTheDocument();
+
+    resolveRecipient({
+      typedText: '#eng',
+      kind: 'channel',
+      id: 'C12345678',
+      displayName: '#eng',
+    });
+    await Promise.resolve();
+    expect(screen.queryByText('#eng')).not.toBeInTheDocument();
+  });
+
+  it('keeps a failed recipient draft through invalidation and resets it explicitly', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected(),
+    });
+    mock.api.resolveSlackRecipient.mockRejectedValue(
+      ipcError('slack_channel_not_found', 'Slack could not find that channel.'),
+    );
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('button', { name: 'Add recipient' }));
+    const input = screen.getByRole('textbox', { name: 'Recipient 1' });
+    await user.type(input, '#missing{Enter}');
+    expect(await screen.findByText('Slack could not find that channel.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Reset' })).toBeEnabled();
+
+    mock.emitAppEvent({ type: 'invalidated', kind: 'config.updated' });
+    await Promise.resolve();
+    expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(1);
+    expect(input).toHaveValue('#missing');
+    expect(screen.getByText('Slack could not find that channel.')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Reset' }));
+    expect(screen.queryByRole('textbox', { name: 'Recipient 1' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Slack could not find that channel.')).not.toBeInTheDocument();
+  });
+
   it('renders test-message delivery results and clears them when rows change', async () => {
     const user = userEvent.setup();
     const recipients = [
@@ -596,5 +728,173 @@ describe('SlackSettingsPane', () => {
 
     await user.type(screen.getByRole('textbox', { name: 'Recipient 1' }), '-edited');
     expect(screen.queryByText('Sent')).not.toBeInTheDocument();
+  });
+
+  it('does not restore a delayed test error after a recipient edit', async () => {
+    const user = userEvent.setup();
+    let rejectSend!: (error: unknown) => void;
+    const delayed = new Promise<never>((_resolve, reject) => {
+      rejectSend = reject;
+    });
+    const recipient = {
+      typedText: '@ada',
+      kind: 'user' as const,
+      id: 'U12345678',
+      displayName: 'Ada',
+    };
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected({ defaultRecipients: [recipient] }),
+    });
+    mock.api.sendSlackTestMessage.mockReturnValue(delayed);
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('button', { name: 'Send test message' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipient 1' }), '-edited');
+    await act(async () => {
+      rejectSend(ipcError('slack_unreachable', 'Slack was unreachable.'));
+      await delayed.catch(() => undefined);
+    });
+
+    expect(screen.queryByText('Slack was unreachable.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send test message' })).toBeDisabled();
+  });
+
+  it('does not restore delayed test results after a save', async () => {
+    const user = userEvent.setup();
+    let resolveSend!: (
+      value: Awaited<ReturnType<Window['agentico']['sendSlackTestMessage']>>,
+    ) => void;
+    const delayed = new Promise<Awaited<ReturnType<Window['agentico']['sendSlackTestMessage']>>>(
+      (resolve) => {
+        resolveSend = resolve;
+      },
+    );
+    const recipient = {
+      typedText: '@ada',
+      kind: 'user' as const,
+      id: 'U12345678',
+      displayName: 'Ada',
+    };
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected({ defaultRecipients: [recipient] }),
+    });
+    mock.api.sendSlackTestMessage.mockReturnValue(delayed);
+    mock.api.updateSlackSettings.mockResolvedValue(
+      connected({ enabled: false, defaultRecipients: [recipient] }),
+    );
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('button', { name: 'Send test message' }));
+    await user.click(screen.getByRole('checkbox', { name: /Enabled/ }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByText('Saved.')).toBeVisible();
+
+    await act(async () => {
+      resolveSend({
+        results: [{ recipient, delivered: true, error: null }],
+      });
+      await delayed;
+    });
+
+    expect(screen.queryByText('Sent')).not.toBeInTheDocument();
+  });
+
+  it('does not restore delayed test results after reset', async () => {
+    const user = userEvent.setup();
+    let resolveSend!: (
+      value: Awaited<ReturnType<Window['agentico']['sendSlackTestMessage']>>,
+    ) => void;
+    const delayed = new Promise<Awaited<ReturnType<Window['agentico']['sendSlackTestMessage']>>>(
+      (resolve) => {
+        resolveSend = resolve;
+      },
+    );
+    const recipient = {
+      typedText: '@ada',
+      kind: 'user' as const,
+      id: 'U12345678',
+      displayName: 'Ada',
+    };
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected({ defaultRecipients: [recipient] }),
+    });
+    mock.api.sendSlackTestMessage.mockReturnValue(delayed);
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('button', { name: 'Send test message' }));
+    await user.click(screen.getByRole('checkbox', { name: /Enabled/ }));
+    await user.click(screen.getByRole('button', { name: 'Reset' }));
+
+    await act(async () => {
+      resolveSend({
+        results: [{ recipient, delivered: true, error: null }],
+      });
+      await delayed;
+    });
+
+    expect(screen.queryByText('Sent')).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /Enabled/ })).toBeChecked();
+  });
+
+  it('keeps a newer test send pending when an obsolete send completes', async () => {
+    const user = userEvent.setup();
+    type TestResult = Awaited<ReturnType<Window['agentico']['sendSlackTestMessage']>>;
+    let resolveFirst!: (value: TestResult) => void;
+    let resolveSecond!: (value: TestResult) => void;
+    const first = new Promise<TestResult>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const second = new Promise<TestResult>((resolve) => {
+      resolveSecond = resolve;
+    });
+    const recipients = [
+      {
+        typedText: '@ada',
+        kind: 'user' as const,
+        id: 'U12345678',
+        displayName: 'Ada',
+      },
+      {
+        typedText: '#eng',
+        kind: 'channel' as const,
+        id: 'C12345678',
+        displayName: '#eng',
+      },
+    ];
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected({ defaultRecipients: recipients }),
+    });
+    mock.api.sendSlackTestMessage.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('button', { name: 'Send test message' }));
+    await user.click(screen.getByRole('button', { name: 'Remove recipient 2' }));
+    await user.click(screen.getByRole('button', { name: 'Send test message' }));
+
+    await act(async () => {
+      resolveFirst({
+        results: recipients.map((recipient) => ({ recipient, delivered: true, error: null })),
+      });
+      await first;
+    });
+    expect(screen.getByRole('button', { name: 'Sending...' })).toBeDisabled();
+    expect(screen.queryByText('Sent')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveSecond({
+        results: [{ recipient: recipients[0]!, delivered: true, error: null }],
+      });
+      await second;
+    });
+    expect(await screen.findByText('Sent')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send test message' })).toBeEnabled();
   });
 });

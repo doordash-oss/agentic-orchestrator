@@ -111,6 +111,7 @@ export function SlackSettingsPane() {
   const request = useRef(0);
   const operationEpoch = useRef(0);
   const checkRevision = useRef(0);
+  const testRevision = useRef(0);
   const checkedCredentialKey = useRef<string | null>(null);
   const tokenInputRef = useRef<HTMLInputElement>(null);
   const nextRecipientKey = useRef(0);
@@ -146,10 +147,13 @@ export function SlackSettingsPane() {
   const hasInvalidRecipients = recipientRows.some(
     (row) => row.input.trim() !== '' && row.resolved === null,
   );
-  const recipientsDirty = !recipientListsEqual(resolvedRecipients, baselineRecipients);
-  const dirty = enabled !== baselineEnabled || token !== '' || clearToken || recipientsDirty;
+  const recipientsChanged = !recipientListsEqual(resolvedRecipients, baselineRecipients);
+  const recipientsDirty = recipientsChanged || hasInvalidRecipients;
+  const hasNonRecipientChanges = enabled !== baselineEnabled || token !== '' || clearToken;
+  const dirty = hasNonRecipientChanges || recipientsDirty;
 
   const clearTestFeedback = useCallback(() => {
+    testRevision.current += 1;
     setSendingTest(false);
     setTestResult(null);
     setTestError(null);
@@ -275,9 +279,9 @@ export function SlackSettingsPane() {
       enabled,
       ...(token === '' ? {} : { token }),
       ...(clearToken ? { clearToken: true } : {}),
-      ...(recipientsDirty ? { defaultRecipients: resolvedRecipients } : {}),
+      ...(recipientsChanged ? { defaultRecipients: resolvedRecipients } : {}),
     }),
-    [clearToken, enabled, recipientsDirty, resolvedRecipients, token],
+    [clearToken, enabled, recipientsChanged, resolvedRecipients, token],
   );
 
   const updateRecipientInput = (key: number, value: string) => {
@@ -445,19 +449,26 @@ export function SlackSettingsPane() {
 
   const sendTestMessage = () => {
     const epoch = operationEpoch.current;
+    const revision = ++testRevision.current;
     setSendingTest(true);
     setTestResult(null);
     setTestError(null);
     void window.agentico
       .sendSlackTestMessage({ recipients: resolvedRecipients })
       .then((result) => {
-        if (epoch === operationEpoch.current) setTestResult(result);
+        if (epoch === operationEpoch.current && revision === testRevision.current) {
+          setTestResult(result);
+        }
       })
       .catch((error: unknown) => {
-        if (epoch === operationEpoch.current) setTestError(parseIpcError(error));
+        if (epoch === operationEpoch.current && revision === testRevision.current) {
+          setTestError(parseIpcError(error));
+        }
       })
       .finally(() => {
-        if (epoch === operationEpoch.current) setSendingTest(false);
+        if (epoch === operationEpoch.current && revision === testRevision.current) {
+          setSendingTest(false);
+        }
       });
   };
 
@@ -793,7 +804,12 @@ export function SlackSettingsPane() {
             type="button"
             className="config-editor__btn config-editor__btn--primary"
             disabled={
-              !dirty || saving || hasInvalidRecipients || (!snapshot.tokenSet && token === '')
+              !dirty ||
+              saving ||
+              hasInvalidRecipients ||
+              (!snapshot.tokenSet &&
+                token === '' &&
+                !(recipientsChanged && !hasNonRecipientChanges))
             }
             onClick={save}
           >

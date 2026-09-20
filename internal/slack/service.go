@@ -194,7 +194,7 @@ func classifyValidationError(token string, err error) error {
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
 		if slackErrorCode(apiErr.SlackError) == "missing_scope" {
-			return missingScopeError(apiErr)
+			return canonicalError(missingScopeError(apiErr))
 		}
 		return canonicalError(errcat.New(
 			errcat.SlackInvalidToken,

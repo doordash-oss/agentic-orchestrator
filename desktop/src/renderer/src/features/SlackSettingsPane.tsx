@@ -113,6 +113,11 @@ export function SlackSettingsPane() {
   const checkRevision = useRef(0);
   const testRevision = useRef(0);
   const checkedCredentialKey = useRef<string | null>(null);
+  // Advances on every user draft edit. A background snapshot install is dropped
+  // when the draft changed since the reload it answers began, so an outstanding
+  // refresh can never silently discard edits; Save and Reset still install
+  // intentionally because they are user-requested.
+  const draftRevision = useRef(0);
   const tokenInputRef = useRef<HTMLInputElement>(null);
   const nextRecipientKey = useRef(0);
   const recipientRevisions = useRef(new Map<number, number>());
@@ -197,21 +202,20 @@ export function SlackSettingsPane() {
   const reload = useCallback(
     (expectedCheckRevision?: number, preserveSameCredentialFeedback = false) => {
       const current = ++request.current;
+      const draftAtRequest = draftRevision.current;
+      const snapshotStillApplies = () =>
+        current === request.current &&
+        draftAtRequest === draftRevision.current &&
+        (expectedCheckRevision === undefined || expectedCheckRevision === checkRevision.current);
       void window.agentico
         .getSlackSettings()
         .then((next) => {
-          if (
-            current === request.current &&
-            (expectedCheckRevision === undefined || expectedCheckRevision === checkRevision.current)
-          ) {
+          if (snapshotStillApplies()) {
             installSnapshot(next, preserveSameCredentialFeedback);
           }
         })
         .catch((error: unknown) => {
-          if (
-            current === request.current &&
-            (expectedCheckRevision === undefined || expectedCheckRevision === checkRevision.current)
-          ) {
+          if (snapshotStillApplies()) {
             setLoadError(parseIpcError(error));
           }
         });
@@ -255,6 +259,7 @@ export function SlackSettingsPane() {
   const canCheck = token !== '' || tokenSet;
 
   const updateToken = (value: string) => {
+    draftRevision.current += 1;
     clearCheckFeedback();
     clearTestFeedback();
     setToken(value);
@@ -285,6 +290,7 @@ export function SlackSettingsPane() {
   );
 
   const updateRecipientInput = (key: number, value: string) => {
+    draftRevision.current += 1;
     recipientRevisions.current.set(key, (recipientRevisions.current.get(key) ?? 0) + 1);
     clearTestFeedback();
     setSaved(false);
@@ -320,6 +326,7 @@ export function SlackSettingsPane() {
     const epoch = operationEpoch.current;
     const revision = (recipientRevisions.current.get(key) ?? 0) + 1;
     recipientRevisions.current.set(key, revision);
+    draftRevision.current += 1;
     setRecipientRows((rows) =>
       rows.map((candidate) =>
         candidate.key === key
@@ -340,6 +347,7 @@ export function SlackSettingsPane() {
         if (epoch !== operationEpoch.current || recipientRevisions.current.get(key) !== revision) {
           return;
         }
+        draftRevision.current += 1;
         setRecipientRows((rows) => {
           const duplicate = rows.some(
             (candidate) =>
@@ -364,6 +372,7 @@ export function SlackSettingsPane() {
         if (epoch !== operationEpoch.current || recipientRevisions.current.get(key) !== revision) {
           return;
         }
+        draftRevision.current += 1;
         setRecipientRows((rows) =>
           rows.map((candidate) =>
             candidate.key === key
@@ -382,6 +391,7 @@ export function SlackSettingsPane() {
 
   const addRecipient = () => {
     const key = ++nextRecipientKey.current;
+    draftRevision.current += 1;
     recipientRevisions.current.set(key, 0);
     setRecipientRows((rows) => [
       ...rows,
@@ -391,6 +401,7 @@ export function SlackSettingsPane() {
   };
 
   const removeRecipient = (key: number) => {
+    draftRevision.current += 1;
     recipientRevisions.current.delete(key);
     clearTestFeedback();
     setSaved(false);
@@ -423,6 +434,8 @@ export function SlackSettingsPane() {
     const epoch = operationEpoch.current;
     const revision = checkRevision.current;
     const checksStoredToken = token === '';
+    const dirtyAtClick = dirty;
+    const draftAtClick = draftRevision.current;
     checkedCredentialKey.current =
       checksStoredToken && snapshot !== null ? credentialKey(snapshot) : null;
     setChecking(true);
@@ -433,7 +446,12 @@ export function SlackSettingsPane() {
       .then((result) => {
         if (epoch !== operationEpoch.current || revision !== checkRevision.current) return;
         setCheckResult(result);
-        if (checksStoredToken && !dirty) reload(revision, true);
+        // Reload only while the pane is clean and untouched: the captured
+        // `dirty` alone is stale by the time the check returns, and installing
+        // over an edited draft would discard the user's recipients.
+        if (checksStoredToken && !dirtyAtClick && draftRevision.current === draftAtClick) {
+          reload(revision, true);
+        }
       })
       .catch((error: unknown) => {
         if (epoch === operationEpoch.current && revision === checkRevision.current) {
@@ -588,7 +606,10 @@ export function SlackSettingsPane() {
               <button
                 type="button"
                 className="setup-wizard__action"
-                onClick={() => setReplacing(true)}
+                onClick={() => {
+                  draftRevision.current += 1;
+                  setReplacing(true);
+                }}
               >
                 Replace
               </button>
@@ -596,6 +617,7 @@ export function SlackSettingsPane() {
                 type="button"
                 className="settings-panel__root-btn settings-panel__root-btn--danger"
                 onClick={() => {
+                  draftRevision.current += 1;
                   clearCheckFeedback();
                   setClearToken(true);
                   setEnabled(false);
@@ -613,6 +635,7 @@ export function SlackSettingsPane() {
               type="button"
               className="setup-wizard__action"
               onClick={() => {
+                draftRevision.current += 1;
                 clearCheckFeedback();
                 setClearToken(false);
                 setEnabled(snapshot.enabled);
@@ -642,6 +665,7 @@ export function SlackSettingsPane() {
                 type="button"
                 className="setup-wizard__action"
                 onClick={() => {
+                  draftRevision.current += 1;
                   clearCheckFeedback();
                   setReplacing(false);
                   setToken('');
@@ -741,6 +765,7 @@ export function SlackSettingsPane() {
             type="checkbox"
             checked={enabled}
             onChange={(event) => {
+              draftRevision.current += 1;
               setEnabled(event.currentTarget.checked);
               setSaved(false);
             }}

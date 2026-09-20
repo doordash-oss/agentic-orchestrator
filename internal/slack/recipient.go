@@ -256,7 +256,7 @@ func classifyResolveError(token string, err error, notFoundCode errcat.Code) err
 		case credentialSlackError(code):
 			return invalidTokenError(token, apiErr)
 		case code == "missing_scope":
-			return missingScopeError(apiErr)
+			return canonicalError(missingScopeError(apiErr))
 		case notFoundCode == errcat.SlackUserNotFound &&
 			(code == "user_not_found" || code == "users_not_found"):
 			return canonicalError(errcat.New(errcat.SlackUserNotFound))
@@ -289,14 +289,14 @@ func invalidTokenError(token string, apiErr *APIError) error {
 	))
 }
 
-func missingScopeError(apiErr *APIError) error {
+func missingScopeError(apiErr *APIError) errcat.Error {
 	scopes := strings.FieldsFunc(apiErr.Needed, func(r rune) bool {
 		return r == ',' || unicode.IsSpace(r)
 	})
-	return canonicalError(errcat.New(
+	return errcat.New(
 		errcat.SlackMissingScopes,
 		errcat.WithParams(errcat.SlackMissingScopesParams{Scopes: scopes}),
-	))
+	)
 }
 
 func credentialSlackError(code string) bool {

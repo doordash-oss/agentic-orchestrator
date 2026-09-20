@@ -98,10 +98,7 @@ func classifyDeliveryError(
 				errcat.WithDiagnostics("Slack returned "+scrub(token, apiErr.SlackError)),
 			), true
 		case code == "missing_scope":
-			var operationErr *ports.SlackValidationError
-			if errors.As(missingScopeError(apiErr), &operationErr) {
-				return operationErr.Canonical, true
-			}
+			return missingScopeError(apiErr), true
 		case code == "channel_not_found":
 			return recipientError(errcat.SlackChannelNotFound, recipient), false
 		case code == "not_in_channel":

@@ -679,6 +679,274 @@ describe('SlackSettingsPane', () => {
     expect(screen.queryByText('Slack could not find that channel.')).not.toBeInTheDocument();
   });
 
+  it('keeps a pending recipient draft when a delayed stored-token check completes', async () => {
+    const user = userEvent.setup();
+    let resolveCheck!: (
+      value: Awaited<ReturnType<Window['agentico']['validateSlackSettings']>>,
+    ) => void;
+    const delayedCheck = new Promise<
+      Awaited<ReturnType<Window['agentico']['validateSlackSettings']>>
+    >((resolve) => {
+      resolveCheck = resolve;
+    });
+    let resolveRecipient!: (
+      value: Awaited<ReturnType<Window['agentico']['resolveSlackRecipient']>>,
+    ) => void;
+    const delayedRecipient = new Promise<
+      Awaited<ReturnType<Window['agentico']['resolveSlackRecipient']>>
+    >((resolve) => {
+      resolveRecipient = resolve;
+    });
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected(),
+    });
+    mock.api.validateSlackSettings.mockReturnValue(delayedCheck);
+    mock.api.resolveSlackRecipient.mockReturnValue(delayedRecipient);
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('button', { name: 'Check connection' }));
+    await user.click(screen.getByRole('button', { name: 'Add recipient' }));
+    const input = screen.getByRole('textbox', { name: 'Recipient 1' });
+    await user.type(input, '#eng{Enter}');
+    expect(await screen.findByText('Resolving...')).toBeVisible();
+
+    await act(async () => {
+      resolveCheck({
+        tokenType: 'bot',
+        identity: connected().identity!,
+        grantedScopes: ['chat:write'],
+        missingScopes: [],
+        suggestedRecipient: null,
+      });
+      await delayedCheck;
+    });
+
+    expect(await screen.findByText(/1 scopes granted/)).toBeVisible();
+    expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(1);
+    expect(input).toHaveValue('#eng');
+    expect(screen.getByText('Resolving...')).toBeVisible();
+
+    const channel = {
+      typedText: '#eng',
+      kind: 'channel' as const,
+      id: 'C12345678',
+      displayName: '#eng',
+    };
+    await act(async () => {
+      resolveRecipient(channel);
+      await delayedRecipient;
+    });
+
+    expect(screen.getByText('#eng')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+    mock.api.updateSlackSettings.mockResolvedValue(connected({ defaultRecipients: [channel] }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(mock.api.updateSlackSettings).toHaveBeenCalledWith({
+        enabled: true,
+        defaultRecipients: [channel],
+      }),
+    );
+  });
+
+  it('keeps a removal and a failed draft when a delayed stored-token check completes', async () => {
+    const user = userEvent.setup();
+    let resolveCheck!: (
+      value: Awaited<ReturnType<Window['agentico']['validateSlackSettings']>>,
+    ) => void;
+    const delayedCheck = new Promise<
+      Awaited<ReturnType<Window['agentico']['validateSlackSettings']>>
+    >((resolve) => {
+      resolveCheck = resolve;
+    });
+    const stored = [
+      {
+        typedText: '@ada',
+        kind: 'user' as const,
+        id: 'U12345678',
+        displayName: 'Ada',
+      },
+      {
+        typedText: '#eng',
+        kind: 'channel' as const,
+        id: 'C12345678',
+        displayName: '#eng',
+      },
+    ];
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected({ defaultRecipients: stored }),
+    });
+    mock.api.validateSlackSettings.mockReturnValue(delayedCheck);
+    mock.api.resolveSlackRecipient.mockRejectedValue(
+      ipcError('slack_channel_not_found', 'Slack could not find that channel.'),
+    );
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('button', { name: 'Check connection' }));
+    await user.click(screen.getByRole('button', { name: 'Remove recipient 1' }));
+    await user.click(screen.getByRole('button', { name: 'Add recipient' }));
+    const input = screen.getByRole('textbox', { name: 'Recipient 2' });
+    await user.type(input, '#missing{Enter}');
+    expect(await screen.findByText('Slack could not find that channel.')).toBeVisible();
+
+    await act(async () => {
+      resolveCheck({
+        tokenType: 'bot',
+        identity: connected().identity!,
+        grantedScopes: ['chat:write'],
+        missingScopes: [],
+        suggestedRecipient: null,
+      });
+      await delayedCheck;
+    });
+
+    expect(await screen.findByText(/1 scopes granted/)).toBeVisible();
+    expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Ada')).not.toBeInTheDocument();
+    expect(input).toHaveValue('#missing');
+    expect(screen.getByText('Slack could not find that channel.')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Reset' }));
+    expect(screen.getByRole('textbox', { name: 'Recipient 1' })).toHaveValue('@ada');
+    expect(screen.getByRole('textbox', { name: 'Recipient 2' })).toHaveValue('#eng');
+    expect(screen.queryByRole('textbox', { name: 'Recipient 3' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Slack could not find that channel.')).not.toBeInTheDocument();
+  });
+
+  it('keeps recipient edits made while an invalidation reload is in flight', async () => {
+    const user = userEvent.setup();
+    let resolveReload!: (value: SlackSettingsSnapshot) => void;
+    const delayedReload = new Promise<SlackSettingsSnapshot>((resolve) => {
+      resolveReload = resolve;
+    });
+    const stored = [
+      {
+        typedText: '@ada',
+        kind: 'user' as const,
+        id: 'U12345678',
+        displayName: 'Ada',
+      },
+      {
+        typedText: '#eng',
+        kind: 'channel' as const,
+        id: 'C12345678',
+        displayName: '#eng',
+      },
+    ];
+    const storedSnapshot = connected({ defaultRecipients: stored });
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: storedSnapshot,
+    });
+    mock.api.getSlackSettings
+      .mockReturnValueOnce(Promise.resolve(storedSnapshot))
+      .mockReturnValueOnce(delayedReload);
+    render(<SlackSettingsPane />);
+
+    expect(await screen.findByText('Ada')).toBeVisible();
+    mock.emitAppEvent({ type: 'invalidated', kind: 'config.updated' });
+    await waitFor(() => expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(2));
+
+    await user.click(screen.getByRole('button', { name: 'Remove recipient 1' }));
+    await user.click(screen.getByRole('button', { name: 'Add recipient' }));
+    const input = screen.getByRole('textbox', { name: 'Recipient 2' });
+    await user.type(input, '@grace');
+
+    await act(async () => {
+      resolveReload(storedSnapshot);
+      await delayedReload;
+    });
+
+    expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Ada')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Recipient 1' })).toHaveValue('#eng');
+    expect(input).toHaveValue('@grace');
+
+    const grace = {
+      typedText: '@grace',
+      kind: 'user' as const,
+      id: 'U87654321',
+      displayName: 'Grace Hopper',
+    };
+    mock.api.resolveSlackRecipient.mockResolvedValue(grace);
+    await user.tab();
+    expect(await screen.findByText('Grace Hopper')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+
+    mock.api.updateSlackSettings.mockResolvedValue(
+      connected({ defaultRecipients: [stored[1]!, grace] }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(mock.api.updateSlackSettings).toHaveBeenCalledWith({
+        enabled: true,
+        defaultRecipients: [stored[1]!, grace],
+      }),
+    );
+  });
+
+  it('keeps recipient removals made while a check-triggered reload is in flight', async () => {
+    const user = userEvent.setup();
+    let resolveReload!: (value: SlackSettingsSnapshot) => void;
+    const delayedReload = new Promise<SlackSettingsSnapshot>((resolve) => {
+      resolveReload = resolve;
+    });
+    const stored = [
+      {
+        typedText: '@ada',
+        kind: 'user' as const,
+        id: 'U12345678',
+        displayName: 'Ada',
+      },
+      {
+        typedText: '#eng',
+        kind: 'channel' as const,
+        id: 'C12345678',
+        displayName: '#eng',
+      },
+    ];
+    const storedSnapshot = connected({ defaultRecipients: stored });
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: storedSnapshot,
+      slackValidation: {
+        tokenType: 'bot',
+        identity: connected().identity!,
+        grantedScopes: ['chat:write'],
+        missingScopes: [],
+        suggestedRecipient: null,
+      },
+    });
+    mock.api.getSlackSettings
+      .mockReturnValueOnce(Promise.resolve(storedSnapshot))
+      .mockReturnValueOnce(delayedReload);
+    render(<SlackSettingsPane />);
+
+    expect(await screen.findByText('Ada')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Check connection' }));
+    await waitFor(() => expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(2));
+
+    await user.click(screen.getByRole('button', { name: 'Remove recipient 1' }));
+
+    await act(async () => {
+      resolveReload(storedSnapshot);
+      await delayedReload;
+    });
+
+    expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Ada')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Recipient 1' })).toHaveValue('#eng');
+    expect(screen.getByText(/1 scopes granted/)).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Reset' }));
+    expect(screen.getByRole('textbox', { name: 'Recipient 1' })).toHaveValue('@ada');
+    expect(screen.getByRole('textbox', { name: 'Recipient 2' })).toHaveValue('#eng');
+  });
+
   it('renders test-message delivery results and clears them when rows change', async () => {
     const user = userEvent.setup();
     const recipients = [

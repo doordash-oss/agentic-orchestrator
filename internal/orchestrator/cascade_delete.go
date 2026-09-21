@@ -303,36 +303,9 @@ func (o *Orchestrator) classifyCascadeRefs(
 	}
 
 	safe := true
-	for i := range intent.Refs {
-		ref := &intent.Refs[i]
-		ref.Safe = false
-		ref.Restored = false
-		ref.Diagnostic = ""
-		observed, err := o.deps.Worktrees.RefSHA(ref.RepoPath, ref.Ref)
-		ref.ObservedSHA = observed
-		if err != nil {
+	for _, group := range groupCascadeRefs(intent) {
+		if !o.classifyCascadeRefGroup(intent, group) {
 			safe = false
-			o.addCascadeRefDiagnostic(intent, ref, "ref_read_failed", err.Error())
-			continue
-		}
-		switch observed {
-		case ref.AnchorSHA:
-			ref.Safe = true
-		case ref.CandidateSHA:
-			if err := o.deps.Worktrees.UpdateRef(ref.RepoPath, ref.Ref, ref.CandidateSHA, ref.AnchorSHA); err != nil {
-				latest, _ := o.deps.Worktrees.RefSHA(ref.RepoPath, ref.Ref)
-				ref.ObservedSHA = latest
-				safe = false
-				o.addCascadeRefDiagnostic(intent, ref, "ref_restore_failed", err.Error())
-				continue
-			}
-			ref.ObservedSHA = ref.AnchorSHA
-			ref.Safe = true
-			ref.Restored = true
-		default:
-			safe = false
-			o.addCascadeRefDiagnostic(intent, ref, "external_ref_moved",
-				"candidate-bearing parent ref moved externally; delete will not overwrite it")
 		}
 		if err := journals.SaveCascadeDelete(intent.ParentID, intent); err != nil {
 			return false, fmt.Errorf("recording cascade ref classification: %w", err)
@@ -347,17 +320,139 @@ func (o *Orchestrator) classifyCascadeRefs(
 	return safe, nil
 }
 
-func (o *Orchestrator) addCascadeRefDiagnostic(
+// groupCascadeRefs partitions the journaled refs by (repo path, ref) in
+// first-seen order. Every child that promoted into the parent journals its
+// own anchor and candidate for the same parent ref, so the entries describe
+// one ref's history and must be classified together: a ref cannot sit at
+// every child's SHA at once.
+func groupCascadeRefs(intent *feature.CascadeDeleteIntent) [][]*feature.CascadeRef {
+	var groups [][]*feature.CascadeRef
+	slots := map[[2]string]int{}
+	for i := range intent.Refs {
+		ref := &intent.Refs[i]
+		key := [2]string{ref.RepoPath, ref.Ref}
+		slot, ok := slots[key]
+		if !ok {
+			slot = len(groups)
+			slots[key] = slot
+			groups = append(groups, nil)
+		}
+		groups[slot] = append(groups[slot], ref)
+	}
+	return groups
+}
+
+// classifyCascadeRefGroup decides whether one parent ref is safe to delete.
+// The ref is safe when it sits at any recorded anchor (a known baseline,
+// left untouched), at a recorded candidate (restored to that entry's anchor
+// with one compare-and-swap), or has only advanced past a recorded SHA (the
+// parent's own later work, left as-is like any childless parent's branch).
+// A ref unrelated to every recorded SHA is rewritten or external history
+// the cascade must not overwrite.
+func (o *Orchestrator) classifyCascadeRefGroup(
 	intent *feature.CascadeDeleteIntent,
-	ref *feature.CascadeRef,
+	refs []*feature.CascadeRef,
+) bool {
+	for _, ref := range refs {
+		ref.Safe, ref.Restored, ref.Code, ref.Diagnostic = false, false, "", ""
+	}
+	head := refs[0]
+	observed, err := o.deps.Worktrees.RefSHA(head.RepoPath, head.Ref)
+	setCascadeRefsObserved(refs, observed)
+	if err != nil {
+		o.addCascadeRefDiagnostics(intent, refs, "ref_read_failed", err.Error())
+		return false
+	}
+	var restore *feature.CascadeRef
+	for _, ref := range refs {
+		if observed == ref.AnchorSHA {
+			markCascadeRefsSafe(refs)
+			return true
+		}
+		if restore == nil && observed == ref.CandidateSHA {
+			restore = ref
+		}
+	}
+	if restore != nil {
+		if err := o.deps.Worktrees.UpdateRef(restore.RepoPath, restore.Ref, restore.CandidateSHA, restore.AnchorSHA); err != nil {
+			latest, _ := o.deps.Worktrees.RefSHA(restore.RepoPath, restore.Ref)
+			setCascadeRefsObserved(refs, latest)
+			o.addCascadeRefDiagnostics(intent, refs, "ref_restore_failed", err.Error())
+			return false
+		}
+		setCascadeRefsObserved(refs, restore.AnchorSHA)
+		restore.Restored = true
+		markCascadeRefsSafe(refs)
+		return true
+	}
+	advanced, err := o.cascadeRefAdvanced(refs, observed)
+	if err != nil {
+		o.addCascadeRefDiagnostics(intent, refs, "ref_read_failed", err.Error())
+		return false
+	}
+	if !advanced {
+		o.addCascadeRefDiagnostics(intent, refs, "external_ref_moved",
+			"candidate-bearing parent ref moved externally; delete will not overwrite it")
+		return false
+	}
+	for _, ref := range refs {
+		ref.Code = "ref_advanced"
+		ref.Diagnostic = "parent ref advanced past the last promotion; left as-is"
+	}
+	markCascadeRefsSafe(refs)
+	return true
+}
+
+// cascadeRefAdvanced reports whether observed descends from any recorded
+// candidate or anchor of the group, so the ref only moved forward after the
+// children promoted. It fails rather than guesses when git cannot answer.
+func (o *Orchestrator) cascadeRefAdvanced(refs []*feature.CascadeRef, observed string) (bool, error) {
+	head := refs[0]
+	checked := map[string]bool{}
+	for _, ref := range refs {
+		for _, sha := range []string{ref.CandidateSHA, ref.AnchorSHA} {
+			if sha == "" || checked[sha] {
+				continue
+			}
+			checked[sha] = true
+			ok, err := o.deps.Worktrees.IsAncestor(head.RepoPath, sha, observed)
+			if err != nil {
+				return false, fmt.Errorf("checking %s ancestry: %w", head.Ref, err)
+			}
+			if ok {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func setCascadeRefsObserved(refs []*feature.CascadeRef, observed string) {
+	for _, ref := range refs {
+		ref.ObservedSHA = observed
+	}
+}
+
+func markCascadeRefsSafe(refs []*feature.CascadeRef) {
+	for _, ref := range refs {
+		ref.Safe = true
+	}
+}
+
+func (o *Orchestrator) addCascadeRefDiagnostics(
+	intent *feature.CascadeDeleteIntent,
+	refs []*feature.CascadeRef,
 	code, message string,
 ) {
-	ref.Diagnostic = message
-	intent.Diagnostics = append(intent.Diagnostics, feature.CascadeDiagnostic{
-		Code: code, Message: message, Repo: ref.Repo, Ref: ref.Ref,
-		AnchorSHA: ref.AnchorSHA, CandidateSHA: ref.CandidateSHA,
-		ObservedSHA: ref.ObservedSHA,
-	})
+	for _, ref := range refs {
+		ref.Code = code
+		ref.Diagnostic = message
+		intent.Diagnostics = append(intent.Diagnostics, feature.CascadeDiagnostic{
+			Code: code, Message: message, Repo: ref.Repo, Ref: ref.Ref,
+			AnchorSHA: ref.AnchorSHA, CandidateSHA: ref.CandidateSHA,
+			ObservedSHA: ref.ObservedSHA,
+		})
+	}
 }
 
 func (o *Orchestrator) cleanupCascadeResources(

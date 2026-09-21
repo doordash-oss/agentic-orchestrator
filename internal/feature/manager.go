@@ -48,6 +48,7 @@ type WorktreeOps interface {
 	CurrentBranch(worktreePath string) string
 	RefSHA(repoPath, ref string) (string, error)
 	UpdateRef(repoPath, ref, oldSHA, newSHA string) error
+	IsAncestor(repoPath, ancestor, descendant string) (bool, error)
 	CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error)
 	InspectCleanliness(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
 }

@@ -132,6 +132,13 @@ func sanitizeAuditField(s string) string {
 	return s
 }
 
+// RedactTelemetryText applies the same credential vocabulary used by the
+// permission audit log. Telemetry callers add their own path scrubbing and
+// size bounds after this shared secret-redaction step.
+func RedactTelemetryText(s string) string {
+	return sanitizeAuditField(s)
+}
+
 func boundAuditText(s string, limit int) string {
 	if limit <= 0 || len(s) <= limit {
 		return s

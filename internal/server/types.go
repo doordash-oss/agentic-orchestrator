@@ -100,6 +100,7 @@ type Options struct {
 	// CLI wiring so Git freshness refreshes participate. Nil creates a
 	// private counter.
 	ProbeActivity *ProbeActivity
+	HTTPMetrics   HTTPMetrics
 }
 
 type HandlerOptions struct {

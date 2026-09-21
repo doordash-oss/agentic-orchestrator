@@ -134,6 +134,13 @@ jobs:
         if: github.event_name != 'pull_request'
         run: npm run package:verify
 
+      # A quit that stalls is diagnosed by the harness with a native stack of
+      # the app's main thread (desktop/test/e2e/helpers/processes.ts); that
+      # needs gdb, which the Linux runner images do not ship.
+      - name: Install gdb for stalled-quit diagnostics
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends gdb
+
       # Packaged E2E journeys: Playwright drives the unpacked app verified
       # above with the real bundled server. Full journey suite on ubuntu-latest
       # x64; @smoke subset on macOS and arm. Electron needs a display on Linux,

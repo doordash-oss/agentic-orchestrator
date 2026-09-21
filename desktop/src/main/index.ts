@@ -126,6 +126,7 @@ import { AttentionNotificationCoordinator, electronNotificationSink } from './no
 import { NativeCommandController, type NativeCommandSnapshot } from './nativeCommands';
 import { DiagnosticsService } from './diagnostics';
 import { armHardExitGuard } from './exitGuard';
+import { installMainProcessFaultHandlers } from './faults';
 import { applyLoginShellPath } from './shellEnv';
 import {
   FIXTURE_RELEASE_PUBLIC_KEY,
@@ -160,6 +161,13 @@ import {
 // login-shell PATH resolution immediately so it runs concurrently with
 // Electron's own startup; whenReady awaits the result before wiring the
 // gateway, ahead of the first server spawn.
+// First, before any callback can run: a fault that reached Electron's default
+// handler would open a modal that stops the event loop (see faults.ts).
+const faultHandlers = installMainProcessFaultHandlers({
+  process,
+  log: (line) => console.error(line),
+});
+
 const loginShellPathOutcome = applyLoginShellPath({ env: process.env });
 
 // Packaged-E2E isolation hook: relocate the app-local data directory
@@ -471,6 +479,7 @@ if (!hasSingleInstanceLock) {
       revision: process.env['AGENTICO_REVISION'],
       readServerLines: () => logBuffer.snapshot(),
     });
+    faultHandlers.setRecorder(diagnostics);
     diagnostics.record('electron', 'info', 'Agentico desktop process started.');
     if (shellPath.applied) {
       diagnostics.record(

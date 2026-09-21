@@ -119,13 +119,24 @@ export function captureProcessDiagnostics(rootPid: number): string {
   ];
   if (process.platform === 'linux') {
     sections.push(['threads', linuxThreadStates(rootPid)]);
+    // Yama ptrace_scope=1 (Ubuntu default) only lets an ancestor attach, and
+    // this runner is the app's sibling, so attach as root where passwordless
+    // sudo exists (CI runners) and fall back to a plain attach elsewhere.
+    const gdbArgs = [
+      '--batch',
+      '-p',
+      String(rootPid),
+      '-ex',
+      'info threads',
+      '-ex',
+      'thread apply 1 bt 40',
+    ];
+    const rootAttach = probe('sudo', ['-n', 'gdb', ...gdbArgs], 20_000);
     sections.push([
       'main thread native stack (gdb)',
-      probe(
-        'gdb',
-        ['--batch', '-p', String(rootPid), '-ex', 'info threads', '-ex', 'thread apply 1 bt 40'],
-        20_000,
-      ),
+      rootAttach.includes('(sudo failed') || rootAttach.includes('(sudo not available')
+        ? probe('gdb', gdbArgs, 20_000)
+        : rootAttach,
     ]);
   } else if (process.platform === 'darwin') {
     sections.push([

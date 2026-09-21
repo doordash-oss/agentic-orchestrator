@@ -204,6 +204,14 @@ export async function launchApp(
 const QUIT_STALL_PROBE_MS = 32_000;
 /** The guard's stderr line (HARD_EXIT_MARKER in src/main/exitGuard.ts). */
 const HARD_EXIT_MARKER = 'forcing exit off the main thread';
+/**
+ * The main process logs every uncaught exception and unhandled rejection
+ * under this prefix (FAULT_LOG_PREFIX in src/main/faults.ts) instead of
+ * opening Electron's default error modal, whose nested loop is what stalled
+ * quits headless. A fault is a bug in its own right, so a journey that
+ * provoked one fails with the stack even when the quit itself completed.
+ */
+const MAIN_FAULT_PREFIX = '[agentico-main]';
 
 /**
  * Stops tracing (saving the zip when it will be consumed: evidence runs
@@ -303,6 +311,26 @@ export async function closeApp(handle: AppHandle): Promise<void> {
       }`,
     );
   }
+  const faults = mainProcessFaults(handle.logs);
+  if (faults.length > 0) {
+    persistAppLogs(handle, `${handle.traceName}-main-fault`);
+    throw new Error(
+      `the main process logged ${String(faults.length)} fault(s) during the journey; first:\n${faults[0]}\n(full log: ${handle.traceName}-main-fault.log in the test output)`,
+    );
+  }
+}
+
+/** Each main-process fault with the stack lines that follow it. */
+function mainProcessFaults(logs: readonly string[]): string[] {
+  const lines = logs.join('').split('\n');
+  const faults: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index]!.startsWith(MAIN_FAULT_PREFIX)) continue;
+    let end = index + 1;
+    while (end < lines.length && /^\s+at /.test(lines[end]!)) end += 1;
+    faults.push(lines.slice(index, end).join('\n'));
+  }
+  return faults;
 }
 
 /**

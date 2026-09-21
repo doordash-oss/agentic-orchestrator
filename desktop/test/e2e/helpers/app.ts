@@ -232,6 +232,10 @@ export async function closeApp(handle: AppHandle): Promise<void> {
       const tracePath = handle.testInfo.outputPath(`${handle.traceName}-trace.zip`);
       await bounded(handle.app.context().tracing.stop({ path: tracePath }), 60_000, 'tracing.stop');
       copyTraceToEvidence(tracePath, `${handle.traceName}-trace.zip`);
+      // The trace shows what the page did; only the app's own stdout/stderr
+      // shows why it did it (a renderer crash, a server that never became
+      // healthy, a main-process fault). Keep both for a failed journey.
+      persistAppLogs(handle, `${handle.traceName}-app`);
     } else {
       await bounded(handle.app.context().tracing.stop(), 60_000, 'tracing.stop');
     }

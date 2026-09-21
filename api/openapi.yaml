@@ -3803,6 +3803,7 @@ components:
           granted_scopes,
           missing_scopes,
           default_recipients,
+          categories,
           status,
           manifest,
         ]
@@ -3832,10 +3833,42 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SlackRecipient"
+        categories:
+          $ref: "#/components/schemas/SlackCategories"
         status:
           $ref: "#/components/schemas/SlackStatus"
         manifest:
           type: string
+    SlackCategories:
+      type: object
+      additionalProperties: false
+      required: [progress, needs_input, problems]
+      description: >-
+        Effective per-category notification defaults. Absent stored settings
+        read as every category on.
+      properties:
+        progress:
+          type: boolean
+        needs_input:
+          type: boolean
+        problems:
+          type: boolean
+    SlackCategoriesMutation:
+      type: object
+      additionalProperties: false
+      description: >-
+        Patch representation of the per-category defaults. An absent field
+        means unchanged.
+      properties:
+        progress:
+          type: boolean
+          x-go-type-skip-optional-pointer: false
+        needs_input:
+          type: boolean
+          x-go-type-skip-optional-pointer: false
+        problems:
+          type: boolean
+          x-go-type-skip-optional-pointer: false
     SlackConfigMutation:
       type: object
       additionalProperties: false
@@ -3854,6 +3887,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SlackRecipient"
+          x-go-type-skip-optional-pointer: false
+        categories:
+          $ref: "#/components/schemas/SlackCategoriesMutation"
           x-go-type-skip-optional-pointer: false
     RuntimeConfigMutation:
       type: object

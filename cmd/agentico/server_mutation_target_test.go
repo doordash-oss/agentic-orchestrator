@@ -1366,6 +1366,85 @@ func TestServerMutationTargetRuntimeConfigSlackRecipientSemantics(t *testing.T) 
 	}
 }
 
+func TestServerMutationTargetRuntimeConfigSlackCategories(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	cfg := config.NewDefault()
+	cfg.Slack = &config.SlackConfig{Enabled: true}
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+
+	// A categories-only patch stores exactly the sent field, leaves the
+	// other two on, and persists the full mapping once any is off.
+	off := false
+	result, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{
+			Categories: &serverruntime.SlackCategoriesMutation{Progress: &off},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig(categories) error = %v", err)
+	}
+	if result.Result != resultUpdated {
+		t.Fatalf("categories-only patch result = %q; want updated", result.Result)
+	}
+	effective := cfg.Slack.Categories.Effective()
+	if effective.Progress || !effective.NeedsInput || !effective.Problems {
+		t.Fatalf("stored categories = %#v; want progress off only", effective)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "categories:") || !strings.Contains(string(data), "progress: false") {
+		t.Fatalf("config file missing stored categories:\n%s", data)
+	}
+
+	// An omitted object leaves stored values untouched in PATCH and PUT.
+	result, err = target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig(omitted categories) error = %v", err)
+	}
+	if result.Result != "unchanged" {
+		t.Fatalf("omitted categories result = %q; want unchanged", result.Result)
+	}
+	if cfg.Slack.Categories.Effective() != effective {
+		t.Fatalf("omitted categories changed stored mapping: %#v", cfg.Slack.Categories)
+	}
+
+	// Re-enabling the last off category drops the stored mapping so the key
+	// disappears from the file.
+	on := true
+	if _, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{
+			Categories: &serverruntime.SlackCategoriesMutation{Progress: &on},
+		},
+	}); err != nil {
+		t.Fatalf("RuntimeConfig(categories on) error = %v", err)
+	}
+	if cfg.Slack.Categories != nil {
+		t.Fatalf("all-on categories were persisted: %#v", cfg.Slack.Categories)
+	}
+	data, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "categories:") {
+		t.Fatalf("all-on categories persisted:\n%s", data)
+	}
+
+	// The settings accessor reads live values including the defaults.
+	settings := target.SlackSettings()
+	if !settings.Enabled || !settings.Categories.Progress || !settings.Categories.NeedsInput ||
+		!settings.Categories.Problems {
+		t.Fatalf("SlackSettings = %#v; want enabled with all categories on", settings)
+	}
+}
+
 func TestServerMutationTargetRuntimeConfigAutoFillsUserTokenOwner(t *testing.T) {
 	runtimeDir := t.TempDir()
 	configPath := filepath.Join(runtimeDir, "config.yaml")

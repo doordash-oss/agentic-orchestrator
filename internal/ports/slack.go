@@ -103,6 +103,30 @@ func (e *SlackValidationError) Error() string {
 	return string(e.Canonical.Code) + ": " + e.Canonical.Summary
 }
 
+// SlackRuntimeSettings is the live Slack configuration the notifier reads
+// at processing time. It is derived per read from the durable config so a
+// stored token is never cached.
+type SlackRuntimeSettings struct {
+	Enabled    bool
+	Token      string
+	Recipients []SlackRecipient
+	Categories SlackCategoryDefaults
+}
+
+// SlackCategoryDefaults holds the effective per-category notification
+// defaults; every category posts until a stored mapping opts one out.
+type SlackCategoryDefaults struct {
+	Progress   bool
+	NeedsInput bool
+	Problems   bool
+}
+
+// SlackSettingsSource supplies the live Slack configuration under its own
+// locking. Implementations must not cache the token across reads.
+type SlackSettingsSource interface {
+	SlackSettings() SlackRuntimeSettings
+}
+
 // SlackService is the server-facing Slack setup and validation boundary.
 type SlackService interface {
 	Manifest() string

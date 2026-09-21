@@ -40,6 +40,7 @@ const projection = {
       display_name: 'Ada Lovelace',
     },
   ],
+  categories: { progress: true, needs_input: true, problems: true },
   status: {
     state: 'connected',
     last_error: null,
@@ -92,6 +93,7 @@ describe('SlackSettingsService', () => {
           displayName: 'Ada Lovelace',
         },
       ],
+      categories: { progress: true, needsInput: true, problems: true },
       status: {
         state: 'connected',
         lastError: null,
@@ -186,6 +188,56 @@ describe('SlackSettingsService', () => {
           ],
         },
       },
+    });
+  });
+
+  it('maps the category defaults into the snapshot', async () => {
+    const server = transport(
+      response({
+        api_version: 'v1',
+        slack: {
+          ...projection,
+          categories: { progress: false, needs_input: true, problems: false },
+        },
+      }),
+    );
+    const service = new SlackSettingsService({ transport: server });
+
+    const result = await service.get();
+
+    expect(result).toMatchObject({
+      supported: true,
+      categories: { progress: false, needsInput: true, problems: false },
+    });
+  });
+
+  it('forwards only the changed category fields', async () => {
+    const server = transport(
+      response({ api_version: 'v1' }),
+      response({ api_version: 'v1', slack: projection }),
+    );
+    const service = new SlackSettingsService({ transport: server });
+
+    await service.update({ categories: { progress: false } });
+
+    expect(server.apiRequest).toHaveBeenNthCalledWith(1, '/api/v1/config/runtime', {
+      method: 'PATCH',
+      body: { slack: { categories: { progress: false } } },
+    });
+  });
+
+  it('sends no categories key when the draft does not carry them', async () => {
+    const server = transport(
+      response({ api_version: 'v1' }),
+      response({ api_version: 'v1', slack: projection }),
+    );
+    const service = new SlackSettingsService({ transport: server });
+
+    await service.update({ enabled: true });
+
+    expect(server.apiRequest).toHaveBeenNthCalledWith(1, '/api/v1/config/runtime', {
+      method: 'PATCH',
+      body: { slack: { enabled: true } },
     });
   });
 

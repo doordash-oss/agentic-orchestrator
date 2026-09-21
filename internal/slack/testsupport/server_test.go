@@ -19,6 +19,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -61,5 +64,43 @@ func TestServerScriptsRecordsAndFallsBack(t *testing.T) {
 	}
 	if fallback["ok"] != false || fallback["error"] != "unknown_method" {
 		t.Fatalf("unscripted response = %#v; want unknown_method", fallback)
+	}
+}
+
+func TestServerDefaultResponderAnswersUnscriptedCalls(t *testing.T) {
+	server := NewServer()
+	defer server.Close()
+
+	var calls atomic.Int64
+	server.SetDefault(func(method string, request Request) Response {
+		calls.Add(1)
+		if method != "chat.postMessage" {
+			return Response{Body: map[string]any{"ok": false, "error": "unexpected " + method}}
+		}
+		return Response{Body: map[string]any{
+			"ok": true, "ts": "1234.00000" + strconv.Itoa(int(calls.Load())),
+			"channel": request.Fields["channel"],
+		}}
+	})
+
+	_, _ = http.Post(server.URL()+"chat.postMessage", "application/x-www-form-urlencoded",
+		strings.NewReader("channel=C1&text=hi"))
+	_, _ = http.Post(server.URL()+"chat.postMessage", "application/x-www-form-urlencoded",
+		strings.NewReader("channel=C1&text=again"))
+
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("default responder calls = %d; want 2", got)
+	}
+	requests := server.Requests("chat.postMessage")
+	if len(requests) != 2 {
+		t.Fatalf("recorded posts = %d; want 2", len(requests))
+	}
+
+	// A scripted response still takes precedence over the default.
+	server.Script("chat.postMessage", Response{Body: map[string]any{"ok": true, "ts": "9.9"}})
+	_, _ = http.Post(server.URL()+"chat.postMessage", "application/x-www-form-urlencoded",
+		strings.NewReader("channel=C1&text=scripted"))
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("scripted response bypassed the default: responder calls = %d", got)
 	}
 }

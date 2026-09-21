@@ -97,6 +97,8 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		Slack:                       opts.Slack,
 		Events:                      opts.Events,
 		DomainEvents:                opts.DomainEvents,
+		DomainEventTap:              opts.DomainEventTap,
+		RuntimeEventTap:             opts.RuntimeEventTap,
 		Mutations:                   opts.Mutations,
 		PersistProviderModelCatalog: opts.PersistProviderModelCatalog,
 		InitGitRepository:           opts.InitGitRepository,

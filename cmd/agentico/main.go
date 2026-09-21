@@ -1019,14 +1019,18 @@ type runtimeBootstrap struct {
 	observer        *observe.Observer
 	permissionCache *permission.Cache
 	slack           ports.SlackService
-	worktrees       feature.WorktreeOps
-	eventCh         chan interface{}
-	runtime         serverruntime.RuntimeIdentity
-	workspaceDir    string
-	recoveryItems   []ports.RecoveryItem
-	recoveryScanOK  bool
-	selfUpdateExec  selfupdate.Executable
-	updateLease     *selfupdate.Lease
+	slackNotifier   *slackintegration.Notifier
+	// slackSettings relays the locked configuration accessor to the
+	// fx-provided notifier until the server run binds the mutation target.
+	slackSettings  *slackSettingsRelay
+	worktrees      feature.WorktreeOps
+	eventCh        chan interface{}
+	runtime        serverruntime.RuntimeIdentity
+	workspaceDir   string
+	recoveryItems  []ports.RecoveryItem
+	recoveryScanOK bool
+	selfUpdateExec selfupdate.Executable
+	updateLease    *selfupdate.Lease
 	// updateLeaseErr records why the binary lease was not acquired when it
 	// is nil, so eligibility can distinguish ownership contention from
 	// other failures.
@@ -1089,6 +1093,32 @@ func (b *runtimeBootstrap) Close(ctx context.Context) error {
 	}
 	errLock := b.ReleaseLock()
 	return errors.Join(errStop, errLease, errLock)
+}
+
+// slackSettingsRelay lets the fx-provided Slack notifier read live Slack
+// settings from the mutation target, which the server run constructs only
+// after the graph has started.
+type slackSettingsRelay struct {
+	mu     sync.Mutex
+	target ports.SlackSettingsSource
+}
+
+func (r *slackSettingsRelay) bind(target ports.SlackSettingsSource) {
+	r.mu.Lock()
+	r.target = target
+	r.mu.Unlock()
+}
+
+func (r *slackSettingsRelay) SlackSettings() ports.SlackRuntimeSettings {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target == nil {
+		return ports.SlackRuntimeSettings{
+			Categories: ports.SlackCategoryDefaults{Progress: true, NeedsInput: true, Problems: true},
+		}
+	}
+	return target.SlackSettings()
 }
 
 type serverMutationTarget struct {
@@ -1949,6 +1979,23 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 				changed = true
 			}
 		}
+		if req.Slack.Categories != nil {
+			effective := slackConfig.Categories.Effective()
+			patch := *req.Slack.Categories
+			if patch.Progress != nil {
+				effective.Progress = *patch.Progress
+			}
+			if patch.NeedsInput != nil {
+				effective.NeedsInput = *patch.NeedsInput
+			}
+			if patch.Problems != nil {
+				effective.Problems = *patch.Problems
+			}
+			if slackConfig.Categories.Effective() != effective {
+				slackConfig.Categories = config.NormalizeCategories(effective)
+				changed = true
+			}
+		}
 		if req.Slack.ClearToken != nil && *req.Slack.ClearToken {
 			if slackConfig.Token != "" || slackConfig.Identity != nil ||
 				len(slackConfig.GrantedScopes) > 0 || !slackConfig.LastValidatedAt.IsZero() {
@@ -2032,6 +2079,38 @@ func (t *serverMutationTarget) LoadSlackDeliveryConfig() (string, []ports.SlackR
 		})
 	}
 	return t.cfg.Slack.Token, recipients
+}
+
+// SlackSettings returns the live Slack configuration the notifier reads at
+// processing time, without caching the token across reads.
+func (t *serverMutationTarget) SlackSettings() ports.SlackRuntimeSettings {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cfg == nil || t.cfg.Slack == nil {
+		return ports.SlackRuntimeSettings{
+			Categories: ports.SlackCategoryDefaults{Progress: true, NeedsInput: true, Problems: true},
+		}
+	}
+	recipients := make([]ports.SlackRecipient, 0, len(t.cfg.Slack.DefaultRecipients))
+	for _, recipient := range t.cfg.Slack.DefaultRecipients {
+		recipients = append(recipients, ports.SlackRecipient{
+			TypedText:   recipient.TypedText,
+			Kind:        ports.SlackRecipientKind(recipient.Kind),
+			ID:          recipient.ID,
+			DisplayName: recipient.DisplayName,
+		})
+	}
+	effective := t.cfg.Slack.Categories.Effective()
+	return ports.SlackRuntimeSettings{
+		Enabled:    t.cfg.Slack.Enabled,
+		Token:      t.cfg.Slack.Token,
+		Recipients: recipients,
+		Categories: ports.SlackCategoryDefaults{
+			Progress:   effective.Progress,
+			NeedsInput: effective.NeedsInput,
+			Problems:   effective.Problems,
+		},
+	}
 }
 
 func (t *serverMutationTarget) SlackCredentialCurrent(token string, generation uint64) bool {
@@ -3019,6 +3098,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	configIsNew := !fileExists(configPath)
 	workspaceDir, _ := os.Getwd()
 	eventCh := make(chan interface{}, 1000)
+	slackSettings := &slackSettingsRelay{}
 	// The runtime work-admission boundary is shared by orchestration,
 	// repository work, and the HTTP surface; one instance is supplied to
 	// the fx graph and reused for the server construction below.
@@ -3034,6 +3114,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	var observer *observe.Observer
 	var permissionCache *permission.Cache
 	var slackService ports.SlackService
+	var slackNotifier *slackintegration.Notifier
 	var worktrees feature.WorktreeOps
 	providerModules, err := providerFxModules(enabledProviders)
 	if err != nil {
@@ -3047,6 +3128,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 			fx.Annotate(workspaceDir, fx.ResultTags(`name:"workspaceDir"`)),
 			fx.Annotate(eventCh, fx.ResultTags(`name:"eventCh"`)),
 		),
+		fx.Supply(fx.Annotate(slackSettings, fx.As(new(ports.SlackSettingsSource)))),
 		config.Module,
 		feature.Module,
 		session.Module,
@@ -3057,7 +3139,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 		fx.Options(providerModules...),
 		agent.Module,
 		orchestrator.Module,
-		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache, &slackService, &worktrees),
+		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache, &slackService, &slackNotifier, &worktrees),
 		fx.NopLogger,
 	)
 	boot.fxApp = fxApp
@@ -3162,6 +3244,8 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	boot.observer = observer
 	boot.permissionCache = permissionCache
 	boot.slack = slackService
+	boot.slackNotifier = slackNotifier
+	boot.slackSettings = slackSettings
 	boot.worktrees = worktrees
 	boot.eventCh = eventCh
 	boot.workspaceDir = workspaceDir
@@ -3373,37 +3457,46 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		}, err)
 	}
 
+	mutations := &serverMutationTarget{
+		orch:                  boot.orchestrator,
+		childCreator:          boot.featureManager,
+		reviewFeedbackCreator: boot.featureManager,
+		rebaseChildCreator:    boot.featureManager,
+		cfg:                   boot.cfg,
+		configPath:            boot.runtime.Config,
+		store:                 boot.featureManager.Store,
+		sessions:              boot.sessionManager,
+		phaseRunner:           boot.phaseRunner,
+		permissionCache:       boot.permissionCache,
+		workspaceDir:          boot.workspaceDir,
+		admission:             boot.admission,
+	}
+	// The notifier reads the live Slack configuration through the locked
+	// accessor and needs the resolved runtime name, which is only known
+	// now, before the server starts consuming events.
+	boot.slackSettings.bind(mutations)
+	boot.slackNotifier.SetServerName(resolvedName)
+
 	runtimeServer, err := serverruntime.Start(bootCtx, serverruntime.Options{
-		Runtime:      boot.runtime,
-		LaunchPolicy: policy,
-		StartMode:    cliSubcommandServer,
-		Owner:        boot.owner,
-		AuthToken:    authToken,
-		ListenAddr:   listenAddr,
-		Name:         resolvedName,
-		Features:     boot.featureManager,
-		FeatureStore: boot.featureManager.Store,
-		Freshness:    newGitFreshnessProvider(),
-		Config:       boot.cfg,
-		Registry:     boot.registry,
-		Sessions:     boot.sessionManager,
-		Slack:        boot.slack,
-		Events:       boot.eventCh,
-		DomainEvents: boot.orchestrator.Events(),
-		Mutations: &serverMutationTarget{
-			orch:                  boot.orchestrator,
-			childCreator:          boot.featureManager,
-			reviewFeedbackCreator: boot.featureManager,
-			rebaseChildCreator:    boot.featureManager,
-			cfg:                   boot.cfg,
-			configPath:            boot.runtime.Config,
-			store:                 boot.featureManager.Store,
-			sessions:              boot.sessionManager,
-			phaseRunner:           boot.phaseRunner,
-			permissionCache:       boot.permissionCache,
-			workspaceDir:          boot.workspaceDir,
-			admission:             boot.admission,
-		},
+		Runtime:         boot.runtime,
+		LaunchPolicy:    policy,
+		StartMode:       cliSubcommandServer,
+		Owner:           boot.owner,
+		AuthToken:       authToken,
+		ListenAddr:      listenAddr,
+		Name:            resolvedName,
+		Features:        boot.featureManager,
+		FeatureStore:    boot.featureManager.Store,
+		Freshness:       newGitFreshnessProvider(),
+		Config:          boot.cfg,
+		Registry:        boot.registry,
+		Sessions:        boot.sessionManager,
+		Slack:           boot.slack,
+		Events:          boot.eventCh,
+		DomainEvents:    boot.orchestrator.Events(),
+		DomainEventTap:  boot.slackNotifier.DomainEventTap,
+		RuntimeEventTap: boot.slackNotifier.RuntimeMessageTap,
+		Mutations:       mutations,
 		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
 		},

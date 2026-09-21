@@ -35,6 +35,8 @@ type slackClient interface {
 	ConversationInfo(ctx context.Context, channelID string) (Conversation, error)
 	OpenConversation(ctx context.Context, userID string) (string, error)
 	PostMessage(ctx context.Context, channelID, text string) error
+	PostMessageRich(ctx context.Context, input PostMessageInput) (PostMessageResult, error)
+	UpdateMessage(ctx context.Context, channelID, ts, fallbackText string, blocks []Block) error
 }
 
 // ClientFactory constructs the token-bound client used for one operation.

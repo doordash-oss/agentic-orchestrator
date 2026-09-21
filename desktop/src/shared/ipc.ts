@@ -4012,6 +4012,21 @@ export const SlackRecipientListSchema = z
     });
   });
 
+export const SlackCategoriesSchema = z.strictObject({
+  progress: z.boolean(),
+  needsInput: z.boolean(),
+  problems: z.boolean(),
+});
+export type SlackCategories = z.output<typeof SlackCategoriesSchema>;
+
+/** Patch representation of the category defaults; an absent field means unchanged. */
+export const SlackCategoriesPatchSchema = z.strictObject({
+  progress: z.boolean().optional(),
+  needsInput: z.boolean().optional(),
+  problems: z.boolean().optional(),
+});
+export type SlackCategoriesPatch = z.output<typeof SlackCategoriesPatchSchema>;
+
 const SupportedSlackSettingsSchema = z.strictObject({
   supported: z.literal(true),
   enabled: z.boolean(),
@@ -4022,6 +4037,7 @@ const SupportedSlackSettingsSchema = z.strictObject({
   grantedScopes: z.array(z.string().min(1).max(200)).max(100),
   missingScopes: z.array(z.string().min(1).max(200)).max(100),
   defaultRecipients: SlackRecipientListSchema,
+  categories: SlackCategoriesSchema,
   status: SlackStatusSchema,
   manifest: z.string().max(256 * 1024),
 });
@@ -4043,6 +4059,7 @@ export const SlackSettingsDraftSchema = z
       .optional(),
     clearToken: z.boolean().optional(),
     defaultRecipients: SlackRecipientListSchema.optional(),
+    categories: SlackCategoriesPatchSchema.optional(),
   })
   .refine((draft) => !(draft.token !== undefined && draft.clearToken === true), {
     message: 'token and clearToken are mutually exclusive',

@@ -1251,7 +1251,7 @@ func (h *apiHandler) handleRuntimeConfig(w http.ResponseWriter, r *http.Request)
 func (h *apiHandler) slackRuntimeConfig(cfg *config.Config) SlackRuntimeConfig {
 	service := h.slack
 	if service == nil {
-		return SlackRuntimeConfig{}
+		return SlackRuntimeConfig{Categories: allCategoriesOn()}
 	}
 	slackConfig := cfg.Slack
 	token := ""
@@ -1259,6 +1259,7 @@ func (h *apiHandler) slackRuntimeConfig(cfg *config.Config) SlackRuntimeConfig {
 	var identity *SlackIdentity
 	granted := []string{}
 	recipients := []SlackRecipient{}
+	categories := allCategoriesOn()
 	if slackConfig != nil {
 		token = slackConfig.Token
 		enabled = slackConfig.Enabled
@@ -1280,6 +1281,12 @@ func (h *apiHandler) slackRuntimeConfig(cfg *config.Config) SlackRuntimeConfig {
 				BotID:       slackConfig.Identity.BotID,
 			}
 		}
+		effective := slackConfig.Categories.Effective()
+		categories = SlackCategories{
+			Progress:   effective.Progress,
+			NeedsInput: effective.NeedsInput,
+			Problems:   effective.Problems,
+		}
 	}
 	status := service.Status(ports.SlackStatusInput{Token: token, HasIdentity: identity != nil})
 	wireStatus := SlackStatus{State: SlackStatusState(status.State), LastCheckedAt: status.LastChecked}
@@ -1295,6 +1302,7 @@ func (h *apiHandler) slackRuntimeConfig(cfg *config.Config) SlackRuntimeConfig {
 		GrantedScopes:     granted,
 		MissingScopes:     []string{},
 		DefaultRecipients: recipients,
+		Categories:        categories,
 		Status:            wireStatus,
 		Manifest:          service.Manifest(),
 	}
@@ -1319,6 +1327,12 @@ func (h *apiHandler) slackRuntimeConfig(cfg *config.Config) SlackRuntimeConfig {
 		sort.Strings(projection.MissingScopes)
 	}
 	return projection
+}
+
+// allCategoriesOn is the default Slack category projection: every category
+// posts until a stored mapping opts one out.
+func allCategoriesOn() SlackCategories {
+	return SlackCategories{Progress: true, NeedsInput: true, Problems: true}
 }
 
 func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request, featureID string) {

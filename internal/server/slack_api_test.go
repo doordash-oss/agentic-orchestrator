@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -700,5 +701,126 @@ func assertUnrelatedSlackWriteCompletes(t testing.TB, handler http.Handler) {
 	}
 	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
 		t.Fatalf("unrelated write elapsed = %s; Slack operation held a mutation lock", elapsed)
+	}
+}
+
+func TestSlackRuntimeMutationCategoriesPatchIsLocalOnly(t *testing.T) {
+	service := &fakeSlackService{}
+	recorder := &slackMutationRecorder{}
+	api := newAPIHandler(HandlerOptions{
+		Config: config.NewDefault(), Slack: service, Mutations: recorder, DisableHostValidation: true,
+	})
+	events, _, _ := api.broker.subscribeAfter(0, "")
+	defer api.broker.unsubscribe(events)
+	handler := api.routes()
+
+	w := patchTrustedJSON(handler, apiPathConfigRuntime, map[string]any{
+		"slack": map[string]any{"categories": map[string]any{"progress": false}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
+	}
+	if service.calls.Load() != 0 {
+		t.Fatalf("Slack calls = %d; want zero for a categories-only patch", service.calls.Load())
+	}
+	select {
+	case evt := <-events:
+		if evt.Kind != sseEventConfigUpdated {
+			t.Fatalf("event kind = %q; want %q", evt.Kind, sseEventConfigUpdated)
+		}
+		if !evt.SnapshotRequired || evt.Resource.Type != resourceTypeRuntime {
+			t.Fatalf("config.updated event = %#v; want snapshot-required runtime event", evt)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("categories patch published no configuration-updated event")
+	}
+	select {
+	case evt := <-events:
+		t.Fatalf("categories patch published a second event: %#v", evt)
+	default:
+	}
+}
+
+func TestSlackRuntimeMutationRejectsUnknownCategoryField(t *testing.T) {
+	recorder := &slackMutationRecorder{}
+	handler := newAPIHandler(HandlerOptions{
+		Config: config.NewDefault(), Slack: &fakeSlackService{}, Mutations: recorder,
+		DisableHostValidation: true,
+	}).routes()
+
+	w := patchTrustedJSON(handler, apiPathConfigRuntime, map[string]any{
+		"slack": map[string]any{"categories": map[string]any{"progres": false}},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s; want 400", w.Code, w.Body.String())
+	}
+	if recorder.runtimeCalls.Load() != 0 {
+		t.Fatal("unknown category field reached the mutation target")
+	}
+	body := decodeErrorBody(t, w)
+	if body.Error.Code != string(errcat.BadRequest) {
+		t.Fatalf("error code = %q; want canonical bad request", body.Error.Code)
+	}
+}
+
+func TestSlackRuntimeConfigReadProjectsCategories(t *testing.T) {
+	cases := []struct {
+		name        string
+		categories  *config.SlackCategories
+		wantOn      []bool
+		wantHasFile bool
+	}{
+		{name: "no stored mapping reads as all on", wantOn: []bool{true, true, true}},
+		{
+			name: "stored mapping projects stored values",
+			categories: config.NormalizeCategories(config.SlackCategories{
+				Progress: false, NeedsInput: true, Problems: true,
+			}),
+			wantOn:      []bool{false, true, true},
+			wantHasFile: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.NewDefault()
+			cfg.Slack = &config.SlackConfig{Enabled: true, Token: "xoxb-sentinel-1234", Categories: tc.categories}
+			if tc.wantHasFile {
+				cfg.Slack.Categories = config.NormalizeCategories(
+					cfg.Slack.Categories.Effective(),
+				)
+			}
+			handler := newAPIHandler(HandlerOptions{
+				Name: "Local agent", Config: cfg, Slack: &fakeSlackService{},
+				Mutations: &slackMutationRecorder{}, DisableHostValidation: true,
+			}).routes()
+
+			w := httptest.NewRequest(http.MethodGet, apiPathConfigRuntime, nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, w)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("read status = %d body=%s", rec.Code, rec.Body.String())
+			}
+			var body struct {
+				Slack struct {
+					Categories struct {
+						Progress   bool `json:"progress"`
+						NeedsInput bool `json:"needs_input"`
+						Problems   bool `json:"problems"`
+					} `json:"categories"`
+				} `json:"slack"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			got := []bool{
+				body.Slack.Categories.Progress,
+				body.Slack.Categories.NeedsInput,
+				body.Slack.Categories.Problems,
+			}
+			want := []bool{tc.wantOn[0], tc.wantOn[1], tc.wantOn[2]}
+			if !slices.Equal(got, want) {
+				t.Fatalf("categories = %v; want %v", got, want)
+			}
+		})
 	}
 }

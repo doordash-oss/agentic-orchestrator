@@ -1926,8 +1926,21 @@ export interface components {
             granted_scopes: string[];
             missing_scopes: string[];
             default_recipients: components["schemas"]["SlackRecipient"][];
+            categories: components["schemas"]["SlackCategories"];
             status: components["schemas"]["SlackStatus"];
             manifest: string;
+        };
+        /** @description Effective per-category notification defaults. Absent stored settings read as every category on. */
+        SlackCategories: {
+            progress: boolean;
+            needs_input: boolean;
+            problems: boolean;
+        };
+        /** @description Patch representation of the per-category defaults. An absent field means unchanged. */
+        SlackCategoriesMutation: {
+            progress?: boolean;
+            needs_input?: boolean;
+            problems?: boolean;
         };
         SlackConfigMutation: {
             enabled?: boolean;
@@ -1935,6 +1948,7 @@ export interface components {
             token?: string;
             clear_token?: boolean;
             default_recipients?: components["schemas"]["SlackRecipient"][];
+            categories?: components["schemas"]["SlackCategoriesMutation"];
         };
         RuntimeConfigMutation: {
             defaults?: {

@@ -15,6 +15,10 @@
 package slack
 
 import (
+	"context"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"go.uber.org/fx"
 )
@@ -25,4 +29,39 @@ var Module = fx.Module("slack",
 	fx.Provide(func() ports.SlackService {
 		return NewService()
 	}),
+	fx.Provide(newNotifier),
+	fx.Invoke(registerNotifierLifecycle),
 )
+
+type notifierParams struct {
+	fx.In
+	Settings ports.SlackSettingsSource
+	Store    *feature.Store
+	StateDir string `name:"stateDir"`
+	Observer *observe.Observer
+}
+
+func newNotifier(p notifierParams) *Notifier {
+	return NewNotifier(NotifierOptions{
+		Settings: p.Settings,
+		Store:    p.Store,
+		StateDir: p.StateDir,
+		Observer: p.Observer,
+		NewClient: func(token string) (slackClient, error) {
+			return NewClient(token)
+		},
+	})
+}
+
+func registerNotifierLifecycle(lc fx.Lifecycle, notifier *Notifier) {
+	lc.Append(fx.Hook{
+		OnStart: func(context.Context) error {
+			notifier.Start()
+			return nil
+		},
+		OnStop: func(ctx context.Context) error {
+			notifier.Stop(ctx)
+			return nil
+		},
+	})
+}

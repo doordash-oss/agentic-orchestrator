@@ -65,6 +65,32 @@ Partial Implement rewinds add:
 
 Full phase rewinds omit `roadmap_phase` and the roadmap range labels.
 
+### Slack Integration Events
+
+The Slack notifier emits one event for every successful write it makes to
+Slack, and one for every event it had to drop:
+
+- `slack.root_card_updated`: a destination's root card was posted or edited.
+- `slack.message_posted`: a message was posted into a card's thread.
+- `slack.event_dropped`: a lifecycle event was discarded before delivery.
+
+`data` keys:
+
+- `destination_kind`: recipient kind of the destination written to (`user` or
+  `channel`), for the two write events.
+- `action`: `posted` when the root card was first created, `edited` when an
+  existing card was updated in place, for `slack.root_card_updated`.
+- `item_kind`: kind of the delivered item (`progress`), for
+  `slack.message_posted`.
+- `event_type`: name of the dropped lifecycle event (`feature.started`,
+  `phase.completed`, and so on), for `slack.event_dropped`.
+- `reason`: why the event was dropped: `queue_overflow` when the bounded intake
+  queue was full, or `feature_load_failed` when the feature record could not
+  be loaded.
+
+None of these events carries the Slack token, a channel name, or any rendered
+message text.
+
 ## Feature Summary
 
 `observe-summary.yaml` is rebuilt from active-run events and durable feature

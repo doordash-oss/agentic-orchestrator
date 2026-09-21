@@ -380,6 +380,91 @@ func (c *Client) PostMessage(ctx context.Context, channelID, text string) error 
 	return nil
 }
 
+// PostMessageInput describes one rich chat.postMessage request. Blocks are
+// Block Kit values (see blocks.go); the fallback text is what notifications
+// and thread previews show.
+type PostMessageInput struct {
+	Channel        string
+	FallbackText   string
+	Blocks         []Block
+	ThreadTS       string
+	ReplyBroadcast bool
+}
+
+// PostMessageResult echoes back the timestamps Slack assigns.
+type PostMessageResult struct {
+	TS      string
+	Channel string
+}
+
+// PostMessageRich posts a Block Kit message, optionally as a thread reply,
+// and returns the message timestamp Slack echoes back.
+func (c *Client) PostMessageRich(ctx context.Context, input PostMessageInput) (PostMessageResult, error) {
+	var envelope struct {
+		OK      bool   `json:"ok"`
+		Error   string `json:"error"`
+		Needed  string `json:"needed"`
+		TS      string `json:"ts"`
+		Channel string `json:"channel"`
+	}
+	fields := url.Values{
+		"channel": {input.Channel},
+		"text":    {input.FallbackText},
+	}
+	if len(input.Blocks) > 0 {
+		encoded, err := json.Marshal(input.Blocks)
+		if err != nil {
+			return PostMessageResult{}, c.transportError(0, 0, err)
+		}
+		fields.Set("blocks", string(encoded))
+	}
+	if input.ThreadTS != "" {
+		fields.Set("thread_ts", input.ThreadTS)
+	}
+	if input.ReplyBroadcast {
+		fields.Set("reply_broadcast", "true")
+	}
+	if _, err := c.call(ctx, "chat.postMessage", fields, &envelope); err != nil {
+		return PostMessageResult{}, err
+	}
+	if !envelope.OK {
+		return PostMessageResult{}, c.apiError(envelope.Error, envelope.Needed)
+	}
+	return PostMessageResult{TS: envelope.TS, Channel: envelope.Channel}, nil
+}
+
+// UpdateMessage edits an existing message in place through chat.update.
+func (c *Client) UpdateMessage(
+	ctx context.Context,
+	channelID, ts, fallbackText string,
+	blocks []Block,
+) error {
+	var envelope struct {
+		OK     bool   `json:"ok"`
+		Error  string `json:"error"`
+		Needed string `json:"needed"`
+	}
+	fields := url.Values{
+		"channel": {channelID},
+		"ts":      {ts},
+		"text":    {fallbackText},
+	}
+	if len(blocks) > 0 {
+		encoded, err := json.Marshal(blocks)
+		if err != nil {
+			return c.transportError(0, 0, err)
+		}
+		fields.Set("blocks", string(encoded))
+	}
+	if _, err := c.call(ctx, "chat.update", fields, &envelope); err != nil {
+		return err
+	}
+	if !envelope.OK {
+		return c.apiError(envelope.Error, envelope.Needed)
+	}
+	return nil
+}
+
 type apiUser struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`

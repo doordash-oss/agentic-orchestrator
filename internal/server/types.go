@@ -64,7 +64,15 @@ type Options struct {
 	Slack                ports.SlackService
 	Events               <-chan interface{}
 	DomainEvents         <-chan ports.Event
-	Mutations            MutationTarget
+	// DomainEventTap, when non-nil, is invoked by the broker's domain
+	// consumer for every orchestrator event alongside the SSE publish.
+	// Taps must be non-blocking.
+	DomainEventTap func(ports.Event)
+	// RuntimeEventTap, when non-nil, is invoked by the broker's runtime
+	// consumer for every session runtime message alongside the SSE
+	// publish. Taps must be non-blocking.
+	RuntimeEventTap func(interface{})
+	Mutations       MutationTarget
 	// PersistProviderModelCatalog writes a successfully discovered provider
 	// catalog before the server installs it in memory. Nil keeps live refreshes
 	// in memory only.
@@ -118,16 +126,24 @@ type HandlerOptions struct {
 	// RuntimePolicy is the server's declared runtime policy (loopback or
 	// network). Empty defaults to the loopback policy, which enforces the
 	// loopback-only Host-header rule.
-	RuntimePolicy               string
-	Features                    FeatureLister
-	FeatureStore                FeatureReader
-	Freshness                   RepoFreshnessProvider
-	Config                      *config.Config
-	Registry                    *llm.Registry
-	Sessions                    ports.SessionManager
-	Slack                       ports.SlackService
-	Events                      <-chan interface{}
-	DomainEvents                <-chan ports.Event
+	RuntimePolicy string
+	Features      FeatureLister
+	FeatureStore  FeatureReader
+	Freshness     RepoFreshnessProvider
+	Config        *config.Config
+	Registry      *llm.Registry
+	Sessions      ports.SessionManager
+	Slack         ports.SlackService
+	Events        <-chan interface{}
+	DomainEvents  <-chan ports.Event
+	// DomainEventTap, when non-nil, is invoked by the broker's domain
+	// consumer for every orchestrator event alongside the SSE publish.
+	// Taps must be non-blocking.
+	DomainEventTap func(ports.Event)
+	// RuntimeEventTap, when non-nil, is invoked by the broker's runtime
+	// consumer for every session runtime message alongside the SSE
+	// publish. Taps must be non-blocking.
+	RuntimeEventTap             func(interface{})
 	Mutations                   MutationTarget
 	PersistProviderModelCatalog func(llm.LLMProvider, []llm.ModelInfo) error
 	// InitGitRepository overrides the git-init implementation used by the

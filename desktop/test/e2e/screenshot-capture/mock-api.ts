@@ -2836,6 +2836,7 @@ function slackSettingsForScene(scene: string) {
     manifest: '{"display_information":{"name":"Agentico"}}',
     grantedScopes: [] as string[],
     missingScopes: [] as string[],
+    categories: { progress: true, needsInput: true, problems: true },
     defaultRecipients: [] as Array<{
       typedText: string;
       kind: 'user' | 'channel';

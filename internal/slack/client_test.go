@@ -16,6 +16,7 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -361,5 +362,125 @@ func TestClientConversationAndMessageMethodsSendFormFields(t *testing.T) {
 	postFields := server.Requests("chat.postMessage")[0].Fields
 	if postFields["channel"] != "D12345678" || postFields["text"] != "Agentico test" {
 		t.Fatalf("chat.postMessage fields = %#v; want channel and text", postFields)
+	}
+}
+
+func TestClientPostMessageRichSendsBlocksThreadAndBroadcast(t *testing.T) {
+	server := testsupport.New(t)
+	server.Script("chat.postMessage", testsupport.Response{Body: map[string]any{
+		"ok": true, "channel": "C12345678", "ts": "1758499200.000001",
+	}})
+	client, err := NewClient("xoxb-secret-1234", WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocks := []Block{
+		headerBlockFor("Feature"),
+		sectionBlockFor([]textObject{{Type: textTypeMrkdwn, Text: "*Status:* Running"}}),
+	}
+	result, err := client.PostMessageRich(t.Context(), PostMessageInput{
+		Channel:        "C12345678",
+		FallbackText:   "Feature — Running",
+		Blocks:         blocks,
+		ThreadTS:       "1758000000.000001",
+		ReplyBroadcast: true,
+	})
+	if err != nil {
+		t.Fatalf("PostMessageRich() error = %v", err)
+	}
+	if result.TS != "1758499200.000001" || result.Channel != "C12345678" {
+		t.Fatalf("PostMessageRich() = %#v; want echoed timestamp and channel", result)
+	}
+	fields := server.Requests("chat.postMessage")[0].Fields
+	if fields["channel"] != "C12345678" || fields["text"] != "Feature — Running" {
+		t.Fatalf("post fields = %#v; want channel and fallback text", fields)
+	}
+	if fields["thread_ts"] != "1758000000.000001" || fields["reply_broadcast"] != "true" {
+		t.Fatalf("post fields = %#v; want thread and broadcast flags", fields)
+	}
+	var sentBlocks []map[string]any
+	if err := json.Unmarshal([]byte(fields["blocks"].(string)), &sentBlocks); err != nil {
+		t.Fatalf("blocks are not JSON: %v", err)
+	}
+	if sentBlocks[0]["type"] != "header" || sentBlocks[1]["type"] != "section" {
+		t.Fatalf("blocks = %#v; want header then section", sentBlocks)
+	}
+}
+
+func TestClientPostMessageRichOmitsOptionalFields(t *testing.T) {
+	server := testsupport.New(t)
+	server.Script("chat.postMessage", testsupport.Response{Body: map[string]any{
+		"ok": true, "channel": "C1", "ts": "2.0",
+	}})
+	client, err := NewClient("xoxb-secret-1234", WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PostMessageRich(t.Context(), PostMessageInput{
+		Channel:      "C1",
+		FallbackText: "plain",
+	}); err != nil {
+		t.Fatalf("PostMessageRich() error = %v", err)
+	}
+	fields := server.Requests("chat.postMessage")[0].Fields
+	for _, absent := range []string{"blocks", "thread_ts", "reply_broadcast"} {
+		if _, present := fields[absent]; present {
+			t.Fatalf("post fields contain %q: %#v", absent, fields)
+		}
+	}
+}
+
+func TestClientUpdateMessageSendsChannelTimestampTextAndBlocks(t *testing.T) {
+	server := testsupport.New(t)
+	server.Script("chat.update", testsupport.Response{Body: map[string]any{"ok": true}})
+	client, err := NewClient("xoxb-secret-1234", WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := []Block{headerBlockFor("Feature")}
+	if err := client.UpdateMessage(t.Context(), "C12345678", "1758499200.000001", "updated", blocks); err != nil {
+		t.Fatalf("UpdateMessage() error = %v", err)
+	}
+	fields := server.Requests("chat.update")[0].Fields
+	if fields["channel"] != "C12345678" || fields["ts"] != "1758499200.000001" ||
+		fields["text"] != "updated" {
+		t.Fatalf("update fields = %#v; want channel, timestamp, and fallback", fields)
+	}
+	if !strings.Contains(fields["blocks"].(string), "Feature") {
+		t.Fatalf("update blocks = %q; want encoded header block", fields["blocks"])
+	}
+}
+
+func TestClientRichMethodsMapErrorsAndScrubToken(t *testing.T) {
+	server := testsupport.New(t)
+	server.Script("chat.postMessage",
+		testsupport.Response{Body: map[string]any{"ok": false, "error": "xoxb-secret-1234"}},
+		testsupport.Response{Status: http.StatusBadGateway, Body: map[string]any{"ok": false}},
+	)
+	server.Script("chat.update",
+		testsupport.Response{Body: map[string]any{"ok": false, "error": "xoxb-secret-1234"}},
+		testsupport.Response{Status: http.StatusBadGateway, Body: map[string]any{"ok": false}},
+	)
+	client, err := NewClient("xoxb-secret-1234", WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.PostMessageRich(t.Context(), PostMessageInput{Channel: "C1", FallbackText: "x"})
+	if !errors.As(err, new(*APIError)) || strings.Contains(err.Error(), "xoxb-secret-1234") {
+		t.Fatalf("post envelope error = %#v; want scrubbed APIError", err)
+	}
+	_, err = client.PostMessageRich(t.Context(), PostMessageInput{Channel: "C1", FallbackText: "x"})
+	if !errors.As(err, new(*TransportError)) || err.(*TransportError).StatusCode != http.StatusBadGateway {
+		t.Fatalf("post transport error = %#v; want 502 TransportError", err)
+	}
+	err = client.UpdateMessage(t.Context(), "C1", "1.0", "x", nil)
+	if !errors.As(err, new(*APIError)) || strings.Contains(err.Error(), "xoxb-secret-1234") {
+		t.Fatalf("update envelope error = %#v; want scrubbed APIError", err)
+	}
+	err = client.UpdateMessage(t.Context(), "C1", "1.0", "x", nil)
+	if !errors.As(err, new(*TransportError)) || err.(*TransportError).StatusCode != http.StatusBadGateway {
+		t.Fatalf("update transport error = %#v; want 502 TransportError", err)
 	}
 }

@@ -176,7 +176,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		registry:                opts.Registry,
 		sessions:                opts.Sessions,
 		slack:                   opts.Slack,
-		broker:                  newEventBroker(opts.Events, opts.DomainEvents),
+		broker:                  newEventBrokerTaps(opts.Events, opts.DomainEvents, opts.RuntimeEventTap, opts.DomainEventTap),
 		mutations:               opts.Mutations,
 		uploads:                 newUploadStore(opts.Runtime.StateDir),
 		persistProviderModels:   opts.PersistProviderModelCatalog,

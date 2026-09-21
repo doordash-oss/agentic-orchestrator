@@ -76,6 +76,11 @@ const WireSlackSettingsSchema = z.strictObject({
   granted_scopes: z.array(z.string()),
   missing_scopes: z.array(z.string()),
   default_recipients: z.array(WireSlackRecipientSchema),
+  categories: z.strictObject({
+    progress: z.boolean(),
+    needs_input: z.boolean(),
+    problems: z.boolean(),
+  }),
   status: WireSlackStatusSchema,
   manifest: z.string(),
 });
@@ -172,6 +177,11 @@ export class SlackSettingsService {
         grantedScopes: slack.granted_scopes,
         missingScopes: slack.missing_scopes,
         defaultRecipients: slack.default_recipients.map(mapRecipient),
+        categories: {
+          progress: slack.categories.progress,
+          needsInput: slack.categories.needs_input,
+          problems: slack.categories.problems,
+        },
         status: {
           state: slack.status.state,
           lastError:
@@ -198,6 +208,21 @@ export class SlackSettingsService {
           ...(input.defaultRecipients === undefined
             ? {}
             : { default_recipients: input.defaultRecipients.map(wireRecipient) }),
+          ...(input.categories === undefined
+            ? {}
+            : {
+                categories: {
+                  ...(input.categories.progress === undefined
+                    ? {}
+                    : { progress: input.categories.progress }),
+                  ...(input.categories.needsInput === undefined
+                    ? {}
+                    : { needs_input: input.categories.needsInput }),
+                  ...(input.categories.problems === undefined
+                    ? {}
+                    : { problems: input.categories.problems }),
+                },
+              }),
         },
       },
     });

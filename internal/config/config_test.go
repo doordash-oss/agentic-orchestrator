@@ -84,6 +84,90 @@ func TestSlackConfigRoundTripAndLegacyOmission(t *testing.T) {
 	}
 }
 
+func TestSlackCategoriesDefaultOnAndSaveOmission(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	source := "slack:\n  enabled: true\n  token: xoxb-sentinel-1234\n"
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Slack == nil || loaded.Slack.Categories != nil {
+		t.Fatalf("config without categories mapping loaded mapping %#v", loaded.Slack)
+	}
+	effective := loaded.Slack.Categories.Effective()
+	if !effective.Progress || !effective.NeedsInput || !effective.Problems {
+		t.Fatalf("omitted categories defaulted off: %#v", effective)
+	}
+	if err := Save(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "categories:") {
+		t.Fatalf("default categories were persisted:\n%s", data)
+	}
+}
+
+func TestSlackCategoriesExplicitFalseRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	source := "slack:\n  enabled: true\n  token: xoxb-sentinel-1234\n" +
+		"  categories:\n    progress: false\n"
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Slack == nil || loaded.Slack.Categories == nil {
+		t.Fatalf("categories mapping was not loaded")
+	}
+	effective := loaded.Slack.Categories.Effective()
+	if effective.Progress || !effective.NeedsInput || !effective.Problems {
+		t.Fatalf("loaded categories = %#v; want progress off, others on", effective)
+	}
+	if err := Save(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Slack, reloaded.Slack) {
+		t.Fatalf("categories round trip = %#v; want %#v", reloaded.Slack, loaded.Slack)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"progress: false", "needs_input: true", "problems: true"} {
+		if !strings.Contains(string(data), key) {
+			t.Fatalf("saved categories missing %q:\n%s", key, data)
+		}
+	}
+}
+
+func TestNormalizeCategoriesOmitsAllOnMapping(t *testing.T) {
+	if got := NormalizeCategories(SlackCategories{Progress: true, NeedsInput: true, Problems: true}); got != nil {
+		t.Fatalf("all-on categories were not omitted: %#v", got)
+	}
+	off := NormalizeCategories(SlackCategories{Progress: false, NeedsInput: true, Problems: true})
+	if off == nil {
+		t.Fatal("progress-off categories were omitted")
+	}
+	effective := off.Effective()
+	if effective.Progress || !effective.NeedsInput || !effective.Problems {
+		t.Fatalf("normalized categories effective = %#v", effective)
+	}
+}
+
 func TestSlackTokenMetadata(t *testing.T) {
 	cases := []struct {
 		token    string

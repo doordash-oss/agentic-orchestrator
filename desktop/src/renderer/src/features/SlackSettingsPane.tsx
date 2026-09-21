@@ -17,6 +17,7 @@ limitations under the License.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   CanonicalError,
+  SlackCategories,
   SlackRecipient,
   SlackSettingsDraft,
   SlackSettingsSnapshot,
@@ -36,6 +37,12 @@ const TOKEN_ERROR_CODES = new Set([
 ]);
 
 type RecipientRowStatus = 'idle' | 'resolving' | 'resolved' | 'error';
+
+const DEFAULT_CATEGORIES: SlackCategories = {
+  progress: true,
+  needsInput: true,
+  problems: true,
+};
 
 interface RecipientRow {
   key: number;
@@ -138,6 +145,7 @@ export function SlackSettingsPane() {
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   const [recipientRows, setRecipientRows] = useState<RecipientRow[]>([]);
   const [focusRecipientKey, setFocusRecipientKey] = useState<number | null>(null);
+  const [categories, setCategories] = useState<SlackCategories>(DEFAULT_CATEGORIES);
   const [sendingTest, setSendingTest] = useState(false);
   const [testResult, setTestResult] = useState<SlackTestMessageResult | null>(null);
   const [testError, setTestError] = useState<CanonicalError | null>(null);
@@ -145,6 +153,8 @@ export function SlackSettingsPane() {
   const baselineEnabled = snapshot?.supported === true ? snapshot.enabled : false;
   const baselineRecipients =
     snapshot?.supported === true ? snapshot.defaultRecipients : ([] as SlackRecipient[]);
+  const baselineCategories =
+    snapshot?.supported === true ? snapshot.categories : DEFAULT_CATEGORIES;
   const tokenSet = snapshot?.supported === true && snapshot.tokenSet && !clearToken;
   const resolvedRecipients = recipientRows.flatMap((row) =>
     row.input.trim() !== '' && row.resolved !== null ? [row.resolved] : [],
@@ -154,8 +164,12 @@ export function SlackSettingsPane() {
   );
   const recipientsChanged = !recipientListsEqual(resolvedRecipients, baselineRecipients);
   const recipientsDirty = recipientsChanged || hasInvalidRecipients;
+  const categoriesChanged =
+    categories.progress !== baselineCategories.progress ||
+    categories.needsInput !== baselineCategories.needsInput ||
+    categories.problems !== baselineCategories.problems;
   const hasNonRecipientChanges = enabled !== baselineEnabled || token !== '' || clearToken;
-  const dirty = hasNonRecipientChanges || recipientsDirty;
+  const dirty = hasNonRecipientChanges || recipientsDirty || categoriesChanged;
 
   const clearTestFeedback = useCallback(() => {
     testRevision.current += 1;
@@ -181,6 +195,7 @@ export function SlackSettingsPane() {
       if (!preservesCheckFeedback) clearCheckFeedback();
       setSnapshot(next);
       setEnabled(next.supported ? next.enabled : false);
+      setCategories(next.supported ? next.categories : DEFAULT_CATEGORIES);
       setToken('');
       setReplacing(false);
       setClearToken(false);
@@ -231,6 +246,7 @@ export function SlackSettingsPane() {
     setToken('');
     setReplacing(false);
     setClearToken(false);
+    setCategories(DEFAULT_CATEGORIES);
     setSaving(false);
     setSaveError(null);
     setRecipientRows([]);
@@ -285,9 +301,39 @@ export function SlackSettingsPane() {
       ...(token === '' ? {} : { token }),
       ...(clearToken ? { clearToken: true } : {}),
       ...(recipientsChanged ? { defaultRecipients: resolvedRecipients } : {}),
+      ...(categoriesChanged
+        ? {
+            categories: {
+              ...(categories.progress !== baselineCategories.progress
+                ? { progress: categories.progress }
+                : {}),
+              ...(categories.needsInput !== baselineCategories.needsInput
+                ? { needsInput: categories.needsInput }
+                : {}),
+              ...(categories.problems !== baselineCategories.problems
+                ? { problems: categories.problems }
+                : {}),
+            },
+          }
+        : {}),
     }),
-    [clearToken, enabled, recipientsChanged, resolvedRecipients, token],
+    [
+      baselineCategories,
+      categories,
+      categoriesChanged,
+      clearToken,
+      enabled,
+      recipientsChanged,
+      resolvedRecipients,
+      token,
+    ],
   );
+
+  const updateCategory = (key: keyof SlackCategories, value: boolean) => {
+    draftRevision.current += 1;
+    setCategories((current) => ({ ...current, [key]: value }));
+    setSaved(false);
+  };
 
   const updateRecipientInput = (key: number, value: string) => {
     draftRevision.current += 1;
@@ -758,6 +804,53 @@ export function SlackSettingsPane() {
               Add a Slack token before resolving recipients.
             </p>
           ) : null}
+        </section>
+
+        <section
+          className="slack-settings__categories slack-settings__fields"
+          aria-labelledby="slack-categories-title"
+        >
+          <div className="slack-settings__subsection-head">
+            <div>
+              <h3 id="slack-categories-title">Notify about</h3>
+              <p>Choose which kinds of updates reach the default recipients.</p>
+            </div>
+          </div>
+          <label className="settings-panel__toggle">
+            <input
+              type="checkbox"
+              checked={categories.progress}
+              onChange={(event) => updateCategory('progress', event.currentTarget.checked)}
+            />
+            <span>
+              <strong>Progress</strong>
+              <span>
+                Phase starts and completions, publishing, and completion, as thread replies.
+              </span>
+            </span>
+          </label>
+          <label className="settings-panel__toggle">
+            <input
+              type="checkbox"
+              checked={categories.needsInput}
+              onChange={(event) => updateCategory('needsInput', event.currentTarget.checked)}
+            />
+            <span>
+              <strong>Needs input</strong>
+              <span>Questions, permission requests, and review gates.</span>
+            </span>
+          </label>
+          <label className="settings-panel__toggle">
+            <input
+              type="checkbox"
+              checked={categories.problems}
+              onChange={(event) => updateCategory('problems', event.currentTarget.checked)}
+            />
+            <span>
+              <strong>Problems</strong>
+              <span>Blocking failures and conditions that need action.</span>
+            </span>
+          </label>
         </section>
 
         <label className="settings-panel__toggle">

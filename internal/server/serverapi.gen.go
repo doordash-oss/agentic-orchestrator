@@ -4417,11 +4417,27 @@ type SetupTask struct {
 	UseCurrentBranch bool       `json:"use_current_branch,omitempty"`
 }
 
+// SlackCategories Effective per-category notification defaults. Absent stored settings read as every category on.
+type SlackCategories struct {
+	NeedsInput bool `json:"needs_input"`
+	Problems   bool `json:"problems"`
+	Progress   bool `json:"progress"`
+}
+
+// SlackCategoriesMutation Patch representation of the per-category defaults. An absent field means unchanged.
+type SlackCategoriesMutation struct {
+	NeedsInput *bool `json:"needs_input,omitempty"`
+	Problems   *bool `json:"problems,omitempty"`
+	Progress   *bool `json:"progress,omitempty"`
+}
+
 // SlackConfigMutation defines model for SlackConfigMutation.
 type SlackConfigMutation struct {
-	ClearToken        *bool             `json:"clear_token,omitempty"`
-	DefaultRecipients *[]SlackRecipient `json:"default_recipients,omitempty"`
-	Enabled           *bool             `json:"enabled,omitempty"`
+	// Categories Patch representation of the per-category defaults. An absent field means unchanged.
+	Categories        *SlackCategoriesMutation `json:"categories,omitempty"`
+	ClearToken        *bool                    `json:"clear_token,omitempty"`
+	DefaultRecipients *[]SlackRecipient        `json:"default_recipients,omitempty"`
+	Enabled           *bool                    `json:"enabled,omitempty"`
 
 	// Token Write-only Slack OAuth token. Never returned by the API.
 	Token *string `json:"token,omitempty"`
@@ -4473,6 +4489,8 @@ type SlackRecipientResolveResponse struct {
 
 // SlackRuntimeConfig defines model for SlackRuntimeConfig.
 type SlackRuntimeConfig struct {
+	// Categories Effective per-category notification defaults. Absent stored settings read as every category on.
+	Categories        SlackCategories              `json:"categories"`
 	DefaultRecipients []SlackRecipient             `json:"default_recipients"`
 	Enabled           bool                         `json:"enabled"`
 	GrantedScopes     []string                     `json:"granted_scopes"`

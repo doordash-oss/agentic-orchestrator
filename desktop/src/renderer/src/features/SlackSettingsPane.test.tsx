@@ -46,6 +46,7 @@ function notConfigured(): SlackSettingsSnapshot {
     grantedScopes: [],
     missingScopes: [],
     defaultRecipients: [],
+    categories: { progress: true, needsInput: true, problems: true },
     status: { state: 'not_configured', lastError: null, lastCheckedAt: null },
     manifest,
   };
@@ -68,6 +69,7 @@ function connected(overrides: Partial<Extract<SlackSettingsSnapshot, { supported
     grantedScopes: ['chat:write', 'users:read'],
     missingScopes: [],
     defaultRecipients: [],
+    categories: { progress: true, needsInput: true, problems: true },
     status: {
       state: 'connected' as const,
       lastError: null,
@@ -141,6 +143,110 @@ describe('SlackSettingsPane', () => {
     await user.click(screen.getByRole('button', { name: 'Clear' }));
     expect(screen.getByText(/saved token will be removed/i)).toBeVisible();
     expect(screen.getByRole('checkbox', { name: /Enabled/ })).not.toBeChecked();
+  });
+
+  it('renders the three category switches on by default with their descriptions', async () => {
+    installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected(),
+    });
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    expect(screen.getByRole('heading', { name: 'Notify about' })).toBeVisible();
+    expect(screen.getByRole('checkbox', { name: /Progress/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Needs input/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Problems/ })).toBeChecked();
+    expect(
+      screen.getByText(
+        'Phase starts and completions, publishing, and completion, as thread replies.',
+      ),
+    ).toBeVisible();
+    expect(screen.getByText('Questions, permission requests, and review gates.')).toBeVisible();
+    expect(screen.getByText('Blocking failures and conditions that need action.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  });
+
+  it('marks the form dirty when a category changes', async () => {
+    const user = userEvent.setup();
+    installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected(),
+    });
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('checkbox', { name: /Progress/ }));
+    expect(screen.getByRole('checkbox', { name: /Progress/ })).not.toBeChecked();
+    expect(screen.getByText('Unsaved changes')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Reset' })).toBeEnabled();
+  });
+
+  it('saves only the changed category', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected(),
+    });
+    mock.api.updateSlackSettings.mockResolvedValue(
+      connected({ categories: { progress: false, needsInput: true, problems: true } }),
+    );
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('checkbox', { name: /Progress/ }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(mock.api.updateSlackSettings).toHaveBeenCalledWith({
+        enabled: true,
+        categories: { progress: false },
+      }),
+    );
+    expect(await screen.findByText('Saved.')).toBeVisible();
+    expect(screen.getByRole('checkbox', { name: /Progress/ })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Needs input/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Problems/ })).toBeChecked();
+  });
+
+  it('restores a category change on reset', async () => {
+    const user = userEvent.setup();
+    installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected(),
+    });
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('checkbox', { name: /Progress/ }));
+    expect(screen.getByRole('checkbox', { name: /Progress/ })).not.toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: 'Reset' }));
+
+    expect(screen.getByRole('checkbox', { name: /Progress/ })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  });
+
+  it('discards a category draft after switching servers', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected(),
+    });
+    render(<SlackSettingsPane />);
+
+    await screen.findByText(/Connected to Acme as Agentico/);
+    await user.click(screen.getByRole('checkbox', { name: /Needs input/ }));
+    expect(screen.getByRole('checkbox', { name: /Needs input/ })).not.toBeChecked();
+
+    mock.emitConnection(readyConnection('b'.repeat(32)));
+
+    await waitFor(() =>
+      expect(screen.getByRole('checkbox', { name: /Needs input/ })).toBeChecked(),
+    );
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    expect(mock.api.updateSlackSettings).not.toHaveBeenCalled();
   });
 
   it('checks a stored token and renders warning and field errors inline', async () => {

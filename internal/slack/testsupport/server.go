@@ -52,6 +52,10 @@ type Server struct {
 	mu       sync.Mutex
 	scripts  map[string][]Response
 	requests []Request
+	// defaultResponder answers unscripted calls (empty or missing method
+	// queue) so lifecycle tests need not pre-count posts. Nil keeps the
+	// unknown_method fallback.
+	defaultResponder func(method string, request Request) Response
 }
 
 // New starts a server and registers cleanup with t.
@@ -67,6 +71,14 @@ func NewServer() *Server {
 	server := &Server{scripts: make(map[string][]Response)}
 	server.server = httptest.NewServer(http.HandlerFunc(server.serveHTTP))
 	return server
+}
+
+// SetDefault installs the per-method responder used when a method's script
+// queue is empty, so lifecycle tests need not pre-count posts.
+func (s *Server) SetDefault(responder func(method string, request Request) Response) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.defaultResponder = responder
 }
 
 // URL returns a Slack-compatible API base URL.
@@ -131,6 +143,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(queue) > 0 {
 		response = queue[0]
 		s.scripts[method] = queue[1:]
+	} else if s.defaultResponder != nil {
+		response = s.defaultResponder(method, cloneRequest(request))
 	} else {
 		response = Response{
 			Status: http.StatusOK,

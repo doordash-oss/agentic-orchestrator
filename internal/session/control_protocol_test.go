@@ -887,6 +887,28 @@ func TestManagerOnMessage_InteractiveTurnMode_ResultSetsWaitingHelp(t *testing.T
 	}
 }
 
+func TestManagerOnMessage_TerminalErrorDoesNotRequestPhaseInput(t *testing.T) {
+	for _, kind := range []ports.SessionKind{ports.KindPhase, ports.KindChat} {
+		t.Run(kind.String(), func(t *testing.T) {
+			mgr := NewManager(make(chan interface{}, 100))
+			sess := NewSession("terminal-error", "feat-1", feature.PhaseImplement)
+			sess.SetKind(kind)
+			sess.turnMode = ports.TurnModeInteractive
+			mgr.handleSessionMessage(sess, sess.ID(), sess.FeatureID(), sess.Phase(), llm.SDKMessage{
+				Type:   "result",
+				Result: &llm.ResultMessage{Subtype: "error", IsError: true, Result: "unsupported image input"},
+			})
+			want := SessionFailed
+			if kind == ports.KindChat {
+				want = SessionWaitingHelp // Chat remains available for the next message.
+			}
+			if got := sess.Status(); got != want {
+				t.Fatalf("status = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestManagerOnMessage_BashToolPermission_SetsWaitingPermission(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: direct manager routing with per-test session state.

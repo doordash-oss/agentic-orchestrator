@@ -2327,7 +2327,7 @@ func handleCompletedPlanSession(
 		return planOutcomeReturn, &PlanLoopResult{
 			FinalStatus: "failed",
 			Iterations:  attempt,
-			LastError:   fmt.Sprintf("committing planner outcome: %v", waitResult.Err),
+			LastError:   fmt.Sprintf("waiting for planner outcome: %v", waitResult.Err),
 		}, "", sessionAttempt
 	}
 	if agentStatus == agentStatusSuccess {

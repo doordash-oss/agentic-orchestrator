@@ -321,6 +321,25 @@ func TestCoordinatorExplicitCheckBypassesPeriodicWait(t *testing.T) {
 	coordinator.shutdown(context.Background())
 }
 
+func TestCoordinatorExplicitCheckAfterPublishedCompletionIsNotDropped(t *testing.T) {
+	t.Parallel()
+	coordinator, _, feed, recorder := newTestCoordinator(t, UpdateOptions{})
+	defer coordinator.shutdown(context.Background())
+	requested := false
+	coordinator.opts.Log = func(line string) {
+		recorder.log(line)
+		// The completion event and snapshot are already visible, but the
+		// scheduler has not returned to its wait loop. A client requesting
+		// another check here must get a new check, not join the finished one.
+		if !requested && strings.Contains(line, "checking -> available") {
+			requested = true
+			coordinator.requestCheck()
+		}
+	}
+	coordinator.start(context.Background())
+	waitForFeedCalls(t, feed, 2)
+}
+
 func TestCoordinatorFailedRefreshRetainsLastSuccessfulMetadata(t *testing.T) {
 	t.Parallel()
 	coordinator, _, feed, _ := newTestCoordinator(t, UpdateOptions{})

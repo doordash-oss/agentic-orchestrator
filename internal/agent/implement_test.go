@@ -1887,8 +1887,9 @@ func TestImplementLoopReviewHelperMissingRootOutcomeCountsConsecutiveFailure(t *
 }
 
 // mixedFailureCrash and mixedFailureDrift are the mixedFailureScript sequence
-// keywords that make the mock agent CLI emit, respectively, an error line
-// (simulating an agent crash) or a protocol-violation progress.md (drift).
+// keywords that make the mock agent CLI exit without a result (a process crash)
+// or emit a protocol-violation progress.md (drift). A terminal API-error result
+// is an explicit failed turn, not a crash eligible for iteration recovery.
 const (
 	mixedFailureCrash = "crash"
 	mixedFailureDrift = "drift"
@@ -1986,7 +1987,7 @@ case "$_step" in
 		case mixedFailureDrift:
 			b.WriteString(testutil.JSONLSuccess)
 		case mixedFailureCrash:
-			b.WriteString(testutil.JSONLError("mock agent crash"))
+			b.WriteString("exit 1")
 		}
 		b.WriteString("\n;;\n")
 	}

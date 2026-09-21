@@ -262,10 +262,11 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	waitForJourneyGate(t, srv.URL, childID, 1)
 	postReviewSessionProceed(t, srv.URL, childID)
 	waitForJourneyChildClosed(t, srv.URL, store, childID)
-	// The closure tail (cleanup, KB promotion) settles before the
-	// review-feedback tail runs. Wait for the parent to reach Published
-	// (set by the tail) so assertions observe the completed tail.
+	// Published is written before the child's durable tail-settled marker.
+	// Join the completion goroutine before loading the child or asserting
+	// tail side effects, so those reads cannot race the final state write.
 	waitForJourneyStatus(t, srv.URL, parent.ID, feature.StatusPublished.String())
+	orch.WaitForCycles()
 
 	closedChild, err := store.Load(childID)
 	if err != nil {

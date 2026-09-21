@@ -685,7 +685,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// SUCCESS by the waiter). For providers that can resume their
 			// native session, give the same conversation one fresh process to
 			// finish or report state before charging the iteration as FAILED.
-			if agentStatus == agentStatusFailed && sessOpts != nil && sessOpts.SupportsSessionResume &&
+			// An explicit terminal error is not a crash: replaying its input
+			// can only hide the diagnostic or repeat the same failed request.
+			if agentStatus == agentStatusFailed && waitResult.Err == nil && sessOpts != nil && sessOpts.SupportsSessionResume &&
 				!HasCommittedPhaseOutcome(iterDir, feature.PhaseImplement, RoleImplementer) {
 				if resumeID := providerSessionID(sess); resumeID != "" {
 					// Account the dead session before replacing it.
@@ -800,7 +802,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 		// Handle based on agent status
 		if waitResult.Err != nil {
-			return nil, fmt.Errorf("committing implementer outcome: %w", waitResult.Err)
+			_ = am.WriteMeta(iterDir, meta)
+			_ = am.WriteSummary(summaryPath, meta)
+			cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), agentStatus)
+			return nil, fmt.Errorf("waiting for implementer outcome: %w", waitResult.Err)
 		}
 		if agentStatus == agentStatusProtocolViolation {
 			violations := waitResult.ProtocolViolations
@@ -2301,11 +2306,16 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 		if !sessionDone && status == agentStatusSuccess && alreadyAdjudicated() {
 			return PhaseOutcomeWaitResult{}, false
 		}
-		if status == agentStatusAPIError {
-			if sessionDone {
-				return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff}, true
+		if status == agentStatusAPIError || (classifiedResult != nil && classifiedResult.IsError) {
+			// A Result is terminal for this turn, even when the provider's
+			// multi-turn transport stays alive. Waiting for process exit here
+			// strands interactive phase sessions in WaitingHelp indefinitely.
+			detail := "provider returned a terminal error"
+			if classifiedResult != nil && strings.TrimSpace(classifiedResult.Result) != "" {
+				detail = strings.TrimSpace(classifiedResult.Result)
 			}
-			return PhaseOutcomeWaitResult{}, false
+			_ = sess.Stop()
+			return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff, Err: errors.New(detail)}, true
 		}
 		if status != agentStatusSuccess {
 			_ = sess.Stop()
@@ -2607,9 +2617,8 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 			if result, done := handleStatus(status, false); done {
 				return result
 			}
-			// API error — the agent is stuck but still alive, or a
-			// truncated turn was auto-resumed. Keep waiting for the next
-			// terminal result.
+			// The turn is awaiting input/tasks or was nudged to continue.
+			// Keep waiting for the next terminal result.
 			continue
 		}
 	}

@@ -982,10 +982,25 @@ if (!hasSingleInstanceLock) {
         },
         runtimeOwnership: () => gateway.getState().ownership,
         shutdown: async () => {
+          // Aborting a fetch destroys its socket while the server may still be
+          // writing to it, and Node's read callback throws (from inside libuv,
+          // so as an uncaught exception) when bytes land on a destroyed
+          // socket. An app-owned runtime is stopped first: the server closes
+          // its side, every stream ends with EOF, and the abort afterwards
+          // finds nothing in flight. Only a runtime this app does not own
+          // still has its streams cut while live.
+          const ownsRuntime = gateway.getState().ownership === 'app-owned';
+          if (ownsRuntime) {
+            quitLog('stopping app-owned runtime');
+            await gateway.shutdown();
+            quitLog('runtime stopped; stopping streams');
+          }
           stopStreams();
           accent.stop();
-          quitLog('streams stopped; stopping app-owned runtime');
-          await gateway.shutdown();
+          if (!ownsRuntime) {
+            quitLog('streams stopped; releasing runtime');
+            await gateway.shutdown();
+          }
           quitLog('runtime shutdown complete');
         },
         quitApplication: () => {

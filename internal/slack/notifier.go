@@ -112,6 +112,9 @@ type Notifier struct {
 
 	recordMu sync.Mutex
 	records  map[string]*featureRecord
+	// pendingPersistence retains failed durable writes so the next eligible
+	// lifecycle event can retry even when it only refreshes the root card.
+	pendingPersistence map[string]ports.SlackRecipientKind
 
 	workerMu sync.Mutex
 	workers  map[string]*destinationWorker
@@ -130,16 +133,17 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		jitter = defaultJitter
 	}
 	notifier := &Notifier{
-		settings:  opts.Settings,
-		store:     opts.Store,
-		stateDir:  opts.StateDir,
-		observer:  opts.Observer,
-		newClient: opts.NewClient,
-		clock:     clock,
-		jitter:    jitter,
-		stopCh:    make(chan struct{}),
-		records:   map[string]*featureRecord{},
-		workers:   map[string]*destinationWorker{},
+		settings:           opts.Settings,
+		store:              opts.Store,
+		stateDir:           opts.StateDir,
+		observer:           opts.Observer,
+		newClient:          opts.NewClient,
+		clock:              clock,
+		jitter:             jitter,
+		stopCh:             make(chan struct{}),
+		records:            map[string]*featureRecord{},
+		pendingPersistence: map[string]ports.SlackRecipientKind{},
+		workers:            map[string]*destinationWorker{},
 	}
 	notifier.requestBase, notifier.cancelBase = context.WithCancel(context.Background())
 	dropCapacity := opts.QueueCapacity
@@ -346,7 +350,9 @@ func (n *Notifier) processItem(item queueItem) {
 		n.queue.complete(item)
 		return
 	}
+	n.retryPendingRecord(owner.ID, record)
 
+	progressText := renderProgress(item.event, eventFeature)
 	var work []workItem
 	for _, recipient := range settings.Recipients {
 		channelID, err := n.resolveDestination(settings, record, owner.ID, recipient)
@@ -364,6 +370,7 @@ func (n *Notifier) processItem(item queueItem) {
 			channelID:       channelID,
 			needsCard:       true,
 			refresh:         true,
+			progressText:    progressText,
 		})
 	}
 	if len(work) == 0 {
@@ -427,7 +434,7 @@ func (n *Notifier) resolveDestination(
 		entry.DisplayName = recipient.DisplayName
 		entry.ChannelID = channelID
 		record.Destinations[key] = entry
-		persistErr := persistFeatureRecord(n.stateDir, featureID, record)
+		persistErr := n.persistRecordLocked(featureID, record, recipient.Kind)
 		n.recordMu.Unlock()
 		n.logPersistError(persistErr, recipient.Kind)
 		return channelID, nil
@@ -442,10 +449,40 @@ func (n *Notifier) resolveDestination(
 	entry.DisplayName = recipient.DisplayName
 	entry.ChannelID = recipient.ID
 	record.Destinations[key] = entry
-	persistErr := persistFeatureRecord(n.stateDir, featureID, record)
+	persistErr := n.persistRecordLocked(featureID, record, recipient.Kind)
 	n.recordMu.Unlock()
 	n.logPersistError(persistErr, recipient.Kind)
 	return recipient.ID, nil
+}
+
+// persistRecordLocked writes the authoritative in-memory record and tracks a
+// failed write for retry. The caller must hold recordMu.
+func (n *Notifier) persistRecordLocked(
+	featureID string,
+	record *featureRecord,
+	kind ports.SlackRecipientKind,
+) error {
+	err := persistFeatureRecord(n.stateDir, featureID, record)
+	if err != nil {
+		n.pendingPersistence[featureID] = kind
+		return err
+	}
+	delete(n.pendingPersistence, featureID)
+	return nil
+}
+
+// retryPendingRecord repairs a prior failed write on the next eligible
+// lifecycle event, including events that only produce a chat.update.
+func (n *Notifier) retryPendingRecord(featureID string, record *featureRecord) {
+	n.recordMu.Lock()
+	kind, pending := n.pendingPersistence[featureID]
+	if !pending {
+		n.recordMu.Unlock()
+		return
+	}
+	err := n.persistRecordLocked(featureID, record, kind)
+	n.recordMu.Unlock()
+	n.logPersistError(err, kind)
 }
 
 var errUnsupportedRecipientKind = &unsupportedRecipientKindError{}

@@ -61,6 +61,7 @@ type workItem struct {
 	channelID       string
 	needsCard       bool
 	refresh         bool
+	progressText    string
 	delivery        *deliveryGroup
 }
 
@@ -86,6 +87,7 @@ type destinationWorker struct {
 	dirty      []dirtyEntry
 	lastWrite  time.Time
 	lastUpdate time.Time
+	notBefore  time.Time
 }
 
 func (n *Notifier) workerFor(channelID string) *destinationWorker {
@@ -197,8 +199,8 @@ func (w *destinationWorker) itemRequiresWrite(item workItem) bool {
 	if item.needsCard && rootTS == "" {
 		return true
 	}
-	_, source, ok := w.currentDelivery(item, true)
-	return ok && renderProgress(item.event, source) != ""
+	_, _, ok := w.currentDelivery(item, true)
+	return ok && item.progressText != ""
 }
 
 // handle delivers one item: ensure the root card, post the Progress reply,
@@ -282,7 +284,9 @@ func (w *destinationWorker) ensureCard(item workItem) error {
 	entry.RootTS = result.TS
 	entry.ledgerAppend(result.TS)
 	record.Destinations[item.destinationKey] = entry
-	persistErr := persistFeatureRecord(notifier.stateDir, item.featureID, record)
+	persistErr := notifier.persistRecordLocked(
+		item.featureID, record, ports.SlackRecipientKind(item.kind),
+	)
 	notifier.recordMu.Unlock()
 	notifier.logPersistError(persistErr, ports.SlackRecipientKind(item.kind))
 	notifier.emitEvent(item.featureID, "slack.root_card_updated", map[string]any{
@@ -307,11 +311,11 @@ func (w *destinationWorker) postReply(item workItem) error {
 		return errors.New("no root card to reply to")
 	}
 
-	settings, source, ok := w.currentDelivery(item, true)
+	settings, _, ok := w.currentDelivery(item, true)
 	if !ok {
 		return errDeliveryIneligible
 	}
-	line := renderProgress(item.event, source)
+	line := item.progressText
 	if line == "" {
 		return nil
 	}
@@ -320,12 +324,8 @@ func (w *destinationWorker) postReply(item workItem) error {
 	}
 	defer w.recordWrite()
 	send := func() (PostMessageResult, error) {
-		settings, source, ok = w.currentDelivery(item, true)
+		settings, _, ok = w.currentDelivery(item, true)
 		if !ok {
-			return PostMessageResult{}, errDeliveryIneligible
-		}
-		line = renderProgress(item.event, source)
-		if line == "" {
 			return PostMessageResult{}, errDeliveryIneligible
 		}
 		client, err := notifier.newClient(settings.Token)
@@ -347,7 +347,9 @@ func (w *destinationWorker) postReply(item workItem) error {
 	entry := record.Destinations[item.destinationKey]
 	entry.ledgerAppend(result.TS)
 	record.Destinations[item.destinationKey] = entry
-	persistErr := persistFeatureRecord(notifier.stateDir, item.featureID, record)
+	persistErr := notifier.persistRecordLocked(
+		item.featureID, record, ports.SlackRecipientKind(item.kind),
+	)
 	notifier.recordMu.Unlock()
 	notifier.logPersistError(persistErr, ports.SlackRecipientKind(item.kind))
 	notifier.emitEvent(item.featureID, "slack.message_posted", map[string]any{
@@ -508,7 +510,9 @@ func (w *destinationWorker) currentDelivery(
 // spaced from the response that Slack actually observed. pace reports
 // false when shutdown aborted the wait.
 func (w *destinationWorker) pace() bool {
-	deadline := w.lastWrite.Add(writePaceInterval)
+	w.mu.Lock()
+	deadline := latestTime(w.lastWrite.Add(writePaceInterval), w.notBefore)
+	w.mu.Unlock()
 	if w.notifier.clock.Now().Before(deadline) {
 		if !w.waitUntil(deadline) {
 			return false
@@ -520,6 +524,14 @@ func (w *destinationWorker) pace() bool {
 func (w *destinationWorker) recordWrite() {
 	w.mu.Lock()
 	w.lastWrite = w.notifier.clock.Now()
+	w.mu.Unlock()
+}
+
+func (w *destinationWorker) pauseUntil(deadline time.Time) {
+	w.mu.Lock()
+	if deadline.After(w.notBefore) {
+		w.notBefore = deadline
+	}
 	w.mu.Unlock()
 }
 
@@ -594,13 +606,19 @@ func sendWithRetry[T any](
 		var wait time.Duration
 		switch {
 		case transportErr.StatusCode == http.StatusTooManyRequests:
+			wait = maxDuration(transportErr.RetryAfter, time.Second)
+			deadline := notifier.clock.Now().Add(wait)
+			w.pauseUntil(deadline)
 			attempts++
 			if attempts > retryLimit {
 				log.Printf("slack-notifier: giving up on %s to %s destination after %d retries: %v",
 					label, item.kind, retryLimit, err)
 				return zero, err
 			}
-			wait = maxDuration(transportErr.RetryAfter, time.Second)
+			if !w.waitUntil(deadline) {
+				return zero, err
+			}
+			continue
 		case transientStatus(transportErr.StatusCode):
 			attempts++
 			if attempts > retryLimit {

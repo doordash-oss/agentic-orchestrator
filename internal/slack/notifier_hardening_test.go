@@ -307,24 +307,50 @@ func TestNotifierPersistFailureRetainsAndRetries(t *testing.T) {
 	if err := os.Remove(recordPath); err != nil {
 		t.Fatal(err)
 	}
+	harness.settings.mutate(func(settings *ports.SlackRuntimeSettings) {
+		settings.Categories.Progress = false
+	})
+	updatesBefore := len(harness.server.Requests("chat.update"))
 	harness.feed(ports.Event{Type: ports.PublishStarted, FeatureID: "F-1"})
 	waitFor(t, 10*time.Second, func() bool {
-		return len(postsTo(harness.server, "C-ENG")) == 4
+		return len(harness.server.Requests("chat.update")) > updatesBefore
 	})
-	// The re-persist trails the post; poll until the complete ledger,
-	// including every timestamp accepted while writes were failing, is
-	// durable.
+	if got := len(postsTo(harness.server, "C-ENG")); got != 3 {
+		t.Fatalf("posts = %d; want no Progress reply from the update-only recovery event", got)
+	}
+	// The next eligible lifecycle change must retry persistence even when
+	// Progress is off and the event only edits the root card.
 	waitFor(t, 10*time.Second, func() bool {
 		ledger, ok := recordLedger(harness.stateDir, "F-1", destinationKey("channel", "C-ENG"))
-		return ok && len(ledger) == 4
+		return ok && len(ledger) == 3
 	})
 	destinations := recordDestinations(t, harness.stateDir, "F-1")
 	entry := destinations[destinationKey("channel", "C-ENG")]
-	if got := len(entry.Ledger); got != 4 {
+	if got := len(entry.Ledger); got != 3 {
 		t.Fatalf("persisted ledger = %d entries; want every timestamp accepted while writes were failing", got)
 	}
 	if entry.RootTS == "" {
 		t.Fatal("re-persisted record lost the root timestamp")
+	}
+
+	postsBeforeRestart := len(postsTo(harness.server, "C-ENG"))
+	first := harness.notifier
+	first.Stop(context.Background())
+	second := harness.newNotifier(0)
+	second.Start()
+	t.Cleanup(func() { second.Stop(context.Background()) })
+	harness.notifier = second
+	updatesBefore = len(harness.server.Requests("chat.update"))
+	harness.feed(ports.Event{Type: ports.FeatureCompleted, FeatureID: "F-1"})
+	waitFor(t, 10*time.Second, func() bool {
+		return len(harness.server.Requests("chat.update")) > updatesBefore
+	})
+	if got := len(postsTo(harness.server, "C-ENG")); got != postsBeforeRestart {
+		t.Fatalf("posts after restart = %d; want %d with the durable root reused", got, postsBeforeRestart)
+	}
+	update := harness.server.Requests("chat.update")[updatesBefore]
+	if got := fieldString(update, "ts"); got != entry.RootTS {
+		t.Fatalf("restart update root ts = %q; want persisted %q", got, entry.RootTS)
 	}
 }
 
@@ -441,6 +467,49 @@ func TestNotifierRateLimitPauseIsPerDestination(t *testing.T) {
 	}
 	if delayed := channelWrites[0].Sub(dmAt); delayed > time.Second {
 		t.Fatalf("channel's first request was delayed %s behind the direct message; destinations pace independently", delayed)
+	}
+}
+
+func TestNotifierRateLimitExhaustionPreservesFinalPause(t *testing.T) {
+	logs := captureLogs(t)
+	harness := newNotifierHarness(t, defaultTestSettings(testToken, testRecipients()[1]))
+	harness.seedFeature("F-1", func(f *feature.Feature) { withRoadmap(f) })
+	inner, _ := defaultOKResponder()
+	var attemptsMu sync.Mutex
+	var attempts []time.Time
+	var requestCount atomic.Int64
+	harness.server.SetDefault(func(method string, request testsupport.Request) testsupport.Response {
+		if method != "chat.postMessage" {
+			return inner(method, request)
+		}
+		attemptsMu.Lock()
+		attempts = append(attempts, harness.clock.Now())
+		attemptsMu.Unlock()
+		if requestCount.Add(1) <= 4 {
+			return testsupport.Response{
+				Status:  http.StatusTooManyRequests,
+				Headers: http.Header{"Retry-After": []string{"5"}},
+				Body:    map[string]any{"ok": false},
+			}
+		}
+		return inner(method, request)
+	})
+	harness.start(0)
+	harness.feed(ports.Event{Type: ports.FeatureStarted, FeatureID: "F-1"})
+	harness.feed(startedEvent("F-1", feature.PhaseResearch))
+
+	waitFor(t, 10*time.Second, func() bool {
+		return len(harness.server.Requests("chat.postMessage")) >= 5 &&
+			strings.Contains(logs.String(), "after 3 retries")
+	})
+	attemptsMu.Lock()
+	got := append([]time.Time(nil), attempts...)
+	attemptsMu.Unlock()
+	if len(got) < 5 {
+		t.Fatalf("post attempts = %d; want four exhausted 429s and the next queued write", len(got))
+	}
+	if pause := got[4].Sub(got[3]); pause < 5*time.Second {
+		t.Fatalf("next write followed the exhausted 429 after %s; want the final five-second pause", pause)
 	}
 }
 

@@ -321,6 +321,95 @@ func TestNotifierReplyBacklogDoesNotStarveDueCardUpdate(t *testing.T) {
 	}
 }
 
+func TestNotifierQueuedProgressKeepsEventRoadmapPhase(t *testing.T) {
+	recipients := []ports.SlackRecipient{
+		{TypedText: "#slow", Kind: ports.SlackRecipientChannel, ID: "C-SLOW", DisplayName: "#slow"},
+		{TypedText: "#fast", Kind: ports.SlackRecipientChannel, ID: "C-FAST", DisplayName: "#fast"},
+	}
+	harness := newNotifierHarness(t, defaultTestSettings(testToken, recipients...))
+	harness.seedFeature("F-1", func(f *feature.Feature) {
+		withRoadmap(f)
+		f.CurrentPhase = feature.PhaseImplement
+		f.PhaseTimings = map[string]time.Duration{
+			"phase-1-plan": 2*time.Minute + 10*time.Second,
+			"phase-1-impl": 3*time.Minute + 10*time.Second,
+			"phase-2-plan": 1*time.Minute + 40*time.Second,
+			"phase-2-impl": 3*time.Minute + 20*time.Second,
+		}
+		f.PhaseCosts = map[string]float64{
+			"phase-1-plan": 1.24,
+			"phase-1-impl": 2.16,
+			"phase-2-plan": 0.90,
+			"phase-2-impl": 1.10,
+		}
+	})
+	notifier := harness.start(0)
+	harness.feed(ports.Event{Type: ports.FeatureStarted, FeatureID: "F-1"})
+	if !reviewEventually(2*time.Second, func() bool {
+		return len(reviewRequestsTo(harness.server, "chat.update", "C-SLOW")) == 1 &&
+			len(reviewRequestsTo(harness.server, "chat.update", "C-FAST")) == 1
+	}) {
+		t.Fatal("initial root cards were not refreshed")
+	}
+
+	slowStarted := make(chan struct{})
+	slowRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(slowRelease) }) }
+	t.Cleanup(release)
+	inner, _ := defaultOKResponder()
+	var held atomic.Bool
+	harness.server.SetDefault(func(method string, request testsupport.Request) testsupport.Response {
+		response := inner(method, request)
+		if method == "chat.postMessage" &&
+			fieldString(request, "channel") == "C-SLOW" &&
+			fieldString(request, "thread_ts") != "" &&
+			held.CompareAndSwap(false, true) {
+			response.Started = slowStarted
+			response.Release = slowRelease
+		}
+		return response
+	})
+
+	harness.feed(startedEvent("F-1", feature.PhaseImplement))
+	select {
+	case <-slowStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("slow destination did not reach the held phase-one reply")
+	}
+	harness.feed(completedEvent("F-1", feature.PhaseImplement))
+	slowWorker := reviewWaitForWorker(t, notifier, "C-SLOW")
+	if !reviewEventually(2*time.Second, func() bool {
+		return reviewWorkerInboxLen(slowWorker) == 1 &&
+			len(reviewThreadPostsTo(harness.server, "C-FAST")) == 2
+	}) {
+		t.Fatal("phase-one completion was not queued behind the held slow write")
+	}
+
+	if err := harness.store.Modify("F-1", func(f *feature.Feature) error {
+		f.CurrentRoadmapPhase = 2
+		f.CurrentPhase = feature.PhasePlan
+		f.Status = feature.StatusPlanning
+		return nil
+	}); err != nil {
+		t.Fatalf("advance roadmap phase: %v", err)
+	}
+	release()
+	if !reviewEventually(2*time.Second, func() bool {
+		return len(reviewThreadPostsTo(harness.server, "C-SLOW")) == 2
+	}) {
+		t.Fatal("slow destination did not drain the queued phase-one completion")
+	}
+
+	const want = "🔧 Roadmap phase 1 of 2 complete in 5m 20s (cost $3.40)"
+	for _, channel := range []string{"C-SLOW", "C-FAST"} {
+		replies := reviewThreadPostsTo(harness.server, channel)
+		if got := fieldString(replies[1], "text"); got != want {
+			t.Errorf("%s queued completion = %q; want %q", channel, got, want)
+		}
+	}
+}
+
 func TestNotifierOverflowObserverCannotDelayDomainEventTap(t *testing.T) {
 	observer := &reviewBlockingObserver{
 		started: make(chan struct{}),

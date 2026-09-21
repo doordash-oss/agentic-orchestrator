@@ -362,22 +362,11 @@ func (c *Client) OpenConversation(ctx context.Context, userID string) (string, e
 
 // PostMessage sends a plain-text chat.postMessage request.
 func (c *Client) PostMessage(ctx context.Context, channelID, text string) error {
-	var envelope struct {
-		OK     bool   `json:"ok"`
-		Error  string `json:"error"`
-		Needed string `json:"needed"`
-	}
-	fields := url.Values{
-		"channel": {channelID},
-		"text":    {text},
-	}
-	if _, err := c.call(ctx, "chat.postMessage", fields, &envelope); err != nil {
-		return err
-	}
-	if !envelope.OK {
-		return c.apiError(envelope.Error, envelope.Needed)
-	}
-	return nil
+	_, err := c.PostMessageRich(ctx, PostMessageInput{
+		Channel:      channelID,
+		FallbackText: text,
+	})
+	return err
 }
 
 // PostMessageInput describes one rich chat.postMessage request. Blocks are

@@ -509,7 +509,8 @@ func TestNotifierRetriesTransientFailures(t *testing.T) {
 	)
 	harness.feed(startedEvent("F-1", feature.PhaseResearch))
 	waitFor(t, 10*time.Second, func() bool {
-		return len(harness.server.Requests("chat.postMessage")) == 8
+		return len(harness.server.Requests("chat.postMessage")) == 8 &&
+			strings.Contains(logs2.String(), "after 3 retries")
 	})
 	if !strings.Contains(logs2.String(), "after 3 retries") {
 		t.Fatalf("exhaustion was not logged:\n%s", logs2.String())
@@ -572,6 +573,9 @@ func TestNotifierQueueOverflowPolicy(t *testing.T) {
 		if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 			t.Fatalf("tap waited %s for the worker; enqueue must not block", elapsed)
 		}
+		waitFor(t, 10*time.Second, func() bool {
+			return len(harness.observer.ofKind("slack.event_dropped")) == 1
+		})
 		dropped := harness.observer.ofKind("slack.event_dropped")
 		if len(dropped) != 1 || dropped[0].Data["event_type"] != "phase.started" ||
 			dropped[0].Data["reason"] != "queue_overflow" {
@@ -617,6 +621,9 @@ func TestNotifierQueueOverflowPolicy(t *testing.T) {
 		if got := notifier.queue.len(); got != 3 {
 			t.Fatalf("queued items = %d; want the evicted progress replaced by the protected item", got)
 		}
+		waitFor(t, 10*time.Second, func() bool {
+			return len(harness.observer.ofKind("slack.event_dropped")) == 1
+		})
 		dropped := harness.observer.ofKind("slack.event_dropped")
 		if len(dropped) != 1 || dropped[0].Data["event_type"] != "phase.started" {
 			t.Fatalf("overflow events = %#v; want exactly one naming the evicted progress event", dropped)
@@ -665,6 +672,9 @@ func TestNotifierQueueOverflowPolicy(t *testing.T) {
 		if got := notifier.queue.len(); got != 4 {
 			t.Fatalf("queued items = %d; want the progress item dropped against protected-only queue", got)
 		}
+		waitFor(t, 10*time.Second, func() bool {
+			return len(harness.observer.ofKind("slack.event_dropped")) == 1
+		})
 		dropped := harness.observer.ofKind("slack.event_dropped")
 		if len(dropped) != 1 || dropped[0].Data["event_type"] != "phase.started" {
 			t.Fatalf("overflow events = %#v; want one for the dropped progress item", dropped)

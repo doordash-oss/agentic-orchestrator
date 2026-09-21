@@ -16,13 +16,13 @@ package slack
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // itemKind is the overflow-policy attribute of a queued item. Only the
-// category the item belongs to drives the eviction decision, so the whole
-// policy is testable before later phases add producers.
+// category the item belongs to drives the eviction decision.
 type itemKind int
 
 const (
@@ -46,8 +46,18 @@ func (k itemKind) String() string {
 
 // queueItem is one lifecycle event awaiting dispatch.
 type queueItem struct {
-	kind  itemKind
-	event ports.Event
+	kind        itemKind
+	event       ports.Event
+	reservation *queueReservation
+}
+
+// queueReservation keeps an accepted event inside the queue budget until all
+// of its destination deliveries finish. Cancellation lets protected work
+// evict Progress that has already reached a destination inbox.
+type queueReservation struct {
+	canceled atomic.Bool
+	kind     itemKind
+	event    ports.Event
 }
 
 // itemQueue is the bounded, non-blocking intake queue. Producers never
@@ -58,6 +68,7 @@ type queueItem struct {
 type itemQueue struct {
 	mu       sync.Mutex
 	items    []queueItem
+	pending  []*queueReservation
 	capacity int
 	signal   chan struct{}
 	dropped  func(item queueItem)
@@ -77,16 +88,26 @@ func newItemQueue(capacity int, dropped func(queueItem)) *itemQueue {
 // enqueue never blocks. It reports whether the item was accepted.
 func (q *itemQueue) enqueue(item queueItem) bool {
 	q.mu.Lock()
-	if len(q.items) < q.capacity {
+	if len(q.pending) < q.capacity {
+		item.reservation = &queueReservation{kind: item.kind, event: item.event}
+		q.pending = append(q.pending, item.reservation)
 		q.appendLocked(item)
 		q.mu.Unlock()
 		return true
 	}
 	if item.kind.protected() {
-		for i, queued := range q.items {
-			if !queued.kind.protected() {
-				evicted := q.items[i]
-				q.items = append(q.items[:i], q.items[i+1:]...)
+		for i, pending := range q.pending {
+			if !pending.kind.protected() {
+				evicted := queueItem{
+					kind:        pending.kind,
+					event:       pending.event,
+					reservation: pending,
+				}
+				pending.canceled.Store(true)
+				q.removeItemLocked(pending)
+				q.pending = append(q.pending[:i], q.pending[i+1:]...)
+				item.reservation = &queueReservation{kind: item.kind, event: item.event}
+				q.pending = append(q.pending, item.reservation)
 				q.appendLocked(item)
 				q.mu.Unlock()
 				q.notifyDropped(evicted)
@@ -94,6 +115,8 @@ func (q *itemQueue) enqueue(item queueItem) bool {
 			}
 		}
 		// Only protected items remain: accept over the bound.
+		item.reservation = &queueReservation{kind: item.kind, event: item.event}
+		q.pending = append(q.pending, item.reservation)
 		q.appendLocked(item)
 		q.mu.Unlock()
 		return true
@@ -101,6 +124,15 @@ func (q *itemQueue) enqueue(item queueItem) bool {
 	q.mu.Unlock()
 	q.notifyDropped(item)
 	return false
+}
+
+func (q *itemQueue) removeItemLocked(reservation *queueReservation) {
+	for i, item := range q.items {
+		if item.reservation == reservation {
+			q.items = append(q.items[:i], q.items[i+1:]...)
+			return
+		}
+	}
 }
 
 func (q *itemQueue) appendLocked(item queueItem) {
@@ -132,5 +164,19 @@ func (q *itemQueue) next() (queueItem, bool) {
 func (q *itemQueue) len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return len(q.items)
+	return len(q.pending)
+}
+
+func (q *itemQueue) complete(item queueItem) {
+	if item.reservation == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i, reservation := range q.pending {
+		if reservation == item.reservation {
+			q.pending = append(q.pending[:i], q.pending[i+1:]...)
+			return
+		}
+	}
 }

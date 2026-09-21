@@ -17,6 +17,7 @@ package slack
 import (
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Block is one Block Kit value. Concrete shapes live below.
@@ -84,17 +85,15 @@ func contextBlockFor(elements []textObject) contextBlock {
 	return contextBlock{Type: blockTypeContext, Elements: elements}
 }
 
-// safeText renders record-derived text for a mrkdwn surface: the safe
-// display bounding first, then mrkdwn escaping so a feature named like a
-// channel mention can never ping anyone, then a hard truncation at the
-// block limit.
+// safeText renders record-derived text for a mrkdwn surface. Truncation
+// happens between escaped characters so entities remain complete.
 func safeText(text string, limit int) string {
-	text = boundDisplayText(text, limit)
-	text = escapeMrkdwn(text)
-	if len(text) > limit {
-		text = text[:limit]
+	text = strings.TrimSpace(text)
+	escaped := escapeMrkdwn(text)
+	if limit <= 0 || len(escaped) <= limit {
+		return escaped
 	}
-	return text
+	return truncateEscapedText(text, limit)
 }
 
 // safePlain renders record-derived text for a plain_text surface, bounding
@@ -105,10 +104,90 @@ func safePlain(text string, limit int) string {
 
 func boundDisplayText(text string, limit int) string {
 	text = strings.TrimSpace(text)
-	if limit > 0 && len(text) > limit {
-		return text[:limit] + "..."
+	if limit <= 0 || len(text) <= limit {
+		return text
 	}
-	return text
+	return truncateWithEllipsis(text, limit)
+}
+
+func truncateEscapedText(text string, limit int) string {
+	budget, suffix := truncationBudget(limit)
+	if budget == 0 {
+		return suffix
+	}
+
+	var result strings.Builder
+	for _, r := range text {
+		escaped := escapeMrkdwn(string(r))
+		if result.Len()+len(escaped) > budget {
+			break
+		}
+		result.WriteString(escaped)
+	}
+	return result.String() + suffix
+}
+
+func truncateMrkdwnTokens(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	budget, suffix := truncationBudget(limit)
+	if budget == 0 {
+		return suffix
+	}
+
+	var result strings.Builder
+	for len(text) > 0 {
+		segment, rest := nextMrkdwnSegment(text)
+		if result.Len()+len(segment) > budget {
+			break
+		}
+		result.WriteString(segment)
+		text = rest
+	}
+	return strings.TrimRight(result.String(), " ") + suffix
+}
+
+func nextMrkdwnSegment(text string) (string, string) {
+	switch text[0] {
+	case '<':
+		if end := strings.IndexByte(text, '>'); end >= 0 {
+			return text[:end+1], text[end+1:]
+		}
+	case '&':
+		if end := strings.IndexByte(text, ';'); end >= 0 {
+			return text[:end+1], text[end+1:]
+		}
+	}
+	_, size := utf8.DecodeRuneInString(text)
+	return text[:size], text[size:]
+}
+
+func truncateWithEllipsis(text string, limit int) string {
+	budget, suffix := truncationBudget(limit)
+	return truncateUTF8(text, budget) + suffix
+}
+
+func truncationBudget(limit int) (int, string) {
+	const ellipsis = "..."
+	if limit <= 0 {
+		return 0, ""
+	}
+	if limit < len(ellipsis) {
+		return 0, ellipsis[:limit]
+	}
+	return limit - len(ellipsis), ellipsis
+}
+
+func truncateUTF8(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	for limit > 0 && !utf8.RuneStart(text[limit]) {
+		limit--
+	}
+	return text[:limit]
 }
 
 // escapeMrkdwn neutralizes the characters Slack interprets as entity or

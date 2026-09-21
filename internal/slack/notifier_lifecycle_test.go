@@ -220,7 +220,8 @@ func TestNotifierChildEventsReportIntoParentThread(t *testing.T) {
 	harness.feed(ports.Event{Type: ports.FeatureCompleted, FeatureID: "F-2"})
 
 	waitFor(t, 10*time.Second, func() bool {
-		return len(postsTo(harness.server, "C-ENG")) >= 1 &&
+		return len(postsTo(harness.server, "D-U-ADA")) == 4 &&
+			len(postsTo(harness.server, "C-ENG")) == 4 &&
 			len(harness.server.Requests("chat.update")) >= 2
 	})
 	dmReplies := postsTo(harness.server, "D-U-ADA")

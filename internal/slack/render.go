@@ -29,7 +29,7 @@ import (
 // phase, and status (plus pull request links once any exist), and a context
 // line with the last update rendered as a Slack date token.
 func renderRootCard(serverName string, f *feature.Feature, now time.Time) ([]Block, string) {
-	name := boundedCardText(safePlain(f.Name, headerTextLimit), headerTextLimit)
+	name := safePlain(f.Name, headerTextLimit)
 	fields := []textObject{
 		labeledField("Server", serverName),
 		labeledField("Pipeline", humanisePipeline(f.EffectivePipeline())),
@@ -48,10 +48,10 @@ func renderRootCard(serverName string, f *feature.Feature, now time.Time) ([]Blo
 			Text: slackDateToken(now.Unix(), now.UTC().Format("2006-01-02 15:04 MST")),
 		}}),
 	}
-	fallback := boundDisplayText(strings.TrimSpace(
+	fallback := safePlain(strings.TrimSpace(
 		fmt.Sprintf("%s — %s", name, humaniseStatus(f.Status.String())),
 	), fallbackTextLimit)
-	return blocks, safePlain(fallback, fallbackTextLimit)
+	return blocks, fallback
 }
 
 func labeledField(label, value string) textObject {
@@ -70,7 +70,7 @@ func labeledFieldRaw(label, value string) textObject {
 	budget := fieldTextLimit - len(prefix)
 	return textObject{
 		Type: textTypeMrkdwn,
-		Text: prefix + boundDisplayText(value, budget),
+		Text: prefix + truncateMrkdwnTokens(value, budget),
 	}
 }
 
@@ -80,17 +80,7 @@ func repoList(f *feature.Feature) string {
 		names = append(names, repo.Name)
 	}
 	list := strings.Join(names, ", ")
-	return boundedCardText(boundDisplayText(list, repoFieldLimit), repoFieldLimit)
-}
-
-func boundedCardText(text string, limit int) string {
-	if limit <= 0 || len(text) <= limit {
-		return text
-	}
-	if limit <= 3 {
-		return text[:limit]
-	}
-	return text[:limit-3] + "..."
+	return boundDisplayText(list, repoFieldLimit)
 }
 
 func prLinks(f *feature.Feature) string {
@@ -112,14 +102,15 @@ func prLinks(f *feature.Feature) string {
 
 func phaseWithRoadmap(f *feature.Feature) string {
 	phase := phaseTitle(f.CurrentPhase)
-	if f.CurrentPhase == feature.PhasePlan && f.TotalRoadmapPhases > 0 && f.CurrentRoadmapPhase > 0 {
+	if (f.CurrentPhase == feature.PhasePlan || f.CurrentPhase == feature.PhaseImplement) &&
+		f.TotalRoadmapPhases > 0 && f.CurrentRoadmapPhase > 0 {
 		phase += fmt.Sprintf(" (roadmap phase %d of %d)", f.CurrentRoadmapPhase, f.TotalRoadmapPhases)
 	}
 	return phase
 }
 
 // renderProgress builds the one-line Progress reply for a handled event.
-// An empty line means the event posts no reply this phase. The line is the
+// An empty line means the event posts no reply. The line is the
 // message text Slack renders as mrkdwn and shows in notifications.
 func renderProgress(ev ports.Event, f *feature.Feature) string {
 	var prefix, emoji, text string
@@ -318,14 +309,6 @@ func childAffix(kind string) (prefix, emoji string) {
 	default:
 		return "", "🧩"
 	}
-}
-
-func childLabel(kind string) string {
-	prefix, _ := childAffix(kind)
-	if prefix == "" {
-		return "Child"
-	}
-	return prefix
 }
 
 func humanisePipeline(profile feature.PipelineProfile) string {

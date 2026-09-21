@@ -53,15 +53,15 @@ const sleepChunk = 100 * time.Millisecond
 // workItem is one destination-bound unit of delivery prepared by the
 // dispatcher.
 type workItem struct {
-	featureID      string
-	feature        *feature.Feature
-	destinationKey string
-	kind           string
-	channelID      string
-	token          string
-	line           string
-	needsCard      bool
-	refresh        bool
+	featureID       string
+	sourceFeatureID string
+	event           ports.Event
+	destinationKey  string
+	kind            string
+	channelID       string
+	needsCard       bool
+	refresh         bool
+	delivery        *deliveryGroup
 }
 
 // dirtyEntry tracks one feature whose card needs a refresh: markedAt is
@@ -127,6 +127,15 @@ func (w *destinationWorker) next() (workItem, bool) {
 	return item, true
 }
 
+func (w *destinationWorker) peek() (workItem, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.inbox) == 0 {
+		return workItem{}, false
+	}
+	return w.inbox[0], true
+}
+
 func (w *destinationWorker) markDirty(featureID string) {
 	now := w.notifier.clock.Now()
 	w.mu.Lock()
@@ -140,12 +149,6 @@ func (w *destinationWorker) markDirty(featureID string) {
 	w.dirty = append(w.dirty, dirtyEntry{featureID: featureID, markedAt: now, firstAt: now})
 }
 
-func (w *destinationWorker) hasDirty() bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return len(w.dirty) > 0
-}
-
 func (w *destinationWorker) run() {
 	defer w.notifier.workerWG.Done()
 	for {
@@ -154,17 +157,21 @@ func (w *destinationWorker) run() {
 			return
 		default:
 		}
-		// Pending work wins over the coalesced refresh: the inbox drains
-		// in order first, so a burst of events costs one edit.
-		item, ok := w.next()
-		if ok {
+		if item, ok := w.peek(); ok && !w.itemRequiresWrite(item) {
+			item, _ = w.next()
 			w.handle(item)
 			continue
 		}
-		if w.hasDirty() {
-			if !w.flushDue() {
+		if featureID, waitUntil, ok := w.takeDueRefresh(); ok {
+			if !w.waitUntil(waitUntil) {
 				return
 			}
+			w.flushOne(featureID)
+			continue
+		}
+		item, ok := w.next()
+		if ok {
+			w.handle(item)
 			continue
 		}
 		select {
@@ -175,22 +182,55 @@ func (w *destinationWorker) run() {
 	}
 }
 
+func (w *destinationWorker) itemRequiresWrite(item workItem) bool {
+	if item.delivery != nil && item.delivery.item.reservation != nil &&
+		item.delivery.item.reservation.canceled.Load() {
+		return false
+	}
+	record, err := w.notifier.recordFor(item.featureID)
+	if err != nil {
+		return false
+	}
+	w.notifier.recordMu.Lock()
+	rootTS := record.Destinations[item.destinationKey].RootTS
+	w.notifier.recordMu.Unlock()
+	if item.needsCard && rootTS == "" {
+		return true
+	}
+	_, source, ok := w.currentDelivery(item, true)
+	return ok && renderProgress(item.event, source) != ""
+}
+
 // handle delivers one item: ensure the root card, post the Progress reply,
 // then mark the destination dirty for the coalesced refresh.
 func (w *destinationWorker) handle(item workItem) {
+	defer item.delivery.done()
+	if item.delivery != nil && item.delivery.item.reservation != nil &&
+		item.delivery.item.reservation.canceled.Load() {
+		return
+	}
+	if _, _, ok := w.currentDelivery(item, false); !ok {
+		return
+	}
 	if item.needsCard {
 		if err := w.ensureCard(item); err != nil {
+			if errors.Is(err, errDeliveryIneligible) {
+				return
+			}
 			log.Printf("slack-notifier: root card for feature %s to %s destination was not delivered: %v",
 				item.featureID, item.kind, err)
 		}
 	}
-	if item.line != "" {
-		if err := w.postReply(item); err != nil {
+	if err := w.postReply(item); err != nil {
+		if !errors.Is(err, errDeliveryIneligible) {
 			log.Printf("slack-notifier: progress reply for feature %s to %s destination was not delivered: %v",
 				item.featureID, item.kind, err)
 		}
 	}
 	if item.refresh {
+		if _, _, ok := w.currentDelivery(item, false); !ok {
+			return
+		}
 		w.markDirty(item.featureID)
 	}
 }
@@ -210,16 +250,22 @@ func (w *destinationWorker) ensureCard(item workItem) error {
 		return nil
 	}
 
-	client, err := notifier.newClient(item.token)
-	if err != nil {
-		return err
-	}
-	blocks, fallback := renderRootCard(notifier.resolvedServerName(), item.feature, notifier.clock.Now())
 	if !w.pace() {
 		return errWorkerStopped
 	}
 	defer w.recordWrite()
 	send := func() (PostMessageResult, error) {
+		settings, current, ok := w.currentDelivery(item, false)
+		if !ok {
+			return PostMessageResult{}, errDeliveryIneligible
+		}
+		client, err := notifier.newClient(settings.Token)
+		if err != nil {
+			return PostMessageResult{}, err
+		}
+		blocks, fallback := renderRootCard(
+			notifier.resolvedServerName(), current, notifier.clock.Now(),
+		)
 		return client.PostMessageRich(notifier.requestBase, PostMessageInput{
 			Channel:      item.channelID,
 			FallbackText: fallback,
@@ -261,18 +307,34 @@ func (w *destinationWorker) postReply(item workItem) error {
 		return errors.New("no root card to reply to")
 	}
 
-	client, err := notifier.newClient(item.token)
-	if err != nil {
-		return err
+	settings, source, ok := w.currentDelivery(item, true)
+	if !ok {
+		return errDeliveryIneligible
+	}
+	line := renderProgress(item.event, source)
+	if line == "" {
+		return nil
 	}
 	if !w.pace() {
 		return errWorkerStopped
 	}
 	defer w.recordWrite()
 	send := func() (PostMessageResult, error) {
+		settings, source, ok = w.currentDelivery(item, true)
+		if !ok {
+			return PostMessageResult{}, errDeliveryIneligible
+		}
+		line = renderProgress(item.event, source)
+		if line == "" {
+			return PostMessageResult{}, errDeliveryIneligible
+		}
+		client, err := notifier.newClient(settings.Token)
+		if err != nil {
+			return PostMessageResult{}, err
+		}
 		return client.PostMessageRich(notifier.requestBase, PostMessageInput{
 			Channel:      item.channelID,
-			FallbackText: item.line,
+			FallbackText: line,
 			ThreadTS:     rootTS,
 		})
 	}
@@ -295,95 +357,38 @@ func (w *destinationWorker) postReply(item workItem) error {
 	return nil
 }
 
-// flushDue drains the coalesced refresh backlog at most one update per
-// second. A refresh waits for a quiescent pipeline — no queued events, no
-// dispatch in flight, no pending writes — plus the trailing-edge deadline
-// (one second after the event that last touched the feature, capped by the
-// staleness bound), so a burst of events costs one edit. It reports false
-// when shutdown aborted the wait.
-func (w *destinationWorker) flushDue() bool {
-	// One pass: the run loop re-enters after draining whatever arrived, so
-	// a pending inbox item can never wedge the refresh loop.
-	if !w.hasDirty() {
-		return true
-	}
-	return w.flushNext()
-}
-
-func (w *destinationWorker) flushNext() bool {
-	for {
-		select {
-		case <-w.notifier.stopCh:
-			return false
-		default:
-		}
-		if !w.inboxEmpty() {
-			// New work arrived; the run loop drains it first and the
-			// refresh re-defers to the trailing edge.
-			return true
-		}
-		now := w.notifier.clock.Now()
-		quiescent := w.notifier.queue.len() == 0 && !w.notifier.processing.Load()
-		// The decision and the pop commit together under the lock so an
-		// enqueue racing the flush decision defers it instead of leaving
-		// an unhandled item behind a fired flush.
-		w.mu.Lock()
-		if len(w.inbox) > 0 {
-			w.mu.Unlock()
-			return true
-		}
-		if len(w.dirty) == 0 {
-			w.mu.Unlock()
-			return true
-		}
-		entry := w.dirty[0]
-		deadline := earliestTime(
-			entry.markedAt.Add(updatePaceInterval),
-			entry.firstAt.Add(maxCardStaleness),
-		)
-		deadline = latestTime(deadline,
-			latestTime(w.lastWrite, w.lastUpdate).Add(updatePaceInterval))
-		if quiescent && !now.Before(deadline) {
-			w.dirty = w.dirty[1:]
-			w.mu.Unlock()
-			w.flushOne(entry.featureID)
-			return true
-		}
-		w.mu.Unlock()
-		wait := deadline.Sub(now)
-		if !quiescent || wait <= 0 {
-			wait = sleepChunk
-		}
-		if wait > sleepChunk {
-			wait = sleepChunk
-		}
-		if !w.notifier.clock.Sleep(w.notifier.requestBase, wait) {
-			return false
-		}
-	}
-}
-
-func (w *destinationWorker) inboxEmpty() bool {
+// takeDueRefresh reserves the next write slot for a dirty card once its
+// trailing edge or maximum staleness is due. Replies remain ordered, while a
+// sustained reply backlog cannot starve card edits.
+func (w *destinationWorker) takeDueRefresh() (string, time.Time, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return len(w.inbox) == 0
+	if len(w.dirty) == 0 {
+		return "", time.Time{}, false
+	}
+	entry := w.dirty[0]
+	due := earliestTime(
+		entry.markedAt.Add(updatePaceInterval),
+		entry.firstAt.Add(maxCardStaleness),
+	)
+	nextWrite := latestTime(w.notifier.clock.Now(), w.lastWrite.Add(writePaceInterval))
+	if len(w.inbox) > 0 && due.After(nextWrite) {
+		return "", time.Time{}, false
+	}
+	due = latestTime(due, latestTime(w.lastWrite, w.lastUpdate).Add(updatePaceInterval))
+	w.dirty = w.dirty[1:]
+	return entry.featureID, due, true
 }
 
 // flushOne renders one dirty feature's card from the freshest record state
 // and edits the card in place.
 func (w *destinationWorker) flushOne(featureID string) {
 	notifier := w.notifier
-	w.mu.Lock()
-	w.lastUpdate = notifier.clock.Now()
-	w.mu.Unlock()
-
 	settings := notifier.settings.SlackSettings()
-	if !settings.Enabled || settings.Token == "" {
-		// Slack was disabled mid-run: no further request is made.
+	if !settings.Enabled || settings.Token == "" || len(settings.Recipients) == 0 {
 		return
 	}
-	f, err := notifier.store.Load(featureID)
-	if err != nil || f == nil {
+	if current, err := notifier.store.Load(featureID); err != nil || current == nil {
 		log.Printf("slack-notifier: dropping card refresh for feature %s: feature cannot be loaded", featureID)
 		return
 	}
@@ -393,26 +398,50 @@ func (w *destinationWorker) flushOne(featureID string) {
 			featureID, err)
 		return
 	}
-	_, rootTS, kind, channelID, hasDestination := w.destinationFor(record, f)
+	_, rootTS, kind, _, hasDestination := w.destinationFor(settings, record)
 	if !hasDestination || rootTS == "" {
 		return
 	}
-	client, err := notifier.newClient(settings.Token)
-	if err != nil {
-		log.Printf("slack-notifier: dropping card refresh for feature %s: %v", featureID, err)
-		return
-	}
-	blocks, fallback := renderRootCard(notifier.resolvedServerName(), f, notifier.clock.Now())
 	if !w.pace() {
 		return
 	}
 	defer w.recordWrite()
 	send := func() (struct{}, error) {
-		return struct{}{}, client.UpdateMessage(notifier.requestBase, channelID, rootTS, fallback, blocks)
+		currentSettings := notifier.settings.SlackSettings()
+		if !currentSettings.Enabled || currentSettings.Token == "" {
+			return struct{}{}, errDeliveryIneligible
+		}
+		currentRecord, err := notifier.recordFor(featureID)
+		if err != nil {
+			return struct{}{}, err
+		}
+		_, currentRootTS, currentKind, currentChannelID, ok :=
+			w.destinationFor(currentSettings, currentRecord)
+		if !ok || currentRootTS == "" {
+			return struct{}{}, errDeliveryIneligible
+		}
+		current, err := notifier.store.Load(featureID)
+		if err != nil || current == nil {
+			return struct{}{}, errDeliveryIneligible
+		}
+		client, err := notifier.newClient(currentSettings.Token)
+		if err != nil {
+			return struct{}{}, err
+		}
+		blocks, fallback := renderRootCard(
+			notifier.resolvedServerName(), current, notifier.clock.Now(),
+		)
+		kind = currentKind
+		return struct{}{}, client.UpdateMessage(
+			notifier.requestBase, currentChannelID, currentRootTS, fallback, blocks,
+		)
 	}
 	if _, err := sendWithRetry(w, "card update", workItem{kind: kind}, send); err != nil {
 		return
 	}
+	w.mu.Lock()
+	w.lastUpdate = notifier.clock.Now()
+	w.mu.Unlock()
 	notifier.emitEvent(featureID, "slack.root_card_updated", map[string]any{
 		"destination_kind": kind,
 		"action":           "edited",
@@ -421,18 +450,55 @@ func (w *destinationWorker) flushOne(featureID string) {
 
 // destinationFor resolves the worker's channel back to the record entry
 // for a feature: the destination whose cached channel ID matches.
-func (w *destinationWorker) destinationFor(record *featureRecord, f *feature.Feature) (
+func (w *destinationWorker) destinationFor(
+	settings ports.SlackRuntimeSettings,
+	record *featureRecord,
+) (
 	key, rootTS, kind, channelID string, ok bool,
 ) {
 	notifier := w.notifier
 	notifier.recordMu.Lock()
 	defer notifier.recordMu.Unlock()
-	for key, entry := range record.Destinations {
-		if entry.ChannelID == w.channelID {
+	for _, recipient := range settings.Recipients {
+		key := destinationKey(string(recipient.Kind), recipient.ID)
+		entry, exists := record.Destinations[key]
+		if exists && entry.ChannelID == w.channelID {
 			return key, entry.RootTS, entry.Kind, entry.ChannelID, true
 		}
 	}
 	return "", "", "", "", false
+}
+
+func (w *destinationWorker) currentDelivery(
+	item workItem,
+	progress bool,
+) (ports.SlackRuntimeSettings, *feature.Feature, bool) {
+	settings := w.notifier.settings.SlackSettings()
+	if !settings.Enabled || settings.Token == "" {
+		return ports.SlackRuntimeSettings{}, nil, false
+	}
+	if progress && !settings.Categories.Progress {
+		return ports.SlackRuntimeSettings{}, nil, false
+	}
+	found := false
+	for _, recipient := range settings.Recipients {
+		if destinationKey(string(recipient.Kind), recipient.ID) == item.destinationKey {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ports.SlackRuntimeSettings{}, nil, false
+	}
+	featureID := item.featureID
+	if progress {
+		featureID = item.sourceFeatureID
+	}
+	current, err := w.notifier.store.Load(featureID)
+	if err != nil || current == nil {
+		return ports.SlackRuntimeSettings{}, nil, false
+	}
+	return settings, current, true
 }
 
 // pace waits until the destination may write again: at least
@@ -481,6 +547,7 @@ func (w *destinationWorker) waitUntil(deadline time.Time) bool {
 }
 
 var errWorkerStopped = errors.New("slack notifier stopped")
+var errDeliveryIneligible = errors.New("slack delivery no longer eligible")
 
 // sendWithRetry runs one Slack write with the destination's retry policy:
 // a 429 pauses for the returned wait (at least one second) and retries the
@@ -501,6 +568,9 @@ func sendWithRetry[T any](
 		result, err := send()
 		if err == nil {
 			return result, nil
+		}
+		if errors.Is(err, errDeliveryIneligible) {
+			return zero, err
 		}
 		select {
 		case <-notifier.stopCh:

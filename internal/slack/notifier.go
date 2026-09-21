@@ -85,14 +85,13 @@ type NotifierOptions struct {
 // root card per default destination that is edited in place, with compact
 // Progress replies accumulating in its thread.
 type Notifier struct {
-	settings      ports.SlackSettingsSource
-	store         FeatureLoader
-	stateDir      string
-	observer      EventObserver
-	newClient     ClientFactory
-	clock         Clock
-	jitter        func() float64
-	queueCapacity int
+	settings  ports.SlackSettingsSource
+	store     FeatureLoader
+	stateDir  string
+	observer  EventObserver
+	newClient ClientFactory
+	clock     Clock
+	jitter    func() float64
 
 	serverNameMu sync.RWMutex
 	serverName   string
@@ -104,15 +103,12 @@ type Notifier struct {
 	requestBase context.Context
 	cancelBase  context.CancelFunc
 
-	// processing spans each dispatcher item from dequeue to completion so
-	// the coalesced card refresh can distinguish a drained pipeline from
-	// one with an item still in flight.
-	processing atomic.Bool
-
 	queue *itemQueue
 
 	dispatcherWG sync.WaitGroup
 	workerWG     sync.WaitGroup
+	observerWG   sync.WaitGroup
+	dropEvents   chan observe.Event
 
 	recordMu sync.Mutex
 	records  map[string]*featureRecord
@@ -134,23 +130,34 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		jitter = defaultJitter
 	}
 	notifier := &Notifier{
-		settings:      opts.Settings,
-		store:         opts.Store,
-		stateDir:      opts.StateDir,
-		observer:      opts.Observer,
-		newClient:     opts.NewClient,
-		clock:         clock,
-		jitter:        jitter,
-		queueCapacity: opts.QueueCapacity,
-		stopCh:        make(chan struct{}),
-		records:       map[string]*featureRecord{},
-		workers:       map[string]*destinationWorker{},
+		settings:  opts.Settings,
+		store:     opts.Store,
+		stateDir:  opts.StateDir,
+		observer:  opts.Observer,
+		newClient: opts.NewClient,
+		clock:     clock,
+		jitter:    jitter,
+		stopCh:    make(chan struct{}),
+		records:   map[string]*featureRecord{},
+		workers:   map[string]*destinationWorker{},
 	}
 	notifier.requestBase, notifier.cancelBase = context.WithCancel(context.Background())
+	dropCapacity := opts.QueueCapacity
+	if dropCapacity <= 0 {
+		dropCapacity = defaultQueueCapacity
+	}
+	notifier.dropEvents = make(chan observe.Event, dropCapacity)
+	notifier.observerWG.Add(1)
+	go notifier.runDropReporter()
 	notifier.queue = newItemQueue(opts.QueueCapacity, func(item queueItem) {
-		notifier.emitEvent(item.event.FeatureID, "slack.event_dropped", map[string]any{
-			"event_type": eventTypeName(item.event.Type),
-			"reason":     "queue_overflow",
+		notifier.reportDrop(observe.Event{
+			Timestamp: notifier.clock.Now(),
+			EventType: "slack.event_dropped",
+			FeatureID: item.event.FeatureID,
+			Data: map[string]any{
+				"event_type": eventTypeName(item.event.Type),
+				"reason":     "queue_overflow",
+			},
 		})
 	})
 	return notifier
@@ -196,6 +203,7 @@ func (n *Notifier) Stop(ctx context.Context) {
 		go func() {
 			n.dispatcherWG.Wait()
 			n.workerWG.Wait()
+			n.observerWG.Wait()
 			close(done)
 		}()
 		select {
@@ -209,7 +217,7 @@ func (n *Notifier) Stop(ctx context.Context) {
 }
 
 // DomainEventTap is the non-blocking tap the SSE broker invokes for every
-// orchestrator domain event. Events outside this phase's set are discarded
+// supported orchestrator domain event. Other events are discarded
 // before any lookup.
 func (n *Notifier) DomainEventTap(ev ports.Event) {
 	if n.stopped.Load() || !handledEventType(ev.Type) {
@@ -219,7 +227,8 @@ func (n *Notifier) DomainEventTap(ev ports.Event) {
 }
 
 // RuntimeMessageTap is the non-blocking tap the SSE broker invokes for
-// session runtime messages. This phase discards them; Phase 6 acts on them.
+// session runtime messages. Runtime notifications are intentionally ignored
+// until a message category consumes them.
 func (n *Notifier) RuntimeMessageTap(any) {}
 
 func handledEventType(t ports.EventType) bool {
@@ -261,12 +270,14 @@ func eventTypeName(t ports.EventType) string {
 func (n *Notifier) runDispatcher() {
 	defer n.dispatcherWG.Done()
 	for {
-		n.processing.Store(true)
 		item, ok := n.queue.next()
 		if ok {
-			n.processItem(item)
+			if item.reservation != nil && item.reservation.canceled.Load() {
+				n.queue.complete(item)
+			} else {
+				n.processItem(item)
+			}
 		}
-		n.processing.Store(false)
 		if !ok {
 			select {
 			case <-n.stopCh:
@@ -289,6 +300,7 @@ func (n *Notifier) runDispatcher() {
 func (n *Notifier) processItem(item queueItem) {
 	settings := n.settings.SlackSettings()
 	if !settings.Enabled || settings.Token == "" || len(settings.Recipients) == 0 {
+		n.queue.complete(item)
 		return
 	}
 	eventFeature, err := n.store.Load(item.event.FeatureID)
@@ -301,6 +313,7 @@ func (n *Notifier) processItem(item queueItem) {
 			log.Printf("slack-notifier: skipping %s for feature that cannot be loaded: %v",
 				eventTypeName(item.event.Type), err)
 		}
+		n.queue.complete(item)
 		return
 	}
 
@@ -316,6 +329,7 @@ func (n *Notifier) processItem(item queueItem) {
 				log.Printf("slack-notifier: skipping %s for child whose parent cannot be loaded: %v",
 					eventTypeName(item.event.Type), err)
 			}
+			n.queue.complete(item)
 			return
 		}
 		owner = parent
@@ -329,14 +343,11 @@ func (n *Notifier) processItem(item queueItem) {
 		})
 		log.Printf("slack-notifier: skipping %s for feature whose Slack record cannot be loaded: %v",
 			eventTypeName(item.event.Type), err)
+		n.queue.complete(item)
 		return
 	}
 
-	line := renderProgress(item.event, eventFeature)
-	if line != "" && !settings.Categories.Progress {
-		line = ""
-	}
-
+	var work []workItem
 	for _, recipient := range settings.Recipients {
 		channelID, err := n.resolveDestination(settings, record, owner.ID, recipient)
 		if err != nil {
@@ -344,18 +355,25 @@ func (n *Notifier) processItem(item queueItem) {
 				recipient.Kind, eventTypeName(item.event.Type), err)
 			continue
 		}
-		worker := n.workerFor(channelID)
-		worker.enqueue(workItem{
-			featureID:      owner.ID,
-			feature:        owner,
-			destinationKey: destinationKey(string(recipient.Kind), recipient.ID),
-			kind:           string(recipient.Kind),
-			channelID:      channelID,
-			token:          settings.Token,
-			line:           line,
-			needsCard:      true,
-			refresh:        true,
+		work = append(work, workItem{
+			featureID:       owner.ID,
+			sourceFeatureID: eventFeature.ID,
+			event:           item.event,
+			destinationKey:  destinationKey(string(recipient.Kind), recipient.ID),
+			kind:            string(recipient.Kind),
+			channelID:       channelID,
+			needsCard:       true,
+			refresh:         true,
 		})
+	}
+	if len(work) == 0 {
+		n.queue.complete(item)
+		return
+	}
+	group := newDeliveryGroup(n.queue, item, len(work))
+	for i := range work {
+		work[i].delivery = group
+		n.workerFor(work[i].channelID).enqueue(work[i])
 	}
 }
 
@@ -455,4 +473,47 @@ func (n *Notifier) emitEvent(featureID, eventType string, data map[string]any) {
 		FeatureID: featureID,
 		Data:      data,
 	})
+}
+
+func (n *Notifier) reportDrop(evt observe.Event) {
+	if n.observer == nil {
+		return
+	}
+	select {
+	case n.dropEvents <- evt:
+	default:
+	}
+}
+
+func (n *Notifier) runDropReporter() {
+	defer n.observerWG.Done()
+	for {
+		select {
+		case <-n.stopCh:
+			return
+		case evt := <-n.dropEvents:
+			_ = n.observer.Emit(evt)
+		}
+	}
+}
+
+type deliveryGroup struct {
+	queue     *itemQueue
+	item      queueItem
+	remaining atomic.Int64
+}
+
+func newDeliveryGroup(queue *itemQueue, item queueItem, count int) *deliveryGroup {
+	group := &deliveryGroup{queue: queue, item: item}
+	group.remaining.Store(int64(count))
+	return group
+}
+
+func (g *deliveryGroup) done() {
+	if g == nil {
+		return
+	}
+	if g.remaining.Add(-1) == 0 {
+		g.queue.complete(g.item)
+	}
 }

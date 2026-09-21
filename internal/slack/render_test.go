@@ -107,6 +107,87 @@ func TestRenderRootCardEditedStateIncludesPullRequestLinks(t *testing.T) {
 	}
 }
 
+func TestPhaseWithRoadmapIncludesRoadmapPosition(t *testing.T) {
+	tests := []struct {
+		name         string
+		currentPhase feature.Phase
+		roadmapPhase int
+		want         string
+	}{
+		{
+			name:         "plan",
+			currentPhase: feature.PhasePlan,
+			roadmapPhase: 1,
+			want:         "Plan (roadmap phase 1 of 2)",
+		},
+		{
+			name:         "first implementation phase",
+			currentPhase: feature.PhaseImplement,
+			roadmapPhase: 1,
+			want:         "Implementation (roadmap phase 1 of 2)",
+		},
+		{
+			name:         "second implementation phase",
+			currentPhase: feature.PhaseImplement,
+			roadmapPhase: 2,
+			want:         "Implementation (roadmap phase 2 of 2)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &feature.Feature{
+				CurrentPhase:        tt.currentPhase,
+				CurrentRoadmapPhase: tt.roadmapPhase,
+				TotalRoadmapPhases:  2,
+			}
+
+			if got := phaseWithRoadmap(f); got != tt.want {
+				t.Errorf("phaseWithRoadmap() = %q; want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderProgressImplementationWordingDoesNotIncludeRoadmapPosition(t *testing.T) {
+	f := &feature.Feature{
+		CurrentRoadmapPhase: 2,
+		TotalRoadmapPhases:  2,
+	}
+	ev := ports.Event{Type: ports.PhaseStarted, Phase: feature.PhaseImplement}
+
+	if got, want := renderProgress(ev, f), "🔧 Implementation started"; got != want {
+		t.Errorf("renderProgress() = %q; want %q", got, want)
+	}
+}
+
+func TestTextLimitsIncludeEllipsis(t *testing.T) {
+	if got, want := boundDisplayText("abcdefgh", 5), "ab..."; got != want {
+		t.Errorf("boundDisplayText() = %q; want %q", got, want)
+	}
+	if got := safeText("&&&&", 8); got != "&amp;..." {
+		t.Errorf("safeText() = %q; want complete escaped entity plus ellipsis", got)
+	}
+}
+
+func TestLabeledFieldRawTruncatesBetweenLinkTokens(t *testing.T) {
+	var links []string
+	for i := 0; i < 12; i++ {
+		links = append(links, "<https://github.example/acme/repository/pull/123456789|"+
+			strings.Repeat("repository", 16)+">")
+	}
+
+	field := labeledFieldRaw("Pull requests", strings.Join(links, " "))
+	if got := len(field.Text); got > fieldTextLimit {
+		t.Fatalf("labeledFieldRaw() length = %d; want at most %d", got, fieldTextLimit)
+	}
+	if strings.Count(field.Text, "<") != strings.Count(field.Text, ">") {
+		t.Errorf("labeledFieldRaw() = %q; want only complete link tokens", field.Text)
+	}
+	if !strings.HasSuffix(field.Text, "...") {
+		t.Errorf("labeledFieldRaw() = %q; want truncation ellipsis", field.Text)
+	}
+}
+
 func TestRenderProgressUsesReviewFeedbackAndRebasePrefixes(t *testing.T) {
 	tests := []struct {
 		name string

@@ -431,6 +431,30 @@ func TestClientPostMessageRichOmitsOptionalFields(t *testing.T) {
 	}
 }
 
+func TestClientPostMessagePreservesPlainMessageBehavior(t *testing.T) {
+	server := testsupport.New(t)
+	server.Script("chat.postMessage", testsupport.Response{Body: map[string]any{
+		"ok": true, "channel": "C1", "ts": "2.0",
+	}})
+	client, err := NewClient("xoxb-secret-1234", WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := client.PostMessage(t.Context(), "C1", "plain"); err != nil {
+		t.Fatalf("PostMessage() error = %v", err)
+	}
+	fields := server.Requests("chat.postMessage")[0].Fields
+	if fields["channel"] != "C1" || fields["text"] != "plain" {
+		t.Errorf("PostMessage() fields = %#v; want channel and text", fields)
+	}
+	for _, absent := range []string{"blocks", "thread_ts", "reply_broadcast"} {
+		if _, present := fields[absent]; present {
+			t.Errorf("PostMessage() fields contain %q: %#v", absent, fields)
+		}
+	}
+}
+
 func TestClientUpdateMessageSendsChannelTimestampTextAndBlocks(t *testing.T) {
 	server := testsupport.New(t)
 	server.Script("chat.update", testsupport.Response{Body: map[string]any{"ok": true}})

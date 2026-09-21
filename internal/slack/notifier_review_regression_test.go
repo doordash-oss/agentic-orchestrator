@@ -410,6 +410,83 @@ func TestNotifierQueuedProgressKeepsEventRoadmapPhase(t *testing.T) {
 	}
 }
 
+func TestNotifierIntakeDelayKeepsEventRoadmapPhase(t *testing.T) {
+	recipient := ports.SlackRecipient{
+		TypedText: "Ada", Kind: ports.SlackRecipientUser, ID: "U-ADA", DisplayName: "Ada",
+	}
+	harness := newNotifierHarness(t, defaultTestSettings(testToken, recipient))
+	harness.seedFeature("F-1", func(f *feature.Feature) {
+		withRoadmap(f)
+		f.CurrentPhase = feature.PhaseImplement
+		f.PhaseTimings = map[string]time.Duration{
+			"phase-1-plan": 2*time.Minute + 10*time.Second,
+			"phase-1-impl": 3*time.Minute + 10*time.Second,
+			"phase-2-plan": 1*time.Minute + 40*time.Second,
+			"phase-2-impl": 3*time.Minute + 20*time.Second,
+		}
+		f.PhaseCosts = map[string]float64{
+			"phase-1-plan": 1.24,
+			"phase-1-impl": 2.16,
+			"phase-2-plan": 0.90,
+			"phase-2-impl": 1.10,
+		}
+	})
+
+	openStarted := make(chan struct{})
+	openRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(openRelease) }) }
+	t.Cleanup(release)
+	harness.server.Script("conversations.open", testsupport.Response{
+		Body: map[string]any{
+			"ok":      true,
+			"channel": map[string]any{"id": "D-ADA"},
+		},
+		Started: openStarted,
+		Release: openRelease,
+	})
+
+	notifier := harness.start(0)
+	harness.feed(ports.Event{Type: ports.FeatureStarted, FeatureID: "F-1"})
+	select {
+	case <-openStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("dispatcher did not reach the held conversations.open request")
+	}
+
+	snapshot, err := harness.store.Load("F-1")
+	if err != nil {
+		t.Fatalf("load phase-one snapshot: %v", err)
+	}
+	harness.feed(ports.Event{
+		Type: ports.PhaseCompleted, FeatureID: "F-1",
+		Phase: feature.PhaseImplement, Feature: snapshot,
+	})
+	if err := harness.store.Modify("F-1", func(f *feature.Feature) error {
+		f.CurrentRoadmapPhase = 2
+		f.CurrentPhase = feature.PhasePlan
+		f.Status = feature.StatusPlanning
+		return nil
+	}); err != nil {
+		t.Fatalf("advance roadmap phase: %v", err)
+	}
+
+	release()
+	worker := reviewWaitForWorker(t, notifier, "D-ADA")
+	if !reviewEventually(2*time.Second, func() bool {
+		return len(reviewThreadPostsTo(harness.server, "D-ADA")) == 1 &&
+			reviewWorkerSettled(notifier, worker)
+	}) {
+		t.Fatal("completion did not drain after releasing dispatcher intake")
+	}
+
+	const want = "🔧 Roadmap phase 1 of 2 complete in 5m 20s (cost $3.40)"
+	replies := reviewThreadPostsTo(harness.server, "D-ADA")
+	if got := fieldString(replies[0], "text"); got != want {
+		t.Errorf("delayed completion = %q; want %q", got, want)
+	}
+}
+
 func TestNotifierOverflowObserverCannotDelayDomainEventTap(t *testing.T) {
 	observer := &reviewBlockingObserver{
 		started: make(chan struct{}),

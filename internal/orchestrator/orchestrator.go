@@ -465,6 +465,7 @@ func (o *Orchestrator) ChildCreated(child *feature.Feature) {
 // Also drops events when shutdown has been signalled, so late emitters do not
 // enqueue work consumers will never read.
 func (o *Orchestrator) emitEvent(ev ports.Event) {
+	ev = o.withFeatureSnapshot(ev)
 	select {
 	case <-o.doneCh:
 		return
@@ -484,10 +485,33 @@ func (o *Orchestrator) emitEvent(ev ports.Event) {
 // downstream consumers must not miss. Selects on doneCh so a full
 // buffer at shutdown does not deadlock the emitter goroutine.
 func (o *Orchestrator) emitEventBlocking(ev ports.Event) {
+	ev = o.withFeatureSnapshot(ev)
 	select {
 	case o.eventCh <- ev:
 	case <-o.doneCh:
 	}
+}
+
+func (o *Orchestrator) withFeatureSnapshot(ev ports.Event) ports.Event {
+	if ev.Feature != nil || ev.FeatureID == "" || o.deps.Store == nil {
+		return ev
+	}
+	switch ev.Type {
+	case ports.FeatureStarted,
+		ports.FeatureAdvanced,
+		ports.PhaseStarted,
+		ports.PhaseCompleted,
+		ports.PublishStarted,
+		ports.PublishCompleted,
+		ports.FeatureCompleted:
+	default:
+		return ev
+	}
+	snapshot, err := o.deps.Store.Load(ev.FeatureID)
+	if err == nil {
+		ev.Feature = snapshot
+	}
+	return ev
 }
 
 func (o *Orchestrator) emitShutdownStarted() {

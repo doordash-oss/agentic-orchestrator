@@ -307,7 +307,11 @@ func (n *Notifier) processItem(item queueItem) {
 		n.queue.complete(item)
 		return
 	}
-	eventFeature, err := n.store.Load(item.event.FeatureID)
+	eventFeature := item.event.Feature
+	var err error
+	if eventFeature == nil {
+		eventFeature, err = n.store.Load(item.event.FeatureID)
+	}
 	if err != nil || eventFeature == nil {
 		n.emitEvent(item.event.FeatureID, "slack.event_dropped", map[string]any{
 			"event_type": eventTypeName(item.event.Type),
@@ -364,7 +368,6 @@ func (n *Notifier) processItem(item queueItem) {
 		work = append(work, workItem{
 			featureID:       owner.ID,
 			sourceFeatureID: eventFeature.ID,
-			event:           item.event,
 			destinationKey:  destinationKey(string(recipient.Kind), recipient.ID),
 			kind:            string(recipient.Kind),
 			channelID:       channelID,

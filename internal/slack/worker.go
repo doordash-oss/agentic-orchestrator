@@ -55,7 +55,6 @@ const sleepChunk = 100 * time.Millisecond
 type workItem struct {
 	featureID       string
 	sourceFeatureID string
-	event           ports.Event
 	destinationKey  string
 	kind            string
 	channelID       string

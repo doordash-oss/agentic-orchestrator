@@ -29,7 +29,7 @@ import path from 'node:path';
 import { _electron as electron, expect } from '@playwright/test';
 import type { ElectronApplication, Locator, Page, TestInfo } from '@playwright/test';
 import { packagedAppAsar, packagedExecutable, packagedResourcesDir } from './packaged';
-import { killProcessTree, worldProcessPIDs } from './processes';
+import { captureProcessDiagnostics, killProcessTree, worldProcessPIDs } from './processes';
 import { minimalEnv, waitFor, type JourneyWorld } from './world';
 
 export interface AppHandle {
@@ -194,6 +194,18 @@ export async function launchApp(
 }
 
 /**
+ * The app bounds its own quit: a 30s shutdown bound and a 10s exit watchdog
+ * on the main thread, then a 45s hard exit guard on a worker thread (see
+ * src/main/quitCoordinator.ts and src/main/exitGuard.ts). A close() still
+ * pending past the shutdown bound means the main thread stopped running
+ * callbacks or native teardown is stuck, and the guard is about to end the
+ * process: the only moment its state can still be captured.
+ */
+const QUIT_STALL_PROBE_MS = 32_000;
+/** The guard's stderr line (HARD_EXIT_MARKER in src/main/exitGuard.ts). */
+const HARD_EXIT_MARKER = 'forcing exit off the main thread';
+
+/**
  * Stops tracing (saving the zip when it will be consumed: evidence runs
  * always, other runs only on failure) and quits the app through the regular
  * quit path, asserting the process really exited so a hung shutdown can
@@ -234,32 +246,31 @@ export async function closeApp(handle: AppHandle): Promise<void> {
   // runner. The reason is reported rather than swallowed, so the failure below
   // distinguishes "close() never returned" from "the process outlived a
   // returned close()".
-  const closeFailure = await bounded(
-    (async () => {
-      // Playwright close() disconnects the Node inspector immediately after
-      // app.quit() returns. Keep it attached through our asynchronous before-quit
-      // cleanup, then let close() release it once Electron is ready to exit.
-      await handle.app.evaluate(({ app }) => {
-        return new Promise<void>((resolve) => {
-          app.once('will-quit', (event) => {
-            // Hold the final exit until this evaluation's reply reaches
-            // Playwright. Otherwise Electron can stop servicing the inspector
-            // before the reply is delivered, leaving both sides waiting forever.
-            // The one-shot listener is gone when close() calls app.quit() again.
-            event.preventDefault();
-            resolve();
-          });
-          app.quit();
+  const closeWork = (async () => {
+    // Playwright close() disconnects the Node inspector immediately after
+    // app.quit() returns. Keep it attached through our asynchronous before-quit
+    // cleanup, then let close() release it once Electron is ready to exit.
+    await handle.app.evaluate(({ app }) => {
+      return new Promise<void>((resolve) => {
+        app.once('will-quit', (event) => {
+          // Hold the final exit until this evaluation's reply reaches
+          // Playwright. Otherwise Electron can stop servicing the inspector
+          // before the reply is delivered, leaving both sides waiting forever.
+          // The one-shot listener is gone when close() calls app.quit() again.
+          event.preventDefault();
+          resolve();
         });
+        app.quit();
       });
-      await handle.app.close();
-    })(),
-    90_000,
-    'app.close',
-  ).then(
+    });
+    await handle.app.close();
+  })();
+  const stallProbe = probeStalledQuit(handle, closeWork);
+  const closeFailure = await bounded(closeWork, 90_000, 'app.close').then(
     () => null,
     (error: unknown) => (error instanceof Error ? error.message : String(error)),
   );
+  await stallProbe;
   const deadline = Date.now() + 15_000;
   while (appProcess.exitCode === null && appProcess.signalCode === null) {
     if (Date.now() > deadline) {
@@ -274,6 +285,71 @@ export async function closeApp(handle: AppHandle): Promise<void> {
       );
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  // Exiting is necessary, not sufficient: the app's off-thread guard ends a
+  // quit whose main thread stopped responding, which is a hang with a safety
+  // net, not a clean quit. A SIGKILL before this harness's own kill can only
+  // be that guard or something external; neither is a pass.
+  const forcedByGuard = handle.logs.join('').includes(HARD_EXIT_MARKER);
+  if (forcedByGuard || appProcess.signalCode === 'SIGKILL') {
+    persistAppLogs(handle, `${handle.traceName}-forced-exit`);
+    const causes = [stubFailure, closeFailure].filter((cause) => cause !== null);
+    const how = forcedByGuard
+      ? 'the app quit only through its hard exit guard: the main thread stopped responding during shutdown'
+      : `the app process was killed (${String(appProcess.signalCode)}) by something other than this harness`;
+    throw new Error(
+      `${how}; see ${handle.traceName}-forced-exit.log and ${handle.traceName}-stalled-quit-process.txt in the test output${
+        causes.length === 0 ? '' : `; teardown steps failed first: ${causes.join('; ')}`
+      }`,
+    );
+  }
+}
+
+/**
+ * Snapshots the app process if close() is still pending once the app's own
+ * shutdown bound should have quit it: process tree, thread states, a native
+ * stack of the main thread, and whether the main thread still answers the
+ * inspector (its live handle list when it does). Written only on a stall;
+ * diagnostic only, so it never throws.
+ */
+async function probeStalledQuit(handle: AppHandle, closeWork: Promise<void>): Promise<void> {
+  const stalled = await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(true), QUIT_STALL_PROBE_MS);
+    const settle = (): void => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    closeWork.then(settle, settle);
+  });
+  const appProcess = handle.appProcess;
+  if (!stalled || appProcess.exitCode !== null || appProcess.signalCode !== null) {
+    return;
+  }
+  try {
+    const sections = [
+      `# stalled quit: close() still pending ${String(QUIT_STALL_PROBE_MS)}ms after quit began\n`,
+    ];
+    if (appProcess.pid !== undefined) {
+      sections.push(captureProcessDiagnostics(appProcess.pid));
+    }
+    sections.push(
+      await bounded(
+        handle.app.evaluate(() => process.getActiveResourcesInfo()),
+        5_000,
+        'main thread handle list',
+      ).then(
+        (resources) => `## main thread answered; active resources\n${resources.join(', ')}\n`,
+        (error: unknown) =>
+          `## main thread did not answer the inspector\n${error instanceof Error ? error.message : String(error)}\n`,
+      ),
+    );
+    fs.writeFileSync(
+      handle.testInfo.outputPath(`${handle.traceName}-stalled-quit-process.txt`),
+      sections.join('\n'),
+    );
+    persistAppLogs(handle, `${handle.traceName}-stalled-quit`);
+  } catch {
+    // Evidence, not correctness.
   }
 }
 

@@ -125,6 +125,7 @@ import {
 import { AttentionNotificationCoordinator, electronNotificationSink } from './notifications';
 import { NativeCommandController, type NativeCommandSnapshot } from './nativeCommands';
 import { DiagnosticsService } from './diagnostics';
+import { armHardExitGuard } from './exitGuard';
 import { applyLoginShellPath } from './shellEnv';
 import {
   FIXTURE_RELEASE_PUBLIC_KEY,
@@ -985,6 +986,14 @@ if (!hasSingleInstanceLock) {
         },
         exitApplication: () => {
           app.exit(0);
+        },
+        armHardExit: (deadlineMs) => {
+          const childPid = gateway.ownedChildPid();
+          armHardExitGuard({
+            timeoutMs: deadlineMs,
+            childPids: childPid === null ? [] : [childPid],
+            log: quitLog,
+          });
         },
         log: quitLog,
       },

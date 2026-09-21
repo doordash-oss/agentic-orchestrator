@@ -130,6 +130,52 @@ describe('QuitCoordinator', () => {
     }
   });
 
+  it('arms the off-thread exit guard before the first shutdown step, past both in-thread bounds', async () => {
+    const log: string[] = [];
+    const order: string[] = [];
+    const deps = makeDeps({
+      detectActiveWork: vi.fn().mockResolvedValue(active([])),
+      shutdown: vi.fn().mockImplementation(async () => {
+        order.push('shutdown');
+      }),
+      armHardExit: vi.fn().mockImplementation(() => {
+        order.push('arm');
+      }),
+      exitApplication: vi.fn(),
+      log: (line) => log.push(line),
+    });
+    const coordinator = new QuitCoordinator(deps, {
+      shutdownTimeoutMs: 1_000,
+      exitWatchdogMs: 500,
+      hardExitMarginMs: 250,
+    });
+    await expect(coordinator.requestQuitDecision()).resolves.toBe(true);
+    expect(order).toEqual(['arm', 'shutdown']);
+    expect(deps.armHardExit).toHaveBeenCalledWith(1_750);
+    expect(log).toEqual([
+      'shutdown started (quitAnyway=false)',
+      'hard exit guard armed (1750ms)',
+      'shutdown completed',
+      'requesting application quit',
+    ]);
+  });
+
+  it('still quits when the exit guard cannot be armed', async () => {
+    const log: string[] = [];
+    const deps = makeDeps({
+      detectActiveWork: vi.fn().mockResolvedValue(active([])),
+      armHardExit: vi.fn().mockImplementation(() => {
+        throw new Error('worker threads unavailable');
+      }),
+      log: (line) => log.push(line),
+    });
+    const coordinator = new QuitCoordinator(deps);
+    await expect(coordinator.requestQuitDecision()).resolves.toBe(true);
+    expect(deps.shutdown).toHaveBeenCalledTimes(1);
+    expect(deps.quitApplication).toHaveBeenCalledTimes(1);
+    expect(log).toContain('hard exit guard failed to arm: worker threads unavailable');
+  });
+
   it('quits immediately when authoritative activity is idle', async () => {
     const deps = makeDeps({
       detectActiveWork: vi.fn().mockResolvedValue(active([], false, false)),

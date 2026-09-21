@@ -57,6 +57,9 @@ func (f *childFakeWorktrees) CurrentHeadSHA(p string) (string, error) {
 func (f *childFakeWorktrees) CurrentBranch(string) string                    { return "" }
 func (f *childFakeWorktrees) RefSHA(string, string) (string, error)          { return "", nil }
 func (f *childFakeWorktrees) UpdateRef(string, string, string, string) error { return nil }
+func (f *childFakeWorktrees) IsAncestor(string, string, string) (bool, error) {
+	return false, nil
+}
 func (f *childFakeWorktrees) CreateMergeCandidate(string, string, string, string) (*git.MergeCandidateResult, error) {
 	return nil, nil
 }
@@ -670,6 +673,9 @@ func (f *reuseWorktrees) CurrentHeadSHA(p string) (string, error) {
 func (f *reuseWorktrees) CurrentBranch(string) string                    { return "" }
 func (f *reuseWorktrees) RefSHA(string, string) (string, error)          { return "", nil }
 func (f *reuseWorktrees) UpdateRef(string, string, string, string) error { return nil }
+func (f *reuseWorktrees) IsAncestor(string, string, string) (bool, error) {
+	return false, nil
+}
 func (f *reuseWorktrees) CreateMergeCandidate(string, string, string, string) (*git.MergeCandidateResult, error) {
 	return nil, nil
 }

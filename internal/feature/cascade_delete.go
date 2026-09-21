@@ -73,6 +73,9 @@ type CascadeResource struct {
 
 // CascadeRef records enough identity to classify and conditionally restore a
 // candidate-bearing parent ref without ever overwriting external movement.
+// One entry is journaled per promoted child; entries sharing a (repo, ref)
+// are classified together, since each records a different point in the same
+// ref's history.
 type CascadeRef struct {
 	ChildID      string `yaml:"child_id" json:"child_id"`
 	Repo         string `yaml:"repo" json:"repo"`
@@ -83,6 +86,7 @@ type CascadeRef struct {
 	ObservedSHA  string `yaml:"observed_sha,omitempty" json:"observed_sha,omitempty"`
 	Safe         bool   `yaml:"safe,omitempty" json:"safe,omitempty"`
 	Restored     bool   `yaml:"restored,omitempty" json:"restored,omitempty"`
+	Code         string `yaml:"code,omitempty" json:"code,omitempty"`
 	Diagnostic   string `yaml:"diagnostic,omitempty" json:"diagnostic,omitempty"`
 }
 

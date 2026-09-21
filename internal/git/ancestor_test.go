@@ -86,6 +86,42 @@ func TestIsAncestor_SelfIsAncestor(t *testing.T) {
 	}
 }
 
+func TestCheckAncestorDistinguishesNonAncestorFromFailure(t *testing.T) {
+	t.Parallel()
+	repo := testutil.InitGitRepo(t)
+	root := runGitAncestorTest(t, repo, "rev-parse", "HEAD")
+	testutil.CommitFile(t, repo, "a.txt", "a\n", "child")
+	child := runGitAncestorTest(t, repo, "rev-parse", "HEAD")
+	bogus := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+	tests := []struct {
+		name       string
+		ancestor   string
+		descendant string
+		want       bool
+		wantErr    bool
+	}{
+		{name: "ancestor holds", ancestor: root, descendant: child, want: true},
+		{name: "self is ancestor", ancestor: child, descendant: child, want: true},
+		{name: "reversed relationship", ancestor: child, descendant: root, want: false},
+		{name: "unknown ancestor fails", ancestor: bogus, descendant: child, wantErr: true},
+		{name: "unknown descendant fails", ancestor: root, descendant: bogus, wantErr: true},
+		{name: "empty argument fails", ancestor: "", descendant: child, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := CheckAncestor(repo, tt.ancestor, tt.descendant)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("CheckAncestor() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("CheckAncestor() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // runGitAncestorTest runs a git command in dir and returns the trimmed stdout.
 func runGitAncestorTest(t *testing.T, dir string, args ...string) string {
 	t.Helper()

@@ -16,7 +16,6 @@ package observe
 
 import (
 	"context"
-	"encoding/hex"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -25,7 +24,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	"go.opentelemetry.io/otel/trace"
 	collectortracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/grpc"
 )
@@ -97,9 +95,10 @@ func TestOTelBridgeStartEndCreatesHierarchy(t *testing.T) {
 			childSpan.SpanContext().TraceID(), rootSpan.SpanContext().TraceID())
 	}
 
-	// Verify OTel SpanIDs match roadmap SpanIDs (deterministic mapping).
-	assertSpanID(t, rootSpan, root.SpanID)
-	assertSpanID(t, childSpan, child.SpanID)
+	// Runtime span IDs are unique per process segment; persisted logical IDs
+	// remain available as compatibility attributes.
+	assertAttr(t, rootSpan, "agentico.logical.span.id", root.SpanID)
+	assertAttr(t, childSpan, "agentico.logical.span.id", child.SpanID)
 
 	// Verify standard attributes are present.
 	assertAttr(t, rootSpan, "agentic.feature_id", "feat-1")
@@ -213,8 +212,7 @@ func TestOTelBridgeMissingParentFallsBackToRoot(t *testing.T) {
 		t.Errorf("expected root span (no valid parent), got parent=%s", s.Parent().SpanID())
 	}
 
-	// Verify OTel SpanID matches roadmap SpanID even for orphaned spans.
-	assertSpanID(t, s, sc.SpanID)
+	assertAttr(t, s, "agentico.logical.span.id", sc.SpanID)
 
 	// Should record that parent was missing.
 	assertAttr(t, s, "agentic.parent_missing", "true")
@@ -403,22 +401,6 @@ func TestDisabledBridgeProducesNoExporterActivity(t *testing.T) {
 	}
 }
 
-// assertSpanID verifies that the OTel span's SpanID matches the hex-encoded
-// roadmap SpanID (deterministic mapping via roadmapIDGen).
-func assertSpanID(t *testing.T, s sdktrace.ReadOnlySpan, roadmapID string) {
-	t.Helper()
-	b, err := hex.DecodeString(roadmapID)
-	if err != nil || len(b) != 8 {
-		t.Fatalf("invalid roadmap SpanID %q", roadmapID)
-	}
-	var want trace.SpanID
-	copy(want[:], b)
-	got := s.SpanContext().SpanID()
-	if got != want {
-		t.Errorf("OTel SpanID %s != roadmap SpanID %s", got, want)
-	}
-}
-
 // assertAttr checks that the span has the given key-value attribute.
 func assertAttr(t *testing.T, s sdktrace.ReadOnlySpan, key, wantVal string) {
 	t.Helper()
@@ -435,5 +417,4 @@ func assertAttr(t *testing.T, s sdktrace.ReadOnlySpan, key, wantVal string) {
 }
 
 // Ensure trace and attribute packages are used (prevent unused import).
-var _ trace.Tracer
 var _ = attribute.Key("test")

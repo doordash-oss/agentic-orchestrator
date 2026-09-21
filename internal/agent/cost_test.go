@@ -411,3 +411,14 @@ func TestCreditOnlyCostPersistsWithoutInventingDollars(t *testing.T) {
 		t.Fatalf("credit-only ledger: %+v", updated.SessionCosts)
 	}
 }
+
+func TestSessionTelemetryPreservesReconciledCostProvenance(t *testing.T) {
+	credits := int64(12345)
+	cost := SessionCost{TotalCostUSD: 1.25, Usage: llm.Usage{CostSource: "provider_estimate", CostCreditsMicros: &credits, InputTokens: 42}}
+	sess := session.NewSession("test", "feat-1", 0)
+	sess.SetCost(&llm.ResultMessage{Subtype: "success", NumTurns: 3, TotalCostUSD: 99})
+	usage := toSessionUsage(cost, sess)
+	if usage.TotalCostUSD != 1.25 || usage.CostSource != "provider_estimate" || usage.CostCreditsMicros == nil || *usage.CostCreditsMicros != credits || usage.InputTokens != 42 || usage.Turns != 3 {
+		t.Fatalf("session telemetry lost reconciled cost provenance: %+v", usage)
+	}
+}

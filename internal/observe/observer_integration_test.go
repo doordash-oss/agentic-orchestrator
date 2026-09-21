@@ -17,7 +17,6 @@ package observe
 import (
 	"bufio"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -26,7 +25,6 @@ import (
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	"go.opentelemetry.io/otel/trace"
 )
 
 func TestObserverWritesJSONLAndOTelConsistently(t *testing.T) {
@@ -43,9 +41,10 @@ func TestObserverWritesJSONLAndOTelConsistently(t *testing.T) {
 		spans:   make(map[string]activeSpan),
 	}
 	obs := &Observer{
-		emitter: NewEmitter(tmpDir),
-		otel:    bridge,
-		enabled: true,
+		emitter:      NewEmitter(tmpDir),
+		otel:         bridge,
+		enabled:      true,
+		localEnabled: true,
 	}
 
 	featureID := "test-feat-1"
@@ -115,16 +114,8 @@ func TestObserverWritesJSONLAndOTelConsistently(t *testing.T) {
 		t.Errorf("OTel agentic.span_id=%q != JSONL SpanID=%q", foundSpanID, events[0].SpanID)
 	}
 
-	// Verify the actual OTel SpanID matches the roadmap SpanID (not just the attribute).
-	spanBytes, err := hex.DecodeString(events[0].SpanID)
-	if err != nil || len(spanBytes) != 8 {
-		t.Fatalf("invalid roadmap SpanID in JSONL: %q", events[0].SpanID)
-	}
-	var expectedSID trace.SpanID
-	copy(expectedSID[:], spanBytes)
-	if otelSpan.SpanContext().SpanID() != expectedSID {
-		t.Errorf("OTel SpanID %s != JSONL roadmap SpanID %s",
-			otelSpan.SpanContext().SpanID(), expectedSID)
+	if !otelSpan.SpanContext().SpanID().IsValid() {
+		t.Error("runtime OTel SpanID is invalid")
 	}
 }
 

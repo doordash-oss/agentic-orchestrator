@@ -82,6 +82,11 @@ type Run struct {
 	RunNumber int        `yaml:"run_number"`
 	StartedAt *time.Time `yaml:"started_at,omitempty"`
 
+	// First durable milestones for this attempt. These survive retries/restarts
+	// and are absent on a freshly forked run. They are not carried phase data.
+	OutputReadyAt *time.Time `yaml:"output_ready_at,omitempty"`
+	DeliveredAt   *time.Time `yaml:"delivered_at,omitempty"`
+
 	// FeatureSeq is the PersistSeq of the feature save that last wrote this
 	// file through saveUnlocked. Run-only writes (seal, fork skeletons,
 	// SaveRun paths) leave it at its last stamped value or zero, so a value

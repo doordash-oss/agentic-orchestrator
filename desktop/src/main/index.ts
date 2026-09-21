@@ -125,6 +125,8 @@ import {
 import { AttentionNotificationCoordinator, electronNotificationSink } from './notifications';
 import { NativeCommandController, type NativeCommandSnapshot } from './nativeCommands';
 import { DiagnosticsService } from './diagnostics';
+import { armHardExitGuard } from './exitGuard';
+import { installMainProcessFaultHandlers } from './faults';
 import { applyLoginShellPath } from './shellEnv';
 import {
   FIXTURE_RELEASE_PUBLIC_KEY,
@@ -159,6 +161,13 @@ import {
 // login-shell PATH resolution immediately so it runs concurrently with
 // Electron's own startup; whenReady awaits the result before wiring the
 // gateway, ahead of the first server spawn.
+// First, before any callback can run: a fault that reached Electron's default
+// handler would open a modal that stops the event loop (see faults.ts).
+const faultHandlers = installMainProcessFaultHandlers({
+  process,
+  log: (line) => console.error(line),
+});
+
 const loginShellPathOutcome = applyLoginShellPath({ env: process.env });
 
 // Packaged-E2E isolation hook: relocate the app-local data directory
@@ -470,6 +479,7 @@ if (!hasSingleInstanceLock) {
       revision: process.env['AGENTICO_REVISION'],
       readServerLines: () => logBuffer.snapshot(),
     });
+    faultHandlers.setRecorder(diagnostics);
     diagnostics.record('electron', 'info', 'Agentico desktop process started.');
     if (shellPath.applied) {
       diagnostics.record(
@@ -972,10 +982,25 @@ if (!hasSingleInstanceLock) {
         },
         runtimeOwnership: () => gateway.getState().ownership,
         shutdown: async () => {
+          // Aborting a fetch destroys its socket while the server may still be
+          // writing to it, and Node's read callback throws (from inside libuv,
+          // so as an uncaught exception) when bytes land on a destroyed
+          // socket. An app-owned runtime is stopped first: the server closes
+          // its side, every stream ends with EOF, and the abort afterwards
+          // finds nothing in flight. Only a runtime this app does not own
+          // still has its streams cut while live.
+          const ownsRuntime = gateway.getState().ownership === 'app-owned';
+          if (ownsRuntime) {
+            quitLog('stopping app-owned runtime');
+            await gateway.shutdown();
+            quitLog('runtime stopped; stopping streams');
+          }
           stopStreams();
           accent.stop();
-          quitLog('streams stopped; stopping app-owned runtime');
-          await gateway.shutdown();
+          if (!ownsRuntime) {
+            quitLog('streams stopped; releasing runtime');
+            await gateway.shutdown();
+          }
           quitLog('runtime shutdown complete');
         },
         quitApplication: () => {
@@ -985,6 +1010,14 @@ if (!hasSingleInstanceLock) {
         },
         exitApplication: () => {
           app.exit(0);
+        },
+        armHardExit: (deadlineMs) => {
+          const childPid = gateway.ownedChildPid();
+          armHardExitGuard({
+            timeoutMs: deadlineMs,
+            childPids: childPid === null ? [] : [childPid],
+            log: quitLog,
+          });
         },
         log: quitLog,
       },

@@ -15,6 +15,8 @@ limitations under the License.
 */
 
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 
 export function collectProcessTree(rootPid: number): number[] {
   const collected = new Set<number>([rootPid]);
@@ -49,6 +51,100 @@ export function killProcessTree(rootPid: number | undefined): void {
       // Best-effort cleanup. Leak assertions classify live failures.
     }
   }
+}
+
+const PROBE_TIMEOUT_MS = 10_000;
+
+/** Runs a diagnostic tool and returns whatever it produced; a failure is text, never a throw. */
+function probe(command: string, args: string[], timeoutMs = PROBE_TIMEOUT_MS): string {
+  try {
+    return execFileSync(command, args, {
+      encoding: 'utf8',
+      timeout: timeoutMs,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    const failure = error as { code?: string; message?: string; stdout?: string; stderr?: string };
+    if (failure.code === 'ENOENT') {
+      return `(${command} not available)`;
+    }
+    return [
+      failure.stdout ?? '',
+      failure.stderr ?? '',
+      `(${command} failed: ${failure.message ?? String(error)})`,
+    ]
+      .filter((part) => part !== '')
+      .join('\n');
+  }
+}
+
+function linuxThreadStates(pid: number): string {
+  const taskDir = `/proc/${String(pid)}/task`;
+  let tids: string[];
+  try {
+    tids = fs.readdirSync(taskDir);
+  } catch (error) {
+    return `(cannot read ${taskDir}: ${error instanceof Error ? error.message : String(error)})`;
+  }
+  return tids
+    .map((tid) => {
+      const read = (name: string): string => {
+        try {
+          return fs.readFileSync(path.join(taskDir, tid, name), 'utf8').trim();
+        } catch {
+          return '?';
+        }
+      };
+      const stat = read('stat');
+      const state = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] ?? '?';
+      return `${tid.padStart(8)} ${state} ${read('comm').padEnd(16)} wchan=${read('wchan')}`;
+    })
+    .join('\n');
+}
+
+/**
+ * Best-effort snapshot of a process that stopped answering: its live process
+ * tree with states and wait channels, per-thread kernel states (Linux), and a
+ * native stack of the main thread (gdb on Linux, `sample` on macOS) when the
+ * tool is present. Every probe is bounded and reports its own failure, so
+ * teardown can always finish.
+ */
+export function captureProcessDiagnostics(rootPid: number): string {
+  const tree = collectProcessTree(rootPid);
+  const sections: Array<[string, string]> = [
+    [
+      'process tree',
+      probe('ps', ['-o', 'pid,ppid,stat,etime,wchan,comm,args', '-p', tree.join(',')]),
+    ],
+  ];
+  if (process.platform === 'linux') {
+    sections.push(['threads', linuxThreadStates(rootPid)]);
+    // Yama ptrace_scope=1 (Ubuntu default) only lets an ancestor attach, and
+    // this runner is the app's sibling, so attach as root where passwordless
+    // sudo exists (CI runners) and fall back to a plain attach elsewhere.
+    const gdbArgs = [
+      '--batch',
+      '-p',
+      String(rootPid),
+      '-ex',
+      'info threads',
+      '-ex',
+      'thread apply 1 bt 40',
+    ];
+    const rootAttach = probe('sudo', ['-n', 'gdb', ...gdbArgs], 20_000);
+    sections.push([
+      'main thread native stack (gdb)',
+      rootAttach.includes('(sudo failed') || rootAttach.includes('(sudo not available')
+        ? probe('gdb', gdbArgs, 20_000)
+        : rootAttach,
+    ]);
+  } else if (process.platform === 'darwin') {
+    sections.push([
+      'native stack sample',
+      probe('sample', [String(rootPid), '1', '-mayDie'], 20_000),
+    ]);
+  }
+  return sections.map(([title, body]) => `## ${title}\n${body.trimEnd()}\n`).join('\n');
 }
 
 /** Returns live process IDs whose command lines reference an isolated journey root. */

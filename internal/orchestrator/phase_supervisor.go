@@ -49,6 +49,10 @@ type phaseSupervisorConfig struct {
 	Sessions          ports.SessionManager
 	CommitOutcome     func(featureID, sessionID string, phase feature.Phase, intent llm.CompletionIntent) ([]agent.ProtocolViolation, error)
 	OnCompletionError func(featureID string, err error)
+	// Spawn launches the supervisor's completion goroutines. The
+	// orchestrator supplies its cycle tracker so WaitForCycles covers the
+	// state writes a completion performs; nil falls back to a bare goroutine.
+	Spawn func(func())
 }
 
 type phaseSupervisor struct {
@@ -56,17 +60,23 @@ type phaseSupervisor struct {
 	sessions          ports.SessionManager
 	commitOutcome     func(featureID, sessionID string, phase feature.Phase, intent llm.CompletionIntent) ([]agent.ProtocolViolation, error)
 	onCompletionError func(featureID string, err error)
+	spawn             func(func())
 
 	singleShotMu       sync.Mutex
 	singleShotSessions map[string]struct{}
 }
 
 func newPhaseSupervisor(cfg phaseSupervisorConfig) *phaseSupervisor {
+	spawn := cfg.Spawn
+	if spawn == nil {
+		spawn = func(fn func()) { go fn() }
+	}
 	return &phaseSupervisor{
 		completion:        cfg.Completion,
 		sessions:          cfg.Sessions,
 		commitOutcome:     cfg.CommitOutcome,
 		onCompletionError: cfg.OnCompletionError,
+		spawn:             spawn,
 	}
 }
 
@@ -82,7 +92,7 @@ func (s *phaseSupervisor) superviseSingleShotSession(featureID, sessionID string
 		s.releaseSingleShotSession(sessionID)
 		return
 	}
-	go s.runSingleShotSession(featureID, sessionID, phase, sess)
+	s.spawn(func() { s.runSingleShotSession(featureID, sessionID, phase, sess) })
 }
 
 func (s *phaseSupervisor) runSingleShotSession(featureID, sessionID string, phase feature.Phase, sess ports.SessionView) {
@@ -171,7 +181,7 @@ func (s *phaseSupervisor) supervisePlanLoop(featureID string, resultCh <-chan *a
 	if s == nil || resultCh == nil {
 		return
 	}
-	go func() {
+	s.spawn(func() {
 		result, ok := <-resultCh
 		if !ok {
 			return
@@ -180,14 +190,14 @@ func (s *phaseSupervisor) supervisePlanLoop(featureID string, resultCh <-chan *a
 			Phase:      feature.PhasePlan,
 			PlanResult: result,
 		})
-	}()
+	})
 }
 
 func (s *phaseSupervisor) superviseImplementationLoop(featureID string, resultCh <-chan *agent.OrchestratorResult) {
 	if s == nil || resultCh == nil {
 		return
 	}
-	go func() {
+	s.spawn(func() {
 		for res := range resultCh {
 			if res == nil {
 				continue
@@ -201,7 +211,7 @@ func (s *phaseSupervisor) superviseImplementationLoop(featureID string, resultCh
 				return
 			}
 		}
-	}()
+	})
 }
 
 func (s *phaseSupervisor) complete(featureID string, input PhaseCompletionInput) {

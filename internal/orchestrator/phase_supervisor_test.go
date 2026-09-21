@@ -18,6 +18,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -243,6 +244,56 @@ func TestPhaseSupervisorImplementationLoopRoutesFirstTerminalResult(t *testing.T
 	if call.featureID != "feat-impl" || call.input.Phase != feature.PhaseImplement || call.input.MultiRepoResult != want {
 		t.Fatalf("completion call = %+v, want implement terminal result", call)
 	}
+}
+
+// The completion sink runs entirely inside the spawned goroutine, so a
+// tracker handed in through Spawn (the orchestrator's cycle WaitGroup)
+// observes every state write a completion performs. Without this, the
+// writes outlive WaitForCycles and race the caller's state-directory cleanup.
+func TestPhaseSupervisorCompletionsRunInsideSpawn(t *testing.T) {
+	sink := newRecordingPhaseCompletionSink()
+	sm := mocks.NewMockSessionManager()
+	sess := mocks.NewMockSessionView(inquireSessionID, "feat")
+	sess.PhaseVal = feature.PhaseInquire
+	configureSuccessfulRootTurn(sess)
+	sm.GetSessionFn = func(string) ports.SessionView { return sess }
+
+	var tracked sync.WaitGroup
+	var spawned atomic.Int32
+	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
+		Completion:    sink,
+		Sessions:      sm,
+		CommitOutcome: commitAllOutcomes,
+		Spawn: func(fn func()) {
+			spawned.Add(1)
+			tracked.Go(fn)
+		},
+	})
+
+	planCh := make(chan *agent.PlanLoopResult, 1)
+	implCh := make(chan *agent.OrchestratorResult, 1)
+	supervisor.supervisePlanLoop("feat-plan", planCh)
+	supervisor.superviseImplementationLoop("feat-impl", implCh)
+	supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
+	if got := spawned.Load(); got != 3 {
+		t.Fatalf("spawned goroutines = %d, want 3 (plan, implement, single-shot)", got)
+	}
+
+	planCh <- &agent.PlanLoopResult{FinalStatus: planStatusApproved}
+	implCh <- &agent.OrchestratorResult{FinalStatus: statusAwaitingFinalReview}
+	sess.StatusChVal <- "SUCCESS"
+
+	tracked.Wait()
+	// Every completion is already recorded once the tracker is released:
+	// nothing is still writing after the wait returns.
+	seen := map[feature.Phase]bool{}
+	for range 3 {
+		seen[sink.wait(t).input.Phase] = true
+	}
+	if !seen[feature.PhasePlan] || !seen[feature.PhaseImplement] || !seen[feature.PhaseInquire] {
+		t.Fatalf("completions after Wait = %v, want plan, implement, inquire", seen)
+	}
+	sink.expectNoCall(t)
 }
 
 func TestPhaseSupervisorSurfacesCompletionErrors(t *testing.T) {

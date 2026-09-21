@@ -112,7 +112,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		lifetime = ctx
 	}
 	httpServer := &http.Server{
-		Handler: handler.routes(),
+		Handler: withHTTPMetrics(handler.routes(), opts.HTTPMetrics),
 		// ReadHeaderTimeout (not ReadTimeout) is intentional: ReadTimeout
 		// would cap the whole connection lifetime, killing long-lived SSE
 		// streams (/api/v1/events, /sessions/{id}/output/stream). Mutation

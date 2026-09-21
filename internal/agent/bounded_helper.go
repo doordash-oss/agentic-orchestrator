@@ -271,7 +271,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			RepoName:      cfg.repoName,
 		})
 		if pr.Observer != nil {
-			pr.Observer.SessionEnded(sessionCtx, observerPhase, cfg.sessionID, cfg.repoName, toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
+			pr.Observer.SessionEnded(sessionCtx, observerPhase, cfg.sessionID, cfg.repoName, toSessionUsage(cost, sess), time.Since(sessionStart), sessionErrFromStatus(sess))
 		}
 		_ = sess.Stop()
 		sess.Wait()

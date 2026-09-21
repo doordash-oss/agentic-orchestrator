@@ -3245,10 +3245,11 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
 		},
-		Worktrees: boot.worktrees,
-		Updates:   wiring.options,
-		Admission: boot.admission,
-		Lifetime:  ctx,
+		Worktrees:   boot.worktrees,
+		Updates:     wiring.options,
+		Admission:   boot.admission,
+		Lifetime:    ctx,
+		HTTPMetrics: boot.observer,
 	})
 	if err != nil {
 		return targetStartupFailure(func(e error) {

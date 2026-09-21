@@ -93,8 +93,8 @@ func applySessionCostAdjustment(cost *SessionCost, adjustment llm.SessionCostAdj
 }
 
 // toSessionUsage converts a SessionCost to an observe.SessionUsage.
-func toSessionUsage(cost SessionCost) observe.SessionUsage {
-	return observe.SessionUsage{
+func toSessionUsage(cost SessionCost, sessions ...ports.SessionView) observe.SessionUsage {
+	usage := observe.SessionUsage{
 		TotalCostUSD:             cost.TotalCostUSD,
 		CostSource:               cost.Usage.CostSource,
 		CostCreditsMicros:        cost.Usage.CostCreditsMicros,
@@ -102,7 +102,34 @@ func toSessionUsage(cost SessionCost) observe.SessionUsage {
 		OutputTokens:             cost.Usage.OutputTokens,
 		CacheReadInputTokens:     cost.Usage.CacheReadInputTokens,
 		CacheCreationInputTokens: cost.Usage.CacheCreationInputTokens,
+		ContextWindow:            cost.Usage.ContextWindow,
+		ContextTotalTokens:       cost.Usage.ContextTotalTokens,
 	}
+	if len(sessions) == 0 || sessions[0] == nil {
+		return usage
+	}
+	sess := sessions[0]
+	usage.Provider = sess.ProviderName()
+	usage.Model = sess.Model()
+	usage.Effort = string(sess.EffectiveEffort())
+	if result := sess.Cost(); result != nil {
+		usage.ResultSubtype = result.Subtype
+		usage.StopReason = result.StopReason
+		usage.Truncated = result.IsTurnTruncated()
+		usage.APIDurationMS = result.DurationAPI
+		usage.Turns = result.NumTurns
+		usage.Outcome = "success"
+		if result.IsError || result.Subtype != "success" {
+			usage.Outcome = "error"
+		}
+		if len(result.ModelUsage) > 0 {
+			usage.PerModelContextWindows = make(map[string]int, len(result.ModelUsage))
+			for model, entry := range result.ModelUsage {
+				usage.PerModelContextWindows[model] = entry.ContextWindow
+			}
+		}
+	}
+	return usage
 }
 
 // accumulateSessionCostToFeature adds a session's cost to the latest active

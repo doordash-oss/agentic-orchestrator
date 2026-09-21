@@ -690,7 +690,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				if resumeID := providerSessionID(sess); resumeID != "" {
 					// Account the dead session before replacing it.
 					deadCost := ExtractSessionCost(sess)
-					cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(deadCost), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
+					cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(deadCost, sess), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
 					_ = accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", deadCost, SessionCostMetadata{
 						SessionID:     sessionID,
 						ObserverPhase: "implement",
@@ -723,7 +723,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			// Read cost from session's ResultMessage
 			cost = ExtractSessionCost(sess)
-			cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(cost), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
+			cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(cost, sess), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
 			emitLargeCodexCommandOutputEvents(cfg.Observer, implSessionCtx, "implement", sessionID, cfg.RepoName, sess.ProviderName(), i, logPath)
 
 			// Read output from message log

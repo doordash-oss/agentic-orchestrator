@@ -254,33 +254,21 @@ func renderGateInput(token, tag, prefix string, item ports.SlackPendingInput) ([
 	if summary != "" {
 		blocks = append(blocks, sectionTextBlockFor("*Summary:*\n"+safeText(summary, sectionTextLimit-12)))
 	}
-	for _, blocker := range item.GateBlockers {
-		parts := []string{"*" + safeText(scrub(token, firstNonempty(blocker.Name, "Blocked check")), 500) + "*"}
-		if blocker.RepoName != "" {
-			parts = append(parts, "*Repository:* "+safeText(scrub(token, blocker.RepoName), 500))
-		}
-		if blocker.Command != "" {
-			parts = append(parts, "*Command:* `"+safeText(scrub(token, blocker.Command), 1200)+"`")
-		}
-		if blocker.Reason != "" {
-			parts = append(parts, "*Reason:* "+safeText(scrub(token, blocker.Reason), 800))
-		}
-		if blocker.Remediation != "" {
-			parts = append(parts, "*Remediation:* "+safeText(scrub(token, blocker.Remediation), 800))
-		}
-		blocks = append(blocks, sectionTextBlockFor(
-			truncateMrkdwnTokens(strings.Join(parts, "\n"), sectionTextLimit),
-		))
-	}
+	trailingBlockCount := 2
 	if len(item.GateQuestions) > 0 {
-		var questions []string
-		for i, question := range item.GateQuestions {
-			questions = append(questions, fmt.Sprintf("%d. %s", i+1, safeText(scrub(token, question), 1200)))
-		}
-		blocks = append(blocks, sectionTextBlockFor(
-			"*Questions:*\n"+truncateMrkdwnTokens(strings.Join(questions, "\n"), sectionTextLimit-13),
-		))
+		trailingBlockCount++
 	}
+	blockerLimit := max(0, messageBlockLimit-len(blocks)-trailingBlockCount)
+	displayedBlockers := min(len(item.GateBlockers), blockerLimit)
+	overflowCount := len(item.GateBlockers) - displayedBlockers
+	for i, blocker := range item.GateBlockers[:displayedBlockers] {
+		blockOverflow := 0
+		if i == displayedBlockers-1 {
+			blockOverflow = overflowCount
+		}
+		blocks = append(blocks, renderGateBlocker(token, blocker, blockOverflow))
+	}
+	blocks = append(blocks, renderGateQuestions(token, item.GateQuestions)...)
 	note := "Resolve this gate in Agentico by waiving the blocked checks or retrying after signing in."
 	blocks = append(blocks,
 		sectionTextBlockFor(safeText(note, sectionTextLimit)),
@@ -327,6 +315,56 @@ func renderGateInput(token, tag, prefix string, item ports.SlackPendingInput) ([
 		fallbackDetails,
 		gateResponseInstructions,
 	)
+}
+
+func renderGateBlocker(
+	token string,
+	blocker ports.SlackPendingInputBlocker,
+	overflowCount int,
+) Block {
+	parts := []string{"*" + safeText(scrub(token, firstNonempty(blocker.Name, "Blocked check")), 500) + "*"}
+	if blocker.RepoName != "" {
+		parts = append(parts, "*Repository:* "+safeText(scrub(token, blocker.RepoName), 500))
+	}
+	if blocker.Command != "" {
+		parts = append(parts, "*Command:* `"+safeText(scrub(token, blocker.Command), 1200)+"`")
+	}
+	if blocker.Reason != "" {
+		parts = append(parts, "*Reason:* "+safeText(scrub(token, blocker.Reason), 800))
+	}
+	if blocker.Remediation != "" {
+		parts = append(parts, "*Remediation:* "+safeText(scrub(token, blocker.Remediation), 800))
+	}
+
+	text := strings.Join(parts, "\n")
+	if overflowCount == 0 {
+		return sectionTextBlockFor(truncateMrkdwnTokens(text, sectionTextLimit))
+	}
+	blockedCheckLabel := "checks"
+	if overflowCount == 1 {
+		blockedCheckLabel = "check"
+	}
+	overflowNote := fmt.Sprintf(
+		"%d additional blocked %s not shown. Open Agentico for full details.",
+		overflowCount,
+		blockedCheckLabel,
+	)
+	const separator = "\n\n"
+	text = truncateMrkdwnTokens(text, sectionTextLimit-len(separator)-len(overflowNote))
+	return sectionTextBlockFor(text + separator + overflowNote)
+}
+
+func renderGateQuestions(token string, questions []string) []Block {
+	if len(questions) == 0 {
+		return nil
+	}
+	rendered := make([]string, 0, len(questions))
+	for i, question := range questions {
+		rendered = append(rendered, fmt.Sprintf("%d. %s", i+1, safeText(scrub(token, question), 1200)))
+	}
+	return []Block{sectionTextBlockFor(
+		"*Questions:*\n" + truncateMrkdwnTokens(strings.Join(rendered, "\n"), sectionTextLimit-13),
+	)}
 }
 
 func pendingInputFallback(title string, details []string, instructions string) string {

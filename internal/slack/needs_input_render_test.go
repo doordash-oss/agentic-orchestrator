@@ -357,6 +357,9 @@ func pendingInputBlockText(blocks []Block) string {
 
 func assertPendingInputBlockLimits(t testing.TB, blocks []Block) {
 	t.Helper()
+	if got := len(blocks); got > messageBlockLimit {
+		t.Errorf("renderPendingInput() block count = %d; want <= %d", got, messageBlockLimit)
+	}
 	for _, block := range blocks {
 		switch value := block.(type) {
 		case headerBlock:

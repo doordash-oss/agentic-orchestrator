@@ -37,6 +37,8 @@ const (
 // Slack's documented block limits. Truncation is the last line of defence
 // after bounding and escaping, so a rendered block can never exceed them.
 const (
+	messageBlockLimit = 50
+
 	headerTextLimit   = 150
 	sectionTextLimit  = 3000
 	fieldTextLimit    = 2000

@@ -765,3 +765,162 @@ func TestPendingSlackInputsRealPortRedactsVerificationGateBeforeSlackTruncation(
 		}
 	}
 }
+
+func TestPendingSlackInputsRealPortBoundsVerificationGateBlocks(t *testing.T) {
+	const token = "xoxb-gate-block-limit-test"
+
+	tests := []struct {
+		name             string
+		blockerCount     int
+		wantOverflowNote string
+	}{
+		{name: "fits exactly", blockerCount: 45},
+		{name: "one over", blockerCount: 46, wantOverflowNote: "1 additional blocked check not shown. Open Agentico for full details."},
+		{name: "maximum gate", blockerCount: 100, wantOverflowNote: "55 additional blocked checks not shown. Open Agentico for full details."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeSlack := testsupport.New(t)
+			var responseCounter atomic.Int64
+			var acceptedThreadPosts atomic.Int64
+			fakeSlack.SetDefault(func(method string, request testsupport.Request) testsupport.Response {
+				switch method {
+				case "chat.postMessage":
+					var blocks []json.RawMessage
+					if raw, _ := request.Fields["blocks"].(string); raw != "" {
+						if err := json.Unmarshal([]byte(raw), &blocks); err != nil {
+							return testsupport.Response{Body: map[string]any{"ok": false, "error": "invalid_blocks"}}
+						}
+					}
+					if len(blocks) > 50 {
+						return testsupport.Response{Body: map[string]any{"ok": false, "error": "invalid_blocks"}}
+					}
+					if threadTS, _ := request.Fields["thread_ts"].(string); threadTS != "" {
+						acceptedThreadPosts.Add(1)
+					}
+					fallthrough
+				case "chat.update":
+					n := responseCounter.Add(1)
+					return testsupport.Response{Body: map[string]any{
+						"ok":      true,
+						"ts":      fmt.Sprintf("1758499200.%06d", n),
+						"channel": fmt.Sprint(request.Fields["channel"]),
+					}}
+				default:
+					return testsupport.Response{Body: map[string]any{"ok": false, "error": "unexpected " + method}}
+				}
+			})
+			t.Setenv(slack.EnvSlackAPIBase, fakeSlack.URL())
+
+			store, f := seedReadFeature(t)
+			gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-06", "implement", agent.NeedUserInputArtifactName)
+			blockers := make([]agent.NeedUserInputVerificationBlocker, tt.blockerCount)
+			itemIDs := make([]string, tt.blockerCount)
+			for i := range blockers {
+				itemID := fmt.Sprintf("check-%03d", i+1)
+				itemIDs[i] = itemID
+				blockers[i] = agent.NeedUserInputVerificationBlocker{
+					ItemID:      itemID,
+					Name:        fmt.Sprintf("Blocked check %d", i+1),
+					RepoName:    repoNameSelf,
+					Command:     fmt.Sprintf("go test ./internal/check-%d", i+1),
+					Reason:      "Authentication required",
+					Remediation: "Sign in and retry",
+				}
+			}
+			blockers[44].Command += " --token " + token
+			if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+				Summary:   "Verification requires an authenticated session.",
+				Questions: []agent.NeedUserInputQuestion{{Index: 1, Prompt: "Retry after signing in?"}},
+				Iteration: 3,
+				VerificationDecision: &agent.NeedUserVerificationDecision{
+					ContractPath:     "testing-contract.yaml",
+					ContractRevision: 1,
+					ItemIDs:          itemIDs,
+					AllowedActions:   []string{agent.NeedUserVerificationRetryAfterAuth},
+				},
+				Verification: &agent.NeedUserInputVerificationContext{Blockers: blockers},
+			}); err != nil {
+				t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+			}
+			f.Status = feature.StatusNeedUserInput
+			f.CurrentIteration = 3
+			f.PendingNeedUserInputPath = gatePath
+			if err := store.Save(f); err != nil {
+				t.Fatalf("Save() error = %v", err)
+			}
+
+			source := &apiHandler{store: store}
+			pending, err := source.PendingSlackInputs(f.ID)
+			if err != nil {
+				t.Fatalf("PendingSlackInputs() error = %v", err)
+			}
+			if len(pending) != 1 || len(pending[0].GateBlockers) != tt.blockerCount {
+				t.Fatalf("PendingSlackInputs() blocker count = %d; want %d", len(pending[0].GateBlockers), tt.blockerCount)
+			}
+
+			notifier := slack.NewNotifier(slack.NotifierOptions{
+				Settings: slackPendingInputTestSettings{settings: ports.SlackRuntimeSettings{
+					Enabled: true,
+					Token:   token,
+					Recipients: []ports.SlackRecipient{{
+						TypedText: "#eng", Kind: ports.SlackRecipientChannel, ID: "C-ENG", DisplayName: "#eng",
+					}},
+					Categories: ports.SlackCategoryDefaults{Progress: true, NeedsInput: true, Problems: true},
+				}},
+				Store:    store,
+				StateDir: store.BaseDir,
+				Pending:  source,
+			})
+			notifier.SetServerName("Local agent")
+			notifier.Start()
+			t.Cleanup(func() { notifier.Stop(context.Background()) })
+
+			notifier.DomainEventTap(ports.Event{Type: ports.NeedUserInputRequired, FeatureID: f.ID})
+
+			var threadPosts []testsupport.Request
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) {
+				threadPosts = threadSlackPosts(fakeSlack.Requests("chat.postMessage"))
+				if len(threadPosts) > 0 {
+					break
+				}
+				time.Sleep(2 * time.Millisecond)
+			}
+			if len(threadPosts) != 1 {
+				t.Fatalf("thread chat.postMessage calls = %d; want 1", len(threadPosts))
+			}
+			if got := acceptedThreadPosts.Load(); got != 1 {
+				t.Errorf("accepted thread chat.postMessage calls = %d; want 1", got)
+			}
+
+			var sentBlocks []json.RawMessage
+			rawBlocks := fmt.Sprint(threadPosts[0].Fields["blocks"])
+			if err := json.Unmarshal([]byte(rawBlocks), &sentBlocks); err != nil {
+				t.Fatalf("decode Slack blocks: %v", err)
+			}
+			if got := len(sentBlocks); got != 50 {
+				t.Errorf("Slack block count = %d; want 50 at boundary", got)
+			}
+			if strings.Contains(rawBlocks, token) || !strings.Contains(rawBlocks, "[REDACTED]") {
+				t.Errorf("Slack blocks did not redact displayed blocker before truncation")
+			}
+			for _, want := range []string{
+				"Resolve this gate in Agentico by waiving the blocked checks or retrying after signing in.",
+				"Replies are not read here. Resolve this verification gate in Agentico.",
+			} {
+				if !strings.Contains(rawBlocks, want) {
+					t.Errorf("Slack blocks missing resolution instruction %q", want)
+				}
+			}
+			if tt.wantOverflowNote == "" {
+				if strings.Contains(rawBlocks, "additional blocked check") {
+					t.Errorf("Slack blocks contain unexpected overflow note: %s", rawBlocks)
+				}
+			} else if !strings.Contains(rawBlocks, tt.wantOverflowNote) {
+				t.Errorf("Slack blocks missing overflow note %q", tt.wantOverflowNote)
+			}
+		})
+	}
+}

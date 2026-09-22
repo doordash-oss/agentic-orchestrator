@@ -1660,8 +1660,14 @@ func (t *serverMutationTarget) WaiveTestingContractItems(featureID string, req s
 	if t.orch == nil {
 		return serverruntime.TestingContractWaiveResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
-	result, err := t.orch.WaiveTestingContractItems(featureID, orchestrator.TestingContractWaiver{ItemIDs: req.ItemIDs, Reason: req.Reason})
+	result, err := t.orch.WaiveTestingContractItems(featureID, orchestrator.TestingContractWaiver{
+		ItemIDs: req.ItemIDs, Reason: req.Reason,
+		ExpectedPhase: req.RoadmapPhase, ExpectedRevision: req.ContractRevision,
+	})
 	if err != nil {
+		if errors.Is(err, orchestrator.ErrStaleTestingContract) {
+			err = &serverruntime.ActionConflictError{Err: err, Code: errcat.Conflict}
+		}
 		return serverruntime.TestingContractWaiveResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	return serverruntime.TestingContractWaiveResponse{

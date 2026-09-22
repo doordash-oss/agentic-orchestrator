@@ -7414,10 +7414,13 @@ body {
   text-decoration: none;
 }
 
-/* Neutral variant of the impact dialog: a contract amendment, not a removal. */
+/* Neutral variant of the impact dialog: a contract amendment, not a removal.
+ * Bounded to the viewport; only the checklist scrolls. */
 .contract-waive-dialog {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-3);
+  max-height: 85vh;
 }
 
 .contract-waive-dialog__eyebrow {
@@ -7431,6 +7434,9 @@ body {
 .contract-waive-dialog__items {
   display: grid;
   gap: var(--space-2);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   margin: 0;
   border: 1px solid var(--hairline);
   border-radius: var(--radius);

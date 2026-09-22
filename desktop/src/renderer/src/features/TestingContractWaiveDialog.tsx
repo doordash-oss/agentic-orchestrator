@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TestingContractItem, TestingContractSnapshot } from '../../../shared/ipc';
 import { parseIpcError } from '../wizard/ipcError';
 import { ResultBox, useCompletionAction, type ActionResult } from './completion/completionShared';
@@ -49,6 +49,10 @@ export function TestingContractWaiveDialog({
   onWaived,
 }: TestingContractWaiveDialogProps): React.ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
+  // The cockpit recreates onClose every render; reading it through a ref keeps
+  // the focus and key effects from re-running on identity changes.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const waiveAction = useCompletionAction();
   const [load, setLoad] = useState<ContractLoad>({ state: 'loading' });
   const [selected, setSelected] = useState<string[]>([]);
@@ -56,32 +60,46 @@ export function TestingContractWaiveDialog({
 
   useEffect(() => {
     dialogRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === 'Escape' && !waiveAction.busy) {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [waiveAction.busy, onClose]);
+  }, [waiveAction.busy]);
+
+  const cancelledRef = useRef(false);
+  const fetchContract = useCallback(async () => {
+    try {
+      const contract = await window.agentico.getTestingContract({ featureId });
+      if (cancelledRef.current) return;
+      setLoad({ state: 'ready', contract });
+      // Drop ticks for rows the reloaded contract no longer offers.
+      const waivable = new Set(
+        contract.available
+          ? contract.items.filter((item) => itemLock(item) === undefined).map((i) => i.itemId)
+          : [],
+      );
+      setSelected((current) => current.filter((id) => waivable.has(id)));
+    } catch (err) {
+      if (cancelledRef.current) return;
+      setLoad({ state: 'failed', result: { ok: false, error: parseIpcError(err) } });
+    }
+  }, [featureId]);
 
   useEffect(() => {
-    let cancelled = false;
+    cancelledRef.current = false;
     setLoad({ state: 'loading' });
-    window.agentico
-      .getTestingContract({ featureId })
-      .then((contract) => {
-        if (!cancelled) setLoad({ state: 'ready', contract });
-      })
-      .catch((err: unknown) => {
-        if (!cancelled)
-          setLoad({ state: 'failed', result: { ok: false, error: parseIpcError(err) } });
-      });
+    void fetchContract();
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
     };
-  }, [featureId]);
+  }, [fetchContract]);
 
   const ready = selected.length > 0 && reason.trim() !== '';
 
@@ -91,13 +109,24 @@ export function TestingContractWaiveDialog({
     );
 
   const handleWaive = async () => {
+    if (load.state !== 'ready' || !load.contract.available) return;
+    const { roadmapPhase, revision } = load.contract;
     const ok = await waiveAction.run(
       async () => {
-        const outcome = await window.agentico.waiveTestingContract({
-          featureId,
-          itemIds: selected,
-          reason: reason.trim(),
-        });
+        const outcome = await window.agentico
+          .waiveTestingContract({
+            featureId,
+            itemIds: selected,
+            reason: reason.trim(),
+            roadmapPhase,
+            contractRevision: revision,
+          })
+          .catch((err: unknown) => {
+            // The contract moved under the selection: show the current one so
+            // the user re-selects against what the server will accept.
+            if (parseIpcError(err).code === 'conflict') void fetchContract();
+            throw err;
+          });
         const count = outcome.waivedItems.length;
         return `Waived ${count} ${count === 1 ? 'item' : 'items'} · contract revision ${outcome.contractRevision}`;
       },

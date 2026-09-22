@@ -247,7 +247,10 @@ desktop waive dialog reads this to list waivable rows.
 ### POST /api/v1/features/{feature_id}/actions/testing-contract-waive
 
 Records user-authorized waivers outside the gate. Body:
-`{ "item_ids": ["<id>", ...], "reason": "<text>" }`. The response
+`{ "item_ids": ["<id>", ...], "reason": "<text>", "roadmap_phase": <n>, "contract_revision": <n> }`.
+The two optional integers bind the waiver to the contract the client read;
+a mismatch returns 409 `conflict` so a selection never applies to a later
+phase or revision. The response
 (`TestingContractWaiveResponse`) carries the new `contract_revision` and the
 `waived_items`.
 

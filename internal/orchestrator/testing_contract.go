@@ -28,7 +28,16 @@ import (
 type TestingContractWaiver struct {
 	ItemIDs []string
 	Reason  string
+	// ExpectedPhase and ExpectedRevision bind the waiver to the contract the
+	// user was shown. Zero means unbound; a mismatch is ErrStaleTestingContract.
+	ExpectedPhase    int
+	ExpectedRevision int
 }
+
+// ErrStaleTestingContract is returned when a waiver names a contract phase or
+// revision that is no longer current, so a selection made against one phase
+// can never waive identically named rows of the next.
+var ErrStaleTestingContract = errors.New("testing contract changed since it was read: reload the contract and select again")
 
 // TestingContractWaiverResult reports the revised contract.
 type TestingContractWaiverResult struct {
@@ -54,6 +63,9 @@ func (o *Orchestrator) WaiveTestingContractItems(featureID string, waiver Testin
 	if reason == "" {
 		return TestingContractWaiverResult{}, errors.New("a waiver reason is required")
 	}
+	if waiver.ExpectedPhase != 0 && waiver.ExpectedPhase != f.CurrentRoadmapPhase {
+		return TestingContractWaiverResult{}, fmt.Errorf("%w (phase %d is current, waiver targeted phase %d)", ErrStaleTestingContract, f.CurrentRoadmapPhase, waiver.ExpectedPhase)
+	}
 	contractPath := agent.PhaseTestingContractPath(o.stateDir(), f, f.CurrentRoadmapPhase)
 	contract, err := agent.ReadTestingContract(contractPath)
 	if err != nil {
@@ -61,6 +73,9 @@ func (o *Orchestrator) WaiveTestingContractItems(featureID string, waiver Testin
 			return TestingContractWaiverResult{}, errors.New("the current phase has no testing contract yet")
 		}
 		return TestingContractWaiverResult{}, fmt.Errorf("read testing contract: %w", err)
+	}
+	if waiver.ExpectedRevision != 0 && waiver.ExpectedRevision != contract.Revision {
+		return TestingContractWaiverResult{}, fmt.Errorf("%w (revision %d is current, waiver targeted revision %d)", ErrStaleTestingContract, contract.Revision, waiver.ExpectedRevision)
 	}
 	changes := make([]agent.TestingContractChange, 0, len(waiver.ItemIDs))
 	waived := make([]string, 0, len(waiver.ItemIDs))

@@ -59,12 +59,12 @@ func TestTestingContractWaiveAction(t *testing.T) {
 
 	t.Run("records the waiver", func(t *testing.T) {
 		t.Parallel()
-		resp, received := post(t, map[string]any{"item_ids": []string{"visual_1", "manual_2"}, "reason": "no signed-in Slack browser on the VM"}, true)
+		resp, received := post(t, map[string]any{"item_ids": []string{"visual_1", "manual_2"}, "reason": "no signed-in Slack browser on the VM", "roadmap_phase": 4, "contract_revision": 2}, true)
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want 200", resp.StatusCode)
 		}
-		if len(received) != 1 || len(received[0].ItemIDs) != 2 || received[0].Reason == "" {
+		if len(received) != 1 || len(received[0].ItemIDs) != 2 || received[0].Reason == "" || received[0].RoadmapPhase != 4 || received[0].ContractRevision != 2 {
 			t.Fatalf("received = %+v", received)
 		}
 		var out TestingContractWaiveResponse

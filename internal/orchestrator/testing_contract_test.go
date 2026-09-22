@@ -15,6 +15,7 @@
 package orchestrator_test
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -87,5 +88,44 @@ func TestWaiveTestingContractItemsRequiresPhaseContract(t *testing.T) {
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lifecycleForFeature(f), Store: store}, orchestrator.Hooks{})
 	if _, err := o.WaiveTestingContractItems(f.ID, orchestrator.TestingContractWaiver{ItemIDs: []string{"x"}, Reason: "r"}); err == nil || !strings.Contains(err.Error(), "no testing contract") {
 		t.Fatalf("error = %v, want missing-contract error", err)
+	}
+}
+
+func TestWaiveTestingContractItemsRejectsStaleSelection(t *testing.T) {
+	stateRoot := t.TempDir()
+	f := &feature.Feature{
+		ID: "feat-stale-waive", Name: "Stale", Slug: "stale", Status: feature.StatusImplementing,
+		SchemaVersion: feature.SchemaVersionCurrent, CurrentPhase: feature.PhaseImplement,
+		CurrentRoadmapPhase: 2, ActiveRun: 1, RunCount: 1,
+		Repos: []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	contractPath := agent.PhaseTestingContractPath(stateRoot, f, 2)
+	contract := agent.TestingContract{Version: 2, Revision: 3, Items: []agent.TestingContractItem{
+		{ID: "visual_1", Source: "visual", Policy: agent.TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true}},
+	}}
+	if err := agent.WriteTestingContract(contractPath, contract); err != nil {
+		t.Fatal(err)
+	}
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lifecycleForFeature(f), Store: store}, orchestrator.Hooks{})
+	// A selection made against phase 1 must not waive phase 2's identically
+	// named row.
+	_, err := o.WaiveTestingContractItems(f.ID, orchestrator.TestingContractWaiver{ItemIDs: []string{"visual_1"}, Reason: "r", ExpectedPhase: 1, ExpectedRevision: 3})
+	if !errors.Is(err, orchestrator.ErrStaleTestingContract) {
+		t.Fatalf("stale phase error = %v", err)
+	}
+	_, err = o.WaiveTestingContractItems(f.ID, orchestrator.TestingContractWaiver{ItemIDs: []string{"visual_1"}, Reason: "r", ExpectedPhase: 2, ExpectedRevision: 2})
+	if !errors.Is(err, orchestrator.ErrStaleTestingContract) {
+		t.Fatalf("stale revision error = %v", err)
+	}
+	got, err := agent.ReadTestingContract(contractPath)
+	if err != nil || agent.IsTestingContractItemWaived(got.Items[0]) {
+		t.Fatalf("stale selection mutated the contract: %+v, %v", got.Items[0], err)
+	}
+	if _, err := o.WaiveTestingContractItems(f.ID, orchestrator.TestingContractWaiver{ItemIDs: []string{"visual_1"}, Reason: "r", ExpectedPhase: 2, ExpectedRevision: 3}); err != nil {
+		t.Fatalf("bound waiver error = %v", err)
 	}
 }

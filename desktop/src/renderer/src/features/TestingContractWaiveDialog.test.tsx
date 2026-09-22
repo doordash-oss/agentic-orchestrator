@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TestingContractItem, TestingContractSnapshot } from '../../../shared/ipc';
@@ -123,6 +123,8 @@ describe('TestingContractWaiveDialog', () => {
         featureId: 'abcd1234ef567890',
         itemIds: ['deploy-smoke', 'ui-capture'],
         reason: 'Vendor console is unreachable from CI.',
+        roadmapPhase: 2,
+        contractRevision: 3,
       }),
     );
     await waitFor(() => expect(onWaived).toHaveBeenCalledOnce());
@@ -188,5 +190,129 @@ describe('TestingContractWaiveDialog', () => {
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('reloads the contract on a 409 conflict and drops ticks the new phase no longer offers', async () => {
+    const mock = installAgenticoMock();
+    const later: TestingContractSnapshot = {
+      available: true,
+      featureId: 'abcd1234ef567890',
+      roadmapPhase: 3,
+      revision: 1,
+      items: [
+        item({ itemId: 'ui-capture', name: 'Vendor console capture' }),
+        item({ itemId: 'load-test', name: 'Load test' }),
+      ],
+    };
+    mock.api.getTestingContract.mockResolvedValueOnce(contract).mockResolvedValueOnce(later);
+    mock.api.waiveTestingContract.mockRejectedValue(
+      ipcError(
+        'conflict',
+        'testing contract changed since it was read: reload the contract and select again',
+      ),
+    );
+    const onClose = vi.fn();
+    const onWaived = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <TestingContractWaiveDialog
+        featureId="abcd1234ef567890"
+        onClose={onClose}
+        onWaived={onWaived}
+      />,
+    );
+
+    await user.click(await screen.findByRole('checkbox', { name: 'deploy-smoke' }));
+    await user.click(screen.getByRole('checkbox', { name: 'ui-capture' }));
+    await user.type(screen.getByRole('textbox', { name: 'Waiver reason' }), 'Offline vendor.');
+    await user.click(screen.getByRole('button', { name: 'Waive items' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'testing contract changed since it was read',
+    );
+    expect(mock.api.waiveTestingContract).toHaveBeenCalledWith(
+      expect.objectContaining({ roadmapPhase: 2, contractRevision: 3 }),
+    );
+    expect(await screen.findByText('Phase 3 contract · revision 1')).toBeVisible();
+    expect(mock.api.getTestingContract).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('dialog', { name: 'Waive contract items?' })).toBeVisible();
+    expect(screen.queryByRole('checkbox', { name: 'deploy-smoke' })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'ui-capture' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'load-test' })).not.toBeChecked();
+    expect(onWaived).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    // The retry binds to the reloaded snapshot.
+    mock.api.waiveTestingContract.mockResolvedValue({
+      result: 'waived',
+      contractRevision: 2,
+      waivedItems: ['ui-capture'],
+    });
+    await user.click(screen.getByRole('button', { name: 'Waive items' }));
+    await waitFor(() =>
+      expect(mock.api.waiveTestingContract).toHaveBeenLastCalledWith({
+        featureId: 'abcd1234ef567890',
+        itemIds: ['ui-capture'],
+        reason: 'Offline vendor.',
+        roadmapPhase: 3,
+        contractRevision: 1,
+      }),
+    );
+  });
+
+  it('keeps the footer mounted behind a scrolling checklist when the contract is long', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getTestingContract.mockResolvedValue({
+      ...contract,
+      items: Array.from({ length: 14 }, (_, i) => item({ itemId: `check-${i}` })),
+    });
+    render(
+      <TestingContractWaiveDialog
+        featureId="abcd1234ef567890"
+        onClose={vi.fn()}
+        onWaived={vi.fn()}
+      />,
+    );
+
+    const first = await screen.findByRole('checkbox', { name: 'check-0' });
+    expect(screen.getAllByRole('checkbox')).toHaveLength(14);
+    expect(first.closest('fieldset')).toHaveClass('contract-waive-dialog__items');
+    expect(screen.getByRole('button', { name: 'Waive items' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Waiver reason' })).toBeInTheDocument();
+  });
+
+  it('keeps focus in the reason field when the cockpit hands down a new onClose', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getTestingContract.mockResolvedValue(contract);
+    const user = userEvent.setup();
+    const onWaived = vi.fn();
+    const view = render(
+      <TestingContractWaiveDialog
+        featureId="abcd1234ef567890"
+        onClose={vi.fn()}
+        onWaived={onWaived}
+      />,
+    );
+    await screen.findByRole('checkbox', { name: 'deploy-smoke' });
+
+    const textarea = screen.getByRole('textbox', { name: 'Waiver reason' });
+    await user.click(textarea);
+    expect(textarea).toHaveFocus();
+
+    const nextClose = vi.fn();
+    view.rerender(
+      <TestingContractWaiveDialog
+        featureId="abcd1234ef567890"
+        onClose={nextClose}
+        onWaived={onWaived}
+      />,
+    );
+    expect(textarea).toHaveFocus();
+
+    // Escape still reaches the latest callback.
+    await act(async () => {
+      await user.keyboard('{Escape}');
+    });
+    expect(nextClose).toHaveBeenCalledOnce();
   });
 });

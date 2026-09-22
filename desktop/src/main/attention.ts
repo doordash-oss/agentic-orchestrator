@@ -423,7 +423,12 @@ export class AttentionService {
       `/api/v1/features/${input.featureId}/actions/testing-contract-waive`,
       {
         method: 'POST',
-        body: { item_ids: input.itemIds, reason: input.reason },
+        body: {
+          item_ids: input.itemIds,
+          reason: input.reason,
+          roadmap_phase: input.roadmapPhase,
+          contract_revision: input.contractRevision,
+        },
       } as ApiRequestInit,
     );
     const value = response as {

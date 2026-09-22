@@ -2497,6 +2497,10 @@ export const TestingContractWaiveRequestSchema = z.strictObject({
     .min(1)
     .max(100),
   reason: AttentionTextSchema.refine((value) => value.trim() !== ''),
+  // Bind the waiver to the contract the user saw; the server rejects a
+  // mismatch with 409 `conflict`.
+  roadmapPhase: z.number().int().positive(),
+  contractRevision: z.number().int().positive(),
 });
 export type TestingContractWaiveRequest = z.output<typeof TestingContractWaiveRequestSchema>;
 export const TestingContractWaiveResultSchema = z.strictObject({

@@ -73,6 +73,8 @@ describe('AttentionService mutations', () => {
         featureId: 'abcd1234ef567890',
         itemIds: ['deploy-smoke', 'ui-capture'],
         reason: 'Vendor UI is unreachable from CI.',
+        roadmapPhase: 2,
+        contractRevision: 2,
       }),
     ).resolves.toEqual({
       result: 'waived',
@@ -86,6 +88,8 @@ describe('AttentionService mutations', () => {
         body: {
           item_ids: ['deploy-smoke', 'ui-capture'],
           reason: 'Vendor UI is unreachable from CI.',
+          roadmap_phase: 2,
+          contract_revision: 2,
         },
       }),
     );
@@ -203,18 +207,35 @@ describe('AttentionService mutations', () => {
     await expect(malformed.getTestingContract({ featureId: 'abcd1234ef567890' })).rejects.toThrow();
   });
 
-  it('rejects testing-contract waivers without items or a reason before any request', async () => {
+  it('rejects testing-contract waivers without items, a reason, or a contract binding before any request', async () => {
     const apiRequest = vi.fn(() => Promise.resolve({ status: 200, body: {} }));
     const service = new AttentionService({ apiRequest } satisfies ServerTransport);
 
     await expect(
-      service.waiveTestingContract({ featureId: 'abcd1234ef567890', itemIds: [], reason: 'x' }),
+      service.waiveTestingContract({
+        featureId: 'abcd1234ef567890',
+        itemIds: [],
+        reason: 'x',
+        roadmapPhase: 1,
+        contractRevision: 1,
+      }),
     ).rejects.toThrow();
     await expect(
       service.waiveTestingContract({
         featureId: 'abcd1234ef567890',
         itemIds: ['deploy-smoke'],
         reason: '   ',
+        roadmapPhase: 1,
+        contractRevision: 1,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      service.waiveTestingContract({
+        featureId: 'abcd1234ef567890',
+        itemIds: ['deploy-smoke'],
+        reason: 'x',
+        roadmapPhase: 0,
+        contractRevision: 1,
       }),
     ).rejects.toThrow();
     expect(apiRequest).not.toHaveBeenCalled();

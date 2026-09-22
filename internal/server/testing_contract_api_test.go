@@ -106,3 +106,37 @@ func TestTestingContractEndpoint(t *testing.T) {
 		t.Fatalf("plan row = %v", plan)
 	}
 }
+
+func TestTestingContractEndpointRevisionChangesAcrossPhases(t *testing.T) {
+	store, f := seedReadFeature(t)
+	handler := NewHandler(HandlerOptions{
+		Runtime:               RuntimeIdentity{StateDir: store.BaseDir},
+		Features:              store,
+		DisableHostValidation: true,
+	})
+	plan := "### Automated Verification\n- [ ] Build: `go build ./...`\n"
+	etag := func(t *testing.T) string {
+		t.Helper()
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features/"+f.ID+"/testing-contract", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+		return w.Header().Get("ETag")
+	}
+	for _, phase := range []int{1, 2} {
+		path := agent.PhaseTestingContractPath(store.BaseDir, f, phase)
+		if err := agent.WriteTestingContract(path, agent.CompileTestingContract(plan, path, "collapsed")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := etag(t)
+	f.CurrentRoadmapPhase = 2
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	second := etag(t)
+	if first == "" || first == second {
+		t.Fatalf("ETag did not change across phases with identical rows: %q vs %q", first, second)
+	}
+}

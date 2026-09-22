@@ -1766,6 +1766,13 @@ func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
 }
 
 func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inputNotifications feature.InputNotificationsMode, gatePath string) NeedUserInputGate {
+	dto := rawNeedUserInputGateDTO(featureID, scope, repoName, iteration, inputNotifications, gatePath)
+	boundNeedUserInputGateFields(&dto)
+	boundNeedUserInputGateDisplay(&dto)
+	return dto
+}
+
+func rawNeedUserInputGateDTO(featureID, scope, repoName string, iteration int, inputNotifications feature.InputNotificationsMode, gatePath string) NeedUserInputGate {
 	dto := NeedUserInputGate{
 		FeatureID:          featureID,
 		Open:               true,
@@ -1785,10 +1792,7 @@ func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inpu
 	if !rec.WaitingSince.IsZero() {
 		dto.WaitingSince = rec.WaitingSince
 	}
-	dto.Summary = agent.BoundNeedUserInputVerificationString(
-		strings.TrimSpace(rec.Summary),
-		agent.NeedUserInputVerificationContextTextMaxLength,
-	)
+	dto.Summary = strings.TrimSpace(rec.Summary)
 	dto.Questions = make(
 		[]NeedUserInputQuestion,
 		0,
@@ -1807,15 +1811,9 @@ func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inpu
 			questionIndex = len(dto.Questions) + 1
 		}
 		dto.Questions = append(dto.Questions, NeedUserInputQuestion{
-			Index: questionIndex,
-			Prompt: agent.BoundNeedUserInputVerificationString(
-				prompt,
-				agent.NeedUserInputVerificationContextTextMaxLength,
-			),
-			Answer: agent.BoundNeedUserInputVerificationString(
-				strings.TrimSpace(q.Answer),
-				agent.NeedUserInputVerificationContextTextMaxLength,
-			),
+			Index:  questionIndex,
+			Prompt: prompt,
+			Answer: strings.TrimSpace(q.Answer),
 		})
 	}
 	if rec.Verification != nil && rec.VerificationDecision != nil && len(rec.Verification.Blockers) > 0 {
@@ -1845,44 +1843,20 @@ func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inpu
 			)
 			for _, capability := range blocker.Capabilities {
 				if capability = strings.TrimSpace(capability); capability != "" {
-					capabilities = append(
-						capabilities,
-						agent.BoundNeedUserInputVerificationString(
-							capability,
-							agent.NeedUserInputVerificationContextTextMaxLength,
-						),
-					)
+					capabilities = append(capabilities, capability)
 					if len(capabilities) == agent.NeedUserInputVerificationMaxCapabilities {
 						break
 					}
 				}
 			}
 			verification.Blockers = append(verification.Blockers, NeedUserInputVerificationBlocker{
-				ItemID: agent.BoundNeedUserInputVerificationString(
-					itemID,
-					agent.NeedUserInputVerificationItemIDMaxLength,
-				),
-				Name: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.Name),
-					agent.NeedUserInputVerificationContextTextMaxLength,
-				),
-				RepoName: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.RepoName),
-					agent.NeedUserInputVerificationRepoNameMaxLength,
-				),
-				Command: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.Command),
-					agent.NeedUserInputVerificationContextTextMaxLength,
-				),
-				Reason: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.Reason),
-					agent.NeedUserInputVerificationContextTextMaxLength,
-				),
+				ItemID:       itemID,
+				Name:         strings.TrimSpace(blocker.Name),
+				RepoName:     strings.TrimSpace(blocker.RepoName),
+				Command:      strings.TrimSpace(blocker.Command),
+				Reason:       strings.TrimSpace(blocker.Reason),
 				Capabilities: capabilities,
-				Remediation: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.Remediation),
-					agent.NeedUserInputVerificationContextTextMaxLength,
-				),
+				Remediation:  strings.TrimSpace(blocker.Remediation),
 			})
 		}
 		seenActions := make(map[NeedUserInputVerificationAction]struct{}, 2)
@@ -1899,8 +1873,60 @@ func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inpu
 		}
 		dto.Verification = &verification
 	}
-	boundNeedUserInputGateDisplay(&dto)
 	return dto
+}
+
+func boundNeedUserInputGateFields(dto *NeedUserInputGate) {
+	dto.Summary = agent.BoundNeedUserInputVerificationString(
+		dto.Summary,
+		agent.NeedUserInputVerificationContextTextMaxLength,
+	)
+	for i := range dto.Questions {
+		dto.Questions[i].Prompt = agent.BoundNeedUserInputVerificationString(
+			dto.Questions[i].Prompt,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		)
+		dto.Questions[i].Answer = agent.BoundNeedUserInputVerificationString(
+			dto.Questions[i].Answer,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		)
+	}
+	if dto.Verification == nil {
+		return
+	}
+	for i := range dto.Verification.Blockers {
+		blocker := &dto.Verification.Blockers[i]
+		blocker.ItemID = agent.BoundNeedUserInputVerificationString(
+			blocker.ItemID,
+			agent.NeedUserInputVerificationItemIDMaxLength,
+		)
+		blocker.Name = agent.BoundNeedUserInputVerificationString(
+			blocker.Name,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		)
+		blocker.RepoName = agent.BoundNeedUserInputVerificationString(
+			blocker.RepoName,
+			agent.NeedUserInputVerificationRepoNameMaxLength,
+		)
+		blocker.Command = agent.BoundNeedUserInputVerificationString(
+			blocker.Command,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		)
+		blocker.Reason = agent.BoundNeedUserInputVerificationString(
+			blocker.Reason,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		)
+		for capability := range blocker.Capabilities {
+			blocker.Capabilities[capability] = agent.BoundNeedUserInputVerificationString(
+				blocker.Capabilities[capability],
+				agent.NeedUserInputVerificationContextTextMaxLength,
+			)
+		}
+		blocker.Remediation = agent.BoundNeedUserInputVerificationString(
+			blocker.Remediation,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		)
+	}
 }
 
 // A JSON string can expand to six bytes per UTF-16 code unit when control

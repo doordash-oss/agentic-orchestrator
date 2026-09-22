@@ -130,6 +130,39 @@ func (q *itemQueue) enqueue(item queueItem) bool {
 	return false
 }
 
+// reserveProtected gives protected work discovered while dispatching an event
+// its own queue-budget reservation. It applies the same eviction policy as a
+// newly enqueued protected item without adding another dispatcher item.
+func (q *itemQueue) reserveProtected(event ports.Event) *queueReservation {
+	q.mu.Lock()
+	reservation := &queueReservation{kind: kindNeedsInput, event: event}
+	if len(q.pending) < q.capacity {
+		q.pending = append(q.pending, reservation)
+		q.mu.Unlock()
+		return reservation
+	}
+	for i, pending := range q.pending {
+		if pending.kind.protected() {
+			continue
+		}
+		evicted := queueItem{
+			kind:        pending.kind,
+			event:       pending.event,
+			reservation: pending,
+		}
+		pending.canceled.Store(true)
+		q.removeItemLocked(pending)
+		q.pending = append(q.pending[:i], q.pending[i+1:]...)
+		q.pending = append(q.pending, reservation)
+		q.mu.Unlock()
+		q.notifyDropped(evicted)
+		return reservation
+	}
+	q.pending = append(q.pending, reservation)
+	q.mu.Unlock()
+	return reservation
+}
+
 func (q *itemQueue) removeItemLocked(reservation *queueReservation) {
 	for i, item := range q.items {
 		if item.reservation == reservation {

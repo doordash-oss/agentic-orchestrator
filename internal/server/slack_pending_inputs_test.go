@@ -549,3 +549,219 @@ func TestPendingSlackInputsProjectsVerificationGate(t *testing.T) {
 		t.Errorf("PendingSlackInputs()[0].GateBlockers[0] = %+v; want full blocker projection", blocker)
 	}
 }
+
+func TestPendingSlackInputsPreservesRawVerificationGateText(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-06", "implement", agent.NeedUserInputArtifactName)
+	credentialURL := func(user, password string, padding int) string {
+		return "https://" + user + ":" + password + strings.Repeat("x", padding) + "@example.test/private"
+	}
+	summary := "Summary " + credentialURL("alice", "summary-password", agent.NeedUserInputVerificationContextTextMaxLength)
+	question := "Open " + credentialURL("alice", "question-password", 700)
+	name := "Name " + credentialURL("alice", "name-password", agent.NeedUserInputVerificationContextTextMaxLength)
+	repoName := "Repo " + credentialURL("alice", "repo-password", agent.NeedUserInputVerificationRepoNameMaxLength)
+	command := "curl " + credentialURL("alice", "command-password", agent.NeedUserInputVerificationContextTextMaxLength)
+	reason := "Reason " + credentialURL("alice", "reason-password", agent.NeedUserInputVerificationContextTextMaxLength)
+	remediation := "Remediation " + credentialURL("alice", "remediation-password", agent.NeedUserInputVerificationContextTextMaxLength)
+
+	questions := make([]agent.NeedUserInputQuestion, agent.NeedUserInputGateMaxQuestions)
+	questions[0] = agent.NeedUserInputQuestion{Index: 1, Prompt: question}
+	for i := 1; i < len(questions); i++ {
+		questions[i] = agent.NeedUserInputQuestion{Index: i + 1, Prompt: fmt.Sprintf("Question %d", i+1)}
+	}
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Summary:   summary,
+		Questions: questions,
+		Iteration: 3,
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			ContractPath:     "testing-contract.yaml",
+			ContractRevision: 1,
+			ItemIDs:          []string{"slack-integration"},
+			AllowedActions:   []string{agent.NeedUserVerificationWaive},
+		},
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: []agent.NeedUserInputVerificationBlocker{{
+				ItemID:      "slack-integration",
+				Name:        name,
+				RepoName:    repoName,
+				Command:     command,
+				Reason:      reason,
+				Remediation: remediation,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	f.Status = feature.StatusNeedUserInput
+	f.CurrentIteration = 3
+	f.PendingNeedUserInputPath = gatePath
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	h := &apiHandler{store: store}
+	got, err := h.PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("PendingSlackInputs() length = %d; want 1", len(got))
+	}
+	gate := got[0]
+	if gate.GateSummary != summary {
+		t.Errorf("PendingSlackInputs()[0].GateSummary length = %d; want raw length %d", len(gate.GateSummary), len(summary))
+	}
+	if len(gate.GateQuestions) != len(questions) || gate.GateQuestions[0] != question {
+		t.Errorf("PendingSlackInputs()[0].GateQuestions first length = %d; want raw length %d across %d questions", len(gate.GateQuestions[0]), len(question), len(questions))
+	}
+	if len(gate.GateBlockers) != 1 {
+		t.Fatalf("PendingSlackInputs()[0].GateBlockers length = %d; want 1", len(gate.GateBlockers))
+	}
+	blocker := gate.GateBlockers[0]
+	if blocker.Name != name ||
+		blocker.RepoName != repoName ||
+		blocker.Command != command ||
+		blocker.Reason != reason ||
+		blocker.Remediation != remediation {
+		t.Errorf(
+			"PendingSlackInputs()[0].GateBlockers[0] lengths = name:%d repo:%d command:%d reason:%d remediation:%d; want raw lengths %d, %d, %d, %d, %d",
+			len(blocker.Name), len(blocker.RepoName), len(blocker.Command), len(blocker.Reason), len(blocker.Remediation),
+			len(name), len(repoName), len(command), len(reason), len(remediation),
+		)
+	}
+
+	dto := needUserInputGateDTO(
+		f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath,
+	)
+	if dto.Summary == summary {
+		t.Error("needUserInputGateDTO().Summary retained raw over-limit text; want existing API display bound")
+	}
+	if len(dto.Questions) != len(questions) || dto.Questions[0].Prompt == question {
+		t.Errorf("needUserInputGateDTO().Questions retained raw boundary-crossing prompt; want existing aggregate display bound")
+	}
+}
+
+func TestPendingSlackInputsRealPortRedactsVerificationGateBeforeSlackTruncation(t *testing.T) {
+	const token = "xoxb-server-gate-port-test-token"
+
+	fakeSlack := testsupport.New(t)
+	var responseCounter atomic.Int64
+	fakeSlack.SetDefault(func(method string, request testsupport.Request) testsupport.Response {
+		switch method {
+		case "chat.postMessage", "chat.update":
+			n := responseCounter.Add(1)
+			return testsupport.Response{Body: map[string]any{
+				"ok":      true,
+				"ts":      fmt.Sprintf("1758499200.%06d", n),
+				"channel": fmt.Sprint(request.Fields["channel"]),
+			}}
+		default:
+			return testsupport.Response{Body: map[string]any{"ok": false, "error": "unexpected " + method}}
+		}
+	})
+	t.Setenv(slack.EnvSlackAPIBase, fakeSlack.URL())
+
+	store, f := seedReadFeature(t)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-06", "implement", agent.NeedUserInputArtifactName)
+	credentialQuestion := "Open https://alice:gate-password" +
+		strings.Repeat("x", 700) +
+		"@example.test/private"
+	questions := make([]agent.NeedUserInputQuestion, agent.NeedUserInputGateMaxQuestions)
+	questions[0] = agent.NeedUserInputQuestion{Index: 1, Prompt: credentialQuestion}
+	for i := 1; i < len(questions); i++ {
+		questions[i] = agent.NeedUserInputQuestion{Index: i + 1, Prompt: fmt.Sprintf("Question %d", i+1)}
+	}
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Summary:   "Authentication is required.",
+		Questions: questions,
+		Iteration: 3,
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			ContractPath:     "testing-contract.yaml",
+			ContractRevision: 1,
+			ItemIDs:          []string{"slack-integration"},
+			AllowedActions:   []string{agent.NeedUserVerificationRetryAfterAuth},
+		},
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: []agent.NeedUserInputVerificationBlocker{{
+				ItemID:      "slack-integration",
+				Name:        "Slack integration test",
+				RepoName:    repoNameSelf,
+				Command:     "go test ./internal/slack/...",
+				Reason:      "Okta session expired",
+				Remediation: "Sign in and retry",
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	f.Status = feature.StatusNeedUserInput
+	f.CurrentIteration = 3
+	f.PendingNeedUserInputPath = gatePath
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	source := &apiHandler{store: store}
+	pending, err := source.PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(pending) != 1 || len(pending[0].GateQuestions) != len(questions) {
+		t.Fatalf("PendingSlackInputs() = %+v; want one gate with %d questions", pending, len(questions))
+	}
+	if pending[0].GateQuestions[0] != credentialQuestion {
+		t.Fatalf(
+			"PendingSlackInputs()[0].GateQuestions[0] length = %d; want raw length %d for Slack scrubbing",
+			len(pending[0].GateQuestions[0]),
+			len(credentialQuestion),
+		)
+	}
+
+	notifier := slack.NewNotifier(slack.NotifierOptions{
+		Settings: slackPendingInputTestSettings{settings: ports.SlackRuntimeSettings{
+			Enabled: true,
+			Token:   token,
+			Recipients: []ports.SlackRecipient{{
+				TypedText: "#eng", Kind: ports.SlackRecipientChannel, ID: "C-ENG", DisplayName: "#eng",
+			}},
+			Categories: ports.SlackCategoryDefaults{Progress: true, NeedsInput: true, Problems: true},
+		}},
+		Store:    store,
+		StateDir: store.BaseDir,
+		Pending:  source,
+	})
+	notifier.SetServerName("Local agent")
+	notifier.Start()
+	t.Cleanup(func() { notifier.Stop(context.Background()) })
+
+	notifier.DomainEventTap(ports.Event{Type: ports.NeedUserInputRequired, FeatureID: f.ID})
+
+	var threadPosts []testsupport.Request
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		threadPosts = threadSlackPosts(fakeSlack.Requests("chat.postMessage"))
+		if len(threadPosts) == 1 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if len(threadPosts) != 1 {
+		t.Fatalf("thread chat.postMessage calls = %d; want 1", len(threadPosts))
+	}
+
+	for field, payload := range map[string]string{
+		"blocks":   fmt.Sprint(threadPosts[0].Fields["blocks"]),
+		"fallback": fmt.Sprint(threadPosts[0].Fields["text"]),
+	} {
+		for _, fragment := range []string{"alice:", "gate-password", strings.Repeat("x", 64)} {
+			if strings.Contains(payload, fragment) {
+				t.Errorf("Slack %s leaked credential fragment %q", field, fragment)
+			}
+		}
+		if !strings.Contains(payload, "Open https://[REDACTED]@example.test/private") {
+			t.Errorf("Slack %s = %q; want surrounding question text and redaction marker", field, payload)
+		}
+	}
+}

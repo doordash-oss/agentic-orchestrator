@@ -585,11 +585,11 @@ var (
 )
 
 func scrub(token, text string) string {
+	text = scrubAuthorizationHeaders(text)
 	if token != "" {
 		text = strings.ReplaceAll(text, token, "[REDACTED]")
 	}
 	text = slackTokenPattern.ReplaceAllString(text, "[REDACTED]")
-	text = scrubAuthorizationHeaders(text)
 	return urlCredentialPattern.ReplaceAllString(text, `${1}[REDACTED]@`)
 }
 

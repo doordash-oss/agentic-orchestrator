@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -69,6 +70,11 @@ type composedNeedsInputSSE struct {
 	cancel context.CancelFunc
 	body   io.ReadCloser
 	blocks chan string
+}
+
+type composedNeedsInputSSEEvent struct {
+	Kind             string
+	SnapshotRequired bool
 }
 
 func TestSlackNeedsInputRedaction(t *testing.T) {
@@ -231,9 +237,9 @@ func TestSlackNeedsInputRedaction(t *testing.T) {
 		return record.TagCounter == 3 && len(record.PendingInputs) == 0 && cardWithoutWaitingLine(fake)
 	})
 
-	gotSSE := collectComposedNeedsInputSSE(t, sse.blocks, 2)
+	gotSSE := collectComposedNeedsInputSSE(t, sse.blocks, composedNeedsInputSessionID)
 	wantSSE := runComposedNeedsInputSSEBaseline(t, script, handler, cache)
-	if fmt.Sprint(gotSSE) != fmt.Sprint(wantSSE) {
+	if !slices.Equal(gotSSE, wantSSE) {
 		t.Fatalf("SSE permission/prompt events = %v; want baseline %v", gotSSE, wantSSE)
 	}
 
@@ -374,24 +380,57 @@ func openComposedNeedsInputSSE(t *testing.T, server *httptest.Server) composedNe
 	return composedNeedsInputSSE{cancel: cancel, body: resp.Body, blocks: blocks}
 }
 
-func collectComposedNeedsInputSSE(t *testing.T, blocks <-chan string, count int) []string {
+func collectComposedNeedsInputSSE(
+	t *testing.T,
+	blocks <-chan string,
+	sessionID string,
+) []composedNeedsInputSSEEvent {
 	t.Helper()
-	var got []string
+	var got []composedNeedsInputSSEEvent
+	sawRelevant := false
 	deadline := time.After(5 * time.Second)
-	for len(got) < count {
+	for {
 		select {
-		case block := <-blocks:
-			switch {
-			case strings.Contains(block, "event: permission.updated"):
-				got = append(got, "permission.updated:snapshot")
-			case strings.Contains(block, "event: prompt.updated"):
-				got = append(got, "prompt.updated:snapshot")
+		case block, ok := <-blocks:
+			if !ok {
+				t.Fatalf("SSE stream closed before session completion; got %v", got)
+			}
+			event := decodeComposedNeedsInputSSE(t, block)
+			switch event.Kind {
+			case "permission.updated", "prompt.updated":
+				sawRelevant = true
+				got = append(got, composedNeedsInputSSEEvent{
+					Kind:             event.Kind,
+					SnapshotRequired: event.SnapshotRequired,
+				})
+			case "session.updated":
+				if sawRelevant && event.Resource.ID == sessionID {
+					return got
+				}
 			}
 		case <-deadline:
 			t.Fatalf("timed out collecting SSE events; got %v", got)
 		}
 	}
-	return got
+}
+
+func decodeComposedNeedsInputSSE(t *testing.T, block string) serverruntime.SSEEvent {
+	t.Helper()
+	var data string
+	for line := range strings.SplitSeq(block, "\n") {
+		if strings.HasPrefix(line, "data: ") {
+			data = strings.TrimPrefix(line, "data: ")
+			break
+		}
+	}
+	if data == "" {
+		t.Fatalf("SSE block has no data payload: %q", block)
+	}
+	var event serverruntime.SSEEvent
+	if err := json.Unmarshal([]byte(data), &event); err != nil {
+		t.Fatalf("decode SSE payload %q: %v", data, err)
+	}
+	return event
 }
 
 func runComposedNeedsInputSSEBaseline(
@@ -399,7 +438,7 @@ func runComposedNeedsInputSSEBaseline(
 	script string,
 	handler ports.PermissionHandler,
 	cache *permission.Cache,
-) []string {
+) []composedNeedsInputSSEEvent {
 	t.Helper()
 	eventCh := make(chan interface{}, 64)
 	sessions := session.NewManager(eventCh)
@@ -452,7 +491,12 @@ func runComposedNeedsInputSSEBaseline(
 	}); err != nil {
 		t.Fatalf("baseline AnswerAskUser() error = %v", err)
 	}
-	return collectComposedNeedsInputSSE(t, sse.blocks, 2)
+	select {
+	case <-sess.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for baseline scripted session")
+	}
+	return collectComposedNeedsInputSSE(t, sse.blocks, composedNeedsInputSessionID+"-baseline")
 }
 
 func waitForComposedNeedsInput(t *testing.T, timeout time.Duration, condition func() bool) {

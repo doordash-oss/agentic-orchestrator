@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -125,6 +126,89 @@ func TestNeedsInputRetirementCancelsQueuedReply(t *testing.T) {
 	}
 }
 
+func TestReenabledNeedsInputDeliverySurvivesProgressReservationEviction(t *testing.T) {
+	settings := defaultTestSettings(testToken, testRecipients()[1])
+	settings.Categories.NeedsInput = false
+	harness := newNotifierHarness(t, settings)
+	harness.seedFeature("F-1", nil)
+	harness.pending.set("F-1", testPendingPermission("perm-1"))
+
+	notifier := harness.start(3)
+	notifier.RuntimeMessageTap(controlRuntimeMessage("F-1", "session-1", "perm-1"))
+	waitFor(t, 5*time.Second, func() bool {
+		record, ok := readFeatureRecord(harness.stateDir, "F-1")
+		return ok && len(record.Pending) == 1 && record.Pending[0].Tag == "" &&
+			notifier.queue.len() == 0
+	})
+
+	problemStarted := make(chan struct{}, 1)
+	problemRelease := make(chan struct{})
+	var held atomic.Bool
+	harness.server.SetDefault(func(method string, request testsupport.Request) testsupport.Response {
+		response, _ := defaultOKResponder()
+		result := response(method, request)
+		if method == "chat.postMessage" &&
+			fieldString(request, "thread_ts") != "" &&
+			held.CompareAndSwap(false, true) {
+			result.Started = problemStarted
+			result.Release = problemRelease
+		}
+		return result
+	})
+
+	problem := errcat.New(errcat.SessionCrashed)
+	harness.feed(ports.Event{
+		Type: ports.FeatureFailed, FeatureID: "F-1", CanonicalError: &problem,
+	})
+	select {
+	case <-problemStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("protected Problems reply did not reach the held destination")
+	}
+
+	harness.settings.mutate(func(settings *ports.SlackRuntimeSettings) {
+		settings.Categories.NeedsInput = true
+	})
+	harness.feed(startedEvent("F-1", feature.PhaseImplement))
+	worker := reviewWaitForWorker(t, notifier, "C-ENG")
+	waitFor(t, 2*time.Second, func() bool {
+		record, ok := readFeatureRecord(harness.stateDir, "F-1")
+		return ok && record.Pending[0].Tag == "#1" &&
+			reviewWorkerInboxLen(worker) == 2
+	})
+
+	harness.feed(startedEvent("F-1", feature.PhaseDesign))
+	waitFor(t, 2*time.Second, func() bool { return notifier.queue.len() == 3 })
+	harness.feed(ports.Event{Type: ports.NeedUserInputRequired, FeatureID: "F-1"})
+	waitFor(t, 2*time.Second, func() bool {
+		droppedProgress := 0
+		for _, event := range harness.observer.ofKind("slack.event_dropped") {
+			if event.Data["event_type"] == "phase.started" {
+				droppedProgress++
+			}
+		}
+		return droppedProgress == 2
+	})
+
+	close(problemRelease)
+	waitFor(t, 5*time.Second, func() bool {
+		record, ok := readFeatureRecord(harness.stateDir, "F-1")
+		return ok && len(record.Pending) == 1 &&
+			len(record.Pending[0].MessageTS) == 1 &&
+			reviewWorkerSettled(notifier, worker)
+	})
+
+	needsInputPosts := 0
+	for _, post := range reviewThreadPostsTo(harness.server, "C-ENG") {
+		if strings.Contains(fieldString(post, "text"), "#1") {
+			needsInputPosts++
+		}
+	}
+	if needsInputPosts != 1 {
+		t.Fatalf("Needs-input replies after Progress eviction = %d; want exactly 1", needsInputPosts)
+	}
+}
+
 func TestRuntimeMessageTapUsesOnlyInMemoryAdmission(t *testing.T) {
 	harness := newNotifierHarness(t, defaultTestSettings(testToken, testRecipients()[1]))
 	harness.seedFeature("F-1", nil)
@@ -218,7 +302,7 @@ func (l *blockingFeatureLoader) Load(id string) (*feature.Feature, error) {
 	return l.inner.Load(id)
 }
 
-func TestPendingDeliverySnapshotDoesNotShareMessageTimestampMaps(t *testing.T) {
+func TestPendingDeliveryEligibleHandlesConcurrentTimestampUpdates(t *testing.T) {
 	record := &featureRecord{Pending: []pendingInputRecord{{
 		Identity:  "permission:perm-1",
 		MessageTS: map[string]string{"channel:C-ONE": "1.0"},

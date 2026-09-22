@@ -100,7 +100,7 @@ func (h *apiHandler) PendingSlackInputs(featureID string) ([]ports.SlackPendingI
 		}
 	}
 	if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
-		gate := needUserInputGateDTO(
+		gate := rawNeedUserInputGateDTO(
 			f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath,
 		)
 		item := ports.SlackPendingInput{

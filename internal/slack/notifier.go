@@ -568,6 +568,34 @@ func (n *Notifier) dispatchWork(item queueItem, work []workItem) {
 		n.queue.complete(item)
 		return
 	}
+	if item.kind != kindNeedsInput {
+		var needsInputWork []workItem
+		remainingWork := work[:0]
+		for _, delivery := range work {
+			if delivery.reply.kind == kindNeedsInput {
+				needsInputWork = append(needsInputWork, delivery)
+				continue
+			}
+			remainingWork = append(remainingWork, delivery)
+		}
+		if len(needsInputWork) > 0 {
+			protectedItem := queueItem{
+				kind:        kindNeedsInput,
+				event:       item.event,
+				reservation: n.queue.reserveProtected(item.event),
+			}
+			n.dispatchDeliveryGroup(protectedItem, needsInputWork)
+			if len(remainingWork) == 0 {
+				n.queue.complete(item)
+				return
+			}
+			work = remainingWork
+		}
+	}
+	n.dispatchDeliveryGroup(item, work)
+}
+
+func (n *Notifier) dispatchDeliveryGroup(item queueItem, work []workItem) {
 	group := newDeliveryGroup(n.queue, item, len(work))
 	for i := range work {
 		work[i].delivery = group

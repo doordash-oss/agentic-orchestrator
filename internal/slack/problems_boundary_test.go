@@ -48,6 +48,17 @@ func TestScrubRedactsCompleteAuthorizationHeaderValues(t *testing.T) {
 	}
 }
 
+func TestScrubDoesNotNestRedactionMarkersInAuthorizationValues(t *testing.T) {
+	const secret = "xoxp-NESTED-REDACTION-123456"
+	got := scrub("", "Question Authorization: Bearer "+secret+"?")
+	if strings.Contains(got, "]]") {
+		t.Fatalf("scrub() = %q; want a single redaction marker", got)
+	}
+	if !strings.Contains(got, "Authorization: [REDACTED]") {
+		t.Fatalf("scrub() = %q; want redacted authorization value", got)
+	}
+}
+
 func TestScrubPreservesDiagnosticsAroundDigestAuthorizationHeader(t *testing.T) {
 	input := `repo alpha; Authorization: Digest username="ops;bot", response="REVIEW_SENTINEL"; path /tmp/worktree exit 17`
 	got := scrub("", input)

@@ -31,13 +31,21 @@ import (
 // verification capability blocker. Root-agent questions use the live
 // AskUserQuestion control protocol instead.
 type NeedUserInputRecord struct {
-	Summary              string                            `yaml:"summary"`
-	Questions            []NeedUserInputQuestion           `yaml:"questions"`
-	Iteration            int                               `yaml:"iteration"`
+	Summary   string                  `yaml:"summary"`
+	Questions []NeedUserInputQuestion `yaml:"questions"`
+	Iteration int                     `yaml:"iteration"`
+	// Source records who authored the gate: empty or "harness" for the
+	// deterministic executor, "agent" for an implementer report-blocker
+	// escalation. The user remains the only authority who can waive.
+	Source               string                            `yaml:"source,omitempty"`
 	WaitingSince         time.Time                         `yaml:"waiting_since,omitempty"`
 	VerificationDecision *NeedUserVerificationDecision     `yaml:"verification_decision,omitempty"`
 	Verification         *NeedUserInputVerificationContext `yaml:"verification,omitempty"`
 }
+
+// NeedUserInputSourceAgent marks a gate written by the implementer through
+// `agentico report-blocker`.
+const NeedUserInputSourceAgent = "agent"
 
 // NeedUserInputVerificationContext is the persisted, sanitized explanation
 // of verification blockers attached to a harness-owned gate artifact.
@@ -70,6 +78,11 @@ type NeedUserVerificationDecision struct {
 const (
 	NeedUserVerificationWaive          = "WAIVE"
 	NeedUserVerificationRetryAfterAuth = "RETRY_AFTER_AUTH"
+	// NeedUserVerificationAllowSubstitute keeps the evidence requirement but
+	// authorizes a faithful substitute (for example a local rendering in
+	// place of a third-party UI capture) by flipping the items'
+	// allow_substitution policy.
+	NeedUserVerificationAllowSubstitute = "ALLOW_SUBSTITUTE"
 )
 
 // Verification gate context limits match the public API and desktop IPC
@@ -138,10 +151,31 @@ func SynthesizeVerificationNeedUserInputGate(contractPath string, revision int, 
 	}
 }
 
+// offerSubstituteAction adds ALLOW_SUBSTITUTE when at least one blocked item
+// is agent-owned evidence whose policy still forbids substitution.
+func offerSubstituteAction(rec *NeedUserInputRecord, contract *TestingContract) {
+	if rec == nil || rec.VerificationDecision == nil || contract == nil {
+		return
+	}
+	for _, itemID := range rec.VerificationDecision.ItemIDs {
+		idx := testingContractItemIndex(contract.Items, itemID)
+		if idx < 0 {
+			continue
+		}
+		item := contract.Items[idx]
+		if item.Owner == TestingContractOwnerAgent && !item.Policy.AllowSubstitution {
+			rec.VerificationDecision.AllowedActions = append(rec.VerificationDecision.AllowedActions, NeedUserVerificationAllowSubstitute)
+			rec.Questions[0].Prompt = "Enter WAIVE to authorize waiving these blocked checks, ALLOW_SUBSTITUTE to accept a faithful substitute for the blocked evidence, or RETRY_AFTER_AUTH after making the required login/permission available."
+			return
+		}
+	}
+}
+
 // SynthesizeVerificationNeedUserInputGateWithContext creates a same-iteration
 // pause with sanitized, user-actionable descriptions of blocked checks.
 func SynthesizeVerificationNeedUserInputGateWithContext(contractPath string, contract *TestingContract, report *VerificationReport, itemIDs []string, iteration int) NeedUserInputRecord {
 	rec := SynthesizeVerificationNeedUserInputGate(contractPath, contract.Revision, itemIDs, iteration)
+	offerSubstituteAction(&rec, contract)
 	itemsByID := make(map[string]TestingContractItem, len(contract.Items))
 	for _, item := range contract.Items {
 		itemsByID[item.ID] = item
@@ -284,6 +318,26 @@ func ApplyNeedUserVerificationDecision(gatePath string, rec NeedUserInputRecord)
 	if err != nil {
 		return fmt.Errorf("reading verification decision contract: %w", err)
 	}
+	if action == NeedUserVerificationAllowSubstitute {
+		if contract.Revision == decision.ContractRevision+1 && substitutionAlreadyAllowed(contract, decision.ItemIDs) {
+			return nil
+		}
+		if contract.Revision != decision.ContractRevision {
+			return fmt.Errorf("verification contract changed from revision %d to %d; review the updated requirements before resuming", decision.ContractRevision, contract.Revision)
+		}
+		changes := make([]TestingContractChange, 0, len(decision.ItemIDs))
+		for _, itemID := range decision.ItemIDs {
+			changes = append(changes, TestingContractChange{
+				ItemID: itemID, Action: TestingContractChangeAllowSubstitution,
+				ChangeReason: "user authorized substitute evidence at verification capability gate", ChangedBy: "user",
+			})
+		}
+		revised, err := ReviseTestingContract(contract, changes)
+		if err != nil {
+			return err
+		}
+		return WriteTestingContract(decision.ContractPath, *revised)
+	}
 	if contract.Revision == decision.ContractRevision+1 && verificationWaiverAlreadyApplied(contract, decision.ItemIDs) {
 		return nil
 	}
@@ -320,6 +374,105 @@ func needUserVerificationAction(rec NeedUserInputRecord) (string, error) {
 		return "", fmt.Errorf("verification gate answer %q is not one of %s", action, strings.Join(rec.VerificationDecision.AllowedActions, ", "))
 	}
 	return action, nil
+}
+
+func substitutionAlreadyAllowed(contract *TestingContract, itemIDs []string) bool {
+	for _, itemID := range itemIDs {
+		idx := testingContractItemIndex(contract.Items, itemID)
+		if idx < 0 || !contract.Items[idx].Policy.AllowSubstitution {
+			return false
+		}
+	}
+	return true
+}
+
+// SynthesizeAgentReportedBlockerGate builds the gate an implementer raises
+// through `agentico report-blocker` when it discovers mid-iteration that
+// required evidence needs a capability the environment lacks. Item names and
+// commands come from the contract, never from the agent, so the user sees
+// exactly which rows a decision affects. Only required, non-waived items
+// whose policy allows blocking may be reported.
+func SynthesizeAgentReportedBlockerGate(contractPath string, contract *TestingContract, itemIDs []string, capability, reason string, iteration int) (NeedUserInputRecord, error) {
+	if contract == nil {
+		return NeedUserInputRecord{}, errors.New("report-blocker: contract is nil")
+	}
+	capability = strings.TrimSpace(capability)
+	reason = strings.TrimSpace(reason)
+	if capability == "" {
+		return NeedUserInputRecord{}, errors.New("report-blocker: --capability is required")
+	}
+	if reason == "" {
+		return NeedUserInputRecord{}, errors.New("report-blocker: --reason is required")
+	}
+	if len(itemIDs) == 0 {
+		return NeedUserInputRecord{}, errors.New("report-blocker: at least one --items id is required")
+	}
+	seen := make(map[string]bool, len(itemIDs))
+	ids := make([]string, 0, len(itemIDs))
+	for _, raw := range itemIDs {
+		itemID := strings.TrimSpace(raw)
+		if itemID == "" || seen[itemID] {
+			continue
+		}
+		seen[itemID] = true
+		idx := testingContractItemIndex(contract.Items, itemID)
+		if idx < 0 {
+			return NeedUserInputRecord{}, fmt.Errorf("report-blocker: unknown contract item %q", itemID)
+		}
+		item := contract.Items[idx]
+		if !item.Policy.Required || IsTestingContractItemWaived(item) {
+			return NeedUserInputRecord{}, fmt.Errorf("report-blocker: item %q is not a required, unwaived check", itemID)
+		}
+		if !item.Policy.AllowBlocked {
+			return NeedUserInputRecord{}, fmt.Errorf("report-blocker: item %q does not allow blocking", itemID)
+		}
+		ids = append(ids, itemID)
+	}
+	report := BuildContractVerificationReportStub(contract, contractPath)
+	blockedReason := fmt.Sprintf("missing declared capability %q: %s", capability, reason)
+	for i := range report.Results {
+		if seen[report.Results[i].ItemID] {
+			report.Results[i].Status = VerificationStatusBlocked
+			report.Results[i].BlockedReason = blockedReason
+		}
+	}
+	rec := SynthesizeVerificationNeedUserInputGateWithContext(contractPath, contract, &report, ids, iteration)
+	rec.Source = NeedUserInputSourceAgent
+	rec.Summary = fmt.Sprintf("The implementer reports %d required check(s) blocked by a missing capability: %s.", len(ids), capability)
+	return rec, nil
+}
+
+// ValidateAgentReportedBlockerGate confirms an agent-authored gate found in
+// an iteration directory binds to the current contract before the loop
+// routes on it: matching contract path and revision, and item ids that are
+// still required and unwaived.
+func ValidateAgentReportedBlockerGate(rec NeedUserInputRecord, contractPath string, contract *TestingContract) error {
+	if rec.Source != NeedUserInputSourceAgent {
+		return errors.New("gate was not authored by the implementer")
+	}
+	if rec.VerificationDecision == nil || contract == nil {
+		return errors.New("gate has no verification decision")
+	}
+	if filepath.Clean(strings.TrimSpace(rec.VerificationDecision.ContractPath)) != filepath.Clean(strings.TrimSpace(contractPath)) {
+		return errors.New("gate binds a different testing contract")
+	}
+	if rec.VerificationDecision.ContractRevision != contract.Revision {
+		return fmt.Errorf("gate binds contract revision %d but the contract is at revision %d", rec.VerificationDecision.ContractRevision, contract.Revision)
+	}
+	if len(rec.VerificationDecision.ItemIDs) == 0 {
+		return errors.New("gate names no contract items")
+	}
+	for _, itemID := range rec.VerificationDecision.ItemIDs {
+		idx := testingContractItemIndex(contract.Items, itemID)
+		if idx < 0 {
+			return fmt.Errorf("gate names unknown contract item %q", itemID)
+		}
+		item := contract.Items[idx]
+		if !item.Policy.Required || IsTestingContractItemWaived(item) || !item.Policy.AllowBlocked {
+			return fmt.Errorf("gate names item %q, which is not a blockable required check", itemID)
+		}
+	}
+	return nil
 }
 
 func verificationWaiverAlreadyApplied(contract *TestingContract, itemIDs []string) bool {

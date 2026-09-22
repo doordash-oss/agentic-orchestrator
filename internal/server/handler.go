@@ -501,6 +501,8 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 		h.handleFeatureConfig(w, r, featureID)
 	case len(parts) == 2 && parts[1] == "live-preview":
 		h.handleLivePreview(w, r, featureID)
+	case len(parts) == 2 && parts[1] == "testing-contract":
+		h.handleTestingContract(w, r, featureID)
 	case len(parts) == 3 && parts[1] == "rewind" && parts[2] == "preview":
 		h.handleRewindPreview(w, r, featureID)
 	case len(parts) >= 2 && parts[1] == "runs":

@@ -93,6 +93,10 @@ type ImplementConfig struct {
 	// harness-owned command.
 	CommandRunner ports.CommandRunner
 
+	// CapabilityPolicy configures built-in capability probes (browser state
+	// location and remote-server restrictions). Nil uses the local default.
+	CapabilityPolicy *CapabilityPolicy
+
 	// BuildSession creates CLI command args, env vars, and session opts
 	// by routing through the provider registry. In tests, provide a mock
 	// function. In production, set to PhaseRunner.BuildSession.
@@ -457,6 +461,21 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if createErr != nil {
 				return nil, createErr
 			}
+			// Probe declared capabilities before the implementer starts so a
+			// missing login or environment feature opens the user gate now
+			// instead of after a spent iteration.
+			var capabilityEnv []string
+			if strings.TrimSpace(testingContractPath) != "" && cfg.CommandRunner != nil {
+				gated, env, probeErr := preIterationCapabilityGate(cfg, testingContractPath, iterDir, i)
+				if probeErr != nil {
+					return nil, probeErr
+				}
+				if gated != nil {
+					cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), gated.FinalStatus)
+					return gated, nil
+				}
+				capabilityEnv = env
+			}
 			// Build prompt
 			prompt := BuildImplementPrompt(
 				cfg.PlanPath,
@@ -545,6 +564,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if buildErr != nil {
 				return nil, fmt.Errorf("building session for iteration %d: %w", i, buildErr)
 			}
+			// Passing capability probes hand their state to the implementer
+			// (e.g. AGENTICO_BROWSER_STATE_<HOST>) so it never hunts for
+			// credentials itself.
+			env = append(env, capabilityEnv...)
 			// Copy the auto-review snapshot from sessOpts into implBuildOpts
 			// so crash-resume reuses the original values rather than reading
 			// the current (possibly edited) workspace config.
@@ -865,6 +888,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					harnessVerification = ReconstructVerificationOutcome(cached)
 				} else {
 					verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
+					verifyCtx = withConfiguredCapabilityPolicy(verifyCtx, cfg)
 					beginVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, contract, cfg.OnVerificationProgress)
 					verifyCtx = WithVerificationProgress(verifyCtx, func(name, state string) {
 						updateVerificationStatus(cfg.FeatureStore, cfg.Feature.ID, name, state, cfg.OnVerificationProgress)
@@ -942,6 +966,17 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// iteration starts fresh against the just-emitted progress.md
 			// (no reviewer feedback — RETRY is not a rejection).
 			if parsed.State == StateRetry {
+				if gated, gateErr := agentReportedBlockerGate(iterDir, testingContractPath, i); gateErr != nil {
+					return nil, gateErr
+				} else if gated != nil {
+					meta.ReviewStatus = "skipped_need_user_input"
+					meta.AgentStatus = "RETRY"
+					_ = am.WriteMeta(iterDir, meta)
+					_ = am.WriteSummary(summaryPath, meta)
+					consecutiveFailures = 0
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "need_user_input")
+					return gated, nil
+				}
 				madeProgress = pt.ObserveRetryOutcome(retryProgressFingerprints(progressPath, cfg))
 				meta.ReviewStatus = "skipped_retry"
 				meta.AgentStatus = "RETRY"
@@ -1630,7 +1665,7 @@ func prepareImplementationTestingContract(cfg ImplementConfig, planContent strin
 func verificationScopePlanRevisionFeedback(violations []ProtocolViolation) string {
 	var b strings.Builder
 	b.WriteString("## Verification Scope Errors\n\n")
-	b.WriteString("Repair the phase plan's command scopes without changing implementation scope. Multi-repo commands require `[repo: <name>]` and run from that repository root.\n")
+	b.WriteString("Repair the phase plan's verification declarations without changing implementation scope. Multi-repo commands require `[repo: <name>]` and run from that repository root; evidence that reaches an external host must declare the capability that reaches it.\n")
 	for _, violation := range violations {
 		fmt.Fprintf(&b, "\n- %s\n", violation.Reason)
 	}
@@ -2810,4 +2845,106 @@ func isFeatureInterrupted(store ports.FeatureStore, featureID string) bool {
 		return false
 	}
 	return f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed
+}
+
+func withConfiguredCapabilityPolicy(ctx context.Context, cfg ImplementConfig) context.Context {
+	if cfg.CapabilityPolicy == nil {
+		return ctx
+	}
+	return WithCapabilityPolicy(ctx, *cfg.CapabilityPolicy)
+}
+
+// preIterationCapabilityGate probes every declared capability in the bound
+// contract. A planner defect routes to plan revision; a missing capability
+// writes the harness gate into iterDir and returns the need_user_input
+// result; nil means the iteration may start.
+func preIterationCapabilityGate(cfg ImplementConfig, contractPath, iterDir string, iteration int) (*LoopResult, []string, error) {
+	contract, err := ReadTestingContract(contractPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading testing contract for capability probes: %w", err)
+	}
+	hasCapabilities := false
+	for _, item := range contract.Items {
+		if capabilityProbesApply(item) && item.Policy.Required && !IsTestingContractItemWaived(item) {
+			hasCapabilities = true
+			break
+		}
+	}
+	if !hasCapabilities {
+		return nil, nil, nil
+	}
+	var repos []feature.FeatureRepo
+	if cfg.Feature != nil {
+		repos = cfg.Feature.Repos
+		if strings.TrimSpace(cfg.RepoName) != "" {
+			repos = nil
+			for _, repo := range cfg.Feature.Repos {
+				if repo.Name == cfg.RepoName {
+					repos = append(repos, repo)
+				}
+			}
+		}
+	}
+	featureID := ""
+	if cfg.Feature != nil {
+		featureID = cfg.Feature.ID
+	}
+	ctx, cancel := verificationContext(cfg.FeatureStore, featureID)
+	defer cancel()
+	outcome, err := ProbeTestingContractCapabilities(withConfiguredCapabilityPolicy(ctx, cfg), cfg.CommandRunner, contract, contractPath, cfg.WorkDir, repos)
+	if err != nil {
+		return nil, nil, fmt.Errorf("probing testing contract capabilities: %w", err)
+	}
+	if len(outcome.ContractErrors) > 0 {
+		return &LoopResult{
+			FinalStatus:          "plan_revision_required",
+			Iterations:           iteration,
+			PlanRevisionFeedback: VerificationContractPlanRevisionFeedback(outcome.ContractErrors),
+		}, nil, nil
+	}
+	if len(outcome.BlockedItems) == 0 {
+		return nil, outcome.CapabilityEnv, nil
+	}
+	gatePath := NeedUserInputPath(iterDir)
+	rec := SynthesizeVerificationNeedUserInputGateWithContext(contractPath, contract, outcome.Report, outcome.BlockedItems, iteration)
+	if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
+		return nil, nil, fmt.Errorf("persisting pre-iteration capability gate: %w", err)
+	}
+	return &LoopResult{FinalStatus: "need_user_input", Iterations: iteration, LastError: rec.Summary, NeedUserInputPath: gatePath}, nil, nil
+}
+
+// agentReportedBlockerGate routes a RETRY handoff to the user gate when the
+// implementer wrote a valid `agentico report-blocker` artifact into iterDir.
+// An invalid artifact is removed and ignored so a malformed escalation
+// degrades to an ordinary RETRY rather than pausing on a gate the user
+// cannot trust.
+func agentReportedBlockerGate(iterDir, contractPath string, iteration int) (*LoopResult, error) {
+	gatePath := NeedUserInputPath(iterDir)
+	rec, err := ReadNeedUserInputRecord(gatePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading implementer blocker gate: %w", err)
+	}
+	if rec.Source != NeedUserInputSourceAgent {
+		return nil, nil
+	}
+	if strings.TrimSpace(contractPath) == "" {
+		_ = os.Remove(gatePath)
+		return nil, nil
+	}
+	contract, err := ReadTestingContract(contractPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading testing contract for implementer blocker gate: %w", err)
+	}
+	if err := ValidateAgentReportedBlockerGate(rec, contractPath, contract); err != nil {
+		_ = os.Remove(gatePath)
+		return nil, nil
+	}
+	rec.Iteration = iteration
+	if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
+		return nil, fmt.Errorf("persisting implementer blocker gate: %w", err)
+	}
+	return &LoopResult{FinalStatus: "need_user_input", Iterations: iteration, LastError: rec.Summary, NeedUserInputPath: gatePath}, nil
 }

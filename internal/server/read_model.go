@@ -97,16 +97,19 @@ const (
 	actionMerge          = "merge"
 	actionNeedUserInput  = "need-user-input"
 	actionNeedInputDraft = "need-user-input-draft"
-	actionPauseStop      = "pause-stop"
-	actionPublish        = "publish"
-	actionRebase         = "rebase"
-	actionRefactor       = "refactor"
-	actionRestart        = "restart"
-	actionResume         = "resume"
-	actionSetup          = "setup"
-	actionStart          = "start"
-	actionRetry          = "retry"
-	actionRewind         = "rewind"
+	// actionTestingContractWaive records user-authorized waivers on the
+	// current phase's testing contract outside the verification gate.
+	actionTestingContractWaive = "testing-contract-waive"
+	actionPauseStop            = "pause-stop"
+	actionPublish              = "publish"
+	actionRebase               = "rebase"
+	actionRefactor             = "refactor"
+	actionRestart              = "restart"
+	actionResume               = "resume"
+	actionSetup                = "setup"
+	actionStart                = "start"
+	actionRetry                = "retry"
+	actionRewind               = "rewind"
 )
 
 func revisionForAny(v any) string {
@@ -1790,11 +1793,11 @@ func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inpu
 				),
 			})
 		}
-		seenActions := make(map[NeedUserInputVerificationAction]struct{}, 2)
+		seenActions := make(map[NeedUserInputVerificationAction]struct{}, 3)
 		for _, action := range rec.VerificationDecision.AllowedActions {
 			normalized := strings.ToUpper(strings.TrimSpace(action))
 			switch normalized {
-			case agent.NeedUserVerificationWaive, agent.NeedUserVerificationRetryAfterAuth:
+			case agent.NeedUserVerificationWaive, agent.NeedUserVerificationRetryAfterAuth, agent.NeedUserVerificationAllowSubstitute:
 				candidate := NeedUserInputVerificationAction(normalized)
 				if _, exists := seenActions[candidate]; !exists {
 					seenActions[candidate] = struct{}{}

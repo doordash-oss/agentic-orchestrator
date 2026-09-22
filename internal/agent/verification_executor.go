@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,6 +64,9 @@ type VerificationExecutionOutcome struct {
 	RegressionItems []string
 	InheritedItems  []string
 	ContractErrors  []VerificationContractError
+	// CapabilityEnv carries values exported by passing built-in probes (for
+	// example the browser storage-state path) for the implementer session.
+	CapabilityEnv []string
 }
 
 // VerificationContractError is a planner-authored command defect. It is kept
@@ -189,7 +193,21 @@ func ExecuteTestingContract(
 			continue
 		}
 		if item.Owner == TestingContractOwnerAgent {
-			report.Results[idx] = finalizeAgentOwnedEvidence(item, iterationDir)
+			result := finalizeAgentOwnedEvidence(item, iterationDir)
+			if result.Status != VerificationStatusPassed && capabilityProbesApply(item) {
+				// Missing agent evidence behind an unavailable capability is
+				// an environment block the user resolves, not an implementer
+				// defect. Probes run without a repo cwd: agent-owned items
+				// declare registry capabilities or cwd-independent probes.
+				probe, probeErr := probeItemCapabilities(ctx, runner, contractPath, out, report, idx, item, "", nil)
+				if probeErr != nil {
+					return nil, probeErr
+				}
+				if probe.blocked {
+					continue
+				}
+			}
+			report.Results[idx] = result
 			continue
 		}
 		if item.Run == nil || strings.TrimSpace(item.Run.Shell) == "" {
@@ -234,55 +252,14 @@ func ExecuteTestingContract(
 			continue
 		}
 
-		blocked := false
-		for _, capability := range item.Capabilities {
-			probe := strings.TrimSpace(capability.Probe)
-			if probe == "" {
-				continue
-			}
-			if reason, preflightErr := preflightVerificationShell(ctx, runner, probe, cwd); preflightErr != nil {
-				return nil, fmt.Errorf("preflight capability probe for verification item %s: %w", item.ID, preflightErr)
-			} else if reason != "" {
-				recordVerificationContractError(out, report, idx, item, cwd,
-					"invalid capability probe: "+strings.TrimPrefix(reason, "invalid verification shell syntax: "),
-					"Fix the capability probe in the phase plan before verification runs.")
-				blocked = true
-				break
-			}
-			run, runErr := captureVerificationCommand(ctx, runner, item.ID, "capability", probe, cwd, "30s", writableRoots, true, nil)
-			if runErr != nil {
-				var exitCoder interface{ ExitCode() int }
-				if !errors.As(runErr, &exitCoder) && !errors.Is(runErr, context.DeadlineExceeded) {
-					recordVerificationContractError(out, report, idx, item, cwd,
-						"capability probe shell failed to start: "+runErr.Error(),
-						"Fix the capability probe in the phase plan before verification runs.")
-					blocked = true
-					break
-				}
-			}
-			if runErr == nil {
-				run.record.Classification = "capability_available"
-			} else {
-				run.record.Classification = VerificationClassificationMissingCapability
-			}
-			if persistErr := persistVerificationRun(contractPath, item.ID, &run); persistErr != nil {
-				return nil, persistErr
-			}
-			if runErr != nil {
-				name := strings.TrimSpace(capability.Name)
-				if name == "" {
-					name = probe
-				}
-				report.Results[idx] = machineContractResult(item, VerificationStatusBlocked, run,
-					fmt.Sprintf("missing declared capability %q", name))
-				out.BlockedItems = append(out.BlockedItems, item.ID)
-				blocked = true
-				break
-			}
+		probe, probeErr := probeItemCapabilities(ctx, runner, contractPath, out, report, idx, item, cwd, writableRoots)
+		if probeErr != nil {
+			return nil, probeErr
 		}
-		if blocked {
+		if probe.blocked {
 			continue
 		}
+		itemEnv = append(itemEnv, probe.env...)
 
 		runSandboxed := !unsandboxedItems[item.ID]
 		candidate, candidateErr := captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed, itemEnv)
@@ -1354,4 +1331,173 @@ func safeEvidenceComponent(value string) string {
 		return "unknown"
 	}
 	return value
+}
+
+// capabilityProbesApply reports whether an item's declared capabilities gate
+// it. Agent-owned evidence with user-authorized substitution no longer needs
+// the third-party capability: the implementer produces the substitute.
+func capabilityProbesApply(item TestingContractItem) bool {
+	if len(item.Capabilities) == 0 {
+		return false
+	}
+	if item.Owner == TestingContractOwnerAgent && item.Policy.AllowSubstitution {
+		return false
+	}
+	return true
+}
+
+// capabilityProbeOutcome summarises one item's capability probes.
+type capabilityProbeOutcome struct {
+	// blocked is true when a probe failed (result recorded) or a probe was a
+	// contract error (recorded); the item must not run.
+	blocked bool
+	// env carries values built-in capabilities export to the checked command.
+	env []string
+}
+
+// probeItemCapabilities runs every declared capability probe for item in
+// order and stops at the first failure. Shell probes execute through the
+// runner in cwd; registry probes run in-process. Failures are recorded on the
+// report and outcome exactly as the inline executor did.
+func probeItemCapabilities(ctx context.Context, runner ports.CommandRunner, contractPath string, out *VerificationExecutionOutcome, report *VerificationReport, idx int, item TestingContractItem, cwd string, writableRoots []string) (capabilityProbeOutcome, error) {
+	var outcome capabilityProbeOutcome
+	for _, capability := range item.Capabilities {
+		name := strings.TrimSpace(capability.Name)
+		if registry := strings.TrimSpace(capability.Registry); registry != "" {
+			if err := ValidateRegistryCapability(registry, capability.Arg); err != nil {
+				recordVerificationContractError(out, report, idx, item, cwd, "invalid capability declaration: "+err.Error(),
+					"Declare a built-in capability such as authenticated-browser(host), display, docker, or network(host), or add an explicit probe command in the phase plan.")
+				outcome.blocked = true
+				return outcome, nil
+			}
+			started := time.Now().UTC()
+			result := RunRegistryCapabilityProbe(ctx, registry, capability.Arg)
+			run := capturedVerificationRun{record: verificationRunRecord{
+				ItemID: item.ID, Kind: "capability", Command: "agentico capability-probe " + name, Cwd: cwd,
+				StartedAt: started, Duration: time.Since(started).String(),
+			}}
+			if result.Available {
+				run.record.Classification = "capability_available"
+				run.stdout = "capability available"
+			} else {
+				run.record.ExitCode = 1
+				run.record.Classification = VerificationClassificationMissingCapability
+				run.stderr = result.Reason
+			}
+			if strings.TrimSpace(contractPath) != "" {
+				if err := persistVerificationRun(contractPath, item.ID, &run); err != nil {
+					return outcome, err
+				}
+			}
+			if !result.Available {
+				report.Results[idx] = machineContractResult(item, VerificationStatusBlocked, run,
+					fmt.Sprintf("missing declared capability %q: %s", name, result.Reason))
+				out.BlockedItems = append(out.BlockedItems, item.ID)
+				outcome.blocked = true
+				return outcome, nil
+			}
+			outcome.env = append(outcome.env, result.Env...)
+			continue
+		}
+		probe := strings.TrimSpace(capability.Probe)
+		if probe == "" {
+			continue
+		}
+		if reason, preflightErr := preflightVerificationShell(ctx, runner, probe, cwd); preflightErr != nil {
+			return outcome, fmt.Errorf("preflight capability probe for verification item %s: %w", item.ID, preflightErr)
+		} else if reason != "" {
+			recordVerificationContractError(out, report, idx, item, cwd,
+				"invalid capability probe: "+strings.TrimPrefix(reason, "invalid verification shell syntax: "),
+				"Fix the capability probe in the phase plan before verification runs.")
+			outcome.blocked = true
+			return outcome, nil
+		}
+		run, runErr := captureVerificationCommand(ctx, runner, item.ID, "capability", probe, cwd, "30s", writableRoots, true, nil)
+		if runErr != nil {
+			var exitCoder interface{ ExitCode() int }
+			if !errors.As(runErr, &exitCoder) && !errors.Is(runErr, context.DeadlineExceeded) {
+				recordVerificationContractError(out, report, idx, item, cwd,
+					"capability probe shell failed to start: "+runErr.Error(),
+					"Fix the capability probe in the phase plan before verification runs.")
+				outcome.blocked = true
+				return outcome, nil
+			}
+		}
+		if runErr == nil {
+			run.record.Classification = "capability_available"
+		} else {
+			run.record.Classification = VerificationClassificationMissingCapability
+		}
+		if strings.TrimSpace(contractPath) != "" {
+			if persistErr := persistVerificationRun(contractPath, item.ID, &run); persistErr != nil {
+				return outcome, persistErr
+			}
+		}
+		if runErr != nil {
+			if name == "" {
+				name = probe
+			}
+			report.Results[idx] = machineContractResult(item, VerificationStatusBlocked, run,
+				fmt.Sprintf("missing declared capability %q", name))
+			out.BlockedItems = append(out.BlockedItems, item.ID)
+			outcome.blocked = true
+			return outcome, nil
+		}
+	}
+	return outcome, nil
+}
+
+// ProbeTestingContractCapabilities runs only the capability probes of every
+// required, non-waived item before an implementation iteration starts. It
+// lets the loop open the user gate up front instead of after the implementer
+// has spent an iteration discovering the environment cannot produce the
+// evidence. The returned outcome carries BlockedItems, ContractErrors, and a
+// report holding one result per probed item.
+func ProbeTestingContractCapabilities(
+	ctx context.Context,
+	runner ports.CommandRunner,
+	contract *TestingContract,
+	contractPath string,
+	workspaceDir string,
+	repos []feature.FeatureRepo,
+) (*VerificationExecutionOutcome, error) {
+	if contract == nil {
+		return nil, errors.New("probing testing contract capabilities: contract is nil")
+	}
+	report := BuildContractVerificationReportStub(contract, contractPath)
+	out := &VerificationExecutionOutcome{Report: &report}
+	for idx, item := range contract.Items {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("probing testing contract capabilities: %w", ctxErr)
+		}
+		if !capabilityProbesApply(item) || !item.Policy.Required || IsTestingContractItemWaived(item) {
+			continue
+		}
+		cwd := ""
+		var writableRoots []string
+		if item.Owner == TestingContractOwnerHarness && item.Run != nil && strings.TrimSpace(item.Run.Shell) != "" {
+			_, workDir, workDirErr := verificationItemWorkDir(item, workspaceDir, repos)
+			if workDirErr != nil {
+				recordVerificationContractError(out, &report, idx, item, "", workDirErr.Error(), "Tag the item with one repository from the feature scope.")
+				continue
+			}
+			resolved, err := resolveVerificationCwd(workDir, item.Run.Cwd)
+			if err != nil {
+				recordVerificationContractError(out, &report, idx, item, workDir, err.Error(), "Use a cwd relative to the tagged repository root.")
+				continue
+			}
+			cwd = resolved
+			writableRoots = verificationWritableRoots(itemWritableWorkRoots(item, workDir, repos)...)
+		}
+		probe, err := probeItemCapabilities(ctx, runner, contractPath, out, &report, idx, item, cwd, writableRoots)
+		if err != nil {
+			return nil, err
+		}
+		for _, kv := range probe.env {
+			if !slices.Contains(out.CapabilityEnv, kv) {
+				out.CapabilityEnv = append(out.CapabilityEnv, kv)
+			}
+		}
+	}
+	return out, nil
 }

@@ -39,6 +39,7 @@ import {
   ServerRepoStatusSchema,
   ServerSetupSchema,
   ServerSetupTaskSchema,
+  TestingContractResponseSchema,
 } from './parse';
 import { CanonicalErrorException, type CanonicalError } from '../errors';
 import { MAX_PAYLOAD_BYTES } from '../sanitize';
@@ -560,6 +561,56 @@ function failure(fn: () => unknown): CanonicalError {
   throw new Error('expected parse to fail closed');
 }
 
+describe('testing contract response contract', () => {
+  const row = {
+    item_id: 'deploy-smoke',
+    source: 'plan',
+    owner: 'harness',
+    name: 'Deployment smoke test',
+    command: 'make smoke',
+    required: true,
+    allow_substitution: false,
+    allow_blocked: false,
+    allow_waiver: true,
+    capabilities: ['network'],
+  };
+  const response = {
+    api_version: 'v1',
+    feature_id: 'abcd1234ef567890',
+    active_run: 1,
+    roadmap_phase: 2,
+    revision: 3,
+    items: [row, { ...row, item_id: 'manual', disposition: { status: 'waived', reason: 'r' } }],
+  };
+
+  it('accepts rows with and without a recorded disposition', () => {
+    const parsed = TestingContractResponseSchema.parse(response);
+    expect(parsed.items).toHaveLength(2);
+    expect(parsed.items[1]?.disposition).toEqual({ status: 'waived', reason: 'r' });
+  });
+
+  it('rejects missing policy flags, a zero phase or run, and disposition without status', () => {
+    const { allow_waiver: _omitted, ...noFlag } = row;
+    expect(TestingContractResponseSchema.safeParse({ ...response, items: [noFlag] }).success).toBe(
+      false,
+    );
+    expect(TestingContractResponseSchema.safeParse({ ...response, roadmap_phase: 0 }).success).toBe(
+      false,
+    );
+    expect(TestingContractResponseSchema.safeParse({ ...response, active_run: 0 }).success).toBe(
+      false,
+    );
+    const { active_run: _noRun, ...withoutRun } = response;
+    expect(TestingContractResponseSchema.safeParse(withoutRun).success).toBe(false);
+    expect(
+      TestingContractResponseSchema.safeParse({
+        ...response,
+        items: [{ ...row, disposition: { reason: 'r' } }],
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe('parseServerJson', () => {
   it('parses a well-formed health response', () => {
     const parsed = parseServerJson(JSON.stringify(healthFixture), HealthResponseSchema);
@@ -666,6 +717,27 @@ describe('parseServerJson', () => {
       'WAIVE',
       'x'.repeat(50),
     ]);
+
+    promptFixture.need_user_inputs[0]!.verification.allowed_actions = [
+      'WAIVE',
+      'RETRY_AFTER_AUTH',
+      'ALLOW_SUBSTITUTE',
+    ];
+    expect(
+      parseServerJson(JSON.stringify(promptFixture), PromptSnapshotResponseSchema)
+        .need_user_inputs[0]?.verification?.allowed_actions,
+    ).toHaveLength(3);
+
+    promptFixture.need_user_inputs[0]!.verification.allowed_actions = [
+      'WAIVE',
+      'RETRY_AFTER_AUTH',
+      'ALLOW_SUBSTITUTE',
+      'EXTRA',
+    ];
+    expect(
+      failure(() => parseServerJson(JSON.stringify(promptFixture), PromptSnapshotResponseSchema))
+        .code,
+    ).toBe('E_SCHEMA_MISMATCH');
 
     promptFixture.need_user_inputs[0]!.verification.allowed_actions = ['x'.repeat(51)];
     expect(

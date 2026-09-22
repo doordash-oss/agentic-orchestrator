@@ -189,7 +189,7 @@ const ServerNeedUserInputVerificationBlockerSchema = z.object({
 });
 const ServerNeedUserInputVerificationSchema = z.object({
   blockers: z.array(ServerNeedUserInputVerificationBlockerSchema).max(100),
-  allowed_actions: z.array(z.string().max(50)).max(2),
+  allowed_actions: z.array(z.string().max(50)).max(3),
 });
 export const ServerNeedUserInputGateSchema = z.object({
   feature_id: AttentionIDSchema.optional(),
@@ -1120,6 +1120,38 @@ export const FeatureDetailResponseSchema = z.object({
 
 export type FeatureDetailResponse = z.output<typeof FeatureDetailResponseSchema>;
 
+// --- Testing contract (GET /features/{id}/testing-contract) ----------------
+
+export const ServerTestingContractDispositionSchema = z.object({
+  status: z.string().min(1).max(100),
+  reason: z.string().max(2000).optional(),
+  changed_by: z.string().max(200).optional(),
+});
+export const ServerTestingContractItemSchema = z.object({
+  item_id: AttentionIDSchema,
+  source: z.string().min(1).max(100),
+  owner: z.string().min(1).max(100),
+  repo: z.string().max(500).optional(),
+  name: AttentionTextSchema,
+  command: AttentionTextSchema,
+  required: z.boolean(),
+  allow_substitution: z.boolean(),
+  allow_blocked: z.boolean(),
+  allow_waiver: z.boolean(),
+  disposition: ServerTestingContractDispositionSchema.optional(),
+  capabilities: z.array(z.string().max(500)).max(20),
+});
+export type ServerTestingContractItem = z.output<typeof ServerTestingContractItemSchema>;
+export const TestingContractResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: AttentionIDSchema,
+  active_run: z.number().int().positive(),
+  roadmap_phase: z.number().int().positive(),
+  revision: z.number().int().positive(),
+  items: z.array(ServerTestingContractItemSchema).max(500),
+});
+export type TestingContractResponse = z.output<typeof TestingContractResponseSchema>;
+
 // --- Run listing (GET /runs, GET /runs/{n}, GET /runs/{n}/sessions) --------
 
 export const ServerRunSummarySchema = z.object({
@@ -1696,6 +1728,9 @@ void _runtimeConfigSubset;
 type FeatureListDTO = components['schemas']['FeatureListResponse'];
 const _featureListSubset = (value: FeatureListDTO): FeatureListResponse => value;
 void _featureListSubset;
+type TestingContractDTO = components['schemas']['TestingContractResponse'];
+const _testingContractSubset = (value: TestingContractDTO): TestingContractResponse => value;
+void _testingContractSubset;
 type FeatureDetailResponseDTO = components['schemas']['FeatureDetailResponse'];
 const _featureDetailSubset = (value: FeatureDetailResponseDTO): FeatureDetailResponse => value;
 void _featureDetailSubset;

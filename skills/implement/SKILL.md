@@ -48,7 +48,7 @@ For every testing-contract item with `owner: agent`, write the file named by `ex
 - `visual_artifact`: the actual image at the specified `screenshots/` path.
 - `behavioral_artifact`: one actual trace, recording, or interaction log covering the contract's consolidated primary-journey checklist at the specified `behaviors/` path.
 
-Do not write evidence for `owner: harness` items. Do not invent statuses, counts, transcripts, or waiver claims. If required evidence needs unavailable authorization, hardware, a human judgment, or an external environment, call the formal AskUserQuestion control and name the missing capability. Never create placeholder evidence.
+Do not write evidence for `owner: harness` items. Do not invent statuses, counts, transcripts, or waiver claims. If required evidence needs authorization, hardware, or an environment this session lacks, run `"$AGENTICO_BIN" report-blocker --contract "{testing_contract_path}" --dir "{iteration_dir}" --items <id,id,...> --capability <name> --reason <text>` with the affected contract item ids, then end the iteration with `RETRY`; the harness pauses on the user gate, which owns waivers and substitutions. A row with `allow_substitution: true` accepts a faithful, labelled substitute. Never create placeholder evidence.
 
 ## Handoff
 
@@ -97,4 +97,4 @@ Choose exactly one state:
 
 - `SUCCESS`: implementation, acceptance criteria, development tests, due deferrals, and all `owner: agent` evidence are complete. When a testing contract exists, the harness performs final contract verification next; otherwise your reported automated-verification runs are the record.
 - `RETRY`: useful implementation progress landed and a concrete in-scope next action is possible in the current environment.
-Never emit `RETRY` for a blocker you cannot act on in this environment (missing credentials, absent hardware, or a human decision): the harness re-dispatches `RETRY` iterations unchanged. Call the formal AskUserQuestion control instead, and resume the same iteration after the answer.
+Never emit a bare `RETRY` for a blocker you cannot act on in this environment (missing credentials, absent hardware): the harness re-dispatches `RETRY` iterations unchanged. Record the blocker with `report-blocker` first, or call the formal AskUserQuestion control for a human decision and resume the same iteration after the answer.

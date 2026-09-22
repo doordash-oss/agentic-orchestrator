@@ -71,8 +71,12 @@ type TestingContractRun struct {
 // executed before Run; a non-zero probe result is a capability block rather
 // than an implementation failure.
 type TestingContractCapability struct {
-	Name      string `yaml:"name"`
-	Probe     string `yaml:"probe"`
+	Name  string `yaml:"name"`
+	Probe string `yaml:"probe,omitempty"`
+	// Registry names a built-in probe (see capability_registry.go) that runs
+	// in-process instead of Probe. Arg is its parenthesised argument.
+	Registry  string `yaml:"registry,omitempty"`
+	Arg       string `yaml:"arg,omitempty"`
 	OnMissing string `yaml:"on_missing,omitempty"`
 }
 
@@ -129,10 +133,11 @@ type TestingContractItem struct {
 }
 
 const (
-	TestingContractChangeWaive       = "waive"
-	TestingContractDispositionWaived = "waived"
-	TestingContractOwnerHarness      = "harness"
-	TestingContractOwnerAgent        = "agent"
+	TestingContractChangeWaive             = "waive"
+	TestingContractChangeAllowSubstitution = "allow_substitution"
+	TestingContractDispositionWaived       = "waived"
+	TestingContractOwnerHarness            = "harness"
+	TestingContractOwnerAgent              = "agent"
 )
 
 func CompileTestingContract(planText, planPath, phaseType string) TestingContract {
@@ -161,7 +166,7 @@ func CompileTestingContract(planText, planPath, phaseType string) TestingContrac
 			Name:         name,
 			Command:      command,
 			Run:          testingContractRunFor(source, command, step.Timeout),
-			Capabilities: testingContractCapabilitiesFor(step),
+			Capabilities: testingContractCapabilitiesFor(step.Capabilities),
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    testingContractEvidenceKind,
 				Matcher: testingContractEvidenceMatcher,
@@ -180,10 +185,11 @@ func CompileTestingContract(planText, planPath, phaseType string) TestingContrac
 		}
 		seen[command] = true
 		contract.Items = append(contract.Items, TestingContractItem{
-			ID:      testingContractItemID(testingContractManualSource, command),
-			Source:  testingContractManualSource,
-			Name:    description,
-			Command: command,
+			ID:           testingContractItemID(testingContractManualSource, command),
+			Source:       testingContractManualSource,
+			Name:         description,
+			Command:      command,
+			Capabilities: testingContractCapabilitiesFor(step.Capabilities),
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    testingContractManualKind,
 				Matcher: testingContractManualMatcher,
@@ -203,10 +209,11 @@ func CompileTestingContract(planText, planPath, phaseType string) TestingContrac
 		}
 		seen[key] = true
 		item := TestingContractItem{
-			ID:      testingContractItemID(source, command),
-			Source:  source,
-			Name:    description,
-			Command: command,
+			ID:           testingContractItemID(source, command),
+			Source:       source,
+			Name:         description,
+			Command:      command,
+			Capabilities: testingContractCapabilitiesFor(step.Capabilities),
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    kind,
 				Matcher: testingContractEvidenceFileExistsMatcher,
@@ -277,8 +284,16 @@ func ReviseTestingContract(contract *TestingContract, changes []TestingContractC
 			return nil, fmt.Errorf("revising testing contract: changed_by is required for %q", itemID)
 		}
 		action := strings.ToLower(strings.TrimSpace(change.Action))
-		if action != "" && action != TestingContractChangeWaive {
+		if action != "" && action != TestingContractChangeWaive && action != TestingContractChangeAllowSubstitution {
 			return nil, fmt.Errorf("revising testing contract: unsupported action %q for %q", action, itemID)
+		}
+		if action == TestingContractChangeAllowSubstitution {
+			// Substitution policy is user-owned for the same reason waivers
+			// are: it relaxes what counts as evidence.
+			if !strings.EqualFold(strings.TrimSpace(change.ChangedBy), "user") {
+				return nil, fmt.Errorf("revising testing contract: allow_substitution for %q requires changed_by \"user\", got %q", itemID, strings.TrimSpace(change.ChangedBy))
+			}
+			revised.Items[testingContractItemIndex(revised.Items, itemID)].Policy.AllowSubstitution = true
 		}
 		if action == TestingContractChangeWaive {
 			// The executor only honors user-authorized waivers; recording any
@@ -356,6 +371,7 @@ func ReconcileTestingContract(existing *TestingContract, fresh TestingContract) 
 		if oldIdx := testingContractItemIndex(existing.Items, merged.Items[i].ID); oldIdx >= 0 {
 			if testingContractItemDefinitionEqual(existing.Items[oldIdx], merged.Items[i]) {
 				merged.Items[i].Disposition = existing.Items[oldIdx].Disposition
+				merged.Items[i].Policy.AllowSubstitution = existing.Items[oldIdx].Policy.AllowSubstitution
 				unchangedIDs[merged.Items[i].ID] = true
 			}
 		}
@@ -384,9 +400,13 @@ func testingContractDefinitionsEqual(a, b []TestingContractItem) bool {
 	return true
 }
 
+// testingContractItemDefinitionEqual ignores the user-owned amendments
+// (disposition, substitution policy) so they survive plan regeneration.
 func testingContractItemDefinitionEqual(left, right TestingContractItem) bool {
 	left.Disposition = TestingContractItemDisposition{}
 	right.Disposition = TestingContractItemDisposition{}
+	left.Policy.AllowSubstitution = false
+	right.Policy.AllowSubstitution = false
 	leftYAML, _ := yaml.Marshal(left)
 	rightYAML, _ := yaml.Marshal(right)
 	return string(leftYAML) == string(rightYAML)
@@ -410,11 +430,21 @@ func WriteTestingContract(path string, contract TestingContract) error {
 	// next iteration to re-anchor at post-change HEAD. The contract is
 	// read-only on disk (each generation writes a fresh temp file), so casual
 	// edits fail; the permission layer denies agent writes outright.
-	tmp := path + ".tmp"
-	if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
+	tmpFile, err := os.CreateTemp(filepath.Dir(path), ".testing-contract-*.tmp")
+	if err != nil {
 		return fmt.Errorf("writing testing contract: %w", err)
 	}
-	if err := os.WriteFile(tmp, data, 0o444); err != nil {
+	tmp := tmpFile.Name()
+	defer os.Remove(tmp)
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("writing testing contract: %w", err)
+	}
+	if err := tmpFile.Chmod(0o444); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("writing testing contract: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("writing testing contract: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -548,7 +578,7 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 			Name:         name,
 			Command:      command,
 			Run:          testingContractRunFor(source, command, step.Timeout),
-			Capabilities: testingContractCapabilitiesFor(step),
+			Capabilities: testingContractCapabilitiesFor(step.Capabilities),
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    testingContractEvidenceKind,
 				Matcher: testingContractEvidenceMatcher,
@@ -568,11 +598,12 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		}
 		seen[key] = true
 		contract.Items = append(contract.Items, TestingContractItem{
-			ID:      testingContractItemIDWithRepo(testingContractManualSource, repo, command),
-			Source:  testingContractManualSource,
-			Repo:    repo,
-			Name:    description,
-			Command: command,
+			ID:           testingContractItemIDWithRepo(testingContractManualSource, repo, command),
+			Source:       testingContractManualSource,
+			Repo:         repo,
+			Name:         description,
+			Command:      command,
+			Capabilities: testingContractCapabilitiesFor(step.Capabilities),
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    testingContractManualKind,
 				Matcher: testingContractManualMatcher,
@@ -592,11 +623,12 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		}
 		seen[key] = true
 		item := TestingContractItem{
-			ID:      testingContractItemIDWithRepo(source, repo, command),
-			Source:  source,
-			Repo:    repo,
-			Name:    description,
-			Command: command,
+			ID:           testingContractItemIDWithRepo(source, repo, command),
+			Source:       source,
+			Repo:         repo,
+			Name:         description,
+			Command:      command,
+			Capabilities: testingContractCapabilitiesFor(step.Capabilities),
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    kind,
 				Matcher: testingContractEvidenceFileExistsMatcher,
@@ -791,7 +823,11 @@ func consolidatedManualVerification(steps []ManualVerificationStep) (ManualVerif
 	if !ok {
 		return ManualVerificationStep{}, false
 	}
-	return ManualVerificationStep{Description: description}, true
+	var capabilities []VerificationCapability
+	for _, step := range steps {
+		capabilities = append(capabilities, step.Capabilities...)
+	}
+	return ManualVerificationStep{Description: description, Capabilities: capabilities}, true
 }
 
 func evidenceStepsHaveCommands(steps []EvidenceRequirement) bool {
@@ -821,7 +857,11 @@ func consolidatedBehavioralEvidence(steps []EvidenceRequirement) (EvidenceRequir
 		descriptions = append(descriptions, step.Description)
 	}
 	description, _ := consolidatedChecklist("Capture one phase behavioral evidence bundle covering:", descriptions)
-	return EvidenceRequirement{Description: description}, true
+	var capabilities []VerificationCapability
+	for _, step := range clean {
+		capabilities = append(capabilities, step.Capabilities...)
+	}
+	return EvidenceRequirement{Description: description, Capabilities: capabilities}, true
 }
 
 func consolidatedChecklist(title string, descriptions []string) (string, bool) {
@@ -949,13 +989,32 @@ func testingContractRequiresCommandRunner(contract *TestingContract) bool {
 	return false
 }
 
-func testingContractCapabilitiesFor(step VerificationStep) []TestingContractCapability {
-	if len(step.Capabilities) == 0 {
+// testingContractCapabilitiesFor compiles plan capability declarations. A
+// declaration without a probe resolves against the built-in registry; the
+// executor reports unknown registry names as contract errors so a planner
+// typo never turns into a user-facing waiver prompt.
+func testingContractCapabilitiesFor(declared []VerificationCapability) []TestingContractCapability {
+	if len(declared) == 0 {
 		return nil
 	}
-	out := make([]TestingContractCapability, 0, len(step.Capabilities))
-	for _, capability := range step.Capabilities {
-		out = append(out, TestingContractCapability{Name: capability.Name, Probe: capability.Probe, OnMissing: "need_user_input"})
+	out := make([]TestingContractCapability, 0, len(declared))
+	seen := make(map[string]bool, len(declared))
+	for _, capability := range declared {
+		name := strings.TrimSpace(capability.Name)
+		probe := strings.TrimSpace(capability.Probe)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		compiled := TestingContractCapability{Name: name, Probe: probe, OnMissing: "need_user_input"}
+		if probe == "" {
+			registry, arg, ok := ParseCapabilityName(name)
+			if !ok {
+				registry = name
+			}
+			compiled.Registry, compiled.Arg = registry, arg
+		}
+		out = append(out, compiled)
 	}
 	return out
 }

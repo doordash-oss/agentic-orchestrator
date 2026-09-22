@@ -2503,8 +2503,9 @@ func TestImplementLoopHarnessCapabilityPauseKeepsSameIteration(t *testing.T) {
 	if result.FinalStatus != "need_user_input" || result.Iterations != 1 {
 		t.Fatalf("result = %+v, want same-iteration need_user_input", result)
 	}
-	if len(*captured) != 1 {
-		t.Fatalf("BuildSession calls = %d, want implementer only (no reviewer)", len(*captured))
+	// The pre-iteration probe gates before any session is spent.
+	if len(*captured) != 0 {
+		t.Fatalf("BuildSession calls = %d, want none before the capability gate", len(*captured))
 	}
 	iterDir := filepath.Join(artifactDir, "iteration-01")
 	if _, err := os.Stat(filepath.Join(iterDir, "meta.yaml")); !os.IsNotExist(err) {
@@ -2539,7 +2540,85 @@ func TestImplementLoopHarnessCapabilityPauseKeepsSameIteration(t *testing.T) {
 	}
 	axes := implementationReviewAxesForGate(implementationReviewGatePerPhase, implementationReviewAxisSelection{Profile: f.EffectivePipeline()})
 	if len(*captured) != 1+len(axes) {
-		t.Fatalf("BuildSession calls after resume = %d, want one implementer + %d review axes (no second implementer)", len(*captured), len(axes))
+		t.Fatalf("BuildSession calls after resume = %d, want one implementer + %d review axes", len(*captured), len(axes))
+	}
+}
+
+// TestImplementLoopPostHandoffCapabilityLossGatesSameIteration covers the
+// second probe pass: a capability that is present when the iteration starts
+// but gone by post-handoff verification still opens the gate on the same
+// iteration, after the implementer session ran.
+func TestImplementLoopPostHandoffCapabilityLossGatesSameIteration(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-capability-loss")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := NewExecCommandRunner()
+	runVerificationTestCommand(t, runner, workDir, "git init -q")
+	runVerificationTestCommand(t, runner, workDir, "git config user.email test@example.com")
+	runVerificationTestCommand(t, runner, workDir, "git config user.name Test")
+	runVerificationTestCommand(t, runner, workDir, "git commit --allow-empty -qm base")
+
+	// The probe passes while the token exists; the implementer session
+	// removes it, so only the post-handoff pass sees the loss.
+	authToken := filepath.Join(tmpDir, "auth-token")
+	if err := os.WriteFile(authToken, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	planPath := filepath.Join(artifactDir, "plan.md")
+	plan := "### Automated Verification\n- [ ] Protected [agentico capability: Auth token; probe: test -f " + authToken + "]: `printf protected`\n"
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\nrm -f "+authToken+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	f := &feature.Feature{
+		ID: "test-capability-loss", Name: "Capability Loss", Slug: "capability-loss",
+		Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement, CurrentRoadmapPhase: 1,
+		Repos: []feature.FeatureRepo{{Name: "repo", Path: workDir, WorktreePath: workDir}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	buildSession, captured := capturingBuildSession(agentScript, reviewScript)
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := ImplementConfig{
+		Feature: f, FeatureStore: store, WorkDir: workDir, PlanPath: planPath,
+		MaxIterations: 1, MaxConsecFails: 3, MaxConsecNoProgress: 3,
+		Model: "opus", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
+		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
+		SkipIterationReview: true, PhaseType: "collapsed",
+	}
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != "need_user_input" || result.Iterations != 1 {
+		t.Fatalf("result = %+v, want same-iteration need_user_input", result)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("BuildSession calls = %d, want the implementer to have run before the post-handoff gate", len(*captured))
+	}
+	reportPath := filepath.Join(filepath.Dir(result.NeedUserInputPath), "verification-report.yaml")
+	report, err := ReadVerificationReport(reportPath)
+	if err != nil {
+		t.Fatalf("expected blocked verification report at %s: %v", reportPath, err)
+	}
+	if !verificationReportHasBlockedResults(report) {
+		t.Fatalf("post-handoff report = %+v, want blocked result", report)
 	}
 }
 
@@ -2603,9 +2682,11 @@ func TestImplementLoopRetryAfterAuthReexecutesVerification(t *testing.T) {
 	if result.FinalStatus != "need_user_input" || result.Iterations != 1 {
 		t.Fatalf("result = %+v, want same-iteration need_user_input", result)
 	}
+	// The pre-iteration probe gates before the implementer runs, so no
+	// verification report exists yet; RETRY_AFTER_AUTH must tolerate that.
 	reportPath := filepath.Join(filepath.Dir(result.NeedUserInputPath), "verification-report.yaml")
-	if _, err := os.Stat(reportPath); err != nil {
-		t.Fatalf("expected blocked verification report at %s: %v", reportPath, err)
+	if _, err := os.Stat(reportPath); !os.IsNotExist(err) {
+		t.Fatalf("unexpected verification report before the implementer ran: %v", err)
 	}
 
 	rec, err := ReadNeedUserInputRecord(result.NeedUserInputPath)

@@ -43,6 +43,7 @@ type problemsEvidenceEntry struct {
 
 func TestSlackProblemsEvidence(t *testing.T) {
 	const secondSecret = "xoxp-PROBLEMS-EVIDENCE-987654321"
+	const digestSecret = "PROBLEMS_DIGEST_SECRET"
 
 	harness := newNotifierHarness(t, defaultTestSettings(testToken, testRecipients()...))
 	harness.seedFeature("F-1", func(f *feature.Feature) {
@@ -239,8 +240,17 @@ func TestSlackProblemsEvidence(t *testing.T) {
 	waitForProblemsEvidenceUpdate(t, harness, updatesBefore, "*Status:* Planning")
 	assertProblemsEvidencePostCount(t, harness, 17)
 
+	harness.feed(ports.Event{
+		Type:      ports.FeatureFailed,
+		FeatureID: "F-1",
+		Message: "fallback repository beta exit 23 Authorization: Digest username=\"operator\", response=\"" +
+			digestSecret + "\"\npath /tmp/worktrees/beta",
+	})
+	waitForProblemsEvidencePosts(t, harness, 18)
+
 	diagnostics := "repository alpha path /tmp/worktrees/alpha exit 17 configured=" +
 		testToken + " echoed=" + secondSecret + "\n" +
+		"Authorization: Digest username=\"operator\", response=\"" + digestSecret + "\"\n" +
 		strings.Repeat("provider stack frame in /tmp/worktrees/alpha/internal/slack/notifier.go\n", 120)
 	failureRecord := &errcat.FailureRecord{
 		Code: errcat.SessionCrashed,
@@ -261,12 +271,12 @@ func TestSlackProblemsEvidence(t *testing.T) {
 	harness.feed(ports.Event{
 		Type: ports.FeatureFailed, FeatureID: "F-1", CanonicalError: &blockingProblem,
 	})
-	waitForProblemsEvidencePosts(t, harness, 18)
+	waitForProblemsEvidencePosts(t, harness, 19)
 	waitForProblemsEvidenceUpdateAll(t, harness, updatesBefore, "Failed: Session crashed")
 	waitFor(t, 10*time.Second, func() bool {
 		for _, channel := range []string{"D-U-ADA", "C-ENG"} {
 			posts := postsTo(harness.server, channel)
-			if len(posts) != 18 {
+			if len(posts) != 19 {
 				return false
 			}
 			last, err := json.Marshal(posts[len(posts)-1].Fields)
@@ -287,7 +297,7 @@ func TestSlackProblemsEvidence(t *testing.T) {
 	} {
 		waitFor(t, 10*time.Second, func() bool {
 			ledger, ok := recordLedger(harness.stateDir, "F-1", key)
-			return ok && len(ledger) == 18
+			return ok && len(ledger) == 19
 		})
 	}
 	notifier.Stop(context.Background())
@@ -299,7 +309,7 @@ func TestSlackProblemsEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read final Slack record: %v", err)
 	}
-	assertProblemsEvidenceTranscript(t, entries, record, testToken, secondSecret)
+	assertProblemsEvidenceTranscript(t, entries, record, testToken, secondSecret, digestSecret)
 
 	dir := strings.TrimSpace(os.Getenv("AGENTICO_EVIDENCE_DIR"))
 	if dir == "" {
@@ -443,6 +453,8 @@ func assertProblemsEvidenceTranscript(
 		"Knowledge Base completed",
 		"Plan completed",
 		"Refactor: Integration merge conflict",
+		"fallback repository beta exit 23",
+		"/tmp/worktrees/beta",
 		"Failed: Session crashed",
 	} {
 		if !strings.Contains(transcriptText, want) {
@@ -496,11 +508,11 @@ func assertProblemsEvidenceTranscript(
 		if roots[channel] == "" {
 			t.Fatalf("destination %s has no root card", channel)
 		}
-		if got := len(postTimestamps[channel]); got != 18 {
-			t.Fatalf("destination %s posts = %d; want one root and seventeen replies", channel, got)
+		if got := len(postTimestamps[channel]); got != 19 {
+			t.Fatalf("destination %s posts = %d; want one root and eighteen replies", channel, got)
 		}
-		if got := problemReplies[channel]; got != 4 {
-			t.Fatalf("destination %s Problems replies = %d; want four", channel, got)
+		if got := problemReplies[channel]; got != 5 {
+			t.Fatalf("destination %s Problems replies = %d; want five", channel, got)
 		}
 	}
 

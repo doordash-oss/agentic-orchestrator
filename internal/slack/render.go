@@ -25,6 +25,8 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
+const problemFallbackTextLimit = 1200
+
 // renderRootCard builds the Block Kit root card for a feature: a header
 // with the feature name, a section with the server, pipeline, repositories,
 // phase, and status (plus pull request links once any exist), and a context
@@ -153,10 +155,16 @@ func renderProblem(token string, problem errcat.Error, f *feature.Feature) ([]Bl
 }
 
 func problemFallback(emoji, title, classLabel string, problem errcat.Error) string {
-	parts := []string{
-		emoji + " " + safePlain(title, 35),
-		"Summary: " + safePlain(problem.Summary, 20),
-	}
+	const (
+		preferredSummaryBudget          = 300
+		preferredDiagnosticsBudget      = 180
+		problemDiagnosticsPointer       = "Open Agentico for the full diagnostics."
+		problemFallbackPartSeparator    = " | "
+		problemFallbackDiagnosticsLabel = "Diagnostics: "
+	)
+
+	titlePart := emoji + " " + safePlain(title, 0)
+	recoveryPart := ""
 	if problem.Remediation != nil {
 		recovery := ""
 		if len(problem.Remediation.Actions) > 0 {
@@ -164,22 +172,109 @@ func problemFallback(emoji, title, classLabel string, problem errcat.Error) stri
 		}
 		recovery += problem.Remediation.Hint
 		if recovery = strings.TrimSpace(recovery); recovery != "" {
-			parts = append(parts, "Next: "+safePlain(recovery, 50))
+			recoveryPart = "Next: " + safePlain(recovery, 0)
 		}
 	}
+	detailsPart := ""
 	if details := problemDetails(problem.Context); details != "" {
-		parts = append(parts, "Details: "+safePlain(details, 35))
+		detailsPart = "Details: " + safePlain(details, 0)
 	}
-	parts = append(parts, "Code: "+safePlain(
+	codePart := "Code: " + safePlain(
 		fmt.Sprintf("%s (%s)", problem.Code, classLabel),
-		50,
-	))
+		0,
+	)
+
+	required := compactStrings(
+		titlePart,
+		recoveryPart,
+		detailsPart,
+		codePart,
+	)
 	if problem.Diagnostics != "" {
-		parts = append(parts,
-			"Diagnostics: "+safePlain(problem.Diagnostics, 15)+". Full text in Agentico.",
-		)
+		required = append(required, problemDiagnosticsPointer)
 	}
-	return safePlain(strings.Join(parts, " | "), fallbackTextLimit)
+	requiredLength := len(strings.Join(required, problemFallbackPartSeparator))
+	secondaryBudget := problemFallbackTextLimit - requiredLength
+	if secondaryBudget > 0 {
+		secondaryBudget -= len(problemFallbackPartSeparator)
+	}
+
+	summaryBudget := min(preferredSummaryBudget, max(0, secondaryBudget-preferredDiagnosticsBudget))
+	summaryPart := ""
+	if summary := abbreviateFallbackText(problem.Summary, summaryBudget); summary != "" {
+		summaryPart = "Summary: " + summary
+		secondaryBudget -= len(summaryPart) + len(problemFallbackPartSeparator)
+	}
+
+	diagnosticsPart := ""
+	if problem.Diagnostics != "" {
+		diagnosticsBudget := max(
+			0,
+			secondaryBudget-len(problemFallbackDiagnosticsLabel)-len(problemDiagnosticsPointer)-1,
+		)
+		if diagnosticsBudget > preferredDiagnosticsBudget {
+			diagnosticsBudget = preferredDiagnosticsBudget
+		}
+		if diagnostics := abbreviateFallbackText(problem.Diagnostics, diagnosticsBudget); diagnostics != "" {
+			diagnosticsPart = problemFallbackDiagnosticsLabel + diagnostics + " " + problemDiagnosticsPointer
+		} else {
+			diagnosticsPart = problemDiagnosticsPointer
+		}
+	}
+
+	parts := compactStrings(
+		titlePart,
+		summaryPart,
+		recoveryPart,
+		detailsPart,
+		codePart,
+		diagnosticsPart,
+	)
+	return safePlain(strings.Join(parts, problemFallbackPartSeparator), problemFallbackTextLimit)
+}
+
+func compactStrings(values ...string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func abbreviateFallbackText(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" || limit <= 0 {
+		return ""
+	}
+	if len(text) <= limit {
+		return text
+	}
+
+	const ellipsis = "..."
+	if limit <= len(ellipsis) {
+		return ellipsis[:limit]
+	}
+	candidate := truncateUTF8(text, limit-len(ellipsis))
+	boundary := -1
+	for _, marker := range []string{". ", "; ", ": ", ", "} {
+		if index := strings.LastIndex(candidate, marker); index >= len(candidate)/3 {
+			boundary = index + 1
+			break
+		}
+	}
+	if boundary < 0 {
+		boundary = strings.LastIndexByte(candidate, ' ')
+	}
+	if boundary > 0 {
+		candidate = candidate[:boundary]
+	}
+	candidate = strings.TrimSpace(candidate)
+	if strings.HasSuffix(candidate, ".") {
+		candidate = strings.TrimRight(candidate, ".")
+	}
+	return candidate + ellipsis
 }
 
 func redactedError(token string, problem errcat.Error) errcat.Error {

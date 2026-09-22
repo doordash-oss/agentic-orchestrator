@@ -115,6 +115,139 @@ func TestRenderProblemNeedsActionChildAndShortDiagnostics(t *testing.T) {
 	}
 }
 
+func TestRenderProblemFallbackPreservesCatalogueRecoveryAndEssentialContext(t *testing.T) {
+	longRepo := "alpha-" + strings.Repeat("service-", 24)
+	longBranch := "feature/" + strings.Repeat("accessible-fallback-", 16)
+	tests := []struct {
+		name    string
+		problem errcat.Error
+		feature *feature.Feature
+		want    []string
+	}{
+		{
+			name: "session crash",
+			problem: errcat.New(
+				errcat.SessionCrashed,
+				errcat.WithParams(errcat.RunFailureParams{
+					Phase: "implement", Iteration: 7, Repositories: []string{longRepo},
+				}),
+				errcat.WithRepositories(errcat.CodeRepository{Name: longRepo}),
+				errcat.WithPhase(errcat.CodePhase{Name: "implement", Iteration: 7}),
+				errcat.WithDiagnostics(strings.Repeat(
+					"provider stack frame in /tmp/worktrees/alpha/session.log\n",
+					30,
+				)),
+			),
+			feature: &feature.Feature{},
+			want: []string{
+				"Next: Actions: restart. Restart the phase; the session log has the crash details.",
+				"Details: repository " + longRepo + " · phase implement (iteration 7)",
+				"Code: session_crashed (blocking)",
+				"Open Agentico for the full diagnostics.",
+			},
+		},
+		{
+			name: "worktree setup",
+			problem: errcat.New(
+				errcat.WorktreeSetupFailed,
+				errcat.WithParams(errcat.SetupFailureParams{
+					TaskLabel: "Worktree: alpha", Repositories: []string{"alpha"},
+				}),
+				errcat.WithRepositories(errcat.CodeRepository{Name: "alpha"}),
+				errcat.WithSetupTask(errcat.CodeSetupTask{
+					Key: "worktree:alpha", Kind: "worktree", Label: "Worktree: alpha",
+				}),
+				errcat.WithDiagnostics(strings.Repeat(
+					"git worktree add failed after checking repository state; ",
+					24,
+				)),
+			),
+			feature: &feature.Feature{},
+			want: []string{
+				"Next: Actions: setup. Resolve the reported problem in the repository or branch, then retry setup.",
+				"Details: repository alpha · setup task Worktree: alpha",
+				"Code: worktree_setup_failed (blocking)",
+				"Open Agentico for the full diagnostics.",
+			},
+		},
+		{
+			name: "publish conflict",
+			problem: errcat.New(
+				errcat.PublishRebaseConflict,
+				errcat.WithParams(errcat.PublishRepoParams{
+					Repo: "alpha", Branch: longBranch, RebaseTarget: "main",
+				}),
+				errcat.WithRepositories(errcat.CodeRepository{
+					Name: "alpha", Branch: longBranch, RebaseTarget: "main",
+				}),
+				errcat.WithDiagnostics(strings.Repeat(
+					"CONFLICT in internal/slack/render.go while replaying commit; ",
+					24,
+				)),
+			),
+			feature: &feature.Feature{},
+			want: []string{
+				"Next: Actions: publish. Resolve the conflict in the worktree or run a rebase pass, then retry.",
+				"Details: repository alpha (" + longBranch + "); target: main",
+				"Code: publish_rebase_conflict (needs your action)",
+				"Open Agentico for the full diagnostics.",
+			},
+		},
+		{
+			name: "child integration attention",
+			problem: errcat.New(
+				errcat.IntegrationMergeConflict,
+				errcat.WithParams(errcat.IntegrationRepoParams{
+					Repositories: []errcat.CodeRepository{{Name: "alpha"}},
+				}),
+				errcat.WithRepositories(errcat.CodeRepository{Name: "alpha"}),
+				errcat.WithDiagnostics(strings.Repeat(
+					"merge conflict in internal/slack/render.go; ",
+					30,
+				)),
+			),
+			feature: &feature.Feature{Parent: &feature.ChildRelationship{
+				ParentID: "parent-1", Kind: feature.ChildKindRefactor,
+			}},
+			want: []string{
+				"Refactor: Integration merge conflict",
+				"Next: Actions: retry. Resolve the conflict in the pass worktree and retry; the pass re-enters final review if its code changed.",
+				"Details: repository alpha",
+				"Code: integration_merge_conflict (needs your action)",
+				"Open Agentico for the full diagnostics.",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, fallback, _ := renderProblem(testToken, tt.problem, tt.feature)
+			if len(fallback) > problemFallbackTextLimit {
+				t.Errorf(
+					"renderProblem() fallback length = %d; want <= %d",
+					len(fallback),
+					problemFallbackTextLimit,
+				)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(fallback, want) {
+					t.Errorf("renderProblem() fallback = %q; want complete meaning %q", fallback, want)
+				}
+			}
+		})
+	}
+}
+
+func TestAbbreviateFallbackTextPrefersCompleteSentence(t *testing.T) {
+	text := "The provider exited with status 17. " +
+		"Secondary stack details continue through several frames and helper calls."
+	got := abbreviateFallbackText(text, 80)
+	want := "The provider exited with status 17..."
+	if got != want {
+		t.Errorf("abbreviateFallbackText() = %q; want %q", got, want)
+	}
+}
+
 func TestRenderProblemRedactsBeforeDiagnosticsTruncation(t *testing.T) {
 	secret := "xoxb-TRUNCATION-SECRET-123456789"
 	const note = "\n_Diagnostics were shortened. Open Agentico for the full text._"
@@ -173,6 +306,7 @@ func TestRenderProblemBoundsCombinedTitleAndSummary(t *testing.T) {
 
 func TestSlackProblemsRedaction(t *testing.T) {
 	const secondSecret = "xoxp-SECONDSECRET-123456789"
+	const digestSecret = "DIGEST_REVIEW_SENTINEL"
 	var logs bytes.Buffer
 	previousLogOutput := log.Writer()
 	log.SetOutput(&logs)
@@ -191,7 +325,9 @@ func TestSlackProblemsRedaction(t *testing.T) {
 
 	diagnostics := "repo alpha path /tmp/worktree exit 17 " + testToken +
 		" " + secondSecret + " Authorization: Bearer header-secret" +
-		" https://user:password@example.test/repo"
+		" https://user:password@example.test/repo\n" +
+		"Authorization: Digest username=\"operator\", response=\"" + digestSecret +
+		"\"\nrepo gamma path /tmp/digest exit 29"
 	problem := errcat.Error{
 		Code:    errcat.SessionCrashed,
 		Class:   errcat.ClassBlocking,
@@ -218,7 +354,9 @@ func TestSlackProblemsRedaction(t *testing.T) {
 	})
 	harness.feed(ports.Event{
 		Type: ports.FeatureFailed, FeatureID: "F-1",
-		Message: "fallback repo alpha " + testToken + " " + secondSecret,
+		Message: "fallback repo beta " + testToken + " " + secondSecret +
+			" Authorization: Digest username=\"operator\", response=\"" + digestSecret +
+			"\"\npath /tmp/fallback exit 23",
 	})
 	waitFor(t, 10*time.Second, func() bool {
 		return len(postsTo(harness.server, "C-ENG")) == 3
@@ -229,12 +367,20 @@ func TestSlackProblemsRedaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(encoded)
-	for _, secret := range []string{testToken, secondSecret, "header-secret", "another-secret", "user:password"} {
+	for _, secret := range []string{
+		testToken, secondSecret, digestSecret, "operator",
+		"header-secret", "another-secret", "user:password",
+	} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("Slack request leaked %q: %s", secret, body)
 		}
 	}
-	for _, want := range []string{"[REDACTED]", "repo alpha", "/tmp/worktree", "exit 17"} {
+	for _, want := range []string{
+		"[REDACTED]",
+		"repo alpha", "/tmp/worktree", "exit 17",
+		"repo gamma", "/tmp/digest", "exit 29",
+		"repo beta", "/tmp/fallback", "exit 23",
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Slack request missing non-sensitive detail %q: %s", want, body)
 		}
@@ -252,7 +398,10 @@ func TestSlackProblemsRedaction(t *testing.T) {
 		"record":        string(record),
 		"observability": string(observed),
 	} {
-		for _, secret := range []string{testToken, secondSecret, "header-secret", "another-secret", "user:password"} {
+		for _, secret := range []string{
+			testToken, secondSecret, digestSecret, "operator",
+			"header-secret", "another-secret", "user:password",
+		} {
 			if strings.Contains(value, secret) {
 				t.Fatalf("%s leaked %q: %s", label, secret, value)
 			}
@@ -440,6 +589,49 @@ func TestNotifierInterruptedAndRewoundUseProgressThread(t *testing.T) {
 	}
 	if got := len(destination.Ledger); got != 13 {
 		t.Fatalf("persisted ledger entries = %d; want all thirteen posts across notifier reconstruction", got)
+	}
+}
+
+func TestNotifierRewindOutsideImplementationLoopOmitsRoadmapPhase(t *testing.T) {
+	harness := newNotifierHarness(t, defaultTestSettings(
+		testToken,
+		ports.SlackRecipient{Kind: ports.SlackRecipientChannel, ID: "C-ENG", DisplayName: "#eng"},
+	))
+	harness.seedFeature("F-1", func(f *feature.Feature) {
+		f.ActiveRun = 5
+		f.RunCount = 5
+		f.CurrentPhase = feature.PhaseResearch
+		f.CurrentRoadmapPhase = 3
+		f.TotalRoadmapPhases = 4
+	})
+	harness.start(0)
+	harness.feed(ports.Event{Type: ports.FeatureStarted, FeatureID: "F-1"})
+	waitFor(t, 10*time.Second, func() bool {
+		return len(postsTo(harness.server, "C-ENG")) == 1
+	})
+	harness.feed(ports.Event{
+		Type: ports.FeatureRewound, FeatureID: "F-1", Phase: feature.PhaseResearch,
+	})
+	waitFor(t, 10*time.Second, func() bool {
+		return len(postsTo(harness.server, "C-ENG")) == 2
+	})
+
+	posts := postsTo(harness.server, "C-ENG")
+	text := fieldString(posts[1], "text")
+	for _, want := range []string{"Rewound to Research", "run 5"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("rewound line = %q; missing %q", text, want)
+		}
+	}
+	if strings.Contains(text, "roadmap phase") {
+		t.Errorf("rewound line = %q; roadmap wording should be absent outside implementation loop", text)
+	}
+	destination := recordDestinations(t, harness.stateDir, "F-1")[destinationKey("channel", "C-ENG")]
+	if got := fieldString(posts[1], "thread_ts"); got != destination.RootTS {
+		t.Errorf("rewound thread_ts = %q; want persisted root %q", got, destination.RootTS)
+	}
+	if got := len(destination.Ledger); got != 2 {
+		t.Errorf("persisted ledger entries = %d; want root and rewind", got)
 	}
 }
 

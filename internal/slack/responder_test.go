@@ -426,6 +426,7 @@ func TestSlackResponderReplyWinsReactionAndPersistsResolution(t *testing.T) {
 			ID: "C-ENG", DisplayName: "#eng",
 		},
 	))
+	harness.seedFeature("feature-1", nil)
 	harness.server.Script("users.info", testsupport.Response{Body: map[string]any{
 		"ok": true,
 		"user": map[string]any{
@@ -493,6 +494,7 @@ func TestSlackResponderReplyWinsReactionAndPersistsResolution(t *testing.T) {
 		},
 	})
 	notifier.records[featureID] = record
+	t.Cleanup(func() { notifier.Stop(context.Background()) })
 
 	notifier.responderTick()
 
@@ -533,6 +535,47 @@ func TestSlackResponderReplyWinsReactionAndPersistsResolution(t *testing.T) {
 	}
 	if got := harness.server.CallCount("users.info"); got != 1 {
 		t.Fatalf("users.info calls = %d; want one cached lookup", got)
+	}
+	waitFor(t, time.Second, func() bool {
+		if harness.server.CallCount("reactions.add") != 1 ||
+			harness.server.CallCount("chat.postMessage") != 1 {
+			return false
+		}
+		current, err := loadFeatureRecord(harness.stateDir, featureID)
+		if err != nil {
+			return false
+		}
+		destination := current.Destinations[destinationKey]
+		return len(destination.Ledger) == 3 &&
+			destination.reactionContains("100.000003", "white_check_mark")
+	})
+	reaction := harness.server.Requests("reactions.add")[0]
+	if got := fieldString(reaction, "timestamp"); got != "100.000003" {
+		t.Fatalf("reaction timestamp = %q; want winning reply timestamp", got)
+	}
+	if got := fieldString(reaction, "name"); got != "white_check_mark" {
+		t.Fatalf("reaction name = %q; want white_check_mark", got)
+	}
+	confirmation := harness.server.Requests("chat.postMessage")[0]
+	if got := fieldString(confirmation, "thread_ts"); got != rootTS {
+		t.Fatalf("confirmation thread = %q; want %q", got, rootTS)
+	}
+	if got := fieldString(confirmation, "text"); got != "#1 was allowed once by <@U-REPLIER> via Slack." {
+		t.Fatalf("confirmation text = %q; want accepted-answer attribution", got)
+	}
+	persisted, err = loadFeatureRecord(harness.stateDir, featureID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := persisted.Destinations[destinationKey]
+	if !destination.reactionContains("100.000003", "white_check_mark") {
+		t.Fatalf(
+			"integration reactions = %#v; want accepted reply check-mark",
+			destination.IntegrationReactions,
+		)
+	}
+	if len(destination.Ledger) != 3 {
+		t.Fatalf("ledger = %#v; want root, pending item, and confirmation", destination.Ledger)
 	}
 
 	notifier.responderTick()

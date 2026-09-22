@@ -64,9 +64,17 @@ type workItem struct {
 	channelID                  string
 	needsCard                  bool
 	refresh                    bool
+	responder                  bool
+	poll                       bool
 	suppressDestinationFailure bool
 	reply                      replyPayload
+	reaction                   reactionPayload
 	delivery                   *deliveryGroup
+}
+
+type reactionPayload struct {
+	messageTS string
+	name      string
 }
 
 type replyPayload struct {
@@ -224,13 +232,13 @@ func (w *destinationWorker) itemRequiresWrite(item workItem) bool {
 	if item.needsCard && rootTS == "" {
 		return true
 	}
-	if !w.notifier.pendingDeliveryEligible(
+	if !item.responder && !w.notifier.pendingDeliveryEligible(
 		record, item.featureID, item.reply.identity, item.destinationKey,
 	) {
 		return false
 	}
 	_, _, ok := w.currentDelivery(item, item.reply.kind)
-	return ok && item.reply.fallback != ""
+	return ok && (item.reply.fallback != "" || item.reaction.name != "")
 }
 
 // handle delivers one item: ensure the root card, post its thread reply,
@@ -256,10 +264,20 @@ func (w *destinationWorker) handle(item workItem) {
 				item.featureID, item.kind, err)
 		}
 	}
-	if err := w.postReply(item); err != nil {
-		if !errors.Is(err, errDeliveryIneligible) {
-			log.Printf("slack-notifier: thread reply for feature %s to %s destination was not delivered: %v",
-				item.featureID, item.kind, err)
+	if item.reaction.name != "" {
+		if err := w.postReaction(item); err != nil {
+			if !errors.Is(err, errDeliveryIneligible) {
+				log.Printf("slack-notifier: reaction for feature %s to %s destination was not delivered: %v",
+					item.featureID, item.kind, err)
+			}
+		}
+	}
+	if item.reply.fallback != "" {
+		if err := w.postReply(item); err != nil {
+			if !errors.Is(err, errDeliveryIneligible) {
+				log.Printf("slack-notifier: thread reply for feature %s to %s destination was not delivered: %v",
+					item.featureID, item.kind, err)
+			}
 		}
 	}
 	if item.refresh {
@@ -268,6 +286,63 @@ func (w *destinationWorker) handle(item workItem) {
 		}
 		w.markDirty(item.featureID)
 	}
+}
+
+func (w *destinationWorker) postReaction(item workItem) error {
+	notifier := w.notifier
+	record, err := notifier.recordFor(item.featureID)
+	if err != nil {
+		return err
+	}
+	if item.reaction.messageTS == "" || item.reaction.name == "" {
+		return nil
+	}
+	if !w.pace() {
+		return errWorkerStopped
+	}
+	defer w.recordWrite()
+	send := func() (AddReactionResult, deliveryCredential, error) {
+		settings, _, ok := w.currentDelivery(item, kindNeedsInput)
+		credential := deliveryCredential{
+			token: settings.Token, generation: settings.CredentialGeneration,
+		}
+		if !ok {
+			return AddReactionResult{}, credential, errDeliveryIneligible
+		}
+		client, err := notifier.newClient(settings.Token)
+		if err != nil {
+			return AddReactionResult{}, credential, err
+		}
+		result, err := client.AddReaction(
+			notifier.requestBase,
+			item.channelID,
+			item.reaction.messageTS,
+			item.reaction.name,
+		)
+		return result, credential, err
+	}
+	if _, err := sendWithRetry(
+		w,
+		"reaction",
+		item,
+		kindNeedsInput.String(),
+		send,
+	); err != nil {
+		return err
+	}
+
+	notifier.recordMu.Lock()
+	entry := record.Destinations[item.destinationKey]
+	entry.reactionAppend(item.reaction.messageTS, item.reaction.name)
+	record.Destinations[item.destinationKey] = entry
+	persistErr := notifier.persistRecordLocked(
+		item.featureID,
+		record,
+		ports.SlackRecipientKind(item.kind),
+	)
+	notifier.recordMu.Unlock()
+	notifier.logPersistError(persistErr, ports.SlackRecipientKind(item.kind))
+	return nil
 }
 
 // ensureCard posts the root card once per destination; after that the
@@ -348,7 +423,7 @@ func (w *destinationWorker) postReply(item workItem) error {
 	if rootTS == "" {
 		return errors.New("no root card to reply to")
 	}
-	if !notifier.pendingDeliveryEligible(
+	if !item.responder && !notifier.pendingDeliveryEligible(
 		record, item.featureID, item.reply.identity, item.destinationKey,
 	) {
 		return errDeliveryIneligible
@@ -382,7 +457,7 @@ func (w *destinationWorker) postReply(item workItem) error {
 	}
 	defer w.recordWrite()
 	send := func() (PostMessageResult, deliveryCredential, error) {
-		if !notifier.pendingDeliveryEligible(
+		if !item.responder && !notifier.pendingDeliveryEligible(
 			record, item.featureID, item.reply.identity, item.destinationKey,
 		) {
 			return PostMessageResult{}, deliveryCredential{}, errDeliveryIneligible
@@ -901,6 +976,18 @@ func (w *destinationWorker) pauseUntil(deadline time.Time) {
 		w.notBefore = deadline
 	}
 	w.mu.Unlock()
+}
+
+func (n *Notifier) workerPauseUntil(channelID string) time.Time {
+	n.workerMu.Lock()
+	worker := n.workers[channelID]
+	n.workerMu.Unlock()
+	if worker == nil {
+		return time.Time{}
+	}
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	return worker.notBefore
 }
 
 // waitUntil sleeps in bounded slices until the clock reaches the deadline,

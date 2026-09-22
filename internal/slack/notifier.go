@@ -156,7 +156,8 @@ type Notifier struct {
 	trackedInputs     map[string]bool
 	pendingDeliveries map[string]struct{}
 
-	responderPolls map[string]responderPollState
+	responderPollMu sync.Mutex
+	responderPolls  map[string]responderPollState
 
 	responderNameMu sync.Mutex
 	responderNames  map[string]string
@@ -1151,6 +1152,9 @@ func (n *Notifier) reportWriteSuccess(item workItem, credentialGeneration uint64
 	at := n.clock.Now()
 	if n.reporter != nil {
 		n.reporter.ReportSlackDeliverySuccess(at, credentialGeneration)
+	}
+	if !item.poll {
+		n.rearmResponderPoll(item.featureID, item.destinationKey)
 	}
 	if item.suppressDestinationFailure {
 		return

@@ -15,6 +15,8 @@
 package slack
 
 import (
+	"errors"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -39,8 +41,13 @@ type responderThread struct {
 }
 
 type responderPollState struct {
-	oldest string
-	cursor string
+	oldest              string
+	cursor              string
+	consecutiveFailures int
+	pauseUntil          time.Time
+	suspended           bool
+	credentialFailed    bool
+	generation          uint64
 }
 
 type responderReplyCandidate struct {
@@ -106,11 +113,19 @@ func (n *Notifier) responderTick() {
 	var replies []responderReplyCandidate
 	var reactions []responderReactionCandidate
 	for _, thread := range threads {
-		key := thread.channelID + "\x00" + thread.rootTS
+		key := responderPollKey(thread.featureID, thread.destinationKey)
 		active[key] = true
+		n.responderPollMu.Lock()
 		state := n.responderPolls[key]
+		n.responderPollMu.Unlock()
 		if state.oldest != thread.oldest {
 			state = responderPollState{oldest: thread.oldest}
+		}
+		if state.suspended ||
+			n.responderClock.Now().Before(state.pauseUntil) ||
+			n.responderClock.Now().Before(n.workerPauseUntil(thread.channelID)) {
+			n.storeResponderPollState(key, state)
+			continue
 		}
 		for pageNumber := 0; pageNumber < responderPageBudget; pageNumber++ {
 			page, err := client.ThreadReplies(
@@ -122,8 +137,15 @@ func (n *Notifier) responderTick() {
 				state.cursor,
 			)
 			if err != nil {
+				n.handleResponderPollFailure(
+					settings,
+					thread,
+					&state,
+					err,
+				)
 				break
 			}
+			n.handleResponderPollSuccess(settings, thread, &state)
 			pageReplies, pageReactions := n.extractResponderCandidates(thread, page.Messages)
 			replies = append(replies, pageReplies...)
 			reactions = append(reactions, pageReactions...)
@@ -132,7 +154,7 @@ func (n *Notifier) responderTick() {
 				break
 			}
 		}
-		n.responderPolls[key] = state
+		n.storeResponderPollState(key, state)
 	}
 	sort.SliceStable(replies, func(i, j int) bool {
 		return compareSlackTimestamps(replies[i].Message.TS, replies[j].Message.TS) < 0
@@ -163,10 +185,125 @@ func (n *Notifier) responderTick() {
 	for _, candidate := range reactions {
 		n.processResponderReaction(client, settings.Token, candidate)
 	}
+	n.responderPollMu.Lock()
 	for key := range n.responderPolls {
 		if !active[key] {
 			delete(n.responderPolls, key)
 		}
+	}
+	n.responderPollMu.Unlock()
+}
+
+func responderPollKey(featureID, destinationKey string) string {
+	return featureID + "\x00" + destinationKey
+}
+
+func (n *Notifier) storeResponderPollState(key string, state responderPollState) {
+	n.responderPollMu.Lock()
+	if current := n.responderPolls[key]; current.generation != state.generation {
+		state.consecutiveFailures = 0
+		state.pauseUntil = time.Time{}
+		state.suspended = false
+		state.credentialFailed = false
+		state.generation = current.generation
+	}
+	n.responderPolls[key] = state
+	n.responderPollMu.Unlock()
+}
+
+func (n *Notifier) rearmResponderPoll(featureID, destinationKey string) {
+	if featureID == "" || destinationKey == "" {
+		return
+	}
+	key := responderPollKey(featureID, destinationKey)
+	n.responderPollMu.Lock()
+	state, ok := n.responderPolls[key]
+	if ok {
+		state.consecutiveFailures = 0
+		state.pauseUntil = time.Time{}
+		state.suspended = false
+		state.credentialFailed = false
+		state.generation++
+		n.responderPolls[key] = state
+	}
+	n.responderPollMu.Unlock()
+}
+
+func (n *Notifier) handleResponderPollSuccess(
+	settings ports.SlackRuntimeSettings,
+	thread responderThread,
+	state *responderPollState,
+) {
+	item := responderPollWorkItem(thread)
+	n.reportWriteSuccess(item, settings.CredentialGeneration)
+	state.consecutiveFailures = 0
+	state.pauseUntil = time.Time{}
+	state.credentialFailed = false
+}
+
+func (n *Notifier) handleResponderPollFailure(
+	settings ports.SlackRuntimeSettings,
+	thread responderThread,
+	state *responderPollState,
+	err error,
+) {
+	credential := deliveryCredential{
+		token: settings.Token, generation: settings.CredentialGeneration,
+	}
+	item := responderPollWorkItem(thread)
+	failure := classifyWriteFailure(settings.Token, err, false)
+	if failure.class == deliveryFailureCredential {
+		if !state.credentialFailed {
+			n.reportWriteFailure(item, "poll", 1, credential, failure)
+			state.credentialFailed = true
+		}
+		return
+	}
+
+	var transportErr *TransportError
+	if !errors.As(err, &transportErr) {
+		n.reportWriteFailure(item, "poll", 1, credential, failure)
+		state.suspended = true
+		return
+	}
+	state.consecutiveFailures++
+	if transportErr.StatusCode == http.StatusTooManyRequests {
+		wait := maxDuration(transportErr.RetryAfter, time.Second)
+		state.pauseUntil = n.responderClock.Now().Add(wait)
+		n.workerFor(thread.channelID).pauseUntil(state.pauseUntil)
+	}
+	if !transientStatus(transportErr.StatusCode) &&
+		transportErr.StatusCode != http.StatusTooManyRequests {
+		n.reportWriteFailure(
+			item,
+			"poll",
+			state.consecutiveFailures,
+			credential,
+			failure,
+		)
+		state.suspended = true
+		return
+	}
+	if state.consecutiveFailures <= retryLimit {
+		return
+	}
+	n.reportWriteFailure(
+		item,
+		"poll",
+		state.consecutiveFailures,
+		credential,
+		classifyWriteFailure(settings.Token, err, true),
+	)
+	state.suspended = true
+}
+
+func responderPollWorkItem(thread responderThread) workItem {
+	return workItem{
+		featureID:      thread.featureID,
+		destinationKey: thread.destinationKey,
+		kind:           candidateDestinationKind(thread.destinationKey),
+		channelID:      thread.channelID,
+		poll:           true,
 	}
 }
 
@@ -341,6 +478,14 @@ func (n *Notifier) processResponderReply(
 		candidate.Message.User,
 		responderName,
 	) {
+		n.enqueueAcceptedResponderWrites(
+			token,
+			pending,
+			candidate.Thread,
+			candidate.Message.TS,
+			candidate.Message.User,
+			string(decision),
+		)
 		n.emitEvent(candidate.Thread.featureID, "slack.answer_received", map[string]any{
 			"destination_kind": candidateDestinationKind(candidate.Thread.destinationKey),
 			"input_kind":       pending.Kind,
@@ -396,6 +541,14 @@ func (n *Notifier) processResponderReaction(
 		candidate.UserID,
 		responderName,
 	) {
+		n.enqueueAcceptedResponderWrites(
+			token,
+			pending,
+			candidate.Thread,
+			"",
+			candidate.UserID,
+			string(decision),
+		)
 		n.emitEvent(candidate.Thread.featureID, "slack.answer_received", map[string]any{
 			"destination_kind": candidateDestinationKind(candidate.Thread.destinationKey),
 			"input_kind":       pending.Kind,
@@ -404,6 +557,87 @@ func (n *Notifier) processResponderReaction(
 			"medium":           "reaction",
 		})
 	}
+}
+
+func (n *Notifier) enqueueAcceptedResponderWrites(
+	token string,
+	pending pendingInputRecord,
+	source responderThread,
+	replyTS, responderID, decision string,
+) {
+	confirmation := responderConfirmation(
+		token,
+		pending.Tag,
+		pending.Kind,
+		decision,
+		responderID,
+	)
+	n.recordMu.Lock()
+	record := n.records[source.featureID]
+	if record == nil {
+		n.recordMu.Unlock()
+		return
+	}
+	work := make([]workItem, 0, len(record.Destinations)+1)
+	if replyTS != "" {
+		work = append(work, workItem{
+			featureID:       source.featureID,
+			sourceFeatureID: pending.SourceFeatureID,
+			destinationKey:  source.destinationKey,
+			kind:            candidateDestinationKind(source.destinationKey),
+			channelID:       source.channelID,
+			responder:       true,
+			reaction: reactionPayload{
+				messageTS: replyTS,
+				name:      "white_check_mark",
+			},
+		})
+	}
+	for key, destination := range record.Destinations {
+		if destination.ChannelID == "" || destination.RootTS == "" {
+			continue
+		}
+		work = append(work, workItem{
+			featureID:       source.featureID,
+			sourceFeatureID: pending.SourceFeatureID,
+			destinationKey:  key,
+			kind:            destination.Kind,
+			channelID:       destination.ChannelID,
+			responder:       true,
+			reply: replyPayload{
+				kind:     kindNeedsInput,
+				fallback: confirmation,
+			},
+		})
+	}
+	n.recordMu.Unlock()
+	if len(work) == 0 {
+		return
+	}
+	item := queueItem{
+		kind: kindNeedsInput,
+		event: ports.Event{
+			Type:      ports.SessionOutput,
+			FeatureID: source.featureID,
+		},
+	}
+	item.reservation = n.queue.reserveProtected(item.event)
+	n.dispatchDeliveryGroup(item, work)
+}
+
+func responderConfirmation(token, tag, inputKind, decision, responderID string) string {
+	action := decision
+	switch {
+	case inputKind == string(ports.SlackPendingPermission) &&
+		decision == string(ports.SlackPermissionAllowOnce):
+		action = "allowed once"
+	case inputKind == string(ports.SlackPendingPermission) &&
+		decision == string(ports.SlackPermissionDeny):
+		action = "denied"
+	case inputKind == string(ports.SlackPendingReview):
+		action = "approved"
+	}
+	return scrub(token, tag+" was "+action+" by <@"+responderID+"> via Slack.")
 }
 
 func (n *Notifier) pendingResponderTarget(

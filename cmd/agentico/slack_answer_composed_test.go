@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -32,11 +34,14 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	slackintegration "github.com/doordash-oss/agentic-orchestrator/internal/slack"
+	"go.uber.org/fx"
 )
 
 func TestSlackAnswerPortPermissionOutcomesUseRealSession(t *testing.T) {
@@ -138,126 +143,183 @@ func TestSlackAnswerPortPermissionOutcomesUseRealSession(t *testing.T) {
 	}
 }
 
+type blockingPermissionMutationTarget struct {
+	*serverMutationTarget
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (t *blockingPermissionMutationTarget) AnswerPermission(
+	req serverruntime.PermissionAnswerRequest,
+) (serverruntime.PermissionAnswerResponse, error) {
+	t.once.Do(func() {
+		close(t.entered)
+		<-t.release
+	})
+	return t.serverMutationTarget.AnswerPermission(req)
+}
+
 func TestSlackAnswerPortPermissionRaceWithRESTUsesRealSession(t *testing.T) {
-	const (
-		featureID = "slack-answer-race"
-		sessionID = "slack-answer-race-implement"
-		requestID = "permission-race"
-	)
-
-	for attempt := 0; attempt < 12; attempt++ {
-		eventCh := make(chan interface{}, 16)
-		sessions := session.NewManager(eventCh)
-		resultPath := filepath.Join(t.TempDir(), "responses.txt")
-		script := writeSlackPermissionRaceProvider(t, requestID, resultPath)
-		sess, err := sessions.StartSession(
-			sessionID,
-			featureID,
-			feature.PhaseImplement,
-			[]string{"bash", script},
-			filepath.Dir(script),
-			nil,
-			&session.SessionOpts{ProviderName: "scripted"},
-		)
-		if err != nil {
-			sessions.Shutdown()
-			t.Fatalf("StartSession() error = %v", err)
+	for _, slackFirst := range []bool{true, false} {
+		name := "REST wins"
+		if slackFirst {
+			name = "Slack wins"
 		}
-		waitForComposedNeedsInput(t, 5*time.Second, func() bool {
-			return hasPendingRequest(sess, requestID)
-		})
-
-		target := &serverMutationTarget{sessions: sessions}
-		var answerPort ports.SlackAnswerPort
-		handler := serverruntime.NewHandler(serverruntime.HandlerOptions{
-			Sessions:              sessions,
-			Mutations:             target,
-			BindSlackAnswerPort:   func(port ports.SlackAnswerPort) { answerPort = port },
-			DisableHostValidation: true,
-		})
-		if answerPort == nil {
-			sessions.Shutdown()
-			t.Fatal("real Slack answer port was not bound")
-		}
-
-		start := make(chan struct{})
-		var wg sync.WaitGroup
-		wg.Add(2)
-		var slackResult ports.SlackAnswerResult
-		var restStatus int
-		var restBody []byte
-		go func() {
-			defer wg.Done()
-			<-start
-			slackResult = answerPort.AnswerSlackPermission(ports.SlackPermissionAnswer{
-				RequestID:       requestID,
-				SourceFeatureID: featureID,
-				Decision:        ports.SlackPermissionAllowOnce,
-				Source: ports.AnswerSource{
-					Kind:      ports.AnswerSourceSlack,
-					Responder: "Ada",
-				},
+		t.Run(name, func(t *testing.T) {
+			const (
+				featureID = "slack-answer-race"
+				sessionID = "slack-answer-race-implement"
+				requestID = "permission-race"
+			)
+			eventCh := make(chan interface{}, 16)
+			sessions := session.NewManager(eventCh)
+			t.Cleanup(sessions.Shutdown)
+			resultPath := filepath.Join(t.TempDir(), "responses.txt")
+			script := writeSlackPermissionRaceProvider(t, requestID, resultPath)
+			sess, err := sessions.StartSession(
+				sessionID,
+				featureID,
+				feature.PhaseImplement,
+				[]string{"bash", script},
+				filepath.Dir(script),
+				nil,
+				&session.SessionOpts{ProviderName: "scripted"},
+			)
+			if err != nil {
+				t.Fatalf("StartSession() error = %v", err)
+			}
+			waitForComposedNeedsInput(t, 5*time.Second, func() bool {
+				return hasPendingRequest(sess, requestID)
 			})
-		}()
-		go func() {
-			defer wg.Done()
-			<-start
-			restStatus, restBody = postPermissionAnswer(t, handler, requestID)
-		}()
-		close(start)
-		wg.Wait()
 
-		select {
-		case <-sess.Done():
-		case <-time.After(5 * time.Second):
-			sessions.Shutdown()
-			t.Fatal("timed out waiting for scripted permission session")
-		}
-		sessions.Shutdown()
+			target := &blockingPermissionMutationTarget{
+				serverMutationTarget: &serverMutationTarget{sessions: sessions},
+				entered:              make(chan struct{}),
+				release:              make(chan struct{}),
+			}
+			var answerPort ports.SlackAnswerPort
+			handler := serverruntime.NewHandler(serverruntime.HandlerOptions{
+				Sessions:              sessions,
+				Mutations:             target,
+				BindSlackAnswerPort:   func(port ports.SlackAnswerPort) { answerPort = port },
+				DisableHostValidation: true,
+			})
+			if answerPort == nil {
+				t.Fatal("real Slack answer port was not bound")
+			}
 
-		responses, err := os.ReadFile(resultPath)
-		if err != nil {
-			t.Fatalf("read provider responses: %v", err)
-		}
-		lines := strings.Split(strings.TrimSpace(string(responses)), "\n")
-		if len(lines) != 1 {
-			t.Fatalf(
-				"attempt %d provider response count = %d (%q), Slack result = %+v, REST status/body = %d/%s; want exactly one",
-				attempt,
-				len(lines),
-				responses,
-				slackResult,
-				restStatus,
-				restBody,
-			)
-		}
+			var slackResult ports.SlackAnswerResult
+			var restStatus int
+			var restBody []byte
+			firstStarted := make(chan struct{})
+			secondStarted := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(2)
+			slackCall := func(started chan struct{}) {
+				defer wg.Done()
+				close(started)
+				slackResult = answerPort.AnswerSlackPermission(ports.SlackPermissionAnswer{
+					RequestID:       requestID,
+					SourceFeatureID: featureID,
+					Decision:        ports.SlackPermissionAllowOnce,
+					Source: ports.AnswerSource{
+						Kind:      ports.AnswerSourceSlack,
+						Responder: "Ada",
+					},
+				})
+			}
+			restCall := func(started chan struct{}) {
+				defer wg.Done()
+				close(started)
+				restStatus, restBody = postPermissionAnswer(t, handler, requestID)
+			}
+			if slackFirst {
+				go slackCall(firstStarted)
+			} else {
+				go restCall(firstStarted)
+			}
+			<-firstStarted
+			select {
+			case <-target.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("first permission answer did not reach mutation target")
+			}
+			if slackFirst {
+				go restCall(secondStarted)
+			} else {
+				go slackCall(secondStarted)
+			}
+			<-secondStarted
+			close(target.release)
+			wg.Wait()
 
-		slackWon := slackResult.Outcome == ports.SlackAnswerAccepted
-		restWon := restStatus == http.StatusOK
-		if slackWon == restWon {
-			t.Fatalf(
-				"attempt %d Slack result = %+v, REST status/body = %d/%s; want exactly one winner",
-				attempt,
-				slackResult,
-				restStatus,
-				restBody,
-			)
-		}
-		if !slackWon && slackResult.Outcome != ports.SlackAnswerNoLongerPending {
-			t.Fatalf("attempt %d Slack loser = %+v; want no longer pending", attempt, slackResult)
-		}
-		if !restWon {
-			if restStatus != http.StatusConflict {
-				t.Fatalf("attempt %d REST loser status = %d; want 409", attempt, restStatus)
+			select {
+			case <-sess.Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("timed out waiting for scripted permission session")
 			}
-			var response serverruntime.ErrorResponse
-			if err := json.Unmarshal(restBody, &response); err != nil {
-				t.Fatalf("decode REST loser: %v", err)
+			responses, err := os.ReadFile(resultPath)
+			if err != nil {
+				t.Fatalf("read provider responses: %v", err)
 			}
-			if response.Error.Code != string(errcat.NoLongerPending) {
-				t.Fatalf("attempt %d REST loser code = %q; want %q", attempt, response.Error.Code, errcat.NoLongerPending)
+			lines := strings.Split(strings.TrimSpace(string(responses)), "\n")
+			if len(lines) != 1 {
+				t.Fatalf("provider response count = %d (%q); want exactly one", len(lines), responses)
 			}
+
+			if slackFirst {
+				if slackResult.Outcome != ports.SlackAnswerAccepted || restStatus != http.StatusConflict {
+					t.Fatalf("Slack-first results = Slack %+v, REST %d/%s", slackResult, restStatus, restBody)
+				}
+				assertNoLongerPendingResponse(t, restBody)
+			} else if restStatus != http.StatusOK || slackResult.Outcome != ports.SlackAnswerNoLongerPending {
+				t.Fatalf("REST-first results = REST %d/%s, Slack %+v", restStatus, restBody, slackResult)
+			}
+		})
+	}
+}
+
+func TestSlackAnswerRelayIsBoundThroughFxNotifierComposition(t *testing.T) {
+	stateDir := t.TempDir()
+	answerRelay := &slackAnswerRelay{}
+	var notifier *slackintegration.Notifier
+	app := fx.New(
+		fx.Supply(fx.Annotate(stateDir, fx.ResultTags(`name:"stateDir"`))),
+		fx.Supply(fx.Annotate(&slackSettingsRelay{}, fx.As(new(ports.SlackSettingsSource)))),
+		fx.Supply(fx.Annotate(answerRelay, fx.As(new(ports.SlackAnswerPort)))),
+		fx.Supply(feature.NewStore(stateDir)),
+		fx.Supply(observe.New(false, stateDir, false, "", false, "")),
+		slackintegration.Module,
+		fx.Populate(&notifier),
+		fx.NopLogger,
+	)
+	if err := app.Start(t.Context()); err != nil {
+		t.Fatalf("fx App.Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := app.Stop(context.Background()); err != nil {
+			t.Errorf("fx App.Stop() error = %v", err)
 		}
+	})
+	if notifier == nil {
+		t.Fatal("Fx notifier = nil; want constructed notifier")
+	}
+	answerField := reflect.ValueOf(notifier).Elem().FieldByName("answer")
+	if !answerField.IsValid() || answerField.IsNil() {
+		t.Fatal("Fx notifier answer port = nil; want supplied relay")
+	}
+
+	serverruntime.NewHandler(serverruntime.HandlerOptions{
+		Mutations:             &serverMutationTarget{},
+		BindSlackAnswerPort:   answerRelay.bind,
+		DisableHostValidation: true,
+	})
+	answerRelay.mu.Lock()
+	bound := answerRelay.target
+	answerRelay.mu.Unlock()
+	if bound == nil {
+		t.Fatal("Slack answer relay target = nil after handler construction")
 	}
 }
 

@@ -16,6 +16,7 @@ package slack
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -446,30 +447,34 @@ func (n *Notifier) processResponderReply(
 	candidate responderReplyCandidate,
 ) {
 	if !candidate.TargetFound {
+		n.rejectResponderReply(token, candidate, pendingInputRecord{}, "not_answerable", "question",
+			"This reply does not target an answerable item. Answer in Agentico.")
 		return
 	}
 	pending, ok := n.pendingResponderTarget(candidate.Thread.featureID, candidate.Target.Identity)
-	if !ok || pending.Resolution != nil {
+	if !ok {
 		return
 	}
-	if pending.Kind != string(ports.SlackPendingPermission) {
+	if pending.Resolution != nil {
+		n.rejectResolvedReply(token, candidate, pending, pending.Resolution)
 		return
 	}
-	decision, parsed := parsePermissionReply(candidate.Message.Text)
+	decision, parsed := responderReplyDecision(pending.Kind, candidate.Message.Text)
 	if !parsed {
+		n.rejectResponderReply(
+			token,
+			candidate,
+			pending,
+			responderUnparseableReason(pending.Kind),
+			"question",
+			responderHint(pending),
+		)
 		return
 	}
 	responderName := n.responderName(client, token, candidate.Message.User)
-	result := n.answer.AnswerSlackPermission(ports.SlackPermissionAnswer{
-		RequestID:       pending.RequestID,
-		SourceFeatureID: pending.SourceFeatureID,
-		Decision:        decision,
-		Source: ports.AnswerSource{
-			Kind:      ports.AnswerSourceSlack,
-			Responder: responderName,
-		},
-	})
+	result := n.submitResponderAnswer(pending, decision, responderName)
 	if result.Outcome != ports.SlackAnswerAccepted {
+		n.handleRejectedResponderReply(token, candidate, pending, decision, result)
 		return
 	}
 	if n.resolveResponderTarget(
@@ -484,15 +489,9 @@ func (n *Notifier) processResponderReply(
 			candidate.Thread,
 			candidate.Message.TS,
 			candidate.Message.User,
-			string(decision),
+			decision,
 		)
-		n.emitEvent(candidate.Thread.featureID, "slack.answer_received", map[string]any{
-			"destination_kind": candidateDestinationKind(candidate.Thread.destinationKey),
-			"input_kind":       pending.Kind,
-			"tag":              pending.Tag,
-			"decision":         string(decision),
-			"medium":           "reply",
-		})
+		n.emitResponderAccepted(candidate.Thread, pending, decision, "reply")
 	}
 }
 
@@ -512,27 +511,18 @@ func (n *Notifier) processResponderReaction(
 	}
 	if pending.Resolution != nil {
 		n.judgeResponderReaction(candidate)
+		n.rejectResolvedReaction(token, candidate, pending, pending.Resolution)
 		return
 	}
-	if pending.Kind != string(ports.SlackPendingPermission) {
+	decision, parsed := responderReactionDecision(pending.Kind, candidate.Name)
+	if !parsed {
 		return
-	}
-	decision := ports.SlackPermissionAllowOnce
-	if candidate.Name == "x" {
-		decision = ports.SlackPermissionDeny
 	}
 	responderName := n.responderName(client, token, candidate.UserID)
-	result := n.answer.AnswerSlackPermission(ports.SlackPermissionAnswer{
-		RequestID:       pending.RequestID,
-		SourceFeatureID: pending.SourceFeatureID,
-		Decision:        decision,
-		Source: ports.AnswerSource{
-			Kind:      ports.AnswerSourceSlack,
-			Responder: responderName,
-		},
-	})
+	result := n.submitResponderAnswer(pending, decision, responderName)
 	n.judgeResponderReaction(candidate)
 	if result.Outcome != ports.SlackAnswerAccepted {
+		n.handleRejectedResponderReaction(token, candidate, pending, decision, result)
 		return
 	}
 	if n.resolveResponderTarget(
@@ -547,15 +537,250 @@ func (n *Notifier) processResponderReaction(
 			candidate.Thread,
 			"",
 			candidate.UserID,
-			string(decision),
+			decision,
 		)
-		n.emitEvent(candidate.Thread.featureID, "slack.answer_received", map[string]any{
-			"destination_kind": candidateDestinationKind(candidate.Thread.destinationKey),
-			"input_kind":       pending.Kind,
-			"tag":              pending.Tag,
-			"decision":         string(decision),
-			"medium":           "reaction",
+		n.emitResponderAccepted(candidate.Thread, pending, decision, "reaction")
+	}
+}
+
+func responderReplyDecision(inputKind, text string) (string, bool) {
+	switch inputKind {
+	case string(ports.SlackPendingPermission):
+		decision, ok := parsePermissionReply(text)
+		return string(decision), ok
+	case string(ports.SlackPendingReview):
+		return "approve", parseReviewReply(text)
+	default:
+		return "", false
+	}
+}
+
+func responderReactionDecision(inputKind, reaction string) (string, bool) {
+	switch inputKind {
+	case string(ports.SlackPendingPermission):
+		if reaction == "white_check_mark" {
+			return string(ports.SlackPermissionAllowOnce), true
+		}
+		if reaction == "x" {
+			return string(ports.SlackPermissionDeny), true
+		}
+	case string(ports.SlackPendingReview):
+		if reaction == "white_check_mark" {
+			return "approve", true
+		}
+	}
+	return "", false
+}
+
+func (n *Notifier) submitResponderAnswer(
+	pending pendingInputRecord,
+	decision, responderName string,
+) ports.SlackAnswerResult {
+	source := ports.AnswerSource{Kind: ports.AnswerSourceSlack, Responder: responderName}
+	switch pending.Kind {
+	case string(ports.SlackPendingPermission):
+		return n.answer.AnswerSlackPermission(ports.SlackPermissionAnswer{
+			RequestID: pending.RequestID, SourceFeatureID: pending.SourceFeatureID,
+			Decision: ports.SlackPermissionDecision(decision), Source: source,
 		})
+	case string(ports.SlackPendingReview):
+		return n.answer.ApproveSlackReview(ports.SlackReviewApproval{
+			SourceFeatureID: pending.SourceFeatureID, ReviewID: pending.ReviewID,
+			SourceRevision: pending.SourceRevision, Source: source,
+		})
+	default:
+		return ports.SlackAnswerResult{Outcome: ports.SlackAnswerFailed}
+	}
+}
+
+func (n *Notifier) handleRejectedResponderReply(
+	token string,
+	candidate responderReplyCandidate,
+	pending pendingInputRecord,
+	decision string,
+	result ports.SlackAnswerResult,
+) {
+	switch result.Outcome {
+	case ports.SlackAnswerRevisionMoved:
+		n.rejectResponderReply(token, candidate, pending, "stale_revision", "warning",
+			pending.Tag+" changed in Agentico. Approve the current review there.")
+	case ports.SlackAnswerNoLongerPending:
+		n.rejectResponderReply(token, candidate, pending, "already_resolved", "warning",
+			pending.Tag+" was already answered by Agentico.")
+	case ports.SlackAnswerFailed:
+		n.logResponderFailure(token, result.Cause)
+		n.rejectResponderReply(token, candidate, pending, "submit_failed", "warning",
+			pending.Tag+" could not be submitted. Answer again or in Agentico.")
+	default:
+		n.emitResponderRejected(candidate.Thread, pending, decision, "reply", "submit_failed")
+	}
+}
+
+func (n *Notifier) handleRejectedResponderReaction(
+	token string,
+	candidate responderReactionCandidate,
+	pending pendingInputRecord,
+	decision string,
+	result ports.SlackAnswerResult,
+) {
+	line := ""
+	reason := ""
+	switch result.Outcome {
+	case ports.SlackAnswerRevisionMoved:
+		reason = "stale_revision"
+		line = pending.Tag + " changed in Agentico. Approve the current review there."
+	case ports.SlackAnswerNoLongerPending:
+		reason = "already_resolved"
+		line = pending.Tag + " was already answered by Agentico."
+	case ports.SlackAnswerFailed:
+		reason = "submit_failed"
+		line = pending.Tag + " could not be submitted. Answer again or in Agentico."
+		n.logResponderFailure(token, result.Cause)
+	default:
+		return
+	}
+	n.enqueueResponderFeedback(token, candidate.Thread, pending.SourceFeatureID, "", "", line)
+	n.emitResponderRejected(candidate.Thread, pending, decision, "reaction", reason)
+}
+
+func (n *Notifier) rejectResolvedReply(
+	token string,
+	candidate responderReplyCandidate,
+	pending pendingInputRecord,
+	resolution *postingResolution,
+) {
+	n.rejectResponderReply(token, candidate, pending, "already_resolved", "warning",
+		alreadyAnsweredLine(pending.Tag, resolution))
+}
+
+func (n *Notifier) rejectResolvedReaction(
+	token string,
+	candidate responderReactionCandidate,
+	pending pendingInputRecord,
+	resolution *postingResolution,
+) {
+	n.enqueueResponderFeedback(
+		token,
+		candidate.Thread,
+		pending.SourceFeatureID,
+		"",
+		"",
+		alreadyAnsweredLine(pending.Tag, resolution),
+	)
+	n.emitResponderRejected(candidate.Thread, pending, "", "reaction", "already_resolved")
+}
+
+func alreadyAnsweredLine(tag string, resolution *postingResolution) string {
+	if resolution != nil && resolution.Kind == resolutionSlack && resolution.ResponderID != "" {
+		return tag + " was already answered by <@" + resolution.ResponderID + ">."
+	}
+	return tag + " was already answered by Agentico."
+}
+
+func responderUnparseableReason(inputKind string) string {
+	if inputKind == string(ports.SlackPendingPermission) ||
+		inputKind == string(ports.SlackPendingReview) {
+		return "unparseable"
+	}
+	return "not_answerable"
+}
+
+func responderHint(pending pendingInputRecord) string {
+	switch pending.Kind {
+	case string(ports.SlackPendingPermission):
+		return pending.Tag + " accepts ✅ or ❌, or a reply of allow or deny."
+	case string(ports.SlackPendingReview):
+		return pending.Tag + " accepts ✅ or approve. Request changes in Agentico."
+	default:
+		return pending.Tag + " is answered in Agentico."
+	}
+}
+
+func (n *Notifier) rejectResponderReply(
+	token string,
+	candidate responderReplyCandidate,
+	pending pendingInputRecord,
+	reason, reaction, line string,
+) {
+	n.enqueueResponderFeedback(
+		token,
+		candidate.Thread,
+		firstNonempty(pending.SourceFeatureID, candidate.Thread.featureID),
+		candidate.Message.TS,
+		reaction,
+		line,
+	)
+	decision, _ := responderReplyDecision(pending.Kind, candidate.Message.Text)
+	n.emitResponderRejected(candidate.Thread, pending, decision, "reply", reason)
+}
+
+func (n *Notifier) enqueueResponderFeedback(
+	token string,
+	source responderThread,
+	sourceFeatureID string,
+	messageTS, reaction, line string,
+) {
+	work := make([]workItem, 0, 2)
+	if messageTS != "" && reaction != "" {
+		work = append(work, workItem{
+			featureID: source.featureID, sourceFeatureID: sourceFeatureID,
+			destinationKey: source.destinationKey,
+			kind:           candidateDestinationKind(source.destinationKey), channelID: source.channelID,
+			responder: true, reaction: reactionPayload{messageTS: messageTS, name: reaction},
+		})
+	}
+	if line != "" {
+		work = append(work, workItem{
+			featureID: source.featureID, sourceFeatureID: sourceFeatureID,
+			destinationKey: source.destinationKey,
+			kind:           candidateDestinationKind(source.destinationKey), channelID: source.channelID,
+			responder: true, reply: replyPayload{
+				kind: kindNeedsInput, fallback: scrub(token, line),
+			},
+		})
+	}
+	if len(work) == 0 {
+		return
+	}
+	item := queueItem{
+		kind:  kindNeedsInput,
+		event: ports.Event{Type: ports.SessionOutput, FeatureID: source.featureID},
+	}
+	item.reservation = n.queue.reserveProtected(item.event)
+	n.dispatchDeliveryGroup(item, work)
+}
+
+func (n *Notifier) emitResponderAccepted(
+	thread responderThread,
+	pending pendingInputRecord,
+	decision, medium string,
+) {
+	n.emitEvent(thread.featureID, "slack.answer_received", map[string]any{
+		"destination_kind": candidateDestinationKind(thread.destinationKey),
+		"input_kind":       pending.Kind, "tag": pending.Tag,
+		"decision": decision, "medium": medium,
+	})
+}
+
+func (n *Notifier) emitResponderRejected(
+	thread responderThread,
+	pending pendingInputRecord,
+	decision, medium, reason string,
+) {
+	data := map[string]any{
+		"destination_kind": candidateDestinationKind(thread.destinationKey),
+		"input_kind":       pending.Kind, "tag": pending.Tag,
+		"medium": medium, "reason": reason,
+	}
+	if decision != "" {
+		data["decision"] = decision
+	}
+	n.emitEvent(thread.featureID, "slack.answer_rejected", data)
+}
+
+func (n *Notifier) logResponderFailure(token string, cause error) {
+	if cause != nil {
+		log.Printf("slack-notifier: submitting a Slack answer failed: %s", scrub(token, cause.Error()))
 	}
 }
 

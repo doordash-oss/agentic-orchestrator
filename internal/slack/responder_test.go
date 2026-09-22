@@ -80,6 +80,8 @@ type fakeSlackAnswerPort struct {
 	mu                sync.Mutex
 	permissionAnswers []ports.SlackPermissionAnswer
 	permissionResults []ports.SlackAnswerResult
+	reviewApprovals   []ports.SlackReviewApproval
+	reviewResults     []ports.SlackAnswerResult
 }
 
 func (p *fakeSlackAnswerPort) AnswerSlackPermission(
@@ -96,9 +98,17 @@ func (p *fakeSlackAnswerPort) AnswerSlackPermission(
 	return ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted}
 }
 
-func (*fakeSlackAnswerPort) ApproveSlackReview(
-	ports.SlackReviewApproval,
+func (p *fakeSlackAnswerPort) ApproveSlackReview(
+	approval ports.SlackReviewApproval,
 ) ports.SlackAnswerResult {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.reviewApprovals = append(p.reviewApprovals, approval)
+	if len(p.reviewResults) > 0 {
+		result := p.reviewResults[0]
+		p.reviewResults = p.reviewResults[1:]
+		return result
+	}
 	return ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted}
 }
 
@@ -106,6 +116,12 @@ func (p *fakeSlackAnswerPort) permissionSubmissions() []ports.SlackPermissionAns
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]ports.SlackPermissionAnswer(nil), p.permissionAnswers...)
+}
+
+func (p *fakeSlackAnswerPort) reviewSubmissions() []ports.SlackReviewApproval {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]ports.SlackReviewApproval(nil), p.reviewApprovals...)
 }
 
 func TestSlackResponderReplyGrammar(t *testing.T) {

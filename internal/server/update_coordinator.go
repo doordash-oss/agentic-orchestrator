@@ -365,9 +365,6 @@ func (c *updateCoordinator) run(ctx context.Context) {
 	defer cancel()
 	c.performCheck(ctx, "initial")
 	for {
-		// A wake that arrived while the last check ran is satisfied by it:
-		// drain it so coalesced requests never queue a second worker.
-		c.drainWake()
 		next, has := c.nextDeadline()
 		if !has {
 			select {
@@ -396,7 +393,8 @@ func (c *updateCoordinator) run(ctx context.Context) {
 	}
 }
 
-// drainWake absorbs one pending wake signal.
+// drainWake absorbs one pending wake signal. The caller must hold c.mu so
+// requestCheck cannot enqueue across a check's completion boundary.
 func (c *updateCoordinator) drainWake() {
 	select {
 	case <-c.wake:
@@ -436,9 +434,8 @@ func (c *updateCoordinator) retryDeadlineRefusal() *errcat.Error {
 // network I/O.
 func (c *updateCoordinator) requestCheck() {
 	c.mu.Lock()
-	stopped := c.stopped
-	c.mu.Unlock()
-	if stopped {
+	defer c.mu.Unlock()
+	if c.stopped {
 		return
 	}
 	select {
@@ -454,10 +451,7 @@ func (c *updateCoordinator) performCheck(ctx context.Context, trigger string) {
 	c.mu.Lock()
 	// Absorb any pending wake: this check satisfies it, so signals arriving
 	// while a check runs coalesce instead of queueing a second worker.
-	select {
-	case <-c.wake:
-	default:
-	}
+	c.drainWake()
 	if c.stopped {
 		c.mu.Unlock()
 		return
@@ -490,6 +484,10 @@ func (c *updateCoordinator) performCheck(ctx context.Context, trigger string) {
 		c.mu.Unlock()
 		return
 	}
+	// Coalesce only requests accepted before completion. Do this under the
+	// same lock as requestCheck and before exposing the finished snapshot:
+	// a request arriving after publication must survive for the next check.
+	c.drainWake()
 	result := c.applyCheckResultLocked(sel, err, lookup, lookupErr)
 	newStatus := c.state.status
 	revision = c.commitRevisionLocked()

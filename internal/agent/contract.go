@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -479,6 +480,7 @@ func verificationScopeViolations(planText string) []ProtocolViolation {
 			}
 		}
 	}
+	violations = append(violations, evidenceCapabilityViolations(planText)...)
 	topLevel, _ := splitPlanForVerification(planText)
 	for _, step := range ParsePlanVerification(topLevel) {
 		repo := strings.TrimSpace(step.Repo)
@@ -844,4 +846,40 @@ func JoinProtocolViolations(violations []ProtocolViolation) string {
 		parts = append(parts, v.Artifact+": "+v.Reason)
 	}
 	return strings.Join(parts, "; ")
+}
+
+// externalHostRE matches a URL or bare domain in evidence prose. It is the
+// deterministic signal that a capture or observation targets a third-party
+// surface rather than the repository's own UI.
+var externalHostRE = regexp.MustCompile(`(?i)\bhttps?://[^\s)]+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|io|net|org|dev|ai|app|co)\b`)
+
+// evidenceCapabilityViolations rejects visual or manual evidence rows that
+// name an external host without declaring the capability that reaches it.
+// Without the declaration the harness cannot probe the environment up front,
+// and the implementer only discovers the missing login after an iteration.
+func evidenceCapabilityViolations(planText string) []ProtocolViolation {
+	var violations []ProtocolViolation
+	check := func(kind, description string, capabilities []VerificationCapability) {
+		host := externalHostRE.FindString(description)
+		if host == "" || len(capabilities) > 0 {
+			return
+		}
+		violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: fmt.Sprintf(
+			"%s evidence %q targets external host %q without a capability declaration; add `[agentico capability: authenticated-browser(<host>)]` (or another built-in capability) to the row, or capture the repository's own surface instead", kind, truncateForFeedback(description, 80), host)})
+	}
+	for _, step := range ParsePlanVisualEvidence(planText) {
+		check("visual", step.Description, step.Capabilities)
+	}
+	for _, step := range ParsePlanManualVerification(planText) {
+		check("manual", step.Description, step.Capabilities)
+	}
+	return violations
+}
+
+func truncateForFeedback(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "…"
 }

@@ -15,21 +15,34 @@
 package observe
 
 import (
+	"context"
+
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"go.uber.org/fx"
 )
 
 // Params holds fx-injected parameters for the observe module.
 type Params struct {
 	fx.In
-	Config   *config.Config
-	StateDir string `name:"stateDir"`
+	Config    *config.Config
+	StateDir  string `name:"stateDir"`
+	Lifecycle fx.Lifecycle
+	Store     *feature.Store `optional:"true"`
 }
 
 // Module provides the Observer via fx.
 var Module = fx.Module("observe",
 	fx.Provide(func(p Params) *Observer {
 		obs := p.Config.Observability
-		return New(obs.Events, p.StateDir, obs.OTelEnabled, obs.OTelEndpoint, obs.OTelInsecure, obs.OTelServiceName)
+		o := New(obs.Events, p.StateDir, obs.OTelEnabled, obs.OTelEndpoint, obs.OTelInsecure, obs.OTelServiceName)
+		if p.Store != nil {
+			p.Store.SetMutationObserver(o)
+			if features, err := p.Store.List(); err == nil || feature.IsPartialLoadError(err) {
+				o.initializeActive(features)
+			}
+		}
+		p.Lifecycle.Append(fx.Hook{OnStop: func(context.Context) error { return o.Shutdown() }})
+		return o
 	}),
 )

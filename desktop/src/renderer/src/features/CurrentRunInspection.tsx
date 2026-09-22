@@ -116,6 +116,8 @@ export interface CurrentRunInspectionProps {
    * logs, with their open-file overlay). Defaults to 'live'.
    */
   mode?: 'live' | 'files';
+  /** Files mode only: opens the testing-contract waiver dialog from the artifacts column. */
+  onWaiveTestingContract?(): void;
   /**
    * Host node for the restyled full-screen expand icon, supplied by the
    * stage-bar row's trailing side. Falls back to rendering inline above the
@@ -273,6 +275,7 @@ function FilesSurface({
   contentError,
   onOpen,
   onRefresh,
+  onWaiveTestingContract,
 }: {
   artifacts: RunArtifactsListResult['artifacts'];
   logs: RunLogView[];
@@ -282,6 +285,7 @@ function FilesSurface({
   onOpen(kind: 'artifact' | 'log', id: string, size?: number, label?: string): void;
   /** Re-invokes the run-resource refresh that carries the log listing. */
   onRefresh(): void;
+  onWaiveTestingContract?(): void;
 }): React.ReactElement {
   const channels = logs.length === 0 ? [] : groupLogsByChannel(logs);
   return (
@@ -307,6 +311,15 @@ function FilesSurface({
           <h4 className="current-inspection__files-heading">
             <span>Run artifacts</span>
             <span className="current-inspection__resource-count">{artifacts.length}</span>
+            {onWaiveTestingContract === undefined ? null : (
+              <button
+                type="button"
+                className="attention-button current-inspection__files-action"
+                onClick={onWaiveTestingContract}
+              >
+                Waive contract items
+              </button>
+            )}
           </h4>
           {artifacts.length === 0 ? (
             <p className="setup-step__empty">No current-run artifacts yet.</p>
@@ -468,6 +481,7 @@ export function CurrentRunInspection({
   onSessionSettled,
   presentation = 'regular',
   mode = 'live',
+  onWaiveTestingContract,
   expandHost = null,
   controlsHost = null,
 }: CurrentRunInspectionProps): React.ReactElement {
@@ -533,6 +547,17 @@ export function CurrentRunInspection({
   const [verificationTicks, setVerificationTicks] = useState<ConversationItem[]>([]);
   const observedVerificationRef = useRef<Map<string, string> | null>(null);
   const verificationTickSeqRef = useRef(0);
+  // Ticks belong to the phase run that produced them: once the feature moves
+  // to another phase (or roadmap phase), the previous checks are history the
+  // Files surface owns, not events in the new phase's stream.
+  const verificationScope = `${featureId}:${runNumber}:${currentPhase}:${currentRoadmapPhase ?? ''}`;
+  const verificationScopeRef = useRef(verificationScope);
+  useEffect(() => {
+    if (verificationScopeRef.current === verificationScope) return;
+    verificationScopeRef.current = verificationScope;
+    observedVerificationRef.current = null;
+    setVerificationTicks([]);
+  }, [verificationScope]);
   useEffect(() => {
     if (verificationItems === undefined) return;
     const observed = observedVerificationRef.current;
@@ -727,6 +752,9 @@ export function CurrentRunInspection({
       onRefresh={() => {
         void refresh();
       }}
+      {...(mode === 'files' && onWaiveTestingContract !== undefined
+        ? { onWaiveTestingContract }
+        : {})}
     />
   );
 

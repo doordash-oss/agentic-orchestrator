@@ -29,7 +29,10 @@ import (
 type cascadeTestWorktrees struct {
 	store       *feature.Store
 	refs        map[string]string
+	ancestors   map[string][]string // descendant SHA -> its ancestors
+	ancestorErr error
 	removeCalls int
+	updateCalls int
 	removeErr   error
 }
 
@@ -64,11 +67,26 @@ func (w *cascadeTestWorktrees) RefSHAOrAbsent(_ string, ref string) (string, boo
 	return sha, !ok, nil
 }
 func (w *cascadeTestWorktrees) UpdateRef(_ string, ref, oldSHA, newSHA string) error {
+	w.updateCalls++
 	if w.refs[ref] != oldSHA {
 		return errors.New("ref moved")
 	}
 	w.refs[ref] = newSHA
 	return nil
+}
+func (w *cascadeTestWorktrees) IsAncestor(_ string, ancestor, descendant string) (bool, error) {
+	if w.ancestorErr != nil {
+		return false, w.ancestorErr
+	}
+	if ancestor == descendant {
+		return true, nil
+	}
+	for _, sha := range w.ancestors[descendant] {
+		if sha == ancestor {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 func (*cascadeTestWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport, error) {
 	return &git.CleanlinessReport{}, nil
@@ -564,4 +582,319 @@ func receiveCascadeEvent(t *testing.T, events <-chan ports.Event) ports.Event {
 		t.Fatal("cascade recovery emitted no relationship event")
 		return ports.Event{}
 	}
+}
+
+func TestDeleteCascadeClassifiesSharedParentRefAcrossChildren(t *testing.T) {
+	t.Parallel()
+
+	const ref = "refs/heads/feature/parent"
+	// "older" promoted first (anchor -> candidate-1) and "newer" promoted on
+	// top of it (candidate-1 -> candidate-2). The IDs sort in the opposite
+	// order so classification cannot rely on journal order.
+	older := feature.RepoTransactionEntry{
+		Repo: "repo-a",
+		Refs: []feature.RepoTransactionRef{{
+			Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate-1",
+		}},
+		ApplyState: feature.RepoApplyApplied,
+	}
+	newer := feature.RepoTransactionEntry{
+		Repo: "repo-a",
+		Refs: []feature.RepoTransactionRef{{
+			Branch: "feature/parent", AnchorSHA: "candidate-1", CandidateSHA: "candidate-2",
+		}},
+		ApplyState: feature.RepoApplyApplied,
+	}
+	// A rebase pass-through child whose candidate is its anchor.
+	passThrough := feature.RepoTransactionEntry{
+		Repo: "repo-a",
+		Refs: []feature.RepoTransactionRef{{
+			Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "anchor",
+		}},
+		ApplyState: feature.RepoApplyApplied,
+	}
+
+	tests := []struct {
+		name            string
+		children        map[string]feature.RepoTransactionEntry
+		observed        string
+		ancestors       map[string][]string
+		ancestorErr     error
+		wantStatus      feature.CascadeDeleteStatus
+		wantRef         string
+		wantUpdateCalls int
+		wantDiagCode    string
+	}{
+		{
+			name:            "single child at candidate restores anchor",
+			children:        map[string]feature.RepoTransactionEntry{"older": older},
+			observed:        "candidate-1",
+			wantStatus:      feature.CascadeDeleteCompleted,
+			wantRef:         "anchor",
+			wantUpdateCalls: 1,
+		},
+		{
+			name:       "single child at anchor leaves ref alone",
+			children:   map[string]feature.RepoTransactionEntry{"older": older},
+			observed:   "anchor",
+			wantStatus: feature.CascadeDeleteCompleted,
+			wantRef:    "anchor",
+		},
+		{
+			name:            "two children at latest candidate restore latest anchor",
+			children:        map[string]feature.RepoTransactionEntry{"older": older, "newer": newer},
+			observed:        "candidate-2",
+			wantStatus:      feature.CascadeDeleteCompleted,
+			wantRef:         "candidate-1",
+			wantUpdateCalls: 1,
+		},
+		{
+			name:       "two children at latest anchor leave ref alone",
+			children:   map[string]feature.RepoTransactionEntry{"older": older, "newer": newer},
+			observed:   "candidate-1",
+			wantStatus: feature.CascadeDeleteCompleted,
+			wantRef:    "candidate-1",
+		},
+		{
+			name:       "two children at earliest anchor leave ref alone",
+			children:   map[string]feature.RepoTransactionEntry{"older": older, "newer": newer},
+			observed:   "anchor",
+			wantStatus: feature.CascadeDeleteCompleted,
+			wantRef:    "anchor",
+		},
+		{
+			name:       "two children advanced past latest candidate leave ref alone",
+			children:   map[string]feature.RepoTransactionEntry{"older": older, "newer": newer},
+			observed:   "advanced",
+			ancestors:  map[string][]string{"advanced": {"candidate-2", "candidate-1", "anchor"}},
+			wantStatus: feature.CascadeDeleteCompleted,
+			wantRef:    "advanced",
+		},
+		{
+			name:       "pass-through child advanced past anchor leaves ref alone",
+			children:   map[string]feature.RepoTransactionEntry{"older": passThrough},
+			observed:   "advanced",
+			ancestors:  map[string][]string{"advanced": {"anchor"}},
+			wantStatus: feature.CascadeDeleteCompleted,
+			wantRef:    "advanced",
+		},
+		{
+			name:         "two children unrelated history parks",
+			children:     map[string]feature.RepoTransactionEntry{"older": older, "newer": newer},
+			observed:     "external",
+			ancestors:    map[string][]string{"external": {"unrelated-root"}},
+			wantStatus:   feature.CascadeDeleteAttentionRequired,
+			wantRef:      "external",
+			wantDiagCode: "external_ref_moved",
+		},
+		{
+			name:         "ancestry check failure parks",
+			children:     map[string]feature.RepoTransactionEntry{"older": older, "newer": newer},
+			observed:     "advanced",
+			ancestorErr:  errors.New("bad object"),
+			wantStatus:   feature.CascadeDeleteAttentionRequired,
+			wantRef:      "advanced",
+			wantDiagCode: "ref_read_failed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store, parent := saveCascadeTestPromotedChildren(t, tt.children)
+			worktrees := &cascadeTestWorktrees{
+				store: store, refs: map[string]string{ref: tt.observed},
+				ancestors: tt.ancestors, ancestorErr: tt.ancestorErr,
+			}
+			o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
+
+			result, err := o.DeleteCascade(parent.ID)
+			if err != nil {
+				t.Fatalf("DeleteCascade: %v", err)
+			}
+			if result.Status != tt.wantStatus {
+				t.Fatalf("status = %q, want %q (diagnostics %+v)", result.Status, tt.wantStatus, result.Diagnostics)
+			}
+			if worktrees.refs[ref] != tt.wantRef {
+				t.Fatalf("ref = %q, want %q", worktrees.refs[ref], tt.wantRef)
+			}
+			if worktrees.updateCalls != tt.wantUpdateCalls {
+				t.Fatalf("UpdateRef calls = %d, want %d", worktrees.updateCalls, tt.wantUpdateCalls)
+			}
+			if tt.wantStatus == feature.CascadeDeleteCompleted {
+				if _, err := store.Load(parent.ID); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("parent load error = %v, want not exist", err)
+				}
+				return
+			}
+			if len(result.Diagnostics) != len(tt.children) {
+				t.Fatalf("diagnostics = %+v, want one per journaled entry", result.Diagnostics)
+			}
+			for _, diag := range result.Diagnostics {
+				if diag.Code != tt.wantDiagCode || diag.ObservedSHA != tt.observed {
+					t.Fatalf("diagnostic = %+v, want %s at %q", diag, tt.wantDiagCode, tt.observed)
+				}
+			}
+			if worktrees.removeCalls != 0 {
+				t.Fatalf("cleanup calls = %d, want 0", worktrees.removeCalls)
+			}
+			if _, err := store.Load(parent.ID); err != nil {
+				t.Fatalf("parent deleted: %v", err)
+			}
+			for id := range tt.children {
+				if _, err := store.Load(id); err != nil {
+					t.Fatalf("child %s deleted: %v", id, err)
+				}
+			}
+		})
+	}
+}
+
+func TestDeleteCascadeRecordsRestoredEntryOnlyOnce(t *testing.T) {
+	t.Parallel()
+
+	const ref = "refs/heads/feature/parent"
+	store, parent := saveCascadeTestPromotedChildren(t, map[string]feature.RepoTransactionEntry{
+		"older": {
+			Repo: "repo-a",
+			Refs: []feature.RepoTransactionRef{{
+				Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate-1",
+			}},
+			ApplyState: feature.RepoApplyApplied,
+		},
+		"newer": {
+			Repo: "repo-a",
+			Refs: []feature.RepoTransactionRef{{
+				Branch: "feature/parent", AnchorSHA: "candidate-1", CandidateSHA: "candidate-2",
+			}},
+			ApplyState: feature.RepoApplyApplied,
+		},
+	})
+	worktrees := &cascadeTestWorktrees{
+		store: store, refs: map[string]string{ref: "candidate-2"}, removeErr: errors.New("device busy"),
+	}
+	o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
+
+	// Resource cleanup fails so the journal survives with its classification.
+	result, err := o.DeleteCascade(parent.ID)
+	if err != nil {
+		t.Fatalf("DeleteCascade: %v", err)
+	}
+	if result.Status != feature.CascadeDeleteCleanupPending {
+		t.Fatalf("status = %q, want cleanup_pending", result.Status)
+	}
+	intent, err := store.LoadCascadeDelete(parent.ID)
+	if err != nil {
+		t.Fatalf("LoadCascadeDelete: %v", err)
+	}
+	if intent.Step != feature.CascadeStepRefsSafe || len(intent.Refs) != 2 {
+		t.Fatalf("intent step = %q refs = %+v", intent.Step, intent.Refs)
+	}
+	for _, journaled := range intent.Refs {
+		if !journaled.Safe || journaled.ObservedSHA != "candidate-1" || journaled.Diagnostic != "" {
+			t.Fatalf("ref = %+v, want safe at candidate-1", journaled)
+		}
+		if journaled.Restored != (journaled.ChildID == "newer") {
+			t.Fatalf("ref = %+v, want restored only on the child whose candidate was observed", journaled)
+		}
+	}
+	if worktrees.refs[ref] != "candidate-1" || worktrees.updateCalls != 1 {
+		t.Fatalf("ref = %q after %d updates, want candidate-1 after 1", worktrees.refs[ref], worktrees.updateCalls)
+	}
+}
+
+func TestDeleteCascadeRecordsAdvancedRefWithoutRestoring(t *testing.T) {
+	t.Parallel()
+
+	const ref = "refs/heads/feature/parent"
+	store, parent := saveCascadeTestPromotedChildren(t, map[string]feature.RepoTransactionEntry{
+		"older": {
+			Repo: "repo-a",
+			Refs: []feature.RepoTransactionRef{{
+				Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate-1",
+			}},
+			ApplyState: feature.RepoApplyApplied,
+		},
+		"newer": {
+			Repo: "repo-a",
+			Refs: []feature.RepoTransactionRef{{
+				Branch: "feature/parent", AnchorSHA: "candidate-1", CandidateSHA: "candidate-2",
+			}},
+			ApplyState: feature.RepoApplyApplied,
+		},
+	})
+	worktrees := &cascadeTestWorktrees{
+		store: store, refs: map[string]string{ref: "advanced"},
+		ancestors: map[string][]string{"advanced": {"candidate-2"}},
+		removeErr: errors.New("device busy"),
+	}
+	o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
+
+	// Resource cleanup fails so the journal survives with its classification.
+	result, err := o.DeleteCascade(parent.ID)
+	if err != nil {
+		t.Fatalf("DeleteCascade: %v", err)
+	}
+	if result.Status != feature.CascadeDeleteCleanupPending {
+		t.Fatalf("status = %q, want cleanup_pending", result.Status)
+	}
+	intent, err := store.LoadCascadeDelete(parent.ID)
+	if err != nil {
+		t.Fatalf("LoadCascadeDelete: %v", err)
+	}
+	if intent.Step != feature.CascadeStepRefsSafe || len(intent.Refs) != 2 {
+		t.Fatalf("intent step = %q refs = %+v", intent.Step, intent.Refs)
+	}
+	for _, journaled := range intent.Refs {
+		if !journaled.Safe || journaled.Restored || journaled.ObservedSHA != "advanced" ||
+			journaled.Code != "ref_advanced" || journaled.Diagnostic == "" {
+			t.Fatalf("ref = %+v, want safe, unrestored, noted as ref_advanced", journaled)
+		}
+	}
+	if worktrees.refs[ref] != "advanced" || worktrees.updateCalls != 0 {
+		t.Fatalf("ref = %q after %d updates, want untouched", worktrees.refs[ref], worktrees.updateCalls)
+	}
+}
+
+// saveCascadeTestPromotedChildren persists a parent whose closed children
+// each promoted one transaction entry into the same parent branch.
+func saveCascadeTestPromotedChildren(
+	t *testing.T,
+	children map[string]feature.RepoTransactionEntry,
+) (*feature.Store, *feature.Feature) {
+	t.Helper()
+	store := feature.NewStore(filepath.Join(t.TempDir(), "features"))
+	parent := &feature.Feature{
+		ID: "parent", Slug: "parent", SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun: 1, RunCount: 1,
+		Repos: []feature.FeatureRepo{{
+			Name: "repo-a", Path: "/repos/a", WorktreePath: "/worktrees/parent/a",
+			Branch: "feature/parent",
+		}},
+	}
+	if err := store.Save(parent); err != nil {
+		t.Fatal(err)
+	}
+	closedAt := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	for id, entry := range children {
+		child := &feature.Feature{
+			ID: id, Slug: id, SchemaVersion: feature.SchemaVersionCurrent,
+			ActiveRun: 1, RunCount: 1,
+			Parent: &feature.ChildRelationship{
+				ParentID:     parent.ID,
+				CloseOutcome: feature.ChildCloseOutcomeCompleted, ClosedAt: &closedAt,
+				Transaction: &feature.TransactionJournal{
+					Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{entry},
+				},
+			},
+			Repos: []feature.FeatureRepo{{
+				Name: "repo-a", Path: "/repos/a", WorktreePath: "/worktrees/" + id + "/a",
+				Branch: "feature/" + id,
+			}},
+		}
+		if err := store.Save(child); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return store, parent
 }

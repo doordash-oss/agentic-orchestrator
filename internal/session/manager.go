@@ -477,6 +477,13 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 			s.setStatusLocked(SessionWaitingPermission)
 		}
 	case msg.Result != nil:
+		// Failed autonomous work must not become a synthetic help request.
+		// The phase waiter owns stopping the still-live provider transport;
+		// chat remains available for the user's next turn after an error.
+		if s.kind != ports.KindChat && (msg.Result.IsError || msg.Result.Subtype == "error") {
+			s.setStatusLocked(SessionFailed)
+			break
+		}
 		interactive := s.turnMode == ports.TurnModeInteractive
 		// Result received — turn completed. Preserve WaitingHelp when an
 		// AskUserQuestion is still outstanding. Interactive sessions also

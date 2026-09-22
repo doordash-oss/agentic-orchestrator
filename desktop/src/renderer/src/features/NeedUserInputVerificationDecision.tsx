@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import type { VerificationGateAction } from '../../../shared/ipc';
+import { VerificationGateActionSchema, type VerificationGateAction } from '../../../shared/ipc';
 import type { AttentionGate } from './NeedUserInputModal';
 
 export interface NeedUserInputVerificationDecisionProps {
@@ -30,10 +30,25 @@ export function hasStructuredVerificationDecision(item: AttentionGate): boolean 
     verification !== undefined &&
     verification.blockers.length > 0 &&
     item.questions.length === 1 &&
-    verification.allowedActions.length === 2 &&
     verification.allowedActions.includes('RETRY_AFTER_AUTH') &&
     verification.allowedActions.includes('WAIVE')
   );
+}
+
+export function isVerificationGateAction(value: string): value is VerificationGateAction {
+  return (VerificationGateActionSchema.options as readonly string[]).includes(value);
+}
+
+/** Primary-button verb for the selected structured decision. */
+export function verificationResumeLabel(action: VerificationGateAction | ''): string {
+  switch (action) {
+    case 'WAIVE':
+      return 'Waive and resume';
+    case 'ALLOW_SUBSTITUTE':
+      return 'Accept substitute and resume';
+    default:
+      return 'Retry verification';
+  }
 }
 
 export function NeedUserInputVerificationDecision({
@@ -119,6 +134,27 @@ export function NeedUserInputVerificationDecision({
               <small>Checks are recorded as user-authorized waivers and will not run.</small>
             </span>
           </label>
+          {verification.allowedActions.includes('ALLOW_SUBSTITUTE') ? (
+            <label
+              className="need-input-verification__decision"
+              data-selected={selectedAction === 'ALLOW_SUBSTITUTE'}
+            >
+              <input
+                type="radio"
+                name={`${idPrefix}-verification-action`}
+                value="ALLOW_SUBSTITUTE"
+                checked={selectedAction === 'ALLOW_SUBSTITUTE'}
+                onChange={() => onSelect('ALLOW_SUBSTITUTE')}
+              />
+              <span>
+                <strong>Accept a faithful substitute for the blocked evidence</strong>
+                <small>
+                  The rows stay required; a local rendering or equivalent capture is accepted
+                  instead of the third-party surface.
+                </small>
+              </span>
+            </label>
+          ) : null}
         </div>
       </fieldset>
     </div>

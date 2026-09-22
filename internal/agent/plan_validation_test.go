@@ -1993,12 +1993,15 @@ func TestRoadmapLoopValidatorInfrastructureFailureDoesNotRevisePlan(t *testing.T
 		}
 	}
 
+	// Consume initialization and the initial prompt before returning a result:
+	// an eager fixture can otherwise exit while StartSession is still writing.
+	const receivePrompt = "read -r _initialize\nread -r _prompt\n"
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
-		testutil.JSONLInit+"\n"+
+		testutil.JSONLInit+"\n"+receivePrompt+
 			writeRoadmapArtifactSnippet(roadmapDir)+
 			testutil.JSONLSuccess+"\n")
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic-error.sh",
-		testutil.JSONLInit+"\n"+testutil.JSONLError("codex rejected turn/start")+"\n")
+		testutil.JSONLInit+"\n"+receivePrompt+testutil.JSONLError("codex rejected turn/start")+"\n")
 	buildSession := mockBuildSession(planScript, criticScript)
 	var callsMu sync.Mutex
 	plannerCalls := 0

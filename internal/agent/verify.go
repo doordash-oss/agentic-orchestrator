@@ -35,14 +35,17 @@ type VerificationStep struct {
 // prerequisite. It is deliberately declared rather than inferred from test
 // output so arbitrary failures cannot be mislabeled as authorization blocks.
 type VerificationCapability struct {
-	Name  string
+	Name string
+	// Probe is the planner-authored shell probe. Empty when Name resolves to
+	// a built-in registry capability such as authenticated-browser(host).
 	Probe string
 }
 
 // ManualVerificationStep represents one manual check extracted from a plan's
 // "Manual Verification" section.
 type ManualVerificationStep struct {
-	Description string
+	Description  string
+	Capabilities []VerificationCapability
 }
 
 // EvidenceRequirement represents one visual or behavioral artifact requirement
@@ -50,10 +53,11 @@ type ManualVerificationStep struct {
 // executable backtick span (the harness runs it); Width/Height come from an
 // optional [size: WxH] tag on visual bullets.
 type EvidenceRequirement struct {
-	Description string
-	Command     string
-	Width       int
-	Height      int
+	Description  string
+	Command      string
+	Width        int
+	Height       int
+	Capabilities []VerificationCapability
 }
 
 // ParsePlanVerification extracts automated verification commands from a plan's
@@ -296,7 +300,10 @@ func verificationStepFromSpan(line string, chosen []int) (VerificationStep, bool
 	}, true
 }
 
-var verificationCapabilityRE = regexp.MustCompile(`\[agentico capability:\s*([^;\]]+)\s*;\s*probe:\s*([^\]]+)\]`)
+// verificationCapabilityRE matches `[agentico capability: <name>; probe: <cmd>]`
+// and the probe-less `[agentico capability: <name>]` form, where <name> is a
+// built-in registry capability such as authenticated-browser(slack.com).
+var verificationCapabilityRE = regexp.MustCompile(`\[agentico capability:\s*([^;\]]+?)\s*(?:;\s*probe:\s*([^\]]+))?\]`)
 var verificationRepoRE = regexp.MustCompile(`(?i)\[repo:\s*([^\]]+)\]`)
 var verificationTimeoutRE = regexp.MustCompile(`(?i)\[timeout:\s*([^\]]+)\]`)
 
@@ -328,11 +335,17 @@ func parseVerificationCapabilities(line string) []VerificationCapability {
 	for _, match := range matches {
 		name := strings.TrimSpace(match[1])
 		probe := strings.TrimSpace(match[2])
-		if name != "" && probe != "" {
+		if name != "" {
 			out = append(out, VerificationCapability{Name: name, Probe: probe})
 		}
 	}
 	return out
+}
+
+// stripCapabilityTags removes capability declarations from a checklist
+// description and collapses the surrounding whitespace.
+func stripCapabilityTags(description string) string {
+	return strings.Join(strings.Fields(verificationCapabilityRE.ReplaceAllString(description, " ")), " ")
 }
 
 func parseManualChecklistItem(line string) (ManualVerificationStep, bool) {
@@ -343,7 +356,12 @@ func parseManualChecklistItem(line string) (ManualVerificationStep, bool) {
 	if isNoneRequiredDescription(description) {
 		return ManualVerificationStep{}, false
 	}
-	return ManualVerificationStep{Description: description}, true
+	capabilities := parseVerificationCapabilities(description)
+	description = stripCapabilityTags(description)
+	if description == "" {
+		return ManualVerificationStep{}, false
+	}
+	return ManualVerificationStep{Description: description, Capabilities: capabilities}, true
 }
 
 func parseEvidenceChecklistItem(line string) (EvidenceRequirement, bool) {
@@ -354,7 +372,8 @@ func parseEvidenceChecklistItem(line string) (EvidenceRequirement, bool) {
 	if isNoneRequiredDescription(description) {
 		return EvidenceRequirement{}, false
 	}
-	req := EvidenceRequirement{Description: description}
+	req := EvidenceRequirement{Description: description, Capabilities: parseVerificationCapabilities(description)}
+	req.Description = stripCapabilityTags(req.Description)
 	if m := evidenceSizeRE.FindStringSubmatch(req.Description); m != nil {
 		req.Width, _ = strconv.Atoi(m[1])
 		req.Height, _ = strconv.Atoi(m[2])

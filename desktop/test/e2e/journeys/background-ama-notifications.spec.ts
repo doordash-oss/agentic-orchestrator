@@ -226,9 +226,14 @@ test('packaged attention notifications are private, deduplicated, bounded, passi
     await waitForAttentionItem(handle, 'perm-allow-once');
     expect(await capturedNotifications(handle)).toHaveLength(0);
 
-    await hideMainWindow(handle, { refreshBackground: false });
+    // Answer while still focused, so the answered item can never be the one
+    // that notifies: a snapshot push landing between hide and answer would
+    // otherwise notify for perm-allow-once as well as perm-stale, and the two
+    // no-preview bodies are indistinguishable. Hide only once perm-stale is
+    // the sole pending item, then let the background refresh notify for it.
     await answerPermission(handle, 'perm-allow-once', 'allow_once');
     await waitForAttentionItem(handle, 'perm-stale');
+    await hideMainWindow(handle);
     await waitForNotificationCount(handle, 1);
     let notifications = await capturedNotifications(handle);
     expect(notifications[0]?.body).toBe('Agentico needs attention.');

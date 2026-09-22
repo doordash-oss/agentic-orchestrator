@@ -295,26 +295,27 @@ func (e ErrorScope) Valid() bool {
 
 // Defines values for FeatureAction.
 const (
-	FeatureActionCleanup             FeatureAction = "cleanup"
-	FeatureActionDelete              FeatureAction = "delete"
-	FeatureActionDiscard             FeatureAction = "discard"
-	FeatureActionMarkDone            FeatureAction = "mark-done"
-	FeatureActionMerge               FeatureAction = "merge"
-	FeatureActionNeedUserInput       FeatureAction = "need-user-input"
-	FeatureActionNeedUserInputDraft  FeatureAction = "need-user-input-draft"
-	FeatureActionPauseStop           FeatureAction = "pause-stop"
-	FeatureActionPublish             FeatureAction = "publish"
-	FeatureActionRebase              FeatureAction = "rebase"
-	FeatureActionRecreatePullRequest FeatureAction = "recreate-pull-request"
-	FeatureActionRefactor            FeatureAction = "refactor"
-	FeatureActionReopenPullRequest   FeatureAction = "reopen-pull-request"
-	FeatureActionRestart             FeatureAction = "restart"
-	FeatureActionResume              FeatureAction = "resume"
-	FeatureActionRetry               FeatureAction = "retry"
-	FeatureActionReviewFeedback      FeatureAction = "review-feedback"
-	FeatureActionRewind              FeatureAction = "rewind"
-	FeatureActionSetup               FeatureAction = "setup"
-	FeatureActionStart               FeatureAction = "start"
+	FeatureActionCleanup              FeatureAction = "cleanup"
+	FeatureActionDelete               FeatureAction = "delete"
+	FeatureActionDiscard              FeatureAction = "discard"
+	FeatureActionMarkDone             FeatureAction = "mark-done"
+	FeatureActionMerge                FeatureAction = "merge"
+	FeatureActionNeedUserInput        FeatureAction = "need-user-input"
+	FeatureActionNeedUserInputDraft   FeatureAction = "need-user-input-draft"
+	FeatureActionPauseStop            FeatureAction = "pause-stop"
+	FeatureActionPublish              FeatureAction = "publish"
+	FeatureActionRebase               FeatureAction = "rebase"
+	FeatureActionRecreatePullRequest  FeatureAction = "recreate-pull-request"
+	FeatureActionRefactor             FeatureAction = "refactor"
+	FeatureActionReopenPullRequest    FeatureAction = "reopen-pull-request"
+	FeatureActionRestart              FeatureAction = "restart"
+	FeatureActionResume               FeatureAction = "resume"
+	FeatureActionRetry                FeatureAction = "retry"
+	FeatureActionReviewFeedback       FeatureAction = "review-feedback"
+	FeatureActionRewind               FeatureAction = "rewind"
+	FeatureActionSetup                FeatureAction = "setup"
+	FeatureActionStart                FeatureAction = "start"
+	FeatureActionTestingContractWaive FeatureAction = "testing-contract-waive"
 )
 
 // Valid indicates whether the value is a known member of the FeatureAction enum.
@@ -359,6 +360,8 @@ func (e FeatureAction) Valid() bool {
 	case FeatureActionSetup:
 		return true
 	case FeatureActionStart:
+		return true
+	case FeatureActionTestingContractWaive:
 		return true
 	default:
 		return false
@@ -448,13 +451,16 @@ func (e InitializeRepositoryResponseResult) Valid() bool {
 
 // Defines values for NeedUserInputVerificationAction.
 const (
-	RETRYAFTERAUTH NeedUserInputVerificationAction = "RETRY_AFTER_AUTH"
-	WAIVE          NeedUserInputVerificationAction = "WAIVE"
+	ALLOWSUBSTITUTE NeedUserInputVerificationAction = "ALLOW_SUBSTITUTE"
+	RETRYAFTERAUTH  NeedUserInputVerificationAction = "RETRY_AFTER_AUTH"
+	WAIVE           NeedUserInputVerificationAction = "WAIVE"
 )
 
 // Valid indicates whether the value is a known member of the NeedUserInputVerificationAction enum.
 func (e NeedUserInputVerificationAction) Valid() bool {
 	switch e {
+	case ALLOWSUBSTITUTE:
+		return true
 	case RETRYAFTERAUTH:
 		return true
 	case WAIVE:
@@ -2088,21 +2094,22 @@ type ActionResponse struct {
 	FeatureRestartResponse      FeatureRestartResponse      `json:"feature_restart_response,omitempty"`
 
 	// FeatureSetupResponse Result of the setup action: durable server-owned setup (fresh run or retry of unfinished tasks) has been dispatched without starting orchestration. Progress is reported through the feature detail setup state and SSE invalidation events; on success the feature reaches a startable pre-orchestration state.
-	FeatureSetupResponse        FeatureSetupResponse        `json:"feature_setup_response,omitempty"`
-	FeatureStartResponse        FeatureStartResponse        `json:"feature_start_response,omitempty"`
-	FeatureStopResponse         FeatureStopResponse         `json:"feature_stop_response,omitempty"`
-	HelpSendResponse            HelpSendResponse            `json:"help_send_response,omitempty"`
-	MarkDoneResponse            MarkDoneResponse            `json:"mark_done_response,omitempty"`
-	MergeFeatureResponse        MergeFeatureResponse        `json:"merge_feature_response,omitempty"`
-	Meta                        ResponseMeta                `json:"meta,omitempty"`
-	NeedUserInputDraftResponse  NeedUserInputDraftResponse  `json:"need_user_input_draft_response,omitempty"`
-	NeedUserInputResumeResponse NeedUserInputResumeResponse `json:"need_user_input_resume_response,omitempty"`
-	PermissionAnswerResponse    PermissionAnswerResponse    `json:"permission_answer_response,omitempty"`
-	PublishFeatureResponse      PublishFeatureResponse      `json:"publish_feature_response,omitempty"`
-	RecoveryActionResponse      RecoveryActionResponse      `json:"recovery_action_response,omitempty"`
-	RetryFeatureResponse        RetryFeatureResponse        `json:"retry_feature_response,omitempty"`
-	RewindFeatureResponse       RewindFeatureResponse       `json:"rewind_feature_response,omitempty"`
-	RuntimeConfigUpdateResponse RuntimeConfigUpdateResponse `json:"runtime_config_update_response,omitempty"`
+	FeatureSetupResponse         FeatureSetupResponse         `json:"feature_setup_response,omitempty"`
+	FeatureStartResponse         FeatureStartResponse         `json:"feature_start_response,omitempty"`
+	FeatureStopResponse          FeatureStopResponse          `json:"feature_stop_response,omitempty"`
+	HelpSendResponse             HelpSendResponse             `json:"help_send_response,omitempty"`
+	MarkDoneResponse             MarkDoneResponse             `json:"mark_done_response,omitempty"`
+	MergeFeatureResponse         MergeFeatureResponse         `json:"merge_feature_response,omitempty"`
+	Meta                         ResponseMeta                 `json:"meta,omitempty"`
+	NeedUserInputDraftResponse   NeedUserInputDraftResponse   `json:"need_user_input_draft_response,omitempty"`
+	NeedUserInputResumeResponse  NeedUserInputResumeResponse  `json:"need_user_input_resume_response,omitempty"`
+	PermissionAnswerResponse     PermissionAnswerResponse     `json:"permission_answer_response,omitempty"`
+	PublishFeatureResponse       PublishFeatureResponse       `json:"publish_feature_response,omitempty"`
+	RecoveryActionResponse       RecoveryActionResponse       `json:"recovery_action_response,omitempty"`
+	RetryFeatureResponse         RetryFeatureResponse         `json:"retry_feature_response,omitempty"`
+	RewindFeatureResponse        RewindFeatureResponse        `json:"rewind_feature_response,omitempty"`
+	RuntimeConfigUpdateResponse  RuntimeConfigUpdateResponse  `json:"runtime_config_update_response,omitempty"`
+	TestingContractWaiveResponse TestingContractWaiveResponse `json:"testing_contract_waive_response,omitempty"`
 }
 
 // ActionResult defines model for ActionResult.
@@ -3143,7 +3150,7 @@ type NeedUserInputVerification struct {
 	Blockers       []NeedUserInputVerificationBlocker `json:"blockers"`
 }
 
-// NeedUserInputVerificationAction defines model for NeedUserInputVerificationAction.
+// NeedUserInputVerificationAction WAIVE records user-authorized waivers, RETRY_AFTER_AUTH re-probes after the user provides the missing capability, and ALLOW_SUBSTITUTE keeps the evidence requirement but authorizes a faithful substitute for blocked agent-owned evidence rows.
 type NeedUserInputVerificationAction string
 
 // NeedUserInputVerificationBlocker defines model for NeedUserInputVerificationBlocker.
@@ -4641,6 +4648,57 @@ type TaskActivityUsage struct {
 	DurationMs  int64 `json:"duration_ms,omitempty"`
 	ToolUses    int   `json:"tool_uses,omitempty"`
 	TotalTokens int   `json:"total_tokens,omitempty"`
+}
+
+// TestingContractDisposition defines model for TestingContractDisposition.
+type TestingContractDisposition struct {
+	ChangedBy string `json:"changed_by,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+
+	// Status waived is the only recorded status today.
+	Status string `json:"status"`
+}
+
+// TestingContractItem One compiled testing-contract row.
+type TestingContractItem struct {
+	AllowBlocked      bool                        `json:"allow_blocked"`
+	AllowSubstitution bool                        `json:"allow_substitution"`
+	AllowWaiver       bool                        `json:"allow_waiver"`
+	Capabilities      []string                    `json:"capabilities"`
+	Command           string                      `json:"command"`
+	Disposition       *TestingContractDisposition `json:"disposition,omitempty"`
+	ItemID            string                      `json:"item_id"`
+	Name              string                      `json:"name"`
+
+	// Owner harness or agent.
+	Owner    string `json:"owner"`
+	Repo     string `json:"repo,omitempty"`
+	Required bool   `json:"required"`
+
+	// Source plan, cross-repo, manual, visual, or behavioral.
+	Source string `json:"source"`
+}
+
+// TestingContractResponse defines model for TestingContractResponse.
+type TestingContractResponse struct {
+	// ActiveRun Run the contract belongs to; phase and revision numbers restart after a rewind.
+	ActiveRun    int                   `json:"active_run"`
+	APIVersion   string                `json:"api_version"`
+	FeatureID    string                `json:"feature_id"`
+	Items        []TestingContractItem `json:"items"`
+	Meta         ResponseMeta          `json:"meta,omitempty"`
+	Revision     int                   `json:"revision"`
+	RoadmapPhase int                   `json:"roadmap_phase"`
+}
+
+// TestingContractWaiveResponse defines model for TestingContractWaiveResponse.
+type TestingContractWaiveResponse struct {
+	APIVersion       string       `json:"api_version"`
+	ContractRevision int          `json:"contract_revision"`
+	FeatureID        string       `json:"feature_id"`
+	Meta             ResponseMeta `json:"meta,omitempty"`
+	Result           string       `json:"result"`
+	WaivedItems      []string     `json:"waived_items"`
 }
 
 // TextContentResponse defines model for TextContentResponse.

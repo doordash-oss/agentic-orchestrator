@@ -21,6 +21,7 @@ import type { AttentionItem, VerificationGateAction } from '../../../shared/ipc'
 import {
   hasStructuredVerificationDecision,
   NeedUserInputVerificationDecision,
+  verificationResumeLabel,
 } from './NeedUserInputVerificationDecision';
 
 afterEach(cleanup);
@@ -76,6 +77,41 @@ describe('NeedUserInputVerificationDecision', () => {
     expect(onSelect).toHaveBeenLastCalledWith('RETRY_AFTER_AUTH');
     await user.click(screen.getByRole('radio', { name: /Waive blocked checks/ }));
     expect(onSelect).toHaveBeenLastCalledWith('WAIVE');
+    expect(
+      screen.queryByRole('radio', { name: /Accept a faithful substitute/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers the substitute decision only when the server allows it', async () => {
+    const onSelect = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <NeedUserInputVerificationDecision
+        item={{
+          ...gate,
+          verification: {
+            ...gate.verification!,
+            allowedActions: ['RETRY_AFTER_AUTH', 'WAIVE', 'ALLOW_SUBSTITUTE'],
+          },
+        }}
+        selectedAction=""
+        idPrefix="verification-gate-1"
+        onSelect={onSelect}
+      />,
+    );
+
+    const substitute = screen.getByRole('radio', {
+      name: /Accept a faithful substitute for the blocked evidence/,
+    });
+    expect(substitute).not.toBeChecked();
+    expect(substitute.closest('label')).not.toHaveAttribute('data-tone');
+    expect(
+      screen.getByText(
+        'The rows stay required; a local rendering or equivalent capture is accepted instead of the third-party surface.',
+      ),
+    ).toBeVisible();
+    await user.click(substitute);
+    expect(onSelect).toHaveBeenLastCalledWith('ALLOW_SUBSTITUTE');
   });
 
   it('recognizes only complete structured verification decisions', () => {
@@ -96,6 +132,17 @@ describe('NeedUserInputVerificationDecision', () => {
         allowedActions: ['WAIVE'] satisfies VerificationGateAction[],
       },
     };
+    const withSubstitute = {
+      ...gate,
+      verification: {
+        ...gate.verification!,
+        allowedActions: [
+          'WAIVE',
+          'RETRY_AFTER_AUTH',
+          'ALLOW_SUBSTITUTE',
+        ] satisfies VerificationGateAction[],
+      },
+    };
     const multipleQuestions = {
       ...gate,
       questions: [...gate.questions, { index: 2, prompt: 'Another question?', answer: '' }],
@@ -104,6 +151,14 @@ describe('NeedUserInputVerificationDecision', () => {
     expect(hasStructuredVerificationDecision(withoutBlockers)).toBe(false);
     expect(hasStructuredVerificationDecision(withoutActions)).toBe(false);
     expect(hasStructuredVerificationDecision(withPartialActions)).toBe(false);
+    expect(hasStructuredVerificationDecision(withSubstitute)).toBe(true);
     expect(hasStructuredVerificationDecision(multipleQuestions)).toBe(false);
+  });
+
+  it('labels the resume verb after the selected decision', () => {
+    expect(verificationResumeLabel('')).toBe('Retry verification');
+    expect(verificationResumeLabel('RETRY_AFTER_AUTH')).toBe('Retry verification');
+    expect(verificationResumeLabel('WAIVE')).toBe('Waive and resume');
+    expect(verificationResumeLabel('ALLOW_SUBSTITUTE')).toBe('Accept substitute and resume');
   });
 });

@@ -242,3 +242,63 @@ func TestBeginCascadeDeleteFailsClosedOnInvalidRelationship(t *testing.T) {
 		t.Fatalf("LoadCascadeDelete() error = %v, want no persisted destructive intent", err)
 	}
 }
+
+func TestBeginCascadeDeleteJournalsOneRefPerPromotedChild(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
+
+	store := NewStore(filepath.Join(t.TempDir(), "features"))
+	parent := &Feature{
+		ID: "parent", Slug: "parent-slug", ActiveRun: 1, RunCount: 1, SchemaVersion: SchemaVersionCurrent,
+		Repos: []FeatureRepo{{Name: "repo-a", Path: "/repos/a", Branch: "feature/parent"}},
+	}
+	if err := store.Save(parent); err != nil {
+		t.Fatal(err)
+	}
+	closedAt := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	entries := map[string]RepoTransactionEntry{
+		"first": {
+			Repo: "repo-a",
+			Refs: []RepoTransactionRef{{
+				Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate-1",
+			}},
+		},
+		"second": {
+			Repo: "repo-a",
+			Refs: []RepoTransactionRef{{
+				Branch: "feature/parent", AnchorSHA: "candidate-1", CandidateSHA: "candidate-2",
+			}},
+		},
+	}
+	for id, entry := range entries {
+		child := &Feature{
+			ID: id, Slug: id, ActiveRun: 1, RunCount: 1, SchemaVersion: SchemaVersionCurrent,
+			Parent: &ChildRelationship{
+				ParentID: "parent", CloseOutcome: ChildCloseOutcomeCompleted, ClosedAt: &closedAt,
+				Transaction: &TransactionJournal{Entries: []RepoTransactionEntry{entry}},
+			},
+			Repos: []FeatureRepo{{Name: "repo-a", Path: "/repos/a", Branch: "feature/" + id}},
+		}
+		if err := store.Save(child); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	intent, err := store.BeginCascadeDelete("parent", time.Now())
+	if err != nil {
+		t.Fatalf("BeginCascadeDelete: %v", err)
+	}
+	if len(intent.Refs) != len(entries) {
+		t.Fatalf("refs = %+v, want one per promoted child", intent.Refs)
+	}
+	for _, ref := range intent.Refs {
+		entry, ok := entries[ref.ChildID]
+		if !ok {
+			t.Fatalf("ref %+v names an unknown child", ref)
+		}
+		if ref.Repo != "repo-a" || ref.RepoPath != "/repos/a" || ref.Ref != "refs/heads/feature/parent" ||
+			ref.AnchorSHA != entry.Refs[0].AnchorSHA || ref.CandidateSHA != entry.Refs[0].CandidateSHA {
+			t.Fatalf("ref = %+v, want %s's own anchor and candidate on the shared parent ref", ref, ref.ChildID)
+		}
+	}
+}

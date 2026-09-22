@@ -337,6 +337,34 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(await screen.findByRole('dialog', { name: 'Live agent preview' })).toBeVisible();
   });
 
+  it('opens the testing-contract waiver from the Files tab', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Implementing',
+        currentPhase: 'Implement',
+        currentRoadmapPhase: 2,
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [],
+      }),
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const tablist = await screen.findByRole('tablist', { name: 'Stage view' });
+    await user.click(within(tablist).getByRole('tab', { name: 'Files' }));
+    const opener = await screen.findByRole('button', { name: 'Waive contract items' });
+    await user.click(opener);
+
+    const dialog = await screen.findByRole('dialog', { name: 'Waive contract items?' });
+    expect(dialog).toBeVisible();
+    expect(mock.api.getTestingContract).toHaveBeenCalledWith({ featureId: FEATURE_ID });
+    expect(await screen.findByText('This phase has no testing contract yet.')).toBeVisible();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Waive contract items?' })).not.toBeInTheDocument();
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
   it('opens configuration from the overflow menu', async () => {
     renderCockpit();
     const user = userEvent.setup();

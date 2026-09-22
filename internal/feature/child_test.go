@@ -64,6 +64,9 @@ func (f *childFakeWorktrees) RefSHA(string, string) (string, error) { return "",
 func (f *childFakeWorktrees) RefSHAOrAbsent(string, string) (string, bool, error) {
 	return "", false, nil
 }
+func (f *childFakeWorktrees) IsAncestor(string, string, string) (bool, error) {
+	return false, nil
+}
 func (f *childFakeWorktrees) UpdateRef(string, string, string, string) error { return nil }
 func (f *childFakeWorktrees) InspectCleanliness(path string, max int) (*git.CleanlinessReport, error) {
 	if f.clean != nil {
@@ -806,6 +809,9 @@ func (f *reuseWorktrees) CurrentBranch(string) string           { return "" }
 func (f *reuseWorktrees) RefSHA(string, string) (string, error) { return "", nil }
 func (f *reuseWorktrees) RefSHAOrAbsent(string, string) (string, bool, error) {
 	return "", false, nil
+}
+func (f *reuseWorktrees) IsAncestor(string, string, string) (bool, error) {
+	return false, nil
 }
 func (f *reuseWorktrees) UpdateRef(string, string, string, string) error { return nil }
 func (f *reuseWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport, error) {

@@ -38,6 +38,8 @@ import type {
   RunDetailView,
   RunListResult,
   RunSessionsListResult,
+  TestingContractItem,
+  TestingContractSnapshot,
   RunSummaryView,
   RunTextContent,
   SessionDetail,
@@ -2059,6 +2061,7 @@ function makeMockApi(
     sendHelp: () => Promise.resolve({ result: 'submitted' } as AttentionActionResult),
     saveGateDraft: () => Promise.resolve({ result: 'drafted' } as AttentionActionResult),
     resolveGate: () => Promise.resolve({ result: 'resolved' } as AttentionActionResult),
+    ...testingContractFixture(),
     startChat: () => Promise.resolve({ sessionId: '__chat__', result: 'started' }),
     endChat: () => Promise.resolve({ sessionId: '__chat__', result: 'ended' }),
     listSessions: () =>
@@ -3040,6 +3043,120 @@ function diagnosticsSnapshotForScene(_scene: string): DiagnosticsSnapshot {
         context: 'exitCode=9',
       },
     ],
+  };
+}
+
+/**
+ * The testing contract behind the Files tab's "Waive contract items" action,
+ * shaped by the URL: `contract` picks the state (`normal`, `mixed`,
+ * `multi-repo`, `empty`, `missing`, `error`, `loading`) and `count` the row
+ * count; `waive=conflict` rejects every waiver as a stale contract and bumps
+ * the revision. Waivers mutate the fixture so a reopened dialog shows them
+ * recorded.
+ */
+function testingContractFixture(): Pick<
+  AgenticoApi,
+  'getTestingContract' | 'waiveTestingContract'
+> {
+  const params = new URLSearchParams(window.location.search);
+  const mode = params.get('contract') ?? 'normal';
+  const count = Number(params.get('count') ?? 4);
+  const waiveMode = params.get('waive') ?? 'ok';
+  const names = [
+    'Desktop unit tests',
+    'Packaged desktop journey',
+    'Preview of the billing dashboard',
+    'Accessibility audit',
+    'API integration tests',
+    'Visual regression capture',
+    'Migration smoke test',
+    'Error recovery journey',
+    'Keyboard navigation checks',
+    'Deployment health check',
+    'Performance budget',
+    'Cross-repository smoke test',
+  ];
+  const commands = ['npm test', 'npm run test:e2e:packaged', 'Capture the billing dashboard'];
+  const hashes = ['abc12def900', 'dd034fab450', 'ea773cf3310', 'fe8712b6090'];
+  const items: TestingContractItem[] = Array.from({ length: count }, (_, i) => ({
+    itemId: `${i === 2 ? 'visual' : 'plan'}_${hashes[i % 4]}${String(i).padStart(2, '0')}`,
+    name: mode === 'multi-repo' ? 'Unit tests' : names[i % names.length]!,
+    source: i === 2 ? 'visual' : 'plan',
+    owner: i === 2 ? 'agent' : 'harness',
+    repo: mode === 'multi-repo' ? (i === 0 ? 'api' : 'web') : 'agentic-orchestrator',
+    command: mode === 'multi-repo' ? 'npm test' : commands[i % commands.length]!,
+    required: i !== 3,
+    allowSubstitution: i !== 2,
+    allowBlocked: true,
+    allowWaiver: mode !== 'mixed' || i !== 3,
+    capabilities: i === 2 ? ['billing-dashboard-access', 'browser'] : [],
+    ...(mode === 'mixed' && i === 1
+      ? {
+          disposition: {
+            status: 'waived',
+            reason: 'Covered by the nightly desktop matrix.',
+            changedBy: 'user',
+          },
+        }
+      : {}),
+  }));
+  let snapshot: TestingContractSnapshot = {
+    available: true,
+    featureId: 'abcd1234ef567890',
+    activeRun: 1,
+    roadmapPhase: 3,
+    revision: 4,
+    items,
+  };
+  return {
+    getTestingContract: ({ featureId }) => {
+      if (mode === 'loading') return new Promise(() => undefined);
+      if (mode === 'error') return Promise.reject(new Error('E_INTERNAL: contract read failed'));
+      if (mode === 'missing') return Promise.resolve({ available: false as const });
+      if (mode === 'empty') {
+        return Promise.resolve({
+          available: true,
+          featureId,
+          activeRun: 1,
+          roadmapPhase: 3,
+          revision: 4,
+          items: [],
+        });
+      }
+      return Promise.resolve({ ...snapshot, featureId });
+    },
+    waiveTestingContract: (request) => {
+      if (!snapshot.available) return Promise.reject(new Error('E_NOT_FOUND: no contract'));
+      if (waiveMode === 'conflict') {
+        snapshot = { ...snapshot, revision: snapshot.revision + 1 };
+        return Promise.reject(
+          canonicalRejection({
+            code: 'conflict',
+            class: 'blocking',
+            title: 'Conflict',
+            summary:
+              'The request conflicts with the current state of the feature. The testing contract changed since it was read: reload the contract and select again.',
+          }),
+        );
+      }
+      snapshot = {
+        ...snapshot,
+        revision: snapshot.revision + 1,
+        items: snapshot.items.map((item) =>
+          request.itemIds.includes(item.itemId)
+            ? {
+                ...item,
+                disposition: { status: 'waived', reason: request.reason, changedBy: 'user' },
+              }
+            : item,
+        ),
+      };
+      return Promise.resolve({
+        result: 'waived',
+        contractRevision: snapshot.revision,
+        waivedItems: request.itemIds,
+      });
+    },
   };
 }
 

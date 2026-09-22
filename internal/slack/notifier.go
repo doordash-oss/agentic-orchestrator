@@ -97,6 +97,9 @@ type NotifierOptions struct {
 	QueueCapacity int
 	// Clock controls pacing and backoff; tests inject a fake.
 	Clock Clock
+	// ResponderClock controls the Slack reply polling cadence independently
+	// from delivery pacing. Tests use a manually advanced clock.
+	ResponderClock Clock
 	// Jitter supplies the backoff jitter fraction in [0,1).
 	Jitter func() float64
 }
@@ -105,16 +108,17 @@ type NotifierOptions struct {
 // root card per default destination that is edited in place, with compact
 // Progress replies accumulating in its thread.
 type Notifier struct {
-	settings  ports.SlackSettingsSource
-	store     FeatureLoader
-	stateDir  string
-	observer  EventObserver
-	reporter  DeliveryReporter
-	pending   ports.SlackPendingInputSource
-	answer    ports.SlackAnswerPort
-	newClient ClientFactory
-	clock     Clock
-	jitter    func() float64
+	settings       ports.SlackSettingsSource
+	store          FeatureLoader
+	stateDir       string
+	observer       EventObserver
+	reporter       DeliveryReporter
+	pending        ports.SlackPendingInputSource
+	answer         ports.SlackAnswerPort
+	newClient      ClientFactory
+	clock          Clock
+	responderClock Clock
+	jitter         func() float64
 
 	serverNameMu sync.RWMutex
 	serverName   string
@@ -123,12 +127,15 @@ type Notifier struct {
 	stopOnce sync.Once
 	stopCh   chan struct{}
 
-	requestBase context.Context
-	cancelBase  context.CancelFunc
+	requestBase     context.Context
+	cancelBase      context.CancelFunc
+	responderBase   context.Context
+	cancelResponder context.CancelFunc
 
 	queue *itemQueue
 
 	dispatcherWG sync.WaitGroup
+	responderWG  sync.WaitGroup
 	workerWG     sync.WaitGroup
 	observerWG   sync.WaitGroup
 	dropEvents   chan observe.Event
@@ -148,6 +155,8 @@ type Notifier struct {
 	inputMu           sync.Mutex
 	trackedInputs     map[string]bool
 	pendingDeliveries map[string]struct{}
+
+	responderPolls map[string]responderPollState
 }
 
 // NewNotifier constructs the notifier and its intake queue. Call Start
@@ -157,6 +166,10 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 	clock := opts.Clock
 	if clock == nil {
 		clock = realClock{}
+	}
+	responderClock := opts.ResponderClock
+	if responderClock == nil {
+		responderClock = clock
 	}
 	jitter := opts.Jitter
 	if jitter == nil {
@@ -178,6 +191,7 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		answer:             opts.Answer,
 		newClient:          newClient,
 		clock:              clock,
+		responderClock:     responderClock,
 		jitter:             jitter,
 		stopCh:             make(chan struct{}),
 		records:            map[string]*featureRecord{},
@@ -186,8 +200,10 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		recheckQueued:      map[string]bool{},
 		trackedInputs:      map[string]bool{},
 		pendingDeliveries:  map[string]struct{}{},
+		responderPolls:     map[string]responderPollState{},
 	}
 	notifier.requestBase, notifier.cancelBase = context.WithCancel(context.Background())
+	notifier.responderBase, notifier.cancelResponder = context.WithCancel(context.Background())
 	dropCapacity := opts.QueueCapacity
 	if dropCapacity <= 0 {
 		dropCapacity = defaultQueueCapacity
@@ -239,6 +255,10 @@ func (n *Notifier) Start() {
 	n.warmPendingRecords()
 	n.dispatcherWG.Add(1)
 	go n.runDispatcher()
+	if n.answer != nil {
+		n.responderWG.Add(1)
+		go n.runResponder()
+	}
 }
 
 // Stop shuts the notifier down inside the carried deadline: intake stops so
@@ -249,9 +269,11 @@ func (n *Notifier) Stop(ctx context.Context) {
 	n.stopOnce.Do(func() {
 		n.stopped.Store(true)
 		close(n.stopCh)
+		n.cancelResponder()
 		done := make(chan struct{})
 		go func() {
 			n.dispatcherWG.Wait()
+			n.responderWG.Wait()
 			n.workerWG.Wait()
 			n.observerWG.Wait()
 			close(done)

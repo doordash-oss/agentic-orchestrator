@@ -91,6 +91,118 @@ describe('AttentionService mutations', () => {
     );
   });
 
+  it('reads the testing contract and maps rows to the renderer shape', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: {
+          api_version: 'v1',
+          feature_id: 'abcd1234ef567890',
+          roadmap_phase: 2,
+          revision: 3,
+          items: [
+            {
+              item_id: 'deploy-smoke',
+              source: 'plan',
+              owner: 'harness',
+              repo: 'svc',
+              name: 'Deployment smoke test',
+              command: 'make smoke',
+              required: true,
+              allow_substitution: true,
+              allow_blocked: false,
+              allow_waiver: true,
+              disposition: { status: 'waived', reason: 'Offline.', changed_by: 'user' },
+              capabilities: ['network'],
+            },
+            {
+              item_id: 'unit',
+              source: 'plan',
+              owner: 'agent',
+              name: 'Unit tests',
+              command: 'make test',
+              required: true,
+              allow_substitution: false,
+              allow_blocked: false,
+              allow_waiver: false,
+              capabilities: [],
+            },
+          ],
+        },
+      }),
+    );
+    const service = new AttentionService({ apiRequest } satisfies ServerTransport);
+
+    await expect(service.getTestingContract({ featureId: 'abcd1234ef567890' })).resolves.toEqual({
+      available: true,
+      featureId: 'abcd1234ef567890',
+      roadmapPhase: 2,
+      revision: 3,
+      items: [
+        {
+          itemId: 'deploy-smoke',
+          source: 'plan',
+          owner: 'harness',
+          repo: 'svc',
+          name: 'Deployment smoke test',
+          command: 'make smoke',
+          required: true,
+          allowSubstitution: true,
+          allowBlocked: false,
+          allowWaiver: true,
+          disposition: { status: 'waived', reason: 'Offline.', changedBy: 'user' },
+          capabilities: ['network'],
+        },
+        {
+          itemId: 'unit',
+          source: 'plan',
+          owner: 'agent',
+          name: 'Unit tests',
+          command: 'make test',
+          required: true,
+          allowSubstitution: false,
+          allowBlocked: false,
+          allowWaiver: false,
+          capabilities: [],
+        },
+      ],
+    });
+    expect(apiRequest).toHaveBeenCalledWith(
+      '/api/v1/features/abcd1234ef567890/testing-contract',
+      undefined,
+    );
+  });
+
+  it('reports a missing testing contract as unavailable instead of throwing', async () => {
+    const service = new AttentionService({
+      apiRequest: () => Promise.resolve({ status: 404, body: canonicalBody('not_found') }),
+    } satisfies ServerTransport);
+
+    await expect(service.getTestingContract({ featureId: 'abcd1234ef567890' })).resolves.toEqual({
+      available: false,
+    });
+  });
+
+  it('propagates other testing-contract read failures and rejects malformed rows', async () => {
+    const conflict = new AttentionService({
+      apiRequest: () => Promise.resolve({ status: 409, body: canonicalBody('conflict') }),
+    } satisfies ServerTransport);
+    const err = await conflict
+      .getTestingContract({ featureId: 'abcd1234ef567890' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CanonicalErrorException);
+    expect((err as CanonicalErrorException).canonical.code).toBe('conflict');
+
+    const malformed = new AttentionService({
+      apiRequest: () =>
+        Promise.resolve({
+          status: 200,
+          body: { api_version: 'v1', feature_id: 'abcd1234ef567890', roadmap_phase: 0, items: [] },
+        }),
+    } satisfies ServerTransport);
+    await expect(malformed.getTestingContract({ featureId: 'abcd1234ef567890' })).rejects.toThrow();
+  });
+
   it('rejects testing-contract waivers without items or a reason before any request', async () => {
     const apiRequest = vi.fn(() => Promise.resolve({ status: 200, body: {} }));
     const service = new AttentionService({ apiRequest } satisfies ServerTransport);

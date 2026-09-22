@@ -7462,6 +7462,33 @@ body {
   word-break: break-all;
 }
 
+.contract-waive-dialog__item small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.contract-waive-dialog__item[data-lock] {
+  color: var(--muted);
+}
+
+.contract-waive-dialog__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.contract-waive-dialog__tag {
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font: 500 11px var(--bench-font-text);
+}
+
+.contract-waive-dialog__tag--state {
+  color: var(--text);
+}
+
 .contract-waive-dialog .impact-dialog__actions {
   margin-top: 0;
 }

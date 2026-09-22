@@ -441,6 +441,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/features/{feature_id}/testing-contract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the current roadmap phase's testing contract.
+         * @description Returns the harness-compiled testing contract for the feature's current roadmap phase: every row with its id, ownership, policy flags, recorded disposition, and declared capabilities. Clients use it to show which rows are waivable and to pick item ids for the testing-contract-waive action. 404 `not_found` when the phase has no contract yet.
+         */
+        get: operations["getTestingContract"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/features/{feature_id}/runs/{run_number}/artifacts": {
         parameters: {
             query?: never;
@@ -1872,6 +1892,35 @@ export interface components {
         PermissionSnapshotResponse: components["schemas"]["JSONResponse"] & {
             requests: components["schemas"]["ControlRequest"][];
         };
+        TestingContractResponse: components["schemas"]["JSONResponse"] & {
+            feature_id: string;
+            roadmap_phase: number;
+            revision: number;
+            items: components["schemas"]["TestingContractItem"][];
+        };
+        /** @description One compiled testing-contract row. */
+        TestingContractItem: {
+            item_id: string;
+            /** @description plan, cross-repo, manual, visual, or behavioral. */
+            source: string;
+            /** @description harness or agent. */
+            owner: string;
+            repo?: string;
+            name: string;
+            command: string;
+            required: boolean;
+            allow_substitution: boolean;
+            allow_blocked: boolean;
+            allow_waiver: boolean;
+            disposition?: components["schemas"]["TestingContractDisposition"];
+            capabilities: string[];
+        };
+        TestingContractDisposition: {
+            /** @description waived is the only recorded status today. */
+            status: string;
+            reason?: string;
+            changed_by?: string;
+        };
         ArtifactListResponse: components["schemas"]["JSONResponse"] & {
             artifacts: components["schemas"]["Artifact"][];
         };
@@ -3246,6 +3295,16 @@ export interface components {
                 "application/json": components["schemas"]["ArtifactListResponse"];
             };
         };
+        /** @description Current phase testing contract. */
+        TestingContractResponse: {
+            headers: {
+                "X-Agentico-Seq": components["headers"]["Sequence"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["TestingContractResponse"];
+            };
+        };
         /** @description Bounded text content. */
         TextContentResponse: {
             headers: {
@@ -4181,6 +4240,22 @@ export interface operations {
         responses: {
             200: components["responses"]["RunSessionListResponse"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    getTestingContract: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["TestingContractResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
         };
     };
     listArtifacts: {

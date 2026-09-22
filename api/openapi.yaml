@@ -615,6 +615,26 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/features/{feature_id}/testing-contract:
+    get:
+      operationId: getTestingContract
+      summary: Read the current roadmap phase's testing contract.
+      description: >-
+        Returns the harness-compiled testing contract for the feature's current
+        roadmap phase: every row with its id, ownership, policy flags, recorded
+        disposition, and declared capabilities. Clients use it to show which
+        rows are waivable and to pick item ids for the testing-contract-waive
+        action. 404 `not_found` when the phase has no contract yet.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+      responses:
+        "200":
+          $ref: "#/components/responses/TestingContractResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/features/{feature_id}/runs/{run_number}/artifacts:
     get:
       operationId: listArtifacts
@@ -1876,6 +1896,15 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ArtifactListResponse"
+    TestingContractResponse:
+      description: Current phase testing contract.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/TestingContractResponse"
     TextContentResponse:
       description: Bounded text content.
       content:
@@ -3760,6 +3789,79 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/ControlRequest"
+    TestingContractResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [feature_id, roadmap_phase, revision, items]
+          properties:
+            feature_id:
+              type: string
+              x-go-name: FeatureID
+            roadmap_phase:
+              type: integer
+              minimum: 1
+            revision:
+              type: integer
+              minimum: 1
+            items:
+              type: array
+              maxItems: 500
+              items:
+                $ref: "#/components/schemas/TestingContractItem"
+    TestingContractItem:
+      type: object
+      description: One compiled testing-contract row.
+      required: [item_id, source, owner, name, command, required, allow_substitution, allow_blocked, allow_waiver, capabilities]
+      properties:
+        item_id:
+          type: string
+          maxLength: 200
+          x-go-name: ItemID
+        source:
+          type: string
+          description: plan, cross-repo, manual, visual, or behavioral.
+        owner:
+          type: string
+          description: harness or agent.
+        repo:
+          type: string
+        name:
+          type: string
+          maxLength: 65536
+        command:
+          type: string
+          maxLength: 65536
+        required:
+          type: boolean
+        allow_substitution:
+          type: boolean
+        allow_blocked:
+          type: boolean
+        allow_waiver:
+          type: boolean
+        disposition:
+          allOf:
+            - $ref: "#/components/schemas/TestingContractDisposition"
+          x-go-type-skip-optional-pointer: false
+        capabilities:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            maxLength: 500
+    TestingContractDisposition:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: waived is the only recorded status today.
+        reason:
+          type: string
+          maxLength: 2000
+        changed_by:
+          type: string
     ArtifactListResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

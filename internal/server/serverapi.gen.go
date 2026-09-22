@@ -4345,6 +4345,45 @@ type TaskActivityUsage struct {
 	TotalTokens int   `json:"total_tokens,omitempty"`
 }
 
+// TestingContractDisposition defines model for TestingContractDisposition.
+type TestingContractDisposition struct {
+	ChangedBy string `json:"changed_by,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+
+	// Status waived is the only recorded status today.
+	Status string `json:"status"`
+}
+
+// TestingContractItem One compiled testing-contract row.
+type TestingContractItem struct {
+	AllowBlocked      bool                        `json:"allow_blocked"`
+	AllowSubstitution bool                        `json:"allow_substitution"`
+	AllowWaiver       bool                        `json:"allow_waiver"`
+	Capabilities      []string                    `json:"capabilities"`
+	Command           string                      `json:"command"`
+	Disposition       *TestingContractDisposition `json:"disposition,omitempty"`
+	ItemID            string                      `json:"item_id"`
+	Name              string                      `json:"name"`
+
+	// Owner harness or agent.
+	Owner    string `json:"owner"`
+	Repo     string `json:"repo,omitempty"`
+	Required bool   `json:"required"`
+
+	// Source plan, cross-repo, manual, visual, or behavioral.
+	Source string `json:"source"`
+}
+
+// TestingContractResponse defines model for TestingContractResponse.
+type TestingContractResponse struct {
+	APIVersion   string                `json:"api_version"`
+	FeatureID    string                `json:"feature_id"`
+	Items        []TestingContractItem `json:"items"`
+	Meta         ResponseMeta          `json:"meta,omitempty"`
+	Revision     int                   `json:"revision"`
+	RoadmapPhase int                   `json:"roadmap_phase"`
+}
+
 // TestingContractWaiveResponse defines model for TestingContractWaiveResponse.
 type TestingContractWaiveResponse struct {
 	APIVersion       string       `json:"api_version"`

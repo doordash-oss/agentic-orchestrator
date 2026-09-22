@@ -93,6 +93,8 @@ import {
   type HelpAnswerRequest,
   type GateDraftRequest,
   type GateResumeRequest,
+  type TestingContractRequest,
+  type TestingContractSnapshot,
   type TestingContractWaiveRequest,
   type TestingContractWaiveResult,
   type AttentionActionResult,
@@ -245,6 +247,7 @@ export interface IpcServices {
   saveGateDraft(request: GateDraftRequest): Promise<AttentionActionResult>;
   resolveGate(request: GateResumeRequest): Promise<AttentionActionResult>;
   waiveTestingContract(request: TestingContractWaiveRequest): Promise<TestingContractWaiveResult>;
+  getTestingContract(request: TestingContractRequest): Promise<TestingContractSnapshot>;
   startChat(request: ChatStartRequest): Promise<ChatActionResult>;
   endChat(): Promise<ChatActionResult>;
   loadLocalReviewDraft(request: LocalReviewDraftLookupRequest): LocalReviewDraft | null;
@@ -430,6 +433,8 @@ export function registerIpcHandlers(
       services.resolveGate(request),
     [IPC_CHANNELS.attentionWaiveTestingContract]: (_event, request: TestingContractWaiveRequest) =>
       services.waiveTestingContract(request),
+    [IPC_CHANNELS.attentionGetTestingContract]: (_event, request: TestingContractRequest) =>
+      services.getTestingContract(request),
     [IPC_CHANNELS.chatStart]: (_event, request: ChatStartRequest) => services.startChat(request),
     [IPC_CHANNELS.chatEnd]: () => services.endChat(),
     [IPC_CHANNELS.sessionsList]: () => services.listSessions(),

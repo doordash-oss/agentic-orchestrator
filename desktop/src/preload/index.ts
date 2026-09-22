@@ -238,6 +238,7 @@ const api: AgenticoApi = {
   saveGateDraft: (request) => call(IPC_CHANNELS.attentionSaveGateDraft, request),
   resolveGate: (request) => call(IPC_CHANNELS.attentionResolveGate, request),
   waiveTestingContract: (request) => call(IPC_CHANNELS.attentionWaiveTestingContract, request),
+  getTestingContract: (request) => call(IPC_CHANNELS.attentionGetTestingContract, request),
   startChat: (request: ChatStartRequest) => call(IPC_CHANNELS.chatStart, request),
   endChat: () => call(IPC_CHANNELS.chatEnd),
   listSessions: () => call(IPC_CHANNELS.sessionsList),

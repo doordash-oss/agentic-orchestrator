@@ -234,6 +234,16 @@ CLI:
   and the harness pauses on the user gate. Item names shown to the user come
   from the contract, not the agent.
 
+### GET /api/v1/features/{feature_id}/testing-contract
+
+Returns the current roadmap phase's compiled testing contract
+(`TestingContractResponse`): `roadmap_phase`, `revision`, and one `items`
+entry per row with `item_id`, `source`, `owner`, `repo`, `name`, `command`,
+the policy flags (`required`, `allow_substitution`, `allow_blocked`,
+`allow_waiver`), the recorded `disposition` when one exists, and declared
+`capabilities`. 404 `not_found` when the phase has no contract yet. The
+desktop waive dialog reads this to list waivable rows.
+
 ### POST /api/v1/features/{feature_id}/actions/testing-contract-waive
 
 Records user-authorized waivers outside the gate. Body:

@@ -2405,10 +2405,6 @@ export function FeatureCockpit({
         {contractWaiveOpen ? (
           <TestingContractWaiveDialog
             featureId={featureId}
-            candidates={(preferredGate?.verification?.blockers ?? []).map((blocker) => ({
-              itemId: blocker.itemId,
-              name: blocker.name,
-            }))}
             onClose={() => setContractWaiveOpen(false)}
             onWaived={async () => {
               await refreshAttention();

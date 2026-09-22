@@ -180,6 +180,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     waiveTestingContract: vi.fn(() =>
       Promise.resolve({ result: 'waived', contractRevision: 2, waivedItems: [] }),
     ),
+    getTestingContract: vi.fn(() => Promise.resolve({ available: false as const })),
     startChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'started' })),
     endChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'ended' })),
     listSessions: vi.fn(() => Promise.resolve([])),

@@ -19,8 +19,10 @@ import {
   PermissionSnapshotResponseSchema,
   PromptSnapshotResponseSchema,
   SessionListResponseSchema,
+  TestingContractResponseSchema,
   validateWithSchema,
   type ServerSessionSummary,
+  type ServerTestingContractItem,
 } from '../shared/api/parse';
 import {
   AskUserAnswerRequestSchema,
@@ -29,6 +31,8 @@ import {
   GateResumeRequestSchema,
   HelpAnswerRequestSchema,
   PermissionDecisionRequestSchema,
+  TestingContractRequestSchema,
+  TestingContractSnapshotSchema,
   TestingContractWaiveRequestSchema,
   TestingContractWaiveResultSchema,
   VerificationGateActionSchema,
@@ -44,6 +48,9 @@ import {
   type GateResumeRequest,
   type HelpAnswerRequest,
   type PermissionDecisionRequest,
+  type TestingContractItem,
+  type TestingContractRequest,
+  type TestingContractSnapshot,
   type TestingContractWaiveRequest,
   type TestingContractWaiveResult,
   type VerificationGateAction,
@@ -75,6 +82,33 @@ function helpWaitingKind(help: {
 }
 
 const WAITING_TURN_STATES = new Set(['waiting_input', 'waiting_question']);
+
+function toTestingContractItem(item: ServerTestingContractItem): TestingContractItem {
+  return {
+    itemId: item.item_id,
+    source: item.source,
+    owner: item.owner,
+    ...(item.repo === undefined ? {} : { repo: item.repo }),
+    name: item.name,
+    command: item.command,
+    required: item.required,
+    allowSubstitution: item.allow_substitution,
+    allowBlocked: item.allow_blocked,
+    allowWaiver: item.allow_waiver,
+    ...(item.disposition === undefined
+      ? {}
+      : {
+          disposition: {
+            status: item.disposition.status,
+            ...(item.disposition.reason === undefined ? {} : { reason: item.disposition.reason }),
+            ...(item.disposition.changed_by === undefined
+              ? {}
+              : { changedBy: item.disposition.changed_by }),
+          },
+        }),
+    capabilities: item.capabilities,
+  };
+}
 
 function waitingSessionFor(
   sessions: readonly ServerSessionSummary[],
@@ -401,6 +435,30 @@ export class AttentionService {
       result: typeof value.result === 'string' ? value.result : 'waived',
       contractRevision: value.contract_revision,
       waivedItems: Array.isArray(value.waived_items) ? value.waived_items : [],
+    });
+  }
+
+  /** Reads the current phase's compiled contract; a missing contract is a result, not an error. */
+  async getTestingContract(request: TestingContractRequest): Promise<TestingContractSnapshot> {
+    const input = validateWithSchema(request, TestingContractRequestSchema);
+    let body;
+    try {
+      body = await this.get(
+        `/api/v1/features/${input.featureId}/testing-contract`,
+        TestingContractResponseSchema,
+      );
+    } catch (err) {
+      if (err instanceof CanonicalErrorException && err.canonical.code === 'not_found') {
+        return { available: false };
+      }
+      throw err;
+    }
+    return TestingContractSnapshotSchema.parse({
+      available: true,
+      featureId: body.feature_id,
+      roadmapPhase: body.roadmap_phase,
+      revision: body.revision,
+      items: body.items.map(toTestingContractItem),
     });
   }
 

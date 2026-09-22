@@ -227,8 +227,10 @@ type NeedUserInputResumeRequest struct{}
 type TestingContractWaiveRequest struct {
 	ItemIDs []string `json:"item_ids"`
 	Reason  string   `json:"reason"`
-	// RoadmapPhase and ContractRevision bind the waiver to the contract the
-	// client displayed; the server rejects a stale selection with 409.
+	// ActiveRun, RoadmapPhase, and ContractRevision bind the waiver to the
+	// contract the client displayed; the server rejects a stale selection
+	// with 409.
+	ActiveRun        int `json:"active_run,omitempty"`
 	RoadmapPhase     int `json:"roadmap_phase,omitempty"`
 	ContractRevision int `json:"contract_revision,omitempty"`
 }

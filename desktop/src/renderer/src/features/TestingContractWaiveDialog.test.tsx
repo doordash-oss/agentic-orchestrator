@@ -42,6 +42,7 @@ function item(overrides: Partial<TestingContractItem> & { itemId: string }): Tes
 const contract: TestingContractSnapshot = {
   available: true,
   featureId: 'abcd1234ef567890',
+  activeRun: 1,
   roadmapPhase: 2,
   revision: 3,
   items: [
@@ -135,6 +136,7 @@ describe('TestingContractWaiveDialog', () => {
         featureId: 'abcd1234ef567890',
         itemIds: ['deploy-smoke', 'ui-capture'],
         reason: 'Vendor console is unreachable from CI.',
+        activeRun: 1,
         roadmapPhase: 2,
         contractRevision: 3,
       }),
@@ -263,11 +265,12 @@ describe('TestingContractWaiveDialog', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('reloads the contract on a 409 conflict and drops ticks the new phase no longer offers', async () => {
+  it('reloads the contract on a 409 conflict and clears the selection for a fresh pick', async () => {
     const mock = installAgenticoMock();
     const later: TestingContractSnapshot = {
       available: true,
       featureId: 'abcd1234ef567890',
+      activeRun: 2,
       roadmapPhase: 3,
       revision: 1,
       items: [
@@ -302,7 +305,7 @@ describe('TestingContractWaiveDialog', () => {
       'testing contract changed since it was read',
     );
     expect(mock.api.waiveTestingContract).toHaveBeenCalledWith(
-      expect.objectContaining({ roadmapPhase: 2, contractRevision: 3 }),
+      expect.objectContaining({ activeRun: 1, roadmapPhase: 2, contractRevision: 3 }),
     );
     expect(await screen.findByText('Phase 3 contract · revision 1')).toBeVisible();
     expect(mock.api.getTestingContract).toHaveBeenCalledTimes(2);
@@ -310,8 +313,11 @@ describe('TestingContractWaiveDialog', () => {
     expect(
       screen.queryByRole('checkbox', { name: 'Deployment smoke test' }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: 'Vendor console capture' })).toBeChecked();
+    // Nothing carries over: the user re-selects against the current contract.
+    expect(screen.getByRole('checkbox', { name: 'Vendor console capture' })).not.toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Load test' })).not.toBeChecked();
+    const waive = screen.getByRole('button', { name: 'Waive checks' });
+    expect(waive).toBeDisabled();
     expect(onWaived).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
 
@@ -321,12 +327,15 @@ describe('TestingContractWaiveDialog', () => {
       contractRevision: 2,
       waivedItems: ['ui-capture'],
     });
-    await user.click(screen.getByRole('button', { name: 'Waive 1 check' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Vendor console capture' }));
+    expect(waive).toHaveTextContent('Waive 1 check');
+    await user.click(waive);
     await waitFor(() =>
       expect(mock.api.waiveTestingContract).toHaveBeenLastCalledWith({
         featureId: 'abcd1234ef567890',
         itemIds: ['ui-capture'],
         reason: 'Offline vendor.',
+        activeRun: 2,
         roadmapPhase: 3,
         contractRevision: 1,
       }),

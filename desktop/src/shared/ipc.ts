@@ -2498,7 +2498,9 @@ export const TestingContractWaiveRequestSchema = z.strictObject({
     .max(100),
   reason: AttentionTextSchema.refine((value) => value.trim() !== ''),
   // Bind the waiver to the contract the user saw; the server rejects a
-  // mismatch with 409 `conflict`.
+  // mismatch with 409 `conflict`. Phase and revision numbers restart after
+  // a rewind, so the run is part of the binding.
+  activeRun: z.number().int().positive(),
   roadmapPhase: z.number().int().positive(),
   contractRevision: z.number().int().positive(),
 });
@@ -2539,6 +2541,7 @@ export const TestingContractSnapshotSchema = z.discriminatedUnion('available', [
   z.strictObject({
     available: z.literal(true),
     featureId: FeatureIdSchema,
+    activeRun: z.number().int().positive(),
     roadmapPhase: z.number().int().positive(),
     revision: z.number().int().positive(),
     items: z.array(TestingContractItemSchema).max(500),

@@ -1145,6 +1145,7 @@ export type ServerTestingContractItem = z.output<typeof ServerTestingContractIte
 export const TestingContractResponseSchema = z.object({
   api_version: z.string(),
   feature_id: AttentionIDSchema,
+  active_run: z.number().int().positive(),
   roadmap_phase: z.number().int().positive(),
   revision: z.number().int().positive(),
   items: z.array(ServerTestingContractItemSchema).max(500),

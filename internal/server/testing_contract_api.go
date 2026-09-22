@@ -58,6 +58,7 @@ func (h *apiHandler) handleTestingContract(w http.ResponseWriter, r *http.Reques
 	resp := TestingContractResponse{
 		APIVersion:   APIVersion,
 		FeatureID:    featureID,
+		ActiveRun:    f.ActiveRun,
 		RoadmapPhase: f.CurrentRoadmapPhase,
 		Revision:     contract.Revision,
 		Items:        make([]TestingContractItem, 0, min(len(contract.Items), maxTestingContractItems)),
@@ -69,10 +70,11 @@ func (h *apiHandler) handleTestingContract(w http.ResponseWriter, r *http.Reques
 		resp.Items = append(resp.Items, testingContractItemDTO(item))
 	}
 	revision := revisionForAny(struct {
+		Run      int
 		Phase    int
 		Revision int
 		Items    []TestingContractItem
-	}{f.CurrentRoadmapPhase, contract.Revision, resp.Items})
+	}{f.ActiveRun, f.CurrentRoadmapPhase, contract.Revision, resp.Items})
 	resp.Meta = h.responseMeta(revision)
 	h.writeRevisionedJSON(w, r, revision, resp)
 }

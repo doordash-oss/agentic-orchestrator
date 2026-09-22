@@ -430,11 +430,21 @@ func WriteTestingContract(path string, contract TestingContract) error {
 	// next iteration to re-anchor at post-change HEAD. The contract is
 	// read-only on disk (each generation writes a fresh temp file), so casual
 	// edits fail; the permission layer denies agent writes outright.
-	tmp := path + ".tmp"
-	if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
+	tmpFile, err := os.CreateTemp(filepath.Dir(path), ".testing-contract-*.tmp")
+	if err != nil {
 		return fmt.Errorf("writing testing contract: %w", err)
 	}
-	if err := os.WriteFile(tmp, data, 0o444); err != nil {
+	tmp := tmpFile.Name()
+	defer os.Remove(tmp)
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("writing testing contract: %w", err)
+	}
+	if err := tmpFile.Chmod(0o444); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("writing testing contract: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("writing testing contract: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {

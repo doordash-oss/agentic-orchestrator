@@ -73,6 +73,7 @@ describe('AttentionService mutations', () => {
         featureId: 'abcd1234ef567890',
         itemIds: ['deploy-smoke', 'ui-capture'],
         reason: 'Vendor UI is unreachable from CI.',
+        activeRun: 1,
         roadmapPhase: 2,
         contractRevision: 2,
       }),
@@ -88,6 +89,7 @@ describe('AttentionService mutations', () => {
         body: {
           item_ids: ['deploy-smoke', 'ui-capture'],
           reason: 'Vendor UI is unreachable from CI.',
+          active_run: 1,
           roadmap_phase: 2,
           contract_revision: 2,
         },
@@ -102,6 +104,7 @@ describe('AttentionService mutations', () => {
         body: {
           api_version: 'v1',
           feature_id: 'abcd1234ef567890',
+          active_run: 1,
           roadmap_phase: 2,
           revision: 3,
           items: [
@@ -140,6 +143,7 @@ describe('AttentionService mutations', () => {
     await expect(service.getTestingContract({ featureId: 'abcd1234ef567890' })).resolves.toEqual({
       available: true,
       featureId: 'abcd1234ef567890',
+      activeRun: 1,
       roadmapPhase: 2,
       revision: 3,
       items: [
@@ -201,7 +205,13 @@ describe('AttentionService mutations', () => {
       apiRequest: () =>
         Promise.resolve({
           status: 200,
-          body: { api_version: 'v1', feature_id: 'abcd1234ef567890', roadmap_phase: 0, items: [] },
+          body: {
+            api_version: 'v1',
+            feature_id: 'abcd1234ef567890',
+            active_run: 1,
+            roadmap_phase: 0,
+            items: [],
+          },
         }),
     } satisfies ServerTransport);
     await expect(malformed.getTestingContract({ featureId: 'abcd1234ef567890' })).rejects.toThrow();
@@ -216,6 +226,7 @@ describe('AttentionService mutations', () => {
         featureId: 'abcd1234ef567890',
         itemIds: [],
         reason: 'x',
+        activeRun: 1,
         roadmapPhase: 1,
         contractRevision: 1,
       }),
@@ -225,6 +236,7 @@ describe('AttentionService mutations', () => {
         featureId: 'abcd1234ef567890',
         itemIds: ['deploy-smoke'],
         reason: '   ',
+        activeRun: 1,
         roadmapPhase: 1,
         contractRevision: 1,
       }),
@@ -234,7 +246,18 @@ describe('AttentionService mutations', () => {
         featureId: 'abcd1234ef567890',
         itemIds: ['deploy-smoke'],
         reason: 'x',
+        activeRun: 1,
         roadmapPhase: 0,
+        contractRevision: 1,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      service.waiveTestingContract({
+        featureId: 'abcd1234ef567890',
+        itemIds: ['deploy-smoke'],
+        reason: 'x',
+        activeRun: 0,
+        roadmapPhase: 1,
         contractRevision: 1,
       }),
     ).rejects.toThrow();

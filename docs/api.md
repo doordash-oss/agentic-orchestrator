@@ -237,7 +237,7 @@ CLI:
 ### GET /api/v1/features/{feature_id}/testing-contract
 
 Returns the current roadmap phase's compiled testing contract
-(`TestingContractResponse`): `roadmap_phase`, `revision`, and one `items`
+(`TestingContractResponse`): `active_run`, `roadmap_phase`, `revision`, and one `items`
 entry per row with `item_id`, `source`, `owner`, `repo`, `name`, `command`,
 the policy flags (`required`, `allow_substitution`, `allow_blocked`,
 `allow_waiver`), the recorded `disposition` when one exists, and declared
@@ -247,8 +247,8 @@ desktop waive dialog reads this to list waivable rows.
 ### POST /api/v1/features/{feature_id}/actions/testing-contract-waive
 
 Records user-authorized waivers outside the gate. Body:
-`{ "item_ids": ["<id>", ...], "reason": "<text>", "roadmap_phase": <n>, "contract_revision": <n> }`.
-The two optional integers bind the waiver to the contract the client read;
+`{ "item_ids": ["<id>", ...], "reason": "<text>", "active_run": <n>, "roadmap_phase": <n>, "contract_revision": <n> }`.
+The three optional integers bind the waiver to the contract the client read;
 a mismatch returns 409 `conflict` so a selection never applies to a later
 phase or revision. The response
 (`TestingContractWaiveResponse`) carries the new `contract_revision` and the

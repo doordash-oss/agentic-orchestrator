@@ -72,7 +72,7 @@ func TestTestingContractEndpoint(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %v", resp.StatusCode, body)
 	}
-	if body["feature_id"] != f.ID || body["roadmap_phase"] != float64(1) || body["revision"] != float64(2) {
+	if body["feature_id"] != f.ID || body["active_run"] != float64(1) || body["roadmap_phase"] != float64(1) || body["revision"] != float64(2) {
 		t.Fatalf("envelope = %v", body)
 	}
 	items, _ := body["items"].([]any)

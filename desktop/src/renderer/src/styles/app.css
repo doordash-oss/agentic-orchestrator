@@ -7416,12 +7416,14 @@ body {
 
 /* Neutral variant of the impact dialog: a contract amendment, not a removal.
  * Bounded to the window; the header and the reason/actions footer stay put
- * and only the checklist scrolls. */
+ * and only the checklist scrolls. The checklist keeps at least two rows, so
+ * a window too short for that scrolls the whole card instead. */
 .contract-waive-dialog {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   max-height: calc(100vh - 2 * var(--space-4));
+  overflow-y: auto;
 }
 
 .contract-waive-dialog__eyebrow {
@@ -7445,7 +7447,7 @@ body {
 
 .contract-waive-dialog__body {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 7rem;
   overflow-y: auto;
 }
 
@@ -7546,6 +7548,43 @@ body {
 /* A short window keeps more of the checklist in view. */
 .contract-waive-dialog .need-input-sheet__question textarea {
   min-height: 56px;
+}
+
+/* A long failure scrolls inside its own box instead of pushing the
+ * checklist out of the card. */
+.contract-waive-dialog__result {
+  max-height: 6rem;
+  overflow-y: auto;
+}
+
+/* A short window: the title names the dialog on its own, and the card
+ * tightens so the two checklist rows, the reason, the verbs, and a failure
+ * all fit without scrolling the card. */
+@media (max-height: 600px) {
+  .contract-waive-dialog {
+    padding: var(--space-4);
+    gap: var(--space-2);
+  }
+
+  .contract-waive-dialog .impact-dialog__lede {
+    display: none;
+  }
+
+  .contract-waive-dialog h3 {
+    margin-bottom: 0;
+  }
+
+  .contract-waive-dialog__footer {
+    gap: var(--space-2);
+  }
+
+  .contract-waive-dialog .need-input-sheet__question textarea {
+    min-height: 40px;
+  }
+
+  .contract-waive-dialog__result {
+    max-height: 4rem;
+  }
 }
 
 /* The Files heading's contract action: a real button, set apart from the

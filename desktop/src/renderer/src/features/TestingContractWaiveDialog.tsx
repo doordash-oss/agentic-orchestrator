@@ -117,7 +117,7 @@ export function TestingContractWaiveDialog({
 
   const handleWaive = async () => {
     if (load.state !== 'ready' || !load.contract.available) return;
-    const { roadmapPhase, revision } = load.contract;
+    const { activeRun, roadmapPhase, revision } = load.contract;
     const ok = await waiveAction.run(
       async () => {
         const outcome = await window.agentico
@@ -125,13 +125,18 @@ export function TestingContractWaiveDialog({
             featureId,
             itemIds: selected,
             reason: reason.trim(),
+            activeRun,
             roadmapPhase,
             contractRevision: revision,
           })
           .catch((err: unknown) => {
-            // The contract moved under the selection: show the current one so
-            // the user re-selects against what the server will accept.
-            if (parseIpcError(err).code === 'conflict') void fetchContract();
+            // The contract moved under the selection: drop it and show the
+            // current one so the user re-selects against what the server
+            // will accept.
+            if (parseIpcError(err).code === 'conflict') {
+              setSelected([]);
+              void fetchContract();
+            }
             throw err;
           });
         const count = outcome.waivedItems.length;
@@ -311,7 +316,11 @@ export function TestingContractWaiveDialog({
               </button>
             ) : null}
           </div>
-          <ResultBox result={waiveAction.result} />
+          {waiveAction.result === null ? null : (
+            <div className="contract-waive-dialog__result">
+              <ResultBox result={waiveAction.result} />
+            </div>
+          )}
         </footer>
       </div>
     </div>

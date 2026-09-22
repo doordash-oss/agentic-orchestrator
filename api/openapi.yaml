@@ -3793,11 +3793,15 @@ components:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
         - type: object
-          required: [feature_id, roadmap_phase, revision, items]
+          required: [feature_id, active_run, roadmap_phase, revision, items]
           properties:
             feature_id:
               type: string
               x-go-name: FeatureID
+            active_run:
+              type: integer
+              minimum: 1
+              description: Run the contract belongs to; phase and revision numbers restart after a rewind.
             roadmap_phase:
               type: integer
               minimum: 1

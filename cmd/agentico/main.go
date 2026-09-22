@@ -1662,7 +1662,7 @@ func (t *serverMutationTarget) WaiveTestingContractItems(featureID string, req s
 	}
 	result, err := t.orch.WaiveTestingContractItems(featureID, orchestrator.TestingContractWaiver{
 		ItemIDs: req.ItemIDs, Reason: req.Reason,
-		ExpectedPhase: req.RoadmapPhase, ExpectedRevision: req.ContractRevision,
+		ExpectedRun: req.ActiveRun, ExpectedPhase: req.RoadmapPhase, ExpectedRevision: req.ContractRevision,
 	})
 	if err != nil {
 		if errors.Is(err, orchestrator.ErrStaleTestingContract) {

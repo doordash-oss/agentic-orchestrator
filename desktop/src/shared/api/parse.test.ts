@@ -577,6 +577,7 @@ describe('testing contract response contract', () => {
   const response = {
     api_version: 'v1',
     feature_id: 'abcd1234ef567890',
+    active_run: 1,
     roadmap_phase: 2,
     revision: 3,
     items: [row, { ...row, item_id: 'manual', disposition: { status: 'waived', reason: 'r' } }],
@@ -588,7 +589,7 @@ describe('testing contract response contract', () => {
     expect(parsed.items[1]?.disposition).toEqual({ status: 'waived', reason: 'r' });
   });
 
-  it('rejects missing policy flags, a zero phase, and disposition without status', () => {
+  it('rejects missing policy flags, a zero phase or run, and disposition without status', () => {
     const { allow_waiver: _omitted, ...noFlag } = row;
     expect(TestingContractResponseSchema.safeParse({ ...response, items: [noFlag] }).success).toBe(
       false,
@@ -596,6 +597,11 @@ describe('testing contract response contract', () => {
     expect(TestingContractResponseSchema.safeParse({ ...response, roadmap_phase: 0 }).success).toBe(
       false,
     );
+    expect(TestingContractResponseSchema.safeParse({ ...response, active_run: 0 }).success).toBe(
+      false,
+    );
+    const { active_run: _noRun, ...withoutRun } = response;
+    expect(TestingContractResponseSchema.safeParse(withoutRun).success).toBe(false);
     expect(
       TestingContractResponseSchema.safeParse({
         ...response,

@@ -1894,6 +1894,8 @@ export interface components {
         };
         TestingContractResponse: components["schemas"]["JSONResponse"] & {
             feature_id: string;
+            /** @description Run the contract belongs to; phase and revision numbers restart after a rewind. */
+            active_run: number;
             roadmap_phase: number;
             revision: number;
             items: components["schemas"]["TestingContractItem"][];

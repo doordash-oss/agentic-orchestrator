@@ -2917,7 +2917,9 @@ function diagnosticsSnapshotForScene(_scene: string): DiagnosticsSnapshot {
  * The testing contract behind the Files tab's "Waive contract items" action,
  * shaped by the URL: `contract` picks the state (`normal`, `mixed`,
  * `multi-repo`, `empty`, `missing`, `error`, `loading`) and `count` the row
- * count. Waivers mutate the fixture so a reopened dialog shows them recorded.
+ * count; `waive=conflict` rejects every waiver as a stale contract and bumps
+ * the revision. Waivers mutate the fixture so a reopened dialog shows them
+ * recorded.
  */
 function testingContractFixture(): Pick<
   AgenticoApi,
@@ -2926,6 +2928,7 @@ function testingContractFixture(): Pick<
   const params = new URLSearchParams(window.location.search);
   const mode = params.get('contract') ?? 'normal';
   const count = Number(params.get('count') ?? 4);
+  const waiveMode = params.get('waive') ?? 'ok';
   const names = [
     'Desktop unit tests',
     'Packaged desktop journey',
@@ -2967,6 +2970,7 @@ function testingContractFixture(): Pick<
   let snapshot: TestingContractSnapshot = {
     available: true,
     featureId: 'abcd1234ef567890',
+    activeRun: 1,
     roadmapPhase: 3,
     revision: 4,
     items,
@@ -2980,6 +2984,7 @@ function testingContractFixture(): Pick<
         return Promise.resolve({
           available: true,
           featureId,
+          activeRun: 1,
           roadmapPhase: 3,
           revision: 4,
           items: [],
@@ -2989,6 +2994,18 @@ function testingContractFixture(): Pick<
     },
     waiveTestingContract: (request) => {
       if (!snapshot.available) return Promise.reject(new Error('E_NOT_FOUND: no contract'));
+      if (waiveMode === 'conflict') {
+        snapshot = { ...snapshot, revision: snapshot.revision + 1 };
+        return Promise.reject(
+          canonicalRejection({
+            code: 'conflict',
+            class: 'blocking',
+            title: 'Conflict',
+            summary:
+              'The request conflicts with the current state of the feature. The testing contract changed since it was read: reload the contract and select again.',
+          }),
+        );
+      }
       snapshot = {
         ...snapshot,
         revision: snapshot.revision + 1,

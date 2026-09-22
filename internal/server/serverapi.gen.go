@@ -4376,6 +4376,8 @@ type TestingContractItem struct {
 
 // TestingContractResponse defines model for TestingContractResponse.
 type TestingContractResponse struct {
+	// ActiveRun Run the contract belongs to; phase and revision numbers restart after a rewind.
+	ActiveRun    int                   `json:"active_run"`
 	APIVersion   string                `json:"api_version"`
 	FeatureID    string                `json:"feature_id"`
 	Items        []TestingContractItem `json:"items"`

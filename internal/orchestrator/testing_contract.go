@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 )
@@ -28,11 +29,19 @@ import (
 type TestingContractWaiver struct {
 	ItemIDs []string
 	Reason  string
-	// ExpectedPhase and ExpectedRevision bind the waiver to the contract the
-	// user was shown. Zero means unbound; a mismatch is ErrStaleTestingContract.
+	// ExpectedRun, ExpectedPhase, and ExpectedRevision bind the waiver to the
+	// contract the user was shown. Zero means unbound; a mismatch is
+	// ErrStaleTestingContract. Run matters because phase and revision numbers
+	// restart after a rewind.
+	ExpectedRun      int
 	ExpectedPhase    int
 	ExpectedRevision int
 }
+
+// testingContractWaiverMu serializes waiver read-revise-write cycles so two
+// concurrent submissions cannot both pass the revision check and one silently
+// overwrite the other's acknowledged waiver.
+var testingContractWaiverMu sync.Mutex
 
 // ErrStaleTestingContract is returned when a waiver names a contract phase or
 // revision that is no longer current, so a selection made against one phase
@@ -52,6 +61,8 @@ type TestingContractWaiverResult struct {
 // verification pass, and the implement loop re-anchors its contract
 // fingerprint on the external amendment.
 func (o *Orchestrator) WaiveTestingContractItems(featureID string, waiver TestingContractWaiver) (TestingContractWaiverResult, error) {
+	testingContractWaiverMu.Lock()
+	defer testingContractWaiverMu.Unlock()
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return TestingContractWaiverResult{}, fmt.Errorf("load feature: %w", err)
@@ -62,6 +73,9 @@ func (o *Orchestrator) WaiveTestingContractItems(featureID string, waiver Testin
 	reason := strings.TrimSpace(waiver.Reason)
 	if reason == "" {
 		return TestingContractWaiverResult{}, errors.New("a waiver reason is required")
+	}
+	if waiver.ExpectedRun != 0 && waiver.ExpectedRun != f.ActiveRun {
+		return TestingContractWaiverResult{}, fmt.Errorf("%w (run %d is active, waiver targeted run %d)", ErrStaleTestingContract, f.ActiveRun, waiver.ExpectedRun)
 	}
 	if waiver.ExpectedPhase != 0 && waiver.ExpectedPhase != f.CurrentRoadmapPhase {
 		return TestingContractWaiverResult{}, fmt.Errorf("%w (phase %d is current, waiver targeted phase %d)", ErrStaleTestingContract, f.CurrentRoadmapPhase, waiver.ExpectedPhase)

@@ -16,8 +16,10 @@ package orchestrator_test
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -127,5 +129,65 @@ func TestWaiveTestingContractItemsRejectsStaleSelection(t *testing.T) {
 	}
 	if _, err := o.WaiveTestingContractItems(f.ID, orchestrator.TestingContractWaiver{ItemIDs: []string{"visual_1"}, Reason: "r", ExpectedPhase: 2, ExpectedRevision: 3}); err != nil {
 		t.Fatalf("bound waiver error = %v", err)
+	}
+}
+
+func TestWaiveTestingContractItemsBindsRunAndSerializesWriters(t *testing.T) {
+	stateRoot := t.TempDir()
+	f := &feature.Feature{
+		ID: "feat-run-waive", Name: "Run", Slug: "run", Status: feature.StatusImplementing,
+		SchemaVersion: feature.SchemaVersionCurrent, CurrentPhase: feature.PhaseImplement,
+		CurrentRoadmapPhase: 1, ActiveRun: 2, RunCount: 2,
+		Repos: []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	contractPath := agent.PhaseTestingContractPath(stateRoot, f, 1)
+	items := make([]agent.TestingContractItem, 0, 8)
+	for i := 0; i < 8; i++ {
+		items = append(items, agent.TestingContractItem{ID: fmt.Sprintf("visual_%d", i), Source: "visual",
+			Policy: agent.TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true}})
+	}
+	if err := agent.WriteTestingContract(contractPath, agent.TestingContract{Version: 2, Revision: 1, Items: items}); err != nil {
+		t.Fatal(err)
+	}
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lifecycleForFeature(f), Store: store}, orchestrator.Hooks{})
+
+	// A run-1 selection must not waive run 2's identically numbered phase.
+	_, err := o.WaiveTestingContractItems(f.ID, orchestrator.TestingContractWaiver{ItemIDs: []string{"visual_0"}, Reason: "r", ExpectedRun: 1, ExpectedPhase: 1, ExpectedRevision: 1})
+	if !errors.Is(err, orchestrator.ErrStaleTestingContract) {
+		t.Fatalf("stale run error = %v", err)
+	}
+
+	// Eight concurrent unbound waivers, one per item: every acknowledged
+	// waiver must be present in the final contract.
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = o.WaiveTestingContractItems(f.ID, orchestrator.TestingContractWaiver{ItemIDs: []string{fmt.Sprintf("visual_%d", i)}, Reason: "concurrent"})
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("waiver %d error = %v", i, err)
+		}
+	}
+	got, err := agent.ReadTestingContract(contractPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range got.Items {
+		if !agent.IsTestingContractItemWaived(item) {
+			t.Fatalf("acknowledged waiver lost for %s: %+v", item.ID, got.Changes)
+		}
+	}
+	if got.Revision != 9 {
+		t.Fatalf("revision = %d, want 9 after eight serialized waivers", got.Revision)
 	}
 }

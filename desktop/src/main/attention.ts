@@ -426,6 +426,7 @@ export class AttentionService {
         body: {
           item_ids: input.itemIds,
           reason: input.reason,
+          active_run: input.activeRun,
           roadmap_phase: input.roadmapPhase,
           contract_revision: input.contractRevision,
         },
@@ -461,6 +462,7 @@ export class AttentionService {
     return TestingContractSnapshotSchema.parse({
       available: true,
       featureId: body.feature_id,
+      activeRun: body.active_run,
       roadmapPhase: body.roadmap_phase,
       revision: body.revision,
       items: body.items.map(toTestingContractItem),

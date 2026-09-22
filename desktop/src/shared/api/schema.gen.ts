@@ -1911,7 +1911,7 @@ export interface components {
         };
         SlackStatus: {
             /** @enum {string} */
-            state: "not_configured" | "connected" | "warning";
+            state: "not_configured" | "connected" | "warning" | "credential_error";
             last_error?: components["schemas"]["Error"];
             /** Format: date-time */
             last_checked_at?: string;

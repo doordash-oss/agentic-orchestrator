@@ -76,9 +76,10 @@ type SlackValidation struct {
 type SlackStatusState string
 
 const (
-	SlackNotConfigured SlackStatusState = "not_configured"
-	SlackConnected     SlackStatusState = "connected"
-	SlackWarning       SlackStatusState = "warning"
+	SlackNotConfigured   SlackStatusState = "not_configured"
+	SlackConnected       SlackStatusState = "connected"
+	SlackWarning         SlackStatusState = "warning"
+	SlackCredentialError SlackStatusState = "credential_error"
 )
 
 // SlackStatusInput contains only durable facts needed to derive status.
@@ -140,7 +141,22 @@ type SlackService interface {
 		recipients []SlackRecipient,
 	) ([]SlackDeliveryResult, error)
 	Status(input SlackStatusInput) SlackStatusSnapshot
-	RecordValidationSuccess(checkedAt time.Time)
-	RecordValidationFailure(checkedAt time.Time, canonical errcat.Error)
-	ClearStatus()
+	SetPublishHook(func())
+	RecordValidationSuccess(checkedAt time.Time) bool
+	RecordValidationFailure(checkedAt time.Time, canonical errcat.Error) bool
+	RecordDeliveryFailure(failedAt time.Time, canonical errcat.Error) bool
+	RecordDeliverySuccess(succeededAt time.Time) bool
+	ClearStatus() bool
+}
+
+// SlackDeliveryReporter receives notifier delivery outcomes without exposing
+// configuration persistence to the notifier.
+type SlackDeliveryReporter interface {
+	ReportSlackDeliveryFailure(at time.Time, canonical errcat.Error)
+	ReportSlackDeliverySuccess(at time.Time)
+}
+
+// SlackWarningSource supplies read-time Slack delivery warnings for a feature.
+type SlackWarningSource interface {
+	SlackWarnings(featureID string) []errcat.Error
 }

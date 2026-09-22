@@ -44,6 +44,12 @@ type EventObserver interface {
 	Emit(observe.Event) error
 }
 
+// DeliveryReporter receives delivery-time credential state changes.
+type DeliveryReporter interface {
+	ReportSlackDeliveryFailure(at time.Time, canonical errcat.Error)
+	ReportSlackDeliverySuccess(at time.Time)
+}
+
 // Clock abstracts time so pacing, retries, and rate-limit waits run
 // without sleeping in tests.
 type Clock interface {
@@ -74,6 +80,7 @@ type NotifierOptions struct {
 	Store     FeatureLoader
 	StateDir  string
 	Observer  EventObserver
+	Reporter  DeliveryReporter
 	NewClient ClientFactory
 	// QueueCapacity bounds the intake queue; tests lower it.
 	QueueCapacity int
@@ -91,6 +98,7 @@ type Notifier struct {
 	store     FeatureLoader
 	stateDir  string
 	observer  EventObserver
+	reporter  DeliveryReporter
 	newClient ClientFactory
 	clock     Clock
 	jitter    func() float64
@@ -139,6 +147,7 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		store:              opts.Store,
 		stateDir:           opts.StateDir,
 		observer:           opts.Observer,
+		reporter:           opts.Reporter,
 		newClient:          opts.NewClient,
 		clock:              clock,
 		jitter:             jitter,
@@ -236,6 +245,53 @@ func (n *Notifier) DomainEventTap(ev ports.Event) {
 // session runtime messages. Runtime notifications are intentionally ignored
 // until a message category consumes them.
 func (n *Notifier) RuntimeMessageTap(any) {}
+
+// SlackWarnings returns the current destination failures for configured recipients.
+func (n *Notifier) SlackWarnings(featureID string) []errcat.Error {
+	settings := n.settings.SlackSettings()
+	if len(settings.Recipients) == 0 {
+		return nil
+	}
+	record, err := n.recordFor(featureID)
+	if err != nil {
+		return nil
+	}
+	type warningSource struct {
+		recipient string
+		failure   destinationFailure
+	}
+	sources := make([]warningSource, 0, len(settings.Recipients))
+	n.recordMu.Lock()
+	for _, recipient := range settings.Recipients {
+		key := destinationKey(string(recipient.Kind), recipient.ID)
+		entry, ok := record.Destinations[key]
+		if !ok || entry.Failure == nil {
+			continue
+		}
+		sources = append(sources, warningSource{
+			recipient: scrub(
+				settings.Token,
+				firstNonempty(entry.DisplayName, recipient.DisplayName, recipient.TypedText, recipient.ID),
+			),
+			failure: *entry.Failure,
+		})
+	}
+	n.recordMu.Unlock()
+
+	warnings := make([]errcat.Error, 0, len(sources))
+	for _, source := range sources {
+		warnings = append(warnings, errcat.New(
+			source.failure.Code,
+			errcat.WithParams(errcat.SlackDeliveryFailureParams{
+				Recipient:    source.recipient,
+				Cause:        scrub(settings.Token, source.failure.SlackError),
+				MissedCount:  source.failure.Count,
+				FirstFailure: source.failure.FirstFailedAt,
+			}),
+		))
+	}
+	return warnings
+}
 
 func handledEvent(ev ports.Event) bool {
 	switch ev.Type {
@@ -489,7 +545,7 @@ func (n *Notifier) resolveDestination(
 		entry = record.Destinations[key]
 		entry.Kind = string(recipient.Kind)
 		entry.SlackID = recipient.ID
-		entry.DisplayName = recipient.DisplayName
+		entry.DisplayName = scrub(settings.Token, recipient.DisplayName)
 		entry.ChannelID = channelID
 		record.Destinations[key] = entry
 		persistErr := n.persistRecordLocked(featureID, record, recipient.Kind)
@@ -504,7 +560,7 @@ func (n *Notifier) resolveDestination(
 	entry = record.Destinations[key]
 	entry.Kind = string(recipient.Kind)
 	entry.SlackID = recipient.ID
-	entry.DisplayName = recipient.DisplayName
+	entry.DisplayName = scrub(settings.Token, recipient.DisplayName)
 	entry.ChannelID = recipient.ID
 	record.Destinations[key] = entry
 	persistErr := n.persistRecordLocked(featureID, record, recipient.Kind)
@@ -556,6 +612,92 @@ func (n *Notifier) logPersistError(err error, kind ports.SlackRecipientKind) {
 		log.Printf("slack-notifier: persisting the Slack record failed (destination kind %s): %v",
 			kind, err)
 	}
+}
+
+func (n *Notifier) reportWriteFailure(
+	item workItem,
+	itemKind string,
+	attempts int,
+	failure writeFailure,
+) {
+	at := n.clock.Now()
+	if failure.class == deliveryFailureCredential {
+		if n.reporter != nil && failure.canonical != nil {
+			n.reporter.ReportSlackDeliveryFailure(at, *failure.canonical)
+		}
+	} else {
+		n.recordDestinationFailure(item, at, failure)
+	}
+	n.reportDrop(observe.Event{
+		Timestamp: at,
+		EventType: "slack.delivery_failed",
+		FeatureID: item.featureID,
+		Data: map[string]any{
+			"destination_kind": item.kind,
+			"item_kind":        itemKind,
+			"failure_class":    string(failure.class),
+			"slack_error":      failure.slackError,
+			"error_code":       string(failure.errorCode),
+			"attempts":         attempts,
+		},
+	})
+}
+
+func (n *Notifier) recordDestinationFailure(item workItem, at time.Time, failure writeFailure) {
+	if item.featureID == "" || item.destinationKey == "" {
+		return
+	}
+	record, err := n.recordFor(item.featureID)
+	if err != nil {
+		log.Printf(
+			"slack-notifier: recording a %s destination failure failed: %v",
+			item.kind,
+			err,
+		)
+		return
+	}
+	settings := n.settings.SlackSettings()
+	n.recordMu.Lock()
+	entry := record.Destinations[item.destinationKey]
+	entry.DisplayName = scrub(settings.Token, entry.DisplayName)
+	entry.recordFailure(failure.errorCode, scrub(settings.Token, failure.slackError), at)
+	record.Destinations[item.destinationKey] = entry
+	persistErr := n.persistRecordLocked(
+		item.featureID,
+		record,
+		ports.SlackRecipientKind(item.kind),
+	)
+	n.recordMu.Unlock()
+	n.logPersistError(persistErr, ports.SlackRecipientKind(item.kind))
+}
+
+func (n *Notifier) reportWriteSuccess(item workItem) {
+	at := n.clock.Now()
+	if n.reporter != nil {
+		n.reporter.ReportSlackDeliverySuccess(at)
+	}
+	if item.featureID == "" || item.destinationKey == "" {
+		return
+	}
+	record, err := n.recordFor(item.featureID)
+	if err != nil {
+		return
+	}
+	n.recordMu.Lock()
+	entry, ok := record.Destinations[item.destinationKey]
+	if !ok || entry.Failure == nil {
+		n.recordMu.Unlock()
+		return
+	}
+	entry.Failure = nil
+	record.Destinations[item.destinationKey] = entry
+	persistErr := n.persistRecordLocked(
+		item.featureID,
+		record,
+		ports.SlackRecipientKind(item.kind),
+	)
+	n.recordMu.Unlock()
+	n.logPersistError(persistErr, ports.SlackRecipientKind(item.kind))
 }
 
 func (n *Notifier) emitEvent(featureID, eventType string, data map[string]any) {

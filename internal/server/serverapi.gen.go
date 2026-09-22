@@ -985,15 +985,18 @@ func (e SlackRuntimeConfigTokenType) Valid() bool {
 
 // Defines values for SlackStatusState.
 const (
-	Connected     SlackStatusState = "connected"
-	NotConfigured SlackStatusState = "not_configured"
-	Warning       SlackStatusState = "warning"
+	Connected       SlackStatusState = "connected"
+	CredentialError SlackStatusState = "credential_error"
+	NotConfigured   SlackStatusState = "not_configured"
+	Warning         SlackStatusState = "warning"
 )
 
 // Valid indicates whether the value is a known member of the SlackStatusState enum.
 func (e SlackStatusState) Valid() bool {
 	switch e {
 	case Connected:
+		return true
+	case CredentialError:
 		return true
 	case NotConfigured:
 		return true

@@ -251,6 +251,13 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		detail.NeedUserInput = &gate
 	}
 	detail.Warnings = append(detail.Warnings, effortDriftWarnings(f, h.registry)...)
+	if h.slackWarnings != nil {
+		for _, warning := range h.slackWarnings.SlackWarnings(f.ID) {
+			wire := wireError(warning)
+			wire.Diagnostics = SafeDisplayText(wire.Diagnostics, maxStoredDiagnosticsLen)
+			detail.Warnings = append(detail.Warnings, wire)
+		}
+	}
 	return detail, nil
 }
 

@@ -22,6 +22,7 @@ import {
   defaultSettings,
   type AttentionItem,
   type ConnectionState,
+  type SlackSettingsSnapshot,
 } from '../../shared/ipc';
 import App from './App';
 import {
@@ -44,6 +45,51 @@ function connection(overrides: Record<string, unknown>): ConnectionState {
     ...(overrides.status === 'ready' ? { kind: 'local' } : {}),
     ...overrides,
   });
+}
+
+function slackCredentialError(): SlackSettingsSnapshot {
+  return {
+    supported: true,
+    enabled: true,
+    tokenSet: true,
+    tokenHint: '1234',
+    tokenType: 'bot',
+    identity: {
+      teamId: 'T123',
+      teamName: 'Acme',
+      userId: 'U123',
+      displayName: 'Agentico',
+      botId: 'B123',
+    },
+    grantedScopes: ['chat:write'],
+    missingScopes: [],
+    defaultRecipients: [],
+    categories: { progress: true, needsInput: true, problems: true },
+    status: {
+      state: 'credential_error',
+      lastError: {
+        code: 'slack_token_rejected',
+        class: 'needs_action',
+        title: 'Slack rejected the saved token',
+        summary: 'Slack rejected the saved token with invalid_auth.',
+      },
+      lastCheckedAt: '2026-09-22T10:00:00Z',
+    },
+    manifest: '{}',
+  };
+}
+
+function connectedSlack(): SlackSettingsSnapshot {
+  const snapshot = slackCredentialError();
+  if (!snapshot.supported) throw new Error('credential snapshot must be supported');
+  return {
+    ...snapshot,
+    status: {
+      state: 'connected',
+      lastError: null,
+      lastCheckedAt: '2026-09-22T10:05:00Z',
+    },
+  };
 }
 
 beforeEach(() => {
@@ -474,6 +520,25 @@ describe('App settings-window routing', () => {
     );
   });
 
+  it("reaches the Slack pane from the credential warning's settings action", async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+      slackSettings: slackCredentialError(),
+    });
+    render(<App />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    await user.click(await screen.findByRole('button', { name: 'Show Slack credential warning' }));
+    const popover = screen.getByRole('region', { name: 'Slack needs attention' });
+    await user.click(within(popover).getByRole('button', { name: 'Open Slack settings' }));
+
+    await waitFor(() =>
+      expect(mock.api.openSettingsWindow).toHaveBeenCalledWith({ section: 'slack' }),
+    );
+  });
+
   it("reaches the window from the command palette's Settings entry", async () => {
     const user = userEvent.setup();
     const mock = readyMock();
@@ -486,6 +551,78 @@ describe('App settings-window routing', () => {
 
     await waitFor(() => expect(mock.api.openSettingsWindow).toHaveBeenCalledWith({}));
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument();
+  });
+});
+
+describe('App Slack credential warning', () => {
+  const readyConnection = (serverKey: string) =>
+    connection({
+      status: 'ready',
+      stage: 'ready',
+      ownership: 'external',
+      serverKey,
+      serverName: serverKey,
+    });
+
+  it('refreshes on mount, config.updated, and resync, and resets dismissal after recovery', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: readyConnection('server-a'),
+      readiness: readySnapshot(),
+      slackSettings: slackCredentialError(),
+    });
+    render(<App />);
+
+    const trigger = await screen.findByRole('button', {
+      name: 'Show Slack credential warning',
+    });
+    expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(1);
+    await user.click(trigger);
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(
+      screen.queryByRole('button', { name: 'Show Slack credential warning' }),
+    ).not.toBeInTheDocument();
+
+    mock.api.getSlackSettings.mockResolvedValueOnce(slackCredentialError());
+    act(() => mock.emitAppEvent({ type: 'invalidated', kind: 'config.updated' }));
+    await waitFor(() => expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(2));
+    expect(
+      screen.queryByRole('button', { name: 'Show Slack credential warning' }),
+    ).not.toBeInTheDocument();
+
+    mock.api.getSlackSettings.mockResolvedValueOnce(connectedSlack());
+    act(() => mock.emitAppEvent({ type: 'invalidated', kind: 'config.updated' }));
+    await waitFor(() => expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(3));
+
+    mock.api.getSlackSettings.mockResolvedValueOnce(slackCredentialError());
+    act(() => mock.emitAppEvent({ type: 'invalidated', kind: 'resync' }));
+    await waitFor(() => expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(4));
+    expect(
+      await screen.findByRole('button', { name: 'Show Slack credential warning' }),
+    ).toBeVisible();
+  });
+
+  it('forgets a dismissal when the selected server changes', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: readyConnection('server-a'),
+      readiness: readySnapshot(),
+      slackSettings: slackCredentialError(),
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole('button', { name: 'Show Slack credential warning' }));
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(
+      screen.queryByRole('button', { name: 'Show Slack credential warning' }),
+    ).not.toBeInTheDocument();
+
+    act(() => mock.emitConnection(readyConnection('server-b')));
+
+    expect(
+      await screen.findByRole('button', { name: 'Show Slack credential warning' }),
+    ).toBeVisible();
+    expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(2);
   });
 });
 

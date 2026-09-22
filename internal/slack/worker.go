@@ -280,7 +280,7 @@ func (w *destinationWorker) ensureCard(item workItem) error {
 			Blocks:       blocks,
 		})
 	}
-	result, err := sendWithRetry(w, "root card", item, send)
+	result, err := sendWithRetry(w, "root card", item, "root_card", send)
 	if err != nil {
 		return err
 	}
@@ -347,7 +347,7 @@ func (w *destinationWorker) postReply(item workItem) error {
 				item.kind == string(ports.SlackRecipientChannel),
 		})
 	}
-	result, err := sendWithRetry(w, "thread reply", item, send)
+	result, err := sendWithRetry(w, "thread reply", item, item.reply.kind.String(), send)
 	if err != nil {
 		return err
 	}
@@ -413,7 +413,7 @@ func (w *destinationWorker) flushOne(featureID string) {
 			featureID, err)
 		return
 	}
-	_, rootTS, kind, _, hasDestination := w.destinationFor(settings, record)
+	destinationKey, rootTS, kind, _, hasDestination := w.destinationFor(settings, record)
 	if !hasDestination || rootTS == "" {
 		return
 	}
@@ -451,7 +451,13 @@ func (w *destinationWorker) flushOne(featureID string) {
 			notifier.requestBase, currentChannelID, currentRootTS, fallback, blocks,
 		)
 	}
-	if _, err := sendWithRetry(w, "card update", workItem{kind: kind}, send); err != nil {
+	updateItem := workItem{
+		featureID:      featureID,
+		destinationKey: destinationKey,
+		kind:           kind,
+		channelID:      w.channelID,
+	}
+	if _, err := sendWithRetry(w, "card update", updateItem, "root_card", send); err != nil {
 		return
 	}
 	w.mu.Lock()
@@ -606,14 +612,17 @@ func sendWithRetry[T any](
 	w *destinationWorker,
 	label string,
 	item workItem,
+	itemKind string,
 	send func() (T, error),
 ) (T, error) {
 	var zero T
 	notifier := w.notifier
 	attempts := 0
 	for {
+		attempts++
 		result, err := send()
 		if err == nil {
+			notifier.reportWriteSuccess(item)
 			return result, nil
 		}
 		if errors.Is(err, errDeliveryIneligible) {
@@ -627,14 +636,27 @@ func sendWithRetry[T any](
 
 		var apiErr *APIError
 		if errors.As(err, &apiErr) {
+			token := notifier.settings.SlackSettings().Token
 			log.Printf("slack-notifier: giving up on %s to %s destination: Slack error %s",
-				label, item.kind, apiErr.SlackError)
+				label, item.kind, scrub(token, apiErr.SlackError))
+			notifier.reportWriteFailure(
+				item,
+				itemKind,
+				attempts,
+				classifyWriteFailure(token, err, false),
+			)
 			return zero, err
 		}
 		var transportErr *TransportError
 		if !errors.As(err, &transportErr) {
 			log.Printf("slack-notifier: giving up on %s to %s destination: %v",
 				label, item.kind, err)
+			notifier.reportWriteFailure(
+				item,
+				itemKind,
+				attempts,
+				classifyWriteFailure(notifier.settings.SlackSettings().Token, err, false),
+			)
 			return zero, err
 		}
 
@@ -644,10 +666,15 @@ func sendWithRetry[T any](
 			wait = maxDuration(transportErr.RetryAfter, time.Second)
 			deadline := notifier.clock.Now().Add(wait)
 			w.pauseUntil(deadline)
-			attempts++
 			if attempts > retryLimit {
 				log.Printf("slack-notifier: giving up on %s to %s destination after %d retries: %v",
 					label, item.kind, retryLimit, err)
+				notifier.reportWriteFailure(
+					item,
+					itemKind,
+					attempts,
+					classifyWriteFailure(notifier.settings.SlackSettings().Token, err, true),
+				)
 				return zero, err
 			}
 			if !w.waitUntil(deadline) {
@@ -655,16 +682,27 @@ func sendWithRetry[T any](
 			}
 			continue
 		case transientStatus(transportErr.StatusCode):
-			attempts++
 			if attempts > retryLimit {
 				log.Printf("slack-notifier: giving up on %s to %s destination after %d retries: %v",
 					label, item.kind, retryLimit, err)
+				notifier.reportWriteFailure(
+					item,
+					itemKind,
+					attempts,
+					classifyWriteFailure(notifier.settings.SlackSettings().Token, err, true),
+				)
 				return zero, err
 			}
 			wait = backoffDelay(notifier, attempts)
 		default:
 			log.Printf("slack-notifier: giving up on %s to %s destination: %v",
 				label, item.kind, err)
+			notifier.reportWriteFailure(
+				item,
+				itemKind,
+				attempts,
+				classifyWriteFailure(notifier.settings.SlackSettings().Token, err, false),
+			)
 			return zero, err
 		}
 		if !w.waitUntil(notifier.clock.Now().Add(wait)) {

@@ -46,14 +46,23 @@ type fakeSlackService struct {
 	lastRecipients []ports.SlackRecipient
 	successAt      time.Time
 	failureAt      time.Time
+	status         ports.SlackStatusSnapshot
+	publish        func()
 }
 
 func (s *fakeSlackService) Manifest() string         { return "{}" }
 func (s *fakeSlackService) RequiredScopes() []string { return []string{"chat:write"} }
 func (s *fakeSlackService) Status(ports.SlackStatusInput) ports.SlackStatusSnapshot {
+	if s.status.State != "" {
+		return s.status
+	}
 	return ports.SlackStatusSnapshot{State: ports.SlackConnected}
 }
-func (s *fakeSlackService) ClearStatus() {}
+func (s *fakeSlackService) SetPublishHook(publish func()) { s.publish = publish }
+func (s *fakeSlackService) ClearStatus() bool {
+	s.status = ports.SlackStatusSnapshot{}
+	return false
+}
 func (s *fakeSlackService) Validate(_ context.Context, token string) (ports.SlackValidation, error) {
 	s.calls.Add(1)
 	s.lastToken = token
@@ -79,9 +88,35 @@ func (s *fakeSlackService) SendTestMessage(
 	s.lastRecipients = append([]ports.SlackRecipient(nil), recipients...)
 	return append([]ports.SlackDeliveryResult(nil), s.results...), s.sendErr
 }
-func (s *fakeSlackService) RecordValidationSuccess(at time.Time) { s.successAt = at }
-func (s *fakeSlackService) RecordValidationFailure(at time.Time, _ errcat.Error) {
+func (s *fakeSlackService) RecordValidationSuccess(at time.Time) bool {
+	s.successAt = at
+	if s.publish != nil {
+		s.publish()
+	}
+	return true
+}
+func (s *fakeSlackService) RecordValidationFailure(at time.Time, canonical errcat.Error) bool {
 	s.failureAt = at
+	s.status = ports.SlackStatusSnapshot{
+		State: ports.SlackCredentialError, LastError: &canonical, LastChecked: &at,
+	}
+	if s.publish != nil {
+		s.publish()
+	}
+	return true
+}
+func (s *fakeSlackService) RecordDeliveryFailure(at time.Time, canonical errcat.Error) bool {
+	started := s.status.State != ports.SlackCredentialError
+	s.RecordValidationFailure(at, canonical)
+	return started
+}
+func (s *fakeSlackService) RecordDeliverySuccess(at time.Time) bool {
+	s.successAt = at
+	s.status = ports.SlackStatusSnapshot{State: ports.SlackConnected, LastChecked: &at}
+	if s.publish != nil {
+		s.publish()
+	}
+	return true
 }
 
 type slackMutationRecorder struct {
@@ -738,6 +773,58 @@ func TestSlackRuntimeMutationCategoriesPatchIsLocalOnly(t *testing.T) {
 	case evt := <-events:
 		t.Fatalf("categories patch published a second event: %#v", evt)
 	default:
+	}
+}
+
+func TestSlackDeliveryFailureRefreshesIdentityOnceAndPublishes(t *testing.T) {
+	at := time.Date(2026, 9, 22, 14, 30, 0, 0, time.UTC)
+	service := &fakeSlackService{validation: ports.SlackValidation{
+		TokenType: ports.SlackTokenBot,
+		Identity: ports.SlackIdentity{
+			TeamID: "T2", TeamName: "Renamed team", UserID: "U1", DisplayName: "Agentico",
+		},
+		GrantedScopes: []string{"chat:write"},
+	}}
+	store := &slackMutationRecorder{token: "xoxb-secret", generation: 4}
+	var reporter ports.SlackDeliveryReporter
+	api := newAPIHandler(HandlerOptions{
+		Config: config.NewDefault(), Slack: service, Mutations: store,
+		BindSlackDeliveryReporter: func(bound ports.SlackDeliveryReporter) {
+			reporter = bound
+		},
+		DisableHostValidation: true,
+	})
+	if reporter == nil {
+		t.Fatal("delivery reporter was not bound")
+	}
+	events, _, _ := api.broker.subscribeAfter(0, "")
+	defer api.broker.unsubscribe(events)
+
+	failure := errcat.New(errcat.SlackInvalidToken)
+	reporter.ReportSlackDeliveryFailure(at, failure)
+	if got := service.calls.Load(); got != 1 {
+		t.Fatalf("Validate() calls = %d; want 1", got)
+	}
+	if store.stored == nil || store.stored.Identity.TeamName != "Renamed team" {
+		t.Fatalf("stored validation = %#v; want refreshed identity", store.stored)
+	}
+	if service.status.State != ports.SlackCredentialError ||
+		service.status.LastError == nil || service.status.LastError.Code != errcat.SlackInvalidToken {
+		t.Fatalf("status = %#v; want retained delivery failure", service.status)
+	}
+	select {
+	case evt := <-events:
+		if evt.Kind != sseEventConfigUpdated || !evt.SnapshotRequired ||
+			evt.Resource.Type != resourceTypeRuntime {
+			t.Fatalf("event = %#v; want runtime config.updated", evt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("delivery failure published no runtime invalidation")
+	}
+
+	reporter.ReportSlackDeliveryFailure(at.Add(time.Minute), failure)
+	if got := service.calls.Load(); got != 1 {
+		t.Fatalf("Validate() calls after repeated failure = %d; want 1", got)
 	}
 }
 

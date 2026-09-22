@@ -49,7 +49,7 @@ const WireSlackIdentitySchema = z.strictObject({
 });
 
 const WireSlackStatusSchema = z.strictObject({
-  state: z.enum(['not_configured', 'connected', 'warning']),
+  state: z.enum(['not_configured', 'connected', 'warning', 'credential_error']),
   last_error: CanonicalErrorSchema.nullable().optional(),
   last_checked_at: z.string().datetime().nullable().optional(),
 });

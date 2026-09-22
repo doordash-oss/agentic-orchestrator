@@ -18,11 +18,94 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
+
+type deliveryFailureClass string
+
+const (
+	deliveryFailureCredential  deliveryFailureClass = "credential"
+	deliveryFailureDestination deliveryFailureClass = "destination"
+)
+
+type writeFailure struct {
+	class      deliveryFailureClass
+	errorCode  errcat.Code
+	slackError string
+	canonical  *errcat.Error
+}
+
+func classifyWriteFailure(token string, err error, retryExhausted bool) writeFailure {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		slackError := scrub(token, apiErr.SlackError)
+		code := slackErrorCode(slackError)
+		if code == "missing_scope" {
+			canonical := errcat.New(
+				errcat.SlackScopesRevoked,
+				errcat.WithParams(errcat.SlackScopeFailureParams{
+					NeededScope: scrub(token, apiErr.Needed),
+				}),
+			)
+			return writeFailure{
+				class:      deliveryFailureCredential,
+				errorCode:  errcat.SlackScopesRevoked,
+				slackError: slackError,
+				canonical:  &canonical,
+			}
+		}
+		if workerCredentialSlackError(code) {
+			canonical := errcat.New(
+				errcat.SlackTokenRejected,
+				errcat.WithParams(errcat.SlackCredentialFailureParams{
+					SlackError: slackError,
+				}),
+			)
+			return writeFailure{
+				class:      deliveryFailureCredential,
+				errorCode:  errcat.SlackTokenRejected,
+				slackError: slackError,
+				canonical:  &canonical,
+			}
+		}
+		return writeFailure{
+			class:      deliveryFailureDestination,
+			errorCode:  errcat.SlackRecipientNotNotified,
+			slackError: slackError,
+		}
+	}
+
+	var transportErr *TransportError
+	if retryExhausted && errors.As(err, &transportErr) {
+		cause := "retries_exhausted"
+		if transportErr.StatusCode == http.StatusTooManyRequests {
+			cause = "rate_limited"
+		}
+		return writeFailure{
+			class:      deliveryFailureDestination,
+			errorCode:  errcat.SlackDeliveryRetriesExhausted,
+			slackError: cause,
+		}
+	}
+	return writeFailure{
+		class:      deliveryFailureDestination,
+		errorCode:  errcat.SlackRecipientNotNotified,
+		slackError: scrub(token, err.Error()),
+	}
+}
+
+func workerCredentialSlackError(code string) bool {
+	switch code {
+	case "invalid_auth", "token_revoked", "account_inactive", "not_authed", "token_expired":
+		return true
+	default:
+		return false
+	}
+}
 
 // SendTestMessage attempts every recipient sequentially unless credentials fail.
 func (s *Service) SendTestMessage(

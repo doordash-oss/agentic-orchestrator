@@ -1263,22 +1263,21 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 			return
 		}
 		defaultActionFields(&resp, "", resultUpdated)
-		if resp.Result == resultUpdated && h.broker != nil {
-			// A runtime configuration change (workspace roots, defaults,
-			// notifications) reshapes discovery and read models: every
-			// surface re-reads its snapshot. Unchanged mutations publish
-			// nothing.
-			h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
-		}
+		statusPublished := false
 		if resp.Result == resultUpdated && h.slack != nil && req.Slack != nil {
 			switch {
 			case req.Slack.ClearToken != nil && *req.Slack.ClearToken:
-				h.slack.ClearStatus()
+				statusPublished = h.slack.ClearStatus()
 			case req.SlackValidation != nil:
-				h.slack.RecordValidationSuccess(req.SlackCheckedAt)
+				statusPublished = h.slack.RecordValidationSuccess(req.SlackCheckedAt)
 			case req.SlackWarning != nil:
-				h.slack.RecordValidationFailure(req.SlackCheckedAt, *req.SlackWarning)
+				statusPublished = h.slack.RecordValidationFailure(req.SlackCheckedAt, *req.SlackWarning)
 			}
+		}
+		if resp.Result == resultUpdated && !statusPublished && h.broker != nil {
+			// Slack status changes publish through the service hook. Other
+			// runtime mutations publish here so each change invalidates once.
+			h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
 		}
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:

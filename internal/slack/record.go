@@ -18,7 +18,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,12 +42,21 @@ type featureRecord struct {
 // least once. Entries survive recipient removal so re-adding a recipient
 // continues the same thread.
 type destinationRecord struct {
-	Kind        string   `yaml:"kind"`
-	SlackID     string   `yaml:"slack_id"`
-	DisplayName string   `yaml:"display_name"`
-	ChannelID   string   `yaml:"channel_id,omitempty"`
-	RootTS      string   `yaml:"root_ts,omitempty"`
-	Ledger      []string `yaml:"ledger,omitempty"`
+	Kind        string              `yaml:"kind"`
+	SlackID     string              `yaml:"slack_id"`
+	DisplayName string              `yaml:"display_name"`
+	ChannelID   string              `yaml:"channel_id,omitempty"`
+	RootTS      string              `yaml:"root_ts,omitempty"`
+	Ledger      []string            `yaml:"ledger,omitempty"`
+	Failure     *destinationFailure `yaml:"failure,omitempty"`
+}
+
+type destinationFailure struct {
+	Code          errcat.Code `yaml:"code"`
+	SlackError    string      `yaml:"slack_error"`
+	Count         int         `yaml:"count"`
+	FirstFailedAt time.Time   `yaml:"first_failed_at"`
+	LastFailedAt  time.Time   `yaml:"last_failed_at"`
 }
 
 // destinationKey identifies a destination across restarts: recipient kind
@@ -66,6 +77,19 @@ func (d *destinationRecord) ledgerAppend(ts string) {
 		}
 	}
 	d.Ledger = append(d.Ledger, ts)
+}
+
+func (d *destinationRecord) recordFailure(code errcat.Code, slackError string, at time.Time) {
+	at = at.UTC()
+	if d.Failure == nil {
+		d.Failure = &destinationFailure{
+			FirstFailedAt: at,
+		}
+	}
+	d.Failure.Code = code
+	d.Failure.SlackError = slackError
+	d.Failure.Count++
+	d.Failure.LastFailedAt = at
 }
 
 // recordPath is the durable file backing a feature's in-memory record.

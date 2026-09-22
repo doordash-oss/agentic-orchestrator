@@ -17,6 +17,7 @@ package errcat
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSlackCodesContract(t *testing.T) {
@@ -36,6 +37,10 @@ func TestSlackCodesContract(t *testing.T) {
 		{SlackScanCapReached, ClassWarning},
 		{SlackUnrecognizedRecipient, ClassWarning},
 		{SlackDeliveryFailed, ClassWarning},
+		{SlackTokenRejected, ClassNeedsAction},
+		{SlackScopesRevoked, ClassNeedsAction},
+		{SlackRecipientNotNotified, ClassWarning},
+		{SlackDeliveryRetriesExhausted, ClassWarning},
 	}
 	for _, tc := range cases {
 		entry, ok := Lookup(tc.code)
@@ -50,6 +55,98 @@ func TestSlackCodesContract(t *testing.T) {
 		}
 		if len(entry.Actions) != 0 || len(entry.Blocks) != 0 {
 			t.Errorf("Lookup(%q) actions/blocks = %#v/%#v; want none", tc.code, entry.Actions, entry.Blocks)
+		}
+	}
+}
+
+func TestSlackDeliveryFailureCodesRenderSpecificGuidance(t *testing.T) {
+	firstFailure := time.Date(2026, time.September, 22, 10, 2, 0, 0, time.UTC)
+	cases := []struct {
+		name        string
+		rendered    Error
+		summary     []string
+		remediation []string
+	}{
+		{
+			name: "token rejected",
+			rendered: New(SlackTokenRejected, WithParams(SlackCredentialFailureParams{
+				SlackError: "token_revoked",
+			})),
+			summary:     []string{"token_revoked"},
+			remediation: []string{"Slack settings"},
+		},
+		{
+			name: "scopes revoked",
+			rendered: New(SlackScopesRevoked, WithParams(SlackScopeFailureParams{
+				NeededScope: "chat:write",
+			})),
+			summary:     []string{"chat:write"},
+			remediation: []string{"Slack settings"},
+		},
+		{
+			name: "recipient not notified",
+			rendered: New(SlackRecipientNotNotified, WithParams(SlackDeliveryFailureParams{
+				Recipient:    "#team-x",
+				Cause:        "is_archived",
+				MissedCount:  5,
+				FirstFailure: firstFailure,
+			})),
+			summary:     []string{"#team-x", "is_archived", "5", firstFailure.Format(time.RFC3339)},
+			remediation: []string{"not resent"},
+		},
+		{
+			name: "retries exhausted",
+			rendered: New(SlackDeliveryRetriesExhausted, WithParams(SlackDeliveryFailureParams{
+				Recipient:    "Ada Lovelace",
+				Cause:        "rate_limited",
+				MissedCount:  2,
+				FirstFailure: firstFailure,
+			})),
+			summary:     []string{"Ada Lovelace", "rate_limited", "2", firstFailure.Format(time.RFC3339)},
+			remediation: []string{"Later messages", "not resent"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, want := range tc.summary {
+				if !strings.Contains(tc.rendered.Summary, want) {
+					t.Errorf("New(%q).Summary = %q; want %q", tc.rendered.Code, tc.rendered.Summary, want)
+				}
+			}
+			if tc.rendered.Remediation == nil {
+				t.Fatalf("New(%q).Remediation = nil", tc.rendered.Code)
+			}
+			for _, want := range tc.remediation {
+				if !strings.Contains(tc.rendered.Remediation.Hint, want) {
+					t.Errorf(
+						"New(%q).Remediation = %q; want %q",
+						tc.rendered.Code,
+						tc.rendered.Remediation.Hint,
+						want,
+					)
+				}
+			}
+		})
+	}
+}
+
+func TestSlackDeliveryFailureParamsRenderWithZeroValues(t *testing.T) {
+	params := []Params{
+		SlackCredentialFailureParams{},
+		SlackScopeFailureParams{},
+		SlackDeliveryFailureParams{},
+	}
+	for _, code := range []Code{
+		SlackTokenRejected,
+		SlackScopesRevoked,
+		SlackRecipientNotNotified,
+		SlackDeliveryRetriesExhausted,
+	} {
+		for _, value := range params {
+			rendered := New(code, WithParams(value))
+			if rendered.Title == "" || rendered.Summary == "" {
+				t.Errorf("New(%q, WithParams(%T{})) = %#v; want fallback text", code, value, rendered)
+			}
 		}
 	}
 }

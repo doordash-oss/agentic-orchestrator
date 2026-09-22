@@ -1527,6 +1527,10 @@ describe('Servers pane IPC contracts', () => {
       settingsFocus: 'add-server',
     });
     expect(AppRouteEventSchema.parse({ target: 'settings' })).toEqual({ target: 'settings' });
+    expect(AppRouteEventSchema.parse({ target: 'settings', settingsSection: 'slack' })).toEqual({
+      target: 'settings',
+      settingsSection: 'slack',
+    });
     // Unknown focus intents and smuggled fields are rejected.
     expect(
       AppRouteEventSchema.safeParse({
@@ -1696,6 +1700,7 @@ describe('window purposes', () => {
     expect(SettingsOpenRequestSchema.parse({ section: 'diagnostics' })).toEqual({
       section: 'diagnostics',
     });
+    expect(SettingsOpenRequestSchema.parse({ section: 'slack' })).toEqual({ section: 'slack' });
     // Not every pane is deep-linkable, and nothing else rides along.
     expect(SettingsOpenRequestSchema.safeParse({ section: 'advanced' }).success).toBe(false);
     expect(SettingsOpenRequestSchema.safeParse({ section: 'updates', pane: 'x' }).success).toBe(

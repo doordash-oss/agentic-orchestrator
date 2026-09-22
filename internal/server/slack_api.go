@@ -15,6 +15,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -92,9 +93,6 @@ func (h *apiHandler) handleSlackValidateRoute(w http.ResponseWriter, r *http.Req
 			h.slackCredentialMu.Lock()
 			if store.SlackCredentialCurrent(token, generation) {
 				h.slack.RecordValidationFailure(checkedAt, validationErr.Canonical)
-				if h.broker != nil {
-					h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
-				}
 			}
 			h.slackCredentialMu.Unlock()
 		}
@@ -113,9 +111,6 @@ func (h *apiHandler) handleSlackValidateRoute(w http.ResponseWriter, r *http.Req
 		}
 		if applied {
 			h.slack.RecordValidationSuccess(checkedAt)
-			if h.broker != nil {
-				h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
-			}
 		}
 		h.slackCredentialMu.Unlock()
 	}
@@ -127,6 +122,40 @@ func (h *apiHandler) handleSlackValidateRoute(w http.ResponseWriter, r *http.Req
 		MissingScopes:      append(make([]string, 0, len(validation.MissingScopes)), validation.MissingScopes...),
 		SuggestedRecipient: suggestedSlackRecipient(validation),
 	})
+}
+
+// ReportSlackDeliveryFailure records a credential-class delivery failure and
+// refreshes cached identity once at the start of each failure episode.
+func (h *apiHandler) ReportSlackDeliveryFailure(at time.Time, canonical errcat.Error) {
+	if h.slack == nil {
+		return
+	}
+	h.slackCredentialMu.Lock()
+	defer h.slackCredentialMu.Unlock()
+
+	status := h.slack.Status(ports.SlackStatusInput{Token: "configured"})
+	if status.State != ports.SlackCredentialError {
+		if store, ok := h.mutations.(slackValidationStore); ok {
+			token, generation := store.LoadSlackCredential()
+			if token != "" {
+				if validation, err := h.slack.Validate(context.Background(), token); err == nil {
+					_, _ = store.StoreSlackValidation(token, generation, &validation, at)
+				}
+			}
+		}
+	}
+	h.slack.RecordDeliveryFailure(at, canonical)
+}
+
+// ReportSlackDeliverySuccess clears credential status after any successful
+// Slack write.
+func (h *apiHandler) ReportSlackDeliverySuccess(at time.Time) {
+	if h.slack == nil {
+		return
+	}
+	h.slackCredentialMu.Lock()
+	h.slack.RecordDeliverySuccess(at)
+	h.slackCredentialMu.Unlock()
 }
 
 func (h *apiHandler) handleSlackRecipientResolveRoute(w http.ResponseWriter, r *http.Request) {

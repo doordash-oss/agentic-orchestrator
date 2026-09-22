@@ -854,7 +854,7 @@ export type AppEvent = z.output<typeof AppEventSchema>;
  * The deep-linkable Settings destinations. Every value is also a Settings
  * pane id (`SETTINGS_PANES`), so a section name selects a pane directly.
  */
-export const SettingsSectionSchema = z.enum(['updates', 'diagnostics', 'servers']);
+export const SettingsSectionSchema = z.enum(['updates', 'diagnostics', 'servers', 'slack']);
 export type SettingsSection = z.output<typeof SettingsSectionSchema>;
 
 /**
@@ -3980,7 +3980,7 @@ export const SlackIdentitySchema = z.strictObject({
 export type SlackIdentity = z.output<typeof SlackIdentitySchema>;
 
 export const SlackStatusSchema = z.strictObject({
-  state: z.enum(['not_configured', 'connected', 'warning']),
+  state: z.enum(['not_configured', 'connected', 'warning', 'credential_error']),
   lastError: CanonicalErrorSchema.nullable(),
   lastCheckedAt: z.string().datetime().nullable(),
 });

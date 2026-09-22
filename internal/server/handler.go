@@ -58,13 +58,14 @@ type apiHandler struct {
 	// deduplicated background cache. worktrees stays the uncached authority
 	// for mutations and launch preflights, which must see the worktree as it
 	// is at the instant they act.
-	cleanliness git.CleanlinessInspector
-	cfg         *config.Config
-	registry    *llm.Registry
-	sessions    ports.SessionManager
-	slack       ports.SlackService
-	broker      *eventBroker
-	mutations   MutationTarget
+	cleanliness   git.CleanlinessInspector
+	cfg           *config.Config
+	registry      *llm.Registry
+	sessions      ports.SessionManager
+	slack         ports.SlackService
+	slackWarnings ports.SlackWarningSource
+	broker        *eventBroker
+	mutations     MutationTarget
 	// uploads owns the octet-stream upload staging area under the runtime
 	// state dir; nil when the runtime identity has no state dir (tests that
 	// never stage uploads).
@@ -176,6 +177,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		registry:                opts.Registry,
 		sessions:                opts.Sessions,
 		slack:                   opts.Slack,
+		slackWarnings:           opts.SlackWarnings,
 		broker:                  newEventBrokerTaps(opts.Events, opts.DomainEvents, opts.RuntimeEventTap, opts.DomainEventTap),
 		mutations:               opts.Mutations,
 		uploads:                 newUploadStore(opts.Runtime.StateDir),
@@ -191,6 +193,19 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		reconcileSourceDeadline: defaultReconcileSourceDeadline,
 		admission:               opts.Admission,
 		probeActivity:           opts.ProbeActivity,
+	}
+	if handler.slack != nil {
+		handler.slack.SetPublishHook(func() {
+			if handler.broker != nil {
+				handler.broker.publish(snapshotRequiredEventDTO(
+					sseEventConfigUpdated,
+					Resource{Type: resourceTypeRuntime},
+				))
+			}
+		})
+	}
+	if opts.BindSlackDeliveryReporter != nil {
+		opts.BindSlackDeliveryReporter(handler)
 	}
 	if handler.probeActivity == nil {
 		handler.probeActivity = NewProbeActivity()

@@ -167,14 +167,40 @@ func TestServiceStatusDerivationAndPublication(t *testing.T) {
 		t.Fatalf("Status(failure) = %#v; want UTC warning snapshot", got)
 	}
 
+	credential := errcat.New(errcat.SlackInvalidToken)
+	if started := service.RecordDeliveryFailure(checkedAt.Add(30*time.Second), credential); !started {
+		t.Fatal("RecordDeliveryFailure() started episode = false; want true")
+	}
+	got = service.Status(ports.SlackStatusInput{Token: "xoxb-secret", HasIdentity: true})
+	if got.State != ports.SlackCredentialError || got.LastError == nil ||
+		got.LastError.Code != errcat.SlackInvalidToken {
+		t.Fatalf("Status(credential failure) = %#v; want credential_error", got)
+	}
+	if started := service.RecordDeliveryFailure(checkedAt.Add(45*time.Second), credential); started {
+		t.Fatal("RecordDeliveryFailure() started episode = true for existing episode")
+	}
+
 	service.RecordValidationSuccess(checkedAt.Add(time.Minute))
 	got = service.Status(ports.SlackStatusInput{Token: "xoxb-secret", HasIdentity: true})
 	if got.State != ports.SlackConnected || got.LastError != nil {
 		t.Fatalf("Status(success) = %#v; want connected", got)
 	}
 	service.ClearStatus()
-	if got := publishes.Load(); got != 3 {
-		t.Fatalf("publish hook calls = %d; want 3 snapshot changes", got)
+	if got := publishes.Load(); got != 5 {
+		t.Fatalf("publish hook calls = %d; want 5 snapshot changes", got)
+	}
+}
+
+func TestServiceSetPublishHook(t *testing.T) {
+	service := NewService()
+	var publishes atomic.Int32
+	service.SetPublishHook(func() { publishes.Add(1) })
+
+	service.RecordDeliveryFailure(time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC),
+		errcat.New(errcat.SlackInvalidToken))
+
+	if got := publishes.Load(); got != 1 {
+		t.Fatalf("publish hook calls = %d; want 1", got)
 	}
 }
 

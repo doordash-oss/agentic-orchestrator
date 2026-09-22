@@ -104,6 +104,44 @@ describe('SlackSettingsService', () => {
     expect(JSON.stringify(result)).not.toContain('xox');
   });
 
+  it('accepts credential_error and redacts the canonical diagnostics', async () => {
+    const server = transport(
+      response({
+        api_version: 'v1',
+        slack: {
+          ...projection,
+          status: {
+            state: 'credential_error',
+            last_error: {
+              code: 'slack_token_rejected',
+              class: 'needs_action',
+              title: 'Slack rejected the saved token',
+              summary: 'Slack rejected the saved token with invalid_auth.',
+              diagnostics: 'Authorization: Bearer xoxb-secret-token',
+            },
+            last_checked_at: '2026-09-22T10:00:00Z',
+          },
+        },
+      }),
+    );
+    const service = new SlackSettingsService({ transport: server });
+
+    const result = await service.get();
+
+    expect(result).toMatchObject({
+      supported: true,
+      status: {
+        state: 'credential_error',
+        lastError: {
+          code: 'slack_token_rejected',
+          diagnostics: 'Authorization: [redacted]',
+        },
+        lastCheckedAt: '2026-09-22T10:00:00Z',
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('xoxb-secret-token');
+  });
+
   it('returns an explicit unsupported marker when the server omits Slack', async () => {
     const server = transport(response({ api_version: 'v1' }));
     const service = new SlackSettingsService({ transport: server });

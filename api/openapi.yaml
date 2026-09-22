@@ -3784,7 +3784,7 @@ components:
       properties:
         state:
           type: string
-          enum: [not_configured, connected, warning]
+          enum: [not_configured, connected, warning, credential_error]
         last_error:
           $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false

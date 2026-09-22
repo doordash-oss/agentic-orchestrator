@@ -46,8 +46,9 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react';
-import type { AttentionItem, UpdateState } from '../../../shared/ipc';
+import type { AttentionItem, SlackSettingsSnapshot, UpdateState } from '../../../shared/ipc';
 import { AttentionInbox, type AttentionDrafts } from './AttentionInbox';
+import { SlackWarningPopover } from '../components/SlackWarningPopover';
 import { UpdatePopover } from '../components/UpdatePopover';
 
 export interface ToolbarAttentionProps {
@@ -69,6 +70,13 @@ export interface ToolbarUpdateProps {
   onInstallWhenIdle(): Promise<void>;
 }
 
+export interface ToolbarSlackWarningProps {
+  snapshot: SlackSettingsSnapshot | null;
+  dismissed: boolean;
+  onDismiss(): void;
+  onOpenSettings(): void;
+}
+
 export interface ToolbarProps {
   /**
    * The shell-owned leading content. While the sidebar is collapsed the shell
@@ -83,6 +91,7 @@ export interface ToolbarProps {
   showTrailing: boolean;
   attention?: ToolbarAttentionProps;
   update?: ToolbarUpdateProps;
+  slackWarning?: ToolbarSlackWarningProps;
   /** The cockpit-owned status chip, primary verbs, and completion controls portal into this node once mounted. */
   actionsSlotRef?(node: HTMLDivElement | null): void;
   /** The cockpit-owned overflow menu portals into this node once mounted. */
@@ -102,6 +111,7 @@ export function Toolbar({
   showTrailing,
   attention,
   update,
+  slackWarning,
   actionsSlotRef,
   overflowSlotRef,
   inspectorSlotRef,
@@ -109,7 +119,7 @@ export function Toolbar({
   onNewFeature,
   newFeatureButtonRef,
 }: ToolbarProps) {
-  const [openPopover, setOpenPopover] = useState<'attention' | 'update' | null>(null);
+  const [openPopover, setOpenPopover] = useState<'attention' | 'slack' | 'update' | null>(null);
 
   return (
     <header className="toolbar" aria-label="Workspace toolbar">
@@ -124,6 +134,13 @@ export function Toolbar({
             {...attention}
             open={openPopover === 'attention'}
             onOpenChange={(next) => setOpenPopover(next ? 'attention' : null)}
+          />
+        ) : null}
+        {slackWarning !== undefined ? (
+          <SlackWarningPopover
+            {...slackWarning}
+            open={openPopover === 'slack'}
+            onOpenChange={(next) => setOpenPopover(next ? 'slack' : null)}
           />
         ) : null}
         {update !== undefined ? (

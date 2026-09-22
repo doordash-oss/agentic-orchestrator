@@ -1022,7 +1022,10 @@ type runtimeBootstrap struct {
 	slackNotifier   *slackintegration.Notifier
 	// slackSettings relays the locked configuration accessor to the
 	// fx-provided notifier until the server run binds the mutation target.
-	slackSettings  *slackSettingsRelay
+	slackSettings *slackSettingsRelay
+	// slackReporter relays delivery outcomes to the server-owned credential
+	// reporter once the HTTP handler has been constructed.
+	slackReporter  *slackDeliveryReporterRelay
 	worktrees      feature.WorktreeOps
 	eventCh        chan interface{}
 	runtime        serverruntime.RuntimeIdentity
@@ -1101,6 +1104,38 @@ func (b *runtimeBootstrap) Close(ctx context.Context) error {
 type slackSettingsRelay struct {
 	mu     sync.Mutex
 	target ports.SlackSettingsSource
+}
+
+type slackDeliveryReporterRelay struct {
+	mu     sync.Mutex
+	target ports.SlackDeliveryReporter
+}
+
+func (r *slackDeliveryReporterRelay) bind(target ports.SlackDeliveryReporter) {
+	r.mu.Lock()
+	r.target = target
+	r.mu.Unlock()
+}
+
+func (r *slackDeliveryReporterRelay) ReportSlackDeliveryFailure(
+	at time.Time,
+	canonical errcat.Error,
+) {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target != nil {
+		target.ReportSlackDeliveryFailure(at, canonical)
+	}
+}
+
+func (r *slackDeliveryReporterRelay) ReportSlackDeliverySuccess(at time.Time) {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target != nil {
+		target.ReportSlackDeliverySuccess(at)
+	}
 }
 
 func (r *slackSettingsRelay) bind(target ports.SlackSettingsSource) {
@@ -3099,11 +3134,13 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	workspaceDir, _ := os.Getwd()
 	eventCh := make(chan interface{}, 1000)
 	slackSettings := &slackSettingsRelay{}
+	slackReporter := &slackDeliveryReporterRelay{}
 	// The runtime work-admission boundary is shared by orchestration,
 	// repository work, and the HTTP surface; one instance is supplied to
 	// the fx graph and reused for the server construction below.
 	admission := workadmission.New(workadmission.Options{})
 	boot.admission = admission
+	boot.slackReporter = slackReporter
 
 	var fm *feature.Manager
 	var sm *session.Manager
@@ -3129,6 +3166,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 			fx.Annotate(eventCh, fx.ResultTags(`name:"eventCh"`)),
 		),
 		fx.Supply(fx.Annotate(slackSettings, fx.As(new(ports.SlackSettingsSource)))),
+		fx.Supply(fx.Annotate(slackReporter, fx.As(new(slackintegration.DeliveryReporter)))),
 		config.Module,
 		feature.Module,
 		session.Module,
@@ -3478,25 +3516,27 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	boot.slackNotifier.SetServerName(resolvedName)
 
 	runtimeServer, err := serverruntime.Start(bootCtx, serverruntime.Options{
-		Runtime:         boot.runtime,
-		LaunchPolicy:    policy,
-		StartMode:       cliSubcommandServer,
-		Owner:           boot.owner,
-		AuthToken:       authToken,
-		ListenAddr:      listenAddr,
-		Name:            resolvedName,
-		Features:        boot.featureManager,
-		FeatureStore:    boot.featureManager.Store,
-		Freshness:       newGitFreshnessProvider(),
-		Config:          boot.cfg,
-		Registry:        boot.registry,
-		Sessions:        boot.sessionManager,
-		Slack:           boot.slack,
-		Events:          boot.eventCh,
-		DomainEvents:    boot.orchestrator.Events(),
-		DomainEventTap:  boot.slackNotifier.DomainEventTap,
-		RuntimeEventTap: boot.slackNotifier.RuntimeMessageTap,
-		Mutations:       mutations,
+		Runtime:                   boot.runtime,
+		LaunchPolicy:              policy,
+		StartMode:                 cliSubcommandServer,
+		Owner:                     boot.owner,
+		AuthToken:                 authToken,
+		ListenAddr:                listenAddr,
+		Name:                      resolvedName,
+		Features:                  boot.featureManager,
+		FeatureStore:              boot.featureManager.Store,
+		Freshness:                 newGitFreshnessProvider(),
+		Config:                    boot.cfg,
+		Registry:                  boot.registry,
+		Sessions:                  boot.sessionManager,
+		Slack:                     boot.slack,
+		SlackWarnings:             boot.slackNotifier,
+		BindSlackDeliveryReporter: boot.slackReporter.bind,
+		Events:                    boot.eventCh,
+		DomainEvents:              boot.orchestrator.Events(),
+		DomainEventTap:            boot.slackNotifier.DomainEventTap,
+		RuntimeEventTap:           boot.slackNotifier.RuntimeMessageTap,
+		Mutations:                 mutations,
 		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
 		},

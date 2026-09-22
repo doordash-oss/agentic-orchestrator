@@ -99,6 +99,7 @@ function formatCheckedAt(value: string | null | undefined): string | null {
 function statusHeading(snapshot: SlackSettingsSnapshot): string {
   if (!snapshot.supported) return 'Slack';
   if (!snapshot.tokenSet) return 'Not set up';
+  if (snapshot.status.state === 'credential_error') return 'Slack rejected the saved token';
   if (snapshot.status.state === 'warning') return 'Token saved, but Slack could not be reached';
   if (snapshot.identity === null || snapshot.tokenType === null)
     return 'Slack connection needs attention';

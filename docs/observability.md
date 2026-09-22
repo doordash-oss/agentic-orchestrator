@@ -67,11 +67,12 @@ Full phase rewinds omit `roadmap_phase` and the roadmap range labels.
 
 ### Slack Integration Events
 
-The Slack notifier emits one event for every successful write it makes to
-Slack, and one for every event it had to drop:
+The Slack notifier emits one event for every successful write, terminal
+delivery failure, and lifecycle event it had to drop:
 
 - `slack.root_card_updated`: a destination's root card was posted or edited.
 - `slack.message_posted`: a message was posted into a card's thread.
+- `slack.delivery_failed`: a Slack write reached a terminal failure.
 - `slack.event_dropped`: a lifecycle event was discarded before delivery.
 
 `data` keys:
@@ -80,15 +81,25 @@ Slack, and one for every event it had to drop:
   `channel`), for the two write events.
 - `action`: `posted` when the root card was first created, `edited` when an
   existing card was updated in place, for `slack.root_card_updated`.
-- `item_kind`: kind of the delivered item (`progress` or `problems`), for
-  `slack.message_posted`.
-- `error_code`: canonical error code for `problems` items; message text is
-  never included.
+- `item_kind`: kind of the delivered or failed item (`progress`, `problems`, or
+  `root_card`), for `slack.message_posted` and `slack.delivery_failed`.
+- `failure_class`: `credential` or `destination`, for
+  `slack.delivery_failed`.
+- `slack_error`: Slack's scrubbed error string, or `rate_limited` or
+  `retries_exhausted` after retry exhaustion, for `slack.delivery_failed`.
+- `error_code`: canonical error code for `problems` items and failed
+  deliveries; message text is never included.
+- `attempts`: number of Slack write attempts before the terminal failure, for
+  `slack.delivery_failed`.
+- `tag`: reserved on `slack.delivery_failed`, `slack.message_posted`, and
+  `slack.root_card_updated`. It is omitted until delivered items carry a
+  per-thread tag.
 - `event_type`: name of the dropped lifecycle event (`feature.started`,
   `phase.completed`, and so on), for `slack.event_dropped`.
 - `reason`: why the event was dropped: `queue_overflow` when the bounded intake
-  queue was full, or `feature_load_failed` when the feature record could not
-  be loaded.
+  queue was full, `feature_load_failed` when the feature record could not be
+  loaded, or `record_load_failed` when the Slack-owned record could not be
+  loaded.
 
 None of these events carries the Slack token, a channel name, or any rendered
 message text.

@@ -295,6 +295,31 @@ describe('SlackSettingsPane', () => {
     expect(tokenInput).toHaveFocus();
   });
 
+  it('names a credential error while keeping connection recovery available', async () => {
+    installAgenticoMock({
+      connection: readyConnection(),
+      slackSettings: connected({
+        status: {
+          state: 'credential_error',
+          lastError: {
+            code: 'slack_token_rejected',
+            class: 'needs_action',
+            title: 'Slack rejected the saved token',
+            summary: 'Slack rejected the saved token with invalid_auth.',
+          },
+          lastCheckedAt: '2026-09-22T10:00:00Z',
+        },
+      }),
+    });
+    render(<SlackSettingsPane />);
+
+    expect(await screen.findAllByText('Slack rejected the saved token')).toHaveLength(2);
+    expect(screen.getByText('slack_token_rejected')).toBeVisible();
+    expect(screen.getByText('Slack rejected the saved token with invalid_auth.')).toBeVisible();
+    expect(screen.getAllByText(/^Last checked /)).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Check connection' })).toBeEnabled();
+  });
+
   it('preserves a pending stored-token check through same-credential invalidation', async () => {
     const user = userEvent.setup();
     let resolveCheck!: (

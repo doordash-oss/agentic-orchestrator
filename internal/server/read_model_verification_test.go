@@ -17,8 +17,15 @@ package server
 import (
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
+
+type staticSlackWarnings map[string][]errcat.Error
+
+func (s staticSlackWarnings) SlackWarnings(featureID string) []errcat.Error {
+	return append([]errcat.Error(nil), s[featureID]...)
+}
 
 func TestFeatureDetailDTOCarriesVerificationItems(t *testing.T) {
 	t.Parallel()
@@ -51,5 +58,34 @@ func TestFeatureDetailDTOCarriesVerificationItems(t *testing.T) {
 	}
 	if detail.VerificationItems[1].Name != "Build" || detail.VerificationItems[1].State != "running" {
 		t.Errorf("VerificationItems[1] = %+v, want {Build running}", detail.VerificationItems[1])
+	}
+}
+
+func TestFeatureDetailDTOAppendsSlackWarnings(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID: "feat-slack-warning", Name: "Slack warning", Slug: "slack-warning",
+		Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement,
+		ActiveRun: 1, RunCount: 1,
+	}
+	h := &apiHandler{slackWarnings: staticSlackWarnings{
+		f.ID: {{
+			Code: errcat.SlackRecipientNotNotified, Class: errcat.ClassWarning,
+			Title:       "Slack notifications were not delivered",
+			Summary:     "#team missed 5 messages since 2026-09-22T10:02:00Z because is_archived.",
+			Remediation: &errcat.Remediation{Hint: "Unarchive the channel or remove it from Slack settings."},
+		}},
+	}}
+
+	detail, err := h.featureDetailDTO(f)
+	if err != nil {
+		t.Fatalf("featureDetailDTO() error = %v", err)
+	}
+	if len(detail.Warnings) != 1 {
+		t.Fatalf("Warnings = %#v; want one Slack warning", detail.Warnings)
+	}
+	if got := detail.Warnings[0]; got.Code != string(errcat.SlackRecipientNotNotified) ||
+		got.Class != ErrorClassWarning || got.Remediation == nil {
+		t.Fatalf("Warnings[0] = %#v; want rendered warning with remediation", got)
 	}
 }

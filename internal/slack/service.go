@@ -147,7 +147,9 @@ func (s *Service) Status(input ports.SlackStatusInput) ports.SlackStatusSnapshot
 	defer s.mu.RUnlock()
 
 	state := ports.SlackWarning
-	if input.HasIdentity && s.lastError == nil {
+	if isCredentialError(s.lastError) {
+		state = ports.SlackCredentialError
+	} else if input.HasIdentity && s.lastError == nil {
 		state = ports.SlackConnected
 	}
 	return ports.SlackStatusSnapshot{
@@ -157,38 +159,80 @@ func (s *Service) Status(input ports.SlackStatusInput) ports.SlackStatusSnapshot
 	}
 }
 
+// SetPublishHook replaces the status-invalidation hook.
+func (s *Service) SetPublishHook(publish func()) {
+	if publish == nil {
+		publish = func() {}
+	}
+	s.mu.Lock()
+	s.publish = publish
+	s.mu.Unlock()
+}
+
 // RecordValidationSuccess clears the transient error and records the check time.
-func (s *Service) RecordValidationSuccess(checkedAt time.Time) {
-	s.setSnapshot(checkedAt, nil)
+func (s *Service) RecordValidationSuccess(checkedAt time.Time) bool {
+	return s.setSnapshot(checkedAt, nil)
 }
 
 // RecordValidationFailure stores a scrubbed canonical failure and check time.
-func (s *Service) RecordValidationFailure(checkedAt time.Time, canonical errcat.Error) {
-	s.setSnapshot(checkedAt, &canonical)
+func (s *Service) RecordValidationFailure(checkedAt time.Time, canonical errcat.Error) bool {
+	return s.setSnapshot(checkedAt, &canonical)
+}
+
+// RecordDeliveryFailure stores a delivery-time credential error and reports
+// whether it started a new credential-error episode.
+func (s *Service) RecordDeliveryFailure(failedAt time.Time, canonical errcat.Error) bool {
+	s.mu.RLock()
+	startedEpisode := !isCredentialError(s.lastError)
+	s.mu.RUnlock()
+	s.setSnapshot(failedAt, &canonical)
+	return startedEpisode
+}
+
+// RecordDeliverySuccess clears a transient error after Slack accepts a write.
+func (s *Service) RecordDeliverySuccess(succeededAt time.Time) bool {
+	return s.setSnapshot(succeededAt, nil)
 }
 
 // ClearStatus drops all transient validation state.
-func (s *Service) ClearStatus() {
+func (s *Service) ClearStatus() bool {
 	s.mu.Lock()
 	changed := s.lastError != nil || s.lastChecked != nil
 	s.lastError = nil
 	s.lastChecked = nil
+	publish := s.publish
 	s.mu.Unlock()
 	if changed {
-		s.publish()
+		publish()
 	}
+	return changed
 }
 
-func (s *Service) setSnapshot(checkedAt time.Time, canonical *errcat.Error) {
+func (s *Service) setSnapshot(checkedAt time.Time, canonical *errcat.Error) bool {
 	checkedAt = checkedAt.UTC()
 	s.mu.Lock()
 	changed := !sameCanonicalError(s.lastError, canonical) ||
 		s.lastChecked == nil || !s.lastChecked.Equal(checkedAt)
 	s.lastError = cloneCanonicalError(canonical)
 	s.lastChecked = &checkedAt
+	publish := s.publish
 	s.mu.Unlock()
 	if changed {
-		s.publish()
+		publish()
+	}
+	return changed
+}
+
+func isCredentialError(canonical *errcat.Error) bool {
+	if canonical == nil {
+		return false
+	}
+	switch canonical.Code {
+	case errcat.SlackInvalidToken, errcat.SlackMissingScopes,
+		errcat.Code("slack_token_rejected"), errcat.Code("slack_scopes_revoked"):
+		return true
+	default:
+		return false
 	}
 }
 

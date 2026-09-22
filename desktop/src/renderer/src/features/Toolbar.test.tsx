@@ -17,9 +17,14 @@ limitations under the License.
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AttentionItem, UpdateState } from '../../../shared/ipc';
+import type { AttentionItem, SlackSettingsSnapshot, UpdateState } from '../../../shared/ipc';
 import { emptyAttentionDrafts } from './AttentionInbox';
-import { Toolbar, type ToolbarAttentionProps, type ToolbarUpdateProps } from './Toolbar';
+import {
+  Toolbar,
+  type ToolbarAttentionProps,
+  type ToolbarSlackWarningProps,
+  type ToolbarUpdateProps,
+} from './Toolbar';
 
 afterEach(cleanup);
 
@@ -72,6 +77,38 @@ function updateProps(): ToolbarUpdateProps {
   };
 }
 
+function slackWarningProps(): ToolbarSlackWarningProps {
+  const snapshot: SlackSettingsSnapshot = {
+    supported: true,
+    enabled: true,
+    tokenSet: true,
+    tokenHint: '1234',
+    tokenType: 'bot',
+    identity: null,
+    grantedScopes: [],
+    missingScopes: [],
+    defaultRecipients: [],
+    categories: { progress: true, needsInput: true, problems: true },
+    status: {
+      state: 'credential_error',
+      lastError: {
+        code: 'slack_token_rejected',
+        class: 'needs_action',
+        title: 'Slack rejected the saved token',
+        summary: 'Slack rejected the saved token with invalid_auth.',
+      },
+      lastCheckedAt: '2026-09-22T10:00:00Z',
+    },
+    manifest: '{}',
+  };
+  return {
+    snapshot,
+    dismissed: false,
+    onDismiss: vi.fn(),
+    onOpenSettings: vi.fn(),
+  };
+}
+
 describe('Toolbar leading slot', () => {
   it('owns no sidebar toggle of its own; it renders whatever leading content the shell hands it', () => {
     const view = render(<Toolbar {...baseProps()} showTrailing={false} />);
@@ -114,31 +151,43 @@ describe('Toolbar trailing notices', () => {
     expect(screen.getByRole('button', { name: 'Attention inbox, 1 pending' })).toBeVisible();
   });
 
-  it('opens at most one popover: each trigger closes the other', async () => {
+  it('opens at most one popover among attention, update, and Slack warning', async () => {
     render(
       <Toolbar
         {...baseProps()}
         showTrailing={false}
         attention={attentionProps()}
         update={updateProps()}
+        slackWarning={slackWarningProps()}
       />,
     );
     const user = userEvent.setup();
     const bell = screen.getByRole('button', { name: 'Attention inbox, 1 pending' });
     const updateTrigger = screen.getByRole('button', { name: 'Show available update' });
+    const slackTrigger = screen.getByRole('button', { name: 'Show Slack credential warning' });
 
     await user.click(bell);
     expect(screen.getByRole('complementary', { name: 'Attention inbox' })).toBeVisible();
 
-    await user.click(updateTrigger);
-    expect(screen.getByRole('region', { name: 'Available update' })).toBeVisible();
+    await user.click(slackTrigger);
+    expect(screen.getByRole('region', { name: 'Slack needs attention' })).toBeVisible();
     expect(
       screen.queryByRole('complementary', { name: 'Attention inbox' }),
     ).not.toBeInTheDocument();
 
+    await user.click(updateTrigger);
+    expect(screen.getByRole('region', { name: 'Available update' })).toBeVisible();
+    expect(screen.queryByRole('region', { name: 'Slack needs attention' })).not.toBeInTheDocument();
+
     await user.click(bell);
     expect(screen.getByRole('complementary', { name: 'Attention inbox' })).toBeVisible();
     expect(screen.queryByRole('region', { name: 'Available update' })).not.toBeInTheDocument();
+
+    await user.click(slackTrigger);
+    expect(screen.getByRole('region', { name: 'Slack needs attention' })).toBeVisible();
+    expect(
+      screen.queryByRole('complementary', { name: 'Attention inbox' }),
+    ).not.toBeInTheDocument();
   });
 
   it('omits the update trigger entirely when nothing is pending', () => {

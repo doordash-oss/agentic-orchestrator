@@ -18,21 +18,26 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
-	SlackInvalidToken          Code = "slack_invalid_token"
-	SlackUnsupportedToken      Code = "slack_unsupported_token"
-	SlackMissingScopes         Code = "slack_missing_scopes"
-	SlackUnreachable           Code = "slack_unreachable"
-	SlackUserNotFound          Code = "slack_user_not_found"
-	SlackChannelNotFound       Code = "slack_channel_not_found"
-	SlackNotInChannel          Code = "slack_not_in_channel"
-	SlackChannelArchived       Code = "slack_channel_archived"
-	SlackAmbiguousHandle       Code = "slack_ambiguous_handle"
-	SlackScanCapReached        Code = "slack_scan_cap_reached"
-	SlackUnrecognizedRecipient Code = "slack_unrecognized_recipient"
-	SlackDeliveryFailed        Code = "slack_delivery_failed"
+	SlackInvalidToken             Code = "slack_invalid_token"
+	SlackUnsupportedToken         Code = "slack_unsupported_token"
+	SlackMissingScopes            Code = "slack_missing_scopes"
+	SlackUnreachable              Code = "slack_unreachable"
+	SlackUserNotFound             Code = "slack_user_not_found"
+	SlackChannelNotFound          Code = "slack_channel_not_found"
+	SlackNotInChannel             Code = "slack_not_in_channel"
+	SlackChannelArchived          Code = "slack_channel_archived"
+	SlackAmbiguousHandle          Code = "slack_ambiguous_handle"
+	SlackScanCapReached           Code = "slack_scan_cap_reached"
+	SlackUnrecognizedRecipient    Code = "slack_unrecognized_recipient"
+	SlackDeliveryFailed           Code = "slack_delivery_failed"
+	SlackTokenRejected            Code = "slack_token_rejected"
+	SlackScopesRevoked            Code = "slack_scopes_revoked"
+	SlackRecipientNotNotified     Code = "slack_recipient_not_notified"
+	SlackDeliveryRetriesExhausted Code = "slack_delivery_retries_exhausted"
 )
 
 // SlackMissingScopesParams carries the stable missing-scope list.
@@ -48,6 +53,30 @@ type SlackRecipientParams struct {
 }
 
 func (SlackRecipientParams) params() {}
+
+// SlackCredentialFailureParams identifies the Slack rejection returned during delivery.
+type SlackCredentialFailureParams struct {
+	SlackError string
+}
+
+func (SlackCredentialFailureParams) params() {}
+
+// SlackScopeFailureParams identifies the scope Slack required during delivery.
+type SlackScopeFailureParams struct {
+	NeededScope string
+}
+
+func (SlackScopeFailureParams) params() {}
+
+// SlackDeliveryFailureParams describes a destination's current missed messages.
+type SlackDeliveryFailureParams struct {
+	Recipient    string
+	Cause        string
+	MissedCount  int
+	FirstFailure time.Time
+}
+
+func (SlackDeliveryFailureParams) params() {}
 
 // SlackAmbiguousHandleParams describes a non-unique handle match.
 type SlackAmbiguousHandleParams struct {
@@ -93,6 +122,54 @@ func slackRecipientSummary(p Params, format string) string {
 		return ""
 	}
 	return fmt.Sprintf(format, strings.TrimSpace(params.Recipient))
+}
+
+func slackCredentialFailureSummary(p Params) string {
+	params, ok := p.(SlackCredentialFailureParams)
+	if !ok || strings.TrimSpace(params.SlackError) == "" {
+		return ""
+	}
+	return fmt.Sprintf(
+		"Slack rejected the saved token while delivering a notification: %s.",
+		strings.TrimSpace(params.SlackError),
+	)
+}
+
+func slackScopeFailureSummary(p Params) string {
+	params, ok := p.(SlackScopeFailureParams)
+	if !ok || strings.TrimSpace(params.NeededScope) == "" {
+		return ""
+	}
+	return fmt.Sprintf(
+		"Slack rejected a notification because the saved token no longer grants %s.",
+		strings.TrimSpace(params.NeededScope),
+	)
+}
+
+func slackDeliveryFailureSummary(p Params) string {
+	params, ok := p.(SlackDeliveryFailureParams)
+	if !ok ||
+		strings.TrimSpace(params.Recipient) == "" ||
+		strings.TrimSpace(params.Cause) == "" ||
+		params.MissedCount <= 0 ||
+		params.FirstFailure.IsZero() {
+		return ""
+	}
+	noun := "messages"
+	verb := "were"
+	if params.MissedCount == 1 {
+		noun = "message"
+		verb = "was"
+	}
+	return fmt.Sprintf(
+		"%d Slack %s to %s %s not delivered since %s because Slack returned %s.",
+		params.MissedCount,
+		noun,
+		strings.TrimSpace(params.Recipient),
+		verb,
+		params.FirstFailure.UTC().Format(time.RFC3339),
+		strings.TrimSpace(params.Cause),
+	)
 }
 
 func slackAmbiguousHandleSummary(p Params) string {
@@ -210,5 +287,33 @@ func init() {
 		Title:       "Slack message was not delivered",
 		Summary:     "Slack could not deliver the test message to this recipient.",
 		Remediation: "Check that the recipient can receive messages from the Agentico app, then try again.",
+	}
+	catalog[SlackTokenRejected] = Entry{
+		Class:         ClassNeedsAction,
+		Title:         "Slack rejected the saved token",
+		Summary:       "Slack rejected the saved token while delivering a notification.",
+		Remediation:   "Open Slack settings, replace or reconnect the saved token, then check the connection.",
+		summaryParams: slackCredentialFailureSummary,
+	}
+	catalog[SlackScopesRevoked] = Entry{
+		Class:         ClassNeedsAction,
+		Title:         "Slack token scopes were revoked",
+		Summary:       "The saved Slack token no longer grants a required scope.",
+		Remediation:   "Open Slack settings, reinstall the Slack app with the required scopes, then check the connection.",
+		summaryParams: slackScopeFailureSummary,
+	}
+	catalog[SlackRecipientNotNotified] = Entry{
+		Class:         ClassWarning,
+		Title:         "Slack notifications were not delivered",
+		Summary:       "Slack did not deliver one or more messages to this recipient.",
+		Remediation:   "Fix the recipient in Slack or Slack settings. Missed messages are not resent.",
+		summaryParams: slackDeliveryFailureSummary,
+	}
+	catalog[SlackDeliveryRetriesExhausted] = Entry{
+		Class:         ClassWarning,
+		Title:         "Slack delivery retries were exhausted",
+		Summary:       "Slack did not accept one or more messages before retries were exhausted.",
+		Remediation:   "Later messages will flow when Slack recovers. Missed messages are not resent.",
+		summaryParams: slackDeliveryFailureSummary,
 	}
 }

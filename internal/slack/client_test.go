@@ -478,6 +478,198 @@ func TestClientUpdateMessageSendsChannelTimestampTextAndBlocks(t *testing.T) {
 	}
 }
 
+func TestClientThreadRepliesPaginatesSeededMessagesAndDecodesReactions(t *testing.T) {
+	server := testsupport.New(t)
+	server.SeedThread("C12345678", "1758000000.000001", []testsupport.Message{
+		{
+			TS:       "1758000002.000001",
+			ThreadTS: "1758000000.000001",
+			User:     "U11111111",
+			BotID:    "B11111111",
+			Subtype:  "thread_broadcast",
+			Text:     "first",
+			Reactions: []testsupport.Reaction{{
+				Name: "white_check_mark", Count: 2, Users: []string{"U22222222", "U33333333"},
+			}},
+		},
+		{TS: "1758000003.000001", ThreadTS: "1758000000.000001", User: "U22222222", Text: "second"},
+		{TS: "1758000004.000001", ThreadTS: "1758000000.000001", User: "U33333333", Text: "third"},
+		{TS: "1758000005.000001", ThreadTS: "1758000000.000001", User: "U44444444", Text: "fourth"},
+		{TS: "1758000006.000001", ThreadTS: "1758000000.000001", User: "U55555555", Text: "fifth"},
+		{TS: "1758000007.000001", ThreadTS: "1758000000.000001", User: "U66666666", Text: "sixth"},
+	})
+	client, err := NewClient("xoxb-secret-1234", WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := client.ThreadReplies(
+		t.Context(), "C12345678", "1758000000.000001", "1758000002.000001", 4, "",
+	)
+	if err != nil {
+		t.Fatalf("ThreadReplies(first) error = %v", err)
+	}
+	if len(first.Messages) != 4 || first.NextCursor == "" {
+		t.Fatalf("ThreadReplies(first) = %#v; want four messages and a cursor", first)
+	}
+	second, err := client.ThreadReplies(
+		t.Context(), "C12345678", "1758000000.000001", "1758000002.000001", 4, first.NextCursor,
+	)
+	if err != nil {
+		t.Fatalf("ThreadReplies(second) error = %v", err)
+	}
+	if len(second.Messages) != 2 || second.NextCursor != "" {
+		t.Fatalf("ThreadReplies(second) = %#v; want two messages and no cursor", second)
+	}
+	all := append(first.Messages, second.Messages...)
+	if all[0].TS != "1758000002.000001" || all[5].TS != "1758000007.000001" {
+		t.Fatalf("ThreadReplies() timestamps = %q ... %q; want oldest-filtered chronological results",
+			all[0].TS, all[5].TS)
+	}
+	if got := all[0]; got.ThreadTS != "1758000000.000001" ||
+		got.User != "U11111111" || got.BotID != "B11111111" ||
+		got.Subtype != "thread_broadcast" || got.Text != "first" ||
+		len(got.Reactions) != 1 || got.Reactions[0].Name != "white_check_mark" ||
+		got.Reactions[0].Count != 2 ||
+		strings.Join(got.Reactions[0].Users, ",") != "U22222222,U33333333" {
+		t.Fatalf("ThreadReplies().Messages[0] = %#v; want all seeded fields", got)
+	}
+
+	requests := server.Requests("conversations.replies")
+	if len(requests) != 2 {
+		t.Fatalf("conversations.replies requests = %d; want 2", len(requests))
+	}
+	firstFields := requests[0].Fields
+	if firstFields["channel"] != "C12345678" ||
+		firstFields["ts"] != "1758000000.000001" ||
+		firstFields["oldest"] != "1758000002.000001" ||
+		firstFields["inclusive"] != "true" || firstFields["limit"] != "4" {
+		t.Fatalf("first conversations.replies fields = %#v; want thread page parameters", firstFields)
+	}
+	if requests[1].Fields["cursor"] != first.NextCursor {
+		t.Fatalf("second conversations.replies cursor = %#v; want %q",
+			requests[1].Fields["cursor"], first.NextCursor)
+	}
+}
+
+func TestClientAddReactionMutatesSeededThreadAndAlreadyReactedIsBenign(t *testing.T) {
+	server := testsupport.New(t)
+	server.SetOwnUserID("UAGENTICO")
+	server.SeedThread("C12345678", "1758000000.000001", []testsupport.Message{{
+		TS: "1758000001.000001", ThreadTS: "1758000000.000001", User: "U11111111", Text: "allow",
+	}})
+	client, err := NewClient("xoxp-secret-1234", WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := client.AddReaction(
+		t.Context(), "C12345678", "1758000001.000001", "white_check_mark",
+	)
+	if err != nil {
+		t.Fatalf("AddReaction() error = %v", err)
+	}
+	if result.AlreadyReacted {
+		t.Fatal("AddReaction().AlreadyReacted = true; want false")
+	}
+	page, err := client.ThreadReplies(
+		t.Context(), "C12345678", "1758000000.000001", "1758000000.000001", 100, "",
+	)
+	if err != nil {
+		t.Fatalf("ThreadReplies() after AddReaction error = %v", err)
+	}
+	if len(page.Messages) != 1 || len(page.Messages[0].Reactions) != 1 {
+		t.Fatalf("ThreadReplies() after AddReaction = %#v; want reflected reaction", page)
+	}
+	reaction := page.Messages[0].Reactions[0]
+	if reaction.Name != "white_check_mark" || reaction.Count != 1 ||
+		strings.Join(reaction.Users, ",") != "UAGENTICO" {
+		t.Fatalf("reflected reaction = %#v; want configured own user", reaction)
+	}
+	requests := server.Requests("reactions.add")
+	if len(requests) != 1 || requests[0].Fields["channel"] != "C12345678" ||
+		requests[0].Fields["timestamp"] != "1758000001.000001" ||
+		requests[0].Fields["name"] != "white_check_mark" {
+		t.Fatalf("reactions.add requests = %#v; want channel, timestamp, and name", requests)
+	}
+
+	server.Script("reactions.add", testsupport.Response{
+		Body: map[string]any{"ok": false, "error": "already_reacted"},
+	})
+	result, err = client.AddReaction(
+		t.Context(), "C12345678", "1758000001.000001", "white_check_mark",
+	)
+	if err != nil {
+		t.Fatalf("AddReaction(already_reacted) error = %v", err)
+	}
+	if !result.AlreadyReacted {
+		t.Fatal("AddReaction(already_reacted).AlreadyReacted = false; want true")
+	}
+}
+
+func TestClientThreadRepliesAndAddReactionMapErrors(t *testing.T) {
+	const token = "xoxb-distinctive-secret-1234"
+	for _, method := range []string{"conversations.replies", "reactions.add"} {
+		t.Run(method, func(t *testing.T) {
+			server := testsupport.New(t)
+			server.Script(method,
+				testsupport.Response{Body: map[string]any{
+					"ok": false, "error": "invalid_auth: " + token,
+				}},
+				testsupport.Response{Status: http.StatusInternalServerError},
+				testsupport.Response{
+					Status:  http.StatusTooManyRequests,
+					Headers: http.Header{"Retry-After": []string{"3"}},
+				},
+				testsupport.Response{Delay: 500 * time.Millisecond},
+			)
+			client, err := NewClient(
+				token, WithBaseURL(server.URL()), WithTimeout(40*time.Millisecond),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := func() error {
+				if method == "conversations.replies" {
+					_, err := client.ThreadReplies(t.Context(), "C1", "1.0", "1.0", 10, "")
+					return err
+				}
+				_, err := client.AddReaction(t.Context(), "C1", "1.0", "white_check_mark")
+				return err
+			}
+
+			err = call()
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.SlackError != "invalid_auth: [REDACTED]" ||
+				strings.Contains(err.Error(), token) {
+				t.Fatalf("%s API error = %#v; want scrubbed APIError", method, err)
+			}
+			if got := server.CallCount(method); got != 1 {
+				t.Fatalf("%s calls after API error = %d; want 1", method, got)
+			}
+
+			err = call()
+			var transportErr *TransportError
+			if !errors.As(err, &transportErr) ||
+				transportErr.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s 500 error = %#v; want TransportError(500)", method, err)
+			}
+
+			err = call()
+			if !errors.As(err, &transportErr) ||
+				transportErr.StatusCode != http.StatusTooManyRequests ||
+				transportErr.RetryAfter != 3*time.Second {
+				t.Fatalf("%s 429 error = %#v; want TransportError(429, 3s)", method, err)
+			}
+
+			err = call()
+			if !errors.As(err, &transportErr) || transportErr.StatusCode != 0 {
+				t.Fatalf("%s timeout error = %#v; want connection TransportError", method, err)
+			}
+		})
+	}
+}
+
 func TestClientRichMethodsMapErrorsAndScrubToken(t *testing.T) {
 	server := testsupport.New(t)
 	server.Script("chat.postMessage",

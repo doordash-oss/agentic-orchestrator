@@ -549,6 +549,9 @@ func (s *Session) QALog() []QAPair {
 	}
 	out := make([]QAPair, len(s.qaLog))
 	copy(out, s.qaLog)
+	for i := range out {
+		out[i].Source = cloneAnswerSource(out[i].Source)
+	}
 	return out
 }
 func (s *Session) LogFilePath() string {
@@ -1853,11 +1856,17 @@ func (s *Session) RespondToControl(requestID string, allow bool, reason string) 
 // provider sends on receipt is not mistaken for the answered one. A rejected
 // write restores the request so it can be answered again.
 func (s *Session) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
+	return s.RespondToAskUserWithSource(requestID, questions, answers, annotations, nil)
+}
+
+// RespondToAskUserWithSource records optional answer provenance while keeping
+// the provider response and agent-facing answer text unchanged.
+func (s *Session) RespondToAskUserWithSource(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation, source *ports.AnswerSource) error {
 	s.mu.Lock()
 	answered := s.findPendingControlRequestLocked(requestID)
 	priorStatus := s.status
 	s.mu.Unlock()
-	s.captureAskUserResponse(requestID, questions, answers, annotations, nil)
+	s.captureAskUserResponse(requestID, questions, answers, annotations, nil, source)
 
 	var err error
 	if s.protocol != nil {
@@ -1907,7 +1916,7 @@ func (s *Session) respondToAskUserAutoPicked(requestID string, questions json.Ra
 	} else if err := s.writeJSON(llm.NewAskUserResponse(requestID, questions, answers, nil)); err != nil {
 		return err
 	}
-	s.captureAskUserResponse(requestID, questions, answers, nil, confidenceByQuestion)
+	s.captureAskUserResponse(requestID, questions, answers, nil, confidenceByQuestion, nil)
 	s.appendAskUserMessages(questions, answers, confidenceByQuestion)
 	return nil
 }
@@ -1995,7 +2004,7 @@ func (s *Session) hasTrailingManualAskUserMessages(keys []string, answers map[st
 	return true
 }
 
-func (s *Session) captureAskUserResponse(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation, confidenceByQuestion map[string]float64) {
+func (s *Session) captureAskUserResponse(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation, confidenceByQuestion map[string]float64, source *ports.AnswerSource) {
 	s.mu.Lock()
 	s.removePendingControlRequestLocked(requestID)
 	// hasUnansweredQuestion stays true while any other AskUserQuestion
@@ -2013,9 +2022,18 @@ func (s *Session) captureAskUserResponse(requestID string, questions json.RawMes
 			Notes:      annotations[q].Notes,
 			AutoPicked: autoPicked,
 			Confidence: confidence,
+			Source:     cloneAnswerSource(source),
 		})
 	}
 	s.mu.Unlock()
+}
+
+func cloneAnswerSource(source *ports.AnswerSource) *ports.AnswerSource {
+	if source == nil {
+		return nil
+	}
+	copy := *source
+	return &copy
 }
 
 func askUserAnswerKeysInPresentedOrder(questions json.RawMessage, answers map[string]string) []string {

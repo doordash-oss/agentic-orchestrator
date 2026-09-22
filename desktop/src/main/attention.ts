@@ -417,15 +417,11 @@ export class AttentionService {
           : {}),
       };
     } catch (error) {
-      // A submission racing the item's resolution reads as already resolved
-      // when the canonical bad_request's diagnostics name the missing pending
-      // request; every other canonical rejection (conflict, not_found, ...)
-      // propagates so the surface renders the server's authored card.
+      // A submission racing the item's resolution reads as already resolved;
+      // every other canonical rejection propagates so the surface renders the
+      // server's authored card.
       const canonical = error instanceof CanonicalErrorException ? error.canonical : undefined;
-      const stalePendingRequest =
-        canonical?.code === 'bad_request' &&
-        /^pending request \S+ not found$/i.test(canonical.diagnostics ?? '');
-      if (stalePendingRequest === true) {
+      if (canonical?.code === 'no_longer_pending') {
         return {
           result: 'Already resolved.',
           alreadyResolved: true,

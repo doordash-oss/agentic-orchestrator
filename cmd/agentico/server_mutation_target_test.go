@@ -389,6 +389,90 @@ func TestServerMutationTargetAnswerAskUserRespondsWithOriginalInputAndSafeMetada
 	assertJSONDoesNotContain(t, result, "Postgres with read replicas", "Dark launch first")
 }
 
+func TestServerMutationTargetAnswerAskUserForwardsSource(t *testing.T) {
+	input := json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`)
+	source := &ports.AnswerSource{Kind: ports.AnswerSourceSlack, Responder: "Ada"}
+	sess := &mutationTargetSessionView{
+		id:        testSessionAskID,
+		featureID: "feat-ask",
+		phase:     feature.PhaseInquire,
+		status:    ports.SessionWaitingHelp,
+		active:    true,
+		pending: []*llm.ControlRequestMessage{{
+			RequestID: testAskRequestID,
+			Request: llm.ControlRequest{
+				ToolName: toolNameAskUserQuestion,
+				Input:    input,
+			},
+		}},
+	}
+	target := serverMutationTarget{
+		sessions: &mutationTargetSessionManager{sessions: []ports.SessionView{sess}},
+	}
+
+	_, err := target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
+		RequestID: testAskRequestID,
+		SessionID: testSessionAskID,
+		Answers:   map[string]string{"Which DB?": "PostgreSQL"},
+		Source:    source,
+	})
+	if err != nil {
+		t.Fatalf("AnswerAskUser() error = %v", err)
+	}
+	if len(sess.askCalls) != 1 || sess.askCalls[0].source == nil || *sess.askCalls[0].source != *source {
+		t.Fatalf("RespondToAskUser source = %+v, want %+v", sess.askCalls, source)
+	}
+}
+
+func TestServerMutationTargetAnswerMutationsReportNoLongerPending(t *testing.T) {
+	target := serverMutationTarget{
+		sessions: &mutationTargetSessionManager{},
+	}
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "permission",
+			call: func() error {
+				_, err := target.AnswerPermission(serverruntime.PermissionAnswerRequest{
+					RequestID: "missing",
+					Decision:  "allow_once",
+				})
+				return err
+			},
+		},
+		{
+			name: "ask user",
+			call: func() error {
+				_, err := target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
+					RequestID: "missing",
+					Answers:   map[string]string{"Question?": "Answer"},
+				})
+				return err
+			},
+		},
+		{
+			name: "help",
+			call: func() error {
+				_, err := target.SendHelp(serverruntime.HelpAnswerRequest{
+					FeatureID: "missing",
+					Message:   "Continue",
+				})
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.call(); !errors.Is(err, serverruntime.ErrNoLongerPending) {
+				t.Fatalf("error = %v, want ErrNoLongerPending", err)
+			}
+		})
+	}
+}
+
 func TestServerMutationTargetAnswerAskUserNormalizesTruncatedQuestionKey(t *testing.T) {
 	fullQuestion := "Which persistence strategy should the orchestrator use when an AskUserQuestion contains enough detail that the read API truncates the display projection, but the provider still requires the exact original question text as the answer-map key?"
 	truncatedQuestion := fullQuestion[:180] + "..."
@@ -3257,6 +3341,7 @@ type mutationTargetAskUserCall struct {
 	requestID string
 	questions json.RawMessage
 	answers   map[string]string
+	source    *ports.AnswerSource
 }
 
 func (s *mutationTargetSessionView) ID() string                       { return s.id }
@@ -3348,6 +3433,9 @@ func (s *mutationTargetSessionView) RespondToControl(requestID string, allow boo
 	return nil
 }
 func (s *mutationTargetSessionView) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, _ map[string]llm.AskUserAnnotation) error {
+	return s.RespondToAskUserWithSource(requestID, questions, answers, nil, nil)
+}
+func (s *mutationTargetSessionView) RespondToAskUserWithSource(requestID string, questions json.RawMessage, answers map[string]string, _ map[string]llm.AskUserAnnotation, source *ports.AnswerSource) error {
 	copied := make(map[string]string, len(answers))
 	for k, v := range answers {
 		copied[k] = v
@@ -3356,6 +3444,7 @@ func (s *mutationTargetSessionView) RespondToAskUser(requestID string, questions
 		requestID: requestID,
 		questions: append(json.RawMessage(nil), questions...),
 		answers:   copied,
+		source:    source,
 	})
 	return nil
 }

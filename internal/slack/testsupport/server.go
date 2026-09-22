@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -54,14 +56,39 @@ type Request struct {
 	ReturnedFileID string
 }
 
+// Reaction is one reaction summary on a seeded message.
+type Reaction struct {
+	Name  string   `json:"name"`
+	Count int      `json:"count"`
+	Users []string `json:"users"`
+}
+
+// Message is one message in a seeded Slack thread.
+type Message struct {
+	TS        string     `json:"ts"`
+	ThreadTS  string     `json:"thread_ts"`
+	User      string     `json:"user"`
+	BotID     string     `json:"bot_id"`
+	Subtype   string     `json:"subtype"`
+	Text      string     `json:"text"`
+	Reactions []Reaction `json:"reactions"`
+}
+
+type threadKey struct {
+	channel string
+	rootTS  string
+}
+
 // Server serves per-method scripted responses and records requests.
 type Server struct {
 	server *httptest.Server
 
-	mu       sync.Mutex
-	scripts  map[string][]Response
-	requests []Request
-	nextFile int64
+	mu        sync.Mutex
+	scripts   map[string][]Response
+	requests  []Request
+	threads   map[threadKey][]Message
+	ownUserID string
+	nextFile  int64
 	// defaultResponder answers unscripted calls (empty or missing method
 	// queue) so lifecycle tests need not pre-count posts. Nil keeps the
 	// unknown_method fallback.
@@ -78,7 +105,10 @@ func New(t testing.TB) *Server {
 
 // NewServer starts a server whose lifecycle is controlled by the caller.
 func NewServer() *Server {
-	server := &Server{scripts: make(map[string][]Response)}
+	server := &Server{
+		scripts: make(map[string][]Response),
+		threads: make(map[threadKey][]Message),
+	}
 	server.server = httptest.NewServer(http.HandlerFunc(server.serveHTTP))
 	return server
 }
@@ -89,6 +119,24 @@ func (s *Server) SetDefault(responder func(method string, request Request) Respo
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.defaultResponder = responder
+}
+
+// SetOwnUserID sets the user ID reflected by unscripted reactions.add calls.
+func (s *Server) SetOwnUserID(userID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ownUserID = userID
+}
+
+// SeedThread replaces the messages served for one channel and thread root.
+func (s *Server) SeedThread(channelID, rootTS string, messages []Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seeded := cloneMessages(messages)
+	sort.SliceStable(seeded, func(i, j int) bool {
+		return timestampCompare(seeded[i].TS, seeded[j].TS) < 0
+	})
+	s.threads[threadKey{channel: channelID, rootTS: rootTS}] = seeded
 }
 
 // URL returns a Slack-compatible API base URL.
@@ -165,6 +213,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.scripts[method] = queue[1:]
 	} else if uploadResponse, ok := s.defaultUploadResponse(method, request); ok {
 		response = uploadResponse
+	} else if seededResponse, ok := s.defaultSeededResponse(method, request); ok {
+		response = seededResponse
 	} else if s.defaultResponder != nil {
 		response = s.defaultResponder(method, cloneRequest(request))
 	} else {
@@ -222,6 +272,106 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		_ = json.NewEncoder(w).Encode(body)
 	}
+}
+
+func (s *Server) defaultSeededResponse(method string, request Request) (Response, bool) {
+	switch method {
+	case "conversations.replies":
+		return s.seededRepliesResponse(request), true
+	case "reactions.add":
+		return s.seededReactionResponse(request), true
+	default:
+		return Response{}, false
+	}
+}
+
+func (s *Server) seededRepliesResponse(request Request) Response {
+	channel, _ := request.Fields["channel"].(string)
+	rootTS, _ := request.Fields["ts"].(string)
+	messages, ok := s.threads[threadKey{channel: channel, rootTS: rootTS}]
+	if !ok {
+		return Response{Body: map[string]any{"ok": false, "error": "thread_not_found"}}
+	}
+
+	oldest, _ := request.Fields["oldest"].(string)
+	inclusive, _ := request.Fields["inclusive"].(string)
+	filtered := make([]Message, 0, len(messages))
+	for _, message := range messages {
+		comparison := timestampCompare(message.TS, oldest)
+		if oldest == "" || comparison > 0 || inclusive == "true" && comparison == 0 {
+			filtered = append(filtered, cloneMessage(message))
+		}
+	}
+
+	limit := len(filtered)
+	if rawLimit, _ := request.Fields["limit"].(string); rawLimit != "" {
+		if parsed, err := strconv.Atoi(rawLimit); err == nil && parsed >= 0 {
+			limit = parsed
+		}
+	}
+	offset := 0
+	if cursor, _ := request.Fields["cursor"].(string); cursor != "" {
+		if parsed, err := strconv.Atoi(cursor); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+	if offset > len(filtered) {
+		offset = len(filtered)
+	}
+	end := offset + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	nextCursor := ""
+	if end < len(filtered) {
+		nextCursor = strconv.Itoa(end)
+	}
+	return Response{Body: map[string]any{
+		"ok":       true,
+		"messages": filtered[offset:end],
+		"response_metadata": map[string]any{
+			"next_cursor": nextCursor,
+		},
+	}}
+}
+
+func (s *Server) seededReactionResponse(request Request) Response {
+	channel, _ := request.Fields["channel"].(string)
+	timestamp, _ := request.Fields["timestamp"].(string)
+	name, _ := request.Fields["name"].(string)
+	for key, messages := range s.threads {
+		if key.channel != channel {
+			continue
+		}
+		for messageIndex := range messages {
+			if messages[messageIndex].TS != timestamp {
+				continue
+			}
+			for reactionIndex := range messages[messageIndex].Reactions {
+				reaction := &messages[messageIndex].Reactions[reactionIndex]
+				if reaction.Name != name {
+					continue
+				}
+				for _, userID := range reaction.Users {
+					if userID == s.ownUserID {
+						return Response{Body: map[string]any{
+							"ok": false, "error": "already_reacted",
+						}}
+					}
+				}
+				reaction.Users = append(reaction.Users, s.ownUserID)
+				reaction.Count++
+				s.threads[key] = messages
+				return Response{Body: map[string]any{"ok": true}}
+			}
+			messages[messageIndex].Reactions = append(messages[messageIndex].Reactions, Reaction{
+				Name: name, Count: 1, Users: []string{s.ownUserID},
+			})
+			s.threads[key] = messages
+			return Response{Body: map[string]any{"ok": true}}
+		}
+	}
+	return Response{Body: map[string]any{"ok": false, "error": "message_not_found"}}
 }
 
 func isRawUpload(method, contentType string) bool {
@@ -337,4 +487,65 @@ func cloneRequest(request Request) Request {
 		cloned.Fields[key] = value
 	}
 	return cloned
+}
+
+func cloneMessages(messages []Message) []Message {
+	cloned := make([]Message, len(messages))
+	for i, message := range messages {
+		cloned[i] = cloneMessage(message)
+	}
+	return cloned
+}
+
+func cloneMessage(message Message) Message {
+	cloned := message
+	cloned.Reactions = make([]Reaction, len(message.Reactions))
+	for i, reaction := range message.Reactions {
+		cloned.Reactions[i] = reaction
+		cloned.Reactions[i].Users = append([]string(nil), reaction.Users...)
+	}
+	return cloned
+}
+
+func timestampCompare(left, right string) int {
+	leftWhole, leftFraction := splitTimestamp(left)
+	rightWhole, rightFraction := splitTimestamp(right)
+	leftWhole = strings.TrimLeft(leftWhole, "0")
+	rightWhole = strings.TrimLeft(rightWhole, "0")
+	if leftWhole == "" {
+		leftWhole = "0"
+	}
+	if rightWhole == "" {
+		rightWhole = "0"
+	}
+	if len(leftWhole) < len(rightWhole) {
+		return -1
+	}
+	if len(leftWhole) > len(rightWhole) {
+		return 1
+	}
+	if leftWhole < rightWhole {
+		return -1
+	}
+	if leftWhole > rightWhole {
+		return 1
+	}
+	width := max(len(leftFraction), len(rightFraction))
+	leftFraction += strings.Repeat("0", width-len(leftFraction))
+	rightFraction += strings.Repeat("0", width-len(rightFraction))
+	if leftFraction < rightFraction {
+		return -1
+	}
+	if leftFraction > rightFraction {
+		return 1
+	}
+	return 0
+}
+
+func splitTimestamp(timestamp string) (string, string) {
+	whole, fraction, found := strings.Cut(timestamp, ".")
+	if !found {
+		return timestamp, ""
+	}
+	return whole, fraction
 }

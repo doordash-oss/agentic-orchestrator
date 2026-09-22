@@ -34,6 +34,16 @@ type slackClient interface {
 	ConversationsList(ctx context.Context, cursor string, limit int) (ConversationsPage, error)
 	ConversationInfo(ctx context.Context, channelID string) (Conversation, error)
 	OpenConversation(ctx context.Context, userID string) (string, error)
+	ThreadReplies(
+		ctx context.Context,
+		channelID, threadTS, oldest string,
+		limit int,
+		cursor string,
+	) (RepliesPage, error)
+	AddReaction(
+		ctx context.Context,
+		channelID, timestamp, name string,
+	) (AddReactionResult, error)
 	PostMessage(ctx context.Context, channelID, text string) error
 	PostMessageRich(ctx context.Context, input PostMessageInput) (PostMessageResult, error)
 	UpdateMessage(ctx context.Context, channelID, ts, fallbackText string, blocks []Block) error

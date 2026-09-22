@@ -1397,6 +1397,12 @@ export interface components {
             auto_approve_scope?: "feature" | "workspace";
             /** @description Existing permission cache scope. Empty string means global. */
             remember_scope?: string;
+            source?: components["schemas"]["AnswerSource"];
+        };
+        AnswerSource: {
+            /** @enum {string} */
+            kind: "slack" | "desktop";
+            responder?: string;
         };
         Resource: {
             type: string;
@@ -2072,6 +2078,7 @@ export interface components {
         ReviewSessionDecisionRequest: {
             decision: string;
             base_revision: string;
+            source?: components["schemas"]["AnswerSource"];
         };
         ReviewSessionDecisionResponse: components["schemas"]["ActionBaseResponse"] & {
             feature_id: string;

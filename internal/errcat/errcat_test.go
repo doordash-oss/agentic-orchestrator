@@ -213,6 +213,7 @@ func TestAuthoredClasses(t *testing.T) {
 		{UnsupportedMediaType, ClassBlocking},
 		{RequestTooLarge, ClassBlocking},
 		{Unavailable, ClassBlocking},
+		{NoLongerPending, ClassBlocking},
 		{ChatContextInvalid, ClassBlocking},
 		{ChatContextNotFound, ClassWarning},
 	}
@@ -224,6 +225,22 @@ func TestAuthoredClasses(t *testing.T) {
 		if entry.Class != tc.want {
 			t.Errorf("%s: class is %q; want %q", tc.code, entry.Class, tc.want)
 		}
+	}
+}
+
+func TestNoLongerPendingCatalogEntry(t *testing.T) {
+	entry, ok := Lookup(NoLongerPending)
+	if !ok {
+		t.Fatal("no_longer_pending missing from catalog")
+	}
+	if strings.TrimSpace(entry.Title) == "" {
+		t.Error("no_longer_pending title is empty")
+	}
+	if strings.TrimSpace(entry.Summary) == "" {
+		t.Error("no_longer_pending summary is empty")
+	}
+	if strings.TrimSpace(entry.Remediation) == "" {
+		t.Error("no_longer_pending remediation is empty")
 	}
 }
 

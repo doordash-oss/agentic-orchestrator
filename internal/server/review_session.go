@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"gopkg.in/yaml.v3"
 )
@@ -253,6 +254,16 @@ func (s *reviewSessionService) SubmitDecision(featureID, reviewID string, req Re
 	if err != nil {
 		return ReviewSessionDecisionResponse{}, err
 	}
+	current, err := s.store.Load(featureID)
+	if err != nil {
+		return ReviewSessionDecisionResponse{}, err
+	}
+	if current == nil || !current.Status.IsNeedsReview() {
+		return ReviewSessionDecisionResponse{}, &ActionConflictError{
+			Code:   errcat.NoLongerPending,
+			Detail: fmt.Sprintf("feature %q is not paused on a review gate", featureID),
+		}
+	}
 	if req.BaseRevision != meta.DraftRevision {
 		return ReviewSessionDecisionResponse{}, staleReviewRevisionError(reviewID, meta.DraftRevision)
 	}
@@ -269,6 +280,7 @@ func (s *reviewSessionService) SubmitDecision(featureID, reviewID string, req Re
 		PhasePlan: meta.PhasePlan,
 		Roadmap:   meta.Roadmap,
 		IsRewind:  meta.ReviewMode == reviewModeRewind,
+		Source:    req.Source,
 	}
 	if s.decider != nil {
 		if err := s.decider(featureID, decisionReq); err != nil {
@@ -342,7 +354,10 @@ func resolveReviewSessionContext(store FeatureReader, f *feature.Feature) (revie
 	}
 	featureID := f.ID
 	if !f.Status.IsNeedsReview() {
-		return reviewSessionContext{}, &ActionConflictError{Detail: fmt.Sprintf("feature %q is not paused on a review gate", featureID)}
+		return reviewSessionContext{}, &ActionConflictError{
+			Code:   errcat.NoLongerPending,
+			Detail: fmt.Sprintf("feature %q is not paused on a review gate", featureID),
+		}
 	}
 	run := f.Run()
 	if run == nil || run.RunNumber <= 0 {

@@ -29,7 +29,9 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 func TestReviewSessionRoutesCommitDraftViaREST(t *testing.T) {
@@ -388,6 +390,7 @@ func TestReviewSessionServiceSaveDraftSerializesRevisionCheckAndWrite(t *testing
 func TestReviewSessionServiceDecisionCommitsDraftBeforeDelegate(t *testing.T) {
 	store, f, planPath := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
 	var delegated bool
+	source := &ports.AnswerSource{Kind: ports.AnswerSourceSlack, Responder: "Ada"}
 	service := newReviewSessionService(store, func(featureID string, req ReviewDecisionRequest) error {
 		delegated = true
 		if featureID != f.ID {
@@ -395,6 +398,9 @@ func TestReviewSessionServiceDecisionCommitsDraftBeforeDelegate(t *testing.T) {
 		}
 		if req.Decision != reviewDecisionProceed || req.Phase != feature.PhaseImplement.DirName() {
 			t.Fatalf("delegate request = %+v, want proceed implement", req)
+		}
+		if req.Source == nil || *req.Source != *source {
+			t.Fatalf("delegate source = %+v, want %+v", req.Source, source)
 		}
 		data, err := os.ReadFile(planPath)
 		if err != nil {
@@ -420,6 +426,7 @@ func TestReviewSessionServiceDecisionCommitsDraftBeforeDelegate(t *testing.T) {
 	decision, err := service.SubmitDecision(f.ID, resp.ReviewID, ReviewSessionDecisionRequest{
 		Decision:     reviewDecisionProceed,
 		BaseRevision: updated.DraftRevision,
+		Source:       source,
 	})
 	if err != nil {
 		t.Fatalf("SubmitDecision: %v", err)
@@ -429,6 +436,33 @@ func TestReviewSessionServiceDecisionCommitsDraftBeforeDelegate(t *testing.T) {
 	}
 	if decision.FeatureID != f.ID || decision.ReviewID != resp.ReviewID || decision.Result != "submitted" {
 		t.Fatalf("decision response = %+v, want submitted response", decision)
+	}
+}
+
+func TestReviewSessionServiceDecisionReportsClosedGateAsNoLongerPending(t *testing.T) {
+	store, f, _ := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
+	service := newReviewSessionService(store, nil)
+	created, err := service.Create(f.ID)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.Modify(f.ID, func(current *feature.Feature) error {
+		current.Status = feature.StatusImplementing
+		return nil
+	}); err != nil {
+		t.Fatalf("close review gate: %v", err)
+	}
+
+	_, err = service.SubmitDecision(f.ID, created.ReviewID, ReviewSessionDecisionRequest{
+		Decision:     reviewDecisionProceed,
+		BaseRevision: created.DraftRevision,
+	})
+	var conflict *ActionConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("SubmitDecision() error = %T %v, want ActionConflictError", err, err)
+	}
+	if conflict.Code != errcat.NoLongerPending {
+		t.Fatalf("SubmitDecision() code = %q, want %q", conflict.Code, errcat.NoLongerPending)
 	}
 }
 

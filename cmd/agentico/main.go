@@ -1485,6 +1485,7 @@ func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntim
 		PhasePlan:   req.PhasePlan,
 		Roadmap:     req.Roadmap,
 		Comment:     req.Comment,
+		Source:      req.Source,
 	}
 	return t.orch.HandleReviewDecision(featureID, decision)
 }
@@ -1694,8 +1695,16 @@ func (t *serverMutationTarget) AnswerAskUser(req serverruntime.AskUserAnswerRequ
 		return serverruntime.AskUserAnswerResponse{}, err
 	}
 	answers := normalizeAskUserAnswerKeys(pending.Request.Input, req.Answers)
-	if err := sess.RespondToAskUser(pending.RequestID, pending.Request.Input, answers, nil); err != nil {
-		return serverruntime.AskUserAnswerResponse{}, fmt.Errorf("answer ask-user question: %w", err)
+	var answerErr error
+	if req.Source == nil {
+		answerErr = sess.RespondToAskUser(pending.RequestID, pending.Request.Input, answers, nil)
+	} else if responder, ok := sess.(ports.AskUserSourceResponder); ok {
+		answerErr = responder.RespondToAskUserWithSource(pending.RequestID, pending.Request.Input, answers, nil, req.Source)
+	} else {
+		answerErr = errors.New("session does not support answer provenance")
+	}
+	if answerErr != nil {
+		return serverruntime.AskUserAnswerResponse{}, fmt.Errorf("answer ask-user question: %w", answerErr)
 	}
 	return serverruntime.AskUserAnswerResponse{SessionID: sess.ID(), RequestID: pending.RequestID, Result: resultAnswered}, nil
 }
@@ -2831,7 +2840,7 @@ func (t *serverMutationTarget) findPendingControlRequest(sessionID, requestID st
 	if strings.TrimSpace(sessionID) != "" {
 		sess := t.sessions.GetSession(strings.TrimSpace(sessionID))
 		if sess == nil {
-			return nil, nil, fmt.Errorf("session %s not found", sessionID)
+			return nil, nil, fmt.Errorf("%w: session %s not found", serverruntime.ErrNoLongerPending, sessionID)
 		}
 		candidates = []ports.SessionView{sess}
 	} else {
@@ -2852,7 +2861,7 @@ func (t *serverMutationTarget) findPendingControlRequest(sessionID, requestID st
 			return sess, pending, nil
 		}
 	}
-	return nil, nil, fmt.Errorf("pending request %s not found", requestID)
+	return nil, nil, fmt.Errorf("%w: pending request %s not found", serverruntime.ErrNoLongerPending, requestID)
 }
 
 func (t *serverMutationTarget) sendQueuedFeatureHelp(req serverruntime.HelpAnswerRequest) (serverruntime.HelpSendResponse, bool, error) {
@@ -2888,8 +2897,8 @@ func (t *serverMutationTarget) helpSession(req serverruntime.HelpAnswerRequest) 
 	}
 	if id := strings.TrimSpace(req.SessionID); id != "" {
 		sess := t.sessions.GetSession(id)
-		if sess == nil {
-			return nil, fmt.Errorf("session %s not found", id)
+		if sess == nil || !sess.IsActive() {
+			return nil, fmt.Errorf("%w: no active session %s", serverruntime.ErrNoLongerPending, id)
 		}
 		return sess, nil
 	}
@@ -2905,7 +2914,7 @@ func (t *serverMutationTarget) helpSession(req serverruntime.HelpAnswerRequest) 
 	}
 	switch len(active) {
 	case 0:
-		return nil, fmt.Errorf("no active session for feature %s", featureID)
+		return nil, fmt.Errorf("%w: no active session for feature %s", serverruntime.ErrNoLongerPending, featureID)
 	case 1:
 		return active[0], nil
 	default:

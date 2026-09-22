@@ -22,6 +22,7 @@ import (
 
 	config "github.com/doordash-oss/agentic-orchestrator/internal/config"
 	feature "github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 const (
@@ -2075,6 +2076,9 @@ type ActionScope struct {
 	Type          string `json:"type"`
 }
 
+// AnswerSource defines model for AnswerSource.
+type AnswerSource = ports.AnswerSource
+
 // Artifact defines model for Artifact.
 type Artifact struct {
 	Category         string    `json:"category"`
@@ -3142,9 +3146,10 @@ type PermissionAnswerSchema struct {
 	RememberPattern  string                                  `json:"remember_pattern,omitempty"`
 
 	// RememberScope Existing permission cache scope. Empty string means global.
-	RememberScope *string `json:"remember_scope,omitempty"`
-	RequestID     string  `json:"request_id"`
-	SessionID     string  `json:"session_id,omitempty"`
+	RememberScope *string       `json:"remember_scope,omitempty"`
+	RequestID     string        `json:"request_id"`
+	SessionID     string        `json:"session_id,omitempty"`
+	Source        *AnswerSource `json:"source,omitempty"`
 }
 
 // PermissionAnswerRequestAutoApproveScope Turn automatic Bash review on for the request's feature or for the whole workspace before answering. Not allowed with deny.
@@ -4012,8 +4017,9 @@ type ReviewGate struct {
 
 // ReviewSessionDecisionRequest defines model for ReviewSessionDecisionRequest.
 type ReviewSessionDecisionRequest struct {
-	BaseRevision string `json:"base_revision"`
-	Decision     string `json:"decision"`
+	BaseRevision string        `json:"base_revision"`
+	Decision     string        `json:"decision"`
+	Source       *AnswerSource `json:"source,omitempty"`
 }
 
 // ReviewSessionDecisionResponse defines model for ReviewSessionDecisionResponse.

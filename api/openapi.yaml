@@ -2440,6 +2440,21 @@ components:
           type: string
           description: Existing permission cache scope. Empty string means global.
           x-go-type-skip-optional-pointer: false
+        source:
+          $ref: "#/components/schemas/AnswerSource"
+          x-go-type-skip-optional-pointer: false
+    AnswerSource:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [slack, desktop]
+        responder:
+          type: string
+      x-go-type: ports.AnswerSource
+      x-go-type-import:
+        path: github.com/doordash-oss/agentic-orchestrator/internal/ports
     Resource:
       type: object
       required: [type]
@@ -4215,6 +4230,9 @@ components:
           type: string
         base_revision:
           type: string
+        source:
+          $ref: "#/components/schemas/AnswerSource"
+          x-go-type-skip-optional-pointer: false
     ReviewSessionDecisionResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"

@@ -115,6 +115,35 @@ type ConversationsPage struct {
 	NextCursor    string
 }
 
+// Reaction is one reaction summary attached to a Slack message.
+type Reaction struct {
+	Name  string   `json:"name"`
+	Count int      `json:"count"`
+	Users []string `json:"users"`
+}
+
+// Message is the Slack message data needed when reading a thread.
+type Message struct {
+	TS        string     `json:"ts"`
+	ThreadTS  string     `json:"thread_ts"`
+	User      string     `json:"user"`
+	BotID     string     `json:"bot_id"`
+	Subtype   string     `json:"subtype"`
+	Text      string     `json:"text"`
+	Reactions []Reaction `json:"reactions"`
+}
+
+// RepliesPage is one cursor page from conversations.replies.
+type RepliesPage struct {
+	Messages   []Message
+	NextCursor string
+}
+
+// AddReactionResult describes a successful or already-satisfied reaction add.
+type AddReactionResult struct {
+	AlreadyReacted bool
+}
+
 // ClientOption customizes a Slack client.
 type ClientOption func(*clientConfig)
 
@@ -380,6 +409,70 @@ func (c *Client) OpenConversation(ctx context.Context, userID string) (string, e
 		return "", c.apiError(envelope.Error, envelope.Needed)
 	}
 	return envelope.Channel.ID, nil
+}
+
+// ThreadReplies calls one cursor page of conversations.replies.
+func (c *Client) ThreadReplies(
+	ctx context.Context,
+	channelID, threadTS, oldest string,
+	limit int,
+	cursor string,
+) (RepliesPage, error) {
+	var envelope struct {
+		OK       bool      `json:"ok"`
+		Error    string    `json:"error"`
+		Needed   string    `json:"needed"`
+		Messages []Message `json:"messages"`
+		Metadata struct {
+			NextCursor string `json:"next_cursor"`
+		} `json:"response_metadata"`
+	}
+	fields := url.Values{
+		"channel":   {channelID},
+		"ts":        {threadTS},
+		"oldest":    {oldest},
+		"inclusive": {"true"},
+		"limit":     {strconv.Itoa(limit)},
+	}
+	if cursor != "" {
+		fields.Set("cursor", cursor)
+	}
+	if _, err := c.call(ctx, "conversations.replies", fields, &envelope); err != nil {
+		return RepliesPage{}, err
+	}
+	if !envelope.OK {
+		return RepliesPage{}, c.apiError(envelope.Error, envelope.Needed)
+	}
+	return RepliesPage{
+		Messages:   envelope.Messages,
+		NextCursor: strings.TrimSpace(envelope.Metadata.NextCursor),
+	}, nil
+}
+
+// AddReaction adds one reaction to a Slack message.
+func (c *Client) AddReaction(
+	ctx context.Context,
+	channelID, timestamp, name string,
+) (AddReactionResult, error) {
+	var envelope struct {
+		OK     bool   `json:"ok"`
+		Error  string `json:"error"`
+		Needed string `json:"needed"`
+	}
+	if _, err := c.call(ctx, "reactions.add", url.Values{
+		"channel":   {channelID},
+		"timestamp": {timestamp},
+		"name":      {name},
+	}, &envelope); err != nil {
+		return AddReactionResult{}, err
+	}
+	if !envelope.OK {
+		if envelope.Error == "already_reacted" {
+			return AddReactionResult{AlreadyReacted: true}, nil
+		}
+		return AddReactionResult{}, c.apiError(envelope.Error, envelope.Needed)
+	}
+	return AddReactionResult{}, nil
 }
 
 // PostMessage sends a plain-text chat.postMessage request.

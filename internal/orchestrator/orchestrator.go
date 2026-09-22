@@ -117,6 +117,7 @@ type ReviewDecision struct {
 	// menu. Only meaningful when Roadmap == true && Decision == "iterate"
 	// (the roadmap reject path). Mirrors RoadmapReviewDecisionMsg.Comment.
 	Comment string
+	Source  *ports.AnswerSource
 }
 
 // PublishConflictError signals a pull-rebase conflict during publish. Satisfies

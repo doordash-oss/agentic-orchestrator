@@ -23,6 +23,10 @@ import { attentionOwnerFeatureId, CHAT_SESSION_ID } from '../../shared/ipc';
 /** One canonical catalog-rendered rejection body, as the server now emits. */
 function canonicalBody(code: string): Record<string, unknown> {
   const catalog: Record<string, { title: string; summary: string }> = {
+    no_longer_pending: {
+      title: 'No longer pending',
+      summary: 'The item is no longer waiting for an answer.',
+    },
     conflict: {
       title: 'Conflict',
       summary: 'The request conflicts with the current state of the feature.',
@@ -561,7 +565,35 @@ describe('AttentionService review items', () => {
     });
   });
 
-  it('maps the canonical bad_request for a missing pending request to already resolved', async () => {
+  it('maps no_longer_pending to already resolved without inspecting diagnostics', async () => {
+    const service = new AttentionService({
+      apiRequest: () =>
+        Promise.resolve({
+          status: 409,
+          body: {
+            api_version: 'v1',
+            error: {
+              code: 'no_longer_pending',
+              class: 'blocking',
+              title: 'No longer pending',
+              summary: 'The item is no longer waiting for an answer.',
+              remediation: { hint: 'Refresh the inbox and continue with the current item.' },
+              diagnostics: 'unrelated implementation detail',
+            },
+          },
+        }),
+    } satisfies ServerTransport);
+
+    await expect(
+      service.answerPermission({ requestId: 'perm-stale', decision: 'allow_once' }),
+    ).resolves.toEqual({
+      result: 'Already resolved.',
+      alreadyResolved: true,
+      notice: 'This item was already resolved. The inbox has been refreshed.',
+    });
+  });
+
+  it('propagates bad_request even when diagnostics match the former stale-request text', async () => {
     const service = new AttentionService({
       apiRequest: () =>
         Promise.resolve({
@@ -573,23 +605,17 @@ describe('AttentionService review items', () => {
               class: 'blocking',
               title: 'Bad request',
               summary: 'The request was not valid.',
-              remediation: { hint: 'Check the request details and try again.' },
               diagnostics: 'pending request perm-stale not found',
             },
           },
         }),
     } satisfies ServerTransport);
 
-    // The canonical era moved the stale marker from the plain-text body into
-    // diagnostics; a submission that raced the item's resolution still reads
-    // as already resolved rather than surfacing the raw rejection.
-    await expect(
-      service.answerPermission({ requestId: 'perm-stale', decision: 'allow_once' }),
-    ).resolves.toEqual({
-      result: 'Already resolved.',
-      alreadyResolved: true,
-      notice: 'This item was already resolved. The inbox has been refreshed.',
-    });
+    const error = await service
+      .answerPermission({ requestId: 'perm-stale', decision: 'allow_once' })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CanonicalErrorException);
+    expect((error as CanonicalErrorException).canonical.code).toBe('bad_request');
   });
 
   it('derives one stable inbox item from each authoritative pending review', async () => {

@@ -96,6 +96,10 @@ const trustedClientHeaderValue = "local"
 // between the route matcher and the client request builder.
 const apiPathPermissionsAnswer = "/api/v1/permissions/answer"
 
+// ErrNoLongerPending identifies an answer mutation whose target has already
+// been resolved or otherwise stopped waiting for input.
+var ErrNoLongerPending = errors.New("no longer pending")
+
 type MutationTarget interface {
 	CreateFeature(CreateFeatureRequest) (CreateFeatureResponse, error)
 	// SetupFeature dispatches server-owned durable setup (fresh run or retry
@@ -200,12 +204,13 @@ type RestartFeatureRequest struct {
 }
 
 type ReviewDecisionRequest struct {
-	Decision  string `json:"decision"`
-	Phase     string `json:"phase,omitempty"`
-	PhasePlan bool   `json:"phase_plan,omitempty"`
-	Roadmap   bool   `json:"roadmap,omitempty"`
-	IsRewind  bool   `json:"is_rewind,omitempty"`
-	Comment   string `json:"comment,omitempty"`
+	Decision  string              `json:"decision"`
+	Phase     string              `json:"phase,omitempty"`
+	PhasePlan bool                `json:"phase_plan,omitempty"`
+	Roadmap   bool                `json:"roadmap,omitempty"`
+	IsRewind  bool                `json:"is_rewind,omitempty"`
+	Comment   string              `json:"comment,omitempty"`
+	Source    *ports.AnswerSource `json:"source,omitempty"`
 }
 
 type FeatureConfigMutationRequest struct {
@@ -232,7 +237,8 @@ type PermissionAnswerRequest struct {
 	RememberScope   *string `json:"remember_scope,omitempty"`
 	// AutoApproveScope turns automatic Bash review on for the request's
 	// feature ("feature") or the workspace ("workspace") before answering.
-	AutoApproveScope string `json:"auto_approve_scope,omitempty"`
+	AutoApproveScope string              `json:"auto_approve_scope,omitempty"`
+	Source           *ports.AnswerSource `json:"source,omitempty"`
 }
 
 const (
@@ -241,15 +247,17 @@ const (
 )
 
 type AskUserAnswerRequest struct {
-	RequestID string            `json:"request_id"`
-	SessionID string            `json:"session_id,omitempty"`
-	Answers   map[string]string `json:"answers"`
+	RequestID string              `json:"request_id"`
+	SessionID string              `json:"session_id,omitempty"`
+	Answers   map[string]string   `json:"answers"`
+	Source    *ports.AnswerSource `json:"source,omitempty"`
 }
 
 type HelpAnswerRequest struct {
-	FeatureID string `json:"feature_id,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	Message   string `json:"message"`
+	FeatureID string              `json:"feature_id,omitempty"`
+	SessionID string              `json:"session_id,omitempty"`
+	Message   string              `json:"message"`
+	Source    *ports.AnswerSource `json:"source,omitempty"`
 }
 
 type RuntimeConfigMutationRequest struct {
@@ -503,7 +511,31 @@ func writeMutationError(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusConflict, errcat.InvalidTransition)
 		return
 	}
+	if errors.Is(err, ErrNoLongerPending) {
+		writeAPIError(w, http.StatusConflict, errcat.NoLongerPending)
+		return
+	}
 	writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(err.Error()))
+}
+
+func validAnswerSource(source *ports.AnswerSource) bool {
+	if source == nil {
+		return true
+	}
+	switch source.Kind {
+	case ports.AnswerSourceSlack, ports.AnswerSourceDesktop:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateAnswerSource(w http.ResponseWriter, source *ports.AnswerSource) bool {
+	if validAnswerSource(source) {
+		return true
+	}
+	writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("source.kind must be slack or desktop"))
+	return false
 }
 
 // writeRelationshipGuardError maps the typed relationship-guard rejections
@@ -1456,6 +1488,9 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("request_id is required"))
 		return
 	}
+	if !validateAnswerSource(w, req.Source) {
+		return
+	}
 	switch req.Decision {
 	case decisionAllowOnce, decisionAllowRemember, decisionDeny:
 	default:
@@ -1514,6 +1549,9 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("answers are required"))
 			return
 		}
+		if !validateAnswerSource(w, req.Source) {
+			return
+		}
 		resp, err := h.mutations.AnswerAskUser(req)
 		if err != nil {
 			writeMutationError(w, err)
@@ -1537,6 +1575,9 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 		}
 		if strings.TrimSpace(req.SessionID) == "" && strings.TrimSpace(req.FeatureID) == "" {
 			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("session_id or feature_id is required"))
+			return
+		}
+		if !validateAnswerSource(w, req.Source) {
 			return
 		}
 		resp, err := h.mutations.SendHelp(req)
@@ -1982,6 +2023,10 @@ func classifyDecodeError(err error) (status int, code errcat.Code, diagnostics s
 	diagnostics = "invalid JSON request"
 	if errors.Is(err, io.ErrUnexpectedEOF) {
 		diagnostics = "truncated JSON request"
+	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) && typeErr.Field == "source" {
+		diagnostics = typeErr.Field + " has invalid type"
 	}
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {

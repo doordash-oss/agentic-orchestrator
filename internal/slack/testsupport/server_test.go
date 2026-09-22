@@ -226,3 +226,75 @@ func TestServerExternalUploadStepsAreScriptedIndependently(t *testing.T) {
 			responses[0].StatusCode, responses[1].StatusCode, responses[2].StatusCode)
 	}
 }
+
+func TestServerSeededThreadsAndScriptsCoexistPerMethod(t *testing.T) {
+	server := New(t)
+	server.SetOwnUserID("UAGENTICO")
+	server.SeedThread("C123", "10.0", []Message{
+		{TS: "10.0", ThreadTS: "10.0", User: "UROOT", Text: "root"},
+		{TS: "11.0", ThreadTS: "10.0", User: "U1", Text: "first"},
+	})
+	server.Script("conversations.replies", Response{
+		Status: http.StatusServiceUnavailable,
+	})
+	server.Script("reactions.add", Response{
+		Body: map[string]any{"ok": false, "error": "scripted_failure"},
+	})
+
+	postForm := func(method string, values url.Values) *http.Response {
+		t.Helper()
+		resp, err := http.Post(
+			server.URL()+method,
+			"application/x-www-form-urlencoded",
+			strings.NewReader(values.Encode()),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		return resp
+	}
+
+	if got := postForm("conversations.replies", url.Values{
+		"channel": {"C123"}, "ts": {"10.0"}, "oldest": {"10.0"},
+		"inclusive": {"true"}, "limit": {"100"},
+	}).StatusCode; got != http.StatusServiceUnavailable {
+		t.Fatalf("scripted conversations.replies status = %d; want 503", got)
+	}
+	scriptedReaction := postForm("reactions.add", url.Values{
+		"channel": {"C123"}, "timestamp": {"11.0"}, "name": {"white_check_mark"},
+	})
+	var envelope map[string]any
+	if err := json.NewDecoder(scriptedReaction.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope["error"] != "scripted_failure" {
+		t.Fatalf("scripted reactions.add response = %#v; want scripted failure", envelope)
+	}
+
+	reactionResponse := postForm("reactions.add", url.Values{
+		"channel": {"C123"}, "timestamp": {"11.0"}, "name": {"white_check_mark"},
+	})
+	if err := json.NewDecoder(reactionResponse.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope["ok"] != true {
+		t.Fatalf("seeded reactions.add response = %#v; want ok", envelope)
+	}
+	repliesResponse := postForm("conversations.replies", url.Values{
+		"channel": {"C123"}, "ts": {"10.0"}, "oldest": {"11.0"},
+		"inclusive": {"true"}, "limit": {"100"},
+	})
+	var replies struct {
+		OK       bool      `json:"ok"`
+		Messages []Message `json:"messages"`
+	}
+	if err := json.NewDecoder(repliesResponse.Body).Decode(&replies); err != nil {
+		t.Fatal(err)
+	}
+	if !replies.OK || len(replies.Messages) != 1 ||
+		len(replies.Messages[0].Reactions) != 1 ||
+		replies.Messages[0].Reactions[0].Users[0] != "UAGENTICO" {
+		t.Fatalf("seeded conversations.replies response = %#v; want reflected reaction", replies)
+	}
+}

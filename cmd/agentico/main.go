@@ -1027,6 +1027,7 @@ type runtimeBootstrap struct {
 	// reporter once the HTTP handler has been constructed.
 	slackReporter  *slackDeliveryReporterRelay
 	slackPending   *slackPendingInputRelay
+	slackAnswer    *slackAnswerRelay
 	worktrees      feature.WorktreeOps
 	eventCh        chan interface{}
 	runtime        serverruntime.RuntimeIdentity
@@ -1115,6 +1116,43 @@ type slackDeliveryReporterRelay struct {
 type slackPendingInputRelay struct {
 	mu     sync.Mutex
 	target ports.SlackPendingInputSource
+}
+
+type slackAnswerRelay struct {
+	mu     sync.Mutex
+	target ports.SlackAnswerPort
+}
+
+func (r *slackAnswerRelay) bind(target ports.SlackAnswerPort) {
+	r.mu.Lock()
+	r.target = target
+	r.mu.Unlock()
+}
+
+func (r *slackAnswerRelay) AnswerSlackPermission(answer ports.SlackPermissionAnswer) ports.SlackAnswerResult {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target == nil {
+		return ports.SlackAnswerResult{
+			Outcome: ports.SlackAnswerFailed,
+			Cause:   errors.New("Slack answer port is unavailable"),
+		}
+	}
+	return target.AnswerSlackPermission(answer)
+}
+
+func (r *slackAnswerRelay) ApproveSlackReview(approval ports.SlackReviewApproval) ports.SlackAnswerResult {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target == nil {
+		return ports.SlackAnswerResult{
+			Outcome: ports.SlackAnswerFailed,
+			Cause:   errors.New("Slack answer port is unavailable"),
+		}
+	}
+	return target.ApproveSlackReview(approval)
 }
 
 func (r *slackPendingInputRelay) bind(target ports.SlackPendingInputSource) {
@@ -1627,6 +1665,7 @@ func (t *serverMutationTarget) AnswerPermission(req serverruntime.PermissionAnsw
 		RememberPattern:  req.RememberPattern,
 		RememberScope:    rememberScope,
 		RememberScopeSet: req.RememberScope != nil,
+		Source:           req.Source,
 	}, func(requestID string, allow bool, reason string) error {
 		return sess.RespondToControl(requestID, allow, reason)
 	})
@@ -3172,6 +3211,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	slackSettings := &slackSettingsRelay{}
 	slackReporter := &slackDeliveryReporterRelay{}
 	slackPending := &slackPendingInputRelay{}
+	slackAnswer := &slackAnswerRelay{}
 	// The runtime work-admission boundary is shared by orchestration,
 	// repository work, and the HTTP surface; one instance is supplied to
 	// the fx graph and reused for the server construction below.
@@ -3179,6 +3219,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	boot.admission = admission
 	boot.slackReporter = slackReporter
 	boot.slackPending = slackPending
+	boot.slackAnswer = slackAnswer
 
 	var fm *feature.Manager
 	var sm *session.Manager
@@ -3206,6 +3247,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 		fx.Supply(fx.Annotate(slackSettings, fx.As(new(ports.SlackSettingsSource)))),
 		fx.Supply(fx.Annotate(slackReporter, fx.As(new(slackintegration.DeliveryReporter)))),
 		fx.Supply(fx.Annotate(slackPending, fx.As(new(ports.SlackPendingInputSource)))),
+		fx.Supply(fx.Annotate(slackAnswer, fx.As(new(ports.SlackAnswerPort)))),
 		config.Module,
 		feature.Module,
 		session.Module,
@@ -3572,6 +3614,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		SlackWarnings:               boot.slackNotifier,
 		BindSlackDeliveryReporter:   boot.slackReporter.bind,
 		BindSlackPendingInputSource: boot.slackPending.bind,
+		BindSlackAnswerPort:         boot.slackAnswer.bind,
 		Events:                      boot.eventCh,
 		DomainEvents:                boot.orchestrator.Events(),
 		DomainEventTap:              boot.slackNotifier.DomainEventTap,

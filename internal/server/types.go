@@ -65,6 +65,7 @@ type Options struct {
 	SlackWarnings               ports.SlackWarningSource
 	BindSlackDeliveryReporter   func(ports.SlackDeliveryReporter)
 	BindSlackPendingInputSource func(ports.SlackPendingInputSource)
+	BindSlackAnswerPort         func(ports.SlackAnswerPort)
 	Events                      <-chan interface{}
 	DomainEvents                <-chan ports.Event
 	// DomainEventTap, when non-nil, is invoked by the broker's domain
@@ -140,6 +141,7 @@ type HandlerOptions struct {
 	SlackWarnings               ports.SlackWarningSource
 	BindSlackDeliveryReporter   func(ports.SlackDeliveryReporter)
 	BindSlackPendingInputSource func(ports.SlackPendingInputSource)
+	BindSlackAnswerPort         func(ports.SlackAnswerPort)
 	Events                      <-chan interface{}
 	DomainEvents                <-chan ports.Event
 	// DomainEventTap, when non-nil, is invoked by the broker's domain

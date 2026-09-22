@@ -210,6 +210,9 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 	if opts.BindSlackPendingInputSource != nil {
 		opts.BindSlackPendingInputSource(handler)
 	}
+	if opts.BindSlackAnswerPort != nil {
+		opts.BindSlackAnswerPort(handler)
+	}
 	if handler.probeActivity == nil {
 		handler.probeActivity = NewProbeActivity()
 	}

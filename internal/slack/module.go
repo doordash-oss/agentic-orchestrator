@@ -38,6 +38,7 @@ type notifierParams struct {
 	Settings ports.SlackSettingsSource
 	Reporter DeliveryReporter              `optional:"true"`
 	Pending  ports.SlackPendingInputSource `optional:"true"`
+	Answer   ports.SlackAnswerPort         `optional:"true"`
 	Store    *feature.Store
 	StateDir string `name:"stateDir"`
 	Observer *observe.Observer
@@ -48,6 +49,7 @@ func newNotifier(p notifierParams) *Notifier {
 		Settings: p.Settings,
 		Reporter: p.Reporter,
 		Pending:  p.Pending,
+		Answer:   p.Answer,
 		Store:    p.Store,
 		StateDir: p.StateDir,
 		Observer: p.Observer,

@@ -91,6 +91,7 @@ type NotifierOptions struct {
 	Observer  EventObserver
 	Reporter  DeliveryReporter
 	Pending   ports.SlackPendingInputSource
+	Answer    ports.SlackAnswerPort
 	NewClient ClientFactory
 	// QueueCapacity bounds the intake queue; tests lower it.
 	QueueCapacity int
@@ -110,6 +111,7 @@ type Notifier struct {
 	observer  EventObserver
 	reporter  DeliveryReporter
 	pending   ports.SlackPendingInputSource
+	answer    ports.SlackAnswerPort
 	newClient ClientFactory
 	clock     Clock
 	jitter    func() float64
@@ -173,6 +175,7 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		observer:           opts.Observer,
 		reporter:           opts.Reporter,
 		pending:            opts.Pending,
+		answer:             opts.Answer,
 		newClient:          newClient,
 		clock:              clock,
 		jitter:             jitter,
@@ -229,6 +232,9 @@ func (n *Notifier) resolvedServerName() string {
 func (n *Notifier) Start() {
 	if n.stopped.Load() {
 		return
+	}
+	if n.answer == nil {
+		log.Printf("slack-notifier: answering from Slack is unavailable")
 	}
 	n.warmPendingRecords()
 	n.dispatcherWG.Add(1)

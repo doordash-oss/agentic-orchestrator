@@ -16,8 +16,10 @@ package slack
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math/rand/v2"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +29,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
 // defaultQueueCapacity bounds the intake queue so producers never wait and
@@ -85,6 +88,7 @@ type NotifierOptions struct {
 	StateDir  string
 	Observer  EventObserver
 	Reporter  DeliveryReporter
+	Pending   ports.SlackPendingInputSource
 	NewClient ClientFactory
 	// QueueCapacity bounds the intake queue; tests lower it.
 	QueueCapacity int
@@ -103,6 +107,7 @@ type Notifier struct {
 	stateDir  string
 	observer  EventObserver
 	reporter  DeliveryReporter
+	pending   ports.SlackPendingInputSource
 	newClient ClientFactory
 	clock     Clock
 	jitter    func() float64
@@ -132,6 +137,9 @@ type Notifier struct {
 
 	workerMu sync.Mutex
 	workers  map[string]*destinationWorker
+
+	recheckMu     sync.Mutex
+	recheckQueued map[string]bool
 }
 
 // NewNotifier constructs the notifier and its intake queue. Call Start
@@ -158,6 +166,7 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		stateDir:           opts.StateDir,
 		observer:           opts.Observer,
 		reporter:           opts.Reporter,
+		pending:            opts.Pending,
 		newClient:          newClient,
 		clock:              clock,
 		jitter:             jitter,
@@ -165,6 +174,7 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		records:            map[string]*featureRecord{},
 		pendingPersistence: map[string]ports.SlackRecipientKind{},
 		workers:            map[string]*destinationWorker{},
+		recheckQueued:      map[string]bool{},
 	}
 	notifier.requestBase, notifier.cancelBase = context.WithCancel(context.Background())
 	dropCapacity := opts.QueueCapacity
@@ -252,9 +262,75 @@ func (n *Notifier) DomainEventTap(ev ports.Event) {
 }
 
 // RuntimeMessageTap is the non-blocking tap the SSE broker invokes for
-// session runtime messages. Runtime notifications are intentionally ignored
-// until a message category consumes them.
-func (n *Notifier) RuntimeMessageTap(any) {}
+// session runtime messages.
+func (n *Notifier) RuntimeMessageTap(message any) {
+	if n.stopped.Load() {
+		return
+	}
+	switch msg := message.(type) {
+	case session.SDKEventMsg:
+		if msg.FeatureID == "" || msg.SessionID == "__chat__" {
+			return
+		}
+		if msg.Message.ControlRequest != nil {
+			n.queue.enqueue(queueItem{
+				kind:  kindNeedsInput,
+				event: ports.Event{Type: ports.SessionOutput, FeatureID: msg.FeatureID},
+			})
+			return
+		}
+		n.enqueueRecheck(msg.FeatureID)
+	case session.SessionDoneMsg:
+		if msg.FeatureID != "" && msg.SessionID != "__chat__" {
+			n.enqueueRecheck(msg.FeatureID)
+		}
+	}
+}
+
+func (n *Notifier) enqueueRecheck(featureID string) {
+	if !n.hasTrackedInputs(featureID) {
+		return
+	}
+	n.recheckMu.Lock()
+	if n.recheckQueued[featureID] {
+		n.recheckMu.Unlock()
+		return
+	}
+	n.recheckQueued[featureID] = true
+	n.recheckMu.Unlock()
+	if !n.queue.enqueue(queueItem{
+		kind:        kindNeedsInput,
+		event:       ports.Event{Type: ports.SessionOutput, FeatureID: featureID},
+		recheckOnly: true,
+	}) {
+		n.clearRecheck(featureID)
+	}
+}
+
+func (n *Notifier) hasTrackedInputs(featureID string) bool {
+	ownerID := featureID
+	if current, err := n.store.Load(featureID); err == nil && current != nil && current.IsChild() {
+		ownerID = current.Parent.ParentID
+	}
+	record, err := n.recordFor(ownerID)
+	if err != nil {
+		return false
+	}
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+	for _, item := range record.Pending {
+		if item.SourceFeatureID == featureID {
+			return true
+		}
+	}
+	return len(record.Pending) > 0
+}
+
+func (n *Notifier) clearRecheck(featureID string) {
+	n.recheckMu.Lock()
+	delete(n.recheckQueued, featureID)
+	n.recheckMu.Unlock()
+}
 
 // SlackWarnings returns the current destination failures for configured recipients.
 func (n *Notifier) SlackWarnings(featureID string) []errcat.Error {
@@ -315,7 +391,8 @@ func handledEvent(ev ports.Event) bool {
 		ports.FeatureFailed,
 		ports.SetupFailed,
 		ports.FeatureInterrupted,
-		ports.FeatureRewound:
+		ports.FeatureRewound,
+		ports.NeedUserInputRequired:
 		return true
 	case ports.RelationshipIntegrationChanged:
 		return ev.CanonicalError != nil
@@ -328,6 +405,8 @@ func eventItemKind(ev ports.Event) itemKind {
 	switch ev.Type {
 	case ports.FeatureFailed, ports.SetupFailed:
 		return kindProblems
+	case ports.NeedUserInputRequired:
+		return kindNeedsInput
 	case ports.PublishCompleted, ports.RelationshipIntegrationChanged:
 		if ev.CanonicalError != nil || ev.Error != nil {
 			return kindProblems
@@ -400,6 +479,9 @@ func (n *Notifier) runDispatcher() {
 // guarded: settings are read live, unusable configurations discard the
 // event with zero Slack calls and no record writes.
 func (n *Notifier) processItem(item queueItem) {
+	if item.recheckOnly {
+		defer n.clearRecheck(item.event.FeatureID)
+	}
 	settings := n.settings.SlackSettings()
 	if !settings.Enabled || settings.Token == "" || len(settings.Recipients) == 0 {
 		n.queue.complete(item)
@@ -454,8 +536,19 @@ func (n *Notifier) processItem(item queueItem) {
 	}
 	n.retryPendingRecord(owner.ID, record)
 
+	work, reconciled := n.reconcilePending(settings, owner, eventFeature, record)
+	if item.recheckOnly ||
+		item.event.Type == ports.NeedUserInputRequired ||
+		item.event.Type == ports.SessionOutput {
+		if len(work) == 0 && !reconciled {
+			n.queue.complete(item)
+			return
+		}
+		n.dispatchWork(item, work)
+		return
+	}
+
 	reply := replyForEvent(settings.Token, item.event, eventFeature)
-	var work []workItem
 	for _, recipient := range settings.Recipients {
 		channelID, err := n.resolveDestination(settings, record, owner.ID, recipient)
 		if err != nil {
@@ -478,11 +571,185 @@ func (n *Notifier) processItem(item queueItem) {
 		n.queue.complete(item)
 		return
 	}
+	n.dispatchWork(item, work)
+}
+
+func (n *Notifier) dispatchWork(item queueItem, work []workItem) {
+	if len(work) == 0 {
+		n.queue.complete(item)
+		return
+	}
 	group := newDeliveryGroup(n.queue, item, len(work))
 	for i := range work {
 		work[i].delivery = group
 		n.workerFor(work[i].channelID).enqueue(work[i])
 	}
+}
+
+func (n *Notifier) reconcilePending(
+	settings ports.SlackRuntimeSettings,
+	owner, trigger *feature.Feature,
+	record *featureRecord,
+) ([]workItem, bool) {
+	if n.pending == nil {
+		return nil, false
+	}
+	sourceIDs := map[string]bool{trigger.ID: true}
+	n.recordMu.Lock()
+	for _, tracked := range record.Pending {
+		sourceIDs[tracked.SourceFeatureID] = true
+	}
+	n.recordMu.Unlock()
+	orderedSources := make([]string, 0, len(sourceIDs))
+	for sourceID := range sourceIDs {
+		orderedSources = append(orderedSources, sourceID)
+	}
+	sort.Strings(orderedSources)
+
+	liveByIdentity := map[string]ports.SlackPendingInput{}
+	var liveOrder []string
+	sourceFeatures := map[string]*feature.Feature{}
+	for _, sourceID := range orderedSources {
+		sourceFeature, err := n.store.Load(sourceID)
+		if err != nil || sourceFeature == nil {
+			continue
+		}
+		live, err := n.pending.PendingSlackInputs(sourceID)
+		if err != nil {
+			log.Printf("slack-notifier: reading pending inputs for feature %s failed: %v", sourceID, err)
+			continue
+		}
+		sourceFeatures[sourceID] = sourceFeature
+		for _, input := range live {
+			input.FeatureID = sourceID
+			if identity := pendingInputIdentity(input); identity != "" {
+				if _, exists := liveByIdentity[identity]; !exists {
+					liveOrder = append(liveOrder, identity)
+				}
+				liveByIdentity[identity] = input
+			}
+		}
+	}
+
+	changed := false
+	n.recordMu.Lock()
+	kept := record.Pending[:0]
+	for _, tracked := range record.Pending {
+		if _, sourceKnown := sourceFeatures[tracked.SourceFeatureID]; !sourceKnown {
+			kept = append(kept, tracked)
+			continue
+		}
+		if _, live := liveByIdentity[tracked.Identity]; live {
+			kept = append(kept, tracked)
+		} else {
+			changed = true
+		}
+	}
+	record.Pending = kept
+	existing := make(map[string]int, len(record.Pending))
+	for i := range record.Pending {
+		existing[record.Pending[i].Identity] = i
+	}
+	for _, identity := range liveOrder {
+		input := liveByIdentity[identity]
+		if _, ok := existing[identity]; ok {
+			continue
+		}
+		record.Pending = append(record.Pending, pendingInputRecord{
+			Identity:        identity,
+			SourceFeatureID: input.FeatureID,
+			Kind:            string(input.Kind),
+			RequestID:       input.RequestID,
+			QuestionIndex:   input.QuestionIndex,
+			GatePath:        input.GatePath,
+			Iteration:       input.Iteration,
+			WaitingSince:    input.WaitingSince.UTC(),
+		})
+		existing[identity] = len(record.Pending) - 1
+		changed = true
+	}
+	if settings.Categories.NeedsInput {
+		for i := range record.Pending {
+			if record.Pending[i].Tag != "" {
+				continue
+			}
+			if _, live := liveByIdentity[record.Pending[i].Identity]; !live {
+				continue
+			}
+			record.TagCounter++
+			record.Pending[i].Tag = fmt.Sprintf("#%d", record.TagCounter)
+			changed = true
+		}
+	}
+	if changed {
+		err := n.persistRecordLocked(owner.ID, record, settings.Recipients[0].Kind)
+		n.recordMu.Unlock()
+		n.logPersistError(err, settings.Recipients[0].Kind)
+	} else {
+		n.recordMu.Unlock()
+	}
+
+	var work []workItem
+	for _, recipient := range settings.Recipients {
+		channelID, err := n.resolveDestination(settings, record, owner.ID, recipient)
+		if err != nil {
+			log.Printf("slack-notifier: skipping %s destination for needs input: %v", recipient.Kind, err)
+			continue
+		}
+		key := destinationKey(string(recipient.Kind), recipient.ID)
+		postedAny := false
+		if settings.Categories.NeedsInput {
+			n.recordMu.Lock()
+			pendingSnapshot := append([]pendingInputRecord(nil), record.Pending...)
+			n.recordMu.Unlock()
+			sort.SliceStable(pendingSnapshot, func(i, j int) bool {
+				return tagNumber(pendingSnapshot[i].Tag) < tagNumber(pendingSnapshot[j].Tag)
+			})
+			for _, tracked := range pendingSnapshot {
+				input, live := liveByIdentity[tracked.Identity]
+				if !live || tracked.Tag == "" || tracked.MessageTS[key] != "" {
+					continue
+				}
+				blocks, fallback := renderPendingInput(
+					settings.Token, tracked.Tag, input, sourceFeatures[tracked.SourceFeatureID],
+				)
+				work = append(work, workItem{
+					featureID:       owner.ID,
+					sourceFeatureID: tracked.SourceFeatureID,
+					destinationKey:  key,
+					kind:            string(recipient.Kind),
+					channelID:       channelID,
+					needsCard:       true,
+					refresh:         true,
+					reply: replyPayload{
+						kind: kindNeedsInput, fallback: fallback, blocks: blocks,
+						inputKind: tracked.Kind, identity: tracked.Identity, tag: tracked.Tag,
+					},
+				})
+				postedAny = true
+			}
+		}
+		if changed && !postedAny {
+			work = append(work, workItem{
+				featureID:       owner.ID,
+				sourceFeatureID: trigger.ID,
+				destinationKey:  key,
+				kind:            string(recipient.Kind),
+				channelID:       channelID,
+				needsCard:       true,
+				refresh:         true,
+				reply:           replyPayload{kind: kindNeedsInput},
+			})
+		}
+	}
+	return work, changed
+}
+
+func (n *Notifier) waitingLine(record *featureRecord, repliesEnabled bool) string {
+	n.recordMu.Lock()
+	pending := append([]pendingInputRecord(nil), record.Pending...)
+	n.recordMu.Unlock()
+	return waitingSummary(pending, repliesEnabled)
 }
 
 func replyForEvent(token string, ev ports.Event, f *feature.Feature) replyPayload {

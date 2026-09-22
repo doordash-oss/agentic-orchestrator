@@ -207,6 +207,9 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 	if opts.BindSlackDeliveryReporter != nil {
 		opts.BindSlackDeliveryReporter(handler)
 	}
+	if opts.BindSlackPendingInputSource != nil {
+		opts.BindSlackPendingInputSource(handler)
+	}
 	if handler.probeActivity == nil {
 		handler.probeActivity = NewProbeActivity()
 	}

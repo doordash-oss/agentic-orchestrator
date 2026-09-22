@@ -81,8 +81,12 @@ delivery failure, and lifecycle event it had to drop:
   `channel`), for the two successful-write events and `slack.delivery_failed`.
 - `action`: `posted` when the root card was first created, `edited` when an
   existing card was updated in place, for `slack.root_card_updated`.
-- `item_kind`: kind of the delivered or failed item (`progress`, `problems`, or
-  `root_card`), for `slack.message_posted` and `slack.delivery_failed`.
+- `item_kind`: kind of the delivered or failed item (`progress`, `needs_input`,
+  `problems`, or `root_card`), for `slack.message_posted` and
+  `slack.delivery_failed`.
+- `input_kind`: pending input kind (`question`, `permission`, `help`, or
+  `gate`) for `slack.message_posted` events whose `item_kind` is
+  `needs_input`.
 - `failure_class`: `credential` or `destination`, for
   `slack.delivery_failed`.
 - `slack_error`: Slack's scrubbed error string, or `rate_limited` or
@@ -91,9 +95,10 @@ delivery failure, and lifecycle event it had to drop:
   deliveries; message text is never included.
 - `attempts`: number of Slack write attempts before the terminal failure, for
   `slack.delivery_failed`.
-- `tag`: reserved on `slack.delivery_failed`, `slack.message_posted`, and
-  `slack.root_card_updated`. It is omitted until delivered items carry a
-  per-thread tag.
+- `tag`: per-feature tag (for example, `#3`) for tagged `needs_input`
+  `slack.message_posted` events. The key remains reserved on
+  `slack.delivery_failed` and `slack.root_card_updated` and is omitted when an
+  event has no tag.
 - `event_type`: name of the dropped lifecycle event (`feature.started`,
   `phase.completed`, and so on), for `slack.event_dropped`.
 - `reason`: why the event was dropped: `queue_overflow` when the bounded intake

@@ -51,6 +51,7 @@ func (k itemKind) String() string {
 type queueItem struct {
 	kind        itemKind
 	event       ports.Event
+	recheckOnly bool
 	reservation *queueReservation
 }
 

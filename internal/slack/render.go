@@ -31,7 +31,12 @@ const problemFallbackTextLimit = 1200
 // with the feature name, a section with the server, pipeline, repositories,
 // phase, and status (plus pull request links once any exist), and a context
 // line with the last update rendered as a Slack date token.
-func renderRootCard(serverName string, f, activeChild *feature.Feature, now time.Time) ([]Block, string) {
+func renderRootCard(
+	serverName string,
+	f, activeChild *feature.Feature,
+	now time.Time,
+	waiting ...string,
+) ([]Block, string) {
 	name := safePlain(f.Name, headerTextLimit)
 	status := cardStatus(f, activeChild)
 	fields := []textObject{
@@ -43,6 +48,9 @@ func renderRootCard(serverName string, f, activeChild *feature.Feature, now time
 	}
 	if prs := prLinks(f); prs != "" {
 		fields = append(fields, labeledFieldRaw("Pull requests", prs))
+	}
+	if len(waiting) > 0 && waiting[0] != "" {
+		fields = append(fields, labeledField("Waiting on you", waiting[0]))
 	}
 	blocks := []Block{
 		headerBlockFor(name),

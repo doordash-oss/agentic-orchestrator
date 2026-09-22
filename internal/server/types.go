@@ -54,18 +54,19 @@ type Options struct {
 	Name string
 	// AllowUnauthenticated is only for tests that intentionally exercise the
 	// server without discovery bootstrap. Production Start requires AuthToken.
-	AllowUnauthenticated      bool
-	Features                  FeatureLister
-	FeatureStore              FeatureReader
-	Freshness                 RepoFreshnessProvider
-	Config                    *config.Config
-	Registry                  *llm.Registry
-	Sessions                  ports.SessionManager
-	Slack                     ports.SlackService
-	SlackWarnings             ports.SlackWarningSource
-	BindSlackDeliveryReporter func(ports.SlackDeliveryReporter)
-	Events                    <-chan interface{}
-	DomainEvents              <-chan ports.Event
+	AllowUnauthenticated        bool
+	Features                    FeatureLister
+	FeatureStore                FeatureReader
+	Freshness                   RepoFreshnessProvider
+	Config                      *config.Config
+	Registry                    *llm.Registry
+	Sessions                    ports.SessionManager
+	Slack                       ports.SlackService
+	SlackWarnings               ports.SlackWarningSource
+	BindSlackDeliveryReporter   func(ports.SlackDeliveryReporter)
+	BindSlackPendingInputSource func(ports.SlackPendingInputSource)
+	Events                      <-chan interface{}
+	DomainEvents                <-chan ports.Event
 	// DomainEventTap, when non-nil, is invoked by the broker's domain
 	// consumer for every orchestrator event alongside the SSE publish.
 	// Taps must be non-blocking.
@@ -128,18 +129,19 @@ type HandlerOptions struct {
 	// RuntimePolicy is the server's declared runtime policy (loopback or
 	// network). Empty defaults to the loopback policy, which enforces the
 	// loopback-only Host-header rule.
-	RuntimePolicy             string
-	Features                  FeatureLister
-	FeatureStore              FeatureReader
-	Freshness                 RepoFreshnessProvider
-	Config                    *config.Config
-	Registry                  *llm.Registry
-	Sessions                  ports.SessionManager
-	Slack                     ports.SlackService
-	SlackWarnings             ports.SlackWarningSource
-	BindSlackDeliveryReporter func(ports.SlackDeliveryReporter)
-	Events                    <-chan interface{}
-	DomainEvents              <-chan ports.Event
+	RuntimePolicy               string
+	Features                    FeatureLister
+	FeatureStore                FeatureReader
+	Freshness                   RepoFreshnessProvider
+	Config                      *config.Config
+	Registry                    *llm.Registry
+	Sessions                    ports.SessionManager
+	Slack                       ports.SlackService
+	SlackWarnings               ports.SlackWarningSource
+	BindSlackDeliveryReporter   func(ports.SlackDeliveryReporter)
+	BindSlackPendingInputSource func(ports.SlackPendingInputSource)
+	Events                      <-chan interface{}
+	DomainEvents                <-chan ports.Event
 	// DomainEventTap, when non-nil, is invoked by the broker's domain
 	// consumer for every orchestrator event alongside the SSE publish.
 	// Taps must be non-blocking.

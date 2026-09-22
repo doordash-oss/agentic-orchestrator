@@ -165,3 +165,63 @@ type SlackDeliveryReporter interface {
 type SlackWarningSource interface {
 	SlackWarnings(featureID string) []errcat.Error
 }
+
+// SlackPendingInputKind identifies one human-answerable item relayed to Slack.
+type SlackPendingInputKind string
+
+const (
+	SlackPendingQuestion   SlackPendingInputKind = "question"
+	SlackPendingPermission SlackPendingInputKind = "permission"
+	SlackPendingHelp       SlackPendingInputKind = "help"
+	SlackPendingGate       SlackPendingInputKind = "gate"
+)
+
+// SlackPendingInputOption is one AskUserQuestion option.
+type SlackPendingInputOption struct {
+	Label         string
+	Description   string
+	Confidence    float64
+	HasConfidence bool
+}
+
+// SlackPendingInputBlocker is one verification-gate blocker.
+type SlackPendingInputBlocker struct {
+	Name        string
+	RepoName    string
+	Command     string
+	Reason      string
+	Remediation string
+}
+
+// SlackPendingInput is the narrow server read model consumed by the Slack
+// notifier. Text is rendered and redacted by the notifier and is never
+// persisted in the Slack-owned record.
+type SlackPendingInput struct {
+	Kind            SlackPendingInputKind
+	FeatureID       string
+	RequestID       string
+	QuestionIndex   int
+	QuestionCount   int
+	Header          string
+	Question        string
+	Options         []SlackPendingInputOption
+	MultiSelect     bool
+	ToolName        string
+	Input           map[string]any
+	Phase           string
+	RepoName        string
+	RememberPattern string
+	HelpQuestion    string
+	GatePath        string
+	Iteration       int
+	WaitingSince    time.Time
+	GateSummary     string
+	GateQuestions   []string
+	GateBlockers    []SlackPendingInputBlocker
+}
+
+// SlackPendingInputSource returns the current human-answerable items for one
+// feature. The notifier treats the result as authoritative for reconciliation.
+type SlackPendingInputSource interface {
+	PendingSlackInputs(featureID string) ([]SlackPendingInput, error)
+}

@@ -97,6 +97,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		Slack:                       opts.Slack,
 		SlackWarnings:               opts.SlackWarnings,
 		BindSlackDeliveryReporter:   opts.BindSlackDeliveryReporter,
+		BindSlackPendingInputSource: opts.BindSlackPendingInputSource,
 		Events:                      opts.Events,
 		DomainEvents:                opts.DomainEvents,
 		DomainEventTap:              opts.DomainEventTap,

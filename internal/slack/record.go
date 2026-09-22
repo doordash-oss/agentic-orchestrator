@@ -36,6 +36,22 @@ const recordVersion = 1
 type featureRecord struct {
 	Version      int                          `yaml:"version"`
 	Destinations map[string]destinationRecord `yaml:"destinations"`
+	TagCounter   int                          `yaml:"tag_counter,omitempty"`
+	Pending      []pendingInputRecord         `yaml:"pending_inputs,omitempty"`
+}
+
+type pendingInputRecord struct {
+	Identity        string            `yaml:"identity"`
+	SourceFeatureID string            `yaml:"source_feature_id"`
+	Kind            string            `yaml:"kind"`
+	RequestID       string            `yaml:"request_id,omitempty"`
+	QuestionIndex   int               `yaml:"question_index,omitempty"`
+	GatePath        string            `yaml:"gate_path,omitempty"`
+	Iteration       int               `yaml:"iteration,omitempty"`
+	WaitingSince    time.Time         `yaml:"waiting_since,omitempty"`
+	Tag             string            `yaml:"tag,omitempty"`
+	PostedAt        time.Time         `yaml:"posted_at,omitempty"`
+	MessageTS       map[string]string `yaml:"message_timestamps,omitempty"`
 }
 
 // destinationRecord is one resolved destination the integration reached at

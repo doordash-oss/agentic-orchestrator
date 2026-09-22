@@ -95,6 +95,32 @@ type fakeObserver struct {
 	events []observe.Event
 }
 
+type fakePendingInputSource struct {
+	mu    sync.Mutex
+	items map[string][]ports.SlackPendingInput
+	calls map[string]int
+}
+
+func newFakePendingInputSource() *fakePendingInputSource {
+	return &fakePendingInputSource{
+		items: map[string][]ports.SlackPendingInput{},
+		calls: map[string]int{},
+	}
+}
+
+func (s *fakePendingInputSource) PendingSlackInputs(featureID string) ([]ports.SlackPendingInput, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls[featureID]++
+	return append([]ports.SlackPendingInput(nil), s.items[featureID]...), nil
+}
+
+func (s *fakePendingInputSource) set(featureID string, items ...ports.SlackPendingInput) {
+	s.mu.Lock()
+	s.items[featureID] = append([]ports.SlackPendingInput(nil), items...)
+	s.mu.Unlock()
+}
+
 func (o *fakeObserver) Emit(evt observe.Event) error {
 	o.mu.Lock()
 	o.events = append(o.events, evt)
@@ -173,6 +199,7 @@ type notifierHarness struct {
 	settings *fakeSettings
 	clock    *fakeClock
 	observer *fakeObserver
+	pending  *fakePendingInputSource
 	notifier *Notifier
 	jitter   *atomic.Int64 // deterministic backoff jitter source
 	jitterFn func() float64
@@ -195,6 +222,7 @@ func newNotifierHarness(t *testing.T, settings ports.SlackRuntimeSettings) *noti
 		settings: newFakeSettings(settings),
 		clock:    newFakeClock(),
 		observer: &fakeObserver{},
+		pending:  newFakePendingInputSource(),
 	}
 	return harness
 }
@@ -217,6 +245,7 @@ func (h *notifierHarness) newNotifier(queueCapacity int) *Notifier {
 		Store:         h.store,
 		StateDir:      h.stateDir,
 		Observer:      h.observer,
+		Pending:       h.pending,
 		QueueCapacity: queueCapacity,
 		Clock:         h.clock,
 		Jitter:        jitterFn,

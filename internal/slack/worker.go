@@ -69,6 +69,9 @@ type replyPayload struct {
 	fallback  string
 	blocks    []Block
 	errorCode string
+	inputKind string
+	identity  string
+	tag       string
 }
 
 // dirtyEntry tracks one feature whose card needs a refresh: markedAt is
@@ -281,6 +284,7 @@ func (w *destinationWorker) ensureCard(item workItem) error {
 		}
 		blocks, fallback := renderRootCard(
 			notifier.resolvedServerName(), current, notifier.activeChild(current), notifier.clock.Now(),
+			notifier.waitingLine(record, settings.Categories.NeedsInput),
 		)
 		result, err := client.PostMessageRich(notifier.requestBase, PostMessageInput{
 			Channel:      item.channelID,
@@ -355,7 +359,7 @@ func (w *destinationWorker) postReply(item workItem) error {
 			FallbackText: line,
 			Blocks:       item.reply.blocks,
 			ThreadTS:     rootTS,
-			ReplyBroadcast: item.reply.kind == kindProblems &&
+			ReplyBroadcast: (item.reply.kind == kindProblems || item.reply.kind == kindNeedsInput) &&
 				item.kind == string(ports.SlackRecipientChannel),
 		})
 		return result, credential, err
@@ -369,6 +373,21 @@ func (w *destinationWorker) postReply(item workItem) error {
 	entry := record.Destinations[item.destinationKey]
 	entry.ledgerAppend(result.TS)
 	record.Destinations[item.destinationKey] = entry
+	if item.reply.identity != "" {
+		for i := range record.Pending {
+			if record.Pending[i].Identity != item.reply.identity {
+				continue
+			}
+			if record.Pending[i].MessageTS == nil {
+				record.Pending[i].MessageTS = map[string]string{}
+			}
+			record.Pending[i].MessageTS[item.destinationKey] = result.TS
+			if record.Pending[i].PostedAt.IsZero() {
+				record.Pending[i].PostedAt = notifier.clock.Now().UTC()
+			}
+			break
+		}
+	}
 	persistErr := notifier.persistRecordLocked(
 		item.featureID, record, ports.SlackRecipientKind(item.kind),
 	)
@@ -380,6 +399,12 @@ func (w *destinationWorker) postReply(item workItem) error {
 	}
 	if item.reply.errorCode != "" {
 		data["error_code"] = item.reply.errorCode
+	}
+	if item.reply.inputKind != "" {
+		data["input_kind"] = item.reply.inputKind
+	}
+	if item.reply.tag != "" {
+		data["tag"] = item.reply.tag
 	}
 	notifier.emitEvent(item.featureID, "slack.message_posted", data)
 	return nil
@@ -461,6 +486,7 @@ func (w *destinationWorker) flushOne(featureID string) {
 		}
 		blocks, fallback := renderRootCard(
 			notifier.resolvedServerName(), current, notifier.activeChild(current), notifier.clock.Now(),
+			notifier.waitingLine(currentRecord, currentSettings.Categories.NeedsInput),
 		)
 		kind = currentKind
 		err = client.UpdateMessage(
@@ -521,6 +547,9 @@ func (w *destinationWorker) currentDelivery(
 	if category == kindProblems && !settings.Categories.Problems {
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
+	if category == kindNeedsInput && !settings.Categories.NeedsInput {
+		return ports.SlackRuntimeSettings{}, nil, false
+	}
 	found := false
 	for _, recipient := range settings.Recipients {
 		if destinationKey(string(recipient.Kind), recipient.ID) == item.destinationKey {
@@ -532,7 +561,7 @@ func (w *destinationWorker) currentDelivery(
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
 	featureID := item.featureID
-	if category == kindProgress || category == kindProblems {
+	if category == kindProgress || category == kindProblems || category == kindNeedsInput {
 		featureID = item.sourceFeatureID
 	}
 	current, err := w.notifier.store.Load(featureID)

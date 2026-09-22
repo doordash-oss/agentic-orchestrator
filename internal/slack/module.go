@@ -36,7 +36,8 @@ var Module = fx.Module("slack",
 type notifierParams struct {
 	fx.In
 	Settings ports.SlackSettingsSource
-	Reporter DeliveryReporter `optional:"true"`
+	Reporter DeliveryReporter              `optional:"true"`
+	Pending  ports.SlackPendingInputSource `optional:"true"`
 	Store    *feature.Store
 	StateDir string `name:"stateDir"`
 	Observer *observe.Observer
@@ -46,6 +47,7 @@ func newNotifier(p notifierParams) *Notifier {
 	return NewNotifier(NotifierOptions{
 		Settings: p.Settings,
 		Reporter: p.Reporter,
+		Pending:  p.Pending,
 		Store:    p.Store,
 		StateDir: p.StateDir,
 		Observer: p.Observer,

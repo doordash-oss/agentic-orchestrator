@@ -1,0 +1,294 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package slack
+
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"math"
+	"sort"
+	"strings"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+)
+
+const inputFallbackTextLimit = 1200
+
+func pendingInputIdentity(item ports.SlackPendingInput) string {
+	switch item.Kind {
+	case ports.SlackPendingQuestion:
+		return fmt.Sprintf("question:%s:%d", item.RequestID, item.QuestionIndex)
+	case ports.SlackPendingPermission:
+		return "permission:" + item.RequestID
+	case ports.SlackPendingGate:
+		return fmt.Sprintf(
+			"gate:%s:%s:%d:%s",
+			item.FeatureID, item.GatePath, item.Iteration, item.WaitingSince.UTC().Format(timeLayout),
+		)
+	case ports.SlackPendingHelp:
+		digest := sha256.Sum256([]byte(item.HelpQuestion))
+		return fmt.Sprintf(
+			"help:%s:%s:%x",
+			item.FeatureID, item.WaitingSince.UTC().Format(timeLayout), digest[:8],
+		)
+	default:
+		return ""
+	}
+}
+
+const timeLayout = "2006-01-02T15:04:05.999999999Z07:00"
+
+func renderPendingInput(
+	token, tag string,
+	item ports.SlackPendingInput,
+	source *feature.Feature,
+) ([]Block, string) {
+	prefix := ""
+	if source != nil && source.IsChild() {
+		if value, _ := childAffix(source.Parent.Kind); value != "" {
+			prefix = scrub(token, value) + ": "
+		}
+	}
+	switch item.Kind {
+	case ports.SlackPendingQuestion:
+		return renderQuestionInput(token, tag, prefix, item)
+	case ports.SlackPendingPermission:
+		return renderPermissionInput(token, tag, prefix, item)
+	case ports.SlackPendingHelp:
+		return renderHelpInput(token, tag, prefix, item)
+	case ports.SlackPendingGate:
+		return renderGateInput(token, tag, prefix, item)
+	default:
+		return nil, ""
+	}
+}
+
+func renderPermissionInput(token, tag, prefix string, item ports.SlackPendingInput) ([]Block, string) {
+	tool := scrub(token, firstNonempty(item.ToolName, "Tool"))
+	header := safePlain(tag+" · "+prefix+"Permission: "+tool, headerTextLimit)
+	repo := scrub(token, firstNonempty(item.RepoName, "feature"))
+	phase := scrub(token, firstNonempty(item.Phase, "unknown"))
+	detail := fmt.Sprintf("*Repository:* %s\n*Phase:* %s", safeText(repo, 500), safeText(phase, 200))
+	input := permissionInputText(item)
+	input = scrub(token, input)
+	const note = "\n_Input was shortened. Open Agentico for the full input._"
+	bodyBudget := sectionTextLimit - len("```\n\n```") - len(note)
+	escaped := strings.ReplaceAll(input, "```", "'''")
+	rendered := safeText(escaped, 0)
+	shortened := len("```\n"+rendered+"\n```") > sectionTextLimit
+	if shortened {
+		rendered = truncateEscapedText(escaped, bodyBudget)
+	}
+	code := "```\n" + rendered + "\n```"
+	if shortened {
+		code += note
+	}
+	context := "React ✅ to allow once or ❌ to deny, or reply allow, approve, yes, deny, or no. Remember rules are created only in Agentico. Anyone who can see this can respond"
+	blocks := []Block{
+		headerBlockFor(header),
+		sectionTextBlockFor(detail),
+		sectionTextBlockFor(code),
+		contextBlockFor([]textObject{{Type: textTypeMrkdwn, Text: safeText(context, contextTextLimit)}}),
+	}
+	fallback := safePlain(
+		fmt.Sprintf("%s Permission: %s for %s in %s. %s", tag, tool, repo, phase, input),
+		inputFallbackTextLimit,
+	)
+	return blocks, fallback
+}
+
+func permissionInputText(item ports.SlackPendingInput) string {
+	if strings.EqualFold(item.ToolName, "Bash") {
+		if command, ok := item.Input["command"].(string); ok {
+			return command
+		}
+	}
+	data, err := json.Marshal(item.Input)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+func renderQuestionInput(token, tag, prefix string, item ports.SlackPendingInput) ([]Block, string) {
+	headerText := firstNonempty(item.Header, "Question")
+	header := safePlain(tag+" · "+prefix+scrub(token, headerText), headerTextLimit)
+	var sections []Block
+	sections = append(sections, headerBlockFor(header))
+	question := scrub(token, item.Question)
+	if item.QuestionCount > 1 {
+		question = fmt.Sprintf("Question %d of %d\n%s", item.QuestionIndex+1, item.QuestionCount, question)
+	}
+	sections = append(sections, sectionTextBlockFor(safeText(question, sectionTextLimit)))
+	if len(item.Options) > 0 {
+		recommended := recommendedOption(item)
+		var lines []string
+		for i, option := range item.Options {
+			label := scrub(token, option.Label)
+			if i == recommended && !strings.Contains(strings.ToLower(label), "recommended") {
+				label += " (recommended)"
+			}
+			line := fmt.Sprintf("*%d. %s*", i+1, safeText(label, 500))
+			if option.Description != "" {
+				line += " — " + safeText(scrub(token, option.Description), 1000)
+			}
+			if option.HasConfidence {
+				line += fmt.Sprintf(" · %d%% confidence", int(math.Round(option.Confidence*100)))
+			}
+			lines = append(lines, line)
+		}
+		sections = append(sections, sectionTextBlockFor(
+			truncateMrkdwnTokens(strings.Join(lines, "\n"), sectionTextLimit),
+		))
+	}
+	context := "Reply with any text. Anyone who can see this can respond"
+	if len(item.Options) > 0 && item.MultiSelect {
+		context = "Reply with a comma- or space-separated list of option numbers or labels. Anyone who can see this can respond"
+	} else if len(item.Options) > 0 {
+		context = "Reply with an option number, its label, or react with a keycap number (1️⃣–9️⃣). Any other text is treated as a free-text answer. Anyone who can see this can respond"
+	}
+	sections = append(sections, contextBlockFor([]textObject{{
+		Type: textTypeMrkdwn, Text: safeText(context, contextTextLimit),
+	}}))
+	return sections, safePlain(tag+" "+scrub(token, headerText)+": "+question, inputFallbackTextLimit)
+}
+
+func recommendedOption(item ports.SlackPendingInput) int {
+	if item.MultiSelect || len(item.Options) == 0 {
+		return -1
+	}
+	best := -1
+	var confidence float64
+	for i, option := range item.Options {
+		if option.HasConfidence && (best < 0 || option.Confidence > confidence) {
+			best = i
+			confidence = option.Confidence
+		}
+	}
+	return best
+}
+
+func renderHelpInput(token, tag, prefix string, item ports.SlackPendingInput) ([]Block, string) {
+	question := scrub(token, item.HelpQuestion)
+	blocks := []Block{
+		headerBlockFor(safePlain(tag+" · "+prefix+"Help request", headerTextLimit)),
+		sectionTextBlockFor(safeText(question, sectionTextLimit)),
+		contextBlockFor([]textObject{{
+			Type: textTypeMrkdwn,
+			Text: safeText("Reply with any text. Anyone who can see this can respond", contextTextLimit),
+		}}),
+	}
+	return blocks, safePlain(tag+" Help request: "+question, inputFallbackTextLimit)
+}
+
+func renderGateInput(token, tag, prefix string, item ports.SlackPendingInput) ([]Block, string) {
+	blocks := []Block{
+		headerBlockFor(safePlain(tag+" · "+prefix+"Verification needs your input", headerTextLimit)),
+	}
+	summary := scrub(token, item.GateSummary)
+	if summary != "" {
+		blocks = append(blocks, sectionTextBlockFor("*Summary:*\n"+safeText(summary, sectionTextLimit-12)))
+	}
+	for _, blocker := range item.GateBlockers {
+		parts := []string{"*" + safeText(scrub(token, firstNonempty(blocker.Name, "Blocked check")), 500) + "*"}
+		if blocker.RepoName != "" {
+			parts = append(parts, "*Repository:* "+safeText(scrub(token, blocker.RepoName), 500))
+		}
+		if blocker.Command != "" {
+			parts = append(parts, "*Command:* `"+safeText(scrub(token, blocker.Command), 1200)+"`")
+		}
+		if blocker.Reason != "" {
+			parts = append(parts, "*Reason:* "+safeText(scrub(token, blocker.Reason), 800))
+		}
+		if blocker.Remediation != "" {
+			parts = append(parts, "*Remediation:* "+safeText(scrub(token, blocker.Remediation), 800))
+		}
+		blocks = append(blocks, sectionTextBlockFor(
+			truncateMrkdwnTokens(strings.Join(parts, "\n"), sectionTextLimit),
+		))
+	}
+	if len(item.GateQuestions) > 0 {
+		var questions []string
+		for i, question := range item.GateQuestions {
+			questions = append(questions, fmt.Sprintf("%d. %s", i+1, safeText(scrub(token, question), 1200)))
+		}
+		blocks = append(blocks, sectionTextBlockFor(
+			"*Questions:*\n"+truncateMrkdwnTokens(strings.Join(questions, "\n"), sectionTextLimit-13),
+		))
+	}
+	note := "Resolve this gate in Agentico by waiving the blocked checks or retrying after signing in."
+	blocks = append(blocks,
+		sectionTextBlockFor(safeText(note, sectionTextLimit)),
+		contextBlockFor([]textObject{{
+			Type: textTypeMrkdwn,
+			Text: safeText("Replies are not read here. Resolve this verification gate in Agentico.", contextTextLimit),
+		}}),
+	)
+	return blocks, safePlain(tag+" Verification needs your input: "+summary, inputFallbackTextLimit)
+}
+
+func waitingSummary(pending []pendingInputRecord, repliesEnabled bool) string {
+	if len(pending) == 0 {
+		return ""
+	}
+	if !repliesEnabled {
+		counts := map[string]int{}
+		for _, item := range pending {
+			counts[item.Kind]++
+		}
+		var parts []string
+		for _, kind := range []string{
+			string(ports.SlackPendingPermission),
+			string(ports.SlackPendingQuestion),
+			string(ports.SlackPendingGate),
+			string(ports.SlackPendingHelp),
+		} {
+			if count := counts[kind]; count > 0 {
+				label := pendingKindLabel(kind)
+				if count != 1 {
+					label += "s"
+				}
+				parts = append(parts, fmt.Sprintf("%d %s", count, label))
+			}
+		}
+		return strings.Join(parts, ", ") + " · Needs input replies are off"
+	}
+	tagged := append([]pendingInputRecord(nil), pending...)
+	sort.SliceStable(tagged, func(i, j int) bool {
+		return tagNumber(tagged[i].Tag) < tagNumber(tagged[j].Tag)
+	})
+	var parts []string
+	for _, item := range tagged {
+		if item.Tag != "" {
+			parts = append(parts, item.Tag+" "+pendingKindLabel(item.Kind))
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+func pendingKindLabel(kind string) string {
+	if kind == string(ports.SlackPendingGate) {
+		return "verification gate"
+	}
+	return kind
+}
+
+func tagNumber(tag string) int {
+	var value int
+	_, _ = fmt.Sscanf(tag, "#%d", &value)
+	return value
+}

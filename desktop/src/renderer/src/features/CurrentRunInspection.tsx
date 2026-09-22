@@ -314,7 +314,7 @@ function FilesSurface({
             {onWaiveTestingContract === undefined ? null : (
               <button
                 type="button"
-                className="current-inspection__files-action"
+                className="attention-button current-inspection__files-action"
                 onClick={onWaiveTestingContract}
               >
                 Waive contract items

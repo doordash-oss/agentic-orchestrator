@@ -2402,17 +2402,6 @@ export function FeatureCockpit({
             }}
           />
         )}
-        {contractWaiveOpen ? (
-          <TestingContractWaiveDialog
-            featureId={featureId}
-            onClose={() => setContractWaiveOpen(false)}
-            onWaived={async () => {
-              await refreshAttention();
-              await refreshFeature({ silent: true });
-            }}
-          />
-        ) : null}
-
         {runRecordOpen ? (
           <CockpitModal
             title={`Run ${snapshot.activeRun} record`}
@@ -2944,6 +2933,17 @@ export function FeatureCockpit({
               }}
             />
           )}
+
+          {contractWaiveOpen ? (
+            <TestingContractWaiveDialog
+              featureId={featureId}
+              onClose={() => setContractWaiveOpen(false)}
+              onWaived={async () => {
+                await refreshAttention();
+                await refreshFeature({ silent: true });
+              }}
+            />
+          ) : null}
 
           {stopDialog ? (
             <StopConfirmDialog

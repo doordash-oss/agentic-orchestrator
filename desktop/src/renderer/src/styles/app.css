@@ -7415,28 +7415,43 @@ body {
 }
 
 /* Neutral variant of the impact dialog: a contract amendment, not a removal.
- * Bounded to the viewport; only the checklist scrolls. */
+ * Bounded to the window; the header and the reason/actions footer stay put
+ * and only the checklist scrolls. */
 .contract-waive-dialog {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  max-height: 85vh;
+  max-height: calc(100vh - 2 * var(--space-4));
 }
 
 .contract-waive-dialog__eyebrow {
   color: var(--muted);
 }
 
+.contract-waive-dialog__header,
+.contract-waive-dialog__footer {
+  flex: 0 0 auto;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.contract-waive-dialog__header {
+  gap: 0;
+}
+
 .contract-waive-dialog h3 {
-  margin: 0;
+  margin: var(--space-2) 0 var(--space-3);
+}
+
+.contract-waive-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .contract-waive-dialog__items {
   display: grid;
   gap: var(--space-2);
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
   margin: 0;
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
@@ -7449,11 +7464,25 @@ body {
   font: 500 12px var(--bench-font-text);
 }
 
+.contract-waive-dialog__notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .contract-waive-dialog__item {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
   font-size: 13px;
+}
+
+.contract-waive-dialog__item > input {
+  margin-top: 2px;
 }
 
 .contract-waive-dialog__item > span {
@@ -7462,15 +7491,23 @@ body {
   min-width: 0;
 }
 
+.contract-waive-dialog__repo {
+  color: var(--muted);
+}
+
 .contract-waive-dialog__item code {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   word-break: break-all;
 }
 
 .contract-waive-dialog__item small {
   color: var(--muted);
   font-size: 12px;
+}
+
+.contract-waive-dialog__meta {
+  font-size: 11px;
 }
 
 .contract-waive-dialog__item[data-lock] {
@@ -7483,6 +7520,10 @@ body {
   gap: var(--space-1);
 }
 
+.contract-waive-dialog__tags:empty {
+  display: none;
+}
+
 .contract-waive-dialog__tag {
   border: 1px solid var(--hairline);
   border-radius: 999px;
@@ -7491,27 +7532,29 @@ body {
   font: 500 11px var(--bench-font-text);
 }
 
+/* A recorded state, not a policy hint: full text color on a filled chip. */
 .contract-waive-dialog__tag--state {
   color: var(--text);
+  background: color-mix(in srgb, var(--content) 6%, transparent);
+  border-color: color-mix(in srgb, var(--text) 30%, transparent);
 }
 
 .contract-waive-dialog .impact-dialog__actions {
   margin-top: 0;
 }
 
-.current-inspection__files-action {
-  margin-left: auto;
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
-  padding: 1px var(--space-2);
-  background: transparent;
-  color: var(--muted);
-  font: 500 11px var(--bench-font-text);
-  cursor: pointer;
+/* A short window keeps more of the checklist in view. */
+.contract-waive-dialog .need-input-sheet__question textarea {
+  min-height: 56px;
 }
 
-.current-inspection__files-action:hover {
-  color: var(--text);
+/* The Files heading's contract action: a real button, set apart from the
+ * count chip beside it. */
+.current-inspection__files-action {
+  margin-left: auto;
+  font-weight: 500;
+  font-size: 12px;
+  padding: var(--space-1) var(--space-3);
 }
 
 /* --- Completion workspace -------------------------------------------------- */

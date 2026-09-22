@@ -2011,6 +2011,8 @@ function makeMockApi(
     sendHelp: () => Promise.resolve({ result: 'submitted' } as AttentionActionResult),
     saveGateDraft: () => Promise.resolve({ result: 'drafted' } as AttentionActionResult),
     resolveGate: () => Promise.resolve({ result: 'resolved' } as AttentionActionResult),
+    waiveTestingContract: () =>
+      Promise.resolve({ result: 'waived', contractRevision: 2, waivedItems: [] }),
     startChat: () => Promise.resolve({ sessionId: '__chat__', result: 'started' }),
     endChat: () => Promise.resolve({ sessionId: '__chat__', result: 'ended' }),
     listSessions: () =>

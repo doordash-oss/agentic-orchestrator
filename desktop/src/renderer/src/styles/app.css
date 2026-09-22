@@ -7414,6 +7414,73 @@ body {
   text-decoration: none;
 }
 
+/* Neutral variant of the impact dialog: a contract amendment, not a removal. */
+.contract-waive-dialog {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.contract-waive-dialog__eyebrow {
+  color: var(--muted);
+}
+
+.contract-waive-dialog h3 {
+  margin: 0;
+}
+
+.contract-waive-dialog__items {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+.contract-waive-dialog__items legend {
+  padding: 0 var(--space-1);
+  color: var(--muted);
+  font: 500 12px var(--bench-font-text);
+}
+
+.contract-waive-dialog__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+
+.contract-waive-dialog__item > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.contract-waive-dialog__item code {
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.contract-waive-dialog .impact-dialog__actions {
+  margin-top: 0;
+}
+
+.current-inspection__files-action {
+  margin-left: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 1px var(--space-2);
+  background: transparent;
+  color: var(--muted);
+  font: 500 11px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.current-inspection__files-action:hover {
+  color: var(--text);
+}
+
 /* --- Completion workspace -------------------------------------------------- */
 
 .completion-workspace {

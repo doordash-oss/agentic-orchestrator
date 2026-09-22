@@ -146,6 +146,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'updateWorkspaceDefaults',
   'uploadCreationFiles',
   'validateReview',
+  'waiveTestingContract',
   'windowPurpose',
   'writeClipboardText',
 ];

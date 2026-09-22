@@ -110,6 +110,11 @@ again — or paste the string into **Settings → Servers**.
   restarting the host server (a new token is generated per server run).
 - Prefer binding a specific address (`--listen 10.0.0.5:8080`) when the host
   has several interfaces.
+- A network-exposed server denies the `authenticated-browser(<host>)`
+  verification capability by default, so signed-in browser state is never
+  provisioned there. Set `server.capabilities.browser_state: allow` in
+  `config.yaml` to override (see `Capability Gates` in
+  [docs/api.md](../api.md)).
 
 ### SSH tunnel alternative
 

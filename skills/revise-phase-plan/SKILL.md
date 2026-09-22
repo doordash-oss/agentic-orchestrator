@@ -34,6 +34,8 @@ provenance: agentic-orchestrator-original
 
 When revising an older plan that lacks the mandatory `## Metadata` section, add it before `## Overview` and set `**Frontend:** true|false` from the phase scope. Use `true` for any phase that adds or changes a user-facing UI surface, and pair `true` with a real top-level `### Visual Evidence` checklist item rather than `None required` — unless the planning prompt declared automated-only verification mode, which mandates `None required: automated-only verification for this feature` there instead.
 
+Harness feedback may cite the capability rule: a Visual Evidence or Manual Verification row that names an external host (URL or domain) must carry `[agentico capability: <name>]` with a built-in capability (`authenticated-browser(<host>)`, `display`, `docker`, `network(<host[:port]>)`) or be rewritten to capture the repository's own surface. Fix the row rather than dropping the evidence requirement; a misspelled capability name is itself a contract error.
+
 ## Plan Format
 
 The plan's output shape is defined in the `plan-phase/format.md` companion file. The user prompt provides its absolute path (look for "the plan output format at: …") — read that file directly using the absolute path; do NOT try to resolve `../plan-phase/format.md` by yourself. The revision MUST match that contract exactly.

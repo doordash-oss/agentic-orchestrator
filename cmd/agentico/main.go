@@ -110,6 +110,8 @@ const (
 	cliSubcommandServer            = "server"
 	cliSubcommandValidateArtifacts = "validate-artifacts"
 	cliSubcommandVerifyEvidence    = "verify-evidence"
+	cliSubcommandCapabilityProbe   = "capability-probe"
+	cliSubcommandReportBlocker     = "report-blocker"
 	cliFlagDir                     = "--dir"
 	cliFlagPhase                   = "--phase"
 	cliFlagRole                    = "--role"
@@ -130,6 +132,8 @@ const (
 	launchModeUpdate
 	launchModeValidateArtifacts
 	launchModeVerifyEvidence
+	launchModeCapabilityProbe
+	launchModeReportBlocker
 )
 
 type launchOptions struct {
@@ -146,6 +150,8 @@ type launchOptions struct {
 	mode              launchMode
 	validateArtifacts validateArtifactsOptions
 	verifyEvidence    verifyEvidenceOptions
+	capabilityProbe   capabilityProbeOptions
+	reportBlocker     reportBlockerOptions
 	// updateCheck is set when update mode was selected with --check / -n,
 	// requesting a check-only run that never attempts to install.
 	updateCheck bool
@@ -160,6 +166,22 @@ type validateArtifactsOptions struct {
 type verifyEvidenceOptions struct {
 	contract string
 	dir      string
+}
+
+// capabilityProbeOptions names one built-in capability, e.g.
+// "authenticated-browser(slack.com)", to probe from the current environment.
+type capabilityProbeOptions struct {
+	name string
+}
+
+// reportBlockerOptions describes an implementer escalation: contract items
+// blocked by a capability the environment lacks.
+type reportBlockerOptions struct {
+	contract   string
+	dir        string
+	items      []string
+	capability string
+	reason     string
 }
 
 type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName, updatesPolicy string) int
@@ -240,6 +262,10 @@ func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop d
 		return runValidateArtifacts(opts.validateArtifacts, stdout, stderr)
 	case launchModeVerifyEvidence:
 		return runVerifyEvidence(opts.verifyEvidence, stdout, stderr)
+	case launchModeCapabilityProbe:
+		return runCapabilityProbe(opts.capabilityProbe, stdout, stderr)
+	case launchModeReportBlocker:
+		return runReportBlocker(opts.reportBlocker, stdout, stderr)
 	case launchModeServer:
 		providers, ok := validateProviderSelection(stderr, opts.enabledProviders)
 		if !ok {
@@ -338,6 +364,14 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	if len(args) > 0 && args[0] == cliSubcommandVerifyEvidence {
 		opts.mode = launchModeVerifyEvidence
 		return parseVerifyEvidenceArgs(opts, args[1:])
+	}
+	if len(args) > 0 && args[0] == cliSubcommandCapabilityProbe {
+		opts.mode = launchModeCapabilityProbe
+		return parseCapabilityProbeArgs(opts, args[1:])
+	}
+	if len(args) > 0 && args[0] == cliSubcommandReportBlocker {
+		opts.mode = launchModeReportBlocker
+		return parseReportBlockerArgs(opts, args[1:])
 	}
 	if len(args) > 0 && args[0] == cliSubcommandServer {
 		opts.mode = launchModeServer
@@ -532,6 +566,132 @@ func parseVerifyEvidenceArgs(opts launchOptions, args []string) (launchOptions, 
 	return opts, nil
 }
 
+func parseCapabilityProbeArgs(opts launchOptions, args []string) (launchOptions, error) {
+	for _, arg := range args {
+		switch arg {
+		case "--help", "-h":
+			opts.mode = launchModeHelp
+			return opts, nil
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return opts, fmt.Errorf("unknown capability-probe flag: %s", arg)
+			}
+			if opts.capabilityProbe.name != "" {
+				return opts, fmt.Errorf("capability-probe accepts exactly one capability name")
+			}
+			opts.capabilityProbe.name = arg
+		}
+	}
+	if strings.TrimSpace(opts.capabilityProbe.name) == "" {
+		return opts, fmt.Errorf("capability-probe requires a capability name, e.g. authenticated-browser(slack.com)")
+	}
+	return opts, nil
+}
+
+func parseReportBlockerArgs(opts launchOptions, args []string) (launchOptions, error) {
+	value := func(i *int, flag string) (string, error) {
+		if *i+1 >= len(args) {
+			return "", fmt.Errorf("%s requires a value", flag)
+		}
+		*i++
+		return args[*i], nil
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		var err error
+		switch arg {
+		case cliFlagContract:
+			opts.reportBlocker.contract, err = value(&i, arg)
+		case cliFlagDir:
+			opts.reportBlocker.dir, err = value(&i, arg)
+		case "--items":
+			var raw string
+			if raw, err = value(&i, arg); err == nil {
+				for _, id := range strings.Split(raw, ",") {
+					if id = strings.TrimSpace(id); id != "" {
+						opts.reportBlocker.items = append(opts.reportBlocker.items, id)
+					}
+				}
+			}
+		case "--capability":
+			opts.reportBlocker.capability, err = value(&i, arg)
+		case "--reason":
+			opts.reportBlocker.reason, err = value(&i, arg)
+		case "--help", "-h":
+			opts.mode = launchModeHelp
+			return opts, nil
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return opts, fmt.Errorf("unknown report-blocker flag: %s", arg)
+			}
+			return opts, fmt.Errorf("unknown report-blocker argument: %s", arg)
+		}
+		if err != nil {
+			return opts, err
+		}
+	}
+	for flag, v := range map[string]string{cliFlagContract: opts.reportBlocker.contract, cliFlagDir: opts.reportBlocker.dir, "--capability": opts.reportBlocker.capability, "--reason": opts.reportBlocker.reason} {
+		if strings.TrimSpace(v) == "" {
+			return opts, fmt.Errorf("report-blocker requires %s", flag)
+		}
+	}
+	if len(opts.reportBlocker.items) == 0 {
+		return opts, fmt.Errorf("report-blocker requires --items <id,id,...>")
+	}
+	return opts, nil
+}
+
+// runCapabilityProbe runs one built-in capability probe from the current
+// environment and prints its verdict. Exit 0 means available. Agents and
+// operators use it to see exactly what the harness will check.
+func runCapabilityProbe(opts capabilityProbeOptions, stdout, stderr io.Writer) int {
+	name, arg, ok := agent.ParseCapabilityName(opts.name)
+	if !ok {
+		renderError(stderr, errcat.InvalidUsage, errcat.WithParams(errcat.UsageParams{Reason: fmt.Sprintf("capability %q is not name or name(argument)", opts.name)}))
+		return 1
+	}
+	if err := agent.ValidateRegistryCapability(name, arg); err != nil {
+		renderError(stderr, errcat.InvalidUsage, errcat.WithParams(errcat.UsageParams{Reason: err.Error()}))
+		return 1
+	}
+	policy := agent.CapabilityPolicy{RuntimeDir: resolveRegistryParent(), AllowBrowserState: true}
+	result := agent.RunRegistryCapabilityProbe(agent.WithCapabilityPolicy(context.Background(), policy), name, arg)
+	if !result.Available {
+		fmt.Fprintf(stderr, "capability %s unavailable: %s\n", opts.name, result.Reason)
+		return 1
+	}
+	fmt.Fprintf(stdout, "capability %s available\n", opts.name)
+	for _, kv := range result.Env {
+		fmt.Fprintln(stdout, kv)
+	}
+	return 0
+}
+
+// runReportBlocker writes the implementer's capability-blocker gate into the
+// iteration directory. The implementer then ends the iteration with RETRY and
+// the harness pauses on the user gate instead of looping on chat questions.
+func runReportBlocker(opts reportBlockerOptions, stdout, stderr io.Writer) int {
+	contract, err := agent.ReadTestingContract(opts.contract)
+	if err != nil {
+		renderError(stderr, errcat.ContractInputUnreadable,
+			errcat.WithDiagnostics(fmt.Sprintf("reading testing contract: %v", err)))
+		return 1
+	}
+	rec, err := agent.SynthesizeAgentReportedBlockerGate(opts.contract, contract, opts.items, opts.capability, opts.reason, 0)
+	if err != nil {
+		renderError(stderr, errcat.InvalidUsage, errcat.WithParams(errcat.UsageParams{Reason: err.Error()}))
+		return 1
+	}
+	gatePath := agent.NeedUserInputPath(opts.dir)
+	if err := agent.WriteNeedUserInputRecord(gatePath, rec); err != nil {
+		renderError(stderr, errcat.ContractInputUnreadable,
+			errcat.WithDiagnostics(fmt.Sprintf("writing blocker gate: %v", err)))
+		return 1
+	}
+	fmt.Fprintf(stdout, "blocker gate written: %s\nEnd this iteration with `RETRY` in progress.md; the harness will pause for the user's decision.\n", gatePath)
+	return 0
+}
+
 // runVerifyEvidence is the in-session self-check the implementer runs before
 // declaring semantic success: it reads the testing contract and confirms every required
 // agent-owned capture is present, well-formed, correctly sized, and not a
@@ -562,6 +722,9 @@ Usage: agentico
        agentico update [--check|-n]
        agentico validate-artifacts --phase <phase> --role <role> --dir <iteration_dir>
        agentico verify-evidence --contract <testing-contract.yaml> --dir <iteration_dir>
+       agentico capability-probe <name[(argument)]>
+       agentico report-blocker --contract <testing-contract.yaml> --dir <iteration_dir> \
+                               --items <id,id,...> --capability <name> --reason <text>
 
 Starts or focuses the installed Agentico desktop app. Use the explicit 'server'
 subcommand to start the foreground loopback HTTP server for headless automation.
@@ -573,6 +736,11 @@ to parse and validate role output artifacts without starting the server.
 Run 'agentico verify-evidence' from implementer sessions before declaring an outcome
 to confirm required agent-owned captures are present, correctly sized, and not
 duplicates — catching gaps before the post-handoff integrity gate does.
+Run 'agentico capability-probe' to check one built-in capability (for example
+authenticated-browser(slack.com), display, docker, network(host)) the way the
+harness will. Run 'agentico report-blocker' from implementer sessions when
+required evidence needs a capability the environment lacks; it records the
+blocked rows for the user's decision instead of an unanswerable chat question.
 
 Server flags (use with 'agentico server'):
   --config <path>                  Config file path (default: ~/.agentic-orchestrator/config.yaml)
@@ -1486,6 +1654,20 @@ func (t *serverMutationTarget) ResumeNeedUserInput(featureID string, req serverr
 		return serverruntime.NeedUserInputResumeResponse{}, err
 	}
 	return serverruntime.NeedUserInputResumeResponse{FeatureID: featureID, Result: "resumed"}, nil
+}
+
+func (t *serverMutationTarget) WaiveTestingContractItems(featureID string, req serverruntime.TestingContractWaiveRequest) (serverruntime.TestingContractWaiveResponse, error) {
+	if t.orch == nil {
+		return serverruntime.TestingContractWaiveResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	result, err := t.orch.WaiveTestingContractItems(featureID, orchestrator.TestingContractWaiver{ItemIDs: req.ItemIDs, Reason: req.Reason})
+	if err != nil {
+		return serverruntime.TestingContractWaiveResponse{FeatureID: featureID, Result: resultFailed}, err
+	}
+	return serverruntime.TestingContractWaiveResponse{
+		FeatureID: featureID, Result: "waived",
+		ContractRevision: result.Revision, WaivedItems: result.WaivedItems,
+	}, nil
 }
 
 func (t *serverMutationTarget) DraftNeedUserInputAnswers(featureID string, req serverruntime.NeedUserInputDraftRequest) (serverruntime.NeedUserInputDraftResponse, error) {
@@ -3177,6 +3359,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		return targetStartupFailure(func(e error) { renderStartupFailure(os.Stderr, &serverStartError{e}) }, err)
 	}
 	networkBind := listen.Policy == serverruntime.CompatibilityNetworkRuntimePolicy
+	boot.phaseRunner.CapabilityPolicy = resolveCapabilityPolicy(boot.cfg, boot.runtime.RuntimeDir, networkBind)
 
 	policy := runtimeLaunchPolicy(boot.registry, dangerouslySkipPerms)
 	discoveryClient := &http.Client{Timeout: time.Second}
@@ -3958,4 +4141,20 @@ func shutdownFeatures(orch *orchestrator.Orchestrator, sm *session.Manager) {
 	// Second shutdown pass: catch any sessions that RunImplementationLoop
 	// managed to create between the first Shutdown snapshot and now.
 	sm.Shutdown()
+}
+
+// resolveCapabilityPolicy derives the built-in capability probe policy for
+// this server. Servers exposed to the network deny authenticated browser
+// state unless server.capabilities.browser_state explicitly allows it.
+func resolveCapabilityPolicy(cfg *config.Config, runtimeDir string, networkBind bool) *agent.CapabilityPolicy {
+	allow := !networkBind
+	if cfg != nil {
+		switch strings.ToLower(strings.TrimSpace(cfg.Server.Capabilities.BrowserState)) {
+		case "allow":
+			allow = true
+		case "deny":
+			allow = false
+		}
+	}
+	return &agent.CapabilityPolicy{RuntimeDir: runtimeDir, AllowBrowserState: allow}
 }

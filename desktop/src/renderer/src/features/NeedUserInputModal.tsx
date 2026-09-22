@@ -21,7 +21,9 @@ import { useModalDismiss } from '../components/useModalDismiss';
 import type { AttentionDrafts } from './AttentionInbox';
 import {
   hasStructuredVerificationDecision,
+  isVerificationGateAction,
   NeedUserInputVerificationDecision,
+  verificationResumeLabel,
 } from './NeedUserInputVerificationDecision';
 import { parseIpcError } from '../wizard/ipcError';
 import { bucketElapsedSince } from './phaseRail';
@@ -152,7 +154,7 @@ export function NeedUserInputModal({
       ? ''
       : ((draft[verificationQuestion.index] ?? '') as VerificationGateAction | '');
   const complete = structuredVerification
-    ? selectedVerificationAction === 'RETRY_AFTER_AUTH' || selectedVerificationAction === 'WAIVE'
+    ? isVerificationGateAction(selectedVerificationAction)
     : item.questions.every((question) => (draft[question.index] ?? '').trim() !== '');
   // A snapshot can carry an empty phase before the run names one; that is a
   // missing fact, not a phase called "".
@@ -330,9 +332,7 @@ export function NeedUserInputModal({
             {submitting || busy
               ? 'Resuming…'
               : structuredVerification
-                ? selectedVerificationAction === 'WAIVE'
-                  ? 'Waive and resume'
-                  : 'Retry verification'
+                ? verificationResumeLabel(selectedVerificationAction)
                 : 'Resume agent'}
           </button>
         </footer>

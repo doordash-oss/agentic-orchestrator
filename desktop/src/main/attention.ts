@@ -29,6 +29,8 @@ import {
   GateResumeRequestSchema,
   HelpAnswerRequestSchema,
   PermissionDecisionRequestSchema,
+  TestingContractWaiveRequestSchema,
+  TestingContractWaiveResultSchema,
   VerificationGateActionSchema,
   ATTENTION_ALREADY_RESOLVED_NOTICE,
   CHAT_SESSION_ID,
@@ -42,6 +44,8 @@ import {
   type GateResumeRequest,
   type HelpAnswerRequest,
   type PermissionDecisionRequest,
+  type TestingContractWaiveRequest,
+  type TestingContractWaiveResult,
   type VerificationGateAction,
 } from '../shared/ipc';
 import { CanonicalErrorException } from '../shared/errors';
@@ -374,6 +378,29 @@ export class AttentionService {
     const input = validateWithSchema(request, GateResumeRequestSchema);
     return this.mutate(`/api/v1/features/${input.featureId}/actions/need-user-input`, {
       ...(input.repoName === undefined ? {} : { repo_name: input.repoName }),
+    });
+  }
+  async waiveTestingContract(
+    request: TestingContractWaiveRequest,
+  ): Promise<TestingContractWaiveResult> {
+    const input = validateWithSchema(request, TestingContractWaiveRequestSchema);
+    const response = await serverRequest(
+      this.transport,
+      `/api/v1/features/${input.featureId}/actions/testing-contract-waive`,
+      {
+        method: 'POST',
+        body: { item_ids: input.itemIds, reason: input.reason },
+      } as ApiRequestInit,
+    );
+    const value = response as {
+      result?: unknown;
+      contract_revision?: unknown;
+      waived_items?: unknown;
+    };
+    return TestingContractWaiveResultSchema.parse({
+      result: typeof value.result === 'string' ? value.result : 'waived',
+      contractRevision: value.contract_revision,
+      waivedItems: Array.isArray(value.waived_items) ? value.waived_items : [],
     });
   }
 

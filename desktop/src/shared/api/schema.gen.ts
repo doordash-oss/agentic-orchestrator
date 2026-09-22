@@ -1259,7 +1259,7 @@ export interface components {
          * @description Feature lifecycle action identifier.
          * @enum {string}
          */
-        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
+        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "testing-contract-waive" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
         /** @description Canonical catalog-rendered error. */
         Error: {
             /** @description Stable snake_case catalog code. */
@@ -1973,6 +1973,7 @@ export interface components {
             feature_config_update_response?: components["schemas"]["FeatureConfigUpdateResponse"];
             need_user_input_resume_response?: components["schemas"]["NeedUserInputResumeResponse"];
             need_user_input_draft_response?: components["schemas"]["NeedUserInputDraftResponse"];
+            testing_contract_waive_response?: components["schemas"]["TestingContractWaiveResponse"];
             permission_answer_response?: components["schemas"]["PermissionAnswerResponse"];
             ask_user_answer_response?: components["schemas"]["AskUserAnswerResponse"];
             help_send_response?: components["schemas"]["HelpSendResponse"];
@@ -2038,6 +2039,10 @@ export interface components {
         FeatureConfigUpdateResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         NeedUserInputResumeResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         NeedUserInputDraftResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
+        TestingContractWaiveResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
+            contract_revision: number;
+            waived_items: string[];
+        };
         PermissionAnswerResponse: components["schemas"]["ActionBaseResponse"] & {
             session_id: string;
             request_id: string;
@@ -2690,8 +2695,11 @@ export interface components {
             blockers: components["schemas"]["NeedUserInputVerificationBlocker"][];
             allowed_actions: components["schemas"]["NeedUserInputVerificationAction"][];
         };
-        /** @enum {string} */
-        NeedUserInputVerificationAction: "WAIVE" | "RETRY_AFTER_AUTH";
+        /**
+         * @description WAIVE records user-authorized waivers, RETRY_AFTER_AUTH re-probes after the user provides the missing capability, and ALLOW_SUBSTITUTE keeps the evidence requirement but authorizes a faithful substitute for blocked agent-owned evidence rows.
+         * @enum {string}
+         */
+        NeedUserInputVerificationAction: "WAIVE" | "RETRY_AFTER_AUTH" | "ALLOW_SUBSTITUTE";
         NeedUserInputVerificationBlocker: {
             item_id: string;
             name: string;

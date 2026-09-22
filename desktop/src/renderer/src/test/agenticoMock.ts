@@ -437,6 +437,7 @@ export interface AgenticoMock {
     sendHelp: ReturnType<typeof vi.fn>;
     saveGateDraft: ReturnType<typeof vi.fn>;
     resolveGate: ReturnType<typeof vi.fn>;
+    waiveTestingContract: ReturnType<typeof vi.fn>;
     startChat: ReturnType<typeof vi.fn>;
     endChat: ReturnType<typeof vi.fn>;
     getFeatureConfig: ReturnType<typeof vi.fn>;
@@ -638,6 +639,9 @@ export function installAgenticoMock(
     sendHelp: vi.fn(() => Promise.resolve({ result: 'submitted' })),
     saveGateDraft: vi.fn(() => Promise.resolve({ result: 'drafted' })),
     resolveGate: vi.fn(() => Promise.resolve({ result: 'resolved' })),
+    waiveTestingContract: vi.fn(() =>
+      Promise.resolve({ result: 'waived', contractRevision: 2, waivedItems: [] }),
+    ),
     startChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'started' })),
     endChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'ended' })),
     listSessions: vi.fn(() => Promise.resolve(sessions)),

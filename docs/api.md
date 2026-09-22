@@ -194,6 +194,53 @@ per-parent "Refactor History" group beneath each parent (collapsed by default,
 expanded per session), read-only closed-child inspection, and focused action
 hints.
 
+## Capability Gates
+
+Testing-contract rows under Automated Verification, Manual Verification,
+Visual Evidence, or Behavioral Evidence may carry
+`[agentico capability: <name>]`, where `<name>` is a built-in capability:
+`authenticated-browser(<host>)`, `display`, `docker`, or
+`network(<host[:port]>)`. The older `[agentico capability: <name>; probe:
+<shell>]` form with an explicit probe still works. Built-in probes run
+in-process; an unknown name is a contract error routed to plan revision, not a
+user prompt. A Visual Evidence or Manual Verification row that names an
+external host without a capability is likewise returned for plan revision.
+
+The harness probes declared capabilities before each implementer iteration
+starts and again at post-handoff verification. A missing capability opens the
+need-user-input gate with actions `WAIVE`, `RETRY_AFTER_AUTH`, and, for
+agent-owned evidence rows whose policy forbids substitution,
+`ALLOW_SUBSTITUTE`, which sets `allow_substitution: true` on those rows so a
+labelled faithful substitute becomes acceptable evidence.
+
+`authenticated-browser(<host>)` first checks server policy: servers exposed on
+the network deny signed-in browser state by default, and
+`server.capabilities.browser_state: allow|deny` in `config.yaml` overrides
+either default. It then reads Playwright storage state from
+`<runtime_dir>/capabilities/browser/<host>/storageState.json`, checks cookie
+expiry, and makes one HTTP liveness request that fails on a sign-in redirect
+or 401/403. On success the row's command environment receives
+`AGENTICO_BROWSER_STATE_<HOST>` (host upper-cased, non-alphanumerics as `_`,
+e.g. `AGENTICO_BROWSER_STATE_SLACK_COM`) pointing at that file.
+
+CLI:
+
+- `agentico capability-probe <name[(argument)]>` prints available/unavailable
+  with the reason and exits 0/1.
+- `agentico report-blocker --contract <testing-contract.yaml> --dir
+  <iteration_dir> --items <id,id,...> --capability <name> --reason <text>`
+  writes the blocker gate (`need-user-input.yaml`, source agent) into the
+  iteration directory; the implementer then ends the iteration with `RETRY`
+  and the harness pauses on the user gate. Item names shown to the user come
+  from the contract, not the agent.
+
+### POST /api/v1/features/{feature_id}/actions/testing-contract-waive
+
+Records user-authorized waivers outside the gate. Body:
+`{ "item_ids": ["<id>", ...], "reason": "<text>" }`. The response
+(`TestingContractWaiveResponse`) carries the new `contract_revision` and the
+`waived_items`.
+
 ## Session Output
 
 Bulk agent output is not delivered through the global event stream.

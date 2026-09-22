@@ -53,6 +53,61 @@ describe('AttentionService mutations', () => {
     },
   );
 
+  it('posts testing-contract waivers and reads the revised contract envelope', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: {
+          api_version: 'v1',
+          feature_id: 'abcd1234ef567890',
+          result: 'waived',
+          contract_revision: 3,
+          waived_items: ['deploy-smoke', 'ui-capture'],
+        },
+      }),
+    );
+    const service = new AttentionService({ apiRequest } satisfies ServerTransport);
+
+    await expect(
+      service.waiveTestingContract({
+        featureId: 'abcd1234ef567890',
+        itemIds: ['deploy-smoke', 'ui-capture'],
+        reason: 'Vendor UI is unreachable from CI.',
+      }),
+    ).resolves.toEqual({
+      result: 'waived',
+      contractRevision: 3,
+      waivedItems: ['deploy-smoke', 'ui-capture'],
+    });
+    expect(apiRequest).toHaveBeenCalledWith(
+      '/api/v1/features/abcd1234ef567890/actions/testing-contract-waive',
+      expect.objectContaining({
+        method: 'POST',
+        body: {
+          item_ids: ['deploy-smoke', 'ui-capture'],
+          reason: 'Vendor UI is unreachable from CI.',
+        },
+      }),
+    );
+  });
+
+  it('rejects testing-contract waivers without items or a reason before any request', async () => {
+    const apiRequest = vi.fn(() => Promise.resolve({ status: 200, body: {} }));
+    const service = new AttentionService({ apiRequest } satisfies ServerTransport);
+
+    await expect(
+      service.waiveTestingContract({ featureId: 'abcd1234ef567890', itemIds: [], reason: 'x' }),
+    ).rejects.toThrow();
+    await expect(
+      service.waiveTestingContract({
+        featureId: 'abcd1234ef567890',
+        itemIds: ['deploy-smoke'],
+        reason: '   ',
+      }),
+    ).rejects.toThrow();
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
   it('does not classify a plain error message as an already-resolved item', async () => {
     const service = new AttentionService({
       apiRequest: () => Promise.reject(new Error('conflict while submitting attention response')),

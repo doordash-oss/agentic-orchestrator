@@ -667,6 +667,27 @@ describe('parseServerJson', () => {
       'x'.repeat(50),
     ]);
 
+    promptFixture.need_user_inputs[0]!.verification.allowed_actions = [
+      'WAIVE',
+      'RETRY_AFTER_AUTH',
+      'ALLOW_SUBSTITUTE',
+    ];
+    expect(
+      parseServerJson(JSON.stringify(promptFixture), PromptSnapshotResponseSchema)
+        .need_user_inputs[0]?.verification?.allowed_actions,
+    ).toHaveLength(3);
+
+    promptFixture.need_user_inputs[0]!.verification.allowed_actions = [
+      'WAIVE',
+      'RETRY_AFTER_AUTH',
+      'ALLOW_SUBSTITUTE',
+      'EXTRA',
+    ];
+    expect(
+      failure(() => parseServerJson(JSON.stringify(promptFixture), PromptSnapshotResponseSchema))
+        .code,
+    ).toBe('E_SCHEMA_MISMATCH');
+
     promptFixture.need_user_inputs[0]!.verification.allowed_actions = ['x'.repeat(51)];
     expect(
       failure(() => parseServerJson(JSON.stringify(promptFixture), PromptSnapshotResponseSchema))

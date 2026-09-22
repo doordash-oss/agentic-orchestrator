@@ -303,6 +303,39 @@ describe('NeedUserInputModal', () => {
     expect(waiveAndResume).toHaveAttribute('data-tone', 'warning');
   });
 
+  it('keeps the substitute decision neutral and relabels the resume action', async () => {
+    const mock = installAgenticoMock();
+    mock.api.saveGateDraft.mockResolvedValue({ result: 'saved' });
+    const user = userEvent.setup();
+    render(
+      <Harness
+        item={{
+          ...verificationGate,
+          verification: {
+            ...verificationGate.verification!,
+            allowedActions: ['WAIVE', 'RETRY_AFTER_AUTH', 'ALLOW_SUBSTITUTE'],
+          },
+        }}
+      />,
+    );
+
+    const substitute = screen.getByRole('radio', { name: /Accept a faithful substitute/ });
+    await user.click(substitute);
+    await waitFor(() =>
+      expect(mock.api.saveGateDraft).toHaveBeenLastCalledWith({
+        featureId: verificationGate.featureId,
+        repoName: 'repo-a',
+        answers: { '1': 'ALLOW_SUBSTITUTE' },
+      }),
+    );
+
+    expect(substitute.closest('label')).toHaveAttribute('data-selected', 'true');
+    expect(substitute.closest('label')).not.toHaveAttribute('data-tone');
+    const resume = screen.getByRole('button', { name: 'Accept substitute and resume' });
+    expect(resume).toBeEnabled();
+    expect(resume).not.toHaveAttribute('data-tone');
+  });
+
   it('serializes rapid decisions and persists the final waiver after a failed save', async () => {
     const mock = installAgenticoMock();
     let rejectRetrySave: (reason?: unknown) => void = () => undefined;

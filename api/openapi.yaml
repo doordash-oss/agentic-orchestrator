@@ -2182,6 +2182,7 @@ components:
         - rebase
         - need-user-input
         - need-user-input-draft
+        - testing-contract-waive
         - mark-done
         - cleanup
         - delete
@@ -4008,6 +4009,8 @@ components:
               $ref: "#/components/schemas/NeedUserInputResumeResponse"
             need_user_input_draft_response:
               $ref: "#/components/schemas/NeedUserInputDraftResponse"
+            testing_contract_waive_response:
+              $ref: "#/components/schemas/TestingContractWaiveResponse"
             permission_answer_response:
               $ref: "#/components/schemas/PermissionAnswerResponse"
             ask_user_answer_response:
@@ -4174,6 +4177,20 @@ components:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
+    TestingContractWaiveResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [contract_revision, waived_items]
+          properties:
+            contract_revision:
+              type: integer
+              minimum: 1
+            waived_items:
+              type: array
+              items:
+                type: string
     PermissionAnswerResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -5705,12 +5722,17 @@ components:
             $ref: "#/components/schemas/NeedUserInputVerificationBlocker"
         allowed_actions:
           type: array
-          maxItems: 2
+          maxItems: 3
           items:
             $ref: "#/components/schemas/NeedUserInputVerificationAction"
     NeedUserInputVerificationAction:
       type: string
-      enum: [WAIVE, RETRY_AFTER_AUTH]
+      description: >-
+        WAIVE records user-authorized waivers, RETRY_AFTER_AUTH re-probes after
+        the user provides the missing capability, and ALLOW_SUBSTITUTE keeps the
+        evidence requirement but authorizes a faithful substitute for blocked
+        agent-owned evidence rows.
+      enum: [WAIVE, RETRY_AFTER_AUTH, ALLOW_SUBSTITUTE]
     NeedUserInputVerificationBlocker:
       type: object
       required: [item_id, name, command, reason, capabilities, remediation]

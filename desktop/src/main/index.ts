@@ -1526,6 +1526,7 @@ if (!hasSingleInstanceLock) {
       sendHelp: (request) => attention.sendHelp(request),
       saveGateDraft: (request) => attention.saveGateDraft(request),
       resolveGate: (request) => attention.resolveGate(request),
+      waiveTestingContract: (request) => attention.waiveTestingContract(request),
       startChat: async (request) => {
         const result = await sessions.startChat(request);
         void updates.refreshActiveWorkSummary();
